@@ -1,0 +1,9 @@
+# agent-harness
+
+Experimental process-steered workbench for a future evented agent harness.
+
+The current goal is not to ship a narrow MVP. The repository first establishes
+the process, source notes, black-box test boundaries, and disposable spike area
+needed to make reliable progress toward the full harness design.
+
+Start with `docs/process/HANDOFF.md`.

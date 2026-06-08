@@ -1,0 +1,13 @@
+[package]
+name = "agent-harness"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Experimental process-steered agent harness workbench"
+repository = "https://github.com/maxeonyx/agent-harness"
+
+[dependencies]
+
+[dev-dependencies]
+assert_cmd = "2.0"
+help-test = { path = "../../crates/help-test" }
