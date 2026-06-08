@@ -24,9 +24,12 @@ Immediate target:
 1. Define the smallest public surface through which a user can exercise the
    harness without exposing private control-loop events as product API.
 2. Define black-box tests only at that public UI/API boundary.
-3. Prove user-visible behavior for a passive in-band user action without
+3. Define fixture setup so product-owned state is created through the same
+   public surface, following the dotsync pattern where setup invokes the tool
+   rather than seeding internals.
+4. Prove user-visible behavior for a passive in-band user action without
    asserting internal event names, queues, or actor messages.
-4. Prove user-visible behavior for an explicit submit/continue action without
+5. Prove user-visible behavior for an explicit submit/continue action without
    asserting an internal model-request schema.
 
 ## User-Gated Decisions
