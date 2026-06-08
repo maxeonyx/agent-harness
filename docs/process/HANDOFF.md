@@ -58,11 +58,22 @@ Ask the user before any core integration:
 - Subrepo commits:
   - `235358d` - initial process scaffold
   - `a2a40b1` - public site references
+  - `e7a9bb3` - onboarding baseline
+  - `f2f523d` - CI path-dependency setup
 - Workspace integration commit: `7486961`.
+- Workspace pointer update commit: `2bea403`.
 - Local checks passed under `devenv`:
   - `cargo fmt --check`
   - `cargo test`
   - `cargo clippy -- -D warnings`
+- GitHub CI passed on `main` for `f2f523d`:
+  - Check
+  - six release build targets
+  - Release `v0.1.0`
+  - Pages deployment
+- GitHub Pages was enabled for workflow deployment.
+- Repository homepage metadata points to
+  `https://agent-harness.maxeonyx.com`.
 - Standards baseline was run from the workspace through `devenv`.
 
 ## Standards Backlog
@@ -83,7 +94,8 @@ Known remaining failures:
 - Auto-update integration is not implemented.
 - Manual attestations are missing for agentic concerns.
 - Release, CI-green, Pages, version artifact, and install-link checks need the
-  first real public release/site cycle.
+  public DNS/custom-domain cycle. Release and GitHub Actions Pages deployment
+  now exist.
 - Standalone publishability still needs the shared workspace path dependency
   story to be resolved.
 - Devenv was fixed after the first run by adding the standard `.gitignore`
