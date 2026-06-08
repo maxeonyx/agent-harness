@@ -17,23 +17,26 @@ The repo now has explicit boundaries:
 
 ## Next Recommended Loop
 
-Pre-spike A: test harness primitives.
+Pre-spike A: public behavior test boundary.
 
 Immediate target:
 
-1. Scope the first tiny scenario language for fake face/brain/limb actors.
-2. Define black-box tests before implementation.
-3. Prove at least one passive user-tool context event does not trigger a model
-   request.
-4. Prove a user turn end does trigger a model request with accumulated context.
+1. Define the smallest public surface through which a user can exercise the
+   harness without exposing private control-loop events as product API.
+2. Define black-box tests only at that public UI/API boundary.
+3. Prove user-visible behavior for a passive in-band user action without
+   asserting internal event names, queues, or actor messages.
+4. Prove user-visible behavior for an explicit submit/continue action without
+   asserting an internal model-request schema.
 
 ## User-Gated Decisions
 
 Ask the user before exiting Pre-spike A scope:
 
-- Whether the first primitive set is adequate for Spike 1.
-- Whether the fake actor names and scenario language are clear enough to build
-  on.
+- Whether the proposed public UI/API boundary is the right product surface to
+  test first.
+- Whether the proposed tests describe user-visible harness behavior rather than
+  internal architecture.
 
 Ask the user before any core integration:
 
@@ -113,6 +116,6 @@ Known remaining failures:
 ## Open Questions
 
 - The eventual user-facing command name is still undecided.
-- The first scenario DSL shape is not designed yet.
+- The first public UI/API test surface is not designed yet.
 - Imported source notes are preserved as raw source material; curated canonical
   requirements have not yet been extracted.
