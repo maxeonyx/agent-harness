@@ -3,6 +3,7 @@
 {
   packages = [
     pkgs.cargo
+    pkgs.cargo-nextest
     pkgs.clippy
     pkgs.curl
     pkgs.gcc
@@ -16,6 +17,6 @@
   enterTest = ''
     cargo fmt --check
     cargo clippy -- -D warnings
-    cargo test
+    cargo ratchet
   '';
 }
