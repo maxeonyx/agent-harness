@@ -8,7 +8,7 @@ fn main() {
         Some("-V" | "--version") => println!("agent-harness {}", env!("CARGO_PKG_VERSION")),
         Some(command) => {
             eprintln!("unknown command: {command}");
-            eprintln!("run `agent-harness --help` for the current process state");
+            eprintln!("run `agent-harness --help` for usage");
             std::process::exit(2);
         }
         None => print_help(),
@@ -24,19 +24,12 @@ fn print_help() {
         "\
 agent-harness {}
 
-Experimental process-steered workbench for the agent harness design.
-
-No product harness behavior is implemented yet. Start with:
-  {}
-
-Current development rule:
-  define black-box tests and disposable spikes before core implementation
+Evented agent harness for coordinated face, brain, and workspace-runtime roles.
 
 Usage:
   agent-harness --help
   agent-harness --version
 ",
-        env!("CARGO_PKG_VERSION"),
-        agent_harness::PROCESS_HANDOFF_PATH
+        env!("CARGO_PKG_VERSION")
     );
 }

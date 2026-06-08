@@ -1,0 +1,12 @@
+{
+  "renames": {
+    "agent-harness::process_contract$binary_reports_product_help": "agent-harness::process_contract$binary_reports_process_state_instead_of_placeholder_output"
+  },
+  "removals": [
+    "agent-harness::process_contract$core_does_not_import_disposable_experiments",
+    "agent-harness::process_contract$experiments_are_marked_disposable",
+    "agent-harness::process_contract$imported_source_notes_are_preserved",
+    "agent-harness::process_contract$process_handoff_records_current_loop_and_boundaries",
+    "agent-harness::process_contract$process_templates_exist_for_resumable_stewardship"
+  ]
+}
