@@ -71,6 +71,9 @@ Ask the user before any core integration:
   - six release build targets
   - Release `v0.1.0`
   - Pages deployment
+- Commit `b644c63` recorded the green CI baseline but intentionally triggered
+  the release version guard because `v0.1.0` already belonged to `f2f523d`.
+- Version `0.1.1` is the next release baseline after the handoff update.
 - GitHub Pages was enabled for workflow deployment.
 - Repository homepage metadata points to
   `https://agent-harness.maxeonyx.com`.
