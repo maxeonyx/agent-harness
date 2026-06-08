@@ -6,8 +6,5 @@
     "agent-harness::process_contract$binary_reports_plain_and_json_versions": "passing",
     "agent-harness::process_contract$binary_reports_product_help": "passing"
   },
-  "renames": {
-    "agent-harness::process_contract$binary_reports_product_help": "agent-harness::process_contract$binary_reports_process_state_instead_of_placeholder_output"
-  },
   "baseline": "66542c39858cfa93877cab5a9655718f230087e6"
 }
