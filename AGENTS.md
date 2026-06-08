@@ -49,6 +49,13 @@ fake model/provider only after the harness exposes a public way to configure
 that provider; it must not commit the core to a public event schema before the
 product boundary has been designed.
 
+Fixture setup follows the same rule for product-owned state. Tests may create
+external conditions a user could bring to the tool, such as files, repos,
+environment variables, terminals, or fake provider endpoints. They must drive
+the harness itself through the public command/UI/API, including initial setup.
+Do not seed sessions, queues, context, providers, or workspace runtime state by
+calling private constructors or writing internal storage directly.
+
 ## Current Active Loop
 
 See `docs/process/HANDOFF.md`.
