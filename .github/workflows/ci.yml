@@ -61,7 +61,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - name: Install cargo-ratchet
-        run: cargo install --git https://github.com/maxeonyx/tdd-ratchet-rs --locked
+        run: cargo install tdd-ratchet --locked
       - name: Check formatting
         run: cargo fmt --check
       - name: Clippy
