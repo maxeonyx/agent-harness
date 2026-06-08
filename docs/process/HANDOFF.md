@@ -1,6 +1,6 @@
 # Agent Harness Process Handoff
 
-Status: initial setup
+Status: initial setup committed and pushed
 Active loop: onboarding / process stewardship
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08
 
@@ -54,11 +54,44 @@ Ask the user before any core integration:
 - Source notes imported.
 - Process handoff created.
 - Initial process contract tests define the setup bar.
+- Subrepo created at `https://github.com/maxeonyx/agent-harness`.
+- Subrepo commits:
+  - `235358d` - initial process scaffold
+  - `a2a40b1` - public site references
+- Workspace integration commit: `7486961`.
+- Local checks passed under `devenv`:
+  - `cargo fmt --check`
+  - `cargo test`
+  - `cargo clippy -- -D warnings`
+- Standards baseline was run from the workspace through `devenv`.
+
+## Standards Backlog
+
+The first standards run passed these onboarding-relevant checks for
+`agent-harness`:
+
+- workspace routing
+- vision and process
+- OpenCode skill docs
+- tests present
+- code standards
+- fast/slow checks
+
+Known remaining failures:
+
+- TDD ratchet is not initialized (`.test-status.json` missing).
+- Auto-update integration is not implemented.
+- Manual attestations are missing for agentic concerns.
+- Release, CI-green, Pages, version artifact, and install-link checks need the
+  first real public release/site cycle.
+- Standalone publishability still needs the shared workspace path dependency
+  story to be resolved.
+- Devenv was fixed after the first run by adding the standard `.gitignore`
+  entries; rerun standards to confirm.
 
 ## Open Questions
 
 - The eventual user-facing command name is still undecided.
 - The first scenario DSL shape is not designed yet.
-- The standards compliance backlog has not been run after submodule integration.
 - Imported source notes are preserved as raw source material; curated canonical
   requirements have not yet been extracted.
