@@ -13,7 +13,7 @@ The repo now has explicit boundaries:
 
 - `experiments/` is for disposable spikes.
 - `src/` is not a dumping ground for spike architecture.
-- `tests/` starts by enforcing the process scaffold.
+- `tests/` starts by enforcing product-visible CLI behavior and version output.
 
 ## Next Recommended Loop
 
@@ -53,7 +53,10 @@ Ask the user before any core integration:
 
 - Source notes imported.
 - Process handoff created.
-- Initial process contract tests define the setup bar.
+- Initial process contract tests were removed after review because repo-local
+  cargo tests should not encode onboarding artifacts. Product-facing CLI tests
+  remain in the tool, and reusable experiment boundaries moved to workspace
+  standards.
 - Subrepo created at `https://github.com/maxeonyx/agent-harness`.
 - Subrepo commits:
   - `235358d` - initial process scaffold
@@ -75,6 +78,8 @@ Ask the user before any core integration:
   the release version guard because `v0.1.0` already belonged to `f2f523d`.
 - Version `0.1.1` is the next release baseline after the handoff update.
 - Version `0.1.2` adds the core package TDD ratchet gatekeeper and CNAME file.
+- Version `0.1.3` removes process-state CLI help and hoists reusable experiment
+  rules into workspace standards.
 - GitHub Pages was enabled for workflow deployment.
 - Repository homepage metadata points to
   `https://agent-harness.maxeonyx.com`.
