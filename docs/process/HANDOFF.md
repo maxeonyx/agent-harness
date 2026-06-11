@@ -120,5 +120,8 @@ Known remaining failures:
 
 - The eventual user-facing command name is still undecided.
 - The first public UI/API test surface is not designed yet.
+- More efficient task handoffs are captured as a design note in
+  `docs/source-notes/agent-harness-design.md`; this is source material, not an
+  implemented API contract.
 - Imported source notes are preserved as raw source material; curated canonical
   requirements have not yet been extracted.
