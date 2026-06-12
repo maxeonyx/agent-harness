@@ -111,7 +111,6 @@ The first standards run passed these onboarding-relevant checks for
 
 Known remaining failures:
 
-- TDD ratchet is not initialized (`.test-status.json` missing).
 - Auto-update integration is not implemented.
 - Manual attestations are missing for agentic concerns.
 - Release, CI-green, Pages, version artifact, and install-link checks need the
