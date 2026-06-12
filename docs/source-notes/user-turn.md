@@ -36,11 +36,9 @@ All of the information that the user used to make their decision should ideally 
 
 The user tools are NOT the same as the agent tools, and we should make sure that the context is clear to the agent that it has a different tool set to the user (we don't want the agent trying to use the user's tools).
 
-This concept is NOT just for a TUI - it's for a harness which could later also be a GUI. This would be more natural in fact as the user may commonly want to use a web browser.
+This concept is NOT just for a TUI - it's for a harness which could later also be a GUI. We build GUI/web support in from the start, even if unimplemented. This would be more natural in fact as the user may commonly want to use a web browser.
 
 Oh - one obvious user tool is a subagent tool!! e.g "find me that nix issue where XYZ" and then the user's prompt + the subagent's response is included. Yeah, that's really great. Support both forked & fresh agents. Forked should warn if cache likely expired (note that forked can still be cheaper even if cache expired, if the model would have to do many sequential tool calls to get back up to speed. User can judge.). In this case we don't have to attach what the subagent saw - only what the user saw.
 
 user turn presents concurrency issues with the model. I don't think we have to think too hard about this, but we might reject an agent's updates to a file if the user currently has it open, or has edited it since the user last did so. I don't think we should be too eager about that. Maybe only if the updates actually conflict. We don't want to overprescribe live collaboration. The fact that the agent gets to observe the user is already a massive win.
-
-
 
