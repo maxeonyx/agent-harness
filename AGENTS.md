@@ -56,6 +56,24 @@ the harness itself through the public command/UI/API, including initial setup.
 Do not seed sessions, queues, context, providers, or workspace runtime state by
 calling private constructors or writing internal storage directly.
 
+## Source Note Sync
+
+The design gist `014463e0964bebd0add4b914971c492f` is the upstream for
+`docs/source-notes/`. To merge new spec/vision changes:
+
+1. Clone the gist and diff it against `docs/source-notes/`.
+2. Copy changed and new files verbatim, keeping the exact gist filenames
+   (including any without an `.md` extension) so future diffs stay clean.
+3. Update the source-notes version line and evidence in
+   `docs/process/HANDOFF.md`, and fix any process references to notes that
+   moved or were renamed in the gist.
+4. Bump the patch version in `Cargo.toml`, `Cargo.lock`, and
+   `docs/version.json` — the release guard requires a new version per push.
+5. Run the commands below under `devenv` before committing.
+
+Source notes stay verbatim. Curation happens in `docs/process/`, never by
+editing the imported files.
+
 ## Current Active Loop
 
 See `docs/process/HANDOFF.md`.
@@ -63,10 +81,14 @@ See `docs/process/HANDOFF.md`.
 ## Commands
 
 ```bash
-cargo test
+cargo ratchet
 cargo fmt --check
 cargo clippy -- -D warnings
 ```
+
+Plain `cargo test` is blocked by the gatekeeper test for the core package; use
+`cargo ratchet`. Disposable spikes under `experiments/` may define their own
+local test workflow.
 
 From the workspace root, also run:
 
