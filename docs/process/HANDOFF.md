@@ -1,7 +1,7 @@
 # Agent Harness Process Handoff
 
-Status: process reworked to the two-gate model; no product behavior implemented
-Active loop: ready to start Spike 0 (walking skeleton)
+Status: Spike 0 (walking skeleton) built; evidence complete
+Active loop: Spike 0 awaiting Gate 1 (user acceptance of the outcome doc)
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
 resynced 2026-06-13 (gist revision of 2026-06-13)
 
@@ -26,27 +26,33 @@ The repo has explicit boundaries:
 
 ## Next Recommended Loop
 
-Spike 0: walking skeleton (see source-notes `requirements.md` §3).
+Gate 1 for Spike 0, then the first small integration.
 
-1. Write the brief in `docs/process/spikes/walking-skeleton-brief.md`.
-2. Build a toy face+brain+limb loop end-to-end against a fake provider:
-   single process, append-only CLI, user-tool context append path, agent-tool
-   call path, simple recorder.
-3. Evidence target: a scripted scenario where user activity appends context
-   without triggering a request, a turn end triggers a request to the fake
-   provider with the accumulated context, and an agent tool call round-trips.
-4. Write the outcome doc; bring it to Gate 1.
+1. User reads `docs/process/spikes/walking-skeleton-outcome.md` (optionally
+   after a fresh-context review) and accepts, redoes, or discards.
+2. User runs the real-provider smoke check (one command, needs an API key;
+   see `experiments/walking-skeleton/README.md`).
+3. On acceptance: pick the first core slice to integrate (fresh design from
+   the evidence, black-box tests first at the public surfaces), or the next
+   spike if integration is premature.
+
+Scope note: the user expanded Spike 0 scope on 2026-06-13 — real provider use
+is in scope for spikes ("I want to actually use it"); the fake provider for
+tests must be a separate HTTP server serving an OpenAI-compatible API. The
+spike implements both behind one adapter (real vs fake is just a base URL).
+Source-notes `requirements.md` §3 still says fake-only; fold the scope change
+into the next gist sync.
 
 ## User-Gated Decisions
 
 - Gate 1 (spike acceptance) and Gate 2 (integration acceptance) always involve
   the user; see `PROCESS.md`.
-- The walking-skeleton brief is the first artifact to confirm with the user
-  before building.
+- Gate 1 for the walking-skeleton outcome doc is open now.
 
 ## Do Not Integrate Yet
 
-- Do not build a real provider adapter.
+- Do not promote the spike's provider client to `src/` as-is; core provider
+  adapters are a fresh design (spikes may use real providers freely).
 - Do not build a real TUI or GUI.
 - Do not choose the final face/brain/limb transport.
 - Do not turn `experiments/` code into `src/` code without an accepted spike
@@ -68,6 +74,11 @@ Spike 0: walking skeleton (see source-notes `requirements.md` §3).
   Curated requirements extracted to `docs/process/REQUIREMENTS.md`.
 - Earlier history (initial scaffold through CI baseline) is in the git log of
   the subrepo; commits `235358d` → `857676d`.
+- Spike 0 built on 2026-06-13 in `experiments/walking-skeleton/`: face+brain+
+  limb in one process, OpenAI-compatible provider client, separate
+  fake-provider HTTP server, JSONL recorder. The exit-condition scenario
+  passes (`cargo test` in the spike dir); outcome doc at
+  `docs/process/spikes/walking-skeleton-outcome.md`.
 
 ## Standards Backlog
 
@@ -94,7 +105,7 @@ Known remaining failures:
 ## Open Questions
 
 - The eventual user-facing command name is still undecided.
-- The exact shape of the fake provider (which provider API it mimics first,
-  and how strictly) is a Spike 0 design question.
+- How strictly different OpenAI-compatible endpoints agree on tool-call
+  encoding is unverified until the real-provider smoke run.
 - Task-handoff design (`docs/source-notes/handoff-improvements.md`) is source
   material, not an implemented API contract.

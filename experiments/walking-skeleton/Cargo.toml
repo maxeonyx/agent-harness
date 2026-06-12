@@ -1,0 +1,22 @@
+[package]
+name = "walking-skeleton"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone spike project, deliberately outside the agent-tools workspace.
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2"
+tiny_http = "0.12"
+
+[[bin]]
+name = "skeleton"
+path = "src/main.rs"
+
+[[bin]]
+name = "fake-provider"
+path = "src/bin/fake_provider.rs"
