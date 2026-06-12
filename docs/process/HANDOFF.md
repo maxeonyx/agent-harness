@@ -2,7 +2,8 @@
 
 Status: initial setup committed and pushed
 Active loop: onboarding / process stewardship
-Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08
+Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
+resynced 2026-06-13 (gist revision of 2026-06-11)
 
 ## Current Position
 
@@ -90,6 +91,11 @@ Ask the user before any core integration:
 - Repository homepage metadata points to
   `https://agent-harness.maxeonyx.com`.
 - Standards baseline was run from the workspace through `devenv`.
+- Source notes resynced from the gist on 2026-06-13: the task-handoff design
+  moved to `handoff-improvements.md` and was expanded (structured-concurrency
+  framing, forked-vs-fresh routing, two-part launch idea); `user-turn.md` now
+  states GUI/web support is built in from the start; new notes
+  `reference-codebases.md`, `stretch-goals.md`, and `tui-styling` were added.
 
 ## Standards Backlog
 
@@ -121,7 +127,8 @@ Known remaining failures:
 - The eventual user-facing command name is still undecided.
 - The first public UI/API test surface is not designed yet.
 - More efficient task handoffs are captured as a design note in
-  `docs/source-notes/agent-harness-design.md`; this is source material, not an
-  implemented API contract.
+  `docs/source-notes/handoff-improvements.md` (moved out of
+  `agent-harness-design.md` in the gist resync); this is source material, not
+  an implemented API contract.
 - Imported source notes are preserved as raw source material; curated canonical
   requirements have not yet been extracted.
