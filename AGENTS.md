@@ -15,15 +15,14 @@ current process state lives in `docs/process/`.
 
 ## Operating Rule
 
-Do not implement forward through uncertainty.
-
-Before product code:
-
-1. Preserve or update the process state.
-2. Define black-box tests or review criteria at public UI/API boundaries.
-3. Keep disposable experiments under `experiments/`.
-4. Keep reusable core code out of `experiments/`.
-5. Write a spike outcome document before promoting any behavior into core.
+The development process is `docs/process/PROCESS.md`. Its principle: spend
+rigor where mistakes are expensive. Spikes under `experiments/` are
+near-frictionless (brief in, runnable evidence + outcome doc out, no
+mid-spike gates); promotion into `src/` is strict (fresh design from
+evidence, black-box tests first at the public surfaces, two user-involved
+gates). "Do not implement forward through uncertainty" is the triage rule for
+when work stalls — go backwards to the brief, the design, or
+`docs/process/REQUIREMENTS.md` — not a permission system gating motion.
 
 ## Directory Boundaries
 
@@ -41,20 +40,31 @@ black-box tests.
 
 ## Test Boundary
 
-Do not test the coding agent harness by asserting internal events, actor
-messages, private queues, or control-loop implementation details.
+Durable tests target the product-public surfaces, which for this product are:
 
-Durable tests must use public UI or public API behavior only. A test may use a
-fake model/provider only after the harness exposes a public way to configure
-that provider; it must not commit the core to a public event schema before the
-product boundary has been designed.
+- the CLI / UI behavior
+- the provider wire boundary, via a fake provider: which API requests were
+  actually sent, what triggered them, and what context they contained
+- the durable storage and query surface: analytics queries are product
+  behavior, not internals
+- the face/brain/limb transport protocol, once it is public
+
+These are product surfaces — the design's central theses (context lifecycle,
+request triggering, queryability, topology) are observable exactly there. Do
+not assert internal events, actor messages, private queues, or control-loop
+implementation details, and do not commit the core to a public event schema
+before that boundary has been designed.
 
 Fixture setup follows the same rule for product-owned state. Tests may create
 external conditions a user could bring to the tool, such as files, repos,
 environment variables, terminals, or fake provider endpoints. They must drive
-the harness itself through the public command/UI/API, including initial setup.
-Do not seed sessions, queues, context, providers, or workspace runtime state by
-calling private constructors or writing internal storage directly.
+the harness itself through the public surfaces, including initial setup and
+pointing the harness at a fake provider. Do not seed sessions, queues,
+context, providers, or workspace runtime state by calling private
+constructors or writing internal storage directly.
+
+Spike code under `experiments/` is exempt from tests-first; see
+`docs/process/SPIKE_RULES.md`.
 
 ## Source Note Sync
 

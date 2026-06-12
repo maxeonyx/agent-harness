@@ -1,101 +1,73 @@
 # Agent Harness Process Handoff
 
-Status: initial setup committed and pushed
-Active loop: onboarding / process stewardship
+Status: process reworked to the two-gate model; no product behavior implemented
+Active loop: ready to start Spike 0 (walking skeleton)
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
-resynced 2026-06-13 (gist revision of 2026-06-11)
+resynced 2026-06-13 (gist revision of 2026-06-13)
 
 ## Current Position
 
-The external design/process notes have been imported into `docs/source-notes/`.
-No product harness behavior has been implemented.
+The external design notes are imported in `docs/source-notes/`. The
+development process was reworked on 2026-06-13 — upstream in the gist
+(`process.md` second revision) and operationally in
+`docs/process/PROCESS.md` — replacing the heavy per-spike gate machinery with
+two gates (spike acceptance, integration acceptance), an invariants list in
+`docs/process/REQUIREMENTS.md`, and incremental integration starting from a
+walking skeleton.
 
-The repo now has explicit boundaries:
+The repo has explicit boundaries:
 
-- `experiments/` is for disposable spikes.
+- `experiments/` is for disposable spikes (briefed, evidence-out, no mid-spike
+  gates).
 - `src/` is not a dumping ground for spike architecture.
-- `tests/` starts by enforcing product-visible CLI behavior and version output.
+- Durable tests target the product-public surfaces listed in `PROCESS.md`:
+  CLI/UI, the provider wire via fake provider, the storage/query surface, and
+  eventually the transport protocol.
 
 ## Next Recommended Loop
 
-Pre-spike A: public behavior test boundary.
+Spike 0: walking skeleton (see source-notes `requirements.md` §3).
 
-Immediate target:
-
-1. Define the smallest public surface through which a user can exercise the
-   harness without exposing private control-loop events as product API.
-2. Define black-box tests only at that public UI/API boundary.
-3. Define fixture setup so product-owned state is created through the same
-   public surface, following the dotsync pattern where setup invokes the tool
-   rather than seeding internals.
-4. Prove user-visible behavior for a passive in-band user action without
-   asserting internal event names, queues, or actor messages.
-5. Prove user-visible behavior for an explicit submit/continue action without
-   asserting an internal model-request schema.
+1. Write the brief in `docs/process/spikes/walking-skeleton-brief.md`.
+2. Build a toy face+brain+limb loop end-to-end against a fake provider:
+   single process, append-only CLI, user-tool context append path, agent-tool
+   call path, simple recorder.
+3. Evidence target: a scripted scenario where user activity appends context
+   without triggering a request, a turn end triggers a request to the fake
+   provider with the accumulated context, and an agent tool call round-trips.
+4. Write the outcome doc; bring it to Gate 1.
 
 ## User-Gated Decisions
 
-Ask the user before exiting Pre-spike A scope:
-
-- Whether the proposed public UI/API boundary is the right product surface to
-  test first.
-- Whether the proposed tests describe user-visible harness behavior rather than
-  internal architecture.
-
-Ask the user before any core integration:
-
-- Whether the spike behavior proves the intended requirement.
-- Whether the spike outcome document correctly separates evidence from
-  architecture.
+- Gate 1 (spike acceptance) and Gate 2 (integration acceptance) always involve
+  the user; see `PROCESS.md`.
+- The walking-skeleton brief is the first artifact to confirm with the user
+  before building.
 
 ## Do Not Integrate Yet
 
 - Do not build a real provider adapter.
 - Do not build a real TUI or GUI.
 - Do not choose the final face/brain/limb transport.
-- Do not turn `experiments/` code into `src/` code without a spike outcome and
-  promoted black-box tests.
+- Do not turn `experiments/` code into `src/` code without an accepted spike
+  outcome and promoted black-box tests at the public surfaces.
 
 ## Evidence So Far
 
-- Source notes imported.
-- Process handoff created.
-- Initial process contract tests were removed after review because repo-local
-  cargo tests should not encode onboarding artifacts. Product-facing CLI tests
-  remain in the tool, and reusable experiment boundaries moved to workspace
-  standards.
-- Subrepo created at `https://github.com/maxeonyx/agent-harness`.
-- Subrepo commits:
-  - `235358d` - initial process scaffold
-  - `a2a40b1` - public site references
-  - `e7a9bb3` - onboarding baseline
-  - `f2f523d` - CI path-dependency setup
-- Workspace integration commit: `7486961`.
-- Workspace pointer update commit: `2bea403`.
-- Local checks passed under `devenv`:
-  - `cargo fmt --check`
-  - `cargo test`
-  - `cargo clippy -- -D warnings`
-- GitHub CI passed on `main` for `f2f523d`:
-  - Check
-  - six release build targets
-  - Release `v0.1.0`
-  - Pages deployment
-- Commit `b644c63` recorded the green CI baseline but intentionally triggered
-  the release version guard because `v0.1.0` already belonged to `f2f523d`.
-- Version `0.1.1` is the next release baseline after the handoff update.
-- Version `0.1.2` adds the core package TDD ratchet gatekeeper and CNAME file.
-- Version `0.1.3` removes process-state CLI help and hoists reusable experiment
-  rules into workspace standards.
-- GitHub Pages was enabled for workflow deployment.
-- Repository homepage metadata points to
-  `https://agent-harness.maxeonyx.com`.
-- Standards baseline was run from the workspace through `devenv`.
+- Source notes imported; process handoff created.
+- Subrepo created at `https://github.com/maxeonyx/agent-harness`; CI, release
+  pipeline, Pages, and the TDD ratchet gatekeeper are in place and green
+  (v0.1.9 released 2026-06-12).
 - Source notes resynced from the gist on 2026-06-13: the task-handoff design
-  moved to `handoff-improvements.md` and was expanded (structured-concurrency
-  framing, forked-vs-fresh routing, two-part launch idea); `user-turn.md` now
+  moved to `handoff-improvements.md` and was expanded; `user-turn.md` now
   states GUI/web support is built in from the start; new notes
   `reference-codebases.md`, `stretch-goals.md`, and `tui-styling` were added.
+- Process reworked on 2026-06-13 (gist + repo in the same change): two gates,
+  invariants, walking-skeleton-first, tests-first scoped to core at public
+  surfaces, test primitives extracted from spikes rather than pre-built.
+  Curated requirements extracted to `docs/process/REQUIREMENTS.md`.
+- Earlier history (initial scaffold through CI baseline) is in the git log of
+  the subrepo; commits `235358d` → `857676d`.
 
 ## Standards Backlog
 
@@ -118,16 +90,11 @@ Known remaining failures:
   now exist.
 - Standalone publishability still needs the shared workspace path dependency
   story to be resolved.
-- Devenv was fixed after the first run by adding the standard `.gitignore`
-  entries; rerun standards to confirm.
 
 ## Open Questions
 
 - The eventual user-facing command name is still undecided.
-- The first public UI/API test surface is not designed yet.
-- More efficient task handoffs are captured as a design note in
-  `docs/source-notes/handoff-improvements.md` (moved out of
-  `agent-harness-design.md` in the gist resync); this is source material, not
-  an implemented API contract.
-- Imported source notes are preserved as raw source material; curated canonical
-  requirements have not yet been extracted.
+- The exact shape of the fake provider (which provider API it mimics first,
+  and how strictly) is a Spike 0 design question.
+- Task-handoff design (`docs/source-notes/handoff-improvements.md`) is source
+  material, not an implemented API contract.

@@ -13,25 +13,12 @@ Note that “stakeholder” at this stage means “me in a different capacity / 
 
 The harness should not be implemented by building a narrow MVP and hoping it generalises. The design has several perpendicular requirements: worker UX, process improvement, harness development, operations, analytics, security boundaries, coordination, and multi-client UI state. A successful implementation must preserve the breadth of those requirements.
 
-The process should therefore be:
+The process itself lives in `process.md`. In short:
 
-1. Define requirements and black-box behaviours.
-2. Build test primitives before building the harness.
-3. Build disposable spikes in separate code locations.
-4. Use spikes to validate risky behaviour.
-5. Integrate only after tests and design implications are understood.
-6. Refactor significantly when integrating into core.
-7. Treat spike code as evidence, not architecture.
-
-Each spike should start with an iterative scaffolding loop involving the user:
-
-* design the behaviour
-* design the tests
-* scaffold the code shape
-* implement the smallest useful version
-* review whether the spike actually proved the intended behaviour
-
-For core integration, this involvement is mandatory.
+1. Disposable spikes in `experiments/` produce evidence; they start with a one-paragraph brief and end with runnable evidence plus an outcome doc. No mid-spike gates, no tests-first requirement.
+2. Two gates carry the rigor: spike acceptance and core integration acceptance. Both check against the invariants below; both involve the user.
+3. Core integration is fresh design from evidence, never copied spike code, with black-box tests written first at the product-public surfaces.
+4. Integration happens small and continuously, alternating with spikes, not batched into a final core phase.
 
 Each spike has two required outcomes:
 
@@ -45,9 +32,24 @@ Each spike has two required outcomes:
    * what it failed to prove
    * what aspects should be integrated into core
    * what aspects should explicitly *not* be integrated
-   * what the spike revealed about the full convex hull of requirements
+   * what requirements pressure appeared
 
-The spike outcome document must review the spike against the full requirements set, not only against the narrow feature being tested. This is what prevents local success from accidentally narrowing the future architecture.
+The gates review the spike against the invariants below, not the full requirements set every time. The full stakeholder sweep happens when this document itself is revised - which a spike outcome can trigger.
+
+---
+
+## 1.1 Invariants
+
+The non-negotiables every gate checks against. A change that violates one of these stops and goes to the user.
+
+1. The brain is the only role that drives provider API requests. Provider credentials never reach limbs, faces, plugins, tool schemas, logs, or model context.
+2. Recording context, appending context, rebuilding context, and triggering inference are distinct operations. Passive user activity never triggers a model request.
+3. User-tool activity is framed as user activity, never as agent tool calls. Each user tool keeps two surfaces: rich interactive UI for the user, compressed context for the model.
+4. Face, brain, and limb are logical roles. Co-location versus splitting is a deployment choice over the same logical model.
+5. Durable session data is analytics-grade and queryable. Durable, cache-supporting-transient, shared-UI, and disposable-stream data are explicitly distinguished.
+6. Subagent concurrency is structured: parents block on children; sibling results stay hidden until the parent resumes.
+7. Multi-client UI state is explicitly modeled. Stale clients cannot silently overwrite newer state; the user wins on conflicting edits.
+8. Spike code never becomes core by copying. Core integration is a fresh design from evidence.
 
 ---
 
@@ -431,63 +433,20 @@ Test cases:
 
 # 3. Experimental spikes
 
-## Pre-spike A: test harness primitives
+## Spike 0: walking skeleton
 
-Purpose: build the test language and simulation tools before building harness behaviour.
-
-Should provide:
-
-* fake face
-* fake brain
-* fake limb
-* fake model provider
-* fake tool/user-tool implementations
-* fake filesystem/workspace
-* deterministic clock
-* scenario runner
-* transcript/context projection assertions
-* durable event/session assertions
-* crash/restart simulation
-* topology simulation where practical
-
-Tests this enables:
-
-* script user actions and agent actions
-* assert model-facing context
-* assert no model request was triggered
-* assert model request was triggered
-* simulate in-flight model call plus user activity
-* simulate tool result plus piggyback context
-* simulate brain restart
-* simulate face disconnect/reconnect
-* simulate cache expiry and cleanup
-
-Exit condition:
-
-Later spikes can express behavioural requirements without each building a new test rig.
-
-Required spike outcomes:
-
-* user acceptance
-* spike outcome document listing what to integrate and what not to integrate
-
----
-
-## Pre-spike B: disposable spike harness foundation
-
-Purpose: create a minimal experimental harness loop that can be reused by several spikes, without becoming core.
+Purpose: a toy face+brain+limb loop running end-to-end against a fake provider, as the shared substrate every later spike needs.
 
 Should include:
 
-* basic session loop
-* fake or real model adapter boundary
-* minimal face abstraction
-* minimal brain abstraction
-* minimal limb abstraction
+* basic session loop, single process, append-only CLI
+* fake model provider behind an adapter boundary
+* minimal face, brain, and limb abstractions
 * user-tool context append path
 * agent-tool call path
 * simple persistence or pluggable recorder
-* enough streaming shape to test topology/lifecycle
+
+Test primitives (fake provider, fake workspace, scenario runner, deterministic clock, context/request assertions) are extracted from this and the next spikes as real pressure appears - they are not designed up front.
 
 Important constraint:
 
@@ -495,7 +454,7 @@ This code is not core. It is the shared experimental scaffold for spikes.
 
 Exit condition:
 
-Multiple spikes can run against this foundation without forcing premature core architecture decisions.
+A scripted toy scenario runs end-to-end: user activity appends context without triggering a request, a turn end triggers a request to the fake provider with the accumulated context, and an agent tool call round-trips.
 
 Required spike outcomes:
 
@@ -890,6 +849,8 @@ The eventual core should not be a direct copy of any spike. It should integrate 
 
 ## Core integration gates
 
+These are the checklist for integration acceptance (Gate 2 in `process.md`). They expand on the invariants in section 1.1.
+
 ### Gate 1: behavioural coverage
 
 Do the black-box tests still cover the full stakeholder breadth?
@@ -928,16 +889,15 @@ Is shared client state explicitly modeled, especially draft buffers, file edit s
 
 ### Gate 10: spike outcome review completed
 
-Has the spike produced a document saying what to integrate, what not to integrate, and how the result affects the full convex hull of requirements?
+Has the spike produced a document saying what to integrate, what not to integrate, and what requirements pressure appeared?
 
 ---
 
 # 5. Short version
 
-The implementation process should prove the harness as a shared in-band work system before building the final core.
+The implementation process should prove the harness as a shared in-band work system while building the core incrementally.
 
-Pre-spike A builds the test language.
-Pre-spike B builds a disposable spike harness.
-Each spike validates one risky behavioural cluster.
+Spike 0 builds a walking skeleton; test primitives are extracted from it.
+Each later spike validates one risky behavioural cluster.
 Each spike ends with user acceptance plus a document saying what to integrate and what not to integrate.
-Core integration only happens after behaviours are encoded as tests and reviewed against all stakeholder requirements.
+Core integration happens small and continuously: tests first at the public surfaces, fresh design from evidence, gated by the invariants.
