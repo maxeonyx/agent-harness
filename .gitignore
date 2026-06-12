@@ -1,4 +1,7 @@
 /target
+experiments/*/target/
+skeleton-session.jsonl
+fake-provider-requests.jsonl
 
 # Devenv
 .devenv*
