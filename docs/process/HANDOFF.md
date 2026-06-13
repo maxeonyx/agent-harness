@@ -29,10 +29,10 @@ The repo has explicit boundaries:
 Gate 1 for Spike 0, then the first small integration.
 
 1. User reads `docs/process/spikes/walking-skeleton-outcome.md` (optionally
-   after a fresh-context review) and accepts, redoes, or discards.
-2. User runs the real-provider smoke check (one command, needs an API key;
-   see `experiments/walking-skeleton/README.md`).
-3. On acceptance: pick the first core slice to integrate (fresh design from
+   after a fresh-context review) and accepts, redoes, or discards. The
+   real-provider smoke check is already done (user-run against OpenRouter,
+   2026-06-13, working well).
+2. On acceptance: pick the first core slice to integrate (fresh design from
    the evidence, black-box tests first at the public surfaces), or the next
    spike if integration is premature.
 
@@ -105,7 +105,7 @@ Known remaining failures:
 ## Open Questions
 
 - The eventual user-facing command name is still undecided.
-- How strictly different OpenAI-compatible endpoints agree on tool-call
-  encoding is unverified until the real-provider smoke run.
+- OpenAI-compat tool-call encoding is verified against OpenRouter (user smoke
+  run); other endpoints (Anthropic compat, OpenAI direct, local) unverified.
 - Task-handoff design (`docs/source-notes/handoff-improvements.md`) is source
   material, not an implemented API contract.

@@ -1,9 +1,9 @@
 # Spike Outcome: walking-skeleton
 
 Spike: walking-skeleton
-Status: evidence complete; awaiting Gate 1 (user acceptance). Real-provider
-smoke run pending — no API key was available in the build environment, so it
-is a one-command check for the user (see `experiments/walking-skeleton/README.md`).
+Status: evidence complete, including the real-provider smoke run (performed
+by the user against OpenRouter on 2026-06-13 — interactive session worked
+well); awaiting Gate 1 (user acceptance).
 Requirements tested: none by itself (Spike 0 is the shared substrate per
 `REQUIREMENTS.md`); exercises invariants 1, 2, 3, 4, 8.
 
@@ -31,8 +31,9 @@ Requirements tested: none by itself (Spike 0 is the shared substrate per
 
 ## What The Spike Failed To Prove
 
-- Real-provider behavior (tool-call quirks, auth, model naming across
-  OpenAI-compatible endpoints) — smoke run pending an API key.
+- Broad OpenAI-compat dialect coverage: OpenRouter is verified by the user's
+  smoke run; other endpoints (Anthropic compat, OpenAI direct, local servers)
+  remain unverified.
 - Streaming, multi-turn cache semantics, append-vs-rebuild, compaction.
 - Any persistence beyond an append-only JSONL event log; no querying.
 - Concurrency of any kind (single blocking thread throughout).
@@ -53,6 +54,9 @@ Shapes, not code (fresh design per invariant 8):
   fake provider's request log. This is the durable black-box test shape for
   the provider wire surface and should become the first promoted test
   primitive.
+- Printing usage help automatically on launch — the user called this out as
+  something they especially liked in the smoke run; keep it as a face
+  behavior.
 
 ## What Must Not Be Integrated
 
@@ -82,7 +86,8 @@ be re-implemented as the shared test primitive at that point.
 - Streaming is absent and will be needed for real interactive use; it will
   reshape the face↔brain interface and possibly the recorder.
 - OpenAI-compat dialect drift across providers (tool-call `arguments` string
-  encoding, system role handling) is unverified until the real smoke run.
+  encoding, system role handling): OpenRouter works; other endpoints
+  unverified.
 - The `/open` simulation reads files in the face; a real design must decide
   where user-tool compression lives (notes say the limb curates context).
 
