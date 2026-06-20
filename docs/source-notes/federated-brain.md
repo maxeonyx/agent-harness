@@ -1,0 +1,1 @@
+I like the idea of connecting my various long running brains together - federated. But actually, instead of them each having their own data, it might be nice for them to just all store all the data, that way I get backups by default. Sync all the data in the background. keep it clear where it came from, don't accidentally duplicate it or get it confused with local data.
