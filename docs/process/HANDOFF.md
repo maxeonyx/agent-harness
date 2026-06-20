@@ -3,13 +3,12 @@
 Status: Spike 0 (walking skeleton) built; evidence complete
 Active loop: Spike 0 awaiting Gate 1 (user acceptance of the outcome doc)
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
-resynced 2026-06-13 (gist revision of 2026-06-13)
+resynced 2026-06-20 (gist revision of 2026-06-20)
 
 ## Current Position
 
 The external design notes are imported in `docs/source-notes/`. The
-development process was reworked on 2026-06-13 — upstream in the gist
-(`process.md` second revision) and operationally in
+development process was reworked on 2026-06-13 — operationally in
 `docs/process/PROCESS.md` — replacing the heavy per-spike gate machinery with
 two gates (spike acceptance, integration acceptance), an invariants list in
 `docs/process/REQUIREMENTS.md`, and incremental integration starting from a
@@ -67,7 +66,14 @@ into the next gist sync.
 - Source notes resynced from the gist on 2026-06-13: the task-handoff design
   moved to `handoff-improvements.md` and was expanded; `user-turn.md` now
   states GUI/web support is built in from the start; new notes
-  `reference-codebases.md`, `stretch-goals.md`, and `tui-styling` were added.
+  `reference-codebases.md`, `stretch-goals.md`, and `tui-styling.md` were added.
+- Source notes resynced from the gist on 2026-06-20: new notes
+  `federated-brain.md`, `open-code-inspiration.md`, and `throbber-design.md`
+  added; `reference-codebases.md` expanded (Oh My Pi, re-implement-don't-copy
+  rule); `tui-styling` renamed to `tui-styling.md`. The AI-authored
+  implementation process plan was removed from the gist's `process.md` (it
+  lives only in `docs/process/PROCESS.md` now); the gist's `process.md` keeps
+  only the user's own informal process notes.
 - Process reworked on 2026-06-13 (gist + repo in the same change): two gates,
   invariants, walking-skeleton-first, tests-first scoped to core at public
   surfaces, test primitives extracted from spikes rather than pre-built.
