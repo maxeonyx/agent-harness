@@ -435,12 +435,12 @@ Test cases:
 
 ## Spike 0: walking skeleton
 
-Purpose: a toy face+brain+limb loop running end-to-end against a fake provider, as the shared substrate every later spike needs.
+Purpose: a toy face+brain+limb loop running end-to-end against a real provider, as the shared substrate every later spike needs. The harness talks to its provider over plain HTTP, so the same binary works against a real OpenAI-compatible endpoint and against a fake provider serving the same API.
 
 Should include:
 
 * basic session loop, single process, append-only CLI
-* fake model provider behind an adapter boundary
+* model provider behind an adapter boundary, run against a real endpoint, with a fake provider serving the same API for tests
 * minimal face, brain, and limb abstractions
 * user-tool context append path
 * agent-tool call path

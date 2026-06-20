@@ -3,7 +3,7 @@
 Status: Spike 0 (walking skeleton) built; evidence complete
 Active loop: Spike 0 awaiting Gate 1 (user acceptance of the outcome doc)
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
-resynced 2026-06-20 (gist revision of 2026-06-20)
+resynced 2026-06-20 (gist revision `8491f05`, real-provider Spike 0 scope)
 
 ## Current Position
 
@@ -39,8 +39,8 @@ Scope note: the user expanded Spike 0 scope on 2026-06-13 — real provider use
 is in scope for spikes ("I want to actually use it"); the fake provider for
 tests must be a separate HTTP server serving an OpenAI-compatible API. The
 spike implements both behind one adapter (real vs fake is just a base URL).
-Source-notes `requirements.md` §3 still says fake-only; fold the scope change
-into the next gist sync.
+The gist's `requirements.md` §3 now reflects this (real provider in scope),
+resynced into `docs/source-notes/` on 2026-06-20.
 
 ## User-Gated Decisions
 
@@ -74,6 +74,11 @@ into the next gist sync.
   implementation process plan was removed from the gist's `process.md` (it
   lives only in `docs/process/PROCESS.md` now); the gist's `process.md` keeps
   only the user's own informal process notes.
+- Source notes resynced from the gist on 2026-06-20 (gist `8491f05`):
+  `requirements.md` §3 Spike 0 now states the walking skeleton runs against a
+  real provider in scope (same binary, plain HTTP, real endpoint or fake
+  provider serving the same API), reconciling the spec with the 2026-06-13
+  scope expansion already recorded in `walking-skeleton-brief.md`.
 - Process reworked on 2026-06-13 (gist + repo in the same change): two gates,
   invariants, walking-skeleton-first, tests-first scoped to core at public
   surfaces, test primitives extracted from spikes rather than pre-built.
