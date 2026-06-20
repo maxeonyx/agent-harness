@@ -24,7 +24,7 @@ fn print_help() {
         "\
 agent-harness {}
 
-CORRUPTED HELP TEXT (red commit).
+Evented agent harness for coordinated face, brain, and workspace-runtime roles.
 
 Usage:
   agent-harness --help
