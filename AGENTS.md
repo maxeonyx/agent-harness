@@ -77,8 +77,13 @@ The design gist `014463e0964bebd0add4b914971c492f` is the upstream for
 3. Update the source-notes version line and evidence in
    `docs/process/HANDOFF.md`, and fix any process references to notes that
    moved or were renamed in the gist.
-4. Bump the patch version in `Cargo.toml`, `Cargo.lock`, and
-   `docs/version.json` — the release guard requires a new version per push.
+4. A notes-only sync needs no version bump. CI (and its release guard) only
+   triggers on the paths in `.github/workflows/ci.yml` — `Cargo.toml`,
+   `Cargo.lock`, `src/**`, `tests/**`, `scripts/**`, `.test-status.json`,
+   `docs/version.json`, etc. `docs/source-notes/` and `docs/process/` are not
+   in that list, so a docs-only change never reaches the guard. Only bump the
+   patch version in `Cargo.toml`, `Cargo.lock`, and `docs/version.json` when
+   the same change also touches a CI-triggering path.
 5. Run the commands below under `devenv` before committing.
 
 Source notes stay verbatim. Curation happens in `docs/process/`, never by
