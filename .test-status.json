@@ -4,10 +4,7 @@
     "agent-harness::gatekeeper$tdd_ratchet_gatekeeper": "passing",
     "agent-harness::help_examples$help_examples": "passing",
     "agent-harness::process_contract$binary_reports_plain_and_json_versions": "passing",
-    "agent-harness::process_contract$binary_reports_product_help": {
-      "state": "passing",
-      "baseline": "b4b82801165338d963412de1a7785b8f31be2f73"
-    }
+    "agent-harness::process_contract$binary_reports_product_help": "pending"
   },
   "baseline": "66542c39858cfa93877cab5a9655718f230087e6"
 }
