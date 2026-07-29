@@ -1,9 +1,13 @@
-//! The exit-condition scenario from the spike brief, asserted at the
-//! provider wire boundary: the fake provider records every request it
-//! receives, and the assertions read that log — not harness internals.
+//! The exit-condition scenarios from the spike brief, asserted at the
+//! public surfaces: the face's CLI output and the provider wire boundary
+//! (the fake provider records every request it receives). The harness
+//! drives stdin interactively and reads stdout live, so it can observe
+//! what the provider saw *between* steps — not just after the fact.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 struct KillOnDrop(Child);
 
@@ -14,102 +18,204 @@ impl Drop for KillOnDrop {
     }
 }
 
-#[test]
-fn walking_skeleton_scenario() {
-    let tmp = std::env::temp_dir().join(format!("walking-skeleton-test-{}", std::process::id()));
-    let workdir = tmp.join("workspace");
-    std::fs::create_dir_all(&workdir).unwrap();
-    std::fs::write(workdir.join("notes.txt"), "remember the milk\n").unwrap();
+struct FakeProvider {
+    _child: KillOnDrop,
+    addr: String,
+    requests_log: std::path::PathBuf,
+}
 
-    let script_path = tmp.join("script.json");
-    std::fs::write(
-        &script_path,
-        serde_json::json!([
-            { "tool_call": { "name": "list_files", "arguments": { "path": "." } } },
-            { "text": "I listed the files for you." }
-        ])
-        .to_string(),
-    )
-    .unwrap();
-    let requests_log = tmp.join("requests.jsonl");
-    let session_log = tmp.join("session.jsonl");
-
-    let mut provider = KillOnDrop(
-        Command::new(env!("CARGO_BIN_EXE_fake-provider"))
+impl FakeProvider {
+    fn start(tmp: &std::path::Path, script: serde_json::Value) -> Self {
+        let script_path = tmp.join("script.json");
+        std::fs::write(&script_path, script.to_string()).unwrap();
+        let requests_log = tmp.join("requests.jsonl");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_fake-provider"))
             .env("FAKE_PROVIDER_PORT", "0")
             .env("FAKE_PROVIDER_SCRIPT", &script_path)
             .env("FAKE_PROVIDER_LOG", &requests_log)
             .stdout(Stdio::piped())
             .spawn()
-            .expect("spawn fake provider"),
-    );
-    let mut first_line = String::new();
-    BufReader::new(provider.0.stdout.take().unwrap())
-        .read_line(&mut first_line)
-        .expect("read fake provider address");
-    let addr = first_line
-        .trim()
-        .strip_prefix("listening on ")
-        .expect("fake provider readiness line");
+            .expect("spawn fake provider");
+        let mut first_line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut first_line)
+            .expect("read fake provider address");
+        let addr = first_line
+            .trim()
+            .strip_prefix("listening on ")
+            .expect("fake provider readiness line")
+            .to_string();
+        FakeProvider {
+            _child: KillOnDrop(child),
+            addr,
+            requests_log,
+        }
+    }
 
-    let mut skeleton = Command::new(env!("CARGO_BIN_EXE_skeleton"))
-        .env("SKELETON_BASE_URL", format!("http://{addr}/v1"))
-        .env("SKELETON_MODEL", "fake-model")
-        .env("SKELETON_RECORD", &session_log)
-        .current_dir(&workdir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn skeleton");
-    skeleton
-        .stdin
-        .take()
+    fn requests(&self) -> Vec<serde_json::Value> {
+        match std::fs::read_to_string(&self.requests_log) {
+            Ok(text) => text
+                .lines()
+                .map(|l| serde_json::from_str(l).expect("request is valid JSON"))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+}
+
+/// The skeleton under test, driven through its public CLI surface.
+struct Skeleton {
+    child: KillOnDrop,
+    stdin: ChildStdin,
+    stdout_rx: mpsc::Receiver<String>,
+    seen: Vec<String>,
+}
+
+impl Skeleton {
+    fn start(
+        workdir: &std::path::Path,
+        provider_addr: &str,
+        session_log: &std::path::Path,
+    ) -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_skeleton"))
+            .env("SKELETON_BASE_URL", format!("http://{provider_addr}/v1"))
+            .env("SKELETON_MODEL", "fake-model")
+            .env("SKELETON_RECORD", session_log)
+            .current_dir(workdir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn skeleton");
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, stdout_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                match line {
+                    Ok(line) => {
+                        if tx.send(line).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Skeleton {
+            child: KillOnDrop(child),
+            stdin,
+            stdout_rx,
+            seen: Vec::new(),
+        }
+    }
+
+    fn send(&mut self, line: &str) {
+        writeln!(self.stdin, "{line}").expect("write to skeleton stdin");
+        self.stdin.flush().unwrap();
+    }
+
+    /// Wait until a stdout line containing `needle` arrives; returns all
+    /// lines seen so far (the needle line is last). Panics on timeout.
+    fn wait_for(&mut self, needle: &str) -> &[String] {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.stdout_rx.recv_timeout(remaining) {
+                Ok(line) => {
+                    let hit = line.contains(needle);
+                    self.seen.push(line);
+                    if hit {
+                        return &self.seen;
+                    }
+                }
+                Err(_) => panic!(
+                    "timed out waiting for {needle:?}; face output so far:\n{}",
+                    self.seen.join("\n")
+                ),
+            }
+        }
+    }
+
+    fn quit(mut self) {
+        self.send("/quit");
+        let status = self.child.0.wait().expect("skeleton exit");
+        assert!(status.success(), "skeleton exited with failure");
+    }
+}
+
+fn setup(name: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "walking-skeleton-test-{name}-{}",
+        std::process::id()
+    ));
+    std::fs::remove_dir_all(&tmp).ok();
+    std::fs::create_dir_all(tmp.join("workspace")).unwrap();
+    tmp
+}
+
+fn roles_and_content(request: &serde_json::Value) -> Vec<(String, String, bool)> {
+    request["messages"]
+        .as_array()
         .unwrap()
-        .write_all(b"hello, what files are here?\n/open notes.txt\n/end\n/quit\n")
-        .unwrap();
-    let output = skeleton.wait_with_output().expect("skeleton run");
-    assert!(output.status.success(), "skeleton exited with failure");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+        .iter()
+        .map(|m| {
+            (
+                m["role"].as_str().unwrap_or_default().to_string(),
+                m["content"].as_str().unwrap_or_default().to_string(),
+                m["tool_calls"].as_array().is_some_and(|c| !c.is_empty()),
+            )
+        })
+        .collect()
+}
+
+/// Exit condition (a): passive activity appends without triggering; ending
+/// the turn triggers exactly one request carrying the accumulated context;
+/// the tool round-trip produces exactly one more.
+#[test]
+fn append_never_triggers_and_turn_end_triggers_once() {
+    let tmp = setup("append");
+    let workdir = tmp.join("workspace");
+    std::fs::write(workdir.join("notes.txt"), "remember the milk\n").unwrap();
+
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            { "tool_call": { "name": "list_files", "arguments": { "path": "." } } },
+            { "text": "I listed the files for you." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("hello, what files are here?");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/open notes.txt");
+    skeleton.wait_for("[face] opened notes.txt");
+
+    // Observe the wire *between* the appends and the trigger: both appends
+    // are acknowledged at the face, and the provider has seen nothing.
+    std::thread::sleep(Duration::from_millis(300));
     assert!(
-        stdout.contains("I listed the files for you."),
-        "final agent text missing from face output:\n{stdout}"
+        provider.requests().is_empty(),
+        "appending must not trigger a provider request"
     );
 
-    // Provider wire boundary: exactly the requests the design says should
-    // exist. Two appends produced zero requests; one turn end produced one
-    // request; the tool round-trip produced exactly one more.
-    let requests: Vec<serde_json::Value> = std::fs::read_to_string(&requests_log)
-        .expect("requests log written")
-        .lines()
-        .map(|l| serde_json::from_str(l).expect("request is valid JSON"))
-        .collect();
+    skeleton.send("/end");
+    skeleton.wait_for("I listed the files for you.");
+    skeleton.wait_for("[brain] turn complete");
+    skeleton.quit();
+
+    let requests = provider.requests();
     assert_eq!(requests.len(), 2, "expected exactly two provider requests");
 
-    let messages_of = |request: &serde_json::Value| -> Vec<(String, String)> {
-        request["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| {
-                (
-                    m["role"].as_str().unwrap_or_default().to_string(),
-                    m["content"].as_str().unwrap_or_default().to_string(),
-                )
-            })
-            .collect()
-    };
-
-    // First request carries the accumulated context: the typed message and
-    // the piggybacked user activity, framed as user activity.
-    let first = messages_of(&requests[0]);
+    let first = roles_and_content(&requests[0]);
     assert!(
         first
             .iter()
-            .any(|(role, content)| role == "user" && content == "hello, what files are here?"),
+            .any(|(role, content, _)| role == "user" && content == "hello, what files are here?"),
         "typed user message missing from first request: {first:?}"
     );
     assert!(
-        first.iter().any(|(role, content)| role == "user"
+        first.iter().any(|(role, content, _)| role == "user"
             && content.starts_with("[user activity]")
             && content.contains("notes.txt")
             && content.contains("remember the milk")),
@@ -118,7 +224,7 @@ fn walking_skeleton_scenario() {
     assert!(
         !first
             .iter()
-            .any(|(role, _)| role == "tool" || role == "assistant"),
+            .any(|(role, _, _)| role == "tool" || role == "assistant"),
         "first request should predate any agent activity: {first:?}"
     );
     assert!(
@@ -128,52 +234,147 @@ fn walking_skeleton_scenario() {
         "first request should declare the limb's tools"
     );
 
-    // Second request carries the tool round-trip: the assistant tool call
-    // and the limb's result.
-    let second_messages = requests[1]["messages"].as_array().unwrap();
+    let second = roles_and_content(&requests[1]);
     assert!(
-        second_messages.iter().any(|m| m["role"] == "assistant"
-            && m["tool_calls"].as_array().is_some_and(|c| !c.is_empty())),
-        "assistant tool call missing from second request"
+        second
+            .iter()
+            .any(|(role, _, has_calls)| role == "assistant" && *has_calls),
+        "assistant tool call missing from second request: {second:?}"
     );
     assert!(
-        second_messages.iter().any(|m| m["role"] == "tool"
-            && m["content"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("notes.txt")),
-        "limb tool result missing from second request"
+        second
+            .iter()
+            .any(|(role, content, _)| role == "tool" && content.contains("notes.txt")),
+        "limb tool result missing from second request: {second:?}"
     );
 
-    // Recorder: both appends happened before inference was triggered, and
-    // appending alone sent nothing.
-    let events: Vec<String> = std::fs::read_to_string(&session_log)
-        .expect("session log written")
-        .lines()
-        .map(|l| {
-            serde_json::from_str::<serde_json::Value>(l).expect("event is valid JSON")["event"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        })
-        .collect();
-    let trigger_at = events
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// Exit condition (b): while a scripted bash sleep tool call runs, user
+/// activity arrives, the face remains responsive, and the activity
+/// piggybacks on the next request without splitting the tool-call exchange.
+#[test]
+fn user_activity_during_tool_call_piggybacks() {
+    let tmp = setup("piggyback");
+    let workdir = tmp.join("workspace");
+
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            { "tool_call": { "name": "bash", "arguments": { "command": "sleep 1; echo done" } } },
+            { "text": "All done." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("please run the slow thing");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("[limb] tool call: bash");
+
+    // The tool is now sleeping. The face must stay responsive: the staged
+    // acknowledgment has to arrive *before* the tool result does.
+    skeleton.send("by the way, another thought");
+    let seen = skeleton.wait_for("[face] staged user message");
+    assert!(
+        !seen.iter().any(|l| l.contains("[limb] tool result")),
+        "face acknowledged mid-tool message only after the tool finished:\n{}",
+        seen.join("\n")
+    );
+
+    skeleton.wait_for("All done.");
+    skeleton.wait_for("[brain] turn complete");
+    skeleton.quit();
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2, "expected exactly two provider requests");
+    let second = roles_and_content(&requests[1]);
+
+    let calls_at = second
         .iter()
-        .position(|e| e == "trigger_inference")
-        .expect("trigger_inference recorded");
-    assert!(
-        events[..trigger_at].contains(&"append_user_message".to_string())
-            && events[..trigger_at].contains(&"append_user_activity".to_string()),
-        "appends should precede the trigger: {events:?}"
-    );
-    assert!(
-        !events[..trigger_at].contains(&"request_sent".to_string()),
-        "no request may be sent before the turn ends: {events:?}"
-    );
+        .position(|(role, _, has_calls)| role == "assistant" && *has_calls)
+        .expect("assistant tool_calls message in second request");
     assert_eq!(
-        events.iter().filter(|e| *e == "request_sent").count(),
-        2,
-        "recorder should agree with the wire log on request count"
+        second[calls_at + 1].0,
+        "tool",
+        "tool result must immediately follow its tool_calls message; \
+         nothing may split the exchange: {second:?}"
+    );
+    let piggy_at = second
+        .iter()
+        .position(|(role, content, _)| role == "user" && content == "by the way, another thought")
+        .expect("piggybacked mid-tool user message in second request");
+    assert!(
+        piggy_at > calls_at + 1,
+        "piggybacked activity must ride after the tool exchange: {second:?}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// Exit condition (c): a cancel during an in-flight tool call drains and
+/// finalizes to a recorded cancelled outcome, visible at the face, with
+/// the session usable afterwards.
+#[test]
+fn cancel_during_tool_call_drains_and_session_continues() {
+    let tmp = setup("cancel");
+    let workdir = tmp.join("workspace");
+
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            { "tool_call": { "name": "bash", "arguments": { "command": "sleep 30; echo never" } } },
+            { "text": "Recovered fine." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("please run the very slow thing");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("[limb] tool call: bash");
+
+    let cancel_started = Instant::now();
+    skeleton.send("/cancel");
+    skeleton.wait_for("[limb] tool cancelled");
+    skeleton.wait_for("[brain] turn cancelled");
+    assert!(
+        cancel_started.elapsed() < Duration::from_secs(5),
+        "drain must not wait out the 30s child process"
+    );
+
+    // Finalized, not merely stopped: no follow-up request was sent.
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        provider.requests().len(),
+        1,
+        "a cancelled turn must not send a follow-up request"
+    );
+
+    // The session is still usable after the cancellation.
+    skeleton.send("still with me?");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("Recovered fine.");
+    skeleton.wait_for("[brain] turn complete");
+    skeleton.quit();
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2, "expected exactly two provider requests");
+    let second = roles_and_content(&requests[1]);
+    let calls_at = second
+        .iter()
+        .position(|(role, _, has_calls)| role == "assistant" && *has_calls)
+        .expect("assistant tool_calls message in second request");
+    assert_eq!(
+        second[calls_at + 1].0,
+        "tool",
+        "cancelled tool call still needs its tool result on the wire: {second:?}"
+    );
+    assert!(
+        second[calls_at + 1].1.contains("[tool cancelled]"),
+        "tool result must record the cancellation: {second:?}"
     );
 
     std::fs::remove_dir_all(&tmp).ok();

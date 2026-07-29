@@ -1,8 +1,9 @@
 # Agent Harness Process Handoff
 
-Status: Spike 0 (walking skeleton) Gate 1 decided 2026-07-30: redo
-Active loop: rebuilding the walking skeleton per the revised brief
-(async I/O, two select loops, events + projections, cancellation protocol)
+Status: Spike 0 (walking skeleton) rebuilt per the revised brief; evidence
+complete (scenarios + agent-run real-provider smoke)
+Active loop: redo awaiting the user's own smoke run and Gate 1 on
+`walking-skeleton-outcome.md`
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
 resynced 2026-07-30 (gist revision `084e2d3`, Anthropic OAuth references added)
 
@@ -26,11 +27,12 @@ The repo has explicit boundaries:
 
 ## Next Recommended Loop
 
-Rebuild the walking skeleton per the revised
-`docs/process/spikes/walking-skeleton-brief.md` (Gate 1 of the first
-attempt returned redo on 2026-07-30; findings and the acceptance record are
-in `walking-skeleton-outcome-v1.md`, and the requirement changes are in
-`REQUIREMENTS.md`). Then a fresh outcome doc and Gate 1 again.
+Gate 1 for the rebuilt skeleton: the user smoke-runs it (e.g.
+`experiments/walking-skeleton/run.ignore.sh` — a local launcher exists on
+the dev machine) and reads `walking-skeleton-outcome.md`, optionally after
+a fresh-context review. On acceptance: pick the first core slice to
+integrate (fresh design from the evidence, black-box tests first at the
+public surfaces), or the next spike if integration is premature.
 
 Scope note: the user expanded Spike 0 scope on 2026-06-13 — real provider use
 is in scope for spikes ("I want to actually use it"); the fake provider for

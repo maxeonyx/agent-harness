@@ -1,0 +1,143 @@
+# Spike Outcome: walking-skeleton (redo)
+
+Spike: walking-skeleton, rebuilt per the revised brief of 2026-07-30 (Gate 1
+of the first attempt: redo; see `walking-skeleton-outcome-v1.md`).
+Status: evidence complete from scripted scenarios and an agent-run
+real-provider smoke (OpenRouter, 2026-07-30: tool round-trip and
+cancel-during-tool both worked); awaiting the user's own smoke run and
+Gate 1.
+Requirements tested: none by itself (Spike 0 is the shared substrate);
+exercises invariants 2, 3, 4, 8, 9.
+
+## What The Spike Proved
+
+- The two-select-loop shape works and stays responsive: the face loop
+  (stdin + event rendering) and the brain's session loop (user events +
+  in-flight work) communicate only by channels. While a tool call sleeps,
+  typed user input is acknowledged at the face before the tool result
+  arrives — asserted in the scenario, not just observed.
+- Events-about-emitter with consumer projections is expressible and cheap:
+  one session event log is the source of truth; the face rendering, the
+  model context view, and the recorder JSONL are three projections of the
+  same events. `FileOpened` carries facts; the face shows path+bytes, the
+  model sees a compressed `[user activity]` framing.
+- Piggybacking works at the wire: user activity arriving mid-tool-call
+  appends without triggering and rides the next request *after* the tool
+  exchange — the `tool_calls` → `tool` adjacency is asserted on the fake
+  provider's request log. Append-never-triggers is now observed *between*
+  steps (the wire is checked empty after appends, before `/end`), fixing
+  the v1 review's evidence gap.
+- Cancellation as request → drain → finalize holds up, and it is cheap to
+  build on tokio primitives: `/cancel` during a 30s (test) / 60s (smoke)
+  bash tool call kills and reaps the child in well under a second, resolves
+  the tool to a `Cancelled` outcome (distinct from error), records a tool
+  result on the wire for the cancelled call (so the next request is
+  protocol-valid), resolves the turn as cancelled, and leaves the session
+  usable — the scenario continues with a second successful turn.
+- Nothing in flight ends without an outcome, structurally: every spawned
+  task sends exactly one resolution message back into the session loop
+  (cancel is signalled by token, and the drain waits for the resolution);
+  panics are converted to a `Panicked` outcome by a supervisor wrapper.
+  Attempts and outcomes are separate events, so the recorder records facts
+  — `request_attempt` is not a claim that a request succeeded.
+- The context lifecycle is visible in the code: `append` (incremental,
+  cache-friendly), `rebuild` (fresh projection of the whole log, a real
+  operation with a `/rebuild` surface and a `context_rebuilt` event), and
+  per-consumer views are distinct operations on the `Context` type.
+
+## What The Spike Failed To Prove
+
+- Rebuild is behaviorally identical to append today (no compaction, no
+  cache-expiry policy) — the seam exists, the policy does not.
+- Streaming remains absent (deliberately out of scope); interface
+  responsiveness during a long *non-streaming* request is proven, token
+  streaming is not.
+- Only one face, one session, one in-flight tool at a time. Parallel tool
+  calls from one response are executed sequentially.
+- Provider dialect coverage is unchanged from v1: OpenRouter works; other
+  endpoints unverified.
+- Cancel during a provider request resolves the turn correctly, but only
+  the fake provider path is scenario-asserted for cancel; the real-provider
+  smoke exercised cancel-during-tool.
+
+## What Should Be Integrated
+
+Shapes, not code (invariant 8):
+
+- One event log per session as source of truth, with face/model/recorder as
+  projections. The piggyback-ordering rule living *in the model-view
+  projection* (facts in arrival order; the view keeps tool exchanges
+  intact) was the key simplification — no queueing machinery.
+- The resolution-message discipline: in-flight work = a task + a
+  cancellation token + exactly one resolution message. Cancel = signal,
+  then await the same resolution path as success. Four-valued outcomes.
+- Attempt/outcome as separate recorded events.
+- The interactive scenario-test harness shape: drive stdin, read stdout
+  live, observe the wire between steps.
+
+## What Must Not Be Integrated
+
+- Any of this code by copying (invariant 8).
+- The broadcast-channel bus as *the* transport decision — it is one
+  in-process stand-in for the eventual face/brain/limb transport.
+- The `Vec<Event>` in-memory log and JSONL recorder as the storage design;
+  SQLite/storage is a later experiment (user direction).
+- Env-var-only configuration, the unrestricted bash tool, stateless
+  `Limb::new()` per tool call.
+
+## Tests To Promote Or Preserve
+
+`tests/scenario.rs` — three scenarios at the public surfaces (CLI in, face
+output + provider wire out): append-never-triggers observed between steps;
+mid-tool responsiveness + piggyback adjacency; cancel drain + session
+continuation. The interactive harness (send, wait_for, requests-between)
+is the durable black-box shape. These assert face output and wire only —
+no recorder-internal event names — so they can be re-derived without
+freezing the event taxonomy.
+
+## Requirements Pressure
+
+- None new. The Gate 1 direction of 2026-07-30 (invariant 3 reworded,
+  invariant 9 added, deferrals) is already recorded in `REQUIREMENTS.md`.
+
+## New Risks Or Open Questions
+
+- The session loop processes one resolution at a time and `drain` awaits
+  inline; with parallel tool calls or multiple sessions this single-loop
+  shape needs rethought (structured concurrency — asupersync territory).
+- `TurnEnd` during a live turn is recorded but does not re-trigger; whether
+  it should queue a follow-up turn is undecided.
+- The broadcast bus drops events for lagged consumers (recorder prints a
+  warning). Fine for a spike; a real recorder needs a lossless path.
+- Cancelling a provider request drops the connection; whether providers
+  bill for it, and whether a cancel should instead race a short grace
+  window, is unknown.
+- The face renders its own echo from the bus (multi-client-shaped), which
+  means user input acknowledgment round-trips through the brain. Fine
+  in-process; adds latency once the transport is real.
+
+## Invariants Check
+
+2. Upheld and now visible in the code: append/rebuild/view are distinct
+   operations on `Context`; appending never triggers (asserted at the wire,
+   between steps); triggering is explicit (`TurnEnd` when idle).
+3. Upheld as reworded: events are emitter-centric facts; face and model
+   views are projections and demonstrably differ (`FileOpened`,
+   tool outcomes).
+4. Upheld by construction, more honestly than v1: the brain talks to faces
+   only via the event bus and user-event channel; the face never touches
+   the provider; the limb owns tool execution and its own drain. Still
+   co-located in one process; splitting is untested (as the notes expect).
+8. Upheld — everything lives in `experiments/walking-skeleton/`.
+9. Upheld within scope: request → drain → finalize with four-valued
+   outcomes; every attempt resolves; cancelled is not an error; the child
+   process is reaped, never abandoned.
+1. Explicitly out of scope for the skeleton (user direction at Gate 1).
+
+## Review Result
+
+Pending (fresh-context review at Gate 1, user's call).
+
+## User Acceptance
+
+Pending.
