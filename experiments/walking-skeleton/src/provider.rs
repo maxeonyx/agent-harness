@@ -40,6 +40,8 @@ pub struct ChatRequest {
     pub messages: Vec<WireMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]

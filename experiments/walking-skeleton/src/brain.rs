@@ -17,6 +17,7 @@ pub struct Config {
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,
+    pub reasoning_effort: Option<String>,
 }
 
 impl Config {
@@ -26,6 +27,7 @@ impl Config {
                 .unwrap_or_else(|_| "http://127.0.0.1:8089/v1".to_string()),
             api_key: std::env::var("SKELETON_API_KEY").ok(),
             model: std::env::var("SKELETON_MODEL").unwrap_or_else(|_| "fake-model".to_string()),
+            reasoning_effort: std::env::var("SKELETON_REASONING_EFFORT").ok(),
         }
     }
 }
@@ -174,6 +176,7 @@ impl Brain {
             model: self.config.model.clone(),
             messages,
             tools: Some(self.limb.tool_defs()),
+            reasoning_effort: self.config.reasoning_effort.clone(),
         }
     }
 }
