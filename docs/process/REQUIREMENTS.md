@@ -19,9 +19,14 @@ these stops and goes to the user.
 2. Recording context, appending context, rebuilding context, and triggering
    inference are distinct operations. Passive user activity never triggers a
    model request.
-3. User-tool activity is framed as user activity, never as agent tool calls.
-   Each user tool keeps two surfaces: rich interactive UI for the user,
-   compressed context for the model.
+3. All activity has multiple views. An event is about its emitter, not *for*
+   anyone; the consumer (or some helpful middle layer) does the projection if
+   needed. Events to the model, maybe different for different models; events
+   to the user, maybe different for different interfaces / settings; context
+   rebuild may use a different view to a fresh append, for both. (Reworded at
+   Gate 1 of Spike 0, 2026-07-30; the original user-tool framing rule — user
+   activity is framed as user activity, never as agent tool calls — still
+   holds as one projection of this.)
 4. Face, brain, and limb are logical roles. Co-location versus splitting is a
    deployment choice over the same logical model.
 5. Durable session data is analytics-grade and queryable. Durable,
@@ -33,6 +38,11 @@ these stops and goes to the user.
    overwrite newer state; the user wins on conflicting edits.
 8. Spike code never becomes core by copying. Core integration is a fresh
    design from evidence.
+9. Cancellation is modeled well, baked in from the start — it is really,
+   really important for a solid UX. Cancellation is an explicit
+   request → drain → finalize protocol; anything in flight ends with a
+   recorded outcome, and cancelled is distinct from error. (Added at Gate 1
+   of Spike 0, 2026-07-30; modeling inspiration: Dicklesworthstone/asupersync.)
 
 ## Requirement areas and validation status
 
@@ -52,4 +62,25 @@ shared substrate the others run on.
 
 ## Requirement changes from spike evidence
 
-None yet.
+Gate 1 of Spike 0 (walking skeleton), 2026-07-30 — user direction after a
+fresh-context review returned findings. Result: redo. The goal of the
+skeleton is to have something for the rest of the work to build on: real
+provider, real minimal interface, real code and provisional abstractions.
+
+- Invariant 3 reworded (above): "all activity has multiple views."
+- Invariant 9 added (above): cancellation baked in from the start.
+- The skeleton needs async I/O from the start. There are at least two select
+  loops: the face loop and the agent loop. The agent loop manages one
+  session's model / tool-call loop, gets additional events from the user, and
+  sends events to the interface(s). The brain handles these session /
+  subsession loops. Face is an abstraction.
+- Invariant 1 (credentials) is "not at all important for the skeleton —
+  that's details"; something more principled later. No key scrub now.
+- Invariant 2 (context lifecycle) matters for the skeleton: it affects the
+  code architecture and wasn't visibly there in the first attempt.
+- Deferred by user direction: tool-calling details / robustness / improvements
+  (a later experiment); provider streaming ("event based but a kind of
+  ephemeral event that's just extra complexity right now"); a full
+  error-case variety in the fake provider; per-model / per-interface view
+  variation; SQLite storage design (a later experiment); subagents (out of
+  scope).

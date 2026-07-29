@@ -1,7 +1,8 @@
 # Agent Harness Process Handoff
 
-Status: Spike 0 (walking skeleton) built; evidence complete
-Active loop: Spike 0 awaiting Gate 1 (user acceptance of the outcome doc)
+Status: Spike 0 (walking skeleton) Gate 1 decided 2026-07-30: redo
+Active loop: rebuilding the walking skeleton per the revised brief
+(async I/O, two select loops, events + projections, cancellation protocol)
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
 resynced 2026-07-30 (gist revision `084e2d3`, Anthropic OAuth references added)
 
@@ -25,15 +26,11 @@ The repo has explicit boundaries:
 
 ## Next Recommended Loop
 
-Gate 1 for Spike 0, then the first small integration.
-
-1. User reads `docs/process/spikes/walking-skeleton-outcome.md` (optionally
-   after a fresh-context review) and accepts, redoes, or discards. The
-   real-provider smoke check is already done (user-run against OpenRouter,
-   2026-06-13, working well).
-2. On acceptance: pick the first core slice to integrate (fresh design from
-   the evidence, black-box tests first at the public surfaces), or the next
-   spike if integration is premature.
+Rebuild the walking skeleton per the revised
+`docs/process/spikes/walking-skeleton-brief.md` (Gate 1 of the first
+attempt returned redo on 2026-07-30; findings and the acceptance record are
+in `walking-skeleton-outcome-v1.md`, and the requirement changes are in
+`REQUIREMENTS.md`). Then a fresh outcome doc and Gate 1 again.
 
 Scope note: the user expanded Spike 0 scope on 2026-06-13 — real provider use
 is in scope for spikes ("I want to actually use it"); the fake provider for
@@ -46,7 +43,9 @@ resynced into `docs/source-notes/` on 2026-06-20.
 
 - Gate 1 (spike acceptance) and Gate 2 (integration acceptance) always involve
   the user; see `PROCESS.md`.
-- Gate 1 for the walking-skeleton outcome doc is open now.
+- Gate 1 for the walking-skeleton first attempt closed 2026-07-30: redo, with
+  direction (see `REQUIREMENTS.md` requirement changes). Gate 1 for the redo
+  will open when its outcome doc exists.
 
 ## Do Not Integrate Yet
 

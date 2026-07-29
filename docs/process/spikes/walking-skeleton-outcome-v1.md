@@ -1,9 +1,10 @@
-# Spike Outcome: walking-skeleton
+# Spike Outcome: walking-skeleton (v1 — Gate 1 result: redo)
 
-Spike: walking-skeleton
-Status: evidence complete, including the real-provider smoke run (performed
-by the user against OpenRouter on 2026-06-13 — interactive session worked
-well); awaiting Gate 1 (user acceptance).
+Spike: walking-skeleton (first attempt; superseded by the revised brief of
+2026-07-30)
+Status: Gate 1 decided 2026-07-30: redo. Evidence was complete, including
+the real-provider smoke run (performed by the user against OpenRouter on
+2026-06-13 — interactive session worked well).
 Requirements tested: none by itself (Spike 0 is the shared substrate per
 `REQUIREMENTS.md`); exercises invariants 1, 2, 3, 4, 8.
 
@@ -104,8 +105,26 @@ be re-implemented as the shared test primitive at that point.
 
 ## Review Result
 
-Pending (fresh-context review optional at Gate 1, user's call).
+Fresh-context adversarial review (two passes, 2026-07-30) returned findings
+rather than acceptance. Highlights: invariant 1 violated (unrestricted bash
+inherits the key env var; key reachable from tool results/logs/context);
+invariants 2/3/4 overclaimed relative to the evidence; the recorder records
+intentions as facts (`request_sent` before HTTP success, no
+failure/correlation events); the scenario test encodes the accidental
+blocking model and asserts private JSONL event names; the fake provider is
+a serial happy-path fixture; per-request context rebuild is not evidence
+for a durable context shape; concurrency forces an unresolved wire-ordering
+decision (mid-loop user activity vs. the tool_calls/tool exchange).
 
 ## User Acceptance
 
-Pending.
+Redo (2026-07-30). The user was very happy with the behaviour of the
+skeleton, but the skeleton's goal is to be something the rest of the work
+builds on — real provider, real minimal interface, real code and
+provisional abstractions — and it was short on some of those: async I/O
+from the start, two select loops, face as an abstraction, context lifecycle
+visible in the code, cancellation baked in. Direction recorded in
+`REQUIREMENTS.md` (invariant 3 reworded, invariant 9 added, deferrals) and
+the revised `walking-skeleton-brief.md`. Not everything in the findings was
+adopted: invariant 1 is explicitly not important for the skeleton, and
+tool-call robustness is a later experiment.
