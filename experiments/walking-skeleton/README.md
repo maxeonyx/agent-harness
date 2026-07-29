@@ -30,6 +30,20 @@ SKELETON_MODEL=claude-sonnet-4-6 \
   cargo run --bin skeleton
 ```
 
+OpenRouter, with optional reasoning effort (`SKELETON_REASONING_EFFORT` sends
+`reasoning_effort` in the request when set; omit it for models that don't
+support it):
+
+```bash
+SKELETON_BASE_URL=https://openrouter.ai/api/v1 \
+SKELETON_API_KEY=$OPENROUTER_API_KEY \
+SKELETON_MODEL=openai/gpt-5.6-terra \
+SKELETON_REASONING_EFFORT=medium \
+  cargo run --bin skeleton
+```
+
+A local launcher with your own key can live at `run.ignore.sh` (gitignored).
+
 ## CLI
 
 - `<text>` — stage a user message (appends to context, never triggers)
