@@ -3,7 +3,7 @@
 Status: Spike 0 (walking skeleton) built; evidence complete
 Active loop: Spike 0 awaiting Gate 1 (user acceptance of the outcome doc)
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
-resynced 2026-06-20 (gist revision `8491f05`, real-provider Spike 0 scope)
+resynced 2026-07-30 (gist revision `084e2d3`, Anthropic OAuth references added)
 
 ## Current Position
 
@@ -79,6 +79,10 @@ resynced into `docs/source-notes/` on 2026-06-20.
   real provider in scope (same binary, plain HTTP, real endpoint or fake
   provider serving the same API), reconciling the spec with the 2026-06-13
   scope expansion already recorded in `walking-skeleton-brief.md`.
+- Source notes resynced from the gist on 2026-07-30 (gist `084e2d3`, authored
+  2026-07-24): new note `anthropic-oauth-references.md` — reference
+  implementations for getting a Claude subscription (OAuth) working with
+  third-party harnesses; no other notes changed.
 - Process reworked on 2026-06-13 (gist + repo in the same change): two gates,
   invariants, walking-skeleton-first, tests-first scoped to core at public
   surfaces, test primitives extracted from spikes rather than pre-built.
