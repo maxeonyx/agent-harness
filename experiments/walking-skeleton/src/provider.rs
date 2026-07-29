@@ -1,6 +1,7 @@
-//! OpenAI-compatible chat-completions wire types and the HTTP client.
+//! OpenAI-compatible chat-completions wire types and the async HTTP client.
 //! The same client talks to a real provider or the fake-provider server;
-//! only the base URL and API key differ.
+//! only the base URL and API key differ. Requests are cancellable by
+//! dropping the future (the brain aborts the request task to cancel).
 
 use serde::{Deserialize, Serialize};
 
@@ -54,26 +55,28 @@ pub struct ChatResponse {
     pub choices: Vec<Choice>,
 }
 
-pub fn send(
+pub async fn send(
+    client: &reqwest::Client,
     base_url: &str,
     api_key: Option<&str>,
     request: &ChatRequest,
 ) -> Result<ChatResponse, String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let body = serde_json::to_string(request).map_err(|e| format!("serialize request: {e}"))?;
-    let mut req = ureq::post(&url).set("content-type", "application/json");
+    let mut req = client.post(&url).json(request);
     if let Some(key) = api_key {
-        req = req.set("authorization", &format!("Bearer {key}"));
+        req = req.bearer_auth(key);
     }
-    let response = req.send_string(&body).map_err(|e| match e {
-        ureq::Error::Status(code, resp) => {
-            let detail = resp.into_string().unwrap_or_default();
-            format!("provider returned {code}: {detail}")
-        }
-        other => format!("provider request failed: {other}"),
-    })?;
+    let response = req
+        .send()
+        .await
+        .map_err(|e| format!("provider request failed: {e}"))?;
+    let status = response.status();
     let text = response
-        .into_string()
+        .text()
+        .await
         .map_err(|e| format!("read response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("provider returned {status}: {text}"));
+    }
     serde_json::from_str(&text).map_err(|e| format!("parse response: {e}; body: {text}"))
 }

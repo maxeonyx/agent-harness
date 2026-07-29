@@ -52,6 +52,12 @@ fn main() {
             .unwrap_or_else(|| json!({ "text": "fake provider script exhausted" }));
         step_index += 1;
 
+        // Optional per-step delay: lets tests hold a request in flight
+        // (e.g. to cancel it, or to interleave user activity).
+        if let Some(delay_ms) = step.get("delay_ms").and_then(|v| v.as_u64()) {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+
         let message = if let Some(tool_call) = step.get("tool_call") {
             json!({
                 "role": "assistant",
