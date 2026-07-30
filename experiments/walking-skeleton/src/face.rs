@@ -4,7 +4,6 @@
 //! its own view, distinct from the model's view of the same events.
 
 use crate::events::{Event, EventKind, Outcome};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{broadcast, mpsc};
 
 pub fn print_help(base_url: &str, model: &str) {
@@ -14,27 +13,50 @@ pub fn print_help(base_url: &str, model: &str) {
     println!("  /end          end the turn (triggers inference)");
     println!("  /cancel       cancel in-flight work (request or tool call)");
     println!("  /rebuild      rebuild the context from the event log");
+    println!("  /dump         open the model view (markdown) in $EDITOR, default nano");
     println!("  /quit         exit");
+}
+
+enum Input {
+    Line(String),
+    Eof,
 }
 
 /// Run the face loop until the session closes its event stream.
 pub async fn run(user_tx: mpsc::Sender<EventKind>, mut bus_rx: broadcast::Receiver<Event>) {
-    let stdin = BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
-    let mut stdin_open = true;
+    // Stdin is read by a dedicated thread so that /dump can hand the
+    // terminal to an editor with *no read pending on the tty* — after
+    // sending a /dump line the thread parks until the editor is done.
+    let (line_tx, mut line_rx) = mpsc::channel::<Input>(16);
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else { break };
+            let is_dump = line.trim() == "/dump";
+            if line_tx.blocking_send(Input::Line(line)).is_err() {
+                return;
+            }
+            if is_dump && resume_rx.recv().is_err() {
+                return;
+            }
+        }
+        let _ = line_tx.blocking_send(Input::Eof);
+    });
+
     loop {
         tokio::select! {
-            line = lines.next_line(), if stdin_open => {
-                match line {
-                    Ok(Some(line)) => {
+            input = line_rx.recv() => {
+                match input {
+                    Some(Input::Line(line)) => {
                         if let Some(kind) = parse_line(line.trim())
                             && user_tx.send(kind).await.is_err()
                         {
                             break; // brain is gone
                         }
                     }
-                    Ok(None) | Err(_) => {
-                        stdin_open = false;
+                    Some(Input::Eof) | None => {
                         let _ = user_tx.send(EventKind::Quit).await;
                     }
                 }
@@ -44,6 +66,13 @@ pub async fn run(user_tx: mpsc::Sender<EventKind>, mut bus_rx: broadcast::Receiv
                     Ok(event) => {
                         if let Some(line) = render(&event) {
                             println!("{line}");
+                        }
+                        if let EventKind::ContextDumped { outcome: Outcome::Ok { value } } = &event.kind {
+                            // The editor owns the terminal until it exits;
+                            // bus events buffer, the stdin thread is parked.
+                            run_editor(value.clone()).await;
+                            println!("[face] returned from dump");
+                            let _ = resume_tx.send(());
                         }
                         if matches!(event.kind, EventKind::SessionClosed) {
                             break;
@@ -59,6 +88,22 @@ pub async fn run(user_tx: mpsc::Sender<EventKind>, mut bus_rx: broadcast::Receiv
     }
 }
 
+/// Open the dump in the user's editor (a plain command name; default nano)
+/// and wait for it to exit.
+async fn run_editor(path: String) {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
+    let result = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&editor).arg(&path).status()
+    })
+    .await;
+    match result {
+        Ok(Ok(status)) if status.success() => {}
+        Ok(Ok(status)) => println!("[face] editor exited with {status}"),
+        Ok(Err(e)) => println!("[face] failed to launch editor: {e}"),
+        Err(e) => println!("[face] editor task failed: {e}"),
+    }
+}
+
 /// Parse one input line into a user event, or handle it locally.
 fn parse_line(line: &str) -> Option<EventKind> {
     if line.is_empty() {
@@ -69,6 +114,7 @@ fn parse_line(line: &str) -> Option<EventKind> {
         "/end" => Some(EventKind::TurnEnd),
         "/cancel" => Some(EventKind::CancelRequest),
         "/rebuild" => Some(EventKind::RebuildRequest),
+        "/dump" => Some(EventKind::DumpRequest),
         _ => {
             if let Some(path) = line.strip_prefix("/open ") {
                 // A user tool: the face reads the file and emits the facts.
@@ -137,7 +183,16 @@ fn render(event: &Event) -> Option<String> {
         EventKind::ContextRebuilt { wire_messages } => Some(format!(
             "[brain] context rebuilt ({wire_messages} wire messages)"
         )),
+        EventKind::ContextDumped { outcome } => match outcome {
+            Outcome::Ok { value } => Some(format!("[face] dump written to {value}")),
+            Outcome::Err { error } => Some(format!("[face] dump failed: {error}")),
+            Outcome::Cancelled { reason } => Some(format!("[face] dump cancelled: {reason}")),
+            Outcome::Panicked { payload } => Some(format!("[face] dump panicked: {payload}")),
+        },
         EventKind::SessionClosed => Some("[brain] session closed".to_string()),
-        EventKind::TurnEnd | EventKind::RebuildRequest | EventKind::Quit => None,
+        EventKind::TurnEnd
+        | EventKind::RebuildRequest
+        | EventKind::DumpRequest
+        | EventKind::Quit => None,
     }
 }

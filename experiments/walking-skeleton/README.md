@@ -57,6 +57,11 @@ A local launcher with your own key can live at `run.ignore.sh` (gitignored).
   recorded outcome, not an error
 - `/rebuild` — rebuild the model context view from the event log (a
   distinct operation from incremental append; no compaction policy yet)
+- `/dump` — introspect the ~exact context as the model sees it: opens a
+  markdown rendering of the model view in `$EDITOR` (default `nano`; a
+  plain command name, no arguments), then returns to the face. Everything
+  the model *cannot* see — non-wire events, piggyback annotations — is in
+  HTML comments. The stdin reader parks while the editor owns the terminal.
 - `/quit` — exit (drains in-flight work first)
 
 ## Scenario evidence

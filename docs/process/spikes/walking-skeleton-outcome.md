@@ -44,6 +44,14 @@ exercises invariants 2, 3, 4, 8, 9.
   cache-friendly), `rebuild` (fresh projection of the whole log, a real
   operation with a `/rebuild` surface and a `context_rebuilt` event), and
   per-consumer views are distinct operations on the `Context` type.
+- Introspection is just another projection: `/dump` renders the ~exact
+  model view as markdown — wire order, verbatim content, tool calls
+  visible — with everything the model *cannot* see (non-wire events,
+  piggyback/arrival annotations, held entries) in HTML comments, opened in
+  `$EDITOR` and returning to the face on exit. Asserted in a scenario and
+  smoke-run against the real provider. The dump makes the piggyback answer
+  directly observable: concurrent user events are appended *after* the
+  tool exchange, never between `tool_calls` and its result.
 
 ## What The Spike Failed To Prove
 
@@ -115,6 +123,15 @@ freezing the event taxonomy.
 - The face renders its own echo from the bus (multi-client-shaped), which
   means user input acknowledgment round-trips through the brain. Fine
   in-process; adds latency once the transport is real.
+- Wire ordering of concurrent user events (user direction, 2026-07-30,
+  after inspecting /dump behavior): currently they are appended after the
+  tool exchange. "I think it maybe should be chronological where possible,
+  although the model might get a little confused when a tool call is not
+  right next to its result? Possibly we should even re-write model
+  responses to occur after the user events that happened while we were
+  waiting for it? Maybe not though — that's a trickier one. Technically
+  there's just no total ordering." Open design question for the context
+  view; /dump exists to make experiments here observable.
 
 ## Invariants Check
 
