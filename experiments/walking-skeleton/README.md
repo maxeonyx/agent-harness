@@ -62,6 +62,9 @@ A local launcher with your own key can live at `run.ignore.sh` (gitignored).
   plain command name, no arguments), then returns to the face. Everything
   the model *cannot* see — non-wire events, piggyback annotations — is in
   HTML comments. The stdin reader parks while the editor owns the terminal.
+  The face projects the dump itself from the shared session log and writes
+  the file on its own filesystem — no shared-FS assumption between roles
+  (invariant 10).
 - `/quit` — exit (drains in-flight work first)
 
 ## Scenario evidence

@@ -14,6 +14,7 @@ use crate::context::Context;
 use crate::events::{AssistantMessage, Event, EventKind, Outcome};
 use crate::limb::Limb;
 use crate::provider::{self, ChatRequest, ToolCall};
+use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -65,7 +66,12 @@ pub struct Session {
     config: Config,
     limb: Limb,
     client: reqwest::Client,
-    context: Context,
+    /// The session log and its cached projections. The brain is the only
+    /// writer. In this co-located deployment other roles (the face) read
+    /// the same shared log directly; a remote face would instead keep or
+    /// request enough of the log for its queries. See the TODO on
+    /// `Context` about being cleverer than a mutex.
+    context: Arc<Mutex<Context>>,
     bus: broadcast::Sender<Event>,
     done_tx: mpsc::Sender<Resolved>,
     next_request_id: u64,
@@ -84,13 +90,14 @@ impl Session {
         limb: Limb,
         bus: broadcast::Sender<Event>,
         mut user_rx: mpsc::Receiver<EventKind>,
+        context: Arc<Mutex<Context>>,
     ) {
         let (done_tx, mut done_rx) = mpsc::channel::<Resolved>(16);
         let mut session = Session {
             config,
             limb,
             client: reqwest::Client::new(),
-            context: Context::new(),
+            context,
             bus,
             done_tx,
             next_request_id: 0,
@@ -98,6 +105,9 @@ impl Session {
             turn_live: false,
             in_flight: InFlight::Idle,
         };
+        session.emit(EventKind::SessionStarted {
+            system_prompt: SYSTEM_PROMPT.to_string(),
+        });
 
         loop {
             tokio::select! {
@@ -121,7 +131,7 @@ impl Session {
     }
 
     fn emit(&mut self, kind: EventKind) {
-        let event = self.context.append(kind);
+        let event = self.context.lock().expect("context poisoned").append(kind);
         // Receivers may lag or be gone; events remain in the log.
         let _ = self.bus.send(event);
     }
@@ -153,26 +163,14 @@ impl Session {
             }
             EventKind::RebuildRequest => {
                 self.emit(EventKind::RebuildRequest);
-                let wire_messages = self.context.rebuild();
+                let wire_messages = self.context.lock().expect("context poisoned").rebuild();
                 self.emit(EventKind::ContextRebuilt { wire_messages });
             }
             EventKind::DumpRequest => {
+                // A fact, not a request/reply: the face (any consumer)
+                // projects the dump from the shared log itself when it
+                // sees this event come back on the bus.
                 self.emit(EventKind::DumpRequest);
-                let dump = self.context.dump_view(SYSTEM_PROMPT);
-                let path = std::env::temp_dir().join(format!(
-                    "skeleton-dump-{}-{}.md",
-                    std::process::id(),
-                    crate::events::now_ms()
-                ));
-                let outcome = match std::fs::write(&path, dump) {
-                    Ok(()) => Outcome::Ok {
-                        value: path.to_string_lossy().into_owned(),
-                    },
-                    Err(e) => Outcome::Err {
-                        error: format!("failed to write dump {}: {e}", path.display()),
-                    },
-                };
-                self.emit(EventKind::ContextDumped { outcome });
             }
             EventKind::Quit => {
                 self.emit(EventKind::Quit);
@@ -267,7 +265,7 @@ impl Session {
         });
         let request = ChatRequest {
             model: self.config.model.clone(),
-            messages: self.context.model_view(SYSTEM_PROMPT),
+            messages: self.context.lock().expect("context poisoned").model_view(),
             tools: Some(self.limb.tool_defs()),
             reasoning_effort: self.config.reasoning_effort.clone(),
         };
