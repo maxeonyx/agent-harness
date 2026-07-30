@@ -219,6 +219,21 @@ impl Limb {
                 };
             }
         };
+        // The group id, captured while the shell is provably alive (its
+        // pid is None after a successful wait). The group's lifetime is
+        // the *operation's* lifetime: whichever way the call resolves —
+        // completed, failed, or cancelled — the group dies with it, so a
+        // tool that backgrounds a child cannot leak it past its own
+        // resolution.
+        let group = child.id();
+        let kill_group = || {
+            if let Some(pid) = group {
+                // SAFETY: plain non-blocking syscall on the group we
+                // created for this call. If every member is already dead
+                // it is a harmless ESRCH.
+                unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            }
+        };
 
         // Read both pipes truly concurrently: a child that fills one pipe
         // while we drain only the other would deadlock (it cannot exit
@@ -244,7 +259,13 @@ impl Limb {
         });
 
         tokio::select! {
-            result = child.wait() => match result {
+            result = child.wait() => {
+                // The shell resolved the operation; end the whole group
+                // *before* draining the pipes, so a backgrounded
+                // descendant can neither outlive the call nor hold the
+                // pipes open indefinitely.
+                kill_group();
+                match result {
                 Ok(status) => {
                     let (stdout, stderr) = match readers.await {
                         Ok(output) => output,
@@ -269,21 +290,17 @@ impl Limb {
                 Err(e) => Outcome::Err {
                     error: format!("error waiting for command: {e}"),
                 },
-            },
+            }},
             _ = cancel.cancelled() => {
-                // Drain: kill the whole process group we created (the
-                // kill(2) syscall does not block), then reap the shell
-                // asynchronously before resolving. Grandchildren were
-                // ours to kill via the group; they reparent to init for
-                // reaping.
-                if let Some(pid) = child.id() {
-                    // SAFETY: plain syscall; pid is our own live child's
-                    // group id.
-                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-                }
+                // Drain: kill the group (non-blocking syscall), reap the
+                // shell asynchronously, and *join* the reader task — the
+                // group kill closed every pipe writer, so the readers hit
+                // EOF and finish; nothing is detached. Grandchildren were
+                // ours to kill via the group; init reaps them.
+                kill_group();
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                readers.abort();
+                let _ = readers.await;
                 Outcome::Cancelled {
                     reason: "cancelled by user; child process tree killed".to_string(),
                 }
