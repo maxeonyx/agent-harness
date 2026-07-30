@@ -116,4 +116,17 @@ Further direction during the redo, 2026-07-30 (at /dump review):
   Examples: skills, tools, environment facts like time, hostname, model."
 - The rendering of API requests must share code with the rendering of the
   context dump — a dump missing something the model sees (as happened
-  with tool schemas) "must be impossible somehow".
+  with tool schemas) "must be impossible somehow". Scope ruling (user):
+  `model` and `reasoning_effort` staying outside that shared projection is
+  fine — "those are not part of the *context*, only part of the
+  *request*".
+- Limb ownership (user, at review round 1): "the brain runs the agent
+  loop for a session, but the limb owns a particular environment
+  including the context that it provides. A session has a limb at the
+  logical level, but not at the memory ownership level necessarily."
+- Structured lifecycle: the skeleton "should lead by example on this
+  stuff" (no detached threads, no process::exit escape hatches).
+- Future experiment (user): a "refined event-based replication protocol —
+  build a somewhat generic event streaming system and re-build the
+  harness innards on top of that." One shared bus and untyped channels
+  are fine until then.

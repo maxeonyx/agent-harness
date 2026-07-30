@@ -84,9 +84,9 @@ exercises invariants 2, 3, 4, 8, 9.
   calls from one response are executed sequentially.
 - Provider dialect coverage is unchanged from v1: OpenRouter works; other
   endpoints unverified.
-- Cancel during a provider request resolves the turn correctly, but only
-  the fake provider path is scenario-asserted for cancel; the real-provider
-  smoke exercised cancel-during-tool.
+- Real-provider cancel coverage: the smoke runs exercised
+  cancel-during-tool; cancel-during-request is scenario-asserted against
+  the fake provider only.
 
 ## What Should Be Integrated
 
@@ -110,8 +110,7 @@ Shapes, not code (invariant 8):
   in-process stand-in for the eventual face/brain/limb transport.
 - The `Vec<Event>` in-memory log and JSONL recorder as the storage design;
   SQLite/storage is a later experiment (user direction).
-- Env-var-only configuration, the unrestricted bash tool, stateless
-  `Limb::new()` per tool call.
+- Env-var-only configuration, the unrestricted bash tool.
 
 ## Tests To Promote Or Preserve
 
@@ -181,7 +180,35 @@ freezing the event taxonomy.
 
 ## Review Result
 
-Pending (fresh-context review at Gate 1, user's call).
+Thermonuclear review round 1 (fresh-context, 2026-07-30) returned 8
+findings. User triage and the resulting changes:
+
+- Fixed: the drain race (a cancel/quit drain could process a completion
+  and launch new work — now `record_resolution` is shared but only the
+  normal path can advance; a drain structurally cannot start work). Note:
+  the completion-wins-the-race case is not black-box testable
+  deterministically; the guarantee is structural, not race-tested.
+- Fixed: the limb is its own loop owning its environment; the brain holds
+  a channel, never the limb ("a session has a limb at the logical level,
+  but not at the memory ownership level necessarily" — user). The limb
+  describes its own contributions.
+- Fixed: structured lifecycle throughout ("this skeleton should lead by
+  example" — user): no `process::exit`, no detached threads; the input
+  thread owns parsing and is joined; all tasks joined with failures
+  propagated. Judo bonus: the face render loop collapsed to a pure event
+  consumer.
+- Fixed: stderr pipe deadlock in bash execution (concurrent pipe reads);
+  recorder opens once and writes async.
+- Fixed: cancel-during-provider-request now has a black-box scenario (the
+  earlier claim was overstated).
+- Ruled fine (user): `model` and `reasoning_effort` living outside
+  `request_parts` — "those are not part of the *context*, only part of
+  the *request*".
+- Ruled deferred (user): mid-context contribution updates stay unwired
+  ("not important right now"), with a comment at the site; the shared
+  bus / untyped face channel is fine for now — a refined event-based
+  replication protocol (generic event streaming system, harness innards
+  rebuilt on top) is queued as a later experiment.
 
 ## User Acceptance
 

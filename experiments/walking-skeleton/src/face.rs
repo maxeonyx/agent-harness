@@ -19,12 +19,14 @@ pub fn print_help(base_url: &str, model: &str) {
     println!("  /quit         exit");
 }
 
-enum Input {
-    Line(String),
-    Eof,
-}
-
-/// Run the face loop until the session closes its event stream.
+/// Run the face until the session closes its event stream.
+///
+/// The face is two owned pieces: an input thread (reads and parses stdin,
+/// emits user events straight to the brain) and this render loop (a pure
+/// consumer of the session event stream). The input thread's lifetime is
+/// structured: it exits on /quit, EOF, or a closed channel — every path
+/// that ends the session goes through it, so it is always joinable when
+/// the render loop finishes.
 ///
 /// `context` is the shared session log: in this co-located deployment the
 /// face reads it directly for queries like /dump. A remote face would keep
@@ -36,71 +38,68 @@ pub async fn run(
     mut bus_rx: broadcast::Receiver<Event>,
     context: Arc<Mutex<Context>>,
 ) {
-    // Stdin is read by a dedicated thread so that /dump can hand the
-    // terminal to an editor with *no read pending on the tty* — after
-    // sending a /dump line the thread parks until the editor is done.
-    let (line_tx, mut line_rx) = mpsc::channel::<Input>(16);
+    // Stdin is read (and parsed — including the /open file read, which is
+    // fine to block on here) by a dedicated thread, so that /dump can hand
+    // the terminal to an editor with *no read pending on the tty*: after
+    // sending /dump the thread parks until the editor is done.
     let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
-    std::thread::spawn(move || {
+    let input_thread = std::thread::spawn(move || {
         use std::io::BufRead;
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
             let Ok(line) = line else { break };
-            let is_dump = line.trim() == "/dump";
-            if line_tx.blocking_send(Input::Line(line)).is_err() {
+            let Some(kind) = parse_line(line.trim()) else {
+                continue;
+            };
+            let is_quit = matches!(kind, EventKind::Quit);
+            let is_dump = matches!(kind, EventKind::DumpRequest);
+            if user_tx.blocking_send(kind).is_err() {
+                return; // brain is gone
+            }
+            if is_quit {
                 return;
             }
             if is_dump && resume_rx.recv().is_err() {
                 return;
             }
         }
-        let _ = line_tx.blocking_send(Input::Eof);
+        // EOF: end the session.
+        let _ = user_tx.blocking_send(EventKind::Quit);
     });
 
     loop {
-        tokio::select! {
-            input = line_rx.recv() => {
-                match input {
-                    Some(Input::Line(line)) => {
-                        if let Some(kind) = parse_line(line.trim())
-                            && user_tx.send(kind).await.is_err()
-                        {
-                            break; // brain is gone
-                        }
-                    }
-                    Some(Input::Eof) | None => {
-                        let _ = user_tx.send(EventKind::Quit).await;
-                    }
+        match bus_rx.recv().await {
+            Ok(event) => {
+                if let Some(line) = render(&event) {
+                    println!("{line}");
+                }
+                if matches!(event.kind, EventKind::DumpRequest) {
+                    // Our own /dump coming back on the bus: the log now
+                    // provably includes everything up to the request.
+                    // Project the dump face-side. The editor owns the
+                    // terminal until it exits; bus events buffer, the
+                    // input thread is parked.
+                    let dump = context.lock().expect("context poisoned").dump_view();
+                    dump_into_editor(dump).await;
+                    println!("[face] returned from dump");
+                    let _ = resume_tx.send(());
+                }
+                if matches!(event.kind, EventKind::SessionClosed) {
+                    break;
                 }
             }
-            event = bus_rx.recv() => {
-                match event {
-                    Ok(event) => {
-                        if let Some(line) = render(&event) {
-                            println!("{line}");
-                        }
-                        if matches!(event.kind, EventKind::DumpRequest) {
-                            // Our own /dump coming back on the bus: the log
-                            // now provably includes everything up to the
-                            // request. Project the dump face-side. The
-                            // editor owns the terminal until it exits; bus
-                            // events buffer, the stdin thread is parked.
-                            let dump = context.lock().expect("context poisoned").dump_view();
-                            dump_into_editor(dump).await;
-                            println!("[face] returned from dump");
-                            let _ = resume_tx.send(());
-                        }
-                        if matches!(event.kind, EventKind::SessionClosed) {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        println!("[face] lagged; skipped {n} events");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                println!("[face] lagged; skipped {n} events");
             }
+            Err(broadcast::error::RecvError::Closed) => break,
         }
+    }
+
+    // The session only ends via /quit or EOF — both of which end the input
+    // thread — so this join does not wait on a blocked read.
+    let joined = tokio::task::spawn_blocking(move || input_thread.join()).await;
+    if !matches!(joined, Ok(Ok(()))) {
+        println!("[face] input thread failed");
     }
 }
 
