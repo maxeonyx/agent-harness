@@ -52,6 +52,18 @@ exercises invariants 2, 3, 4, 8, 9.
   smoke-run against the real provider. The dump makes the piggyback answer
   directly observable: concurrent user events are appended *after* the
   tool exchange, never between `tool_calls` and its result.
+- System-prompt / environment contributions are modeled (user direction):
+  tools, and facts like time, hostname, and model, enter the log as
+  `contribution_added` events. A contribution that exists from the start
+  composes into the system prompt / the request's tools field; one added
+  or changed while the context is active appends an update message (the
+  cache-friendly notification-vs-rebuild policy is later work). The
+  request builder and the dump both consume one shared projection,
+  `request_parts` — after the user caught the first dump omitting tool
+  schemas (they were fetched brain-privately at request time), divergence
+  between "what was sent" and "what the dump shows" is now a shared-code
+  impossibility rather than a rendering discipline. Verified live: the
+  real model answered its own model name from the environment section.
 - The dump is computed by the *face*, not served by the brain (invariant
   10): `dump_request` is a fact, and when the face sees its own request
   come back on the bus (so the log provably includes everything prior) it

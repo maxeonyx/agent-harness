@@ -25,6 +25,18 @@ pub struct AssistantMessage {
     pub tool_calls: Vec<ToolCall>,
 }
 
+/// One contribution to the model's environment.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Contribution {
+    /// A textual environment fact (time, hostname, model, ...): composed
+    /// into the system prompt.
+    Fact { text: String },
+    /// A tool definition (OpenAI function schema): sent as the request's
+    /// `tools` field.
+    Tool { def: serde_json::Value },
+}
+
 /// One event in the session log. `seq` is assigned by the session log at
 /// append time.
 #[derive(Serialize, Clone, Debug)]
@@ -44,6 +56,15 @@ pub enum EventKind {
     /// brain-private config.
     SessionStarted {
         system_prompt: String,
+    },
+    /// A system-prompt / environment contribution: skills, tools,
+    /// environment facts like time, hostname, model. A contribution that
+    /// exists from the start is composed into the system prompt (or the
+    /// request's tools field); one added or changed while the context is
+    /// active becomes an update appended to the context.
+    ContributionAdded {
+        name: String,
+        contribution: Contribution,
     },
 
     // ---- emitter: the user, via a face ----

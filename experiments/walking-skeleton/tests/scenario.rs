@@ -370,6 +370,20 @@ fn dump_shows_model_view_with_invisible_facts() {
         dump.contains("## tool ("),
         "tool result section missing:\n{dump}"
     );
+
+    // Everything the model sees must be in the dump: the request's tools
+    // field (schemas) and the environment contributions composed into the
+    // system prompt. The dump renders the same request_parts projection
+    // the request builder sends, so a miss here would be a shared-code
+    // bug, not a rendering gap.
+    assert!(
+        dump.contains("## tools") && dump.contains("\"name\": \"bash\""),
+        "tool schemas missing from dump (the model sees the tools field):\n{dump}"
+    );
+    assert!(
+        dump.contains("[environment]") && dump.contains("- model: fake-model"),
+        "environment contributions missing from the system prompt:\n{dump}"
+    );
     assert!(
         dump.contains("All done."),
         "assistant text missing:\n{dump}"

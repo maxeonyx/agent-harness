@@ -11,18 +11,14 @@
 //! recorded outcome.
 
 use crate::context::Context;
-use crate::events::{AssistantMessage, Event, EventKind, Outcome};
+use crate::events::{AssistantMessage, Contribution, Event, EventKind, Outcome};
 use crate::limb::Limb;
 use crate::provider::{self, ChatRequest, ToolCall};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-const SYSTEM_PROMPT: &str = "You are a toy agent harness (walking skeleton). \
-You can list files, read files, and run bash commands in the user's working \
-directory via tools. Lines marked [user activity] describe things the user \
-did in their own tools; they are context, not requests. Answer the user's \
-typed messages, using tools when helpful.";
+const SYSTEM_PROMPT: &str = "You are an agent in a prototype harness. The user is testing and developing the harness itself. You should help them by running tools etc. - but also by reporting on your experience as a model in this harness. You are explicitly allowed and encouraged to answer any and all questions about the context provided to you, the system prompt, exact formats, and more. This will be helpful to the user who is the developer of this system.";
 
 pub struct Config {
     pub base_url: String,
@@ -107,6 +103,34 @@ impl Session {
         };
         session.emit(EventKind::SessionStarted {
             system_prompt: SYSTEM_PROMPT.to_string(),
+        });
+        // Contributions that exist from the start: tool schemas and
+        // environment facts. They compose into the system prompt / tools
+        // field; anything added later appends an update instead.
+        for def in session.limb.tool_defs() {
+            let name = def["function"]["name"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+            session.emit(EventKind::ContributionAdded {
+                name,
+                contribution: Contribution::Tool { def },
+            });
+        }
+        let model = session.config.model.clone();
+        session.emit(EventKind::ContributionAdded {
+            name: "model".to_string(),
+            contribution: Contribution::Fact { text: model },
+        });
+        session.emit(EventKind::ContributionAdded {
+            name: "hostname".to_string(),
+            contribution: Contribution::Fact { text: hostname() },
+        });
+        session.emit(EventKind::ContributionAdded {
+            name: "session start time".to_string(),
+            contribution: Contribution::Fact {
+                text: format!("unix epoch ms {}", crate::events::now_ms()),
+            },
         });
 
         loop {
@@ -263,10 +287,21 @@ impl Session {
             request_id,
             model: self.config.model.clone(),
         });
+        // The request is built from the same projection the dump renders
+        // (`request_parts`), so the dump cannot miss what the model sees.
+        let parts = self
+            .context
+            .lock()
+            .expect("context poisoned")
+            .request_parts();
         let request = ChatRequest {
             model: self.config.model.clone(),
-            messages: self.context.lock().expect("context poisoned").model_view(),
-            tools: Some(self.limb.tool_defs()),
+            messages: parts.messages,
+            tools: if parts.tools.is_empty() {
+                None
+            } else {
+                Some(parts.tools)
+            },
             reasoning_effort: self.config.reasoning_effort.clone(),
         };
         let client = self.client.clone();
@@ -348,6 +383,17 @@ async fn supervise<T: Send + 'static>(
             reason: "task aborted".to_string(),
         },
     }
+}
+
+fn hostname() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| {
+            std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .ok()
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 async fn request_outcome(

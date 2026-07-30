@@ -212,6 +212,7 @@ fn render(event: &Event) -> Option<String> {
         )),
         EventKind::SessionClosed => Some("[brain] session closed".to_string()),
         EventKind::SessionStarted { .. }
+        | EventKind::ContributionAdded { .. }
         | EventKind::TurnEnd
         | EventKind::RebuildRequest
         | EventKind::DumpRequest
