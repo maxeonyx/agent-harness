@@ -81,6 +81,9 @@ impl Skeleton {
             .env("SKELETON_BASE_URL", format!("http://{provider_addr}/v1"))
             .env("SKELETON_MODEL", "fake-model")
             .env("SKELETON_RECORD", session_log)
+            // /dump opens $EDITOR; cat streams the dump to stdout where the
+            // test harness can assert on it.
+            .env("EDITOR", "cat")
             .current_dir(workdir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -308,6 +311,89 @@ fn user_activity_during_tool_call_piggybacks() {
     assert!(
         piggy_at > calls_at + 1,
         "piggybacked activity must ride after the tool exchange: {second:?}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// /dump: the model view as markdown — wire order, verbatim content, with
+/// everything the model cannot see in HTML comments (invisible events,
+/// piggyback annotations). Asserted through the public surface: $EDITOR
+/// (cat) streams the dump to the face's terminal.
+#[test]
+fn dump_shows_model_view_with_invisible_facts() {
+    let tmp = setup("dump");
+    let workdir = tmp.join("workspace");
+
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            { "tool_call": { "name": "bash", "arguments": { "command": "sleep 1; echo done" } } },
+            { "text": "All done." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("please run the slow thing");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("[limb] tool call: bash");
+    skeleton.send("by the way, another thought");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.wait_for("All done.");
+    skeleton.wait_for("[brain] turn complete");
+
+    skeleton.send("/dump");
+    let seen = skeleton.wait_for("[face] returned from dump").to_vec();
+    skeleton.quit();
+
+    let dump_start = seen
+        .iter()
+        .position(|l| l.contains("# walking-skeleton context dump"))
+        .expect("dump header in face output");
+    let dump = seen[dump_start..].join("\n");
+
+    // The model view, verbatim, in wire order.
+    assert!(
+        dump.contains("## system"),
+        "system section missing:\n{dump}"
+    );
+    assert!(
+        dump.contains("please run the slow thing"),
+        "user message missing:\n{dump}"
+    );
+    assert!(
+        dump.contains("```json tool_calls"),
+        "tool calls not rendered visibly (the model sees them):\n{dump}"
+    );
+    assert!(
+        dump.contains("## tool ("),
+        "tool result section missing:\n{dump}"
+    );
+    assert!(
+        dump.contains("All done."),
+        "assistant text missing:\n{dump}"
+    );
+
+    // What the model can't see is present, but only as HTML comments.
+    assert!(
+        dump.contains("<!-- seq") && dump.contains("\"event\":\"turn_end\""),
+        "invisible events should appear as comments:\n{dump}"
+    );
+
+    // The piggybacked message is shown at its wire position (after the
+    // tool exchange) with its arrival annotated.
+    let piggy_note = dump
+        .find("arrived while a tool exchange was open")
+        .expect("piggyback annotation missing");
+    let tool_section = dump.find("## tool (").unwrap();
+    let piggy_text = dump
+        .find("by the way, another thought")
+        .expect("piggybacked message missing from dump");
+    assert!(
+        tool_section < piggy_note && piggy_note < piggy_text,
+        "piggybacked message should render after the tool exchange, \
+         annotated:\n{dump}"
     );
 
     std::fs::remove_dir_all(&tmp).ok();

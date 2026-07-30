@@ -12,13 +12,24 @@
 use crate::events::{AssistantMessage, Event, EventKind, Outcome, now_ms};
 use crate::provider::WireMessage;
 
+/// One message of the model view, tagged with which event produced it and
+/// whether it was piggybacked (held back to keep a tool exchange intact,
+/// so its wire position differs from its arrival order). The model sees
+/// only the message; the tags feed the dump projection.
+#[derive(Clone)]
+pub struct WireEntry {
+    pub message: WireMessage,
+    pub seq: u64,
+    pub piggybacked: bool,
+}
+
 pub struct Context {
     log: Vec<Event>,
     next_seq: u64,
     /// Cached model view, extended incrementally by `append`.
-    wire: Vec<WireMessage>,
-    /// User-emitted wire messages held back while a tool exchange is open.
-    held: Vec<WireMessage>,
+    wire: Vec<WireEntry>,
+    /// User-emitted wire entries held back while a tool exchange is open.
+    held: Vec<WireEntry>,
     /// Tool call ids awaiting an outcome (open exchange when non-empty).
     open_calls: Vec<String>,
 }
@@ -76,9 +87,97 @@ impl Context {
             tool_calls: None,
             tool_call_id: None,
         }];
-        messages.extend(self.wire.iter().cloned());
-        messages.extend(self.held.iter().cloned());
+        messages.extend(self.wire.iter().map(|e| e.message.clone()));
+        messages.extend(self.held.iter().map(|e| e.message.clone()));
         messages
+    }
+
+    /// The dump projection: the model view rendered as markdown, in wire
+    /// order (what the model sees), with everything the model *cannot* see
+    /// in HTML comments — non-wire events interleaved by arrival order,
+    /// piggyback annotations where wire order departs from chronology, and
+    /// currently-held entries flagged as such.
+    pub fn dump_view(&self, system_prompt: &str) -> String {
+        use std::fmt::Write;
+        let visible: std::collections::HashSet<u64> = self
+            .wire
+            .iter()
+            .chain(self.held.iter())
+            .map(|e| e.seq)
+            .collect();
+        let mut emitted: std::collections::HashSet<u64> = std::collections::HashSet::new();
+
+        let mut out = String::new();
+        out.push_str("# walking-skeleton context dump — the model view\n\n");
+        out.push_str(
+            "<!-- Everything in HTML comments (like this) is invisible to the model. \
+             Everything else renders the exact wire context, in wire order. -->\n\n",
+        );
+        out.push_str("## system\n\n");
+        out.push_str(system_prompt);
+        out.push_str("\n\n");
+
+        let comments_before =
+            |out: &mut String, bound: Option<u64>, emitted: &mut std::collections::HashSet<u64>| {
+                for event in &self.log {
+                    if bound.is_some_and(|b| event.seq >= b)
+                        || visible.contains(&event.seq)
+                        || emitted.contains(&event.seq)
+                    {
+                        continue;
+                    }
+                    emitted.insert(event.seq);
+                    let kind = serde_json::to_string(&event.kind).unwrap_or_default();
+                    let _ = writeln!(out, "<!-- seq {}: {} -->", event.seq, kind);
+                }
+            };
+
+        for entry in &self.wire {
+            comments_before(&mut out, Some(entry.seq), &mut emitted);
+            if entry.piggybacked {
+                let _ = writeln!(
+                    out,
+                    "<!-- seq {}: arrived while a tool exchange was open; \
+                     the model sees it here, after the exchange -->",
+                    entry.seq
+                );
+            }
+            Self::render_message(&mut out, &entry.message);
+        }
+        for entry in &self.held {
+            let _ = writeln!(
+                out,
+                "<!-- seq {}: currently held: a tool exchange is open; \
+                 will be placed after it -->",
+                entry.seq
+            );
+            Self::render_message(&mut out, &entry.message);
+        }
+        comments_before(&mut out, None, &mut emitted);
+        out
+    }
+
+    fn render_message(out: &mut String, message: &WireMessage) {
+        use std::fmt::Write;
+        match &message.tool_call_id {
+            Some(id) => {
+                let _ = writeln!(out, "## {} ({id})\n", message.role);
+            }
+            None => {
+                let _ = writeln!(out, "## {}\n", message.role);
+            }
+        }
+        if let Some(content) = &message.content
+            && !content.is_empty()
+        {
+            out.push_str(content);
+            out.push_str("\n\n");
+        }
+        if let Some(calls) = &message.tool_calls {
+            out.push_str("```json tool_calls\n");
+            out.push_str(&serde_json::to_string_pretty(calls).unwrap_or_default());
+            out.push_str("\n```\n\n");
+        }
     }
 
     /// Project one event into the wire view. Not every event becomes a wire
@@ -86,10 +185,16 @@ impl Context {
     /// the session, not model context.
     fn project_into(
         event: &Event,
-        wire: &mut Vec<WireMessage>,
-        held: &mut Vec<WireMessage>,
+        wire: &mut Vec<WireEntry>,
+        held: &mut Vec<WireEntry>,
         open_calls: &mut Vec<String>,
     ) {
+        let seq = event.seq;
+        let entry = |message: WireMessage, piggybacked: bool| WireEntry {
+            message,
+            seq,
+            piggybacked,
+        };
         let user_message = |content: String| WireMessage {
             role: "user".to_string(),
             content: Some(content),
@@ -100,9 +205,9 @@ impl Context {
             EventKind::UserMessage { text } => {
                 let msg = user_message(text.clone());
                 if open_calls.is_empty() {
-                    wire.push(msg);
+                    wire.push(entry(msg, false));
                 } else {
-                    held.push(msg);
+                    held.push(entry(msg, true));
                 }
             }
             EventKind::FileOpened { path, head, .. } => {
@@ -112,14 +217,14 @@ impl Context {
                     "[user activity] opened file {path}; first lines:\n{head}"
                 ));
                 if open_calls.is_empty() {
-                    wire.push(msg);
+                    wire.push(entry(msg, false));
                 } else {
-                    held.push(msg);
+                    held.push(entry(msg, true));
                 }
             }
             EventKind::RequestOutcome { outcome, .. } => {
                 if let Outcome::Ok { value } = outcome {
-                    Self::project_assistant(value, wire, open_calls);
+                    Self::project_assistant(value, seq, wire, open_calls);
                 }
                 // Err / Cancelled / Panicked requests contribute nothing to
                 // model context; the staged user content simply rides the
@@ -136,12 +241,15 @@ impl Context {
                         format!("[tool panicked] {payload}")
                     }
                 };
-                wire.push(WireMessage {
-                    role: "tool".to_string(),
-                    content: Some(content),
-                    tool_calls: None,
-                    tool_call_id: Some(call_id.clone()),
-                });
+                wire.push(entry(
+                    WireMessage {
+                        role: "tool".to_string(),
+                        content: Some(content),
+                        tool_calls: None,
+                        tool_call_id: Some(call_id.clone()),
+                    },
+                    false,
+                ));
                 open_calls.retain(|id| id != call_id);
                 if open_calls.is_empty() {
                     wire.append(held);
@@ -152,32 +260,43 @@ impl Context {
             | EventKind::CancelRequest
             | EventKind::Quit
             | EventKind::RebuildRequest
+            | EventKind::DumpRequest
             | EventKind::RequestAttempt { .. }
             | EventKind::ToolCallAttempt { .. }
             | EventKind::TurnOutcome { .. }
             | EventKind::ContextRebuilt { .. }
+            | EventKind::ContextDumped { .. }
             | EventKind::SessionClosed => {}
         }
     }
 
     fn project_assistant(
         message: &AssistantMessage,
-        wire: &mut Vec<WireMessage>,
+        seq: u64,
+        wire: &mut Vec<WireEntry>,
         open_calls: &mut Vec<String>,
     ) {
         if message.tool_calls.is_empty() {
-            wire.push(WireMessage {
-                role: "assistant".to_string(),
-                content: message.text.clone(),
-                tool_calls: None,
-                tool_call_id: None,
+            wire.push(WireEntry {
+                message: WireMessage {
+                    role: "assistant".to_string(),
+                    content: message.text.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                seq,
+                piggybacked: false,
             });
         } else {
-            wire.push(WireMessage {
-                role: "assistant".to_string(),
-                content: message.text.clone(),
-                tool_calls: Some(message.tool_calls.clone()),
-                tool_call_id: None,
+            wire.push(WireEntry {
+                message: WireMessage {
+                    role: "assistant".to_string(),
+                    content: message.text.clone(),
+                    tool_calls: Some(message.tool_calls.clone()),
+                    tool_call_id: None,
+                },
+                seq,
+                piggybacked: false,
             });
             open_calls.extend(message.tool_calls.iter().map(|c| c.id.clone()));
         }

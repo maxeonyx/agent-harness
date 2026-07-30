@@ -54,6 +54,8 @@ pub enum EventKind {
     Quit,
     /// The user asked for an explicit context rebuild.
     RebuildRequest,
+    /// The user asked to introspect the model view (/dump).
+    DumpRequest,
 
     // ---- emitter: the agent loop (brain) ----
     RequestAttempt {
@@ -81,6 +83,11 @@ pub enum EventKind {
     /// as opposed to incrementally appended.
     ContextRebuilt {
         wire_messages: usize,
+    },
+    /// The brain wrote a markdown dump of the model view. On Ok the value
+    /// is the file path; the face opens it in the user's editor.
+    ContextDumped {
+        outcome: Outcome<String>,
     },
     SessionClosed,
 }

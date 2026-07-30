@@ -156,6 +156,24 @@ impl Session {
                 let wire_messages = self.context.rebuild();
                 self.emit(EventKind::ContextRebuilt { wire_messages });
             }
+            EventKind::DumpRequest => {
+                self.emit(EventKind::DumpRequest);
+                let dump = self.context.dump_view(SYSTEM_PROMPT);
+                let path = std::env::temp_dir().join(format!(
+                    "skeleton-dump-{}-{}.md",
+                    std::process::id(),
+                    crate::events::now_ms()
+                ));
+                let outcome = match std::fs::write(&path, dump) {
+                    Ok(()) => Outcome::Ok {
+                        value: path.to_string_lossy().into_owned(),
+                    },
+                    Err(e) => Outcome::Err {
+                        error: format!("failed to write dump {}: {e}", path.display()),
+                    },
+                };
+                self.emit(EventKind::ContextDumped { outcome });
+            }
             EventKind::Quit => {
                 self.emit(EventKind::Quit);
                 return true;
