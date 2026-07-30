@@ -210,6 +210,37 @@ findings. User triage and the resulting changes:
   replication protocol (generic event streaming system, harness innards
   rebuilt on top) is queued as a later experiment.
 
+Thermonuclear review round 2 (fresh-context, 2026-07-31) returned findings
+on in-flight-work ownership and cancellation completeness. Fixes:
+
+- Cancelling a bash tool kills the whole process tree, not just the shell:
+  each child gets its own process group; the drain signals the group (a
+  non-blocking syscall) and reaps the shell asynchronously. Red-proven:
+  the descendant test fails with the group kill disabled.
+- Non-bash tools are cancellation-aware (`cancellable` races the body
+  against the token). Accepted limitation, documented: a read blocked on
+  a writerless FIFO lingers on the blocking pool until a writer appears.
+- In-flight work is owned: the session loop holds identity, cancellation
+  token, and join handle together, and always joins — a panic joins as a
+  `Panicked` outcome, a dropped limb reply resolves `Panicked`, never a
+  vanished operation.
+- `/dump` renders outside the context lock (`dump_snapshot` under the
+  lock, linear `render` outside).
+- Test coverage added: descendant-tree kill, blocked-read cancel,
+  quit-during-tool drain, rebuild-preserves-view.
+
+User direction during round 2 fixes: "limb should own and clean up
+processes on graceful shutdown" — cleanup by ownership, never by global
+observation. The test harness's first cut (a Drop that pgrep-walked
+descendants and shelled out to `kill -9`) was rejected as hacky and
+replaced: cleanup drives the skeleton's own graceful chain through the
+real user surface (stdin EOF → face Quit → brain drain → limb kills its
+process group), and process-death assertions target PIDs the test's own
+fixture recorded, not process-table pattern scans. The user's hedged
+container idea ("do it in some kind of container maybe?") is recorded in
+REQUIREMENTS.md as the kernel-enforced form of the same principle — a
+possible later experiment, not spike scope.
+
 ## User Acceptance
 
 Pending.

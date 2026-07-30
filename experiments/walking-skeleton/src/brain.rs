@@ -5,10 +5,10 @@
 //! piggyback on the next request) and cancel requests (which drain the
 //! in-flight work to a definite outcome).
 //!
-//! In-flight work is a spawned task holding a cancellation token; every
-//! task resolves by sending exactly one resolution message back into the
-//! loop — ok, err, or cancelled — so nothing in flight ends without a
-//! recorded outcome.
+//! In-flight work is an owned operation: the session loop holds its
+//! cancellation token *and* its join handle, and always joins it — so
+//! nothing in flight ends without a recorded outcome (a panic joins as a
+//! `Panicked` outcome, not a vanished task).
 
 use crate::context::Context;
 use crate::events::{AssistantMessage, Contribution, Event, EventKind, Outcome};
@@ -39,7 +39,7 @@ impl Config {
     }
 }
 
-/// Resolution message sent by in-flight tasks back into the session loop.
+/// A joined resolution of in-flight work.
 enum Resolved {
     Request {
         request_id: u64,
@@ -52,10 +52,20 @@ enum Resolved {
 }
 
 /// What the session loop is currently waiting on, besides user events.
+/// The loop owns the work: identity, cancellation capability, and join
+/// handle live together, and the handle is always awaited.
 enum InFlight {
     Idle,
-    Request { cancel: CancellationToken },
-    Tool { cancel: CancellationToken },
+    Request {
+        request_id: u64,
+        cancel: CancellationToken,
+        task: tokio::task::JoinHandle<Outcome<AssistantMessage>>,
+    },
+    Tool {
+        call: ToolCall,
+        cancel: CancellationToken,
+        task: tokio::task::JoinHandle<Outcome<String>>,
+    },
 }
 
 pub struct Session {
@@ -72,13 +82,11 @@ pub struct Session {
     /// `Context` about being cleverer than a mutex.
     context: Arc<Mutex<Context>>,
     bus: broadcast::Sender<Event>,
-    done_tx: mpsc::Sender<Resolved>,
     next_request_id: u64,
     /// Tool calls returned by the provider that have not been started yet.
     pending_calls: Vec<ToolCall>,
     /// A turn is live from the triggering TurnEnd until its TurnOutcome.
     turn_live: bool,
-    in_flight: InFlight,
 }
 
 impl Session {
@@ -91,19 +99,17 @@ impl Session {
         mut user_rx: mpsc::Receiver<EventKind>,
         context: Arc<Mutex<Context>>,
     ) {
-        let (done_tx, mut done_rx) = mpsc::channel::<Resolved>(16);
         let mut session = Session {
             config,
             limb_tx,
             client: reqwest::Client::new(),
             context,
             bus,
-            done_tx,
             next_request_id: 0,
             pending_calls: Vec::new(),
             turn_live: false,
-            in_flight: InFlight::Idle,
         };
+        let mut in_flight = InFlight::Idle;
         session.emit(EventKind::SessionStarted {
             system_prompt: SYSTEM_PROMPT.to_string(),
         });
@@ -148,23 +154,24 @@ impl Session {
         });
 
         loop {
+            let busy = !matches!(in_flight, InFlight::Idle);
             tokio::select! {
                 maybe_kind = user_rx.recv() => {
                     let quit = match maybe_kind {
-                        Some(kind) => session.on_user_event(kind, &mut done_rx).await,
+                        Some(kind) => session.on_user_event(kind, &mut in_flight).await,
                         None => true, // face is gone
                     };
                     if quit {
                         break;
                     }
                 }
-                Some(resolved) = done_rx.recv() => {
-                    session.on_resolved(resolved);
+                resolved = join_in_flight(&mut in_flight), if busy => {
+                    session.on_resolved(resolved, &mut in_flight);
                 }
             }
         }
 
-        session.drain(&mut done_rx, "session shutting down").await;
+        session.drain(&mut in_flight, "session shutting down").await;
         session.emit(EventKind::SessionClosed);
     }
 
@@ -175,11 +182,7 @@ impl Session {
     }
 
     /// Returns true when the session should quit.
-    async fn on_user_event(
-        &mut self,
-        kind: EventKind,
-        done_rx: &mut mpsc::Receiver<Resolved>,
-    ) -> bool {
+    async fn on_user_event(&mut self, kind: EventKind, in_flight: &mut InFlight) -> bool {
         match kind {
             EventKind::UserMessage { .. } | EventKind::FileOpened { .. } => {
                 // Appends never trigger. If work is in flight the
@@ -188,16 +191,16 @@ impl Session {
             }
             EventKind::TurnEnd => {
                 self.emit(EventKind::TurnEnd);
-                if matches!(self.in_flight, InFlight::Idle) && !self.turn_live {
+                if matches!(in_flight, InFlight::Idle) && !self.turn_live {
                     self.turn_live = true;
-                    self.start_request();
+                    self.start_request(in_flight);
                 }
                 // If a turn is already live, TurnEnd is just a fact in the
                 // log; the staged content is already riding along.
             }
             EventKind::CancelRequest => {
                 self.emit(EventKind::CancelRequest);
-                self.drain(done_rx, "cancelled by user").await;
+                self.drain(in_flight, "cancelled by user").await;
             }
             EventKind::RebuildRequest => {
                 self.emit(EventKind::RebuildRequest);
@@ -225,10 +228,11 @@ impl Session {
 
     /// Handle a resolution from in-flight work (normal path): record it,
     /// then advance the turn.
-    fn on_resolved(&mut self, resolved: Resolved) {
+    fn on_resolved(&mut self, resolved: Resolved, in_flight: &mut InFlight) {
+        *in_flight = InFlight::Idle;
         match self.record_resolution(resolved) {
-            Advance::StartTool => self.start_next_tool(),
-            Advance::StartRequest => self.start_request(),
+            Advance::StartTool => self.start_next_tool(in_flight),
+            Advance::StartRequest => self.start_request(in_flight),
             Advance::TurnDone(outcome) => self.finish_turn(outcome),
         }
     }
@@ -239,7 +243,6 @@ impl Session {
     /// split is what makes "a drain can never launch more work" structural
     /// rather than a timing accident.
     fn record_resolution(&mut self, resolved: Resolved) -> Advance {
-        self.in_flight = InFlight::Idle;
         match resolved {
             Resolved::Request {
                 request_id,
@@ -298,7 +301,7 @@ impl Session {
         }
     }
 
-    fn start_request(&mut self) {
+    fn start_request(&mut self, in_flight: &mut InFlight) {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
         self.emit(EventKind::RequestAttempt {
@@ -327,28 +330,24 @@ impl Session {
         let api_key = self.config.api_key.clone();
         let cancel = CancellationToken::new();
         let token = cancel.clone();
-        let done_tx = self.done_tx.clone();
-        tokio::spawn(async move {
-            let outcome = supervise(async move {
-                tokio::select! {
-                    result = request_outcome(&client, &base_url, api_key.as_deref(), &request) => result,
-                    _ = token.cancelled() => Outcome::Cancelled {
-                        reason: "request cancelled; connection dropped".to_string(),
-                    },
-                }
-            })
-            .await;
-            let _ = done_tx
-                .send(Resolved::Request {
-                    request_id,
-                    outcome,
-                })
-                .await;
+        // The session loop owns this task's handle and always joins it;
+        // a panic joins as a Panicked outcome.
+        let task = tokio::spawn(async move {
+            tokio::select! {
+                result = request_outcome(&client, &base_url, api_key.as_deref(), &request) => result,
+                _ = token.cancelled() => Outcome::Cancelled {
+                    reason: "request cancelled; connection dropped".to_string(),
+                },
+            }
         });
-        self.in_flight = InFlight::Request { cancel };
+        *in_flight = InFlight::Request {
+            request_id,
+            cancel,
+            task,
+        };
     }
 
-    fn start_next_tool(&mut self) {
+    fn start_next_tool(&mut self, in_flight: &mut InFlight) {
         let call = self.pending_calls.remove(0);
         self.emit(EventKind::ToolCallAttempt {
             call_id: call.id.clone(),
@@ -357,15 +356,15 @@ impl Session {
         });
         let cancel = CancellationToken::new();
         let token = cancel.clone();
-        let done_tx = self.done_tx.clone();
         let limb_tx = self.limb_tx.clone();
         let name = call.function.name.clone();
         let arguments = call.function.arguments.clone();
-        // Adapter task: asks the limb loop to execute and forwards its
-        // reply as this session's resolution. The limb owns the drain: on
-        // cancellation it kills and reaps its child before replying. A
-        // dropped reply (limb gone/panicked) still yields an outcome.
-        tokio::spawn(async move {
+        // Adapter task: asks the limb loop to execute and returns its
+        // reply as this operation's outcome. The limb owns the drain: on
+        // cancellation it kills and reaps its process tree before
+        // replying. A dropped reply means the limb died mid-request —
+        // that is a panic-shaped failure, not empty success.
+        let task = tokio::spawn(async move {
             let (reply_tx, reply_rx) = oneshot::channel();
             let sent = limb_tx
                 .send(LimbRequest::Execute {
@@ -375,47 +374,76 @@ impl Session {
                     reply: reply_tx,
                 })
                 .await;
-            let outcome = if sent.is_ok() {
-                reply_rx.await.unwrap_or(Outcome::Err {
-                    error: "limb dropped the request without replying".to_string(),
-                })
-            } else {
-                Outcome::Err {
+            if sent.is_err() {
+                return Outcome::Err {
                     error: "limb is gone".to_string(),
-                }
-            };
-            let _ = done_tx.send(Resolved::Tool { call, outcome }).await;
+                };
+            }
+            reply_rx.await.unwrap_or(Outcome::Panicked {
+                payload: "limb dropped the request without replying".to_string(),
+            })
         });
-        self.in_flight = InFlight::Tool { cancel };
+        *in_flight = InFlight::Tool { call, cancel, task };
     }
 
     /// Request → drain → finalize for whatever is in flight: signal the
-    /// token, wait for the task's resolution message, and *record* it —
-    /// never advance. If completion won the race against the cancel, the
-    /// completed work is recorded as completed, but no new work starts and
-    /// the turn finalizes cancelled. Draining structurally cannot launch
-    /// more work.
-    async fn drain(&mut self, done_rx: &mut mpsc::Receiver<Resolved>, reason: &str) {
-        match &self.in_flight {
+    /// token, join the task, and *record* its resolution — never advance.
+    /// If completion won the race against the cancel, the completed work
+    /// is recorded as completed, but no new work starts and the turn
+    /// finalizes cancelled. Draining structurally cannot launch more work.
+    async fn drain(&mut self, in_flight: &mut InFlight, reason: &str) {
+        match &*in_flight {
             InFlight::Idle => return,
-            InFlight::Request { cancel } | InFlight::Tool { cancel } => cancel.cancel(),
+            InFlight::Request { cancel, .. } | InFlight::Tool { cancel, .. } => cancel.cancel(),
         }
-        if let Some(resolved) = done_rx.recv().await {
-            match self.record_resolution(resolved) {
-                // The work resolved the turn by itself (completed with a
-                // final answer, failed, or was cancelled): that resolution
-                // stands.
-                Advance::TurnDone(outcome) => self.finish_turn(outcome),
-                // The work would have continued the turn: finalize
-                // cancelled instead.
-                Advance::StartTool | Advance::StartRequest => {
-                    self.pending_calls.clear();
-                    self.finish_turn(Outcome::Cancelled {
-                        reason: reason.to_string(),
-                    });
-                }
+        let resolved = join_in_flight(in_flight).await;
+        *in_flight = InFlight::Idle;
+        match self.record_resolution(resolved) {
+            // The work resolved the turn by itself (completed with a
+            // final answer, failed, or was cancelled): that resolution
+            // stands.
+            Advance::TurnDone(outcome) => self.finish_turn(outcome),
+            // The work would have continued the turn: finalize cancelled
+            // instead.
+            Advance::StartTool | Advance::StartRequest => {
+                self.pending_calls.clear();
+                self.finish_turn(Outcome::Cancelled {
+                    reason: reason.to_string(),
+                });
             }
         }
+    }
+}
+
+/// Join the in-flight task and produce its resolution. A join error is a
+/// real outcome: a panic joins as `Panicked`, an abort as `Cancelled` —
+/// never a vanished operation. Does not reset the slot (the caller does,
+/// after this future actually completes — if the select loop drops this
+/// future mid-poll, the operation stays owned in the slot).
+async fn join_in_flight(in_flight: &mut InFlight) -> Resolved {
+    fn map_join<T>(result: Result<Outcome<T>, tokio::task::JoinError>) -> Outcome<T> {
+        match result {
+            Ok(outcome) => outcome,
+            Err(join_error) if join_error.is_panic() => Outcome::Panicked {
+                payload: join_error.to_string(),
+            },
+            Err(_) => Outcome::Cancelled {
+                reason: "task aborted".to_string(),
+            },
+        }
+    }
+    match in_flight {
+        InFlight::Request {
+            request_id, task, ..
+        } => Resolved::Request {
+            request_id: *request_id,
+            outcome: map_join(task.await),
+        },
+        InFlight::Tool { call, task, .. } => Resolved::Tool {
+            call: call.clone(),
+            outcome: map_join(task.await),
+        },
+        InFlight::Idle => unreachable!("guarded by the select precondition"),
     }
 }
 
@@ -425,23 +453,6 @@ enum Advance {
     StartTool,
     StartRequest,
     TurnDone(Outcome<()>),
-}
-
-/// Run work in a child task so a panic inside it becomes a `Panicked`
-/// outcome instead of a silently vanished resolution message. Nothing in
-/// flight may end without an outcome — including by panicking.
-async fn supervise<T: Send + 'static>(
-    work: impl std::future::Future<Output = Outcome<T>> + Send + 'static,
-) -> Outcome<T> {
-    match tokio::spawn(work).await {
-        Ok(outcome) => outcome,
-        Err(join_error) if join_error.is_panic() => Outcome::Panicked {
-            payload: join_error.to_string(),
-        },
-        Err(_) => Outcome::Cancelled {
-            reason: "task aborted".to_string(),
-        },
-    }
 }
 
 fn hostname() -> String {

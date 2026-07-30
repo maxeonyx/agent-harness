@@ -64,11 +64,41 @@ impl FakeProvider {
 }
 
 /// The skeleton under test, driven through its public CLI surface.
+///
+/// Cleanup goes through the skeleton's own graceful shutdown, exactly as
+/// a user's terminal would deliver it: dropping stdin is Ctrl-D, the face
+/// turns EOF into Quit, the brain drains in-flight work, and the limb
+/// kills and reaps its process tree. The harness never hunts descendants
+/// globally — process ownership lives inside the skeleton, and the tests
+/// exercise it rather than reimplement it. Only a wedged skeleton (a bug,
+/// reported loudly) gets a last-resort SIGKILL of the skeleton itself.
 struct Skeleton {
-    child: KillOnDrop,
-    stdin: ChildStdin,
+    child: Child,
+    stdin: Option<ChildStdin>,
     stdout_rx: mpsc::Receiver<String>,
+    reader: Option<std::thread::JoinHandle<()>>,
     seen: Vec<String>,
+}
+
+impl Drop for Skeleton {
+    fn drop(&mut self) {
+        drop(self.stdin.take()); // EOF: request graceful shutdown
+        use wait_timeout::ChildExt;
+        match self.child.wait_timeout(Duration::from_secs(5)) {
+            Ok(Some(_)) => {}
+            _ => {
+                eprintln!(
+                    "skeleton did not exit within 5s of stdin EOF; \
+                     killing it (its tool process tree may leak — this is a bug)"
+                );
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+            }
+        }
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
 }
 
 impl Skeleton {
@@ -92,7 +122,7 @@ impl Skeleton {
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let (tx, stdout_rx) = mpsc::channel();
-        std::thread::spawn(move || {
+        let reader = std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 match line {
                     Ok(line) => {
@@ -105,16 +135,18 @@ impl Skeleton {
             }
         });
         Skeleton {
-            child: KillOnDrop(child),
-            stdin,
+            child,
+            stdin: Some(stdin),
             stdout_rx,
+            reader: Some(reader),
             seen: Vec::new(),
         }
     }
 
     fn send(&mut self, line: &str) {
-        writeln!(self.stdin, "{line}").expect("write to skeleton stdin");
-        self.stdin.flush().unwrap();
+        let stdin = self.stdin.as_mut().expect("stdin already closed");
+        writeln!(stdin, "{line}").expect("write to skeleton stdin");
+        stdin.flush().unwrap();
     }
 
     /// Wait until a stdout line containing `needle` arrives; returns all
@@ -141,8 +173,57 @@ impl Skeleton {
 
     fn quit(mut self) {
         self.send("/quit");
-        let status = self.child.0.wait().expect("skeleton exit");
+        self.wait_exit();
+    }
+
+    /// Wait for the process to exit cleanly (without sending /quit) and
+    /// join the stdout reader.
+    fn wait_exit(&mut self) {
+        let status = self.child.wait().expect("skeleton exit");
         assert!(status.success(), "skeleton exited with failure");
+        if let Some(reader) = self.reader.take() {
+            reader.join().expect("stdout reader thread");
+        }
+    }
+}
+
+/// Read the PIDs a scripted tool command recorded in the test's own
+/// fixture file. The test asserts on processes it *owns* by PID — never
+/// on global process-table pattern scans.
+fn recorded_pids(pid_file: &std::path::Path) -> Vec<u32> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(pid_file) {
+            let pids: Vec<u32> = text.lines().filter_map(|l| l.trim().parse().ok()).collect();
+            if !pids.is_empty() {
+                return pids;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "tool command never recorded its pids in {pid_file:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Poll until every one of these specific PIDs is dead, or panic.
+fn wait_pids_dead(pids: &[u32]) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let alive: Vec<u32> = pids
+            .iter()
+            .copied()
+            .filter(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
+            .collect();
+        if alive.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "owned processes {alive:?} still alive after drain"
+        );
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -372,6 +453,175 @@ fn cancel_during_provider_request_drains_and_session_continues() {
     skeleton.wait_for("Recovered fine.");
     skeleton.wait_for("[brain] turn complete");
     skeleton.quit();
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// Cancelling a bash tool call kills the whole process tree, not just the
+/// shell: a backgrounded descendant must not survive the drain.
+#[test]
+fn cancel_kills_descendant_processes() {
+    let tmp = setup("descendants");
+    let workdir = tmp.join("workspace");
+
+    // The scripted command records its own PIDs (the shell's and its
+    // backgrounded descendant's) into the test's fixture file, so the
+    // assertion targets exactly the processes this test owns.
+    let pid_file = workdir.join("pids.txt");
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            { "tool_call": { "name": "bash", "arguments": {
+                "command": "sleep 600 & { echo $!; echo $$; } > pids.txt; wait" } } },
+            { "text": "Recovered fine." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("please run the background thing");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("[limb] tool call: bash");
+    // The pid file appearing proves the descendant has been forked.
+    let pids = recorded_pids(&pid_file);
+    assert_eq!(pids.len(), 2, "expected sleep + shell pids: {pids:?}");
+    skeleton.send("/cancel");
+    skeleton.wait_for("[limb] tool cancelled");
+    skeleton.wait_for("[brain] turn cancelled");
+
+    // The shell AND its backgrounded descendant are gone.
+    wait_pids_dead(&pids);
+
+    skeleton.quit();
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// Cancelling a non-bash tool blocked on I/O (read_file on a FIFO with no
+/// writer) still finalizes the turn and leaves the session usable.
+#[test]
+fn cancel_unblocks_a_blocked_read_file() {
+    let tmp = setup("fifo");
+    let workdir = tmp.join("workspace");
+    let fifo = workdir.join("pipe.fifo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo")
+            .success(),
+        "mkfifo failed"
+    );
+
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            { "tool_call": { "name": "read_file", "arguments": { "path": "pipe.fifo" } } },
+            { "text": "Recovered fine." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("please read the pipe");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("[limb] tool call: read_file");
+    std::thread::sleep(Duration::from_millis(300));
+    skeleton.send("/cancel");
+    skeleton.wait_for("[limb] tool cancelled");
+    skeleton.wait_for("[brain] turn cancelled");
+
+    // Unblock the leaked reader (a spike-accepted limitation: the blocked
+    // open lingers on the blocking pool until the FIFO gets a writer) so
+    // shutdown isn't held hostage by it.
+    std::fs::write(&fifo, b"unblock\n").expect("open fifo write end");
+
+    // The session is still usable after cancelling a wedged tool.
+    skeleton.send("still with me?");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("Recovered fine.");
+    skeleton.wait_for("[brain] turn complete");
+    skeleton.quit();
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// /quit while a tool call is in flight: the drain cancels and finalizes
+/// it (recorded outcomes, dead process tree), and the process exits
+/// cleanly.
+#[test]
+fn quit_during_tool_call_drains_and_exits_cleanly() {
+    let tmp = setup("quit-drain");
+    let workdir = tmp.join("workspace");
+
+    let pid_file = workdir.join("pids.txt");
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            { "tool_call": { "name": "bash", "arguments": {
+                "command": "echo $$ > pids.txt; exec sleep 600" } } }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("please run the slow thing");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("[limb] tool call: bash");
+    let pids = recorded_pids(&pid_file);
+    skeleton.send("/quit");
+    skeleton.wait_for("[limb] tool cancelled");
+    skeleton.wait_for("[brain] turn cancelled");
+    skeleton.wait_for("[brain] session closed");
+    skeleton.wait_exit();
+
+    wait_pids_dead(&pids);
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// /rebuild recomputes the model view from the log without losing the
+/// conversation: the next request still carries everything.
+#[test]
+fn rebuild_preserves_the_model_view() {
+    let tmp = setup("rebuild");
+    let workdir = tmp.join("workspace");
+
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            { "text": "First answer." },
+            { "text": "Second answer." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("first question");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("First answer.");
+    skeleton.send("/rebuild");
+    skeleton.wait_for("[brain] context rebuilt");
+    skeleton.send("second question");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("Second answer.");
+    skeleton.quit();
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2, "expected exactly two provider requests");
+    let second = roles_and_content(&requests[1]);
+    for expected in [
+        ("user", "first question"),
+        ("assistant", "First answer."),
+        ("user", "second question"),
+    ] {
+        assert!(
+            second
+                .iter()
+                .any(|(role, content, _)| role == expected.0 && content == expected.1),
+            "rebuild lost {expected:?} from the model view: {second:?}"
+        );
+    }
 
     std::fs::remove_dir_all(&tmp).ok();
 }

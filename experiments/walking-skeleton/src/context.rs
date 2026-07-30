@@ -144,125 +144,16 @@ impl Context {
         }
         s
     }
-
-    /// The dump projection: exactly `request_parts`, rendered as markdown
-    /// in wire order, plus everything the model *cannot* see in HTML
-    /// comments — non-wire events interleaved by arrival order, piggyback
-    /// annotations where wire order departs from chronology, and
-    /// currently-held entries flagged as such. Any consumer with the log
-    /// can compute this; it is not brain-private.
-    pub fn dump_view(&self) -> String {
-        use std::fmt::Write;
-        let parts = self.request_parts();
-
-        // Events already represented in the rendered request: wire/held
-        // entries, plus session start and pre-activation contributions
-        // (composed into the system message / tools section).
-        let mut represented: std::collections::HashSet<u64> = self
-            .wire
-            .iter()
-            .chain(self.held.iter())
-            .map(|e| e.seq)
-            .collect();
-        let mut activation_seq: Option<u64> = None;
-        for event in &self.log {
-            match &event.kind {
-                EventKind::RequestAttempt { .. } if activation_seq.is_none() => {
-                    activation_seq = Some(event.seq);
-                }
-                EventKind::SessionStarted { .. } => {
-                    represented.insert(event.seq);
-                }
-                EventKind::ContributionAdded { .. } if activation_seq.is_none() => {
-                    represented.insert(event.seq);
-                }
-                _ => {}
-            }
-        }
-        let mut emitted: std::collections::HashSet<u64> = std::collections::HashSet::new();
-
-        let mut out = String::new();
-        out.push_str("# walking-skeleton context dump — the model view\n\n");
-        out.push_str(
-            "<!-- Everything in HTML comments (like this) is invisible to the model. \
-             Everything else renders exactly the request the brain would send right \
-             now (shared code with the request builder). -->\n\n",
-        );
-
-        // The composed system message (parts.messages[0]).
-        if let Some(system) = parts.messages.first() {
-            Self::render_message(&mut out, system);
-        }
-
-        // The request's tools field — the model sees these schemas.
-        if !parts.tools.is_empty() {
-            out.push_str("## tools\n\n");
-            out.push_str("<!-- sent as the request's `tools` field -->\n");
-            out.push_str("```json\n");
-            out.push_str(&serde_json::to_string_pretty(&parts.tools).unwrap_or_default());
-            out.push_str("\n```\n\n");
-        }
-
-        let comments_before =
-            |out: &mut String, bound: Option<u64>, emitted: &mut std::collections::HashSet<u64>| {
-                for event in &self.log {
-                    if bound.is_some_and(|b| event.seq >= b)
-                        || represented.contains(&event.seq)
-                        || emitted.contains(&event.seq)
-                    {
-                        continue;
-                    }
-                    emitted.insert(event.seq);
-                    let kind = serde_json::to_string(&event.kind).unwrap_or_default();
-                    let _ = writeln!(out, "<!-- seq {}: {} -->", event.seq, kind);
-                }
-            };
-
-        for entry in &self.wire {
-            comments_before(&mut out, Some(entry.seq), &mut emitted);
-            if entry.piggybacked {
-                let _ = writeln!(
-                    out,
-                    "<!-- seq {}: arrived while a tool exchange was open; \
-                     the model sees it here, after the exchange -->",
-                    entry.seq
-                );
-            }
-            Self::render_message(&mut out, &entry.message);
-        }
-        for entry in &self.held {
-            let _ = writeln!(
-                out,
-                "<!-- seq {}: currently held: a tool exchange is open; \
-                 will be placed after it -->",
-                entry.seq
-            );
-            Self::render_message(&mut out, &entry.message);
-        }
-        comments_before(&mut out, None, &mut emitted);
-        out
-    }
-
-    fn render_message(out: &mut String, message: &WireMessage) {
-        use std::fmt::Write;
-        match &message.tool_call_id {
-            Some(id) => {
-                let _ = writeln!(out, "## {} ({id})\n", message.role);
-            }
-            None => {
-                let _ = writeln!(out, "## {}\n", message.role);
-            }
-        }
-        if let Some(content) = &message.content
-            && !content.is_empty()
-        {
-            out.push_str(content);
-            out.push_str("\n\n");
-        }
-        if let Some(calls) = &message.tool_calls {
-            out.push_str("```json tool_calls\n");
-            out.push_str(&serde_json::to_string_pretty(calls).unwrap_or_default());
-            out.push_str("\n```\n\n");
+    /// Snapshot everything the dump projection needs. Cheap linear clones:
+    /// callers take this under the shared-log lock, release the lock, and
+    /// render outside it, so a large session cannot stall the brain's
+    /// appends behind markdown rendering.
+    pub fn dump_snapshot(&self) -> DumpSnapshot {
+        DumpSnapshot {
+            parts: self.request_parts(),
+            log: self.log.clone(),
+            wire: self.wire.clone(),
+            held: self.held.clone(),
         }
     }
 
@@ -407,9 +298,142 @@ impl Context {
     }
 }
 
+fn render_message(out: &mut String, message: &WireMessage) {
+    use std::fmt::Write;
+    match &message.tool_call_id {
+        Some(id) => {
+            let _ = writeln!(out, "## {} ({id})\n", message.role);
+        }
+        None => {
+            let _ = writeln!(out, "## {}\n", message.role);
+        }
+    }
+    if let Some(content) = &message.content
+        && !content.is_empty()
+    {
+        out.push_str(content);
+        out.push_str("\n\n");
+    }
+    if let Some(calls) = &message.tool_calls {
+        out.push_str("```json tool_calls\n");
+        out.push_str(&serde_json::to_string_pretty(calls).unwrap_or_default());
+        out.push_str("\n```\n\n");
+    }
+}
+
 fn upsert<T>(list: &mut Vec<(String, T)>, name: &str, value: T) {
     match list.iter_mut().find(|(n, _)| n == name) {
         Some((_, existing)) => *existing = value,
         None => list.push((name.to_string(), value)),
+    }
+}
+
+/// A point-in-time copy of the dump projection's inputs, renderable
+/// without holding the shared-log lock.
+pub struct DumpSnapshot {
+    parts: RequestParts,
+    log: Vec<Event>,
+    wire: Vec<WireEntry>,
+    held: Vec<WireEntry>,
+}
+
+impl DumpSnapshot {
+    /// The dump projection: exactly `request_parts`, rendered as markdown
+    /// in wire order, plus everything the model *cannot* see in HTML
+    /// comments — non-wire events interleaved by arrival order, piggyback
+    /// annotations where wire order departs from chronology, and
+    /// currently-held entries flagged as such. Single linear pass over
+    /// the log. Any consumer with the log can compute this; it is not
+    /// brain-private.
+    pub fn render(&self) -> String {
+        use std::fmt::Write;
+
+        // Events already represented in the rendered request: wire/held
+        // entries, plus session start and pre-activation contributions
+        // (composed into the system message / tools section).
+        let mut represented: std::collections::HashSet<u64> = self
+            .wire
+            .iter()
+            .chain(self.held.iter())
+            .map(|e| e.seq)
+            .collect();
+        let mut activated = false;
+        for event in &self.log {
+            match &event.kind {
+                EventKind::RequestAttempt { .. } => activated = true,
+                EventKind::SessionStarted { .. } => {
+                    represented.insert(event.seq);
+                }
+                EventKind::ContributionAdded { .. } if !activated => {
+                    represented.insert(event.seq);
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = String::new();
+        out.push_str("# walking-skeleton context dump — the model view\n\n");
+        out.push_str(
+            "<!-- Everything in HTML comments (like this) is invisible to the model. \
+             Everything else renders exactly the request the brain would send right \
+             now (shared code with the request builder). -->\n\n",
+        );
+
+        // The composed system message (parts.messages[0]).
+        if let Some(system) = self.parts.messages.first() {
+            render_message(&mut out, system);
+        }
+
+        // The request's tools field — the model sees these schemas.
+        if !self.parts.tools.is_empty() {
+            out.push_str("## tools\n\n");
+            out.push_str("<!-- sent as the request's `tools` field -->\n");
+            out.push_str("```json\n");
+            out.push_str(&serde_json::to_string_pretty(&self.parts.tools).unwrap_or_default());
+            out.push_str("\n```\n\n");
+        }
+
+        // Linear merge: one advancing pointer into the log. Wire entries
+        // are in wire order; only piggybacked entries have out-of-order
+        // seqs, and their preceding comments were already emitted.
+        let mut next = 0usize;
+        let mut comments_before = |out: &mut String, bound: Option<u64>| {
+            while next < self.log.len() {
+                let event = &self.log[next];
+                if bound.is_some_and(|b| event.seq >= b) {
+                    break;
+                }
+                next += 1;
+                if represented.contains(&event.seq) {
+                    continue;
+                }
+                let kind = serde_json::to_string(&event.kind).unwrap_or_default();
+                let _ = writeln!(out, "<!-- seq {}: {} -->", event.seq, kind);
+            }
+        };
+
+        for entry in &self.wire {
+            comments_before(&mut out, Some(entry.seq));
+            if entry.piggybacked {
+                let _ = writeln!(
+                    out,
+                    "<!-- seq {}: arrived while a tool exchange was open; \
+                     the model sees it here, after the exchange -->",
+                    entry.seq
+                );
+            }
+            render_message(&mut out, &entry.message);
+        }
+        for entry in &self.held {
+            let _ = writeln!(
+                out,
+                "<!-- seq {}: currently held: a tool exchange is open; \
+                 will be placed after it -->",
+                entry.seq
+            );
+            render_message(&mut out, &entry.message);
+        }
+        comments_before(&mut out, None);
+        out
     }
 }

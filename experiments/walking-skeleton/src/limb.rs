@@ -10,6 +10,7 @@
 
 use crate::events::Outcome;
 use serde_json::{Value, json};
+use std::future::Future;
 use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -32,6 +33,14 @@ pub enum LimbRequest {
 
 /// The limb loop: executes requests sequentially in its own environment.
 /// Ends when all request senders are dropped.
+///
+/// Process ownership is structural: every child the limb spawns lives
+/// inside an `execute` call that this loop awaits inline, so the loop can
+/// only reach the channel-closed exit with no live child. The graceful
+/// shutdown chain is: brain drains in-flight work (cancel → the limb
+/// kills and reaps its process tree → outcome) *before* dropping its
+/// sender, so limb shutdown never has anything left to clean up. Cleanup
+/// is always an explicit async drain, never a Drop side effect.
 pub async fn run(limb: Limb, mut rx: mpsc::Receiver<LimbRequest>) {
     while let Some(request) = rx.recv().await {
         match request {
@@ -133,22 +142,26 @@ impl Limb {
         let args: Value = serde_json::from_str(arguments_json).unwrap_or_else(|_| json!({}));
         match name {
             "list_files" => {
-                let path = args["path"].as_str().unwrap_or(".");
-                match std::fs::read_dir(self.root.join(path)) {
-                    Ok(entries) => {
-                        let mut names: Vec<String> = entries
-                            .filter_map(|e| e.ok())
-                            .map(|e| e.file_name().to_string_lossy().into_owned())
-                            .collect();
-                        names.sort();
-                        Outcome::Ok {
-                            value: names.join("\n"),
+                let path = args["path"].as_str().unwrap_or(".").to_string();
+                let dir = self.root.join(&path);
+                cancellable(cancel, "list_files", async move {
+                    let mut names = Vec::new();
+                    match tokio::fs::read_dir(dir).await {
+                        Ok(mut entries) => {
+                            while let Ok(Some(entry)) = entries.next_entry().await {
+                                names.push(entry.file_name().to_string_lossy().into_owned());
+                            }
+                            names.sort();
+                            Outcome::Ok {
+                                value: names.join("\n"),
+                            }
                         }
+                        Err(e) => Outcome::Err {
+                            error: format!("error listing {path}: {e}"),
+                        },
                     }
-                    Err(e) => Outcome::Err {
-                        error: format!("error listing {path}: {e}"),
-                    },
-                }
+                })
+                .await
             }
             "read_file" => {
                 let Some(path) = args["path"].as_str() else {
@@ -156,12 +169,17 @@ impl Limb {
                         error: "missing required argument 'path'".to_string(),
                     };
                 };
-                match tokio::fs::read_to_string(self.root.join(path)).await {
-                    Ok(content) => Outcome::Ok { value: content },
-                    Err(e) => Outcome::Err {
-                        error: format!("error reading {path}: {e}"),
-                    },
-                }
+                let path = path.to_string();
+                let file = self.root.join(&path);
+                cancellable(cancel, "read_file", async move {
+                    match tokio::fs::read_to_string(file).await {
+                        Ok(content) => Outcome::Ok { value: content },
+                        Err(e) => Outcome::Err {
+                            error: format!("error reading {path}: {e}"),
+                        },
+                    }
+                })
+                .await
             }
             "bash" => {
                 let Some(command) = args["command"].as_str() else {
@@ -178,12 +196,19 @@ impl Limb {
     }
 
     async fn run_bash(&self, command: &str, cancel: CancellationToken) -> Outcome<String> {
-        let mut child = match tokio::process::Command::new("bash")
+        // The child gets its own process group (its pgid == its pid), so
+        // the limb owns a whole tree it can address exactly: killing the
+        // group reaches every descendant the shell forked, and nothing
+        // else. No global process-table inspection, ever.
+        let mut command_builder = std::process::Command::new("bash");
+        command_builder
             .arg("-c")
             .arg(command)
             .current_dir(&self.root)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        std::os::unix::process::CommandExt::process_group(&mut command_builder, 0);
+        let mut child = match tokio::process::Command::from(command_builder)
             .kill_on_drop(true)
             .spawn()
         {
@@ -221,7 +246,14 @@ impl Limb {
         tokio::select! {
             result = child.wait() => match result {
                 Ok(status) => {
-                    let (stdout, stderr) = readers.await.unwrap_or_default();
+                    let (stdout, stderr) = match readers.await {
+                        Ok(output) => output,
+                        Err(e) => {
+                            return Outcome::Err {
+                                error: format!("error reading command output: {e}"),
+                            };
+                        }
+                    };
                     let mut text = String::new();
                     text.push_str(&String::from_utf8_lossy(&stdout));
                     let stderr = String::from_utf8_lossy(&stderr);
@@ -239,14 +271,44 @@ impl Limb {
                 },
             },
             _ = cancel.cancelled() => {
-                // Drain: kill the child and reap it before resolving.
+                // Drain: kill the whole process group we created (the
+                // kill(2) syscall does not block), then reap the shell
+                // asynchronously before resolving. Grandchildren were
+                // ours to kill via the group; they reparent to init for
+                // reaping.
+                if let Some(pid) = child.id() {
+                    // SAFETY: plain syscall; pid is our own live child's
+                    // group id.
+                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+                }
                 let _ = child.kill().await;
                 let _ = child.wait().await;
                 readers.abort();
                 Outcome::Cancelled {
-                    reason: "cancelled by user; child process killed".to_string(),
+                    reason: "cancelled by user; child process tree killed".to_string(),
                 }
             }
         }
+    }
+}
+
+/// Race a tool body against its cancellation token: the token winning
+/// resolves to a definite `Cancelled` outcome. The abandoned body holds no
+/// process or lock — filesystem tools may at worst leave an I/O operation
+/// to finish in the background (a read blocked on a FIFO lingers on the
+/// blocking pool until its writer appears; a documented spike limitation).
+async fn cancellable(
+    cancel: CancellationToken,
+    name: &str,
+    body: impl Future<Output = Outcome<String>> + Send + 'static,
+) -> Outcome<String> {
+    let task = tokio::spawn(body);
+    tokio::select! {
+        result = task => result.unwrap_or_else(|e| Outcome::Panicked {
+            payload: format!("tool task failed: {e}"),
+        }),
+        _ = cancel.cancelled() => Outcome::Cancelled {
+            reason: format!("{name} cancelled"),
+        },
     }
 }
