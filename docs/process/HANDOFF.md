@@ -29,10 +29,18 @@ The repo has explicit boundaries:
 
 Gate 1 for the rebuilt skeleton: the user smoke-runs it (e.g.
 `experiments/walking-skeleton/run.ignore.sh` — a local launcher exists on
-the dev machine) and reads `walking-skeleton-outcome.md`, optionally after
-a fresh-context review. On acceptance: pick the first core slice to
-integrate (fresh design from the evidence, black-box tests first at the
-public surfaces), or the next spike if integration is premature.
+the dev machine; behaviour already user-tested and liked once, /dump and
+contributions added since) and reads `walking-skeleton-outcome.md`,
+optionally after a fresh-context review. On acceptance: pick the first
+core slice to integrate (fresh design from the evidence, black-box tests
+first at the public surfaces), or the next spike if integration is
+premature.
+
+Queued next spike: `modular-components-brief.md` (user-requested:
+composable typed config + fully in-process black-box testing; deconfuse
+and the user's testing guidelines as inspiration). Open user decision
+recorded in the brief: standalone library in the agent-tools ecosystem vs
+harness infrastructure.
 
 Scope note: the user expanded Spike 0 scope on 2026-06-13 — real provider use
 is in scope for spikes ("I want to actually use it"); the fake provider for
