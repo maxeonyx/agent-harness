@@ -316,6 +316,66 @@ fn user_activity_during_tool_call_piggybacks() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// Cancellation during an in-flight *provider request* (not a tool call):
+/// the request resolves cancelled, the turn finalizes cancelled, no
+/// follow-on work starts, and the session stays usable.
+#[test]
+fn cancel_during_provider_request_drains_and_session_continues() {
+    let tmp = setup("cancel-request");
+    let workdir = tmp.join("workspace");
+
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            // The fake provider holds the first request open long enough
+            // to cancel it mid-flight.
+            { "delay_ms": 3000, "text": "too late, you cancelled me" },
+            { "text": "Recovered fine." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("please think about something slowly");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("[brain] request 0 in flight");
+    // Cancel only once the provider has demonstrably received the request
+    // (it logs before its scripted delay), so the cancel genuinely hits an
+    // in-flight request rather than racing the send.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while provider.requests().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "provider never received the request"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    skeleton.send("/cancel");
+    skeleton.wait_for("[brain] request cancelled");
+    skeleton.wait_for("[brain] turn cancelled");
+
+    // Finalized: no follow-on work after the drain.
+    std::thread::sleep(Duration::from_millis(300));
+    let seen: Vec<String> = skeleton.seen.clone();
+    assert!(
+        !seen.iter().any(|l| l.contains("request 1 in flight")),
+        "a cancelled request must not be followed by new work:\n{}",
+        seen.join("\n")
+    );
+
+    // The session is still usable after the cancellation. (The fake
+    // provider is single-threaded and still sleeping out the abandoned
+    // request; the 10s wait_for budget absorbs that.)
+    skeleton.send("still with me?");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("Recovered fine.");
+    skeleton.wait_for("[brain] turn complete");
+    skeleton.quit();
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// /dump: the model view as markdown — wire order, verbatim content, with
 /// everything the model cannot see in HTML comments (invisible events,
 /// piggyback annotations). Asserted through the public surface: $EDITOR

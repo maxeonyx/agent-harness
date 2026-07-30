@@ -12,10 +12,10 @@
 
 use crate::context::Context;
 use crate::events::{AssistantMessage, Contribution, Event, EventKind, Outcome};
-use crate::limb::Limb;
+use crate::limb::LimbRequest;
 use crate::provider::{self, ChatRequest, ToolCall};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 const SYSTEM_PROMPT: &str = "You are an agent in a prototype harness. The user is testing and developing the harness itself. You should help them by running tools etc. - but also by reporting on your experience as a model in this harness. You are explicitly allowed and encouraged to answer any and all questions about the context provided to you, the system prompt, exact formats, and more. This will be helpful to the user who is the developer of this system.";
@@ -60,7 +60,10 @@ enum InFlight {
 
 pub struct Session {
     config: Config,
-    limb: Limb,
+    /// The session's limb, at the logical level: a channel to a limb loop
+    /// that owns its own environment. Never the limb itself (invariant 10:
+    /// a session has a limb logically, not at the memory-ownership level).
+    limb_tx: mpsc::Sender<LimbRequest>,
     client: reqwest::Client,
     /// The session log and its cached projections. The brain is the only
     /// writer. In this co-located deployment other roles (the face) read
@@ -83,7 +86,7 @@ impl Session {
     /// in-flight work, then emit SessionClosed.
     pub async fn run(
         config: Config,
-        limb: Limb,
+        limb_tx: mpsc::Sender<LimbRequest>,
         bus: broadcast::Sender<Event>,
         mut user_rx: mpsc::Receiver<EventKind>,
         context: Arc<Mutex<Context>>,
@@ -91,7 +94,7 @@ impl Session {
         let (done_tx, mut done_rx) = mpsc::channel::<Resolved>(16);
         let mut session = Session {
             config,
-            limb,
+            limb_tx,
             client: reqwest::Client::new(),
             context,
             bus,
@@ -104,14 +107,25 @@ impl Session {
         session.emit(EventKind::SessionStarted {
             system_prompt: SYSTEM_PROMPT.to_string(),
         });
-        // Contributions that exist from the start: tool schemas and
+        // Contributions that exist from the start: the limb describes the
+        // environment it provides (tool schemas), and the brain adds
         // environment facts. They compose into the system prompt / tools
         // field; anything added later appends an update instead.
-        for def in session.limb.tool_defs() {
-            let name = def["function"]["name"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
+        // (No producer can add or change a contribution mid-context yet —
+        // deliberately not wired up; the projection rule is modeled in
+        // Context and awaits a real producer.)
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let limb_contributions = if session
+            .limb_tx
+            .send(LimbRequest::Describe { reply: reply_tx })
+            .await
+            .is_ok()
+        {
+            reply_rx.await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        for (name, def) in limb_contributions {
             session.emit(EventKind::ContributionAdded {
                 name,
                 contribution: Contribution::Tool { def },
@@ -209,67 +223,71 @@ impl Session {
         false
     }
 
-    /// Handle a resolution from in-flight work (normal path).
+    /// Handle a resolution from in-flight work (normal path): record it,
+    /// then advance the turn.
     fn on_resolved(&mut self, resolved: Resolved) {
+        match self.record_resolution(resolved) {
+            Advance::StartTool => self.start_next_tool(),
+            Advance::StartRequest => self.start_request(),
+            Advance::TurnDone(outcome) => self.finish_turn(outcome),
+        }
+    }
+
+    /// Record a resolution as outcome events and decide what would happen
+    /// next. Recording is shared between the normal path and `drain`;
+    /// only the normal path is allowed to actually start new work — that
+    /// split is what makes "a drain can never launch more work" structural
+    /// rather than a timing accident.
+    fn record_resolution(&mut self, resolved: Resolved) -> Advance {
         self.in_flight = InFlight::Idle;
         match resolved {
             Resolved::Request {
                 request_id,
                 outcome,
-            } => self.on_request_resolved(request_id, outcome),
-            Resolved::Tool { call, outcome } => self.on_tool_resolved(call, outcome),
-        }
-    }
-
-    fn on_request_resolved(&mut self, request_id: u64, outcome: Outcome<AssistantMessage>) {
-        let turn_resolution = match &outcome {
-            Outcome::Ok { value } => {
-                self.pending_calls = value.tool_calls.clone();
-                None
+            } => {
+                let advance = match &outcome {
+                    Outcome::Ok { value } => {
+                        self.pending_calls = value.tool_calls.clone();
+                        if self.pending_calls.is_empty() {
+                            Advance::TurnDone(Outcome::Ok { value: () })
+                        } else {
+                            Advance::StartTool
+                        }
+                    }
+                    Outcome::Err { error } => Advance::TurnDone(Outcome::Err {
+                        error: error.clone(),
+                    }),
+                    Outcome::Cancelled { reason } => Advance::TurnDone(Outcome::Cancelled {
+                        reason: reason.clone(),
+                    }),
+                    Outcome::Panicked { payload } => Advance::TurnDone(Outcome::Panicked {
+                        payload: payload.clone(),
+                    }),
+                };
+                self.emit(EventKind::RequestOutcome {
+                    request_id,
+                    outcome,
+                });
+                advance
             }
-            Outcome::Err { error } => Some(Outcome::Err {
-                error: error.clone(),
-            }),
-            Outcome::Cancelled { reason } => Some(Outcome::Cancelled {
-                reason: reason.clone(),
-            }),
-            Outcome::Panicked { payload } => Some(Outcome::Panicked {
-                payload: payload.clone(),
-            }),
-        };
-        self.emit(EventKind::RequestOutcome {
-            request_id,
-            outcome,
-        });
-        match turn_resolution {
-            Some(resolution) => self.finish_turn(resolution),
-            None => {
-                if self.pending_calls.is_empty() {
-                    self.finish_turn(Outcome::Ok { value: () });
+            Resolved::Tool { call, outcome } => {
+                let cancelled = matches!(outcome, Outcome::Cancelled { .. });
+                self.emit(EventKind::ToolCallOutcome {
+                    call_id: call.id.clone(),
+                    outcome,
+                });
+                if cancelled {
+                    self.pending_calls.clear();
+                    Advance::TurnDone(Outcome::Cancelled {
+                        reason: "tool call cancelled".to_string(),
+                    })
+                } else if !self.pending_calls.is_empty() {
+                    Advance::StartTool
                 } else {
-                    self.start_next_tool();
+                    // Tool loop continues: results go back to the provider.
+                    Advance::StartRequest
                 }
             }
-        }
-    }
-
-    fn on_tool_resolved(&mut self, call: ToolCall, outcome: Outcome<String>) {
-        let cancelled = matches!(outcome, Outcome::Cancelled { .. });
-        self.emit(EventKind::ToolCallOutcome {
-            call_id: call.id.clone(),
-            outcome,
-        });
-        if cancelled {
-            // Finalize: the turn resolves cancelled; no follow-up request.
-            self.pending_calls.clear();
-            self.finish_turn(Outcome::Cancelled {
-                reason: "tool call cancelled".to_string(),
-            });
-        } else if !self.pending_calls.is_empty() {
-            self.start_next_tool();
-        } else {
-            // Tool loop continues: results go back to the provider.
-            self.start_request();
         }
     }
 
@@ -340,32 +358,73 @@ impl Session {
         let cancel = CancellationToken::new();
         let token = cancel.clone();
         let done_tx = self.done_tx.clone();
-        let limb = Limb::new(); // same root; the limb is stateless in the spike
+        let limb_tx = self.limb_tx.clone();
         let name = call.function.name.clone();
         let arguments = call.function.arguments.clone();
+        // Adapter task: asks the limb loop to execute and forwards its
+        // reply as this session's resolution. The limb owns the drain: on
+        // cancellation it kills and reaps its child before replying. A
+        // dropped reply (limb gone/panicked) still yields an outcome.
         tokio::spawn(async move {
-            // The limb owns the drain: on cancellation it kills and reaps
-            // its child before resolving to Cancelled.
-            let outcome =
-                supervise(async move { limb.execute(&name, &arguments, token).await }).await;
+            let (reply_tx, reply_rx) = oneshot::channel();
+            let sent = limb_tx
+                .send(LimbRequest::Execute {
+                    name,
+                    arguments,
+                    cancel: token,
+                    reply: reply_tx,
+                })
+                .await;
+            let outcome = if sent.is_ok() {
+                reply_rx.await.unwrap_or(Outcome::Err {
+                    error: "limb dropped the request without replying".to_string(),
+                })
+            } else {
+                Outcome::Err {
+                    error: "limb is gone".to_string(),
+                }
+            };
             let _ = done_tx.send(Resolved::Tool { call, outcome }).await;
         });
         self.in_flight = InFlight::Tool { cancel };
     }
 
     /// Request → drain → finalize for whatever is in flight: signal the
-    /// token, then wait for the task's resolution message and process it
-    /// normally (the outcome event and turn resolution come out of the
-    /// regular path, so a drained cancellation looks like any other fact).
-    async fn drain(&mut self, done_rx: &mut mpsc::Receiver<Resolved>, _reason: &str) {
+    /// token, wait for the task's resolution message, and *record* it —
+    /// never advance. If completion won the race against the cancel, the
+    /// completed work is recorded as completed, but no new work starts and
+    /// the turn finalizes cancelled. Draining structurally cannot launch
+    /// more work.
+    async fn drain(&mut self, done_rx: &mut mpsc::Receiver<Resolved>, reason: &str) {
         match &self.in_flight {
             InFlight::Idle => return,
             InFlight::Request { cancel } | InFlight::Tool { cancel } => cancel.cancel(),
         }
         if let Some(resolved) = done_rx.recv().await {
-            self.on_resolved(resolved);
+            match self.record_resolution(resolved) {
+                // The work resolved the turn by itself (completed with a
+                // final answer, failed, or was cancelled): that resolution
+                // stands.
+                Advance::TurnDone(outcome) => self.finish_turn(outcome),
+                // The work would have continued the turn: finalize
+                // cancelled instead.
+                Advance::StartTool | Advance::StartRequest => {
+                    self.pending_calls.clear();
+                    self.finish_turn(Outcome::Cancelled {
+                        reason: reason.to_string(),
+                    });
+                }
+            }
         }
     }
+}
+
+/// What a recorded resolution implies for the turn. Only the normal path
+/// acts on Start*; `drain` converts them into a cancelled turn.
+enum Advance {
+    StartTool,
+    StartRequest,
+    TurnDone(Outcome<()>),
 }
 
 /// Run work in a child task so a panic inside it becomes a `Panicked`

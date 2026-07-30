@@ -1,14 +1,55 @@
-//! Toy limb: owns tool declarations and tool execution in its working
-//! directory. No provider access, no agent loop. Execution is async and
-//! cancel-correct in the request → drain → finalize sense: the brain
-//! requests cancellation via a token; the limb drains (kills and reaps a
-//! running child process) and resolves to a `Cancelled` outcome — never an
+//! Toy limb: its own loop, owning a particular environment (here: a
+//! working directory) including the context it provides (tool schemas).
+//! A session has a limb at the logical level, not at the memory-ownership
+//! level: the brain holds a channel to it, never the limb itself. No
+//! provider access, no agent loop. Execution is async and cancel-correct
+//! in the request → drain → finalize sense: the brain requests
+//! cancellation via a token; the limb drains (kills and reaps a running
+//! child process) and resolves to a `Cancelled` outcome — never an
 //! abandoned child, never a missing outcome.
 
 use crate::events::Outcome;
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+
+/// What a brain can ask of a limb. Every request carries a reply channel:
+/// the limb always answers (dropping the reply is visible to the asker).
+pub enum LimbRequest {
+    /// The contributions this limb provides to the model's environment:
+    /// (name, tool schema) pairs.
+    Describe {
+        reply: oneshot::Sender<Vec<(String, Value)>>,
+    },
+    Execute {
+        name: String,
+        arguments: String,
+        cancel: CancellationToken,
+        reply: oneshot::Sender<Outcome<String>>,
+    },
+}
+
+/// The limb loop: executes requests sequentially in its own environment.
+/// Ends when all request senders are dropped.
+pub async fn run(limb: Limb, mut rx: mpsc::Receiver<LimbRequest>) {
+    while let Some(request) = rx.recv().await {
+        match request {
+            LimbRequest::Describe { reply } => {
+                let _ = reply.send(limb.contributions());
+            }
+            LimbRequest::Execute {
+                name,
+                arguments,
+                cancel,
+                reply,
+            } => {
+                let outcome = limb.execute(&name, &arguments, cancel).await;
+                let _ = reply.send(outcome);
+            }
+        }
+    }
+}
 
 pub struct Limb {
     root: PathBuf,
@@ -20,7 +61,21 @@ impl Limb {
         Limb { root }
     }
 
-    pub fn tool_defs(&self) -> Vec<Value> {
+    /// The limb's environment contributions: named tool schemas.
+    fn contributions(&self) -> Vec<(String, Value)> {
+        self.tool_defs()
+            .into_iter()
+            .map(|def| {
+                let name = def["function"]["name"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string();
+                (name, def)
+            })
+            .collect()
+    }
+
+    fn tool_defs(&self) -> Vec<Value> {
         vec![
             json!({
                 "type": "function",
@@ -140,20 +195,26 @@ impl Limb {
             }
         };
 
-        // Read pipes concurrently so a chatty child can't deadlock on a
-        // full pipe while we wait on it.
+        // Read both pipes truly concurrently: a child that fills one pipe
+        // while we drain only the other would deadlock (it cannot exit
+        // while blocked writing, and we would never see EOF).
         let mut stdout_pipe = child.stdout.take();
         let mut stderr_pipe = child.stderr.take();
         let readers = tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
-            if let Some(pipe) = stdout_pipe.as_mut() {
-                let _ = pipe.read_to_end(&mut stdout).await;
-            }
-            if let Some(pipe) = stderr_pipe.as_mut() {
-                let _ = pipe.read_to_end(&mut stderr).await;
-            }
+            let read_stdout = async {
+                if let Some(pipe) = stdout_pipe.as_mut() {
+                    let _ = pipe.read_to_end(&mut stdout).await;
+                }
+            };
+            let read_stderr = async {
+                if let Some(pipe) = stderr_pipe.as_mut() {
+                    let _ = pipe.read_to_end(&mut stderr).await;
+                }
+            };
+            tokio::join!(read_stdout, read_stderr);
             (stdout, stderr)
         });
 

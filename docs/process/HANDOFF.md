@@ -42,6 +42,12 @@ and the user's testing guidelines as inspiration). Open user decision
 recorded in the brief: standalone library in the agent-tools ecosystem vs
 harness infrastructure.
 
+Queued later experiment (user, 2026-07-30): event-streaming substrate — a
+refined event-based replication protocol; "build a somewhat generic event
+streaming system and re-build the harness innards on top of that." Until
+then, one shared broadcast bus and untyped face→brain channels are
+accepted in the skeleton.
+
 Scope note: the user expanded Spike 0 scope on 2026-06-13 — real provider use
 is in scope for spikes ("I want to actually use it"); the fake provider for
 tests must be a separate HTTP server serving an OpenAI-compatible API. The
