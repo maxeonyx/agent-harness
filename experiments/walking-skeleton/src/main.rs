@@ -19,14 +19,17 @@ async fn main() {
     face::print_help(&config.base_url, &config.model);
 
     // Face → brain: user events. Brain → everyone: the session event stream.
+    // The session log is shared directly in this co-located deployment
+    // (brain writes, face reads); see the TODO on Context about the mutex.
     let (user_tx, user_rx) = tokio::sync::mpsc::channel(64);
     let (bus_tx, bus_rx) = tokio::sync::broadcast::channel(256);
     let recorder_rx = bus_tx.subscribe();
+    let context = std::sync::Arc::new(std::sync::Mutex::new(context::Context::new()));
 
     let recorder_task = tokio::spawn(recorder::run(recorder::path_from_env(), recorder_rx));
-    let face_task = tokio::spawn(face::run(user_tx, bus_rx));
+    let face_task = tokio::spawn(face::run(user_tx, bus_rx, context.clone()));
 
-    brain::Session::run(config, limb::Limb::new(), bus_tx, user_rx).await;
+    brain::Session::run(config, limb::Limb::new(), bus_tx, user_rx, context).await;
     // The session dropped its bus sender; consumers drain and finish.
     let _ = face_task.await;
     let _ = recorder_task.await;

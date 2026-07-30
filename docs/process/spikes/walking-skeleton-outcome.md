@@ -52,6 +52,14 @@ exercises invariants 2, 3, 4, 8, 9.
   smoke-run against the real provider. The dump makes the piggyback answer
   directly observable: concurrent user events are appended *after* the
   tool exchange, never between `tool_calls` and its result.
+- The dump is computed by the *face*, not served by the brain (invariant
+  10): `dump_request` is a fact, and when the face sees its own request
+  come back on the bus (so the log provably includes everything prior) it
+  projects the dump from the shared session log and writes the temp file
+  on its own filesystem. The system prompt is a `session_started` event,
+  so everything the model sees is derivable from the log by any consumer.
+  Shared log is `Arc<Mutex<_>>` for now (append-only; a lock-free log or
+  single-threaded model is a recorded TODO).
 
 ## What The Spike Failed To Prove
 
@@ -123,6 +131,10 @@ freezing the event taxonomy.
 - The face renders its own echo from the bus (multi-client-shaped), which
   means user input acknowledgment round-trips through the brain. Fine
   in-process; adds latency once the transport is real.
+- "~exact as the model sees it" rests on projection determinism: the face
+  projects the dump from the same log with the same code, so in-process it
+  is exact. Once views become per-model/per-face or the roles split, the
+  dump may need reconciling against what the brain actually sent.
 - Wire ordering of concurrent user events (user direction, 2026-07-30,
   after inspecting /dump behavior): currently they are appended after the
   tool exchange. "I think it maybe should be chronological where possible,
@@ -149,6 +161,10 @@ freezing the event taxonomy.
 9. Upheld within scope: request → drain → finalize with four-valued
    outcomes; every attempt resolves; cancelled is not an error; the child
    process is reaped, never abandoned.
+10. Upheld after the /dump correction: no paths cross role boundaries, the
+   face writes its own dump file, the system prompt is in the log. The
+   in-process shared log is an explicit deployment optimization, and the
+   projection-determinism caveat below is the residual risk.
 1. Explicitly out of scope for the skeleton (user direction at Gate 1).
 
 ## Review Result

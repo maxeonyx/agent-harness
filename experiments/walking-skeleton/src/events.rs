@@ -38,6 +38,14 @@ pub struct Event {
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum EventKind {
+    // ---- emitter: the brain, at session start ----
+    /// Everything the model sees must be derivable from the log by any
+    /// consumer, so the system prompt enters the session as a fact, not as
+    /// brain-private config.
+    SessionStarted {
+        system_prompt: String,
+    },
+
     // ---- emitter: the user, via a face ----
     UserMessage {
         text: String,
@@ -83,11 +91,6 @@ pub enum EventKind {
     /// as opposed to incrementally appended.
     ContextRebuilt {
         wire_messages: usize,
-    },
-    /// The brain wrote a markdown dump of the model view. On Ok the value
-    /// is the file path; the face opens it in the user's editor.
-    ContextDumped {
-        outcome: Outcome<String>,
     },
     SessionClosed,
 }

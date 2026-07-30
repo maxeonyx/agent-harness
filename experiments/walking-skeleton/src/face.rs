@@ -3,7 +3,9 @@
 //! user events to the brain and *projects* session events for display —
 //! its own view, distinct from the model's view of the same events.
 
+use crate::context::Context;
 use crate::events::{Event, EventKind, Outcome};
+use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc};
 
 pub fn print_help(base_url: &str, model: &str) {
@@ -23,7 +25,17 @@ enum Input {
 }
 
 /// Run the face loop until the session closes its event stream.
-pub async fn run(user_tx: mpsc::Sender<EventKind>, mut bus_rx: broadcast::Receiver<Event>) {
+///
+/// `context` is the shared session log: in this co-located deployment the
+/// face reads it directly for queries like /dump. A remote face would keep
+/// or request enough of the log instead — data still crosses the role
+/// boundary as events, never as file paths (no shared filesystem is
+/// assumed; the dump file below lives on the *face's* filesystem).
+pub async fn run(
+    user_tx: mpsc::Sender<EventKind>,
+    mut bus_rx: broadcast::Receiver<Event>,
+    context: Arc<Mutex<Context>>,
+) {
     // Stdin is read by a dedicated thread so that /dump can hand the
     // terminal to an editor with *no read pending on the tty* — after
     // sending a /dump line the thread parks until the editor is done.
@@ -67,10 +79,14 @@ pub async fn run(user_tx: mpsc::Sender<EventKind>, mut bus_rx: broadcast::Receiv
                         if let Some(line) = render(&event) {
                             println!("{line}");
                         }
-                        if let EventKind::ContextDumped { outcome: Outcome::Ok { value } } = &event.kind {
-                            // The editor owns the terminal until it exits;
-                            // bus events buffer, the stdin thread is parked.
-                            run_editor(value.clone()).await;
+                        if matches!(event.kind, EventKind::DumpRequest) {
+                            // Our own /dump coming back on the bus: the log
+                            // now provably includes everything up to the
+                            // request. Project the dump face-side. The
+                            // editor owns the terminal until it exits; bus
+                            // events buffer, the stdin thread is parked.
+                            let dump = context.lock().expect("context poisoned").dump_view();
+                            dump_into_editor(dump).await;
                             println!("[face] returned from dump");
                             let _ = resume_tx.send(());
                         }
@@ -88,18 +104,29 @@ pub async fn run(user_tx: mpsc::Sender<EventKind>, mut bus_rx: broadcast::Receiv
     }
 }
 
-/// Open the dump in the user's editor (a plain command name; default nano)
-/// and wait for it to exit.
-async fn run_editor(path: String) {
+/// Write the dump to a temp file on the face's own filesystem, open it in
+/// the user's editor (a plain command name; default nano), wait for exit.
+async fn dump_into_editor(dump: String) {
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
     let result = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&editor).arg(&path).status()
+        let path = std::env::temp_dir().join(format!(
+            "skeleton-dump-{}-{}.md",
+            std::process::id(),
+            crate::events::now_ms()
+        ));
+        std::fs::write(&path, dump)
+            .map_err(|e| format!("failed to write dump {}: {e}", path.display()))?;
+        println!("[face] dump written to {}", path.display());
+        std::process::Command::new(&editor)
+            .arg(&path)
+            .status()
+            .map_err(|e| format!("failed to launch editor: {e}"))
     })
     .await;
     match result {
         Ok(Ok(status)) if status.success() => {}
         Ok(Ok(status)) => println!("[face] editor exited with {status}"),
-        Ok(Err(e)) => println!("[face] failed to launch editor: {e}"),
+        Ok(Err(e)) => println!("[face] {e}"),
         Err(e) => println!("[face] editor task failed: {e}"),
     }
 }
@@ -183,14 +210,9 @@ fn render(event: &Event) -> Option<String> {
         EventKind::ContextRebuilt { wire_messages } => Some(format!(
             "[brain] context rebuilt ({wire_messages} wire messages)"
         )),
-        EventKind::ContextDumped { outcome } => match outcome {
-            Outcome::Ok { value } => Some(format!("[face] dump written to {value}")),
-            Outcome::Err { error } => Some(format!("[face] dump failed: {error}")),
-            Outcome::Cancelled { reason } => Some(format!("[face] dump cancelled: {reason}")),
-            Outcome::Panicked { payload } => Some(format!("[face] dump panicked: {payload}")),
-        },
         EventKind::SessionClosed => Some("[brain] session closed".to_string()),
-        EventKind::TurnEnd
+        EventKind::SessionStarted { .. }
+        | EventKind::TurnEnd
         | EventKind::RebuildRequest
         | EventKind::DumpRequest
         | EventKind::Quit => None,

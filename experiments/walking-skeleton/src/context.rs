@@ -23,6 +23,11 @@ pub struct WireEntry {
     pub piggybacked: bool,
 }
 
+// TODO(user direction, 2026-07-30): the shared session log is append-only,
+// so Arc<Mutex<Context>> is heavier than needed — a lock-free append-only
+// structure (e.g. boxcar) or a single-threaded async model would do; a
+// mutex is only really required for cleanup-style operations (compaction /
+// log rewriting), which don't exist yet. Arc<Mutex> for now.
 pub struct Context {
     log: Vec<Event>,
     next_seq: u64,
@@ -76,18 +81,13 @@ impl Context {
         self.wire.len()
     }
 
-    /// The model view: system prompt + the projected wire messages. Any
-    /// held-back user messages are flushed by the projection before this is
-    /// called for a request (an exchange is always closed by an outcome
-    /// event before the next request is built).
-    pub fn model_view(&self, system_prompt: &str) -> Vec<WireMessage> {
-        let mut messages = vec![WireMessage {
-            role: "system".to_string(),
-            content: Some(system_prompt.to_string()),
-            tool_calls: None,
-            tool_call_id: None,
-        }];
-        messages.extend(self.wire.iter().map(|e| e.message.clone()));
+    /// The model view: the projected wire messages (the system message is
+    /// itself projected from the `session_started` event). Any held-back
+    /// user messages are flushed by the projection before this is called
+    /// for a request (an exchange is always closed by an outcome event
+    /// before the next request is built).
+    pub fn model_view(&self) -> Vec<WireMessage> {
+        let mut messages: Vec<WireMessage> = self.wire.iter().map(|e| e.message.clone()).collect();
         messages.extend(self.held.iter().map(|e| e.message.clone()));
         messages
     }
@@ -96,8 +96,9 @@ impl Context {
     /// order (what the model sees), with everything the model *cannot* see
     /// in HTML comments — non-wire events interleaved by arrival order,
     /// piggyback annotations where wire order departs from chronology, and
-    /// currently-held entries flagged as such.
-    pub fn dump_view(&self, system_prompt: &str) -> String {
+    /// currently-held entries flagged as such. Any consumer with the log
+    /// can compute this; it is not brain-private.
+    pub fn dump_view(&self) -> String {
         use std::fmt::Write;
         let visible: std::collections::HashSet<u64> = self
             .wire
@@ -113,9 +114,6 @@ impl Context {
             "<!-- Everything in HTML comments (like this) is invisible to the model. \
              Everything else renders the exact wire context, in wire order. -->\n\n",
         );
-        out.push_str("## system\n\n");
-        out.push_str(system_prompt);
-        out.push_str("\n\n");
 
         let comments_before =
             |out: &mut String, bound: Option<u64>, emitted: &mut std::collections::HashSet<u64>| {
@@ -202,6 +200,19 @@ impl Context {
             tool_call_id: None,
         };
         match &event.kind {
+            EventKind::SessionStarted { system_prompt } => {
+                // The system prompt is model-visible, so it enters the
+                // wire view from the log like everything else.
+                wire.push(entry(
+                    WireMessage {
+                        role: "system".to_string(),
+                        content: Some(system_prompt.clone()),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    false,
+                ));
+            }
             EventKind::UserMessage { text } => {
                 let msg = user_message(text.clone());
                 if open_calls.is_empty() {
@@ -265,7 +276,6 @@ impl Context {
             | EventKind::ToolCallAttempt { .. }
             | EventKind::TurnOutcome { .. }
             | EventKind::ContextRebuilt { .. }
-            | EventKind::ContextDumped { .. }
             | EventKind::SessionClosed => {}
         }
     }

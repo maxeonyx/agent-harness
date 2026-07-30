@@ -43,6 +43,18 @@ these stops and goes to the user.
    request → drain → finalize protocol; anything in flight ends with a
    recorded outcome, and cancelled is distinct from error. (Added at Gate 1
    of Spike 0, 2026-07-30; modeling inspiration: Dicklesworthstone/asupersync.)
+10. Roles never assume co-location. Face, brain, and limb must not be
+   assumed to share a filesystem — or necessarily to have one (though a
+   TUI face can be assumed to have an FS of its own). The same goes for
+   other process-local state: environment, working directory, clocks.
+   Data crossing a role boundary travels in the event or message itself,
+   never by reference to role-local state — a file path is only meaningful
+   to the role that created it. Anything the model sees must be derivable
+   from the session log by any consumer (e.g. the system prompt enters the
+   log as an event, not as brain-private config). Co-located deployments
+   may share the log directly as an optimization; a remote face maintains
+   enough of the log for its queries — even if not, it can request enough,
+   maybe. (Added 2026-07-30 during the Spike 0 redo, at /dump.)
 
 ## Requirement areas and validation status
 
@@ -84,3 +96,13 @@ provider, real minimal interface, real code and provisional abstractions.
   error-case variety in the fake provider; per-model / per-interface view
   variation; SQLite storage design (a later experiment); subagents (out of
   scope).
+
+Further direction during the redo, 2026-07-30 (at /dump review):
+
+- Invariant 10 added (above): roles never assume co-location. Trigger: the
+  first /dump had the brain write a temp file for the face's editor.
+- /dump must be in from the start: "I really, really want an easy way of
+  introspecting on the ~exact text *as the model sees it*."
+- Shared-log concurrency: "you can be more clever than arc mutex... it's
+  append only. mutex on cleanup, though" — then walked back to "just do
+  arc mutex for now. leave it todo" (TODO recorded on `Context`).
