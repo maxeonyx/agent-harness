@@ -49,12 +49,15 @@ these stops and goes to the user.
    other process-local state: environment, working directory, clocks.
    Data crossing a role boundary travels in the event or message itself,
    never by reference to role-local state — a file path is only meaningful
-   to the role that created it. Anything the model sees must be derivable
-   from the session log by any consumer (e.g. the system prompt enters the
-   log as an event, not as brain-private config). Co-located deployments
-   may share the log directly as an optimization; a remote face maintains
+   to the role that created it. Perhaps an exception: a face and limb that
+   do have the same FS — it will be common for face and limb to have a
+   shared environment. Anything the model sees must be derivable from the
+   session log by any consumer (e.g. the system prompt enters the log as
+   an event, not as brain-private config). Co-located deployments may
+   share the log directly as an optimization; a remote face maintains
    enough of the log for its queries — even if not, it can request enough,
-   maybe. (Added 2026-07-30 during the Spike 0 redo, at /dump.)
+   maybe. (Added 2026-07-30 during the Spike 0 redo, at /dump; face↔limb
+   exception noted same day.)
 
 ## Requirement areas and validation status
 
@@ -106,3 +109,11 @@ Further direction during the redo, 2026-07-30 (at /dump review):
 - Shared-log concurrency: "you can be more clever than arc mutex... it's
   append only. mutex on cleanup, though" — then walked back to "just do
   arc mutex for now. leave it todo" (TODO recorded on `Context`).
+- System prompt / environment contributions modeled (user direction): "a
+  contribution that exists from the start comes with an addition to the
+  system prompt, but a contribution that changes or gets added while a
+  context is active comes with an update appended to the context.
+  Examples: skills, tools, environment facts like time, hostname, model."
+- The rendering of API requests must share code with the rendering of the
+  context dump — a dump missing something the model sees (as happened
+  with tool schemas) "must be impossible somehow".
