@@ -241,6 +241,31 @@ container idea ("do it in some kind of container maybe?") is recorded in
 REQUIREMENTS.md as the kernel-enforced form of the same principle — a
 possible later experiment, not spike scope.
 
+Thermonuclear review round 3 (fresh-context, 2026-07-31) returned three
+findings, all fixed:
+
+- A *completed* tool could leak backgrounded descendants (group cleanup
+  existed only on cancellation). Now the process group's lifetime is the
+  operation's lifetime: it is killed on every resolution path. Test-first:
+  `completed_tool_does_not_leak_descendants` failed red before the fix.
+- Top-level concurrency was not supervised: a dead face could hang the
+  brain, and a failed join `.expect` skipped later joins. Main is now the
+  supervisor — an auxiliary ending during a live session triggers a
+  graceful brain shutdown (in-flight work still drained, limb still
+  cleans up), every task is joined, failures set the exit code.
+- The bash cancellation drain aborted its pipe-reader task without
+  joining it; the group kill closes every pipe writer, so the drain now
+  joins the readers instead.
+
+The supervisor fix initially flaked (~1 in 10 suite runs). User ruling:
+"test flake is a bug. make sure to make it impossible." Root cause: the
+supervisor decided "orderly vs early" by *consuming* SessionClosed from
+its bus receiver — a consuming check of a monotonic fact, so the first of
+two orderly auxiliary exits could swallow the event and the second was
+misclassified as a mid-session death. Fixed structurally: the watch
+remembers (`SessionClosedWatch.seen`), making the predicate monotone like
+the fact it tracks. 40 consecutive full-suite runs green after the fix.
+
 ## User Acceptance
 
 Pending.

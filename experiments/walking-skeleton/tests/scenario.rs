@@ -496,6 +496,43 @@ fn cancel_kills_descendant_processes() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// A tool call that *completes* must not leak descendants either: the
+/// process group was created for the call, so nothing in it outlives the
+/// call's resolution — even when the shell backgrounds a child and exits
+/// successfully.
+#[test]
+fn completed_tool_does_not_leak_descendants() {
+    let tmp = setup("completed-leak");
+    let workdir = tmp.join("workspace");
+
+    let pid_file = workdir.join("pids.txt");
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            // Redirected so the pipes close and the shell exits at once,
+            // leaving the backgrounded sleep as a would-be orphan.
+            { "tool_call": { "name": "bash", "arguments": {
+                "command": "sleep 600 > /dev/null 2>&1 & echo $! > pids.txt" } } },
+            { "text": "All done." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("please run the background thing");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("All done.");
+    skeleton.wait_for("[brain] turn complete");
+
+    // The tool resolved Ok; its whole group must already be dead — before
+    // any shutdown, because completion (not quit) ends the operation.
+    let pids = recorded_pids(&pid_file);
+    wait_pids_dead(&pids);
+
+    skeleton.quit();
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// Cancelling a non-bash tool blocked on I/O (read_file on a FIFO with no
 /// writer) still finalizes the turn and leaves the session usable.
 #[test]
