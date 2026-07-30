@@ -76,11 +76,13 @@ pub async fn run(
                 if matches!(event.kind, EventKind::DumpRequest) {
                     // Our own /dump coming back on the bus: the log now
                     // provably includes everything up to the request.
-                    // Project the dump face-side. The editor owns the
-                    // terminal until it exits; bus events buffer, the
+                    // Project the dump face-side: snapshot briefly under
+                    // the lock, render outside it (the brain is never
+                    // stalled behind markdown rendering). The editor owns
+                    // the terminal until it exits; bus events buffer, the
                     // input thread is parked.
-                    let dump = context.lock().expect("context poisoned").dump_view();
-                    dump_into_editor(dump).await;
+                    let snapshot = context.lock().expect("context poisoned").dump_snapshot();
+                    dump_into_editor(snapshot.render()).await;
                     println!("[face] returned from dump");
                     let _ = resume_tx.send(());
                 }

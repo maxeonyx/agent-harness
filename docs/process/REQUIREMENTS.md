@@ -130,3 +130,15 @@ Further direction during the redo, 2026-07-30 (at /dump review):
   build a somewhat generic event streaming system and re-build the
   harness innards on top of that." One shared bus and untyped channels
   are fine until then.
+
+Further direction during review round 2 fixes, 2026-07-31:
+
+- Process ownership (user): "limb should own and clean up processes on
+  graceful shutdown." Cleanup by ownership, not by global observation —
+  no process-table scanning (pgrep/proc-walking) in app or tests, and no
+  blocking process cleanup inside the async app. Rejected as hacky: a
+  test-harness Drop that enumerated global child processes via pgrep.
+- Sandboxing idea (user, hedged): "do it in some kind of container
+  maybe?" — a PID namespace / cgroup per limb would be the
+  kernel-enforced form of the same ownership principle. Not spike scope;
+  candidate for a later experiment.
