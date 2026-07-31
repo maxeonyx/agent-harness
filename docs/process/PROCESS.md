@@ -36,8 +36,8 @@ near-frictionless before promotion into core, then strict at promotion.
    first at the public surfaces below, implement the smallest coherent slice,
    keep `cargo ratchet` green.
 5. **Gate 2 — integration acceptance.** Tests green, invariants checked
-   (expanded checklist: source-notes `requirements.md` §4 core integration
-   gates), fresh-context review accepts, user accepts.
+   (expanded checklist: the integration expectations at the end of
+   `PLAN.md`), fresh-context review accepts, user accepts.
 6. Update `HANDOFF.md`. Go to 1.
 
 Do not batch integrations. Alternate spike → small integration → spike.

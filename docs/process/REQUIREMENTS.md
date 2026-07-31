@@ -1,200 +1,185 @@
-# Curated Requirements
+# Requirements
 
-This is the live behavioral target. The detailed stakeholder requirements and
-test-case lists remain in `docs/source-notes/requirements.md` §2 (verbatim
-source material); this file curates the invariants and tracks validation
-status. When a spike outcome changes a requirement, record it here — source
-notes are never edited locally.
+## Why this project exists
 
-Last reconciled with source notes: gist revision of 2026-06-13.
+The agent harness is a personal system for doing real work *with* agents
+in one shared context: the user opens files, runs commands, searches, and
+edits in-band, and the agent understands what happened without the user
+restating it. Existing harnesses treat the user as a prompt source outside
+the session; this one treats user work and agent work as two activity
+streams over one session, each seen by the other through appropriate
+projections.
+
+"Stakeholder" below means the user in a different capacity. The design has
+several perpendicular requirement directions — worker UX, process
+improvement, harness development, operations, analytics, security
+boundaries, coordination, multi-client UI — and the implementation must
+preserve that breadth rather than building a narrow MVP and hoping it
+generalises. That is why the process (see `PROCESS.md`) validates risky
+behavioral clusters in disposable spikes before integrating anything.
+
+Requirements here derive from three places, and each entry says which:
+
+- **Design notes** — the user's own notes in `docs/source-notes/`
+  (verbatim source material, never edited locally).
+- **Spike evidence** — behavior proven or rulings made at spike gates;
+  the history lives in the spike outcome docs, the current truth here.
+- **Process rulings** — user decisions about how the work itself is done.
+
+## What each stakeholder needs
+
+- **Worker** (design notes): work happens in-band; each user tool has two
+  surfaces — a rich interactive UI for the user and compressed context for
+  the model; the user wins on conflicting edits, and stale agent output
+  never silently overwrites newer user work. Validated by Spike 1.
+- **Process improver** (design notes): prompts, skills, AGENTS.md files,
+  tool descriptions, and schemas are rapidly and safely iterable; edits
+  are recorded honestly against warm-cache reality (no pretending current
+  context changed). Validated by Spike 5.
+- **Harness developer** (design notes): disposable spikes, safe
+  tool/plugin reload, eventual safe self-modification (the harness editing
+  and relaunching itself without losing sessions). Validated by Spikes 0/5.
+- **Operator** (design notes): roles deploy co-located or split; safe
+  updates, downgrades, protocol versioning, migrations, background
+  persistence across user disconnects on Windows and Linux. Validated by
+  Spikes 2/7.
+- **Analyst** (design notes): session data is analytics-grade and
+  queryable from the start — cost, cache hit rates, tool durations,
+  session classification, stuck scopes. Validated by Spike 3.
+- **Security / authority boundaries** (design notes): provider credentials
+  stay brain-owned, never reaching limbs, faces, plugins, schemas, logs,
+  or model context; user tools and agent tools are framed differently;
+  direct connections are capability-bound. NOT a general agent-permission
+  model — personal limbs may run in YOLO mode; permission prompts and
+  approval theatre are explicitly unwanted. Validated by Spikes 1/2.
+- **Attention / coordination** (design notes): parallel work stays
+  legible — structured subagent concurrency, visible blocked states,
+  explicit sibling scopes. Validated by Spike 4.
+- **Multi-client / UI state** (design notes): multiple faces share live UI
+  state (drafts, open files, panes) without stale clients corrupting
+  anything; eventually a real reactive TUI and web GUI over one client
+  state model. Validated by Spike 6.
 
 ## Invariants
 
-The non-negotiables every gate checks against. A change that violates one of
-these stops and goes to the user.
+The non-negotiables every gate checks against. A change that violates one
+of these stops and goes to the user.
 
-1. The brain is the only role that drives provider API requests. Provider
-   credentials never reach limbs, faces, plugins, tool schemas, logs, or model
-   context.
-2. Recording context, appending context, rebuilding context, and triggering
-   inference are distinct operations. Passive user activity never triggers a
-   model request.
-3. All activity has multiple views. An event is about its emitter, not *for*
-   anyone; the consumer (or some helpful middle layer) does the projection if
-   needed. Events to the model, maybe different for different models; events
-   to the user, maybe different for different interfaces / settings; context
-   rebuild may use a different view to a fresh append, for both. (Reworded at
-   Gate 1 of Spike 0, 2026-07-30; the original user-tool framing rule — user
-   activity is framed as user activity, never as agent tool calls — still
-   holds as one projection of this.)
-4. Face, brain, and limb are logical roles. Co-location versus splitting is a
-   deployment choice over the same logical model.
-5. Durable session data is analytics-grade and queryable. Durable,
+1. **The brain is the only role that drives provider API requests.**
+   Provider credentials never reach limbs, faces, plugins, tool schemas,
+   logs, or model context. (Design notes.)
+2. **Recording, appending, rebuilding, and triggering are distinct
+   operations.** Passive user activity never triggers a model request;
+   only turn end, tool-loop continuation, cache-nearly-expired handover,
+   and explicit resume may. (Design notes; proven in Spike 0.)
+3. **All activity has multiple views.** An event is about its emitter, not
+   *for* anyone; consumers (or a helpful middle layer) project it — to the
+   model (possibly per-model), to the user (possibly per-interface), for
+   rebuild vs append. User-tool activity framed as user activity rather
+   than agent tool calls is one projection of this. (Design notes,
+   reworded on Spike 0 evidence.)
+4. **Face, brain, and limb are logical roles**; co-location versus
+   splitting is a deployment choice over the same logical model. (Design
+   notes.)
+5. **Durable session data is analytics-grade and queryable.** Durable,
    cache-supporting-transient, shared-UI, and disposable-stream data are
-   explicitly distinguished.
-6. Subagent concurrency is structured: parents block on children; sibling
-   results stay hidden until the parent resumes.
-7. Multi-client UI state is explicitly modeled. Stale clients cannot silently
-   overwrite newer state; the user wins on conflicting edits.
-8. Spike code never becomes core by copying. Core integration is a fresh
-   design from evidence.
-9. Cancellation is modeled well, baked in from the start — it is really,
-   really important for a solid UX. Cancellation is an explicit
-   request → drain → finalize protocol; anything in flight ends with a
-   recorded outcome, and cancelled is distinct from error. (Added at Gate 1
-   of Spike 0, 2026-07-30; modeling inspiration: Dicklesworthstone/asupersync.)
-10. Roles never assume co-location. Face, brain, and limb must not be
-   assumed to share a filesystem — or necessarily to have one (though a
-   TUI face can be assumed to have an FS of its own). The same goes for
-   other process-local state: environment, working directory, clocks.
-   Data crossing a role boundary travels in the event or message itself,
-   never by reference to role-local state — a file path is only meaningful
-   to the role that created it. Perhaps an exception: a face and limb that
-   do have the same FS — it will be common for face and limb to have a
-   shared environment. Anything the model sees must be derivable from the
-   session log by any consumer (e.g. the system prompt enters the log as
-   an event, not as brain-private config). Co-located deployments may
-   share the log directly as an optimization; a remote face maintains
-   enough of the log for its queries — even if not, it can request enough,
-   maybe. (Added 2026-07-30 during the Spike 0 redo, at /dump; face↔limb
-   exception noted same day.)
+   explicitly distinguished. (Design notes.)
+6. **Subagent concurrency is structured**: parents block on children;
+   sibling results stay hidden until the parent resumes. (Design notes.)
+7. **Multi-client UI state is explicitly modeled.** Stale clients cannot
+   silently overwrite newer state; the user wins on conflicting edits.
+   (Design notes.)
+8. **Spike code never becomes core by copying.** Core integration is a
+   fresh design from evidence. (Process ruling.)
+9. **Cancellation is baked in from the start** — request → drain →
+   finalize; anything in flight ends with a recorded outcome; cancelled is
+   distinct from error; four-valued outcomes (ok / error / cancelled /
+   panicked); a drain structurally cannot start new work. Completed work
+   that ties with a cancel is kept and recorded — it cost money and is
+   probably good — while the turn still finalizes cancelled. (Spike 0
+   gate ruling; modeling inspiration: Dicklesworthstone/asupersync.)
+10. **Roles never assume co-location.** No shared filesystem, environment,
+    working directory, or clock is assumed across role boundaries; data
+    crossing a boundary travels in the message, never by reference to
+    role-local state. Everything the model sees must be derivable from the
+    session record by any consumer. Exception, by design: a face and limb
+    commonly DO share an environment (the user's machine), and co-located
+    deployments may share the session state directly as the substrate.
+    (Spike 0 gate ruling.)
 
-## Requirement areas and validation status
+## Architecture requirements from Spike 0 evidence
 
-| Area | Source | Validated by | Status |
-|------|--------|--------------|--------|
-| In-band user work, user-tool compression, user-wins conflicts | source-notes `requirements.md` §2.1 | Spike 1 | not started |
-| Process/context edits first-class, rapid tool iteration, context lifecycle | §2.2 | Spike 5 | not started |
-| Disposable spikes, safe reload, self-modification | §2.3 | Spikes 0/5 | not started |
-| Topology, lifecycle, direct streams, updates/migrations | §2.4 | Spikes 2/7 | not started |
-| Analytics-grade storage, data lifecycle | §2.5 | Spike 3 | not started |
-| Authority boundaries, credential ownership, tool framing | §2.6 | Spikes 1/2 | not started |
-| Structured subagent concurrency, scope legibility | §2.7 | Spike 4 | not started |
-| Multi-client state, shared UI state, TUI + web GUI | §2.8 | Spike 6 | not started |
+These were ruled during the Spike 0 review loop and are current truth; the
+ruling history with the user's original wording is in
+`spikes/walking-skeleton-outcome.md`.
 
-Spike 0 (walking skeleton) validates no requirement area by itself; it is the
-shared substrate the others run on.
+- **Sequencing belongs to the deployment substrate, not to any
+  participant.** The brain is not a sequencer. Within one process,
+  participants synchronize (appends are synchronous calls under a lock);
+  across processes there is no total order and no synchronization —
+  asynchrony is accepted. Whether same-machine IPC is close enough to
+  sequence is explicitly unresolved. The async-append question begins at a
+  process boundary and is deferred to the event-streaming experiment.
+- **Every component owns exactly one external world**, and the three are
+  symmetric — each an {inbox + select loop + owned in-flight work}
+  participant: the face owns the TUI, the brain owns the provider
+  connection, the limb owns an environment (filesystem, processes,
+  tools). Ephemeral provider state is the brain's, as ephemeral UI state
+  is the face's. Nothing world-specific crosses a component boundary.
+- **The TUI is the face's external world, not its innards.** Rendering is
+  an output port, not loop logic ("rendering != face innards");
+  synchronous tty takeover (an editor) is owned in-flight work; the face
+  loop keeps selecting and is never blocked blind.
+- **Tool facts are recorded by both brain and limb, split by ownership.**
+  The brain records context facts: a call detected in a response, a result
+  entering the model view. The limb is in charge of the actual execution
+  (or not) of tool calls and records the execution facts; environment
+  facts like hostname come from the limb.
+- **A proposed-but-unexecuted tool call is valid, resumable state.** On
+  cancel, wait for the in-flight response and keep it, but do not execute
+  its proposed calls. Unexecuted calls get no fabricated outcome, are
+  omitted from the wire (the model never sees a call that never ran),
+  remain visible to introspection, and may be executed on a later resume.
+  Executed-then-cancelled calls do get their cancelled result on the wire
+  (exchange adjacency).
+- **Process cleanup happens by ownership, never by global observation.**
+  The limb owns and cleans up its process trees (group lifetime ==
+  operation lifetime, on every resolution path); no process-table
+  scanning in the harness or its tests. Kernel-enforced ownership (PID
+  namespaces / cgroups — "some kind of container maybe") is a hedged
+  later idea.
+- **Structured lifecycle throughout.** No detached tasks or threads, no
+  process::exit escape hatches; in-flight work is owned (identity +
+  cancellation + join handle together) and always joined; participants
+  return Results and failures fold into the exit code; every layer shuts
+  down what it owns gracefully (parent-held timeout backstops and
+  descending deadline budgets are a recorded pattern, deferred).
+- **Introspection is first-class.** An easy way to see the ~exact text as
+  the model sees it (/dump), with everything the model cannot see marked
+  as such; the request builder and the dump share one projection so they
+  cannot diverge. `model` and `reasoning_effort` are request facts, not
+  context facts.
 
-## Requirement changes from spike evidence
+## Engineering discipline (process rulings)
 
-Gate 1 of Spike 0 (walking skeleton), 2026-07-30 — user direction after a
-fresh-context review returned findings. Result: redo. The goal of the
-skeleton is to have something for the rest of the work to build on: real
-provider, real minimal interface, real code and provisional abstractions.
+- **Test flakes are bugs.** Races are structurally excluded, not made
+  unlikely or retried away.
+- Black-box tests only, at product-public surfaces (CLI/UI, provider wire
+  via fake provider, storage/query surface, and eventually the transport
+  protocol). No asserting internals.
+- Real provider use is in scope for spikes ("I want to actually use it");
+  the fake provider is a separate HTTP server serving the same
+  OpenAI-compatible API, so real vs fake is just a base URL.
 
-- Invariant 3 reworded (above): "all activity has multiple views."
-- Invariant 9 added (above): cancellation baked in from the start.
-- The skeleton needs async I/O from the start. There are at least two select
-  loops: the face loop and the agent loop. The agent loop manages one
-  session's model / tool-call loop, gets additional events from the user, and
-  sends events to the interface(s). The brain handles these session /
-  subsession loops. Face is an abstraction.
-- Invariant 1 (credentials) is "not at all important for the skeleton —
-  that's details"; something more principled later. No key scrub now.
-- Invariant 2 (context lifecycle) matters for the skeleton: it affects the
-  code architecture and wasn't visibly there in the first attempt.
-- Deferred by user direction: tool-calling details / robustness / improvements
-  (a later experiment); provider streaming ("event based but a kind of
-  ephemeral event that's just extra complexity right now"); a full
-  error-case variety in the fake provider; per-model / per-interface view
-  variation; SQLite storage design (a later experiment); subagents (out of
-  scope).
+## Deferred by explicit ruling
 
-Further direction during the redo, 2026-07-30 (at /dump review):
+Streaming responses; provider error taxonomy in the fake provider;
+principled credential handling; SQLite storage design (Spike 3); subagents
+(Spike 4); compaction and per-model/per-interface view variation;
+tool-calling robustness and improvements; the event-streaming /
+replication protocol and everything in `spikes/event-streaming-notes.md`;
+configuration/context-layer composition (see PLAN.md, modular components);
+"the brain is in charge of configuration changes, I believe" — left for
+later.
 
-- Invariant 10 added (above): roles never assume co-location. Trigger: the
-  first /dump had the brain write a temp file for the face's editor.
-- /dump must be in from the start: "I really, really want an easy way of
-  introspecting on the ~exact text *as the model sees it*."
-- Shared-log concurrency: "you can be more clever than arc mutex... it's
-  append only. mutex on cleanup, though" — then walked back to "just do
-  arc mutex for now. leave it todo" (TODO recorded on `Context`).
-- System prompt / environment contributions modeled (user direction): "a
-  contribution that exists from the start comes with an addition to the
-  system prompt, but a contribution that changes or gets added while a
-  context is active comes with an update appended to the context.
-  Examples: skills, tools, environment facts like time, hostname, model."
-- The rendering of API requests must share code with the rendering of the
-  context dump — a dump missing something the model sees (as happened
-  with tool schemas) "must be impossible somehow". Scope ruling (user):
-  `model` and `reasoning_effort` staying outside that shared projection is
-  fine — "those are not part of the *context*, only part of the
-  *request*".
-- Limb ownership (user, at review round 1): "the brain runs the agent
-  loop for a session, but the limb owns a particular environment
-  including the context that it provides. A session has a limb at the
-  logical level, but not at the memory ownership level necessarily."
-- Structured lifecycle: the skeleton "should lead by example on this
-  stuff" (no detached threads, no process::exit escape hatches).
-- Future experiment (user): a "refined event-based replication protocol —
-  build a somewhat generic event streaming system and re-build the
-  harness innards on top of that." At this point one shared bus and untyped
-  channels were accepted until then; the 2026-07-31 ruling below supersedes
-  that interim design.
-
-Further direction during review round 2 fixes, 2026-07-31:
-
-- Process ownership (user): "limb should own and clean up processes on
-  graceful shutdown." Cleanup by ownership, not by global observation —
-  no process-table scanning (pgrep/proc-walking) in app or tests, and no
-  blocking process cleanup inside the async app. Rejected as hacky: a
-  test-harness Drop that enumerated global child processes via pgrep.
-- Sandboxing idea (user, hedged): "do it in some kind of container
-  maybe?" — a PID namespace / cgroup per limb would be the
-  kernel-enforced form of the same ownership principle. Not spike scope;
-  candidate for a later experiment.
-
-Review round 4 and architecture discussion, 2026-07-31:
-
-- A cancelled turn may retain an assistant response containing proposed but
-  unexecuted tool calls: "the tool call by itself is actually valid, and we
-  could action that later if we wanted." It is resumable state: "we should be
-  able to resume later and then execute the tool call that we had pending from
-  the last time we were accessing the session." The wire projection omits
-  unexecuted calls (the model never sees a call that never ran); no synthetic
-  outcomes are fabricated; /dump shows them as invisible-facts comments.
-- Sequencing is a property of the deployment substrate, never the brain or
-  another participant. One process synchronizes and therefore has a
-  sequencer. Across processes that are too far away to sequence, accept that
-  there is no total order and do not synchronize. Whether same-machine IPC
-  is close enough remains unclear.
-- In-process appends are synchronous method calls under a lock. The
-  synchronous-versus-asynchronous append question begins at a process
-  boundary and is deferred.
-- Face, brain, and limb are symmetric; every component owns exactly one
-  external world. Face owns terminal/UI, brain owns the provider connection,
-  and limb owns the environment (filesystem, processes, tools). These roles
-  are locked before later experiments. Provider state belongs to the brain
-  just as ephemeral UI state belongs to the face.
-- The current limb has the same shape as face and brain: inbox + select loop
-  + owned in-flight work, not request/reply slots. In the later streaming
-  design the limb is an event peer (including streamed tool results and file
-  watching).
-- Desired shutdown pattern, deferred beyond this spike: "every layer should
-  think about how it's shutting down gracefully in response to a
-  cancellation." Each layer gracefully shuts down what it owns; its parent
-  has a timeout backstop and kills on expiry. A descending global deadline
-  budget is an idea, not yet a ruling; check what asupersync does.
-- "test flake is a bug. make sure to make it impossible." Races must be
-  structurally excluded, not retried away.
-
-Further direction during review round 5, 2026-07-31:
-
-- Tool facts are recorded by both brain and limb, split by ownership:
-  "Likely both brain and limb should be recording stuff about tools. Brain
-  needs to say when a tool call is detected in response and needs to know
-  when a tool result is going in the context / to the model, whereas limb
-  is more 'in charge' of the actual execution (or not) of tool calls.
-  Definitely hostname is a fact that comes from limb." Concretely: the limb
-  holds the shared-state handle and appends execution facts (ToolStarted);
-  the brain appends context facts (request outcomes, tool results entering
-  the model view).
-- The TUI is the face's external world, not its innards: "The TUI
-  (stdin/stdout) is conceptually separate from the *face process* due to
-  exactly this reason - synchronous takeover etc. ... Rendering != face
-  innards." Synchronous tty takeover (the /dump editor) and file reads are
-  the face's owned in-flight work; the face loop keeps selecting, buffers
-  display output during takeover, and is never blocked blind.
-
-Deferred replication, topology, peer-lifecycle, and shutdown inputs are
-curated in `spikes/event-streaming-notes.md`.
+Validation sequencing and status live in `PLAN.md`.

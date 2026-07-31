@@ -5,8 +5,8 @@ format and the append/trigger split but was a single blocking thread; the
 user's Gate 1 direction: the skeleton's goal is to have something for the
 rest of the work to build on — real provider, real minimal interface, real
 code and provisional abstractions — and it needs async I/O from the start.
-The first attempt's evidence and review findings are in
-`walking-skeleton-outcome-v1.md`.
+The first attempt's evidence and review findings are in git history
+(`walking-skeleton-outcome-v1.md`, retired).
 
 Thesis: a minimal evented face+brain+limb harness can run end-to-end in one
 process with async I/O and at least two select loops — the face loop (user

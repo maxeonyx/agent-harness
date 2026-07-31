@@ -1,30 +1,43 @@
 # Spike Outcome Template
 
+An outcome doc is a curated record, not a log: it describes the spike as
+accepted (or as abandoned), rewritten to current truth as the spike
+evolves. Do not accumulate round-by-round review chronology — findings
+that were fixed are noise once fixed; only rulings, accepted limitations,
+and results earn a place. Rulings move to `REQUIREMENTS.md` as current
+truth; record them here with the user's original wording as provenance.
+
 Spike:
 Status:
 Requirements tested:
 
-## What The Spike Proved
+## What the accepted spike is
 
-## What The Spike Failed To Prove
+One paragraph: what exists, where, and how it is exercised.
 
-## What Should Be Integrated
+## What the spike proved
 
-## What Must Not Be Integrated
+## What the spike failed to prove
 
-## Tests To Promote Or Preserve
+## Rulings made during review
 
-## Requirements Pressure
+User decisions with original wording preserved; current truth lives in
+`REQUIREMENTS.md`.
 
-What this spike suggests should change in `REQUIREMENTS.md`, if anything.
+## Review summary
 
-## New Risks Or Open Questions
+A few lines: how many review rounds, what classes of issue they caught,
+final verdict. No finding-by-finding log.
 
-## Invariants Check
+## Known accepted limitations
+
+## What must not be integrated
+
+## Tests to promote or preserve
+
+## Invariants check
 
 For each invariant in `REQUIREMENTS.md` the brief said this spike touches:
 upheld, violated, or newly informed.
 
-## Review Result
-
-## User Acceptance
+## User acceptance

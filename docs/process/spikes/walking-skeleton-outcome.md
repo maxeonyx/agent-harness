@@ -1,426 +1,149 @@
-# Spike Outcome: walking-skeleton (redo)
+# Spike Outcome: walking-skeleton
 
-Spike: walking-skeleton, rebuilt per the revised brief of 2026-07-30 (Gate 1
-of the first attempt: redo; see `walking-skeleton-outcome-v1.md`).
-Status: round 4 triggered a shared-state rewrite, which is complete: eleven
-black-box scenarios pass (repeatedly — flake-checked in batches of 10+), and
-agent-run real-provider smokes (OpenRouter, 2026-07-31) exercised the tool
-round-trip, /dump, and clean shutdown against the rewritten code. Review
-rounds 5-6 followed the rewrite; Gate 1 pending.
+Spike: walking-skeleton, rebuilt per the revised brief of 2026-07-30 (the
+first attempt's Gate 1 verdict was redo; its outcome doc was retired when
+this one superseded it — see git history).
+Status: **accepted at Gate 1, 2026-07-31** — "The code is nice, and the
+harness works perfectly. Spike 0 is done."
 Requirements tested: none by itself (Spike 0 is the shared substrate);
-exercises invariants 2, 3, 4, 8, 9.
+exercises invariants 2, 3, 4, 8, 9, 10.
 
-## What The Spike Proved
+## What the accepted spike is
 
-These are results from the event-bus implementation before the round-4 rewrite.
-The black-box observations remain the rewrite's contract; its internal-shape
-claims need to be re-evidenced. The integration recommendations and risks
-below also describe that implementation; the round-4 result supersedes them
-where the architecture differs.
+`experiments/walking-skeleton/`: a working single-process harness the user
+runs against real providers (OpenRouter). One shared, journaled
+`SessionState` (synchronous appends under one lock) is the source of
+truth; three symmetric participants — face (owns the TUI), brain (owns the
+provider connection), limb (owns the environment) — each run an
+{inbox + select loop + owned in-flight work} shape connected by typed
+channels; main supervises. Eleven black-box scenarios drive it through
+stdin/stdout and the fake-provider wire, flake-checked in repeated batches.
 
-- The two-select-loop shape works and stays responsive: the face loop
-  (stdin + event rendering) and the brain's session loop (user events +
-  in-flight work) communicate only by channels. While a tool call sleeps,
-  typed user input is acknowledged at the face before the tool result
-  arrives — asserted in the scenario, not just observed.
-- Events-about-emitter with consumer projections is expressible and cheap:
-  one session event log is the source of truth; the face rendering, the
-  model context view, and the recorder JSONL are three projections of the
-  same events. `FileOpened` carries facts; the face shows path+bytes, the
-  model sees a compressed `[user activity]` framing.
-- Piggybacking works at the wire: user activity arriving mid-tool-call
-  appends without triggering and rides the next request *after* the tool
-  exchange — the `tool_calls` → `tool` adjacency is asserted on the fake
-  provider's request log. Append-never-triggers is now observed *between*
-  steps (the wire is checked empty after appends, before `/end`), fixing
-  the v1 review's evidence gap.
-- Cancellation as request → drain → finalize holds up, and it is cheap to
-  build on tokio primitives: `/cancel` during a 30s (test) / 60s (smoke)
-  bash tool call kills and reaps the child in well under a second, resolves
-  the tool to a `Cancelled` outcome (distinct from error), records a tool
-  result on the wire for the cancelled call (so the next request is
-  protocol-valid), resolves the turn as cancelled, and leaves the session
-  usable — the scenario continues with a second successful turn.
-- Nothing in flight ends without an outcome, structurally: every spawned
-  task sends exactly one resolution message back into the session loop
-  (cancel is signalled by token, and the drain waits for the resolution);
-  panics are converted to a `Panicked` outcome by a supervisor wrapper.
-  Attempts and outcomes are separate events, so the recorder records facts
-  — `request_attempt` is not a claim that a request succeeded.
-- The context lifecycle is visible in the code: `append` (incremental,
-  cache-friendly), `rebuild` (fresh projection of the whole log, a real
-  operation with a `/rebuild` surface and a `context_rebuilt` event), and
-  per-consumer views are distinct operations on the `Context` type.
-- Introspection is just another projection: `/dump` renders the ~exact
-  model view as markdown — wire order, verbatim content, tool calls
-  visible — with everything the model *cannot* see (non-wire events,
-  piggyback/arrival annotations, held entries) in HTML comments, opened in
-  `$EDITOR` and returning to the face on exit. Asserted in a scenario and
-  smoke-run against the real provider. The dump makes the piggyback answer
-  directly observable: concurrent user events are appended *after* the
-  tool exchange, never between `tool_calls` and its result.
-- System-prompt / environment contributions are modeled (user direction):
-  tools, and facts like time, hostname, and model, enter the log as
-  `contribution_added` events. A contribution that exists from the start
-  composes into the system prompt / the request's tools field; one added
-  or changed while the context is active appends an update message (the
-  cache-friendly notification-vs-rebuild policy is later work). The
-  request builder and the dump both consume one shared projection,
-  `request_parts` — after the user caught the first dump omitting tool
-  schemas (they were fetched brain-privately at request time), divergence
-  between "what was sent" and "what the dump shows" is now a shared-code
-  impossibility rather than a rendering discipline. Verified live: the
-  real model answered its own model name from the environment section.
-- The dump is computed by the *face*, not served by the brain (invariant
-  10): `dump_request` is a fact, and when the face sees its own request
-  come back on the bus (so the log provably includes everything prior) it
-  projects the dump from the shared session log and writes the temp file
-  on its own filesystem. The system prompt is a `session_started` event,
-  so everything the model sees is derivable from the log by any consumer.
-  Shared log is `Arc<Mutex<_>>` for now (append-only; a lock-free log or
-  single-threaded model is a recorded TODO).
+## What the spike proved
 
-## What The Spike Failed To Prove
+- The in-band collaboration substrate works end-to-end: appends never
+  trigger requests; turn end triggers exactly one request carrying
+  accumulated context; user activity mid-tool-call stays responsive and
+  piggybacks after the tool exchange without splitting `tool_calls`/`tool`
+  adjacency on the wire (asserted on the fake provider's request log,
+  including *between* steps).
+- Cancellation as request → drain → finalize is buildable and cheap on
+  tokio: four-valued outcomes, every attempt resolves, drain structurally
+  cannot start work, cancel/completion ties resolve deterministically
+  (completed work is kept; the turn still finalizes cancelled), and the
+  limb kills and reaps whole process trees it owns in well under a second.
+- Shared-state-plus-typed-channels is sufficient co-located architecture:
+  the event bus the first rewrite carried was removed as premature
+  replication design, and nothing user-visible was lost. Sequencing by
+  substrate (the lock), not by a participant, held up in code.
+- The journal (JSONL of appends, seq-validated) supports atomic /rebuild
+  and is latent event sourcing for the later streaming experiment; it also
+  carries the resumable unexecuted-tool-call state.
+- Introspection via a shared projection works: /dump renders exactly the
+  request builder's view plus invisible facts as comments, so it cannot
+  silently miss what the model sees.
+- Real-provider use (tool round-trips, /cancel, /dump, clean shutdown)
+  works with the same binary as the fake-provider tests — real vs fake is
+  just a base URL.
 
-- Rebuild is behaviorally identical to append today (no compaction, no
-  cache-expiry policy) — the seam exists, the policy does not.
-- Streaming remains absent (deliberately out of scope); interface
-  responsiveness during a long *non-streaming* request is proven, token
-  streaming is not.
-- Only one face, one session, one in-flight tool at a time. Parallel tool
-  calls from one response are executed sequentially.
-- Provider dialect coverage is unchanged from v1: OpenRouter works; other
-  endpoints unverified.
-- Real-provider cancel coverage: the smoke runs exercised
-  cancel-during-tool; cancel-during-request is scenario-asserted against
-  the fake provider only.
+## Rulings made during review (current truth in REQUIREMENTS.md)
 
-## What Should Be Integrated
+The review loop surfaced design questions the user ruled on; original
+wording preserved here as the record:
 
-Shapes, not code (invariant 8):
+- Cancelled turns keep completed responses, never execute proposed calls:
+  "we should wait for the completion of the assistant response because I
+  don't think there's any point throwing that away. It cost us money, and
+  it's probably good. But I don't think we should execute on the tool
+  calls..."; "the tool call by itself is actually valid, and we could
+  action that later if we wanted"; "we should be able to resume later and
+  then execute the tool call that we had pending."
+- Sequencing: "there is no sequencer unless... A and B share a process...
+  we accept there's no total order for the events across the two. We
+  don't synchronize." In one process "we do synchronize, and therefore we
+  do have a sequencer. But the brain is not the sequencer. The brain is
+  another participant." And: "the question is whether to *synchronously
+  append* or *asynchronously append*. ie. do we wait, or not? If we can
+  synchronously append, we don't need to worry."
+- Event streaming deferred: "the event stream needs to be principled, it
+  needs to be structured well in order to be worth it" — simpler
+  hard-coded setup now; the stream is a later experiment (inputs curated
+  in `event-streaming-notes.md`, where the limb "is definitely an event
+  peer!!").
+- Symmetry: "definitely, the three should be symmetric, and their roles
+  should be defined before we go later on into the other experiments."
+  "Any provider state is part of the brain conceptually, just like
+  ephemeral UI state is part of the face."
+- Tool facts: "both brain and limb should be recording stuff about tools.
+  Brain needs to say when a tool call is detected in response and needs to
+  know when a tool result is going in the context / to the model, whereas
+  limb is more 'in charge' of the actual execution (or not)... Definitely
+  hostname is a fact that comes from limb."
+- Face vs TUI: "The TUI (stdin/stdout) is conceptually separate from the
+  *face process*... synchronous takeover etc. ... Rendering != face
+  innards."
+- Process ownership: "limb should own and clean up processes on graceful
+  shutdown" (no global process-table observation); container/namespace
+  enforcement a hedged later idea ("do it in some kind of container
+  maybe?").
+- Discipline: "test flake is a bug. make sure to make it impossible."
+- Shutdown pattern (deferred): "every layer should think about how it's
+  shutting down gracefully in response to a cancellation," with parent
+  timeout backstops and a descending deadline-budget idea; "I don't know
+  what asupersync does here. We should look."
 
-- One event log per session as source of truth, with face/model/recorder as
-  projections. The piggyback-ordering rule living *in the model-view
-  projection* (facts in arrival order; the view keeps tool exchanges
-  intact) was the key simplification — no queueing machinery.
-- The resolution-message discipline: in-flight work = a task + a
-  cancellation token + exactly one resolution message. Cancel = signal,
-  then await the same resolution path as success. Four-valued outcomes.
-- Attempt/outcome as separate recorded events.
-- The interactive scenario-test harness shape: drive stdin, read stdout
-  live, observe the wire between steps.
+## Review summary
 
-## What Must Not Be Integrated
+Seven fresh-context "thermonuclear" review rounds. Rounds 1-3 hardened the
+first rewrite (limb loop ownership, structural drain, process-group
+lifetime, supervised main, a monotonic close-watch fixing a real ~1-in-10
+flake). Round 4's findings triggered the architecture discussion that
+produced the shared-state rewrite. Rounds 5-7 hardened the rewrite
+(biased cancel/completion ties both directions, atomic rebuild, drain on
+failure paths, no fabricated outcomes anywhere, backpressure-cycle
+removal, id-collision guard, bounded test-harness waits). Round 7's
+reviewer re-verified the dispositions and returned ACCEPT. Notable
+process point: several reviewer findings were reversed by user ruling
+rather than fixed — the findings log is process history, not design
+truth; rulings live in REQUIREMENTS.md.
+
+## Known accepted limitations
+
+- A read blocked on a writerless FIFO lingers on the blocking pool until a
+  writer appears (tokio spawn_blocking is uncancellable).
+- The stdin thread stays blocked on the tty when shutdown does not come
+  through stdin; process exit reaps it.
+- The face deliberately waits for the user's editor before exiting.
+- True completion-wins-cancel races are not black-box testable
+  deterministically; the guarantee is structural (biased selects).
+- "Replay is not a no-op" is not discriminable at the public surface until
+  session resume exists; the rebuild test pins losslessness only.
+
+## What must not be integrated
 
 - Any of this code by copying (invariant 8).
-- The broadcast-channel bus as *the* transport decision — it is one
-  in-process stand-in for the eventual face/brain/limb transport.
-- The `Vec<Event>` in-memory log and JSONL recorder as the storage design;
-  SQLite/storage is a later experiment (user direction).
-- Env-var-only configuration, the unrestricted bash tool.
+- Env-var-only configuration; the unrestricted bash tool.
+- The in-process channel wiring as *the* transport decision — topology is
+  Spike 2's question.
+- The JSONL journal as the storage design — storage is Spike 3's question
+  (the journal's append-log shape is a design input, not a decision).
 
-## Tests To Promote Or Preserve
+## Tests to promote or preserve
 
-`tests/scenario.rs` — eleven scenarios at the public surfaces (CLI in, face
-output + provider wire out): append-never-triggers observed between steps;
-mid-tool responsiveness + piggyback adjacency; cancel drain + session
-continuation (during a request and during a tool call); descendant
-process-tree kill and completed-tool descendant cleanup (asserted on
-fixture-recorded PIDs only); blocked-read cancel; quit-during-tool drain;
-unexecuted-call wire omission; /rebuild losslessness; /dump content. The
-interactive harness (send, wait_for, drain_seen, requests-between,
-graceful-first cleanup through stdin EOF) is the durable black-box shape.
-These assert face output and wire only — no journal-internal record names
-beyond dump comments — so they can be re-derived without freezing the
-journal taxonomy.
+`tests/scenario.rs` — eleven scenarios at the public surfaces (CLI in,
+face output + provider wire out): append-never-triggers observed between
+steps; mid-tool responsiveness + piggyback adjacency; cancel drain +
+session continuation (during a request and during a tool call);
+descendant process-tree kill and completed-tool descendant cleanup
+(asserted on fixture-recorded PIDs only); blocked-read cancel;
+quit-during-tool drain; unexecuted-call wire omission; /rebuild
+losslessness; /dump content. The interactive harness (send, wait_for,
+drain_seen, requests-between, graceful-first cleanup through stdin EOF,
+bounded waits everywhere) is the durable black-box shape.
 
-## Requirements Pressure
-
-- None new. The Gate 1 direction of 2026-07-30 (invariant 3 reworded,
-  invariant 9 added, deferrals) is already recorded in `REQUIREMENTS.md`.
-
-## New Risks Or Open Questions
-
-- The session loop processes one resolution at a time and `drain` awaits
-  inline; with parallel tool calls or multiple sessions this single-loop
-  shape needs rethought (structured concurrency — asupersync territory).
-- `TurnEnd` during a live turn is recorded but does not re-trigger; whether
-  it should queue a follow-up turn is undecided.
-- The broadcast bus drops events for lagged consumers (recorder prints a
-  warning). Fine for a spike; a real recorder needs a lossless path.
-- Cancelling a provider request drops the connection; whether providers
-  bill for it, and whether a cancel should instead race a short grace
-  window, is unknown.
-- The face renders its own echo from the bus (multi-client-shaped), which
-  means user input acknowledgment round-trips through the brain. Fine
-  in-process; adds latency once the transport is real.
-- "~exact as the model sees it" rests on projection determinism: the face
-  projects the dump from the same log with the same code, so in-process it
-  is exact. Once views become per-model/per-face or the roles split, the
-  dump may need reconciling against what the brain actually sent.
-- Wire ordering of concurrent user events (user direction, 2026-07-30,
-  after inspecting /dump behavior): currently they are appended after the
-  tool exchange. "I think it maybe should be chronological where possible,
-  although the model might get a little confused when a tool call is not
-  right next to its result? Possibly we should even re-write model
-  responses to occur after the user events that happened while we were
-  waiting for it? Maybe not though — that's a trickier one. Technically
-  there's just no total ordering." Open design question for the context
-  view; /dump exists to make experiments here observable.
-
-## Invariants Check
-
-2. Upheld and now visible in the code: append/rebuild/view are distinct
-   operations on `Context`; appending never triggers (asserted at the wire,
-   between steps); triggering is explicit (`TurnEnd` when idle).
-3. Upheld as reworded: events are emitter-centric facts; face and model
-   views are projections and demonstrably differ (`FileOpened`,
-   tool outcomes).
-4. Upheld by construction, more honestly than v1: the brain talks to faces
-   only via the event bus and user-event channel; the face never touches
-   the provider; the limb owns tool execution and its own drain. Still
-   co-located in one process; splitting is untested (as the notes expect).
-8. Upheld — everything lives in `experiments/walking-skeleton/`.
-9. Upheld within scope: request → drain → finalize with four-valued
-   outcomes; every attempt resolves; cancelled is not an error; the child
-   process is reaped, never abandoned.
-10. Upheld after the /dump correction: no paths cross role boundaries, the
-   face writes its own dump file, the system prompt is in the log. The
-   in-process shared log is an explicit deployment optimization, and the
-   projection-determinism caveat below is the residual risk.
-1. Explicitly out of scope for the skeleton (user direction at Gate 1).
-
-## Review Result
-
-Thermonuclear review round 1 (fresh-context, 2026-07-30) returned 8
-findings. User triage and the resulting changes:
-
-- Fixed: the drain race (a cancel/quit drain could process a completion
-  and launch new work — now `record_resolution` is shared but only the
-  normal path can advance; a drain structurally cannot start work). Note:
-  the completion-wins-the-race case is not black-box testable
-  deterministically; the guarantee is structural, not race-tested.
-- Fixed: the limb is its own loop owning its environment; the brain holds
-  a channel, never the limb ("a session has a limb at the logical level,
-  but not at the memory ownership level necessarily" — user). The limb
-  describes its own contributions.
-- Fixed: structured lifecycle throughout ("this skeleton should lead by
-  example" — user): no `process::exit`, no detached threads; the input
-  thread owns parsing and is joined; all tasks joined with failures
-  propagated. Judo bonus: the face render loop collapsed to a pure event
-  consumer.
-- Fixed: stderr pipe deadlock in bash execution (concurrent pipe reads);
-  recorder opens once and writes async.
-- Fixed: cancel-during-provider-request now has a black-box scenario (the
-  earlier claim was overstated).
-- Ruled fine (user): `model` and `reasoning_effort` living outside
-  `request_parts` — "those are not part of the *context*, only part of
-  the *request*".
-- Ruled deferred (user): mid-context contribution updates stay unwired
-  ("not important right now"), with a comment at the site; the shared
-  bus / untyped face channel is fine for now — a refined event-based
-  replication protocol (generic event streaming system, harness innards
-  rebuilt on top) is queued as a later experiment.
-
-Thermonuclear review round 2 (fresh-context, 2026-07-31) returned findings
-on in-flight-work ownership and cancellation completeness. Fixes:
-
-- Cancelling a bash tool kills the whole process tree, not just the shell:
-  each child gets its own process group; the drain signals the group (a
-  non-blocking syscall) and reaps the shell asynchronously. Red-proven:
-  the descendant test fails with the group kill disabled.
-- Non-bash tools are cancellation-aware (`cancellable` races the body
-  against the token). Accepted limitation, documented: a read blocked on
-  a writerless FIFO lingers on the blocking pool until a writer appears.
-- In-flight work is owned: the session loop holds identity, cancellation
-  token, and join handle together, and always joins — a panic joins as a
-  `Panicked` outcome, a dropped limb reply resolves `Panicked`, never a
-  vanished operation.
-- `/dump` renders outside the context lock (`dump_snapshot` under the
-  lock, linear `render` outside).
-- Test coverage added: descendant-tree kill, blocked-read cancel,
-  quit-during-tool drain, rebuild-preserves-view.
-
-User direction during round 2 fixes: "limb should own and clean up
-processes on graceful shutdown" — cleanup by ownership, never by global
-observation. The test harness's first cut (a Drop that pgrep-walked
-descendants and shelled out to `kill -9`) was rejected as hacky and
-replaced: cleanup drives the skeleton's own graceful chain through the
-real user surface (stdin EOF → face Quit → brain drain → limb kills its
-process group), and process-death assertions target PIDs the test's own
-fixture recorded, not process-table pattern scans. The user's hedged
-container idea ("do it in some kind of container maybe?") is recorded in
-REQUIREMENTS.md as the kernel-enforced form of the same principle — a
-possible later experiment, not spike scope.
-
-Thermonuclear review round 3 (fresh-context, 2026-07-31) returned three
-findings, all fixed:
-
-- A *completed* tool could leak backgrounded descendants (group cleanup
-  existed only on cancellation). Now the process group's lifetime is the
-  operation's lifetime: it is killed on every resolution path. Test-first:
-  `completed_tool_does_not_leak_descendants` failed red before the fix.
-- Top-level concurrency was not supervised: a dead face could hang the
-  brain, and a failed join `.expect` skipped later joins. Main is now the
-  supervisor — an auxiliary ending during a live session triggers a
-  graceful brain shutdown (in-flight work still drained, limb still
-  cleans up), every task is joined, failures set the exit code.
-- The bash cancellation drain aborted its pipe-reader task without
-  joining it; the group kill closes every pipe writer, so the drain now
-  joins the readers instead.
-
-The supervisor fix initially flaked (~1 in 10 suite runs). User ruling:
-"test flake is a bug. make sure to make it impossible." Root cause: the
-supervisor decided "orderly vs early" by *consuming* SessionClosed from
-its bus receiver — a consuming check of a monotonic fact, so the first of
-two orderly auxiliary exits could swallow the event and the second was
-misclassified as a mid-session death. Fixed structurally: the watch
-remembers (`SessionClosedWatch.seen`), making the predicate monotone like
-the fact it tracks. 40 consecutive full-suite runs green after the fix.
-
-Thermonuclear review round 4 (fresh-context, 2026-07-31) returned six
-findings:
-
-- F1: the face was not actually a peer select loop; the broadcast bus made
-  the brain the router and sequencer for face activity. The architecture
-  discussion resolved this by removing the event bus from this spike and
-  locking symmetric face/brain/limb roles around shared state + typed
-  channels.
-- F2: drain could retain an assistant response with an unmatched
-  `tool_calls` exchange. The reviewer called this a defect; the user reversed
-  it: "we should wait for the completion of the assistant response because I
-  don't think there's any point throwing that away. It cost us money, and it's
-  probably good. But I don't think we should execute on the tool calls because
-  that's a new asynchronous action on our machine, and the user has requested
-  to finish." A cancelled turn therefore keeps the completed response but
-  does not execute its proposed calls. "Specifically, I think that we should
-  be able to resume later and then execute the tool call that we had pending
-  from the last time we were accessing the session." The wire omits the call
-  until execution, no synthetic outcomes are fabricated, and /dump shows it
-  as an invisible fact.
-- F3 accepted: cancellation could return while a spawned cancellable body was
-  still detached. Abort and await the join handle.
-- F4 accepted: supervisor shutdown could block forever joining the stdin
-  thread. Join it only when it has finished; a thread blocked on the terminal
-  remains a known process-exit residual.
-- F5 accepted: participant failures could print and return success. Participant
-  loops return `Result`, and the supervisor folds errors and panics into the
-  process exit code.
-- F6 accepted: one cancellation assertion was vacuous because observed stdout
-  was only updated by `wait_for`. Drain queued output before inspecting it;
-  end-of-session wire assertions remain the authoritative absence proof.
-
-Outcome: rewrite the spike to the simplest honest co-located design. One
-`Arc<Mutex<SessionState>>` is the source of truth and journals each synchronous
-append; face, brain, and limb each own an inbox, select loop, external world,
-and in-flight work; typed channels carry control and display messages. The
-black-box behavior stays the contract. Event streaming, proposals,
-replication, and cross-process ordering move to
-`event-streaming-notes.md` for a dedicated later experiment.
-
-Thermonuclear review round 5 (fresh-context, 2026-07-31, against the
-rewritten spike) returned seven findings:
-
-- Fixed: cancel-versus-completion ties were scheduler-dependent in both
-  directions — now both selects are biased (a ready user cancel is
-  processed before a ready completion in the brain loop; a completed
-  response beats the cancel token in the request task, honoring "it cost
-  us money"). True completion-wins-the-race remains not black-box
-  testable deterministically; the guarantee is structural.
-- Fixed: /rebuild now replays the journal atomically under one lock (a
-  concurrent append could previously be lost from memory and duplicate a
-  seq).
-- Fixed: the brain drains in-flight work even when its own loop fails —
-  no detached provider task, no unrecorded attempt.
-- Fixed: the session-over watch is set before the face can observe
-  SessionClosed (a display-backpressure race could misclassify orderly
-  shutdown).
-- Added: a deterministic black-box test for the unexecuted-call rule (two
-  calls in one response, cancel during the first: the second never
-  starts, the wire omits it while carrying the executed call's cancelled
-  result, the dump comments it). Proven red with omission disabled. The
-  fake provider gained multi-call script steps.
-- Ruled (user), reshaping finding 1: both brain and limb record tool
-  facts, split by ownership — the limb appends execution facts
-  (ToolStarted, via the shared-state handle) and contributes environment
-  facts like hostname; the brain appends context facts (a call detected
-  in a response, a result entering the model view).
-- Ruled (user), reshaping finding 5: the TUI is the face's external
-  world, distinct from the face process — "rendering != face innards."
-  /dump's editor takeover and /open's file read are now the face's owned
-  in-flight work: the loop keeps selecting, buffers display items while
-  the editor owns the tty (flushed after), defers input, and observes
-  shutdown mid-takeover. Waiting for the user's editor before exiting is
-  deliberate.
-- Recorded limitation: "replay is not a no-op" is not discriminable at
-  the public surface while memory is journal-faithful by construction and
-  session resume is unimplemented; the rebuild test pins losslessness
-  only.
-
-Thermonuclear review round 6 (fresh-context, 2026-07-31) returned six
-findings, all accepted and fixed:
-
-- A queued ToolOutcome ahead of a queued Cancel in the FIFO inbox could
-  start new work although the user had already asked to finish (the select
-  bias cannot see inside the inbox). Now, before acting on any
-  start-new-work advance, the brain drains the inbox into its deferred
-  queue and finalizes the turn cancelled if a Cancel/Quit is queued
-  anywhere.
-- The limb-gone dispatch path fabricated a ToolOutcome for a never-started
-  call. Removed: a never-started call gets no outcome (it stays an
-  unexecuted, wire-omitted proposal); the turn resolves Panicked.
-- The bash pipe-reader task detached on the child.wait() error branch;
-  now joined on every resolution path.
-- Duplicate provider tool-call ids (wire-reachable) could corrupt the
-  exchange projection's id-keyed bookkeeping; responses reusing an id now
-  resolve Err before recording. (Broader tool robustness stays deferred by
-  ruling; this guards only the projection invariants.)
-- The test harness's exit wait was unbounded, so a shutdown defect would
-  wedge the suite; it is now bounded (15s) and fails loudly.
-- Stale documentation corrected (this doc's status and preserved-test
-  sections; a provider.rs comment describing an abort that is actually a
-  signalled join).
-
-Thermonuclear review round 7 (fresh-context, 2026-07-31) returned six
-findings; four fixed, one fixed-inverted, one rejected:
-
-- Fixed: a full display channel plus a full brain inbox was a cyclic
-  backpressure deadlock (face awaiting brain send, brain awaiting display
-  send), reachable by flooding stdin. Rendering is an output port: the
-  display channel is now unbounded and producers never block on the TUI.
-- Fixed-inverted: the limb's unbiased selects made cancel-vs-completion
-  ties nondeterministic. Per the recorded semantics the fix biases toward
-  COMPLETION (a finished execution is a real result and is recorded; the
-  brain still finalizes the turn cancelled and starts no new work) — the
-  reviewer's cancel-must-win framing was the wrong direction, but the
-  nondeterminism was real.
-- Fixed: startup order is fully hard-coded — main appends the brain's
-  initial contributions (model, session start) alongside the limb's before
-  any participant runs, so an immediate /dump cannot see partial context.
-- Fixed: a tool outcome is recorded only for a call whose ToolStarted fact
-  exists — the limb dying between accepting a dispatch and recording it no
-  longer yields a fabricated outcome.
-- Fixed (harness): the fake-provider readiness wait and the FIFO unblock
-  are bounded (non-blocking FIFO open with a deadline — a plain blocking
-  write could itself wedge if the cancelled reader never opened the FIFO).
-- Rejected: "face /dump and /open attempts need durable four-valued
-  outcomes in SessionState." Those are TUI-world operations, not session
-  attempts; the session's facts are what enters the context, and a
-  successful /open already appends its fact. Recording UI operation
-  outcomes in the session log would blur the fact vocabulary the round-5
-  ruling established.
-
-The round-7 reviewer then re-verified the dispositions (same reviewer,
-per user direction) and surfaced two residuals in the harness fix — the
-fake-provider child had to be owned before the bounded readiness wait,
-and the readiness reader thread joined — both fixed. Re-verification
-result: ACCEPT ("all round-7 findings are adequately resolved or
-rebutted; readiness is bounded and the reader is joined on success").
-
-## User Acceptance
+## User acceptance
 
 Accepted (Gate 1), 2026-07-31: "The code is nice, and the harness works
-perfectly. Spike 0 is done." Acceptance followed seven thermonuclear
-review rounds (the seventh re-verified by its own reviewer to ACCEPT),
-eleven black-box scenarios flake-checked in batches, and the user's own
-real-provider use of the harness.
+perfectly. Spike 0 is done." Acceptance followed the seven review rounds,
+the flake-checked scenario suite, and the user's own real-provider use of
+the harness.
