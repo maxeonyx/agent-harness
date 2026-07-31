@@ -1,14 +1,14 @@
-# Spike Outcome: walking-skeleton
+# Experiment Outcome: walking-skeleton
 
-Spike: walking-skeleton, rebuilt per the revised brief of 2026-07-30 (the
+Experiment: walking-skeleton, rebuilt per the revised brief of 2026-07-30 (the
 first attempt's Gate 1 verdict was redo; its outcome doc was retired when
 this one superseded it — see git history).
 Status: **accepted at Gate 1, 2026-07-31** — "The code is nice, and the
 harness works perfectly. Spike 0 is done."
-Requirements tested: none by itself (Spike 0 is the shared substrate);
+Requirements tested: none by itself (the walking-skeleton experiment is the shared substrate);
 exercises invariants 2, 3, 4, 8, 9, 10.
 
-## What the accepted spike is
+## What the accepted experiment is
 
 `experiments/walking-skeleton/`: a working single-process harness the user
 runs against real providers (OpenRouter). One shared, journaled
@@ -19,7 +19,7 @@ provider connection), limb (owns the environment) — each run an
 channels; main supervises. Eleven black-box scenarios drive it through
 stdin/stdout and the fake-provider wire, flake-checked in repeated batches.
 
-## What the spike proved
+## What the experiment proved
 
 - The in-band collaboration substrate works end-to-end: appends never
   trigger requests; turn end triggers exactly one request carrying
@@ -124,8 +124,8 @@ truth; rulings live in REQUIREMENTS.md.
 - Any of this code by copying (invariant 8).
 - Env-var-only configuration; the unrestricted bash tool.
 - The in-process channel wiring as *the* transport decision — topology is
-  Spike 2's question.
-- The JSONL journal as the storage design — storage is Spike 3's question
+  Experiment 2's question.
+- The JSONL journal as the storage design — storage is Experiment 3's question
   (the journal's append-log shape is a design input, not a decision).
 
 ## Tests to promote or preserve

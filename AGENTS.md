@@ -16,9 +16,9 @@ current process state lives in `docs/process/`.
 ## Operating Rule
 
 The development process is `docs/process/PROCESS.md`. Its principle: spend
-rigor where mistakes are expensive. Spikes under `experiments/` are
+rigor where mistakes are expensive. Experiments under `experiments/` are
 near-frictionless (brief in, runnable evidence + outcome doc out, no
-mid-spike gates); promotion into `src/` is strict (fresh design from
+mid-experiment gates); promotion into `src/` is strict (fresh design from
 evidence, black-box tests first at the public surfaces, two user-involved
 gates). "Do not implement forward through uncertainty" is the triage rule for
 when work stalls — go backwards to the brief, the design, or
@@ -29,13 +29,13 @@ when work stalls — go backwards to the brief, the design, or
 | Path | Purpose |
 |------|---------|
 | `docs/source-notes/` | Imported design/process notes from the gist |
-| `docs/process/` | Live process state, handoffs, spike plans, and outcomes |
-| `experiments/` | Disposable spike code and fixtures |
+| `docs/process/` | Live process state, handoffs, experiment plans, and outcomes |
+| `experiments/` | Disposable experiment code and fixtures |
 | `src/` | Minimal executable/core surface only after tests justify it |
 | `tests/` | Black-box product behavior tests |
 
-Spike code must not become accidental core architecture. Core integration only
-happens after the relevant spike outcome exists and behavior is represented by
+Experiment code must not become accidental core architecture. Core integration only
+happens after the relevant experiment outcome exists and behavior is represented by
 black-box tests.
 
 ## Test Boundary
@@ -63,8 +63,8 @@ pointing the harness at a fake provider. Do not seed sessions, queues,
 context, providers, or workspace runtime state by calling private
 constructors or writing internal storage directly.
 
-Spike code under `experiments/` is exempt from tests-first; see
-`docs/process/SPIKE_RULES.md`.
+Experiment code under `experiments/` is exempt from tests-first; see
+`docs/process/EXPERIMENT_RULES.md`.
 
 ## Source Note Sync
 
@@ -102,7 +102,7 @@ cargo clippy -- -D warnings
 ```
 
 Plain `cargo test` is blocked by the gatekeeper test for the core package; use
-`cargo ratchet`. Disposable spikes under `experiments/` may define their own
+`cargo ratchet`. Disposable experiments under `experiments/` may define their own
 local test workflow.
 
 From the workspace root, also run:
