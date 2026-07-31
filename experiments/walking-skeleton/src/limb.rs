@@ -1,9 +1,15 @@
 //! Toy limb: a participant shaped like the face and brain — an inbox, a
 //! select loop, and owned in-flight work — owning one external world: an
 //! environment (here: a working directory, its filesystem, and the
-//! processes tools spawn). No provider access, no agent loop, no shared
-//! memory with anyone (the session state is the brain/face's co-location
-//! substrate; the limb only exchanges messages).
+//! processes tools spawn). No provider access, no agent loop.
+//!
+//! Both brain and limb record facts about tools, split by ownership: the
+//! limb is in charge of the actual execution (or not) of tool calls, so
+//! it appends the execution facts — `ToolStarted`, synchronously, to the
+//! shared co-located session state — while the brain records the context
+//! facts (a call detected in a response, a result entering the model
+//! view). A call the limb never started is exactly a call with no
+//! execution facts: unexecuted, omitted from the wire, resumable.
 //!
 //! Cancellation is a message, not a shared token: the brain sends
 //! `LimbMsg::Cancel`; the limb cancels its own in-flight execution (the
@@ -12,9 +18,11 @@
 //! abandoned child, never a missing outcome.
 
 use crate::protocol::{BrainMsg, Contribution, DisplayItem, LimbMsg, Outcome};
+use crate::state::SessionState;
 use serde_json::{Value, json};
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -36,6 +44,7 @@ pub async fn run(
     mut rx: mpsc::Receiver<LimbMsg>,
     brain_tx: mpsc::Sender<BrainMsg>,
     display_tx: mpsc::Sender<DisplayItem>,
+    state: Arc<Mutex<SessionState>>,
 ) -> Result<(), String> {
     let mut in_flight: Option<(
         crate::provider::ToolCall,
@@ -54,6 +63,7 @@ pub async fn run(
         tokio::select! {
             message = rx.recv(), if in_flight.is_none() || !rx.is_closed() => match message {
                 Some(LimbMsg::Execute { call }) if in_flight.is_none() => {
+                    with_state(&state, |state| state.append_tool_started(call.clone()))?;
                     let cancel = CancellationToken::new();
                     let name = call.function.name.clone();
                     let arguments = call.function.arguments.clone();
@@ -100,6 +110,16 @@ pub async fn run(
         }
     }
     Ok(())
+}
+
+fn with_state<T>(
+    state: &Arc<Mutex<SessionState>>,
+    operation: impl FnOnce(&mut SessionState) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut state = state
+        .lock()
+        .map_err(|_| "session state lock poisoned in limb".to_string())?;
+    operation(&mut state)
 }
 
 async fn join_execution(
