@@ -60,7 +60,7 @@ struct LineResult {
 
 pub async fn run(
     brain_tx: mpsc::Sender<BrainMsg>,
-    mut display_rx: mpsc::Receiver<DisplayItem>,
+    mut display_rx: mpsc::UnboundedReceiver<DisplayItem>,
     state: Arc<Mutex<SessionState>>,
 ) -> Result<(), String> {
     let (input_tx, mut input_rx) = mpsc::channel(8);

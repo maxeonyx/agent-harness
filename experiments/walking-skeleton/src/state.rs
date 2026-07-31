@@ -160,6 +160,16 @@ impl SessionState {
         self.journal_path.clone()
     }
 
+    /// Did the limb record that this call actually began executing?
+    /// (Execution facts are the limb's; a call without one is an
+    /// unexecuted proposal and must never receive an outcome.)
+    pub fn tool_started(&self, call_id: &str) -> bool {
+        self.transcript.iter().any(|record| {
+            matches!(&record.item,
+                TranscriptEntry::ToolStarted { call } if call.id == call_id)
+        })
+    }
+
     /// Has any earlier provider response already used this tool-call id?
     /// (The projection's executed/open bookkeeping is keyed by id, so a
     /// reused id would corrupt it; the brain rejects such responses.)

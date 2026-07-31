@@ -32,11 +32,18 @@ async fn run() -> Result<(), String> {
     for (name, contribution) in limb.contributions() {
         initial_state.append_contribution(name, contribution)?;
     }
+    for (name, contribution) in brain::initial_contributions(&config) {
+        initial_state.append_contribution(name, contribution)?;
+    }
     let state = Arc::new(Mutex::new(initial_state));
 
     let (brain_tx, brain_rx) = mpsc::channel(64);
     let (limb_tx, limb_rx) = mpsc::channel(8);
-    let (display_tx, display_rx) = mpsc::channel(64);
+    // Unbounded: rendering is an output port — the brain and limb must
+    // never be flow-controlled by the user's terminal, or a full display
+    // channel plus a full brain inbox becomes a cyclic backpressure
+    // deadlock (face awaiting brain send, brain awaiting display send).
+    let (display_tx, display_rx) = mpsc::unbounded_channel();
     let (session_over_tx, session_over_rx) = watch::channel(false);
 
     let mut tasks = tokio::task::JoinSet::new();

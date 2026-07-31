@@ -36,10 +36,18 @@ impl FakeProvider {
             .stdout(Stdio::piped())
             .spawn()
             .expect("spawn fake provider");
-        let mut first_line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut first_line)
-            .expect("read fake provider address");
+        // Bounded readiness wait: a fake provider that never comes up
+        // fails the test instead of wedging the suite.
+        let stdout = child.stdout.take().unwrap();
+        let (line_tx, line_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = BufReader::new(stdout).read_line(&mut line);
+            let _ = line_tx.send(line);
+        });
+        let first_line = line_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("fake provider never printed its readiness line");
         let addr = first_line
             .trim()
             .strip_prefix("listening on ")
@@ -683,8 +691,33 @@ fn cancel_unblocks_a_blocked_read_file() {
 
     // Unblock the leaked reader (a spike-accepted limitation: the blocked
     // open lingers on the blocking pool until the FIFO gets a writer) so
-    // shutdown isn't held hostage by it.
-    std::fs::write(&fifo, b"unblock\n").expect("open fifo write end");
+    // shutdown isn't held hostage by it. Non-blocking open: if the leaked
+    // reader never actually opened the FIFO (the cancel won before the
+    // blocking open began), there is nothing to unblock — a plain
+    // blocking write here would wait forever for a reader instead.
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo)
+            {
+                Ok(mut pipe) => {
+                    use std::io::Write as _;
+                    let _ = pipe.write_all(b"unblock\n");
+                    break;
+                }
+                // ENXIO: no reader on the FIFO. Either it has not blocked
+                // yet or it never will; stop trying at the deadline.
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+    }
 
     // The session is still usable after cancelling a wedged tool.
     skeleton.send("still with me?");
