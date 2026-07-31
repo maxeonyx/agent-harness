@@ -37,8 +37,11 @@ impl FakeProvider {
             .spawn()
             .expect("spawn fake provider");
         // Bounded readiness wait: a fake provider that never comes up
-        // fails the test instead of wedging the suite.
+        // fails the test instead of wedging the suite. The child is owned
+        // (KillOnDrop) BEFORE the wait, so the timeout panic kills it —
+        // which also EOFs the reader thread rather than leaking it blocked.
         let stdout = child.stdout.take().unwrap();
+        let child = KillOnDrop(child);
         let (line_tx, line_rx) = mpsc::channel();
         std::thread::spawn(move || {
             let mut line = String::new();
@@ -54,7 +57,7 @@ impl FakeProvider {
             .expect("fake provider readiness line")
             .to_string();
         FakeProvider {
-            _child: KillOnDrop(child),
+            _child: child,
             addr,
             requests_log,
         }
