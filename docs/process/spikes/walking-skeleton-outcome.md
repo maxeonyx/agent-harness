@@ -410,6 +410,13 @@ findings; four fixed, one fixed-inverted, one rejected:
   outcomes in the session log would blur the fact vocabulary the round-5
   ruling established.
 
+The round-7 reviewer then re-verified the dispositions (same reviewer,
+per user direction) and surfaced two residuals in the harness fix — the
+fake-provider child had to be owned before the bounded readiness wait,
+and the readiness reader thread joined — both fixed. Re-verification
+result: ACCEPT ("all round-7 findings are adequately resolved or
+rebutted; readiness is bounded and the reader is joined on success").
+
 ## User Acceptance
 
 Pending.
