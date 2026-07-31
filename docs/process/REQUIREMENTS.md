@@ -1,5 +1,10 @@
 # Requirements
 
+This is a derived document. The vision is the user's own notes in
+`docs/source-notes/` (verbatim, never edited locally); this file is a
+process-maintained distillation used at gates, and where it disagrees with
+the source notes or the user, it is this file that is wrong.
+
 ## Why this project exists
 
 The agent harness is a personal system for doing real work *with* agents
