@@ -31,6 +31,28 @@ Requirements here derive from three places, and each entry says which:
   the history lives in the spike outcome docs, the current truth here.
 - **Process rulings** — user decisions about how the work itself is done.
 
+## The soul of the design
+
+The user's own weighting (2026-07-31, wording preserved). The "unique
+soul" is:
+
+- user turn
+- hardcore "forking" subagent model + cache efficiency + structured
+  concurrency
+- limb model (a session exists with respect to one limb. a limb provides
+  tools but also context etc.)
+- agent-owned compaction lifecycle
+
+The "non-unique soul" ("good taste" choices from other harnesses) is,
+non-exhaustively:
+
+- decoupled monolith for deployment & agent flexibility + composable
+  config + fast in-memory "black box" testing
+- self-modifying implementation (Deno, JS implementation, self-limb +
+  self-deployment & auto-rollback)
+- "context" model (facts, updates, skill dependencies, etc.)
+- ...
+
 ## What each stakeholder needs
 
 - **Worker** (design notes): work happens in-band; each user tool has two
