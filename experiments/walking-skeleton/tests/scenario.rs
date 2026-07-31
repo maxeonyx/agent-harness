@@ -182,11 +182,20 @@ impl Skeleton {
         self.wait_exit();
     }
 
-    /// Wait for the process to exit cleanly (without sending /quit) and
-    /// join the stdout reader.
+    /// Wait (bounded) for the process to exit cleanly and join the stdout
+    /// reader. Bounded so a shutdown defect fails the test instead of
+    /// wedging the suite: an unbounded wait here would also prevent Drop's
+    /// escalation from ever running.
     fn wait_exit(&mut self) {
-        let status = self.child.wait().expect("skeleton exit");
-        assert!(status.success(), "skeleton exited with failure");
+        use wait_timeout::ChildExt;
+        match self
+            .child
+            .wait_timeout(Duration::from_secs(15))
+            .expect("wait for skeleton exit")
+        {
+            Some(status) => assert!(status.success(), "skeleton exited with failure"),
+            None => panic!("skeleton did not exit within 15s of the shutdown request"),
+        }
         if let Some(reader) = self.reader.take() {
             reader.join().expect("stdout reader thread");
         }

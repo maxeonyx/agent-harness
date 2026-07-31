@@ -1,7 +1,9 @@
 //! OpenAI-compatible chat-completions wire types and the async HTTP client.
 //! The same client talks to a real provider or the fake-provider server;
 //! only the base URL and API key differ. Requests are cancellable by
-//! dropping the future (the brain aborts the request task to cancel).
+//! dropping the future (the brain's request task races this future against
+//! its cancellation token and is signalled and joined, never abandoned —
+//! with the completed-response side of the race winning ties).
 
 use serde::{Deserialize, Serialize};
 

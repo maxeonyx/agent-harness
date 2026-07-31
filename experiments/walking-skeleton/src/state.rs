@@ -160,6 +160,19 @@ impl SessionState {
         self.journal_path.clone()
     }
 
+    /// Has any earlier provider response already used this tool-call id?
+    /// (The projection's executed/open bookkeeping is keyed by id, so a
+    /// reused id would corrupt it; the brain rejects such responses.)
+    pub fn knows_tool_call(&self, call_id: &str) -> bool {
+        self.transcript.iter().any(|record| match &record.item {
+            TranscriptEntry::RequestOutcome {
+                outcome: Outcome::Ok { value },
+                ..
+            } => value.tool_calls.iter().any(|call| call.id == call_id),
+            _ => false,
+        })
+    }
+
     pub fn append_contribution(
         &mut self,
         name: String,
