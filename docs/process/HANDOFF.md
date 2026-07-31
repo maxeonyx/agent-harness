@@ -1,9 +1,12 @@
 # Agent Harness Process Handoff
 
-Status: Spike 0 (walking skeleton) is in its thermonuclear review loop; round
-4 is complete and triggered a shared-state rewrite
-Active loop: rewrite in progress, preserving the black-box contract; review
-the rewritten spike again before returning to Gate 1
+Status: Spike 0 (walking skeleton) is DONE — Gate 1 accepted 2026-07-31
+("The code is nice, and the harness works perfectly. Spike 0 is done")
+after seven review rounds, a shared-state rewrite, and the user's own
+real-provider use
+Active loop: pick the next loop — the queued `modular-components` spike
+(open user decision in its brief: standalone library vs harness
+infrastructure), or first core integration if the user prefers
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
 resynced 2026-07-30 (gist revision `084e2d3`, Anthropic OAuth references added)
 
@@ -27,15 +30,13 @@ The repo has explicit boundaries:
 
 ## Next Recommended Loop
 
-Finish the shared-state rewrite, run its scripted and real-provider evidence,
-then return it to fresh-context thermonuclear review. Round 4 found that the
-event bus was prematurely encoding an unprincipled replication architecture;
-the replacement is one shared mutable `SessionState`, synchronous appends,
-typed channels, and symmetric face/brain/limb select loops. After review is
-clean, the user smoke-runs it and reads `walking-skeleton-outcome.md` for Gate
-1. On acceptance: pick the first core slice to integrate (fresh design from
-the evidence, black-box tests first at the public surfaces), or the next spike
-if integration is premature.
+Spike 0 is accepted. The accepted spike (shared mutable `SessionState`,
+synchronous journaled appends, typed channels, three symmetric
+face/brain/limb participants each owning one external world) is the
+evidence base; its eleven black-box scenarios are the preserved test
+shapes. Next: run the queued `modular-components` spike, or begin first
+core integration (fresh design from the evidence, black-box tests first
+at the public surfaces) — user's choice.
 
 Queued next spike: `modular-components-brief.md` (user-requested:
 composable typed config + fully in-process black-box testing; deconfuse
@@ -62,7 +63,7 @@ resynced into `docs/source-notes/` on 2026-06-20.
   the user; see `PROCESS.md`.
 - Gate 1 for the walking-skeleton first attempt closed 2026-07-30: redo, with
   direction (see `REQUIREMENTS.md` requirement changes). Gate 1 for the redo
-  remains pending while the round-4 shared-state rewrite and review complete.
+  closed 2026-07-31: accepted (see `walking-skeleton-outcome.md`).
 
 ## Do Not Integrate Yet
 
@@ -114,6 +115,11 @@ resynced into `docs/source-notes/` on 2026-06-20.
   smoke before review round 4. That evidence describes the pre-rewrite event
   bus implementation; round 4's rulings and the rewrite disposition are in
   `walking-skeleton-outcome.md`.
+- The round-4 shared-state rewrite completed 2026-07-31 and survived review
+  rounds 5-7 (round 7 re-verified to ACCEPT by its own reviewer). Eleven
+  black-box scenarios, flake-checked in batches; real-provider smokes for
+  tool round-trips, /dump, /cancel, and clean shutdown. Gate 1 accepted the
+  same day.
 
 ## Standards Backlog
 
