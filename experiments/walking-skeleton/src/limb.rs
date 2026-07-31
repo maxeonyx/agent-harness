@@ -377,9 +377,15 @@ impl Limb {
                     }
                     Outcome::Ok { value: text }
                 }
-                Err(e) => Outcome::Err {
-                    error: format!("error waiting for command: {e}"),
-                },
+                Err(e) => {
+                    // Even this failure path owns its reader task: the
+                    // group kill above closed the pipe writers, so the
+                    // readers finish and are joined, never detached.
+                    let _ = readers.await;
+                    Outcome::Err {
+                        error: format!("error waiting for command: {e}"),
+                    }
+                }
             }},
             _ = cancel.cancelled() => {
                 // Drain: kill the group (non-blocking syscall), reap the

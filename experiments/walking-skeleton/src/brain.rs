@@ -215,15 +215,87 @@ impl Session {
         in_flight: &mut InFlight,
     ) -> Result<(), String> {
         *in_flight = InFlight::Idle;
+        let resolved = self.validated(resolved)?;
         let display = resolution_display(&resolved);
         let advance = self.record_resolution(resolved)?;
         self.send_display(display).await;
         match advance {
+            // A cancel (or quit) already queued in the inbox predates this
+            // moment: the user requested to finish BEFORE this resolution
+            // would start new work, so no new work starts — the select
+            // bias alone cannot see inside the FIFO inbox.
+            Advance::StartTool | Advance::StartRequest if self.finish_already_requested() => {
+                self.pending_calls.clear();
+                self.finish_turn(Outcome::Cancelled {
+                    reason: "cancelled before starting new work".to_string(),
+                })
+                .await?;
+            }
             Advance::StartTool => self.start_next_tool(in_flight).await?,
             Advance::StartRequest => self.start_request(in_flight).await?,
             Advance::TurnDone(outcome) => self.finish_turn(outcome).await?,
         }
         Ok(())
+    }
+
+    /// Drain everything currently queued in the inbox into the deferred
+    /// queue (preserving order) and report whether any of it asks the
+    /// session to stop (Cancel or Quit). The deferred messages are still
+    /// processed normally afterwards.
+    fn finish_already_requested(&mut self) -> bool {
+        while let Ok(message) = self.inbox.try_recv() {
+            self.deferred.push_back(message);
+        }
+        self.deferred.iter().any(|message| {
+            matches!(
+                message,
+                BrainMsg::Command(BrainCommand::Cancel) | BrainMsg::Command(BrainCommand::Quit)
+            )
+        })
+    }
+
+    /// Reject wire-reachable protocol corruption before recording: a
+    /// response whose tool-call ids collide (within the response, or with
+    /// an id from an earlier response) would corrupt the exchange
+    /// projection — the executed/open sets are keyed by id — so such a
+    /// response resolves Err instead of Ok. (Broader tool-calling
+    /// robustness is deferred by ruling; this guards only the projection
+    /// invariants.)
+    fn validated(&self, resolved: Resolved) -> Result<Resolved, String> {
+        let Resolved::Request {
+            request_id,
+            outcome: Outcome::Ok { value },
+        } = &resolved
+        else {
+            return Ok(resolved);
+        };
+        let mut seen = std::collections::HashSet::new();
+        let mut colliding = value
+            .tool_calls
+            .iter()
+            .find(|call| !seen.insert(call.id.as_str()))
+            .map(|call| call.id.clone());
+        if colliding.is_none() {
+            colliding = self.with_state_read(|state| {
+                value
+                    .tool_calls
+                    .iter()
+                    .find(|call| state.knows_tool_call(&call.id))
+                    .map(|call| call.id.clone())
+            })?;
+        }
+        match colliding {
+            None => Ok(resolved),
+            Some(id) => Ok(Resolved::Request {
+                request_id: *request_id,
+                outcome: Outcome::Err {
+                    error: format!(
+                        "provider response reused tool call id {id}; \
+                         rejected to protect the exchange projection"
+                    ),
+                },
+            }),
+        }
     }
 
     fn record_resolution(&mut self, resolved: Resolved) -> Result<Advance, String> {
@@ -335,19 +407,15 @@ impl Session {
             .await
             .is_err()
         {
-            // The limb is gone; the attempt still resolves — as Panicked,
-            // recorded like any other outcome — and the turn ends with it.
-            let payload = "limb disappeared before accepting the tool call".to_string();
-            let outcome = Outcome::Panicked {
-                payload: payload.clone(),
-            };
-            self.send_display(DisplayItem::ToolResolved {
-                outcome: outcome.clone(),
-            })
-            .await;
-            self.with_state(|state| state.append_tool_outcome(call.id, outcome))?;
+            // The limb is gone and the call NEVER STARTED: a never-started
+            // call gets no tool outcome (fabricating one is forbidden —
+            // it stays an unexecuted, wire-omitted proposal). The turn
+            // itself still resolves, as Panicked.
             self.pending_calls.clear();
-            self.finish_turn(Outcome::Panicked { payload }).await?;
+            self.finish_turn(Outcome::Panicked {
+                payload: "limb disappeared before accepting the tool call".to_string(),
+            })
+            .await?;
         } else {
             *in_flight = InFlight::Tool { call };
         }
@@ -393,6 +461,7 @@ impl Session {
             }
         };
         *in_flight = InFlight::Idle;
+        let resolved = self.validated(resolved)?;
         let display = resolution_display(&resolved);
         let advance = self.record_resolution(resolved)?;
         self.send_display(display).await;

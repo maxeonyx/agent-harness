@@ -2,10 +2,11 @@
 
 Spike: walking-skeleton, rebuilt per the revised brief of 2026-07-30 (Gate 1
 of the first attempt: redo; see `walking-skeleton-outcome-v1.md`).
-Status: pre-round-4 evidence complete from scripted scenarios and an agent-run
-real-provider smoke (OpenRouter, 2026-07-30: tool round-trip and
-cancel-during-tool both worked); round 4 triggered a shared-state rewrite,
-which is in progress before another review and Gate 1.
+Status: round 4 triggered a shared-state rewrite, which is complete: eleven
+black-box scenarios pass (repeatedly — flake-checked in batches of 10+), and
+agent-run real-provider smokes (OpenRouter, 2026-07-31) exercised the tool
+round-trip, /dump, and clean shutdown against the rewritten code. Review
+rounds 5-6 followed the rewrite; Gate 1 pending.
 Requirements tested: none by itself (Spike 0 is the shared substrate);
 exercises invariants 2, 3, 4, 8, 9.
 
@@ -120,13 +121,18 @@ Shapes, not code (invariant 8):
 
 ## Tests To Promote Or Preserve
 
-`tests/scenario.rs` — three scenarios at the public surfaces (CLI in, face
+`tests/scenario.rs` — eleven scenarios at the public surfaces (CLI in, face
 output + provider wire out): append-never-triggers observed between steps;
 mid-tool responsiveness + piggyback adjacency; cancel drain + session
-continuation. The interactive harness (send, wait_for, requests-between)
-is the durable black-box shape. These assert face output and wire only —
-no recorder-internal event names — so they can be re-derived without
-freezing the event taxonomy.
+continuation (during a request and during a tool call); descendant
+process-tree kill and completed-tool descendant cleanup (asserted on
+fixture-recorded PIDs only); blocked-read cancel; quit-during-tool drain;
+unexecuted-call wire omission; /rebuild losslessness; /dump content. The
+interactive harness (send, wait_for, drain_seen, requests-between,
+graceful-first cleanup through stdin EOF) is the durable black-box shape.
+These assert face output and wire only — no journal-internal record names
+beyond dump comments — so they can be re-derived without freezing the
+journal taxonomy.
 
 ## Requirements Pressure
 
@@ -350,6 +356,30 @@ rewritten spike) returned seven findings:
   the public surface while memory is journal-faithful by construction and
   session resume is unimplemented; the rebuild test pins losslessness
   only.
+
+Thermonuclear review round 6 (fresh-context, 2026-07-31) returned six
+findings, all accepted and fixed:
+
+- A queued ToolOutcome ahead of a queued Cancel in the FIFO inbox could
+  start new work although the user had already asked to finish (the select
+  bias cannot see inside the inbox). Now, before acting on any
+  start-new-work advance, the brain drains the inbox into its deferred
+  queue and finalizes the turn cancelled if a Cancel/Quit is queued
+  anywhere.
+- The limb-gone dispatch path fabricated a ToolOutcome for a never-started
+  call. Removed: a never-started call gets no outcome (it stays an
+  unexecuted, wire-omitted proposal); the turn resolves Panicked.
+- The bash pipe-reader task detached on the child.wait() error branch;
+  now joined on every resolution path.
+- Duplicate provider tool-call ids (wire-reachable) could corrupt the
+  exchange projection's id-keyed bookkeeping; responses reusing an id now
+  resolve Err before recording. (Broader tool robustness stays deferred by
+  ruling; this guards only the projection invariants.)
+- The test harness's exit wait was unbounded, so a shutdown defect would
+  wedge the suite; it is now bounded (15s) and fails loudly.
+- Stale documentation corrected (this doc's status and preserved-test
+  sections; a provider.rs comment describing an abort that is actually a
+  signalled join).
 
 ## User Acceptance
 
