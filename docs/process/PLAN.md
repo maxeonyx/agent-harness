@@ -113,6 +113,11 @@ obsolete append-only notices. Open experiments from the notes: provider
 cache semantics for append/rebuild/forks; cache-aware proactive handover;
 two-stage handover flow.
 
+Design inputs: `source-notes/context-updates.md` (change notifications as
+bare-minimum invalidation, not eager content; which changes are disallowed
+without a rebuild — limb, maybe cwd/hostname/model/agent-role; time-gap
+injection; progressive disclosure of skills and tools).
+
 Exit: tool iteration and process-context editing are fast without
 corrupting warm sessions, model context, or request-triggering semantics.
 

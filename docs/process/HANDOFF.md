@@ -31,10 +31,12 @@ accumulate chronology here.
 
 ## Source notes sync state
 
-Gist `014463e0964bebd0add4b914971c492f`, last resynced 2026-07-31:
-`requirements.md` was removed from the gist and the local copy (it was
-AI-derived planning material, not source; redistributed into
-`REQUIREMENTS.md` and `PLAN.md`).
+Gist `014463e0964bebd0add4b914971c492f`, last resynced 2026-07-31 (gist
+commit `7f1d33d`): added `context-updates.md` (context changes &
+progressive disclosure). Earlier the same day, `requirements.md` was
+removed from the gist and the local copy (it was AI-derived planning
+material, not source; redistributed into `REQUIREMENTS.md` and
+`PLAN.md`).
 
 ## Open questions
 
