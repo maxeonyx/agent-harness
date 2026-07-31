@@ -43,7 +43,7 @@ impl FakeProvider {
         let stdout = child.stdout.take().unwrap();
         let child = KillOnDrop(child);
         let (line_tx, line_rx) = mpsc::channel();
-        std::thread::spawn(move || {
+        let reader = std::thread::spawn(move || {
             let mut line = String::new();
             let _ = BufReader::new(stdout).read_line(&mut line);
             let _ = line_tx.send(line);
@@ -51,6 +51,11 @@ impl FakeProvider {
         let first_line = line_rx
             .recv_timeout(Duration::from_secs(10))
             .expect("fake provider never printed its readiness line");
+        // The send preceded the recv, so the thread is done: join it. (On
+        // the timeout panic above, KillOnDrop EOFs and ends the thread.)
+        reader
+            .join()
+            .expect("fake provider readiness reader thread");
         let addr = first_line
             .trim()
             .strip_prefix("listening on ")
