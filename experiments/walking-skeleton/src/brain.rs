@@ -17,6 +17,27 @@ pub struct Config {
     pub reasoning_effort: Option<String>,
 }
 
+/// The brain's initial contributions: facts about the session and the
+/// provider world it owns. Appended by main before any participant runs
+/// (co-location lets startup order be hard-coded), so even an immediate
+/// /dump sees the same context every request would carry.
+pub fn initial_contributions(config: &Config) -> Vec<(String, Contribution)> {
+    vec![
+        (
+            "model".to_string(),
+            Contribution::Fact {
+                text: config.model.clone(),
+            },
+        ),
+        (
+            "session start time".to_string(),
+            Contribution::Fact {
+                text: format!("unix epoch ms {}", crate::state::now_ms()),
+            },
+        ),
+    ]
+}
+
 impl Config {
     pub fn from_env() -> Self {
         Self {
@@ -56,7 +77,7 @@ pub struct Session {
     config: Config,
     state: Arc<Mutex<SessionState>>,
     limb_tx: mpsc::Sender<LimbMsg>,
-    display_tx: mpsc::Sender<DisplayItem>,
+    display_tx: mpsc::UnboundedSender<DisplayItem>,
     inbox: mpsc::Receiver<BrainMsg>,
     deferred: VecDeque<BrainMsg>,
     client: reqwest::Client,
@@ -70,7 +91,7 @@ impl Session {
         config: Config,
         state: Arc<Mutex<SessionState>>,
         limb_tx: mpsc::Sender<LimbMsg>,
-        display_tx: mpsc::Sender<DisplayItem>,
+        display_tx: mpsc::UnboundedSender<DisplayItem>,
         inbox: mpsc::Receiver<BrainMsg>,
         session_over: watch::Sender<bool>,
     ) -> Result<(), String> {
@@ -86,7 +107,6 @@ impl Session {
             pending_calls: VecDeque::new(),
             turn_live: false,
         };
-        session.append_initial_contributions()?;
         let mut in_flight = InFlight::Idle;
 
         let looped: Result<(), String> = async {
@@ -135,24 +155,8 @@ impl Session {
         // face while the watch still reads false and misclassify an
         // orderly shutdown as a mid-session death.
         let _ = session_over.send(true);
-        session.send_display(DisplayItem::SessionClosed).await;
+        session.send_display(DisplayItem::SessionClosed);
         Ok(())
-    }
-
-    /// The brain's own contributions: facts about the session and the
-    /// provider world it owns. (Environment facts — hostname, tools — are
-    /// the limb's contributions, appended by main at startup.)
-    fn append_initial_contributions(&self) -> Result<(), String> {
-        let model = self.config.model.clone();
-        self.with_state(|state| {
-            state.append_contribution("model".to_string(), Contribution::Fact { text: model })?;
-            state.append_contribution(
-                "session start time".to_string(),
-                Contribution::Fact {
-                    text: format!("unix epoch ms {}", crate::state::now_ms()),
-                },
-            )
-        })
     }
 
     async fn on_message(
@@ -185,8 +189,7 @@ impl Session {
                     *state = rebuilt;
                     Ok(wire_messages)
                 })?;
-                self.send_display(DisplayItem::ContextRebuilt { wire_messages })
-                    .await;
+                self.send_display(DisplayItem::ContextRebuilt { wire_messages });
             }
             BrainMsg::Command(BrainCommand::Quit) => {
                 self.with_state(|state| state.append_quit())?;
@@ -218,7 +221,7 @@ impl Session {
         let resolved = self.validated(resolved)?;
         let display = resolution_display(&resolved);
         let advance = self.record_resolution(resolved)?;
-        self.send_display(display).await;
+        self.send_display(display);
         match advance {
             // A cancel (or quit) already queued in the inbox predates this
             // moment: the user requested to finish BEFORE this resolution
@@ -329,8 +332,16 @@ impl Session {
             }
             Resolved::Tool { call, outcome } => {
                 let cancelled = matches!(outcome, Outcome::Cancelled { .. });
-                let call_id = call.id;
-                self.with_state(|state| state.append_tool_outcome(call_id, outcome))?;
+                // A tool outcome is a context fact only for a call the limb
+                // actually started (its ToolStarted fact exists). A
+                // never-started call — e.g. the limb died between accepting
+                // the dispatch and recording it — gets NO outcome: it stays
+                // an unexecuted, wire-omitted, resumable proposal.
+                let started = self.with_state_read(|state| state.tool_started(&call.id))?;
+                if started {
+                    let call_id = call.id;
+                    self.with_state(|state| state.append_tool_outcome(call_id, outcome))?;
+                }
                 if cancelled {
                     self.pending_calls.clear();
                     Ok(Advance::TurnDone(Outcome::Cancelled {
@@ -350,8 +361,7 @@ impl Session {
             self.turn_live = false;
             let stored = outcome.clone();
             self.with_state(|state| state.append_turn_outcome(stored))?;
-            self.send_display(DisplayItem::TurnResolved { outcome })
-                .await;
+            self.send_display(DisplayItem::TurnResolved { outcome });
         }
         Ok(())
     }
@@ -368,8 +378,7 @@ impl Session {
             tools: (!parts.tools.is_empty()).then_some(parts.tools),
             reasoning_effort: self.config.reasoning_effort.clone(),
         };
-        self.send_display(DisplayItem::RequestStarted { request_id })
-            .await;
+        self.send_display(DisplayItem::RequestStarted { request_id });
         let client = self.client.clone();
         let base_url = self.config.base_url.clone();
         let api_key = self.config.api_key.clone();
@@ -464,7 +473,7 @@ impl Session {
         let resolved = self.validated(resolved)?;
         let display = resolution_display(&resolved);
         let advance = self.record_resolution(resolved)?;
-        self.send_display(display).await;
+        self.send_display(display);
         match advance {
             Advance::TurnDone(outcome) => self.finish_turn(outcome).await?,
             Advance::StartTool | Advance::StartRequest => {
@@ -497,8 +506,9 @@ impl Session {
         Ok(operation(&state))
     }
 
-    async fn send_display(&self, item: DisplayItem) {
-        let _ = self.display_tx.send(item).await;
+    fn send_display(&self, item: DisplayItem) {
+        // Unbounded and non-blocking: the session never waits on the TUI.
+        let _ = self.display_tx.send(item);
     }
 }
 

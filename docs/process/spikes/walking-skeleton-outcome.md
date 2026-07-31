@@ -381,6 +381,35 @@ findings, all accepted and fixed:
   sections; a provider.rs comment describing an abort that is actually a
   signalled join).
 
+Thermonuclear review round 7 (fresh-context, 2026-07-31) returned six
+findings; four fixed, one fixed-inverted, one rejected:
+
+- Fixed: a full display channel plus a full brain inbox was a cyclic
+  backpressure deadlock (face awaiting brain send, brain awaiting display
+  send), reachable by flooding stdin. Rendering is an output port: the
+  display channel is now unbounded and producers never block on the TUI.
+- Fixed-inverted: the limb's unbiased selects made cancel-vs-completion
+  ties nondeterministic. Per the recorded semantics the fix biases toward
+  COMPLETION (a finished execution is a real result and is recorded; the
+  brain still finalizes the turn cancelled and starts no new work) — the
+  reviewer's cancel-must-win framing was the wrong direction, but the
+  nondeterminism was real.
+- Fixed: startup order is fully hard-coded — main appends the brain's
+  initial contributions (model, session start) alongside the limb's before
+  any participant runs, so an immediate /dump cannot see partial context.
+- Fixed: a tool outcome is recorded only for a call whose ToolStarted fact
+  exists — the limb dying between accepting a dispatch and recording it no
+  longer yields a fabricated outcome.
+- Fixed (harness): the fake-provider readiness wait and the FIFO unblock
+  are bounded (non-blocking FIFO open with a deadline — a plain blocking
+  write could itself wedge if the cancelled reader never opened the FIFO).
+- Rejected: "face /dump and /open attempts need durable four-valued
+  outcomes in SessionState." Those are TUI-world operations, not session
+  attempts; the session's facts are what enters the context, and a
+  successful /open already appends its fact. Recording UI operation
+  outcomes in the session log would blur the fact vocabulary the round-5
+  ruling established.
+
 ## User Acceptance
 
 Pending.

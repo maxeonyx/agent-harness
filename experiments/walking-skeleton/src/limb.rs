@@ -43,7 +43,7 @@ pub async fn run(
     limb: Limb,
     mut rx: mpsc::Receiver<LimbMsg>,
     brain_tx: mpsc::Sender<BrainMsg>,
-    display_tx: mpsc::Sender<DisplayItem>,
+    display_tx: mpsc::UnboundedSender<DisplayItem>,
     state: Arc<Mutex<SessionState>>,
 ) -> Result<(), String> {
     let mut in_flight: Option<(
@@ -61,6 +61,21 @@ pub async fn run(
             cancel.cancel();
         }
         tokio::select! {
+            // Biased, completion first: a finished execution is a real
+            // result and gets recorded (ties must also resolve
+            // deterministically — flakes are bugs). A cancel that ties
+            // with completion did not prevent anything: the brain still
+            // finalizes the turn cancelled and starts no new work.
+            biased;
+            outcome = join_execution(&mut in_flight), if in_flight.is_some() => {
+                let (call_id, outcome) = outcome;
+                in_flight = None;
+                brain_tx.send(BrainMsg::ToolOutcome { call_id, outcome }).await
+                    .map_err(|_| "brain inbox closed before the limb could deliver a tool outcome".to_string())?;
+                if rx.is_closed() {
+                    break;
+                }
+            }
             message = rx.recv(), if in_flight.is_none() || !rx.is_closed() => match message {
                 Some(LimbMsg::Execute { call }) if in_flight.is_none() => {
                     with_state(&state, |state| state.append_tool_started(call.clone()))?;
@@ -72,7 +87,7 @@ pub async fn run(
                     let _ = display_tx.send(DisplayItem::ToolStarted {
                         name: name.clone(),
                         arguments: arguments.clone(),
-                    }).await;
+                    });
                     let task = tokio::spawn(async move {
                         root_limb.execute(&name, &arguments, token).await
                     });
@@ -90,7 +105,7 @@ pub async fn run(
                 None => {
                     // Inbox closed mid-execution (the brain died without
                     // draining us): drain our own work — cancel it and let
-                    // the in-flight branch below join it and report. The
+                    // the in-flight branch above join it and report. The
                     // select guard keeps this arm from spinning on the
                     // already-closed channel meanwhile.
                     if let Some((_, cancel, _)) = &in_flight {
@@ -98,15 +113,6 @@ pub async fn run(
                     }
                 }
             },
-            outcome = join_execution(&mut in_flight), if in_flight.is_some() => {
-                let (call_id, outcome) = outcome;
-                in_flight = None;
-                brain_tx.send(BrainMsg::ToolOutcome { call_id, outcome }).await
-                    .map_err(|_| "brain inbox closed before the limb could deliver a tool outcome".to_string())?;
-                if rx.is_closed() {
-                    break;
-                }
-            }
         }
     }
     Ok(())
@@ -349,6 +355,9 @@ impl Limb {
         });
 
         tokio::select! {
+            // Biased: a child that has already exited is a real result;
+            // record it rather than letting a tying cancel discard it.
+            biased;
             result = child.wait() => {
                 // The shell resolved the operation; end the whole group
                 // *before* draining the pipes, so a backgrounded
@@ -428,6 +437,8 @@ async fn cancellable(
 ) -> Outcome<String> {
     let mut task = tokio::spawn(body);
     tokio::select! {
+        // Biased: a body that already finished produced a real result.
+        biased;
         result = &mut task => result.unwrap_or_else(|e| Outcome::Panicked {
             payload: format!("tool task failed: {e}"),
         }),
