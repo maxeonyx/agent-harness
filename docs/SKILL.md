@@ -1,6 +1,6 @@
 ---
 name: agent-harness
-description: Use when working on the experimental agent harness process and spike workbench
+description: Use when working on the experimental agent harness process and experiment workbench
 ---
 
 # agent-harness
@@ -15,4 +15,4 @@ Start by reading:
 - `docs/process/PLAN.md`
 
 Do not implement product harness behavior without black-box tests or explicit
-review criteria. Put disposable spike code under `experiments/`.
+review criteria. Put disposable experiment code under `experiments/`.

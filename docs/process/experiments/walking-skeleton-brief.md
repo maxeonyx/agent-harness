@@ -1,4 +1,4 @@
-# Spike Brief: walking-skeleton
+# Experiment Brief: walking-skeleton
 
 Revised at Gate 1, 2026-07-30 (redo). The first attempt proved the wire
 format and the append/trigger split but was a single blocking thread; the
@@ -33,7 +33,7 @@ context entry is appended.
 
 The context lifecycle exists as provisional abstractions: append, rebuild,
 and view are distinct operations. Rebuild exists as a real operation but
-carries no compaction policy (later spike). The recorder records facts, not
+carries no compaction policy (later experiment). The recorder records facts, not
 intentions: attempts, completions, failures, and cancellations with
 correlation, never a `request_sent` written before the request succeeds.
 

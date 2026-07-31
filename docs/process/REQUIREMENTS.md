@@ -21,14 +21,14 @@ improvement, harness development, operations, analytics, security
 boundaries, coordination, multi-client UI — and the implementation must
 preserve that breadth rather than building a narrow MVP and hoping it
 generalises. That is why the process (see `PROCESS.md`) validates risky
-behavioral clusters in disposable spikes before integrating anything.
+behavioral clusters in disposable experiments before integrating anything.
 
 Requirements here derive from three places, and each entry says which:
 
 - **Design notes** — the user's own notes in `docs/source-notes/`
   (verbatim source material, never edited locally).
-- **Spike evidence** — behavior proven or rulings made at spike gates;
-  the history lives in the spike outcome docs, the current truth here.
+- **Experiment evidence** — behavior proven or rulings made at experiment
+  gates; the history lives in the experiment outcome docs, the current truth here.
 - **Process rulings** — user decisions about how the work itself is done.
 
 ## The soul of the design
@@ -58,34 +58,34 @@ non-exhaustively:
 - **Worker** (design notes): work happens in-band; each user tool has two
   surfaces — a rich interactive UI for the user and compressed context for
   the model; the user wins on conflicting edits, and stale agent output
-  never silently overwrites newer user work. Validated by Spike 1.
+  never silently overwrites newer user work. Validated by the user-turn experiment.
 - **Process improver** (design notes): prompts, skills, AGENTS.md files,
   tool descriptions, and schemas are rapidly and safely iterable; edits
   are recorded honestly against warm-cache reality (no pretending current
-  context changed). Validated by Spike 5.
-- **Harness developer** (design notes): disposable spikes, safe
+  context changed). Validated by the context-updates experiment.
+- **Harness developer** (design notes): disposable experiments, safe
   tool/plugin reload, eventual safe self-modification (the harness editing
-  and relaunching itself without losing sessions). Validated by Spikes 0/5.
+  and relaunching itself without losing sessions). Validated by walking-skeleton and self-modification.
 - **Operator** (design notes): roles deploy co-located or split; safe
   updates, downgrades, protocol versioning, migrations, background
   persistence across user disconnects on Windows and Linux. Validated by
-  Spikes 2/7.
+  topology and operator-lifecycle.
 - **Analyst** (design notes): session data is analytics-grade and
   queryable from the start — cost, cache hit rates, tool durations,
-  session classification, stuck scopes. Validated by Spike 3.
+  session classification, stuck scopes. Validated by the persistence-analytics experiment.
 - **Security / authority boundaries** (design notes): provider credentials
   stay brain-owned, never reaching limbs, faces, plugins, schemas, logs,
   or model context; user tools and agent tools are framed differently;
   direct connections are capability-bound. NOT a general agent-permission
   model — personal limbs may run in YOLO mode; permission prompts and
-  approval theatre are explicitly unwanted. Validated by Spikes 1/2.
+  approval theatre are explicitly unwanted. Validated by user-turn and topology.
 - **Attention / coordination** (design notes): parallel work stays
   legible — structured subagent concurrency, visible blocked states,
-  explicit sibling scopes. Validated by Spike 4.
+  explicit sibling scopes. Validated by the forked-subagents experiment.
 - **Multi-client / UI state** (design notes): multiple faces share live UI
   state (drafts, open files, panes) without stale clients corrupting
   anything; eventually a real reactive TUI and web GUI over one client
-  state model. Validated by Spike 6.
+  state model. Validated by the multi-client-ui experiment.
 
 ## Invariants
 
@@ -98,13 +98,13 @@ of these stops and goes to the user.
 2. **Recording, appending, rebuilding, and triggering are distinct
    operations.** Passive user activity never triggers a model request;
    only turn end, tool-loop continuation, cache-nearly-expired handover,
-   and explicit resume may. (Design notes; proven in Spike 0.)
+   and explicit resume may. (Design notes; proven in the walking-skeleton experiment.)
 3. **All activity has multiple views.** An event is about its emitter, not
    *for* anyone; consumers (or a helpful middle layer) project it — to the
    model (possibly per-model), to the user (possibly per-interface), for
    rebuild vs append. User-tool activity framed as user activity rather
    than agent tool calls is one projection of this. (Design notes,
-   reworded on Spike 0 evidence.)
+   reworded on walking-skeleton evidence.)
 4. **Face, brain, and limb are logical roles**; co-location versus
    splitting is a deployment choice over the same logical model. (Design
    notes.)
@@ -116,14 +116,14 @@ of these stops and goes to the user.
 7. **Multi-client UI state is explicitly modeled.** Stale clients cannot
    silently overwrite newer state; the user wins on conflicting edits.
    (Design notes.)
-8. **Spike code never becomes core by copying.** Core integration is a
+8. **Experiment code never becomes core by copying.** Core integration is a
    fresh design from evidence. (Process ruling.)
 9. **Cancellation is baked in from the start** — request → drain →
    finalize; anything in flight ends with a recorded outcome; cancelled is
    distinct from error; four-valued outcomes (ok / error / cancelled /
    panicked); a drain structurally cannot start new work. Completed work
    that ties with a cancel is kept and recorded — it cost money and is
-   probably good — while the turn still finalizes cancelled. (Spike 0
+   probably good — while the turn still finalizes cancelled. (Walking-skeleton
    gate ruling; modeling inspiration: Dicklesworthstone/asupersync.)
 10. **Roles never assume co-location.** No shared filesystem, environment,
     working directory, or clock is assumed across role boundaries; data
@@ -132,13 +132,13 @@ of these stops and goes to the user.
     session record by any consumer. Exception, by design: a face and limb
     commonly DO share an environment (the user's machine), and co-located
     deployments may share the session state directly as the substrate.
-    (Spike 0 gate ruling.)
+    (Walking-skeleton gate ruling.)
 
-## Architecture requirements from Spike 0 evidence
+## Architecture requirements from walking-skeleton evidence
 
-These were ruled during the Spike 0 review loop and are current truth; the
+These were ruled during the walking-skeleton review loop and are current truth; the
 ruling history with the user's original wording is in
-`spikes/walking-skeleton-outcome.md`.
+`experiments/walking-skeleton-outcome.md`.
 
 - **Sequencing belongs to the deployment substrate, not to any
   participant.** The brain is not a sequencer. Within one process,
@@ -194,17 +194,17 @@ ruling history with the user's original wording is in
 - Black-box tests only, at product-public surfaces (CLI/UI, provider wire
   via fake provider, storage/query surface, and eventually the transport
   protocol). No asserting internals.
-- Real provider use is in scope for spikes ("I want to actually use it");
+- Real provider use is in scope for experiments ("I want to actually use it");
   the fake provider is a separate HTTP server serving the same
   OpenAI-compatible API, so real vs fake is just a base URL.
 
 ## Deferred by explicit ruling
 
 Streaming responses; provider error taxonomy in the fake provider;
-principled credential handling; SQLite storage design (Spike 3); subagents
-(Spike 4); compaction and per-model/per-interface view variation;
+principled credential handling; SQLite storage design (persistence-analytics); subagents
+(forked-subagents); compaction and per-model/per-interface view variation;
 tool-calling robustness and improvements; the event-streaming /
-replication protocol and everything in `spikes/event-streaming-notes.md`;
+replication protocol and everything in `experiments/event-streaming-notes.md`;
 configuration/context-layer composition (see PLAN.md, modular components);
 "the brain is in charge of configuration changes, I believe" — left for
 later.

@@ -1,7 +1,7 @@
 # Event-streaming experiment notes
 
 These are design inputs for later event-streaming / replication experiment(s),
-not a spike brief or an accepted architecture. The walking skeleton now uses
+not a experiment brief or an accepted architecture. The walking skeleton now uses
 shared mutable state and typed channels instead. The stream "needs to be
 principled, it needs to be structured well in order to be worth it."
 
@@ -75,7 +75,7 @@ brain-sequenced facts, but that has not been ruled in as architecture.
 
 ## Where to start
 
-The current spike's JSONL append journal is already latent event sourcing. The
+The current experiment's JSONL append journal is already latent event sourcing. The
 experiment can grow from replaying that journal into replicas rather than
 inventing storage and replication at the same time.
 

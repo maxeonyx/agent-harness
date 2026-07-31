@@ -1,23 +1,23 @@
-# Spike Outcome Template
+# Experiment Outcome Template
 
-An outcome doc is a curated record, not a log: it describes the spike as
-accepted (or as abandoned), rewritten to current truth as the spike
+An outcome doc is a curated record, not a log: it describes the experiment as
+accepted (or as abandoned), rewritten to current truth as the experiment
 evolves. Do not accumulate round-by-round review chronology — findings
 that were fixed are noise once fixed; only rulings, accepted limitations,
 and results earn a place. Rulings move to `REQUIREMENTS.md` as current
 truth; record them here with the user's original wording as provenance.
 
-Spike:
+Experiment:
 Status:
 Requirements tested:
 
-## What the accepted spike is
+## What the accepted experiment is
 
 One paragraph: what exists, where, and how it is exercised.
 
-## What the spike proved
+## What the experiment proved
 
-## What the spike failed to prove
+## What the experiment failed to prove
 
 ## Rulings made during review
 
@@ -37,7 +37,7 @@ final verdict. No finding-by-finding log.
 
 ## Invariants check
 
-For each invariant in `REQUIREMENTS.md` the brief said this spike touches:
+For each invariant in `REQUIREMENTS.md` the brief said this experiment touches:
 upheld, violated, or newly informed.
 
 ## User acceptance
