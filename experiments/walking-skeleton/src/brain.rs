@@ -89,48 +89,63 @@ impl Session {
         session.append_initial_contributions()?;
         let mut in_flight = InFlight::Idle;
 
-        loop {
-            if let Some(message) = session.deferred.pop_front() {
-                if session.on_message(message, &mut in_flight).await? {
-                    break;
+        let looped: Result<(), String> = async {
+            loop {
+                if let Some(message) = session.deferred.pop_front() {
+                    if session.on_message(message, &mut in_flight).await? {
+                        break;
+                    }
+                    continue;
                 }
-                continue;
-            }
-            let busy = matches!(in_flight, InFlight::Request { .. });
-            tokio::select! {
-                message = session.inbox.recv() => {
-                    match message {
-                        Some(message) => {
-                            if session.on_message(message, &mut in_flight).await? {
-                                break;
+                let busy = matches!(in_flight, InFlight::Request { .. });
+                tokio::select! {
+                    // Biased: a ready user message (a cancel in particular)
+                    // is processed before a ready completion — "the user
+                    // has requested to finish" must not lose a scheduler
+                    // coin toss and watch a tool call start anyway.
+                    biased;
+                    message = session.inbox.recv() => {
+                        match message {
+                            Some(message) => {
+                                if session.on_message(message, &mut in_flight).await? {
+                                    break;
+                                }
                             }
+                            None => break,
                         }
-                        None => break,
+                    }
+                    resolved = join_request(&mut in_flight), if busy => {
+                        session.on_resolved(resolved, &mut in_flight).await?;
                     }
                 }
-                resolved = join_request(&mut in_flight), if busy => {
-                    session.on_resolved(resolved, &mut in_flight).await?;
-                }
             }
+            Ok(())
         }
+        .await;
 
-        session
-            .drain(&mut in_flight, "session shutting down")
-            .await?;
+        // Drain whatever is in flight even when the loop failed: nothing
+        // ends detached or without a recorded outcome. The first error
+        // wins; drain errors on the failure path are secondary.
+        let drained = session.drain(&mut in_flight, "session shutting down").await;
+        looped?;
+        drained?;
         session.with_state(|state| state.append_session_closed())?;
-        session.send_display(DisplayItem::SessionClosed).await;
+        // The monotonic session-over watch must be set BEFORE the face can
+        // observe SessionClosed and exit, or the supervisor could join the
+        // face while the watch still reads false and misclassify an
+        // orderly shutdown as a mid-session death.
         let _ = session_over.send(true);
+        session.send_display(DisplayItem::SessionClosed).await;
         Ok(())
     }
 
+    /// The brain's own contributions: facts about the session and the
+    /// provider world it owns. (Environment facts — hostname, tools — are
+    /// the limb's contributions, appended by main at startup.)
     fn append_initial_contributions(&self) -> Result<(), String> {
         let model = self.config.model.clone();
         self.with_state(|state| {
             state.append_contribution("model".to_string(), Contribution::Fact { text: model })?;
-            state.append_contribution(
-                "hostname".to_string(),
-                Contribution::Fact { text: hostname() },
-            )?;
             state.append_contribution(
                 "session start time".to_string(),
                 Contribution::Fact {
@@ -158,15 +173,18 @@ impl Session {
                 self.drain(in_flight, "cancelled by user").await?;
             }
             BrainMsg::Command(BrainCommand::Rebuild) => {
-                self.with_state(|state| state.append_rebuild_request())?;
-                let path = self.with_state_read(SessionState::journal_path)?;
-                let rebuilt = SessionState::load(&path)?;
-                let wire_messages = rebuilt.wire_message_count();
-                *self
-                    .state
-                    .lock()
-                    .map_err(|_| "session state lock poisoned while rebuilding".to_string())? =
-                    rebuilt;
+                // The entire rebuild happens under one lock: append the
+                // request, replay the journal, swap. Releasing the lock
+                // in between would let a concurrent face append land in
+                // the old state after the replay read the file — lost
+                // from memory, and a duplicate seq on the next append.
+                let wire_messages = self.with_state(|state| {
+                    state.append_rebuild_request()?;
+                    let rebuilt = SessionState::load(&state.journal_path())?;
+                    let wire_messages = rebuilt.wire_message_count();
+                    *state = rebuilt;
+                    Ok(wire_messages)
+                })?;
                 self.send_display(DisplayItem::ContextRebuilt { wire_messages })
                     .await;
             }
@@ -287,6 +305,11 @@ impl Session {
         let token = cancel.clone();
         let task = tokio::spawn(async move {
             tokio::select! {
+                // Biased: a response that has already completed wins a tie
+                // with the cancel token — a completed response is kept
+                // (it cost money and is probably good; binding ruling),
+                // even when the turn it belongs to finalizes cancelled.
+                biased;
                 outcome = request_outcome(&client, &base_url, api_key.as_deref(), &request) => outcome,
                 _ = token.cancelled() => Outcome::Cancelled {
                     reason: "request cancelled; connection dropped".to_string(),
@@ -449,17 +472,6 @@ async fn join_request(in_flight: &mut InFlight) -> Resolved {
         }
         _ => unreachable!("join_request called without a request in flight"),
     }
-}
-
-fn hostname() -> String {
-    std::env::var("HOSTNAME")
-        .ok()
-        .or_else(|| {
-            std::fs::read_to_string("/proc/sys/kernel/hostname")
-                .ok()
-                .map(|value| value.trim().to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 async fn request_outcome(

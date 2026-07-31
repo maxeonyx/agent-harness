@@ -540,6 +540,104 @@ fn completed_tool_does_not_leak_descendants() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// A cancelled turn keeps what the model said but never executes what it
+/// merely proposed: with two calls in one response, cancelling the first
+/// leaves the second permanently unexecuted — it never starts, the next
+/// request's wire omits it (while carrying the executed call and its
+/// cancelled result), and the dump records it as an invisible fact.
+#[test]
+fn cancelled_turn_never_starts_proposed_calls_and_omits_them_from_the_wire() {
+    let tmp = setup("unexecuted");
+    let workdir = tmp.join("workspace");
+
+    let provider = FakeProvider::start(
+        &tmp,
+        serde_json::json!([
+            { "tool_calls": [
+                { "name": "bash", "arguments": { "command": "sleep 30" } },
+                { "name": "list_files", "arguments": { "path": "." } }
+            ] },
+            { "text": "Recovered fine." }
+        ]),
+    );
+    let mut skeleton = Skeleton::start(&workdir, &provider.addr, &tmp.join("session.jsonl"));
+
+    skeleton.send("please run two things");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("[limb] tool call: bash");
+    skeleton.send("/cancel");
+    skeleton.wait_for("[limb] tool cancelled");
+    skeleton.wait_for("[brain] turn cancelled");
+
+    // The second proposed call never starts — not before the cancel, not
+    // after the drain.
+    skeleton.drain_seen();
+    assert!(
+        !skeleton
+            .seen
+            .iter()
+            .any(|l| l.contains("[limb] tool call: list_files")),
+        "a cancelled turn must never start a merely-proposed call:\n{}",
+        skeleton.seen.join("\n")
+    );
+
+    // The dump records the unexecuted call as an invisible fact.
+    skeleton.send("/dump");
+    let seen = skeleton.wait_for("[face] returned from dump").to_vec();
+    let dump = seen.join("\n");
+    assert!(
+        dump.contains("unexecuted tool calls omitted") && dump.contains("list_files"),
+        "dump must comment the unexecuted call:\n{dump}"
+    );
+
+    // The session continues; the next request's wire keeps the executed
+    // call and its cancelled result, and omits the unexecuted one.
+    skeleton.send("still with me?");
+    skeleton.wait_for("[face] staged user message");
+    skeleton.send("/end");
+    skeleton.wait_for("Recovered fine.");
+    skeleton.quit();
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2, "expected exactly two provider requests");
+    let second = &requests[1];
+    let assistant_calls: Vec<String> = second["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["tool_calls"].as_array())
+        .flatten()
+        .map(|c| {
+            c["function"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        assistant_calls,
+        vec!["bash".to_string()],
+        "the wire must carry the executed call and omit the unexecuted one"
+    );
+    let roles = roles_and_content(second);
+    let calls_at = roles
+        .iter()
+        .position(|(role, _, has_calls)| role == "assistant" && *has_calls)
+        .expect("assistant tool_calls message in second request");
+    assert_eq!(
+        roles[calls_at + 1].0,
+        "tool",
+        "the executed call still needs its (cancelled) result adjacent: {roles:?}"
+    );
+    assert!(
+        roles[calls_at + 1].1.contains("[tool cancelled]"),
+        "the executed call's result must record the cancellation: {roles:?}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// Cancelling a non-bash tool blocked on I/O (read_file on a FIFO with no
 /// writer) still finalizes the turn and leaves the session usable.
 #[test]
