@@ -74,9 +74,9 @@ The design gist `014463e0964bebd0add4b914971c492f` is the upstream for
 1. Clone the gist and diff it against `docs/source-notes/`.
 2. Copy changed and new files verbatim, keeping the exact gist filenames
    (including any without an `.md` extension) so future diffs stay clean.
-3. Update the source-notes version line and evidence in
-   `docs/process/HANDOFF.md`, and fix any process references to notes that
-   moved or were renamed in the gist.
+3. Fix any process references to notes that moved or were renamed in the
+   gist. Do not log the sync anywhere — whether source-notes matches the
+   gist is answered by rerunning the diff, not by recorded state.
 4. A notes-only sync needs no version bump. CI (and its release guard) only
    triggers on the paths in `.github/workflows/ci.yml` — `Cargo.toml`,
    `Cargo.lock`, `src/**`, `tests/**`, `scripts/**`, `.test-status.json`,

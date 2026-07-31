@@ -50,4 +50,10 @@ something similar can & should be done for tools.
 
 In real world cases, skill and tool descs can otherwise take up massive context paid on *every* session.
 
-Limb model should also help to reduce this - a subagent can be given a specific limb that has a context-specific tool set. those tools do not need to be available in 
+Limb model should also help to reduce this - a subagent can be given a specific limb that has a context-specific tool set. those tools do not need to be available in every session.
+
+## Compaction note
+
+Compaction should in general happen by instructions (ideally system parts - depends on provider / model support) being appended to the end of the conversation. But not just instructions. Compaction needs to be clear on what the *new* situation will be - what is changing? What is going to be in the system prompt still, so does not need repeating? What is *NOT* going to be in the system prompt anymore, so *does* need kept?
+
+Compaction's going to be a structured thing, whereby the agent can include files / resources that will be loaded immediately into the fresh context, to save some turns at the start and their associated cache-read round-trips.
