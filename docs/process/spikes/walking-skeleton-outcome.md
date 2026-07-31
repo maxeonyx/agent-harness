@@ -419,4 +419,8 @@ rebutted; readiness is bounded and the reader is joined on success").
 
 ## User Acceptance
 
-Pending.
+Accepted (Gate 1), 2026-07-31: "The code is nice, and the harness works
+perfectly. Spike 0 is done." Acceptance followed seven thermonuclear
+review rounds (the seventh re-verified by its own reviewer to ACCEPT),
+eleven black-box scenarios flake-checked in batches, and the user's own
+real-provider use of the harness.
