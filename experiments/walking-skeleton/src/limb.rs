@@ -133,9 +133,11 @@ impl Limb {
         Limb { root }
     }
 
-    /// The limb's environment contributions: named tool schemas.
+    /// The limb's environment contributions: named tool schemas, plus
+    /// facts about the machine this environment lives on.
     pub fn contributions(&self) -> Vec<(String, Contribution)> {
-        self.tool_defs()
+        let mut contributions: Vec<(String, Contribution)> = self
+            .tool_defs()
             .into_iter()
             .map(|def| {
                 let name = def["function"]["name"]
@@ -144,7 +146,12 @@ impl Limb {
                     .to_string();
                 (name, Contribution::Tool { def })
             })
-            .collect()
+            .collect();
+        contributions.push((
+            "hostname".to_string(),
+            Contribution::Fact { text: hostname() },
+        ));
+        contributions
     }
 
     fn tool_defs(&self) -> Vec<Value> {
@@ -370,6 +377,17 @@ impl Limb {
             }
         }
     }
+}
+
+fn hostname() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| {
+            std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .ok()
+                .map(|value| value.trim().to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Race a tool body against its cancellation token: the token winning

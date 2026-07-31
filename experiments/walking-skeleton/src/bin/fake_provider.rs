@@ -58,21 +58,37 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         }
 
-        let message = if let Some(tool_call) = step.get("tool_call") {
+        // A step is either `text`, a single `tool_call`, or `tool_calls`
+        // (a list — one response proposing several calls at once).
+        let scripted_calls: Vec<serde_json::Value> = if let Some(calls) = step.get("tool_calls") {
+            calls.as_array().cloned().unwrap_or_default()
+        } else if let Some(call) = step.get("tool_call") {
+            vec![call.clone()]
+        } else {
+            Vec::new()
+        };
+        let message = if scripted_calls.is_empty() {
+            json!({ "role": "assistant", "content": step["text"] })
+        } else {
+            let tool_calls: Vec<serde_json::Value> = scripted_calls
+                .iter()
+                .enumerate()
+                .map(|(call_index, tool_call)| {
+                    json!({
+                        "id": format!("call_{step_index}_{call_index}"),
+                        "type": "function",
+                        "function": {
+                            "name": tool_call["name"],
+                            "arguments": tool_call["arguments"].to_string()
+                        }
+                    })
+                })
+                .collect();
             json!({
                 "role": "assistant",
-                "content": null,
-                "tool_calls": [{
-                    "id": format!("call_{step_index}"),
-                    "type": "function",
-                    "function": {
-                        "name": tool_call["name"],
-                        "arguments": tool_call["arguments"].to_string()
-                    }
-                }]
+                "content": step.get("text").cloned().unwrap_or(serde_json::Value::Null),
+                "tool_calls": tool_calls
             })
-        } else {
-            json!({ "role": "assistant", "content": step["text"] })
         };
 
         let response_body = json!({
