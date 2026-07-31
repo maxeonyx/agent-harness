@@ -312,6 +312,45 @@ black-box behavior stays the contract. Event streaming, proposals,
 replication, and cross-process ordering move to
 `event-streaming-notes.md` for a dedicated later experiment.
 
+Thermonuclear review round 5 (fresh-context, 2026-07-31, against the
+rewritten spike) returned seven findings:
+
+- Fixed: cancel-versus-completion ties were scheduler-dependent in both
+  directions — now both selects are biased (a ready user cancel is
+  processed before a ready completion in the brain loop; a completed
+  response beats the cancel token in the request task, honoring "it cost
+  us money"). True completion-wins-the-race remains not black-box
+  testable deterministically; the guarantee is structural.
+- Fixed: /rebuild now replays the journal atomically under one lock (a
+  concurrent append could previously be lost from memory and duplicate a
+  seq).
+- Fixed: the brain drains in-flight work even when its own loop fails —
+  no detached provider task, no unrecorded attempt.
+- Fixed: the session-over watch is set before the face can observe
+  SessionClosed (a display-backpressure race could misclassify orderly
+  shutdown).
+- Added: a deterministic black-box test for the unexecuted-call rule (two
+  calls in one response, cancel during the first: the second never
+  starts, the wire omits it while carrying the executed call's cancelled
+  result, the dump comments it). Proven red with omission disabled. The
+  fake provider gained multi-call script steps.
+- Ruled (user), reshaping finding 1: both brain and limb record tool
+  facts, split by ownership — the limb appends execution facts
+  (ToolStarted, via the shared-state handle) and contributes environment
+  facts like hostname; the brain appends context facts (a call detected
+  in a response, a result entering the model view).
+- Ruled (user), reshaping finding 5: the TUI is the face's external
+  world, distinct from the face process — "rendering != face innards."
+  /dump's editor takeover and /open's file read are now the face's owned
+  in-flight work: the loop keeps selecting, buffers display items while
+  the editor owns the tty (flushed after), defers input, and observes
+  shutdown mid-takeover. Waiting for the user's editor before exiting is
+  deliberate.
+- Recorded limitation: "replay is not a no-op" is not discriminable at
+  the public surface while memory is journal-faithful by construction and
+  session resume is unimplemented; the rebuild test pins losslessness
+  only.
+
 ## User Acceptance
 
 Pending.

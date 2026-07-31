@@ -50,10 +50,11 @@ async fn run() -> Result<(), String> {
     });
     let limb_brain_tx = brain_tx.clone();
     let limb_display_tx = display_tx.clone();
+    let limb_state = state.clone();
     tasks.spawn(async move {
         (
             "limb",
-            limb::run(limb, limb_rx, limb_brain_tx, limb_display_tx).await,
+            limb::run(limb, limb_rx, limb_brain_tx, limb_display_tx, limb_state).await,
         )
     });
     let brain_state = state.clone();

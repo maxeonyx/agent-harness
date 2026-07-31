@@ -178,5 +178,23 @@ Review round 4 and architecture discussion, 2026-07-31:
 - "test flake is a bug. make sure to make it impossible." Races must be
   structurally excluded, not retried away.
 
+Further direction during review round 5, 2026-07-31:
+
+- Tool facts are recorded by both brain and limb, split by ownership:
+  "Likely both brain and limb should be recording stuff about tools. Brain
+  needs to say when a tool call is detected in response and needs to know
+  when a tool result is going in the context / to the model, whereas limb
+  is more 'in charge' of the actual execution (or not) of tool calls.
+  Definitely hostname is a fact that comes from limb." Concretely: the limb
+  holds the shared-state handle and appends execution facts (ToolStarted);
+  the brain appends context facts (request outcomes, tool results entering
+  the model view).
+- The TUI is the face's external world, not its innards: "The TUI
+  (stdin/stdout) is conceptually separate from the *face process* due to
+  exactly this reason - synchronous takeover etc. ... Rendering != face
+  innards." Synchronous tty takeover (the /dump editor) and file reads are
+  the face's owned in-flight work; the face loop keeps selecting, buffers
+  display output during takeover, and is never blocked blind.
+
 Deferred replication, topology, peer-lifecycle, and shutdown inputs are
 curated in `spikes/event-streaming-notes.md`.

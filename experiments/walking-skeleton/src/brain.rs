@@ -329,7 +329,6 @@ impl Session {
             .pending_calls
             .pop_front()
             .ok_or_else(|| "brain tried to start a tool with no pending call".to_string())?;
-        self.with_state(|state| state.append_tool_started(call.clone()))?;
         if self
             .limb_tx
             .send(LimbMsg::Execute { call: call.clone() })

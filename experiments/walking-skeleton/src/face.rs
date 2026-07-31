@@ -1,5 +1,17 @@
+//! The face: a participant owning one external world — the TUI. The
+//! terminal (stdin/stdout) is conceptually separate from the face process
+//! itself: rendering is an output port to that world, not face loop
+//! logic, and reading it happens on a dumb line-pump thread. The
+//! distinction is what makes synchronous takeover coherent — when /dump
+//! hands the tty to an editor, that is the face's *owned in-flight work*
+//! (as is the /open file read): the loop keeps selecting the whole time,
+//! buffering display items while the editor owns the terminal (flushed
+//! when it returns), deferring further input, and still observing
+//! session shutdown. The face is never blocked blind on its own world.
+
 use crate::protocol::{BrainCommand, BrainMsg, DisplayItem, Outcome};
 use crate::state::{DumpSnapshot, SessionState};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
@@ -18,6 +30,32 @@ enum Input {
     Line(String),
     Eof,
     Failed(String),
+}
+
+enum FaceWork {
+    Dump(tokio::task::JoinHandle<Result<std::process::ExitStatus, String>>),
+    Open {
+        path: String,
+        task: tokio::task::JoinHandle<Result<OpenedFile, String>>,
+    },
+}
+
+struct OpenedFile {
+    bytes: usize,
+    head: String,
+}
+
+enum FaceWorkResult {
+    Dump(Result<Result<std::process::ExitStatus, String>, tokio::task::JoinError>),
+    Open {
+        path: String,
+        result: Result<Result<OpenedFile, String>, tokio::task::JoinError>,
+    },
+}
+
+struct LineResult {
+    input_finished: bool,
+    work: Option<FaceWork>,
 }
 
 pub async fn run(
@@ -58,35 +96,67 @@ pub async fn run(
         let _ = input_tx.blocking_send(Input::Eof);
     });
     let mut input_finished = false;
+    let mut deferred = VecDeque::new();
+    let mut work = None;
+    let mut buffered_display = VecDeque::new();
+    let mut session_closed = false;
 
     loop {
+        if work.is_none()
+            && let Some(input) = deferred.pop_front()
+        {
+            apply_input(input, &brain_tx, &state, &mut input_finished, &mut work).await?;
+            continue;
+        }
+        let work_in_flight = work.is_some();
         tokio::select! {
-            input = input_rx.recv(), if !input_finished => {
-                match input {
-                    Some(Input::Line(line)) => {
-                        if handle_line(&line, &brain_tx, &state, &resume_tx).await? {
-                            input_finished = true;
-                        }
-                    }
-                    Some(Input::Eof) => {
+            input = input_rx.recv(), if !input_finished && !session_closed => {
+                if work_in_flight {
+                    if let Some(input) = input {
+                        deferred.push_back(input);
+                    } else {
                         input_finished = true;
-                        let _ = brain_tx.send(BrainMsg::Command(BrainCommand::Quit)).await;
                     }
-                    Some(Input::Failed(error)) => {
-                        let _ = brain_tx.send(BrainMsg::Command(BrainCommand::Quit)).await;
-                        return Err(format!("failed to read terminal input: {error}"));
-                    }
-                    None => input_finished = true,
+                } else {
+                    apply_input(
+                        input.unwrap_or(Input::Eof),
+                        &brain_tx,
+                        &state,
+                        &mut input_finished,
+                        &mut work,
+                    ).await?;
                 }
             }
-            item = display_rx.recv() => {
+            item = display_rx.recv(), if !session_closed => {
                 match item {
                     Some(DisplayItem::SessionClosed) => {
-                        println!("[brain] session closed");
-                        break;
+                        if work_in_flight {
+                            session_closed = true;
+                        } else {
+                            println!("[brain] session closed");
+                            break;
+                        }
+                    }
+                    Some(item) if matches!(work, Some(FaceWork::Dump(_))) => {
+                        buffered_display.push_back(item);
                     }
                     Some(item) => render(item),
+                    None if work_in_flight => session_closed = true,
                     None => break,
+                }
+            }
+            result = join_face_work(&mut work), if work_in_flight => {
+                work = None;
+                let resume_input = complete_face_work(result, &state)?;
+                while let Some(item) = buffered_display.pop_front() {
+                    render(item);
+                }
+                if resume_input {
+                    let _ = resume_tx.send(());
+                }
+                if session_closed {
+                    println!("[brain] session closed");
+                    break;
                 }
             }
         }
@@ -100,67 +170,102 @@ pub async fn run(
     Ok(())
 }
 
+async fn apply_input(
+    input: Input,
+    brain_tx: &mpsc::Sender<BrainMsg>,
+    state: &Arc<Mutex<SessionState>>,
+    input_finished: &mut bool,
+    work: &mut Option<FaceWork>,
+) -> Result<(), String> {
+    match input {
+        Input::Line(line) => {
+            let result = handle_line(&line, brain_tx, state).await?;
+            *input_finished = result.input_finished;
+            *work = result.work;
+        }
+        Input::Eof => {
+            *input_finished = true;
+            let _ = brain_tx.send(BrainMsg::Command(BrainCommand::Quit)).await;
+        }
+        Input::Failed(error) => {
+            let _ = brain_tx.send(BrainMsg::Command(BrainCommand::Quit)).await;
+            return Err(format!("failed to read terminal input: {error}"));
+        }
+    }
+    Ok(())
+}
+
 async fn handle_line(
     line: &str,
     brain_tx: &mpsc::Sender<BrainMsg>,
     state: &Arc<Mutex<SessionState>>,
-    resume_tx: &std::sync::mpsc::Sender<()>,
-) -> Result<bool, String> {
+) -> Result<LineResult, String> {
     let line = line.trim();
     if line.is_empty() {
-        return Ok(false);
+        return Ok(LineResult {
+            input_finished: false,
+            work: None,
+        });
     }
-    match line {
+    let result = match line {
         "/quit" => {
             brain_tx
                 .send(BrainMsg::Command(BrainCommand::Quit))
                 .await
                 .map_err(|_| "brain inbox closed before /quit was delivered".to_string())?;
-            Ok(true)
+            LineResult {
+                input_finished: true,
+                work: None,
+            }
         }
         "/end" => {
             send_command(brain_tx, BrainCommand::TurnEnd).await?;
-            Ok(false)
+            LineResult {
+                input_finished: false,
+                work: None,
+            }
         }
         "/cancel" => {
             println!("[face] cancel requested");
             send_command(brain_tx, BrainCommand::Cancel).await?;
-            Ok(false)
+            LineResult {
+                input_finished: false,
+                work: None,
+            }
         }
         "/rebuild" => {
             send_command(brain_tx, BrainCommand::Rebuild).await?;
-            Ok(false)
+            LineResult {
+                input_finished: false,
+                work: None,
+            }
         }
         "/dump" => {
             let snapshot = with_state_read(state, SessionState::dump)?;
-            dump_into_editor(snapshot).await;
-            println!("[face] returned from dump");
-            let _ = resume_tx.send(());
-            Ok(false)
+            LineResult {
+                input_finished: false,
+                work: Some(start_dump(snapshot)),
+            }
         }
         _ if line.starts_with("/open ") => {
-            let path = line.trim_start_matches("/open ");
-            match std::fs::read_to_string(path) {
-                Ok(content) => {
-                    let bytes = content.len();
-                    let head = content.lines().take(20).collect::<Vec<_>>().join("\n");
-                    with_state(state, |session| {
-                        session.append_user_activity(path.to_string(), bytes, head)
-                    })?;
-                    println!("[face] opened {path} ({bytes} bytes)");
-                }
-                Err(error) => println!("[face] could not open {path}: {error}"),
+            let path = line.trim_start_matches("/open ").to_string();
+            LineResult {
+                input_finished: false,
+                work: Some(start_open(path)),
             }
-            Ok(false)
         }
         _ => {
             with_state(state, |session| {
                 session.append_user_message(line.to_string())
             })?;
             println!("[face] staged user message");
-            Ok(false)
+            LineResult {
+                input_finished: false,
+                work: None,
+            }
         }
-    }
+    };
+    Ok(result)
 }
 
 async fn send_command(
@@ -230,9 +335,9 @@ fn render(item: DisplayItem) {
     }
 }
 
-async fn dump_into_editor(snapshot: DumpSnapshot) {
+fn start_dump(snapshot: DumpSnapshot) -> FaceWork {
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
-    let result = tokio::task::spawn_blocking(move || {
+    FaceWork::Dump(tokio::task::spawn_blocking(move || {
         let path = std::env::temp_dir().join(format!(
             "skeleton-dump-{}-{}.md",
             std::process::id(),
@@ -245,12 +350,62 @@ async fn dump_into_editor(snapshot: DumpSnapshot) {
             .arg(&path)
             .status()
             .map_err(|error| format!("failed to launch editor: {error}"))
-    })
-    .await;
+    }))
+}
+
+fn start_open(path: String) -> FaceWork {
+    let task_path = path.clone();
+    let task = tokio::task::spawn_blocking(move || {
+        let content = std::fs::read_to_string(&task_path).map_err(|error| error.to_string())?;
+        Ok(OpenedFile {
+            bytes: content.len(),
+            head: content.lines().take(20).collect::<Vec<_>>().join("\n"),
+        })
+    });
+    FaceWork::Open { path, task }
+}
+
+async fn join_face_work(work: &mut Option<FaceWork>) -> FaceWorkResult {
+    match work.as_mut().expect("guarded by select condition") {
+        FaceWork::Dump(task) => FaceWorkResult::Dump(task.await),
+        FaceWork::Open { path, task } => FaceWorkResult::Open {
+            path: path.clone(),
+            result: task.await,
+        },
+    }
+}
+
+fn complete_face_work(
+    result: FaceWorkResult,
+    state: &Arc<Mutex<SessionState>>,
+) -> Result<bool, String> {
     match result {
-        Ok(Ok(status)) if status.success() => {}
-        Ok(Ok(status)) => println!("[face] editor exited with {status}"),
-        Ok(Err(error)) => println!("[face] {error}"),
-        Err(error) => println!("[face] editor task failed: {error}"),
+        FaceWorkResult::Dump(result) => {
+            match result {
+                Ok(Ok(status)) if status.success() => {}
+                Ok(Ok(status)) => println!("[face] editor exited with {status}"),
+                Ok(Err(error)) => println!("[face] {error}"),
+                Err(error) => println!("[face] editor task failed: {error}"),
+            }
+            println!("[face] returned from dump");
+            Ok(true)
+        }
+        FaceWorkResult::Open { path, result } => match result {
+            Ok(Ok(opened)) => {
+                with_state(state, |session| {
+                    session.append_user_activity(path.clone(), opened.bytes, opened.head)
+                })?;
+                println!("[face] opened {path} ({} bytes)", opened.bytes);
+                Ok(false)
+            }
+            Ok(Err(error)) => {
+                println!("[face] could not open {path}: {error}");
+                Ok(false)
+            }
+            Err(error) => {
+                println!("[face] could not open {path}: {error}");
+                Ok(false)
+            }
+        },
     }
 }
