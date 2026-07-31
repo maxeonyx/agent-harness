@@ -1,12 +1,7 @@
-//! The face: an append-only CLI. One select loop over user input and the
-//! session event stream. The face never talks to the provider; it emits
-//! user events to the brain and *projects* session events for display —
-//! its own view, distinct from the model's view of the same events.
-
-use crate::context::Context;
-use crate::events::{Event, EventKind, Outcome};
+use crate::protocol::{BrainCommand, BrainMsg, DisplayItem, Outcome};
+use crate::state::{DumpSnapshot, SessionState};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
 pub fn print_help(base_url: &str, model: &str) {
     println!("walking-skeleton — provider {base_url} model {model}");
@@ -19,204 +14,243 @@ pub fn print_help(base_url: &str, model: &str) {
     println!("  /quit         exit");
 }
 
-/// Run the face until the session closes its event stream.
-///
-/// The face is two owned pieces: an input thread (reads and parses stdin,
-/// emits user events straight to the brain) and this render loop (a pure
-/// consumer of the session event stream). The input thread's lifetime is
-/// structured: it exits on /quit, EOF, or a closed channel — every path
-/// that ends the session goes through it, so it is always joinable when
-/// the render loop finishes.
-///
-/// `context` is the shared session log: in this co-located deployment the
-/// face reads it directly for queries like /dump. A remote face would keep
-/// or request enough of the log instead — data still crosses the role
-/// boundary as events, never as file paths (no shared filesystem is
-/// assumed; the dump file below lives on the *face's* filesystem).
+enum Input {
+    Line(String),
+    Eof,
+    Failed(String),
+}
+
 pub async fn run(
-    user_tx: mpsc::Sender<EventKind>,
-    mut bus_rx: broadcast::Receiver<Event>,
-    context: Arc<Mutex<Context>>,
-) {
-    // Stdin is read (and parsed — including the /open file read, which is
-    // fine to block on here) by a dedicated thread, so that /dump can hand
-    // the terminal to an editor with *no read pending on the tty*: after
-    // sending /dump the thread parks until the editor is done.
+    brain_tx: mpsc::Sender<BrainMsg>,
+    mut display_rx: mpsc::Receiver<DisplayItem>,
+    state: Arc<Mutex<SessionState>>,
+) -> Result<(), String> {
+    let (input_tx, mut input_rx) = mpsc::channel(8);
     let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
     let input_thread = std::thread::spawn(move || {
         use std::io::BufRead;
-        let stdin = std::io::stdin();
-        for line in stdin.lock().lines() {
-            let Ok(line) = line else { break };
-            let Some(kind) = parse_line(line.trim()) else {
-                continue;
-            };
-            let is_quit = matches!(kind, EventKind::Quit);
-            let is_dump = matches!(kind, EventKind::DumpRequest);
-            if user_tx.blocking_send(kind).is_err() {
-                return; // brain is gone
-            }
-            if is_quit {
-                return;
-            }
-            if is_dump && resume_rx.recv().is_err() {
-                return;
+        for line in std::io::stdin().lock().lines() {
+            match line {
+                Ok(line) => {
+                    let is_dump = line.trim() == "/dump";
+                    let is_quit = line.trim() == "/quit";
+                    if input_tx.blocking_send(Input::Line(line)).is_err() {
+                        return;
+                    }
+                    if is_quit {
+                        // The session is ending by user request: finish so
+                        // the face can join this thread. (Only a shutdown
+                        // that does NOT come through stdin leaves this
+                        // thread blocked on the tty — the documented
+                        // residual; process exit reaps it.)
+                        return;
+                    }
+                    if is_dump && resume_rx.recv().is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = input_tx.blocking_send(Input::Failed(error.to_string()));
+                    return;
+                }
             }
         }
-        // EOF: end the session.
-        let _ = user_tx.blocking_send(EventKind::Quit);
+        let _ = input_tx.blocking_send(Input::Eof);
     });
+    let mut input_finished = false;
 
     loop {
-        match bus_rx.recv().await {
-            Ok(event) => {
-                if let Some(line) = render(&event) {
-                    println!("{line}");
-                }
-                if matches!(event.kind, EventKind::DumpRequest) {
-                    // Our own /dump coming back on the bus: the log now
-                    // provably includes everything up to the request.
-                    // Project the dump face-side: snapshot briefly under
-                    // the lock, render outside it (the brain is never
-                    // stalled behind markdown rendering). The editor owns
-                    // the terminal until it exits; bus events buffer, the
-                    // input thread is parked.
-                    let snapshot = context.lock().expect("context poisoned").dump_snapshot();
-                    dump_into_editor(snapshot.render()).await;
-                    println!("[face] returned from dump");
-                    let _ = resume_tx.send(());
-                }
-                if matches!(event.kind, EventKind::SessionClosed) {
-                    break;
+        tokio::select! {
+            input = input_rx.recv(), if !input_finished => {
+                match input {
+                    Some(Input::Line(line)) => {
+                        if handle_line(&line, &brain_tx, &state, &resume_tx).await? {
+                            input_finished = true;
+                        }
+                    }
+                    Some(Input::Eof) => {
+                        input_finished = true;
+                        let _ = brain_tx.send(BrainMsg::Command(BrainCommand::Quit)).await;
+                    }
+                    Some(Input::Failed(error)) => {
+                        let _ = brain_tx.send(BrainMsg::Command(BrainCommand::Quit)).await;
+                        return Err(format!("failed to read terminal input: {error}"));
+                    }
+                    None => input_finished = true,
                 }
             }
-            Err(broadcast::error::RecvError::Lagged(n)) => {
-                println!("[face] lagged; skipped {n} events");
+            item = display_rx.recv() => {
+                match item {
+                    Some(DisplayItem::SessionClosed) => {
+                        println!("[brain] session closed");
+                        break;
+                    }
+                    Some(item) => render(item),
+                    None => break,
+                }
             }
-            Err(broadcast::error::RecvError::Closed) => break,
         }
     }
 
-    // The session only ends via /quit or EOF — both of which end the input
-    // thread — so this join does not wait on a blocked read.
-    let joined = tokio::task::spawn_blocking(move || input_thread.join()).await;
-    if !matches!(joined, Ok(Ok(()))) {
-        println!("[face] input thread failed");
+    if input_thread.is_finished() {
+        input_thread
+            .join()
+            .map_err(|_| "terminal input thread panicked".to_string())?;
+    }
+    Ok(())
+}
+
+async fn handle_line(
+    line: &str,
+    brain_tx: &mpsc::Sender<BrainMsg>,
+    state: &Arc<Mutex<SessionState>>,
+    resume_tx: &std::sync::mpsc::Sender<()>,
+) -> Result<bool, String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(false);
+    }
+    match line {
+        "/quit" => {
+            brain_tx
+                .send(BrainMsg::Command(BrainCommand::Quit))
+                .await
+                .map_err(|_| "brain inbox closed before /quit was delivered".to_string())?;
+            Ok(true)
+        }
+        "/end" => {
+            send_command(brain_tx, BrainCommand::TurnEnd).await?;
+            Ok(false)
+        }
+        "/cancel" => {
+            println!("[face] cancel requested");
+            send_command(brain_tx, BrainCommand::Cancel).await?;
+            Ok(false)
+        }
+        "/rebuild" => {
+            send_command(brain_tx, BrainCommand::Rebuild).await?;
+            Ok(false)
+        }
+        "/dump" => {
+            let snapshot = with_state_read(state, SessionState::dump)?;
+            dump_into_editor(snapshot).await;
+            println!("[face] returned from dump");
+            let _ = resume_tx.send(());
+            Ok(false)
+        }
+        _ if line.starts_with("/open ") => {
+            let path = line.trim_start_matches("/open ");
+            match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    let bytes = content.len();
+                    let head = content.lines().take(20).collect::<Vec<_>>().join("\n");
+                    with_state(state, |session| {
+                        session.append_user_activity(path.to_string(), bytes, head)
+                    })?;
+                    println!("[face] opened {path} ({bytes} bytes)");
+                }
+                Err(error) => println!("[face] could not open {path}: {error}"),
+            }
+            Ok(false)
+        }
+        _ => {
+            with_state(state, |session| {
+                session.append_user_message(line.to_string())
+            })?;
+            println!("[face] staged user message");
+            Ok(false)
+        }
     }
 }
 
-/// Write the dump to a temp file on the face's own filesystem, open it in
-/// the user's editor (a plain command name; default nano), wait for exit.
-async fn dump_into_editor(dump: String) {
+async fn send_command(
+    brain_tx: &mpsc::Sender<BrainMsg>,
+    command: BrainCommand,
+) -> Result<(), String> {
+    brain_tx
+        .send(BrainMsg::Command(command))
+        .await
+        .map_err(|_| "brain inbox closed before the command was delivered".to_string())
+}
+
+fn with_state<T>(
+    state: &Arc<Mutex<SessionState>>,
+    operation: impl FnOnce(&mut SessionState) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut state = state
+        .lock()
+        .map_err(|_| "session state lock poisoned in face".to_string())?;
+    operation(&mut state)
+}
+
+fn with_state_read<T>(
+    state: &Arc<Mutex<SessionState>>,
+    operation: impl FnOnce(&SessionState) -> T,
+) -> Result<T, String> {
+    let state = state
+        .lock()
+        .map_err(|_| "session state lock poisoned in face".to_string())?;
+    Ok(operation(&state))
+}
+
+fn render(item: DisplayItem) {
+    match item {
+        DisplayItem::RequestStarted { request_id } => {
+            println!("[brain] request {request_id} in flight");
+        }
+        DisplayItem::RequestResolved { outcome } => match outcome {
+            Outcome::Ok { value } => {
+                if let Some(text) = value.text.filter(|text| !text.is_empty()) {
+                    println!("[agent] {text}");
+                }
+            }
+            Outcome::Err { error } => println!("[brain] request failed: {error}"),
+            Outcome::Cancelled { reason } => println!("[brain] request cancelled: {reason}"),
+            Outcome::Panicked { payload } => println!("[brain] request panicked: {payload}"),
+        },
+        DisplayItem::ToolStarted { name, arguments } => {
+            println!("[limb] tool call: {name}({arguments})");
+        }
+        DisplayItem::ToolResolved { outcome } => match outcome {
+            Outcome::Ok { value } => println!("[limb] tool result: {} bytes", value.len()),
+            Outcome::Err { error } => println!("[limb] tool error: {error}"),
+            Outcome::Cancelled { reason } => println!("[limb] tool cancelled: {reason}"),
+            Outcome::Panicked { payload } => println!("[limb] tool panicked: {payload}"),
+        },
+        DisplayItem::TurnResolved { outcome } => match outcome {
+            Outcome::Ok { .. } => println!("[brain] turn complete"),
+            Outcome::Err { error } => println!("[brain] turn failed: {error}"),
+            Outcome::Cancelled { reason } => println!("[brain] turn cancelled: {reason}"),
+            Outcome::Panicked { payload } => println!("[brain] turn panicked: {payload}"),
+        },
+        DisplayItem::ContextRebuilt { wire_messages } => {
+            println!("[brain] context rebuilt ({wire_messages} wire messages)");
+        }
+        DisplayItem::SessionClosed => unreachable!(),
+    }
+}
+
+async fn dump_into_editor(snapshot: DumpSnapshot) {
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
     let result = tokio::task::spawn_blocking(move || {
         let path = std::env::temp_dir().join(format!(
             "skeleton-dump-{}-{}.md",
             std::process::id(),
-            crate::events::now_ms()
+            crate::state::now_ms()
         ));
-        std::fs::write(&path, dump)
-            .map_err(|e| format!("failed to write dump {}: {e}", path.display()))?;
+        std::fs::write(&path, snapshot.render())
+            .map_err(|error| format!("failed to write dump {}: {error}", path.display()))?;
         println!("[face] dump written to {}", path.display());
         std::process::Command::new(&editor)
             .arg(&path)
             .status()
-            .map_err(|e| format!("failed to launch editor: {e}"))
+            .map_err(|error| format!("failed to launch editor: {error}"))
     })
     .await;
     match result {
         Ok(Ok(status)) if status.success() => {}
         Ok(Ok(status)) => println!("[face] editor exited with {status}"),
-        Ok(Err(e)) => println!("[face] {e}"),
-        Err(e) => println!("[face] editor task failed: {e}"),
-    }
-}
-
-/// Parse one input line into a user event, or handle it locally.
-fn parse_line(line: &str) -> Option<EventKind> {
-    if line.is_empty() {
-        return None;
-    }
-    match line {
-        "/quit" => Some(EventKind::Quit),
-        "/end" => Some(EventKind::TurnEnd),
-        "/cancel" => Some(EventKind::CancelRequest),
-        "/rebuild" => Some(EventKind::RebuildRequest),
-        "/dump" => Some(EventKind::DumpRequest),
-        _ => {
-            if let Some(path) = line.strip_prefix("/open ") {
-                // A user tool: the face reads the file and emits the facts.
-                // Face view (rich) and model view (compressed) are both
-                // projections of the one event.
-                match std::fs::read_to_string(path) {
-                    Ok(content) => {
-                        let head: Vec<&str> = content.lines().take(20).collect();
-                        Some(EventKind::FileOpened {
-                            path: path.to_string(),
-                            bytes: content.len(),
-                            head: head.join("\n"),
-                        })
-                    }
-                    Err(e) => {
-                        println!("[face] could not open {path}: {e}");
-                        None
-                    }
-                }
-            } else {
-                Some(EventKind::UserMessage {
-                    text: line.to_string(),
-                })
-            }
-        }
-    }
-}
-
-/// The face's projection of a session event. Returns None for events this
-/// face does not display.
-fn render(event: &Event) -> Option<String> {
-    match &event.kind {
-        EventKind::UserMessage { .. } => Some("[face] staged user message".to_string()),
-        EventKind::FileOpened { path, bytes, .. } => {
-            Some(format!("[face] opened {path} ({bytes} bytes)"))
-        }
-        EventKind::CancelRequest => Some("[face] cancel requested".to_string()),
-        EventKind::RequestAttempt { request_id, .. } => {
-            Some(format!("[brain] request {request_id} in flight"))
-        }
-        EventKind::RequestOutcome { outcome, .. } => match outcome {
-            Outcome::Ok { value } => value
-                .text
-                .clone()
-                .filter(|t| !t.is_empty())
-                .map(|text| format!("[agent] {text}")),
-            Outcome::Err { error } => Some(format!("[brain] request failed: {error}")),
-            Outcome::Cancelled { reason } => Some(format!("[brain] request cancelled: {reason}")),
-            Outcome::Panicked { payload } => Some(format!("[brain] request panicked: {payload}")),
-        },
-        EventKind::ToolCallAttempt {
-            name, arguments, ..
-        } => Some(format!("[limb] tool call: {name}({arguments})")),
-        EventKind::ToolCallOutcome { outcome, .. } => match outcome {
-            Outcome::Ok { value } => Some(format!("[limb] tool result: {} bytes", value.len())),
-            Outcome::Err { error } => Some(format!("[limb] tool error: {error}")),
-            Outcome::Cancelled { reason } => Some(format!("[limb] tool cancelled: {reason}")),
-            Outcome::Panicked { payload } => Some(format!("[limb] tool panicked: {payload}")),
-        },
-        EventKind::TurnOutcome { outcome } => match outcome {
-            Outcome::Ok { .. } => Some("[brain] turn complete".to_string()),
-            Outcome::Err { error } => Some(format!("[brain] turn failed: {error}")),
-            Outcome::Cancelled { reason } => Some(format!("[brain] turn cancelled: {reason}")),
-            Outcome::Panicked { payload } => Some(format!("[brain] turn panicked: {payload}")),
-        },
-        EventKind::ContextRebuilt { wire_messages } => Some(format!(
-            "[brain] context rebuilt ({wire_messages} wire messages)"
-        )),
-        EventKind::SessionClosed => Some("[brain] session closed".to_string()),
-        EventKind::SessionStarted { .. }
-        | EventKind::ContributionAdded { .. }
-        | EventKind::TurnEnd
-        | EventKind::RebuildRequest
-        | EventKind::DumpRequest
-        | EventKind::Quit => None,
+        Ok(Err(error)) => println!("[face] {error}"),
+        Err(error) => println!("[face] editor task failed: {error}"),
     }
 }

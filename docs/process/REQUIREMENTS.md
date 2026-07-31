@@ -128,8 +128,9 @@ Further direction during the redo, 2026-07-30 (at /dump review):
   stuff" (no detached threads, no process::exit escape hatches).
 - Future experiment (user): a "refined event-based replication protocol —
   build a somewhat generic event streaming system and re-build the
-  harness innards on top of that." One shared bus and untyped channels
-  are fine until then.
+  harness innards on top of that." At this point one shared bus and untyped
+  channels were accepted until then; the 2026-07-31 ruling below supersedes
+  that interim design.
 
 Further direction during review round 2 fixes, 2026-07-31:
 
@@ -142,3 +143,40 @@ Further direction during review round 2 fixes, 2026-07-31:
   maybe?" — a PID namespace / cgroup per limb would be the
   kernel-enforced form of the same ownership principle. Not spike scope;
   candidate for a later experiment.
+
+Review round 4 and architecture discussion, 2026-07-31:
+
+- A cancelled turn may retain an assistant response containing proposed but
+  unexecuted tool calls: "the tool call by itself is actually valid, and we
+  could action that later if we wanted." It is resumable state: "we should be
+  able to resume later and then execute the tool call that we had pending from
+  the last time we were accessing the session." The wire projection omits
+  unexecuted calls (the model never sees a call that never ran); no synthetic
+  outcomes are fabricated; /dump shows them as invisible-facts comments.
+- Sequencing is a property of the deployment substrate, never the brain or
+  another participant. One process synchronizes and therefore has a
+  sequencer. Across processes that are too far away to sequence, accept that
+  there is no total order and do not synchronize. Whether same-machine IPC
+  is close enough remains unclear.
+- In-process appends are synchronous method calls under a lock. The
+  synchronous-versus-asynchronous append question begins at a process
+  boundary and is deferred.
+- Face, brain, and limb are symmetric; every component owns exactly one
+  external world. Face owns terminal/UI, brain owns the provider connection,
+  and limb owns the environment (filesystem, processes, tools). These roles
+  are locked before later experiments. Provider state belongs to the brain
+  just as ephemeral UI state belongs to the face.
+- The current limb has the same shape as face and brain: inbox + select loop
+  + owned in-flight work, not request/reply slots. In the later streaming
+  design the limb is an event peer (including streamed tool results and file
+  watching).
+- Desired shutdown pattern, deferred beyond this spike: "every layer should
+  think about how it's shutting down gracefully in response to a
+  cancellation." Each layer gracefully shuts down what it owns; its parent
+  has a timeout backstop and kills on expiry. A descending global deadline
+  budget is an idea, not yet a ruling; check what asupersync does.
+- "test flake is a bug. make sure to make it impossible." Races must be
+  structurally excluded, not retried away.
+
+Deferred replication, topology, peer-lifecycle, and shutdown inputs are
+curated in `spikes/event-streaming-notes.md`.
