@@ -1,9 +1,9 @@
 # Agent Harness Process Handoff
 
-Status: Spike 0 (walking skeleton) rebuilt per the revised brief; evidence
-complete (scenarios + agent-run real-provider smoke)
-Active loop: redo awaiting the user's own smoke run and Gate 1 on
-`walking-skeleton-outcome.md`
+Status: Spike 0 (walking skeleton) is in its thermonuclear review loop; round
+4 is complete and triggered a shared-state rewrite
+Active loop: rewrite in progress, preserving the black-box contract; review
+the rewritten spike again before returning to Gate 1
 Source notes version: gist `014463e0964bebd0add4b914971c492f` cloned 2026-06-08,
 resynced 2026-07-30 (gist revision `084e2d3`, Anthropic OAuth references added)
 
@@ -27,14 +27,15 @@ The repo has explicit boundaries:
 
 ## Next Recommended Loop
 
-Gate 1 for the rebuilt skeleton: the user smoke-runs it (e.g.
-`experiments/walking-skeleton/run.ignore.sh` — a local launcher exists on
-the dev machine; behaviour already user-tested and liked once, /dump and
-contributions added since) and reads `walking-skeleton-outcome.md`,
-optionally after a fresh-context review. On acceptance: pick the first
-core slice to integrate (fresh design from the evidence, black-box tests
-first at the public surfaces), or the next spike if integration is
-premature.
+Finish the shared-state rewrite, run its scripted and real-provider evidence,
+then return it to fresh-context thermonuclear review. Round 4 found that the
+event bus was prematurely encoding an unprincipled replication architecture;
+the replacement is one shared mutable `SessionState`, synchronous appends,
+typed channels, and symmetric face/brain/limb select loops. After review is
+clean, the user smoke-runs it and reads `walking-skeleton-outcome.md` for Gate
+1. On acceptance: pick the first core slice to integrate (fresh design from
+the evidence, black-box tests first at the public surfaces), or the next spike
+if integration is premature.
 
 Queued next spike: `modular-components-brief.md` (user-requested:
 composable typed config + fully in-process black-box testing; deconfuse
@@ -42,11 +43,11 @@ and the user's testing guidelines as inspiration). Open user decision
 recorded in the brief: standalone library in the agent-tools ecosystem vs
 harness infrastructure.
 
-Queued later experiment (user, 2026-07-30): event-streaming substrate — a
-refined event-based replication protocol; "build a somewhat generic event
-streaming system and re-build the harness innards on top of that." Until
-then, one shared broadcast bus and untyped face→brain channels are
-accepted in the skeleton.
+Queued later experiment (user, expanded 2026-07-31): a principled
+event-streaming / replication protocol, with the harness innards rebuilt on
+top. Curated design inputs are in
+`spikes/event-streaming-notes.md`. Until then the skeleton uses shared state
+and typed channels, not a broadcast event bus.
 
 Scope note: the user expanded Spike 0 scope on 2026-06-13 — real provider use
 is in scope for spikes ("I want to actually use it"); the fake provider for
@@ -61,7 +62,7 @@ resynced into `docs/source-notes/` on 2026-06-20.
   the user; see `PROCESS.md`.
 - Gate 1 for the walking-skeleton first attempt closed 2026-07-30: redo, with
   direction (see `REQUIREMENTS.md` requirement changes). Gate 1 for the redo
-  will open when its outcome doc exists.
+  remains pending while the round-4 shared-state rewrite and review complete.
 
 ## Do Not Integrate Yet
 
@@ -109,6 +110,10 @@ resynced into `docs/source-notes/` on 2026-06-20.
   fake-provider HTTP server, JSONL recorder. The exit-condition scenario
   passes (`cargo test` in the spike dir); outcome doc at
   `docs/process/spikes/walking-skeleton-outcome.md`.
+- The revised Spike 0 passed scripted scenarios and an agent-run OpenRouter
+  smoke before review round 4. That evidence describes the pre-rewrite event
+  bus implementation; round 4's rulings and the rewrite disposition are in
+  `walking-skeleton-outcome.md`.
 
 ## Standards Backlog
 

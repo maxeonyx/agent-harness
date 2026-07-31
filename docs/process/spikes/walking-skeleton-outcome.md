@@ -2,14 +2,20 @@
 
 Spike: walking-skeleton, rebuilt per the revised brief of 2026-07-30 (Gate 1
 of the first attempt: redo; see `walking-skeleton-outcome-v1.md`).
-Status: evidence complete from scripted scenarios and an agent-run
+Status: pre-round-4 evidence complete from scripted scenarios and an agent-run
 real-provider smoke (OpenRouter, 2026-07-30: tool round-trip and
-cancel-during-tool both worked); awaiting the user's own smoke run and
-Gate 1.
+cancel-during-tool both worked); round 4 triggered a shared-state rewrite,
+which is in progress before another review and Gate 1.
 Requirements tested: none by itself (Spike 0 is the shared substrate);
 exercises invariants 2, 3, 4, 8, 9.
 
 ## What The Spike Proved
+
+These are results from the event-bus implementation before the round-4 rewrite.
+The black-box observations remain the rewrite's contract; its internal-shape
+claims need to be re-evidenced. The integration recommendations and risks
+below also describe that implementation; the round-4 result supersedes them
+where the architecture differs.
 
 - The two-select-loop shape works and stays responsive: the face loop
   (stdin + event rendering) and the brain's session loop (user events +
@@ -265,6 +271,46 @@ two orderly auxiliary exits could swallow the event and the second was
 misclassified as a mid-session death. Fixed structurally: the watch
 remembers (`SessionClosedWatch.seen`), making the predicate monotone like
 the fact it tracks. 40 consecutive full-suite runs green after the fix.
+
+Thermonuclear review round 4 (fresh-context, 2026-07-31) returned six
+findings:
+
+- F1: the face was not actually a peer select loop; the broadcast bus made
+  the brain the router and sequencer for face activity. The architecture
+  discussion resolved this by removing the event bus from this spike and
+  locking symmetric face/brain/limb roles around shared state + typed
+  channels.
+- F2: drain could retain an assistant response with an unmatched
+  `tool_calls` exchange. The reviewer called this a defect; the user reversed
+  it: "we should wait for the completion of the assistant response because I
+  don't think there's any point throwing that away. It cost us money, and it's
+  probably good. But I don't think we should execute on the tool calls because
+  that's a new asynchronous action on our machine, and the user has requested
+  to finish." A cancelled turn therefore keeps the completed response but
+  does not execute its proposed calls. "Specifically, I think that we should
+  be able to resume later and then execute the tool call that we had pending
+  from the last time we were accessing the session." The wire omits the call
+  until execution, no synthetic outcomes are fabricated, and /dump shows it
+  as an invisible fact.
+- F3 accepted: cancellation could return while a spawned cancellable body was
+  still detached. Abort and await the join handle.
+- F4 accepted: supervisor shutdown could block forever joining the stdin
+  thread. Join it only when it has finished; a thread blocked on the terminal
+  remains a known process-exit residual.
+- F5 accepted: participant failures could print and return success. Participant
+  loops return `Result`, and the supervisor folds errors and panics into the
+  process exit code.
+- F6 accepted: one cancellation assertion was vacuous because observed stdout
+  was only updated by `wait_for`. Drain queued output before inspecting it;
+  end-of-session wire assertions remain the authoritative absence proof.
+
+Outcome: rewrite the spike to the simplest honest co-located design. One
+`Arc<Mutex<SessionState>>` is the source of truth and journals each synchronous
+append; face, brain, and limb each own an inbox, select loop, external world,
+and in-flight work; typed channels carry control and display messages. The
+black-box behavior stays the contract. Event streaming, proposals,
+replication, and cross-process ordering move to
+`event-streaming-notes.md` for a dedicated later experiment.
 
 ## User Acceptance
 

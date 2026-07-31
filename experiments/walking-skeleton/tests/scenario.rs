@@ -171,6 +171,12 @@ impl Skeleton {
         }
     }
 
+    fn drain_seen(&mut self) {
+        while let Ok(line) = self.stdout_rx.try_recv() {
+            self.seen.push(line);
+        }
+    }
+
     fn quit(mut self) {
         self.send("/quit");
         self.wait_exit();
@@ -437,6 +443,7 @@ fn cancel_during_provider_request_drains_and_session_continues() {
 
     // Finalized: no follow-on work after the drain.
     std::thread::sleep(Duration::from_millis(300));
+    skeleton.drain_seen();
     let seen: Vec<String> = skeleton.seen.clone();
     assert!(
         !seen.iter().any(|l| l.contains("request 1 in flight")),
@@ -738,7 +745,7 @@ fn dump_shows_model_view_with_invisible_facts() {
 
     // What the model can't see is present, but only as HTML comments.
     assert!(
-        dump.contains("<!-- seq") && dump.contains("\"event\":\"turn_end\""),
+        dump.contains("<!-- seq") && dump.contains("\"type\":\"turn_end\""),
         "invisible events should appear as comments:\n{dump}"
     );
 

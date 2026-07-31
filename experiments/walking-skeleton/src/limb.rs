@@ -1,65 +1,128 @@
-//! Toy limb: its own loop, owning a particular environment (here: a
-//! working directory) including the context it provides (tool schemas).
-//! A session has a limb at the logical level, not at the memory-ownership
-//! level: the brain holds a channel to it, never the limb itself. No
-//! provider access, no agent loop. Execution is async and cancel-correct
-//! in the request → drain → finalize sense: the brain requests
-//! cancellation via a token; the limb drains (kills and reaps a running
-//! child process) and resolves to a `Cancelled` outcome — never an
+//! Toy limb: a participant shaped like the face and brain — an inbox, a
+//! select loop, and owned in-flight work — owning one external world: an
+//! environment (here: a working directory, its filesystem, and the
+//! processes tools spawn). No provider access, no agent loop, no shared
+//! memory with anyone (the session state is the brain/face's co-location
+//! substrate; the limb only exchanges messages).
+//!
+//! Cancellation is a message, not a shared token: the brain sends
+//! `LimbMsg::Cancel`; the limb cancels its own in-flight execution (the
+//! token below never leaves this module), drains it — kills and reaps its
+//! process tree — and reports the `Cancelled` outcome back. Never an
 //! abandoned child, never a missing outcome.
 
-use crate::events::Outcome;
+use crate::protocol::{BrainMsg, Contribution, DisplayItem, LimbMsg, Outcome};
 use serde_json::{Value, json};
 use std::future::Future;
 use std::path::PathBuf;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-/// What a brain can ask of a limb. Every request carries a reply channel:
-/// the limb always answers (dropping the reply is visible to the asker).
-pub enum LimbRequest {
-    /// The contributions this limb provides to the model's environment:
-    /// (name, tool schema) pairs.
-    Describe {
-        reply: oneshot::Sender<Vec<(String, Value)>>,
-    },
-    Execute {
-        name: String,
-        arguments: String,
-        cancel: CancellationToken,
-        reply: oneshot::Sender<Outcome<String>>,
-    },
-}
-
-/// The limb loop: executes requests sequentially in its own environment.
-/// Ends when all request senders are dropped.
+/// The limb loop: select over the inbox and the owned in-flight
+/// execution. Ends when the inbox closes (the brain drops its sender
+/// after draining), after draining any execution still in flight.
 ///
-/// Process ownership is structural: every child the limb spawns lives
-/// inside an `execute` call that this loop awaits inline, so the loop can
-/// only reach the channel-closed exit with no live child. The graceful
-/// shutdown chain is: brain drains in-flight work (cancel → the limb
-/// kills and reaps its process tree → outcome) *before* dropping its
-/// sender, so limb shutdown never has anything left to clean up. Cleanup
-/// is always an explicit async drain, never a Drop side effect.
-pub async fn run(limb: Limb, mut rx: mpsc::Receiver<LimbRequest>) {
-    while let Some(request) = rx.recv().await {
-        match request {
-            LimbRequest::Describe { reply } => {
-                let _ = reply.send(limb.contributions());
-            }
-            LimbRequest::Execute {
-                name,
-                arguments,
-                cancel,
-                reply,
-            } => {
-                let outcome = limb.execute(&name, &arguments, cancel).await;
-                let _ = reply.send(outcome);
+/// Process ownership is structural: every child the limb spawns belongs
+/// to the in-flight execution this loop owns (identity + cancellation
+/// token + join handle together, always joined), and every exit path
+/// drains it. The graceful shutdown chain is: brain sends Cancel and
+/// waits for the outcome *before* dropping its sender — so the
+/// closed-inbox exit normally has nothing left to clean up, and if the
+/// brain vanished mid-execution the drain below still kills and reaps
+/// the process tree. Cleanup is always an explicit async drain, never a
+/// Drop side effect.
+pub async fn run(
+    limb: Limb,
+    mut rx: mpsc::Receiver<LimbMsg>,
+    brain_tx: mpsc::Sender<BrainMsg>,
+    display_tx: mpsc::Sender<DisplayItem>,
+) -> Result<(), String> {
+    let mut in_flight: Option<(
+        crate::provider::ToolCall,
+        CancellationToken,
+        tokio::task::JoinHandle<Outcome<String>>,
+    )> = None;
+    loop {
+        // A closed inbox with work still in flight means the brain is gone
+        // without draining us: cancel our own work (idempotent) so the
+        // in-flight branch can join it and we can exit.
+        if rx.is_closed()
+            && let Some((_, cancel, _)) = &in_flight
+        {
+            cancel.cancel();
+        }
+        tokio::select! {
+            message = rx.recv(), if in_flight.is_none() || !rx.is_closed() => match message {
+                Some(LimbMsg::Execute { call }) if in_flight.is_none() => {
+                    let cancel = CancellationToken::new();
+                    let name = call.function.name.clone();
+                    let arguments = call.function.arguments.clone();
+                    let root_limb = limb.clone();
+                    let token = cancel.clone();
+                    let _ = display_tx.send(DisplayItem::ToolStarted {
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                    }).await;
+                    let task = tokio::spawn(async move {
+                        root_limb.execute(&name, &arguments, token).await
+                    });
+                    in_flight = Some((call, cancel, task));
+                }
+                Some(LimbMsg::Execute { .. }) => {
+                    return Err("limb received a second tool call while one was already in flight".to_string());
+                }
+                Some(LimbMsg::Cancel) => {
+                    if let Some((_, cancel, _)) = &in_flight {
+                        cancel.cancel();
+                    }
+                }
+                None if in_flight.is_none() => break,
+                None => {
+                    // Inbox closed mid-execution (the brain died without
+                    // draining us): drain our own work — cancel it and let
+                    // the in-flight branch below join it and report. The
+                    // select guard keeps this arm from spinning on the
+                    // already-closed channel meanwhile.
+                    if let Some((_, cancel, _)) = &in_flight {
+                        cancel.cancel();
+                    }
+                }
+            },
+            outcome = join_execution(&mut in_flight), if in_flight.is_some() => {
+                let (call_id, outcome) = outcome;
+                in_flight = None;
+                brain_tx.send(BrainMsg::ToolOutcome { call_id, outcome }).await
+                    .map_err(|_| "brain inbox closed before the limb could deliver a tool outcome".to_string())?;
+                if rx.is_closed() {
+                    break;
+                }
             }
         }
     }
+    Ok(())
 }
 
+async fn join_execution(
+    in_flight: &mut Option<(
+        crate::provider::ToolCall,
+        CancellationToken,
+        tokio::task::JoinHandle<Outcome<String>>,
+    )>,
+) -> (String, Outcome<String>) {
+    let (call, _, task) = in_flight.as_mut().expect("guarded by select condition");
+    let outcome = match task.await {
+        Ok(outcome) => outcome,
+        Err(error) if error.is_panic() => Outcome::Panicked {
+            payload: error.to_string(),
+        },
+        Err(_) => Outcome::Cancelled {
+            reason: "tool execution task aborted".to_string(),
+        },
+    };
+    (call.id.clone(), outcome)
+}
+
+#[derive(Clone)]
 pub struct Limb {
     root: PathBuf,
 }
@@ -71,7 +134,7 @@ impl Limb {
     }
 
     /// The limb's environment contributions: named tool schemas.
-    fn contributions(&self) -> Vec<(String, Value)> {
+    pub fn contributions(&self) -> Vec<(String, Contribution)> {
         self.tool_defs()
             .into_iter()
             .map(|def| {
@@ -79,7 +142,7 @@ impl Limb {
                     .as_str()
                     .unwrap_or("unknown")
                     .to_string();
-                (name, def)
+                (name, Contribution::Tool { def })
             })
             .collect()
     }
@@ -319,13 +382,17 @@ async fn cancellable(
     name: &str,
     body: impl Future<Output = Outcome<String>> + Send + 'static,
 ) -> Outcome<String> {
-    let task = tokio::spawn(body);
+    let mut task = tokio::spawn(body);
     tokio::select! {
-        result = task => result.unwrap_or_else(|e| Outcome::Panicked {
+        result = &mut task => result.unwrap_or_else(|e| Outcome::Panicked {
             payload: format!("tool task failed: {e}"),
         }),
-        _ = cancel.cancelled() => Outcome::Cancelled {
-            reason: format!("{name} cancelled"),
+        _ = cancel.cancelled() => {
+            task.abort();
+            let _ = task.await;
+            Outcome::Cancelled {
+                reason: format!("{name} cancelled"),
+            }
         },
     }
 }
