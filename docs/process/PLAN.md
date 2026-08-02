@@ -40,6 +40,14 @@ compression; passive activity never triggers a request; turn end carries
 accumulated context; tool-loop requests carry piggyback context; user-tool
 output framed as user activity; stale-edit/user-wins smoke test.
 
+Also includes basic UX enhancements (user, 2026-08-03): "I want shift
+enter (kitty escape seq, configured in my win terminal) to be newline,
+enter to stage, enter with *no* content to submit, and control enter (if
+possible) to be submit too."
+
+Scheduling note (user, 2026-08-03): "That one requires a lot of hands on
+from me tho" — pull it when the user has hands-on time available.
+
 Exit: the user-tool contract is expressive and disciplined enough to build
 around.
 
