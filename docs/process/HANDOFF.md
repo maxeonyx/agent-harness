@@ -15,8 +15,14 @@ accumulate chronology here.
   soul-of-the-design weighting in `REQUIREMENTS.md`; the experiment pool
   in `PLAN.md`. Experiments are a pool, not a sequence — the next one is
   pulled based on what the user wants to work on.
-- Next: the user picks the next experiment from the pool. Several
-  experiments are expected before first core integration.
+- Design scoping docs exist for four experiments in
+  `docs/process/design/` (see `design/overview.md` for the map, the
+  cross-pool matrix, and the proposals awaiting review).
+- Next: the user reviews the design docs, then picks the next experiment
+  from the pool. Several experiments are expected before first core
+  integration. Scheduling notes: user-turn needs the user hands-on;
+  forked-subagents is the one he'd "quite like to see designed" (now
+  scoped).
 
 ## Where things are
 
