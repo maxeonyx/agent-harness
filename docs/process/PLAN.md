@@ -27,6 +27,8 @@ validating the good-taste layer, and small targeted questions.
 
 ### user-turn
 
+Design scoping: `design/user-turn.md`.
+
 Purpose: validate the central in-band collaboration thesis — the user
 works (files, terminal, search) inside the shared session, the model sees
 compressed useful context, and user activity never triggers requests.
@@ -52,6 +54,8 @@ Exit: the user-tool contract is expressive and disciplined enough to build
 around.
 
 ### forked-subagents
+
+Design scoping: `design/forked-subagents.md`.
 
 Purpose: validate hierarchy, blocking, fork/fresh, cache-efficient
 launching, and attention semantics.
@@ -89,6 +93,8 @@ Exit: the limb/context contract is concrete enough that "a session exists
 with respect to one limb" is a designed behavior, not a slogan.
 
 ### compaction-handover
+
+Design scoping: `design/compaction-handover.md`.
 
 Purpose: validate the agent-owned compaction lifecycle as a first-class
 mechanism.
@@ -171,6 +177,8 @@ Exit: context change handling is honest against warm-cache reality and
 cheap in the common case.
 
 ### self-modification
+
+Design scoping: `design/ts-vs-rust-boundary.md` (the boundary is this experiment's scope).
 
 Purpose: validate the self-modifying implementation bet — live editing
 without live bricking, for plugins and the harness binary itself.
