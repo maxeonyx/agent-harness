@@ -47,8 +47,12 @@ analyse) then builds back up (synthesise). The stages run in this order
    *not* reflexively reach for cost/tokens — it is the easiest root to
    name and often the wrong one. If the honest root is correctness or
    desire, cost framing actively misleads (e.g. cancellation deliberately
-   *spends* tokens so agents can clean up). Two more traps: stopping at a
-   *mechanism* (the note's how), and mistaking a *consequence* for a why.
+   *spends* tokens so agents can clean up). Two known **false roots** in
+   this project specifically: **cost/tokens** (as above) and
+   **security/isolation** — the user treats security as a low-priority
+   nice-to-have, never a top driver, so proposing it as a why is almost
+   always wrong. Two more traps: stopping at a *mechanism* (the note's
+   how), and mistaking a *consequence* for a why.
    A consequence is something that follows *from* the design choice and
    must be managed (e.g. "a forked child must reliably stop after its
    slice") — it is not a reason the thing exists, and it belongs in the
