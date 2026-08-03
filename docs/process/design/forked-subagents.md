@@ -1,6 +1,6 @@
 # Forked subagents — design scoping
 
-Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Currently at stage 1 (why).** Derives from `source-notes/agent-hierarchy.md` (the spine), `source-notes/handoff-improvements.md`, and `source-notes/context-and-agent-loop.md`.
+Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why (user-involved) · what, interactions, summary — not yet done.** Derives from `source-notes/agent-hierarchy.md` (the spine), `source-notes/handoff-improvements.md`, and `source-notes/context-and-agent-loop.md`.
 
 ## Why
 

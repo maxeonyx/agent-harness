@@ -69,6 +69,44 @@ analyse) then builds back up (synthesise). The stages run in this order
 The summary and the index are **products of the work, written last** —
 never the starting point.
 
+## Review provenance — not all content here is equally settled
+
+These docs are provisional by construction, but they are *unevenly*
+provisional, and that must be visible. The user, 2026-08-03 (wording
+preserved): "I've reviewed or been involved in the above so they can be
+considered more settled than the stuff that you produce here, which I won't
+have reviewed yet."
+
+So every doc carries a **Stages** line in its header naming, per stage,
+whether the content is user-reviewed or agent-drafted:
+
+```
+Stages: why (user-involved) · what, interactions, summary (agent-drafted,
+unreviewed).
+```
+
+Rules:
+
+- A stage drilled *with* the user is `user-involved`. Do not silently
+  rewrite user-involved content while working a later stage. If a later
+  stage genuinely contradicts a user-involved why, that is a **finding** —
+  record it under "Questions for review" in the doc, don't just fix it.
+- A stage the agent produced alone is `agent-drafted, unreviewed` until the
+  user says otherwise.
+- Every doc ends with a **Questions for review** section listing the calls
+  the agent made that most want the user's ruling. Empty is a smell — an
+  honest design pass at this depth generates real questions.
+
+## Where a finished doc hands off
+
+The point of the doc is to make an experiment startable. `PROCESS.md` step
+1 needs a brief with: **thesis**, **what evidence would falsify it**, and
+**which invariants it touches** (`REQUIREMENTS.md`). A doc is done when
+those three fall out of it *without further design thinking* — the
+interactions section having already decided what this experiment owns
+versus what it defers to a sibling. The doc is not the brief and does not
+replace it; it is what makes writing the brief mechanical.
+
 ## The three levels of detail
 
 The logic of each design dictates its structure, so the docs look
