@@ -1,6 +1,16 @@
 # OAuth and credential handling — design scoping
 
-Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why, what (agent-drafted, unreviewed) · interactions, summary — not yet done.** A targeted question rather than a broad design; expected to stop at L2 depth. Derives from `source-notes/anthropic-oauth-references.md`.
+Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why, what, interactions, summary (agent-drafted, unreviewed).** A targeted question rather than a broad design; expected to stop at L2 depth. Derives from `source-notes/anthropic-oauth-references.md`.
+
+## Summary
+
+The plainest root in the project: the user wants to drive the harness with the Claude subscription he already pays for, because a harness that only accepts metered API keys is one he will use less. Underneath that sits a second, less obvious requirement — the notes ask for a *history*, a timeline of the tricks that third-party implementations have accumulated, so that whether subscription access is a stable capability or an arms race can be assessed rather than assumed. That answer changes how much of the harness should depend on it. So there are two deliverables of quite different kinds: a small piece of architecture, and research.
+
+The architecture is the boundary between the auth flow and a provider plugin. Provider implementations are meant to live in the soft middle and be edited live by an agent, and the notes' position is that such a plugin should ideally work "without actual access to the auth" — the flow runs outside it, and it is handed back a pre-authenticated fetch. Taken literally that is not a header-injecting wrapper, and noticing why is most of the design: if the plugin can hand the wrapper an arbitrary destination, it can point it at a host it controls and read the `Authorization` header out of its own logs. So the abstraction is a fetch **bound to a destination** — the plugin declares its base URLs, its non-secret headers and which auth flavour it needs, and the shell composes those with the credential it holds. The notes offer "a script or config" and those differ in strength: config, where the shell knows the flows and the plugin only names one, is the stronger boundary and the simpler code, so it is the proposed default with script as a recognised weaker escape hatch. Behind the fetch sit three things, one of them a real footgun. Refresh must be single-flighted, because some providers invalidate the previous refresh token when a new one is issued, so ten concurrent refreshes can lock the user out of his own subscription. Retry is one attempt after a refresh and then a clear error, not a loop. And accounting constrains the interface: the brain owns billing and rate limits, so the fetch must expose enough of the response for it to account while still never revealing the credential — compatible, but only if the fetch is a real boundary with its own return type rather than a passthrough. The honest framing throughout is the user's own: he rates sandboxing lowest of his priorities, so this is a clean interface first and a safety property second, and it is worth care only because it costs nothing extra.
+
+Where the credential lives is the one decision that reaches into another design. Refresh tokens are durable state that must survive restart and must never reach a projection the model sees — that much is invariant 1. The complication only appears once persistence is designed: the session database replicates to every federated brain by default, because the user wants backups by default, so durable credential rows would ship his refresh token to every machine he owns as a side effect of a backup feature. The proposal is therefore that credentials live *outside* that database — the OS keychain where there is one, otherwise a permission-restricted file — which keeps the replication rule simple and true rather than introducing a per-table exception, at the cost of a second store to manage. A pleasant consequence is that the read-only meta limb then has nothing to accidentally expose, because the guarantee comes from absence rather than from a rule someone has to remember.
+
+The research half is a survey, a timeline and a test. The survey covers the eight or so reference implementations named in the notes, and what makes it a method rather than a reading exercise is extracting the *same* facts from each — client id, endpoints, scopes, PKCE, device flow, headers, whether a first-party identity string is required, storage, refresh handling — so they are comparable and the common core is visible. The timeline's instrument is `git log` on the specific auth files at pinned commits, plus the issue discussion that explains why a change landed, producing a dated table and a reading of it: convergent additions across repositories within days of each other strongly imply an enforcement change, while idiosyncratic ones do not. The artefact must carry its own date prominently, because its whole purpose is to inform how much to depend on subscription access and it goes stale. Then the part the user's own reaction demands — he suspects the strictest implementation "comes from a stricter time" — which a catalogue cannot answer: a **subtractive test**, implementing the union of tricks, confirming it works, then removing each one to find the minimum that currently works. The difference between the minimum and the union measures how much of the existing complexity is historical. It has to run against the user's own subscription, more than once over a period, because a trick unnecessary today may not be next month. Two things stay open rather than being assumed: the references say nothing about Claude Team, which changes what "working" means and can only be settled against the user's actual account, and whether subscription-backed access bills differently from an API key is currently nobody's question.
 
 ## Why
 
@@ -147,3 +157,21 @@ Forked-subagents, user-turn, multi-client-ui, context-updates, compaction-handov
 - The **subtractive test** — implement the union of tricks, then remove them one by one to find the current minimum — is proposed as the core of the survey rather than an extra, because it is the only thing that can answer "is loosening ok". It costs real requests against your own subscription. Worth it?
 - **Should this design close the subscription-versus-API-key billing gap?** Cancellation-economics deliberately holds subscription billing constant because it is unknown here. Nobody currently owns finding out, and a subscription is what you actually use, so the gap is in the one configuration that matters most.
 - Should this experiment also establish **whether subscription-backed access must degrade to API keys transparently or fail loudly**, given that decision affects the fetch abstraction's return type? It is listed above as an open question about behaviour; making it a deliverable would widen this experiment slightly.
+
+## Index
+
+| Aspect | L1 | L2 | L3 |
+|---|---|---|---|
+| Model framing | | | |
+| Wire & cache | P | §What lives behind the fetch | |
+| Tool surface | | | |
+| UX & input | O | | |
+| Ownership & placement | S | §Where the credential actually lives | |
+| Lifecycle | | | |
+| Storage | P | §Where the credential actually lives | |
+| Economics | O | §The gap: which subscription | |
+| Security | P | §What makes a fetch "pre-authenticated" | |
+| Testing & verification | P | §The subtractive test | |
+| Code shape | P | §What makes a fetch "pre-authenticated" | |
+| Dev workflow & references | P | §The survey | |
+| Core migration | | | |

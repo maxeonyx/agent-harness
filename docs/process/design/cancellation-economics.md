@@ -1,8 +1,16 @@
 # Cancellation economics — design scoping
 
-Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why, what (agent-drafted, unreviewed) · interactions, summary — not yet done.** A targeted question rather than a broad design; expected to stop at L2 depth. Derives from `source-notes/analytics.md`.
+Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why, what, interactions, summary (agent-drafted, unreviewed).** A targeted question rather than a broad design; expected to stop at L2 depth. Derives from `source-notes/analytics.md`.
 
 The question, in the user's words: "does long thinking process actually get interrupted on the providers server or do they charge for the whole thing?" And the tentative consequence — "don't cancel API requests (perhaps only if we already recieved first byte) as I think providers still charge for cancelled requests... Rather, we can keep around the request future and finish it but discard the results. probably worth experiment."
+
+## Summary
+
+This is a measurement, not a design, and its value is disproportionate to its size because several decisions already rest on the unverified belief. Cancellation in this harness is deliberately soft and deliberately spends tokens, because cleanup is the point; invariant 9 keeps and records work that completed as a cancel arrived, on the grounds that "it cost money and is probably good"; and graceful shutdown waits for in-flight requests rather than cancelling them, for the same reason. All three are reasoning about money. If a cancelled request is billed in full regardless, discarding a response is pure waste and the harness should always let it finish. If cancellation genuinely stops generation and stops billing, the calculus flips for long thinking responses and there is a real saving available at the cost of losing partial work.
+
+The measurable is billed tokens — and billed cost, which is not the same thing once cache reads and reasoning tokens are priced differently — as a function of the point at which we stopped wanting the response. Two things that sound like one need separating first: closing the HTTP connection is not the same as telling the provider to stop, and whether an explicit cancellation call even exists and whether using it changes the bill is part of what the experiment establishes. Five cancel points plus a baseline, against a stimulus that reliably produces a long generation phase. The baseline matters more than it looks, because every result is a *difference* and generation length varies run to run, so it takes enough uncancelled requests to know the variance — without that error bar the experiment produces a number that feels like an answer and is not one. The practical difficulty to plan for rather than discover is the instrument: usage arrives in response metadata at the end of a stream, so a cancelled stream may never deliver it, and the in-band reporting the harness normally relies on is unavailable in precisely the case of interest. That forces account-level usage as the instrument, which imposes isolated windows per condition and sets the repetition count by the instrument's granularity rather than by statistical taste. The answer is probably not one fact — a gateway may absorb the cancellation while the upstream keeps generating — so Anthropic direct, an OpenAI-compatible endpoint direct, and OpenRouter at minimum, on API keys, with subscription-backed billing held constant rather than tested. The arithmetic lands somewhere between roughly five and fifty dollars.
+
+Three things hang on the result and only one of them is a product change. A per-provider table of cancel point against billed fraction of baseline is the evidence. A ruling on the harness's default follows from it, with the user's tentative "let the future complete and discard the results" as the null hypothesis, which wins unless the evidence is clear — and a null result is a good outcome rather than a failed experiment, because it lets the current design stop being tentative. The third is a **recording rule**, and it is the part that must be right whatever the billing answer turns out to be: a cancelled request's cost may be genuinely unknown because the metadata never arrived, so it must be storable as unknown-with-a-reason rather than as zero, and cost queries must report coverage alongside their totals. Notably, that rule does not actually depend on the measurement — its shape is known already — so persistence can adopt it now, which makes this experiment schedulable whenever there is money to spend on it and deferrable indefinitely without blocking anything.
 
 ## Why
 
@@ -114,3 +122,21 @@ Everything else is empty, and the emptiness is why this can be scheduled wheneve
 - The measurement is proposed on **API keys only**, with subscription-backed billing held constant rather than tested, because whether a subscription bills differently is unknown here and entangled with the OAuth work. Is that gap acceptable, given a subscription is what you actually use day to day?
 - The recording rule above says a cancelled request's cost may be stored as **unknown-with-a-reason**, and that cost queries therefore report coverage alongside totals. That is a small permanent complication in the analytics surface, bought to avoid silently wrong numbers. Confirm you want it that way rather than treating unmeasurable cost as zero.
 - **The recording rule does not actually depend on the measurement.** Its shape is known whatever the billing answer is, so persistence could adopt it now and this experiment could be deferred indefinitely without blocking anything. Do you want the rule landed independently, which would leave this experiment purely optional?
+
+## Index
+
+| Aspect | L1 | L2 | L3 |
+|---|---|---|---|
+| Model framing | | | |
+| Wire & cache | E | §The cancel points | |
+| Tool surface | | | |
+| UX & input | | | |
+| Ownership & placement | | | |
+| Lifecycle | E | §What the experiment must produce | |
+| Storage | P | §What the experiment must produce | |
+| Economics | E | §The quantity being measured | |
+| Security | | | |
+| Testing & verification | P | §The instrument problem | |
+| Code shape | | | |
+| Dev workflow & references | | | |
+| Core migration | | | |
