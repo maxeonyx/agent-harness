@@ -107,6 +107,28 @@ interactions section having already decided what this experiment owns
 versus what it defers to a sibling. The doc is not the brief and does not
 replace it; it is what makes writing the brief mechanical.
 
+## Stages advance across the portfolio, not one doc at a time
+
+A consequence of stage 3 that is easy to get wrong: interactions are
+`this design's aspects × other experiments' aspects`, so a doc cannot
+honestly reach stage 3 until its siblings have a stage-2 *what* to interact
+with. Taking one doc all the way 1→4 in isolation guarantees its
+interactions section is guesswork, and guarantees rework when the siblings
+land.
+
+So the whole set advances a stage at a time: why for every doc, then what
+for every doc, then interactions across the set (the matrix is only real
+now), then summaries and indexes. A doc's own stages still run in order —
+it is the *cohort* that moves together.
+
+This also means **summaries are written last across the board**, which is
+the same rule as before, just at portfolio scale.
+
+Docs need not all reach the same depth. The soul experiments
+(`REQUIREMENTS.md`) earn L3 treatment; good-taste and targeted-question
+docs may honestly stop at L2. Depth is a judgement recorded in the index,
+not a quota.
+
 ## The three levels of detail
 
 The logic of each design dictates its structure, so the docs look
