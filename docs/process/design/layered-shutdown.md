@@ -1,8 +1,18 @@
 # Layered shutdown — design scoping
 
-Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why, what (agent-drafted, unreviewed) · interactions, summary — not yet done.** A targeted question rather than a broad design; expected to stop at L2 depth. Originates as a user ruling, 2026-07-31, and may fold into topology or remain a pattern note. Modelling inspiration: `Dicklesworthstone/asupersync`.
+Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why, what, interactions, summary (agent-drafted, unreviewed).** A targeted question rather than a broad design; expected to stop at L2 depth. Originates as a user ruling, 2026-07-31, and may fold into topology or remain a pattern note. Modelling inspiration: `Dicklesworthstone/asupersync`.
 
 The pattern: every layer shuts down what it owns, the layer above holds a timeout backstop, and a descending deadline budget is an idea rather than a ruling — with an explicit instruction to check what asupersync does.
+
+## Summary
+
+The root is that cleanup only works if someone actually owns the thing being cleaned up: work in flight has real side effects, hard-killing it leaves a mess, and a layer can only tidy what it knows it holds. That principle is already settled by the walking-skeleton rulings — no detached tasks, no `process::exit` escape hatches, in-flight work owned as identity plus cancellation plus join handle and always joined, the limb owning its own process trees with no process-table scanning. It is worth being clear at the outset that this makes the principle a **discipline rather than a hypothesis**: no experiment could falsify it, only code could fail to follow it, so testing it is a review activity. The consequence that turns it from a slogan into a constraint is that the set of things a layer must shut down has to be enumerable rather than discovered — ownership is a list you were handed, not a search you perform, because searching can miss things and can find things belonging to someone else. What is genuinely open is the timing.
+
+The timing question came with an instruction to check what asupersync does before deciding, so: it does not hand down a decremented duration. Its budget carries an **absolute deadline** and budgets compose by componentwise minimum, so an inner scope is structurally never looser than its parent, with no arithmetic at each hop and no accumulated error from scheduling delays. The descending-budget idea survives contact with the reference in that better form, with one correction from invariant 10 — an absolute deadline is only meaningful on a shared clock, so across a role boundary it travels as a relative duration that the far end re-anchors locally and conservatively. One subtlety the plain descending budget misses is that a layer does not only wait for its children; it also has its own finalisation afterwards, and for the brain that finalisation is where durability lives. So each layer splits its budget into a children's share and a **reserved finalisation share**, hands down only the former, and treats its own finalisation as masked — which is what stops the brain running out of time exactly when it needs to write the resume contract. Sizing that reserve wants measuring once rather than guessing repeatedly. Separately, the parent-held backstop only exists where the layer above has kill authority. A brain cannot kill a limb on another machine; it can only close the connection. Across a boundary the pattern degrades into the far end self-terminating on loss of its owner, which the notes already rule for remote limbs — so there are two forms of the pattern, and the point is not to conflate them, because a design assuming parent-held timeouts everywhere will quietly leave remote processes running.
+
+The interesting collision is a shutdown arriving while a soft cancellation is still unwinding, and it is interesting because the two mechanisms have incompatible natures rather than incompatible parameters. Soft cancellation is a message to the model asking it to clean up and then finish, which implies at least one more provider round trip and possibly tool calls — tens of seconds, unbounded by anything the harness controls. Process shutdown must terminate. A deadline long enough to accommodate an agent's cleanup turn would be too long to be a shutdown deadline. So the proposal is to not start an agent-level cleanup turn during shutdown at all: record the cancellation as cancelled-with-cleanup-outstanding, and let the resumed session do the cleaning. That is chosen partly because it is the same move the project has already made once — a proposed-but-unexecuted tool call is valid resumable state with no fabricated outcome — so it converts a timing conflict into a state representation and needs no new concept. Its honest weakness is that if the relaunch never comes, the cleanup never happens, which is why the outstanding record must be durable and surfaced on the next start rather than silently carried. Exit codes then have to distinguish four outcomes, and the distinction that matters is killed-at-the-backstop against failed: the first is a degraded success, the second should trigger an update rollback, and collapsing them means either rolling back on every slow shutdown or never rolling back at all.
+
+Which leads to this doc's own conclusion, stated plainly rather than deferred. There is no standalone thesis here beyond one narrow falsifiable claim: that a total shutdown deadline — absolute within a process, re-anchored as a relative duration across boundaries, with each layer reserving a masked finalisation share — can be met while every durable fact needed for resume is written, including by a brain with several active sessions and a limb with live process trees. Everything else is either already ruled or a behaviour to verify. Examining the interaction matrix sharpens that rather than softening it: every piece of this design has a natural home elsewhere and none of the pieces need each other. So the proposal is dispersal — the timing discipline and the exit-code semantics verified in operator-lifecycle, because that is what reads the exit code and depends on the durable write landing inside the deadline; the cross-boundary self-termination form in topology, because it owns the boundaries; and "cancelled, cleanup outstanding" as a line in persistence's resume contract rather than a table. That leaves this document as a pattern note plus a handful of rows in someone else's test matrix. It is a scoping call, and it is the user's.
 
 ## Why
 
@@ -131,3 +141,21 @@ That leaves the scope conclusion the what reached, now supported by the matrix r
 - Each layer reserving a **masked finalisation share** of its budget is proposed so the brain cannot run out of time exactly when it needs to write the resume contract. Sizing that reserve wants measurement rather than a guess; is that worth measuring once as part of whichever experiment absorbs this?
 - Exit codes are proposed to distinguish **killed-at-the-backstop from failed**, because the former is a degraded success and the latter should trigger an update rollback. Collapsing them means either rolling back on every slow shutdown or never rolling back.
 - **If this is not an experiment, is the proposed dispersal right?** The interactions section proposes that the timing discipline and exit codes are verified in operator-lifecycle, the cross-boundary self-termination form in topology, and the cleanup-outstanding state as a line in persistence's resume contract. That leaves this doc as a pattern note with no experiment of its own. Confirm, or name a different host.
+
+## Index
+
+| Aspect | L1 | L2 | L3 |
+|---|---|---|---|
+| Model framing | | | |
+| Wire & cache | | | |
+| Tool surface | | | |
+| UX & input | | | |
+| Ownership & placement | S | §Naming the layers, and where "the layer above" loses its authority | |
+| Lifecycle | E | §Reserve, then descend | |
+| Storage | P | §Shutdown arriving while a soft cancellation is unwinding | |
+| Economics | | | |
+| Security | | | |
+| Testing & verification | P | §Exit codes | |
+| Code shape | S | §What is already settled, restated as the mechanism to apply | |
+| Dev workflow & references | S | §What asupersync actually does | |
+| Core migration | | | |
