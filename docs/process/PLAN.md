@@ -74,7 +74,7 @@ w.r.t. the parent. Open: shared-workspace parallelism strategy.
 Exit: structured concurrency is usable and understandable, not just
 formally clean — and forking is demonstrably cache-cheap.
 
-### limb-context
+### limb-model
 
 Purpose: validate the limb as the full context environment for a session —
 not just a tool surface — including context layer composition.
@@ -145,6 +145,19 @@ expiry; cost / cache / tool-duration / stuck-scope queries work; large
 blobs separate from hot tables; schema leaves room for
 append/rebuild/request-trigger state.
 
+Replication / backup-by-default (`source-notes/federated-brain.md`, not
+previously carried into this plan): the user likes federated brains
+storing *all* the data rather than each holding only its own — "that way I
+get backups by default. Sync all the data in the background. keep it clear
+where it came from, don't accidentally duplicate it or get it confused with
+local data." Two schema demands fall out and belong here rather than in
+topology: every durable row needs **provenance** (which brain it originated
+on), and identity must be **globally unique** so background sync cannot
+duplicate or conflate remote data with local. Whether sync itself is built
+is a topology/operator question; not narrowing the schema against it is
+this experiment's job. Related: `source-notes/analytics.md` wants queries
+to span all connected brains.
+
 Exit: the storage model supports worker, operator, analyst, and future
 context-lifecycle requirements without obvious rewrite.
 
@@ -213,7 +226,7 @@ with deconfuse. Touches invariants 4, 8, 10.
 Open user decision (hedged): "Perhaps this would be its own library in the
 agent-tools ecosystem though, actually - it's useful for all my projects."
 — standalone library vs harness infrastructure; the experiment should
-produce evidence for that call, not presume it. Overlaps limb-context's
+produce evidence for that call, not presume it. Overlaps limb-model's
 layer-composition work — candidates to merge when either is pulled.
 
 ### multi-client-ui

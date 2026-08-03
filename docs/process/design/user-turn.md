@@ -1,6 +1,6 @@
 # User turn — design scoping
 
-Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Currently at stage 1 (why).** Derives from `source-notes/user-turn.md`.
+Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why (user-involved) · what, interactions, summary — not yet done.** Derives from `source-notes/user-turn.md`.
 
 User turn is a rethinking of what it means to collaborate with an agent. Instead of the user sending messages and asking the agent to show things, the user can act *inline* — open files, edit, run commands, search — and those actions attach to the conversation just as an agent's tool calls do.
 
@@ -31,7 +31,7 @@ The agent should get what *informed* a decision, not just the result — "includ
 - The tool set: file (explorer + editor, tracks diffs *and* what was viewed, incl. finds; opens collapsed), terminal (persistent; ideally forkable/undoable with history rather than a real shell — stretch), search (shows what was searched and found), a github tool (interactive `gh`; likely integrate/fork an existing tool), and a **subagent-as-user-tool** ("find me that nix issue where XYZ" — attaches the user's prompt + the subagent's response; only what the *user* saw needs attaching; forked or fresh, warn if cache likely expired).
 - Each tool owns **both projections**: the UI/actions for the user, and the live transcript/context projection for the agent (all the important info incl. looked-at-but-unused, minus purely visual/intermediate noise). Corollary: agent tools should own their UI projections too (TUI + web).
 - Two UIs per state (what the user sees vs what gets attached).
-- Keybindings: `$` → terminal ready to type (esc leaves the `$` so it can be typed normally), `@` → file, search hotkey TBD; enter vs ctrl+enter and shift+enter — keep the distinction, and user tool calls are multiple message parts.
+- Keybindings: `$` → terminal ready to type (esc leaves the `$` so it can be typed normally), `@` → file, search hotkey TBD. Submission keys, per the user's fresher spec (2026-08-03, wording preserved): "I want shift enter (kitty escape seq, configured in my win terminal) to be newline, enter to stage, enter with *no* content to submit, and control enter (if possible) to be submit too." This supersedes the older source note's "enter would not automatically send the message, it would be ctrl+enter" — note the newer scheme introduces a third state, **stage**, which the source note does not have. Keep the message-part distinction: user tool calls are multiple message parts.
 - Voice transcription while working (attach it too).
 - GUI/web support built in from the start even if unimplemented (the user may commonly want a web browser).
 - Concurrency: light touch — maybe reject an agent's edit only on a real conflict with a file the user has open/edited; "don't overprescribe live collaboration." That the agent observes the user at all is already the big win.

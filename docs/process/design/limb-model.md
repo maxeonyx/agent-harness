@@ -1,6 +1,6 @@
 # Limb model — design scoping
 
-Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Currently at stage 1 (why).** Derives from `source-notes/agent-harness-design.md` (the spine), `source-notes/configuration-model.md`, and the limb references in `source-notes/agent-hierarchy.md`, `tech.md`, and `context-updates.md`. ("Limb" is still a placeholder name — candidates: workspace, context, environment, sandbox.)
+Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why (user-involved) · what, interactions, summary — not yet done.** Derives from `source-notes/agent-harness-design.md` (the spine), `source-notes/configuration-model.md`, and the limb references in `source-notes/agent-hierarchy.md`, `tech.md`, and `context-updates.md`. ("Limb" is still a placeholder name — candidates: workspace, context, environment, sandbox.)
 
 A framing note the user corrected: the limb is **not** best understood by contrasting it with the brain (they are almost always the *same process*), and it is **not** a security boundary. Security is a non-concern in this project — a nice-to-have tacked on at the end, never the top. So the whys below are about *environments*, not isolation.
 

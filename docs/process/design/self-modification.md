@@ -1,6 +1,6 @@
 # Self-modification — the shell / soft-middle boundary — design scoping
 
-Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Currently at stage 1 (why).** Derives from `source-notes/tech.md`.
+Provisional; built stage by stage per `README.md` (why → what → interactions → summary). **Stages: why (user-involved) · what, interactions, summary — not yet done.** Derives from `source-notes/tech.md`.
 
 **Terminology guard (the user corrected an error here):** *"core"* in this project means **the stuff finalized/incorporated from experiments** — a *maturity* axis, not a layer, and not "the Rust implementation". A plugin can be core; you don't know whether something is core until its experiment is done. The layering axis below (**shell** vs **soft middle**) is *orthogonal* to core-ness.
 
