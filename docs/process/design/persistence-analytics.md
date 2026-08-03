@@ -136,6 +136,18 @@ Two things the event log deliberately does *not* have. It has no single global s
 
 And every timestamp belongs to the clock of the emitter that wrote it, because invariant 10 says no shared clock is assumed across role boundaries. Comparing a limb timestamp with a brain timestamp is therefore approximate. For everything this design needs — tool durations measured by one emitter, cost rollups by day, timesheets to the nearest minutes — that is fine, but it must be an acknowledged property rather than a surprise found later in a query result.
 
+### Snapshots and roll-ups are a companion obligation, not an optimisation
+
+User ruling, 2026-08-04, wording preserved: "while we have event streaming, we should also have roll ups, and we should deliver snapshots, not just event streams. I would ideally like that baked into the model from the very start... every thing that implements event streaming should ideally implement snapshotting." The stated reason is cost — "otherwise it gets really, like, really expensive." The hedging is his: "ideally", twice.
+
+The important word is *deliver*. A snapshot is not only a stored optimisation, it is something a consumer can be **sent instead of a stream**. That makes this as much a protocol requirement as a storage one, which is why it appears in the shared-machinery list in `INTERACTIONS.md` rather than belonging to this design alone. Concretely, a consumer joining a session — a phone waking up, a face rejoining after a disconnect, a brain restarting, another brain syncing — asks for state as of some point and receives a snapshot plus the events since, rather than the whole history replayed from the beginning.
+
+This lands well against the events-primary decision above rather than fighting it. A snapshot is a derived view like any other, so it inherits the same discipline: it must be rebuildable from the log, and rebuilding it must produce the same answer. What changes is that a snapshot is *retained* rather than recomputed, and it becomes a legitimate delivery format at a boundary.
+
+It also improves the retention story. The tension recorded in this design's interactions — between keeping every context epoch forever so predecessor contexts stay reconstructible, and collecting epoch-keyed rows once superseded — softens once snapshots exist, because a snapshot is precisely a roll-up that preserves the answer while letting the events behind it become collectable. That does not resolve it: whether a snapshot preserves *enough* to satisfy "no deletion may change an analytics answer" depends on what the roll-up keeps, and a roll-up designed for catch-up (current state) is not obviously the same as one that preserves accounting history. Those may be two different roll-up kinds, which is a question below rather than a decision here.
+
+What this design owes, then: snapshots as a retained derived view with a rebuild test; a roll-up notion for accounting facts distinct from current-state snapshots if they turn out to differ; and a stated position that any emitter of events must be able to produce a snapshot of what it emits.
+
 ### The session graph
 
 This is the schema's hardest requirement, and the one the notes flag as having been underestimated: "the hierarchy model makes storage semantics central to concurrency, blocking, resume, and compaction. May be larger work than assumed."
@@ -317,6 +329,9 @@ Three of `INTERACTIONS.md`'s conflicts involve this design and are not resolved 
 Recorded because an empty cell means two experiments need not coordinate. This design has essentially nothing to say to modular-components beyond an injected handle, nothing to say to user-turn's input scheme or tool surface, and nothing to say to multi-client-ui's TUI styling and throbber *visuals* — as distinct from the waiting-state fact above, which is a real demand. The interaction with limb-model is one shared key and two durable rows, not a design conversation. And while this design is upstream of the cache cluster, it takes no position on any of the three designs' mechanisms: it stores a handle and an expiry, and the meaning of those is somebody else's experiment.
 
 ## Questions for review
+
+- **Are current-state snapshots and accounting roll-ups one mechanism or two?** Your snapshot ruling is satisfied by a roll-up that captures current state for cheap catch-up. But this design also holds that no deletion may change an analytics answer, and a current-state snapshot does not obviously preserve cost history. If they are two kinds, the design carries two roll-up mechanisms with different retention rules; if one, the snapshot has to keep more than catch-up needs.
+- **Does "everything that implements event streaming should implement snapshotting" bind the credential store?** It is a fourth durable store with no version, snapshot or migration story and no owner (see `INTERACTIONS.md`). Your ruling reads as universal, which would give it one — but credentials are deliberately outside this database.
 
 - Is the "one hour" resume rule worth designing now, or is it a preference to leave until the harness is actually being restarted often?
 - Should shared-UI state live in this database at all, or in a separate store with different durability? Invariant 5 names it as a class; it does not say it shares a home.
