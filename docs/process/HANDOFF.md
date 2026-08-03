@@ -15,15 +15,26 @@ accumulate chronology here.
   soul-of-the-design weighting in `REQUIREMENTS.md`; the experiment pool
   in `PLAN.md`. Experiments are a pool, not a sequence — the next one is
   pulled based on what the user wants to work on.
-- Design scoping is in progress. `design/README.md` defines the method
-  (why → what → interactions → summary, top-down-bottom-up) and the doc
-  convention. The per-experiment design docs are being (re)written with
-  the user via that method; an earlier index-first attempt was discarded.
-- Next: develop the design docs one experiment at a time via the method,
-  then the user picks the next experiment from the pool. Several
-  experiments are expected before first core integration. Scheduling
-  notes: user-turn needs the user hands-on; forked-subagents is the one
-  he'd "quite like to see designed".
+- Design scoping is **complete through all four stages for all fourteen
+  experiments**. `design/README.md` defines the method (why → what →
+  interactions → summary, top-down-bottom-up), the review-provenance
+  convention, and the doc conventions. Every pool entry has a doc with a
+  summary, why, what, interactions and an index.
+- **The docs are unevenly settled and say so.** Each doc's `Stages:` line
+  records which stages were drilled with the user and which are
+  agent-drafted. The whys of the four soul designs plus self-modification
+  are user-involved; everything else is agent-drafted and unreviewed.
+  Every doc ends with "Questions for review".
+- `design/INTERACTIONS.md` is the portfolio view: machinery several
+  experiments need and none owns (cache-state prediction being the
+  largest), places where two designs genuinely disagree, and which parts
+  of the matrix are empty.
+- Next: **the user reviews the design docs**, which is expected to produce
+  iteration on the agent-drafted stages. Then briefs, then experiments —
+  `PLAN.md`'s "Readiness and dependencies" section carries what can start
+  in parallel and what is blocked on what. Scheduling notes: user-turn
+  needs the user hands-on; forked-subagents is the one he'd "quite like to
+  see designed" and is now designed.
 
 ## Where things are
 
@@ -31,7 +42,9 @@ accumulate chronology here.
 |---------|----------|
 | Development process and gates | `PROCESS.md`, `EXPERIMENT_RULES.md` |
 | Requirements, invariants, rulings (current truth) | `REQUIREMENTS.md` |
-| Experiment pool and status | `PLAN.md` |
+| Experiment pool, status, readiness and dependencies | `PLAN.md` |
+| Per-experiment design docs, and the method that produced them | `design/` (`design/README.md` first) |
+| Cross-cutting interactions, shared machinery, design conflicts | `design/INTERACTIONS.md` |
 | Experiment briefs/outcomes | `experiments/` (under `docs/process/`) |
 | Deferred event-streaming design inputs | `experiments/event-streaming-notes.md` |
 | User's design notes (verbatim source; sync procedure in AGENTS.md) | `../source-notes/` |
@@ -45,3 +58,18 @@ accumulate chronology here.
 - `tests/gatekeeper.rs` still says "spikes" in its message; fold the
   wording fix into the next code-touching change (it needs a version bump
   per the CI release guard, not worth one alone).
+- The design docs raise their own open questions; those live in each doc
+  rather than being duplicated here. The ones that affect more than one
+  design are in `design/INTERACTIONS.md` under "Where two designs actually
+  disagree" — notably topology's centralise-once why against its
+  federation why, both of which are the user's.
+- Whether `context-updates` should move from the good-taste bucket to the
+  unique-soul bucket: its own doc argues user-turn and self-modification
+  make routine mid-session change a soul concern rather than a
+  nice-to-have. Left in place pending the user's ruling.
+- Whether `layered-shutdown` should be an experiment at all, or a pattern
+  note folded into operator-lifecycle and topology. Its own design work
+  concluded the latter.
+- Whether `topology` and `modular-components` should merge. Both docs now
+  argue against merging, on the grounds that their falsification surfaces
+  differ and a merged failure would be unattributable.
