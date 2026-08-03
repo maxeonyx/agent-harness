@@ -225,6 +225,51 @@ hedging is information.
   user activity piggybacks on turns that would have happened anyway rather
   than creating new ones, while noting he had not fully settled the point;
   his working-through is preserved verbatim in `design/INTERACTIONS.md`.
+- **Credentials live inside the session database.** "credentials should
+  live inside the database... credentials should be treated like
+  everything else we treated." Replication of credential rows is scoped by
+  **brain profile**: replicas of the same profile share credentials;
+  brains in other domains never receive them. Two decoupled decisions —
+  this settles the home of record only; the OS keychain remains available
+  as a *security root* (a key encrypting the rows at rest), not precluded.
+  Credentials differ from code in one way: "they become invalid through
+  external actions. So you can't... do the auto rollback... But that's
+  fine" — recovery is re-authentication. This reverses the design docs'
+  earlier keep-them-outside proposal and closes the "fourth durable store"
+  gap. Detail in `design/oauth-credentials.md`.
+- **Compact-and-report-back: the predecessor writes the report.** "lets
+  the first agent build the report as well as their compaction summary.
+  And then the compaction summary deals with the initial context of the
+  new agent, and the report is given as if it was its first message. I
+  guess. something like that." (Hedge his.) Report-back-to-user and
+  report-back-to-parent are the same flow; compact-and-continue and
+  compact-and-report-back are the only two situations. Detail in
+  `design/compaction-handover.md`.
+- **Shutdown is one pattern at every scale.** A layer always has kill
+  authority over its children — "it is its children for all intents and
+  purposes, whilst it's blocked on its children" — exercised by command
+  over the protocol: only the kill command (with its time budget, passed
+  down again) crosses a boundary, and each layer kills what it locally
+  owns. The remote limb's orphan timeout is the fallback for a *vanished*
+  owner, not a second form of shutdown. This rejects the design docs'
+  earlier two-forms framing. Detail in `design/layered-shutdown.md`.
+- **The activity trail's order is the face's own recorded order.** Every
+  face event carries a front-end and a back-end time anchor ("It's after
+  this time on the front end. It's after that time on the back end... a
+  partial order. Sure. But that's not to say that the face doesn't have
+  its own total order and that we can't remember that") — so "in the order
+  things happened" is an ordinary recorded fact, primarily a
+  representation question. Rejects a derived cross-clock-scrambling
+  concern. Detail in `design/user-turn.md`.
+- **Change notices are economised.** No notice for content the agent was
+  never exposed to (first load simply gets the new version); some elements
+  may warrant no notice even when exposed — "for example, the skill
+  description. Assumably, that's not changing too much... maybe debatable,
+  but I think we need to draw these lines. Otherwise, we'll get too much
+  change notifications coming into the event stream." Notices only need to
+  say something changed; the agent reloads at will. And a context rebuild
+  "is basically the new snapshot" — notices are events that get rolled in.
+  Detail in `design/context-updates.md`.
 
 ## Engineering discipline (process rulings)
 

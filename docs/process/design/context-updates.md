@@ -139,7 +139,7 @@ The note wants notices for "Avaialble agent types for subagent tool, available l
 
 The way out is not a notice mechanism, it is a declaration convention: **sets that can change during a session must not be baked into the schema.** Declare the parameter as a free-form string, keep the valid values discoverable through a listing tool (or through the same limb that will validate the call), and validate at execution time. Then a notice about a new agent type is immediately actionable, because the parameter already accepts it.
 
-That generalises into a rule worth stating on its own, because it is the same rule that governs progressive disclosure: any *set* baked into the prefix is frozen until rebuild, and any set fetched by tool call is live. Proposed here; `P`.
+That generalises into a rule worth stating on its own, because it is the same rule that governs progressive disclosure: any *set* baked into the prefix is frozen until rebuild, and any set fetched by tool call is live. Proposed here; endorsed by the user 2026-08-04 with two reasons of his own added: "the agent's gonna be quite reticent to put an invalid enum value into a tool call even if it's been told that enum value is now valid" — so even a notice cannot rescue a frozen enum — and schema enums carry no documentation anyway ("you can't attach documentation to them... it's not quite what we wanted anyway"), so free-form strings with documented discovery are better on their own terms, not just cache-compatible.
 
 #### Why role and limb cannot be appended, but cwd and model are different questions
 
@@ -173,6 +173,8 @@ Compute the notice set instead as a **diff at flush time**: compare the world as
 
 This does impose a storage requirement, and it is the same one the note implies anyway when it says notification is warranted only "if the agent has loaded the skill": the context must know **what version of what it contains**. Every append that carried config-ish content — a skill load, an AGENTS.md read, a schema — records what it was and a content hash. That is the left-hand side of the diff. It is also, satisfyingly, the same machinery compaction-handover needs for its old→new briefing diff: one is a diff between the context and the world, the other a diff between the context and its successor.
 
+The user re-derived the exposure rule independently when reviewing (2026-08-04), which is some confirmation the diff formulation matches his intent: "if it's a skill and the agent has not read the skill, then we don't need to change notice because the agent hasn't read the previous version... when it loads it the first time, it can be the new version. Perfect." He also pushed the economy further than the doc had: some elements may not deserve notices even when exposed — "there's no reason to notify about certain things like, for example, the skill description. Assumably, that's not changing too much... These things are maybe debatable, but I think we need to draw these lines. Otherwise, we'll get too much change notifications coming into the event stream." So the classification table's job includes a *notify-at-all* threshold per element, not only a mode, and where the line sits is deliberately left debatable. And notices stay minimal because reload is always available: "the events don't have to be large. They only have to say that something has changed. And the agent, as long as it's got a way to... read the new information at will, we don't actually have to include it."
+
 ### A notice is never a reason to call the model
 
 Invariant 2 and `context-and-agent-loop.md` are unambiguous, and the note lists "tool schema changes" and "process config changes" among the things that only piggyback. So: change detection never triggers a request. Notices ride on a request that was going to happen anyway — a tool-loop continuation, a user turn ending, a proactive handover.
@@ -198,6 +200,8 @@ Which makes the interesting property of rebuild its *schedule*: it arrives whene
 Two rules constrain what a rebuild produces.
 
 **A rebuild produces the canonical current context, and canonical means it looks as though the session had started now.** In particular it must not replay the append-only notices, which described how the *old* context became stale; carried forward, they are noise describing a superseded state, and they would accumulate across successive rebuilds. Nor should it carry a notice's *effects* as a special case: if a skill changed and the agent re-read it, the rebuild contains the current skill once, not the old version plus a notice plus the new version.
+
+The user's framing of the same rule (2026-08-04) ties it to the portfolio-wide snapshot ruling: "the context fresh rebuild is basically the new snapshot, and it doesn't need to contain any of the history unless it's explicitly relevant somehow." Notices are "events that get rolled in" — a rebuild is this design's snapshot, and dropping the notices is not a special rule but what snapshotting means.
 
 **Rebuild has to be deterministic and repeatable**, because compaction-handover needs to run it as a dry run in order to describe it, and a rebuild that produced different output the second time would make that briefing a lie. This is a shared requirement rather than a coincidence, and both designs depend on it.
 
@@ -279,6 +283,8 @@ The diff formulation makes those compose without any deduplication logic, and th
 Fork is append mode with respect to an ambiguous baseline, and the ambiguity is forked-subagents' to resolve. But one consequence belongs here, and it is sharp enough to be worth stating plainly, because the naive reading gets it backwards.
 
 A rebuild must drop prior notices, because they describe how a superseded context went stale. A fork must *not* drop them, because the entire economic point of forking is prefix identity with the parent — and a child whose prefix differs from the parent's by the removal of some notices has no shared prefix at all. So the same content is noise in one operation and load-bearing in the other, and the distinction is not about the content's usefulness but about whether the operation is allowed to change bytes. Rebuild is the only operation that may.
+
+The user confirmed this (2026-08-04) and gave it a sharper frame: it is the event-streaming-versus-snapshotting distinction again. "Obviously, a fork, which has an immutable history... has to keep those events. It's just how it works... clearly, change notices don't survive when we do snapshotting... There are events that get rolled in... the context fresh rebuild is basically the new snapshot, and it doesn't need to contain any of the history unless it's explicitly relevant somehow." A fork extends a stream; a rebuild delivers a snapshot; notices are events that get rolled in.
 
 A second consequence follows for the diff's left-hand side. A forked child inherits the parent's conversation, so it must also inherit the parent's record of what-version-of-what that context contains, or the child's first flush will re-notice every skill and AGENTS.md the parent already knew about. The baseline forks with the context.
 

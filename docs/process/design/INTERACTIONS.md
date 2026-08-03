@@ -42,7 +42,7 @@ These three are close to describing one substrate. The distinction that keeps th
 
 This is a genuine addition rather than a detail, and it changes the cluster in three ways. It makes **snapshotting a companion obligation of event streaming** rather than an optimisation added later, which is a constraint on every design that emits events — so it belongs in the shared-machinery list, not in one doc. It makes **catch-up cheap**, which is what multi-client-ui's reconnect and topology's rejoin both need; replaying a long session's entire event history to a phone that just woke up is exactly the expense being avoided. And it interacts with persistence's retention design, because a snapshot is a **roll-up of facts that may themselves be collectable** — which is a cleaner answer to the tension persistence recorded between keeping every context epoch forever and collecting superseded rows: once a snapshot exists, the events behind it may be able to go.
 
-It also touches something nobody owns. The credential store was already flagged below as a fourth durable store with no version, snapshot or migration story; "everything that implements event streaming should implement snapshotting" makes that gap sharper rather than softer.
+A gap this made sharper closed the same day. The credential store had been flagged (in operator-lifecycle's questions) as a fourth durable store with no version, snapshot or migration story and no owner. Ruled 2026-08-04: credentials live *inside* the session database, as a durable-never-projected row class whose replication is scoped by brain profile — "credentials should be treated like everything else we treated" — so the database's own snapshot and migration ceremony covers them and no fourth store exists. The OS keychain remains available as a security root (a key encrypting those rows at rest), which is decoupled from the home of record. Detail in `oauth-credentials.md`.
 
 ### The single context projection
 
@@ -96,7 +96,7 @@ Second, on whether the two arithmetics even meet, the user worked through it and
 
 Recording these because the method asks for connections to be *discarded* as well as developed, and because an empty cell is information — it means two experiments can proceed without coordinating.
 
-Oauth-credentials connects to self-modification (auth outside the plugin), persistence (token storage), and topology (credentials stay brain-owned) and to essentially nothing else. It has no real relationship with forked-subagents, user-turn, multi-client-ui, context-updates or cancellation-economics beyond the trivial.
+Oauth-credentials connects to self-modification (auth outside the plugin), persistence (credential rows as a durable-never-projected class, ruled 2026-08-04), and topology (credentials stay brain-owned; replication scoped by profile) and to essentially nothing else. It has no real relationship with forked-subagents, user-turn, multi-client-ui, context-updates or cancellation-economics beyond the trivial.
 
 Cancellation-economics is similarly peripheral by design: it touches persistence (where its answer is recorded), forked-subagents and operator-lifecycle (whose assumptions it tests), and nothing else. It has nothing to say to limb-model, multi-client-ui, oauth or modular-components.
 
