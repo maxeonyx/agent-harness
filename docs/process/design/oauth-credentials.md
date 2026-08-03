@@ -102,9 +102,39 @@ It is falsified if: some provider's auth genuinely requires the plugin to see th
 
 Invariants touched: 1 primarily and almost exclusively — this is the design that makes brain-owned credentials real for authenticated providers rather than merely asserted; and 5, because credential storage is durable state whose class and home are decided here.
 
-## Parked for later stages
+## Interactions
 
-**Interactions flagged for stage 3:** self-modification (provider implementations as soft-middle plugins with auth outside the plugin is the load-bearing link); topology (credentials stay brain-owned, so limbs never carry them — already invariant); persistence-analytics (token storage as durable state that is never projected to the model); operator-lifecycle (a provider plugin update must not invalidate a live session's auth).
+This design is deliberately peripheral, and its sparseness is worth stating plainly because it is the reason it can run whenever convenient. It has one load-bearing relationship, one that resolves by removing something rather than adding it, and one that is already settled by an invariant and needs no coordination at all. Everything else in the portfolio is genuinely unconnected to it.
+
+**What this experiment owns**: the destination-bound fetch abstraction and the boundary it draws; what lives behind that boundary, which is single-flighted refresh, one retry after a refresh, and a return type rich enough for the brain to do rate-limit and billing accounting; the decision about where the credential actually lives; the dated survey of the reference implementations; the timeline of restrictions and workarounds; and the subtractive test that finds the current minimum.
+
+### Self-modification is the load-bearing link
+
+Provider implementations are soft-middle plugins and the provider *API* is shell — that classification is self-modification's, and this design is what makes it real for authenticated providers. The mapping is exact and worth stating that way rather than as a general affinity: the destination-bound fetch is a **framework the shell provides**, and a plugin's declaration of its base URLs, its non-secret headers and which auth flavour it needs is a **contribution written within that framework**. That is the same shape as the replication protocol and the CLI-argument contributions in self-modification's sketch, which is some reassurance that the boundary is not being invented here.
+
+The reason this matters rather than merely fitting is self-modification's own why #5, arriving with a different justification. Agent-edited plugin code holding a long-lived subscription credential is the one place where this project's general indifference to security stops being comfortable — but the argument for the boundary is not security, it is that the plugin's job is to describe a provider and not to hold a secret, which makes it a clean interface first. Self-modification reaches a structurally similar conclusion about its sandbox, where the value turns out to be fault attribution rather than isolation.
+
+What this design assumes from self-modification and does not test: plugin loading, load-time validation, quarantine, rollback and the version pinning. A provider plugin is an ordinary plugin, and nothing about authentication needs a special reload path.
+
+### Persistence interacts by subtraction
+
+Credentials are proposed to live *outside* the session database — the OS keychain where there is one, otherwise a permission-restricted file — because that database replicates to every federated brain by default, and durable credential rows would ship a refresh token to every machine the user owns as a side effect of a backup feature. So the interaction is a removal rather than a contribution: persistence's replication rule stays simple and true, with no per-table exception, and this design gains a second store to manage.
+
+There is a pleasant consequence worth recording. Persistence exposes the same query set through a read-only meta limb, and a limb must not project credential rows. If credentials are not in that database at all, there is nothing to withhold, and the guarantee comes from absence rather than from a rule someone has to remember. The same move multi-client-ui argues for with shared-live state.
+
+Both docs carry this as a question because the ruling lands on both. And it has one consequence neither covers, raised in operator-lifecycle: a separate credential store is a durable thing with no version, snapshot or migration story attached to it.
+
+### Topology needs nothing from this design
+
+Credentials stay brain-owned because the brain is the only role that talks to providers, and invariant 1 already settles it. Topology's why #4 supplies the reason — rate limits, billing, session management and provider connection state should exist exactly once — and topology's own falsification list already includes provider credentials being observable anywhere but the brain, asserted in its `face+limb ↔ brain` configuration where the far side must demonstrably not hold them. **That assertion is topology's to run, and this design does not duplicate it.** The whole of the coupling is that neither design may quietly weaken the invariant.
+
+### Operator-lifecycle: resolved rather than open
+
+The interaction flagged from the other side was that a provider plugin update must not invalidate a live session's auth. It resolves cleanly: refresh state lives outside both the plugin and the binary, so neither a plugin reload nor a binary relaunch can invalidate it. The residual case is a change to the credential store's own format, which is the versioning gap above and is operator-lifecycle's rather than this design's.
+
+### What turned out to be empty
+
+Forked-subagents, user-turn, multi-client-ui, context-updates, compaction-handover, limb-model, layered-shutdown and modular-components have nothing to say to this design beyond the trivial. A limb never carries a credential, which is an invariant rather than an interaction. A subagent inherits its parent's provider access, which requires no mechanism. There is one line worth carrying to cancellation-economics from the other direction: that measurement is proposed on API keys only, holding subscription-backed billing constant rather than testing it, because whether a subscription bills differently is unknown and entangled with this work. Closing that gap is this design's if it matters, and it is not currently in scope.
 
 ## Questions for review
 
@@ -115,3 +145,5 @@ Invariants touched: 1 primarily and almost exclusively — this is the design th
 - The "pre-authenticated fetch" is designed above as **bound to a destination**, not just carrying a header — otherwise a plugin can point it at its own server and read the credential out of its logs. That is cheap, but it does mean the plugin declares its endpoints up front rather than constructing URLs freely. Any provider you know of where that would be awkward?
 - The notes say a plugin "contributes a script or config". Those are different strength boundaries — script means the plugin drives the flow but never keeps the result; config means the shell knows the flows and the plugin names one. Config is proposed as the default with script as a recognised weaker escape hatch. Agreed?
 - The **subtractive test** — implement the union of tricks, then remove them one by one to find the current minimum — is proposed as the core of the survey rather than an extra, because it is the only thing that can answer "is loosening ok". It costs real requests against your own subscription. Worth it?
+- **Should this design close the subscription-versus-API-key billing gap?** Cancellation-economics deliberately holds subscription billing constant because it is unknown here. Nobody currently owns finding out, and a subscription is what you actually use, so the gap is in the one configuration that matters most.
+- Should this experiment also establish **whether subscription-backed access must degrade to API keys transparently or fail loudly**, given that decision affects the fetch abstraction's return type? It is listed above as an open question about behaviour; making it a deliverable would widen this experiment slightly.

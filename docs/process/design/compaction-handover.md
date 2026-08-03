@@ -184,9 +184,71 @@ It is falsified if any of these show up. A successor that loses the goal or the 
 
 Invariants touched: **2** (compaction is one of the four legal request triggers; the briefing appends without asking), **3** (the briefing and the diff are projections; append versus rebuild are different views of the same facts), **5** (cache predictions and their outcomes are durable, queryable session facts), **9** (an abandoned compaction is a cancelled turn with a recorded outcome), and **10** (the successor's context must be derivable from the session record by any consumer, which is what makes the dry-run rebuild and the shared projection non-negotiable).
 
-## Parked for later stages
+## Interactions
 
-**Interaction flagged for stage 3:** the two-stage "tidy up before completing" step *is* cleanup-at-boundary from forked-subagents (why #4) — same ownership root, two experiments. Also interacts with context-updates: a handover is the big rebuild moment, and the old→new context diff (#6) is the same boundary context-updates handles without a rebuild.
+### What this design owns, and what it stands on
+
+Compaction owns the construction of a successor context and nothing wider than that: the two-stage append-only flow, the briefing's content and channel, the rendering of the old→new diff, the distinction between continue and report back, and the judgement about when to fire. Those are the pieces with no other home, and they are what the experiment has to demonstrate.
+
+Almost everything the flow *stands on* belongs to a sibling. Naming those things precisely is the useful output of this stage, because the experiment can then assume them rather than re-prove them.
+
+Rebuild belongs to context-updates. This design runs a rebuild twice — once as a dry run to describe the successor, once for real to produce it — but what a rebuild *is*, what "canonical" means, and which elements a rebuild refreshes are that design's deliverables. Only two properties are needed from it, and both are already stated there: a rebuild is pure enough to run twice and give the same answer, and it does not replay the notices that described how the old context went stale. If either fails, the briefing describes a successor that never quite happens — so these are assumptions this experiment depends on, not claims it tests.
+
+The attachment mechanism belongs to forked-subagents. Attachments exist there for a sharper reason — three parallel children reading the same bytes — and the shared init step that fixes it is the Task tool's. What compaction adds is the semantics a *context boundary* forces, and that is a real contribution rather than a restatement: attachments are re-executed at successor start rather than copied forward, and a failed attachment appears as a call with an error result. Both rules exist because the successor is a new context and the whole purpose of the diff is to stop stale facts crossing that seam. Assigning the mechanism outward and the boundary semantics inward is a scoping call rather than something the notes settle; see Questions for review.
+
+Storage belongs to persistence-analytics. Context epochs, the durable cache handle, and the request-attempt table are its schema. Compaction contributes two requirements to it and designs neither. The first is small and easy to miss: the cache *prediction* must be recorded next to the outcome, per provider and model, so the predictor becomes calibratable from the session record rather than needing special instrumentation. The second is a constraint rather than a column — the sealed predecessor context must stay reconstructible after the epoch boundary, because that is what makes retry, introspection and invariant 10 work. Persistence currently says both that every epoch is kept forever and that epoch-keyed rows become collectable once a later epoch supersedes them, and those two need reconciling in that design's terms rather than this one's. Recorded as a question.
+
+Cleanup belongs to the single finish procedure, whose portfolio statement is in `INTERACTIONS.md`. The middle step of the two-stage flow is that procedure with the reason set to milestone compaction, and it is the case where the answer to "does the agent get a turn at all" is unambiguously yes — which makes it the friendliest of the three reasons to build first, and an argument for compaction rather than cancellation being where the procedure is shaped.
+
+Cache-state prediction is shared machinery, also in `INTERACTIONS.md`. What this design needs from it is narrow: an expected-value answer to "will this prefix still be warm in a few minutes", per provider and model, good enough to price an invitation. It does not need a boolean and cannot have one.
+
+### Context-updates: the handover is where deferred change is reconciled
+
+This is the closest pairing in the portfolio and it runs in both directions, which is why it is worth developing rather than merely noting.
+
+Forward, the dry-run rebuild surfaces every piece of mid-session drift whether or not a notice was ever appended about it. So context-updates' rebuild-only category is not a dead end where staleness accumulates; it is a queue that drains at the next handover. The changed bucket of the briefing and the notice set are the same information computed at two different boundaries — context against the world, context against its successor — which is also why the content-version record context-updates needs for its diff is the record this design's diff reads.
+
+Backward, that gives context-updates a licence it could not justify alone. Its most aggressive proposal is that a newly added tool is unusable until rebuild, which is only tolerable because a rebuild is a *scheduled* event rather than a hope. Compaction is what schedules it. If the proactive trigger turns out to be unsafe until handover quality is demonstrated — which this doc argues — then context-updates' rebuild-only rows are stale for longer than that design assumes. That is a dependency between the two designs rather than merely a shared mechanism, and what follows from it for the experiment pool belongs to `PLAN.md`.
+
+### Forked-subagents: report-back is a child's result written under pressure
+
+The compact-and-report-back successor exists to produce the last message part of a turn, which is exactly what forked-subagents defines a result to be. So report-back compaction is "write the child's result, under compaction pressure, having just lost the context that produced it" — the same failure class as a bad handover, at the same cost, which is why that design says its result quality is load-bearing in the same way handover quality is.
+
+Two things follow. Invariant 9's outcome class travels *alongside* the result rather than inside it, so a report-back compaction has to carry the outcome class through mechanically rather than leave the model to narrate it in prose.
+
+And the open question of whether a report-back successor gets tools turns out to be a limb-model question with an inconvenient answer. A successor is in the same limb as its predecessor (below), so a near-zero-tool reporting agent cannot be obtained by putting it in a tool-less limb; it would need the brain to filter the limb's declared tool set, which limb-model deliberately keeps out of the default and permits only when the user configures it. So the strict reading of report-back — a reporting agent should not be able to act — needs a capability the limb model does not currently have, and the honest options are to let the reporting successor keep its tools or to make brain-side filtering a real feature. That is limb-model's call rather than this design's; recorded as a question.
+
+The dependency also runs the other way, in the direction that is easy to forget. Forked-subagents' routing prompt asks whether the parent's context is bloated, with the aside that it should not be, because we hope the parent compacts before that happens. Fork's economics assume compaction happens on time.
+
+### Self-modification: a handover is where a pinned schema is released
+
+Self-modification pins a session's tool schemas when its context is built and keeps them until "the next handover/compaction or the next cache break". Read from this side, that makes the handover the cheap adoption path for plugin changes: a schema-additive change — a new tool, a new optional parameter — never needs to force a cache break, because it can wait for a handover, and the dry-run rebuild renders it into the changed bucket automatically.
+
+That costs this design nothing and is worth stating for one reason: it means the briefing's changed bucket includes the *tool set*, not only prose context. It is easy to think of the diff as being about AGENTS.md and skills, and then discover that the successor has three tools the handover text never mentions.
+
+### Limb-model: why the dry run is possible at all
+
+The dry-run rebuild only works because limb-contributed context is a serialisable snapshot taken at a small number of known boundaries rather than a live feed into the model's view. A handover is one of those boundaries. If layer composition turned out to need live evaluation — limb-model's own leading falsifier — the briefing could not describe the successor, so this design has a direct stake in that result.
+
+There is also a class of diff this design does not have to express, and it is worth knowing why. A session is bound to exactly one limb and crossing a limb is always a fresh subagent, so a successor is always in the same limb as its predecessor. The limb's *identity* therefore never appears in the diff — though the content it contributes certainly can, and that is most of what the diff is made of.
+
+### User-turn: what the successor keeps of the user's own work
+
+Accumulated user activity is body content, so it falls squarely in the gone-unless-you-keep-it bucket, and the proposal that the user's own wording is preserved verbatim is specifically about that material — paraphrasing an agent's tool result loses detail, while paraphrasing the user's instruction loses intent. Nothing about how user activity is *projected* is this design's business.
+
+One connection that looks live and is not: a compaction firing in dead time while the user is away, with text staged but unsent, cannot lose that text, because staged text is shared-live state that never entered the context in the first place. Multi-client-ui's classification is what makes that safe, and it is the whole of the relationship between this design and that one.
+
+### The cells that are empty
+
+Topology, oauth-credentials and cancellation-economics have nothing to say to this design. Topology because compaction is entirely a brain-side operation over data the brain already owns, with no boundary crossed. Oauth because credentials never appear in any context. Cancellation-economics because compaction's economics are cache-read economics rather than cancellation billing — the portfolio file records the same judgement from the other side.
+
+Modular-components touches this design only through testing, which is still worth one line because the falsification evidence depends on it: the cache claims are measured from the provider's reported cached-input token counts, read at the fake provider's request record, so the wire-level assertion surface has to be observable between steps rather than only at the end.
+
+The two lifecycle designs touch it thinly and in one direction. Layered-shutdown's rule is that an agent-level cleanup turn is not started during shutdown but recorded as outstanding; an unfinished compaction is the same shape of thing, which makes the litter problem and the retraction proposal a *resume* concern rather than a shutdown concern. Operator-lifecycle inherits that and adds nothing else.
+
+### The conflict recorded at portfolio level
+
+The two cache figures — roughly 10× in why #3 against `source-notes/compaction.md`'s "conservative assumption of 5x" — are recorded as a portfolio-level conflict in `INTERACTIONS.md`. This doc already designs to the conservative number; the portfolio entry's point is that both figures should be labelled as observed-versus-conservative rather than left floating unattributed.
 
 ## Questions for review
 
@@ -200,3 +262,8 @@ Invariants touched: **2** (compaction is one of the four legal request triggers;
 - **Sequencing of the two proactive claims.** I have argued that the proactive cache-driven trigger should not be enabled until handover *quality* is demonstrated, because frequency multiplies quality in whichever direction it points. That splits the secret sauce (whys #3 and #4) across two experiment stages rather than validating it in one.
 - **How big should a handover payload be, and does it have required structure?** The notes are silent, and the fork's `handover.md` prompt is the obvious place to go and read rather than design fresh.
 - **Should cache-state prediction be its own experiment?** Raised in context-updates too: it is now required by compaction-handover, context-updates, and forked-subagents alike, and all three are blocked on the same unknown provider semantics.
+- **I have scoped attachments outward.** The mechanism — attachments executed once in a shared init step, appearing as ordinary tool calls — is treated above as forked-subagents', with this design contributing only the boundary semantics (re-executed rather than copied forward, failure visible as an error result). That means this experiment *assumes* attachments work rather than proving them, and it means the two designs must agree on one mechanism rather than each growing their own.
+- **The sealed predecessor context versus context-lifetime collection.** Retry, introspection and invariant 10 all need the old context to stay reconstructible after a new epoch opens. Persistence-analytics says every epoch is kept forever *and* that epoch-keyed rows become collectable once superseded. I have taken the reconstructibility requirement as binding and recorded the tension rather than resolving it in that design's file.
+- **A handover as the adoption point for plugin schema changes.** Self-modification releases a session's pinned schemas at "the next handover/compaction or the next cache break". I have read that as making a handover the cheap path for schema-additive plugin changes, and as putting the tool set into the briefing's changed bucket. That is my reading of the interaction, not something either note states.
+- **The harness voice is scoped to context-updates rather than to this design.** Both need it; I have put the mechanism there because notices are the higher-frequency case and the late-system-part provider probe is already on that design's list. This design then consumes it. That is a placement call on top of the one-mechanism-or-two question above.
+- **A tool-less report-back successor would need something the limb model does not have.** The successor is in the same limb as its predecessor, so the strict "a reporting agent should not be able to act" reading cannot be delivered by choosing a tool-less limb — it needs the brain to filter the limb's declared tool set, which limb-model keeps out of the default on purpose. Either the reporting successor keeps its tools, or brain-side filtering becomes a real feature in that design. This sharpens the earlier report-back-tools question rather than replacing it.

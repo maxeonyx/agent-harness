@@ -89,9 +89,23 @@ It is falsified if billed usage for a mid-stream cancellation is materially belo
 
 Invariants touched: 9 primarily, since it decides what cost attaches to the `cancelled` outcome and whether soft cancellation's deliberate token spend is quantified; and 5, because the recording rule is a storage requirement — unknown cost must be storable as unknown.
 
-## Parked for later stages
+## Interactions
 
-**Interactions flagged for stage 3:** persistence-analytics (records the answer; needs a cost value for cancelled requests); forked-subagents (soft cancellation deliberately spends tokens — this quantifies what that costs); operator-lifecycle (shutdown currently waits rather than cancels, on this assumption); compaction-handover (only indirectly — its economics are about cache reads, not cancellation).
+This is the most peripheral design in the portfolio and that is a feature, not an oversight. It is a measurement that produces one fact and one recording rule, and it can run in parallel with everything else because it needs nothing from any sibling and gives each of the three it touches a parameter rather than a mechanism.
+
+**What this experiment owns**: the measurement method, the per-provider table of cancel point against billed fraction of baseline, the statement of whether an explicit cancellation call exists and whether it changes the bill, the ruling on the harness's default behaviour, and the recording rule for a cancelled request's cost.
+
+**Persistence-analytics** is where the answer is recorded, and the direction of the dependency is worth being precise about because it is the reverse of what it looks like. Persistence does not need this measurement in order to design its schema; it needs the *shape* of the answer, which is already known — cost may be genuinely unknown because the metadata never arrived, so usage must be nullable with a reason and every cost query must report coverage alongside its total. That shape holds whatever the billing turns out to be, which means the recording rule can be adopted before this measurement ever runs. If the measurement is deferred indefinitely, persistence loses nothing.
+
+**Forked-subagents** is quantified rather than changed. Soft cancellation deliberately spends tokens because cleanup is the point, and this experiment says how much that costs — but it does not decide whether cancellation should be soft, which is settled by forked-subagents' why #4 on correctness grounds rather than economic ones. Its bound on an agent that declines to finish is a deadline, not a bill. So the result informs a number in that design and cannot falsify anything in it.
+
+**Operator-lifecycle** assumes the conservative behaviour — shutdown waits for in-flight requests rather than cancelling them — and does not test it. That assumption is currently well-reasoned and unverified, and this is what verifies it. A null result confirms the design and lets it stop being tentative; a positive result makes shutdown faster without changing its sequence.
+
+One small link to **oauth-credentials** runs the other way. This measurement is proposed on API keys only, with subscription-backed billing held constant rather than tested, because whether a subscription bills differently is unknown here and entangled with the OAuth work. That gap is real and is oauth's to close if it matters, which is worth noting given a subscription is what the user actually uses day to day.
+
+Everything else is empty, and the emptiness is why this can be scheduled whenever there is money to spend on it. Compaction-handover's economics are about cache reads rather than cancellation, so the two measurements share nothing but a units column. There is nothing to say to limb-model, multi-client-ui, modular-components, topology, context-updates, self-modification or user-turn. Layered-shutdown looks adjacent and is not: its problem with soft cancellation is that an agent cleanup turn is unbounded in *time*, which no billing fact changes.
+
+`INTERACTIONS.md` records the one conflict this design decides: whether cost can honestly be stored as unknown depends on this answer, and it is the place where persistence's why #4 promises more confidence than the mechanism can deliver.
 
 ## Questions for review
 
@@ -99,3 +113,4 @@ Invariants touched: 9 primarily, since it decides what cost attaches to the `can
 - Are you willing to spend real money on provoking long thinking responses for this, and roughly how much? The arithmetic above lands somewhere between roughly five and fifty dollars depending on how coarse the usage instrument turns out to be; the estimate needs your ceiling, not the other way round.
 - The measurement is proposed on **API keys only**, with subscription-backed billing held constant rather than tested, because whether a subscription bills differently is unknown here and entangled with the OAuth work. Is that gap acceptable, given a subscription is what you actually use day to day?
 - The recording rule above says a cancelled request's cost may be stored as **unknown-with-a-reason**, and that cost queries therefore report coverage alongside totals. That is a small permanent complication in the analytics surface, bought to avoid silently wrong numbers. Confirm you want it that way rather than treating unmeasurable cost as zero.
+- **The recording rule does not actually depend on the measurement.** Its shape is known whatever the billing answer is, so persistence could adopt it now and this experiment could be deferred indefinitely without blocking anything. Do you want the rule landed independently, which would leave this experiment purely optional?

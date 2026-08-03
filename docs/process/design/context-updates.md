@@ -226,9 +226,63 @@ It is falsified if: an agent given a notice fails to act on a change that matter
 
 Invariants touched: **2** (the whole no-trigger rule, and the piggyback path), **3** (a notice and a rebuild are two projections of the same change facts; the per-model parenthetical bears on the model question), **5** (content versions and hashes must be durable and queryable, since the diff is computed against them), and **10** (everything the model sees must be derivable from the session record — a notice whose meaning depends on limb-local state would violate this, which is why change facts travel in the message).
 
-## Parked for later stages
+## Interactions
 
-**Interactions flagged for stage 3:** user-turn and self-modification (both *create* the mid-session changes this design handles — the causal link in why #1); compaction-handover (shares the cache-state prediction; a handover is the big rebuild moment, and its old→new context diff is the same information a notice carries, at a different boundary); limb-model (per-limb tool sets serve progressive disclosure; a changed limb is the canonical rebuild-only change); forked-subagents (fork is append mode with respect to an ambiguous baseline); persistence-analytics (notices and rebuild boundaries are durable session facts, and cache-state prediction needs stored cache metadata).
+### What this design owns, and what it assumes
+
+This design owns the policy layer: the actionability rule, the classification of every context element by update policy, what a notice says and when it is flushed, the diff-at-flush formulation, the rule that a notice never triggers a request, what a rebuild produces, and progressive disclosure. It also owns one rule that reaches outward into somebody else's tool surface — that a set which can change during a session must not be baked into a schema — and one mechanism that a sibling consumes: the harness voice, developed here rather than in compaction-handover because notices are the high-frequency case and the late-system-part provider probe is already on this design's list of unknowns. That placement is a call rather than a ruling; it is in Questions for review.
+
+What it assumes rather than tests is short and specific. Cache-state prediction is shared machinery (`INTERACTIONS.md`); this design needs it only as a two-way decision — append or rebuild — with the honest caveat that the decision is an expected-value bet. The durable record of what-version-of-what a context contains is persistence-analytics' schema; this design assumes content hashes and epoch anchoring exist and tests the *behaviour* the diff produces from them. The dry-run rebuild is compaction-handover's consumer, not this design's feature; what this design owes it is determinism and canonicality, which are already stated above. And change detection, though required here, is hosted by the limb: the limb reports change and the brain decides what to do about it, so limb-model owns the message surface and this design owns the requirement that lands on it.
+
+### Self-modification proposes the same mechanism from the other side
+
+This is the interaction that changed the most, and it changed by agreement rather than by conflict.
+
+Self-modification classifies every plugin reload into schema-identical, schema-additive, or schema-breaking, and those three land on rows in the classification above. A schema-identical change needs no notice at all, because nothing the agent can observe changed — the wire is untouched and the behaviour behind an existing call is simply current. A schema-additive change — a new tool, or a new optional parameter on an existing one — has the shape of the tool-added row: the addition is not on the wire, so a warm session cannot use it, which is the rebuild-only conclusion this design reaches and the one self-modification reaches independently. A schema-breaking change is either the changed-schema row with full content injection, or the explicit cache break self-modification reserves for exactly this case.
+
+More striking is that its central call — pin the schema, run the newest implementation — is the same policy as this design's: the wire's tools array is a possibly-stale advertisement, and the truth at execution time is the limb's current schema. Two designs arriving at one mechanism from unrelated roots is the strongest evidence either has for it. It also means the risk is shared and correlated: if a provider validates tool call arguments against the advertised schema, both designs lose their central move at the same moment. That is the single most valuable thing the provider probe can tell us, and it should be probed before either commits.
+
+Invariant 2 lands identically on both. A plugin reload is a context change, so it must never trigger a request — the same rule as a file save, for the same reason.
+
+### User-turn: two facts about one edit, and why the diff formulation makes them compose
+
+Why #1 says this design is load-bearing *because* user-turn makes mid-session change routine. Developing that turns out to narrow the interaction rather than widen it, which is the useful result.
+
+User activity is notified by construction: it *is* an append, and user-turn owns projecting it. So the agent already learns that the user edited a file. What this design adds is orthogonal — that the edited file may also be a context element the agent's understanding depends on, which is a different fact about the same edit. The user editing a loaded skill produces one activity projection (he edited it, here is the diff) and would otherwise also produce one notice (the skill you loaded has changed, re-read it).
+
+The diff formulation makes those compose without any deduplication logic, and that is not a coincidence so much as a consequence. A notice is computed at flush time by comparing the world against what the context actually contains. If user-turn's activity projection has already carried the new content into the context, the comparison is empty and no notice fires. If it carried only a summary or a partial diff, the comparison is non-empty and a notice fires correctly. Neither design has to know about the other; the shared left-hand side does the work. A queue-based implementation would have needed an explicit rule here, which is a small piece of evidence for the formulation on top of the arguments already given.
+
+### Forked-subagents: a rebuild must drop notices, and a fork must not
+
+Fork is append mode with respect to an ambiguous baseline, and the ambiguity is forked-subagents' to resolve. But one consequence belongs here, and it is sharp enough to be worth stating plainly, because the naive reading gets it backwards.
+
+A rebuild must drop prior notices, because they describe how a superseded context went stale. A fork must *not* drop them, because the entire economic point of forking is prefix identity with the parent — and a child whose prefix differs from the parent's by the removal of some notices has no shared prefix at all. So the same content is noise in one operation and load-bearing in the other, and the distinction is not about the content's usefulness but about whether the operation is allowed to change bytes. Rebuild is the only operation that may.
+
+A second consequence follows for the diff's left-hand side. A forked child inherits the parent's conversation, so it must also inherit the parent's record of what-version-of-what that context contains, or the child's first flush will re-notice every skill and AGENTS.md the parent already knew about. The baseline forks with the context.
+
+The declaration rule also lands here rather than staying local. Agent types, limbs and other option sets appear as parameters on forked-subagents' Task tool, and the rule above says those parameters cannot be schema enums if the sets can change during a session. So this design owns the rule and that design's tool declaration has to conform. That crossing is already in Questions for review; what stage 3 adds is which side owns which half.
+
+### Limb-model: the watcher's home, and one row that cannot fire
+
+Change detection lives in the limb, which suits the limb's existing role — it owns an environment and already contributes unsolicited facts about it. Limb-model's proposal that limb-contributed context arrives as labelled blocks naming the layer that produced it is what makes a notice able to say *which* thing to re-read, so the actionability rule depends on that labelling existing.
+
+The other consequence is a tidy piece of subtraction. A changed limb is the canonical rebuild-only change, but a limb is identified by host plus directory and a session is bound to exactly one limb, so the situation cannot arise inside a session. That row documents a boundary rather than a case, and the honest reading is that the rebuild-only category is smaller than the notes imply. The role row goes nearly the same way: a session's agent type is fixed at launch, and the only route to a different one is resuming as a different agent type, which forked-subagents treats as creating a new session rather than mutating a running one. That leaves tool additions as the only rebuild-only change that routinely happens inside a live session.
+
+### Compaction-handover, and the schedule that makes rebuild-only tolerable
+
+The reciprocal requirements are developed in that doc and not repeated here. What belongs on this side is a dependency that is easy to miss: rebuild-only is only an acceptable answer because a rebuild is a *scheduled* event. Compaction is what schedules it. If handover quality has to be demonstrated before the proactive cache-driven trigger is enabled — which compaction-handover argues — then rebuild arrives less predictably than this design assumes, and the rebuild-only rows are stale for longer.
+
+### The cells that are empty
+
+Multi-client-ui and this design barely meet. Draft buffers and pane state are not context elements, so there are no notices about them, and the negative requirement runs the other way: shared-live state must never reach a projection, which is a constraint on where that state lives rather than on what this design says about it. Two faces means the user can edit from two places, but that is still just a file change.
+
+Topology contributes nothing beyond an invariant already honoured: change facts travel in the message rather than by reference to limb-local state, which is what invariant 10 requires and what the diff formulation already does. Oauth-credentials, cancellation-economics and layered-shutdown have no relationship with this design at all.
+
+Two thin ones are worth a line each because both are counterintuitive. Operator-lifecycle: a relaunch is *not* a rebuild boundary. The provider-side cache handle is durable, so a session resumes with its context intact and its prefix still warm — restarting the harness does not entitle it to rebuild. And modular-components: the no-trigger rule's central assertion — save a file, observe zero requests; end a turn, observe one carrying the notice — depends on being able to inspect the provider wire *between* steps, which is a property that design has to preserve when the suite moves in-process.
+
+### The unknown this design sits under
+
+Everything above rests on cache semantics nobody here has measured, and `INTERACTIONS.md` records that as the portfolio's largest shared unknown rather than as a risk local to this doc. The pieces this design specifically cannot proceed without are whether the tools array participates in the cached prefix, which the added-versus-removed asymmetry rests on entirely, and whether providers validate arguments against the advertised schema, which the changed-schema policy rests on. Both are cheap to test and impossible to reason out.
 
 ## Questions for review
 
@@ -245,3 +299,7 @@ Invariants touched: **2** (the whole no-trigger rule, and the piggyback path), *
 - **Rebuild and the conversation body.** I have proposed that a rebuild may truncate body content but may not re-order or reinterpret it, because the body is the record of what happened. The notes only say "truncate old tool calls harder".
 - **Progressive disclosure has a documentation prerequisite**, per your own note. I have treated that as a design fact rather than an adjacent nice-to-have — the mechanism does not work with badly written descriptions. Does the experiment therefore need the info-architecture skill and skill-writing workflow in scope, or does it validate the mechanism on hand-tuned descriptions and defer the workflow?
 - **Is the frozen-prefix/live-tail synthesis the right way to unify the note's two halves?** I have argued context changes and progressive disclosure are one axis rather than two topics. If you agree, this doc's structure and the experiment's shape both follow from it; if not, they should be pulled apart again.
+- **A rebuild drops prior notices; a fork must keep them.** The same content is noise in one operation and load-bearing in the other, because a fork's whole economic point is byte-identical prefix with the parent. I am confident in the reasoning but it is mine, and it puts a constraint on forked-subagents' fork encoding: whichever encoding wins, it cannot tidy the parent's context on the way in.
+- **The harness voice is developed here rather than in compaction-handover.** Both designs need it; I have put the mechanism in this one because notices are the high-frequency case and the late-system-part probe is already on this design's list, with compaction consuming it. That is a placement call on top of the earlier one-mechanism-or-two question.
+- **The rebuild-only category may be almost empty.** Limb and role changes are both structurally unreachable inside a session, which leaves tool additions as the only rebuild-only change that actually occurs. If that is right, the classification's third category is a boundary statement rather than a working policy, and the experiment has much less to demonstrate there than the notes imply.
+- **Rebuild-only is only tolerable because compaction schedules rebuilds.** Compaction-handover argues the proactive cache-driven trigger should wait until handover quality is proven. If that holds, rebuilds arrive less predictably than this design assumes and stale-for-longer becomes a real cost — which may mean the rebuild-only policy needs a fallback rather than just a schedule. Worth your ruling on whether that is acceptable as it stands.
