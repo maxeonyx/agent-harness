@@ -259,6 +259,17 @@ design.
 
 ## Pool: targeted questions
 
+- **provider-cache-probe** (identified by the stage-3 interaction pass; see
+  `design/INTERACTIONS.md`): what are the provider's actual cache
+  semantics? What counts as a cached prefix, whether append-only means
+  append-only with respect to the whole context or some smaller unit, what
+  a forked child inherits, and how the OpenAI responses API and the
+  Anthropic messages API differ. Small and cheap, but three designs —
+  compaction-handover, context-updates and forked-subagents — each depend
+  on the answer and none can settle it alone. The notes are explicit that
+  this is a precondition rather than a detail: "we need to *very* correctly
+  use OpenAI responses API & Anthropic messages API w.r.t. caching for this
+  all to work."
 - **cancellation-economics** (`source-notes/analytics.md`): does
   cancelling after first byte avoid the charge? "Probably worth
   experiment."
@@ -270,6 +281,74 @@ design.
   owns; the layer above holds a timeout backstop; a descending deadline
   budget is an idea, not a ruling; check what asupersync does. May fold
   into topology or stay a pattern note.
+
+## Readiness and dependencies
+
+Every experiment in the pool now has a design doc in `docs/process/design/`
+carrying why, what, interactions and a summary, and each doc's interactions
+section states what that experiment owns versus what it assumes from a
+sibling. Writing a brief per `PROCESS.md` step 1 should now be mechanical.
+The whys of the four soul designs plus self-modification were drilled with
+the user; everything else is agent-drafted and unreviewed, which the
+`Stages:` line in each doc records.
+
+This section is about what can *start*, which is a different question from
+the pool's deliberate lack of ordering. Experiments are still pulled based
+on what the user wants to work on. What follows is dependency information
+so that choice is informed, not a schedule.
+
+The stage-3 pass found the pool is unevenly connected (the reasoning is in
+`design/INTERACTIONS.md`). Three groups matter here.
+
+**Independent, and can start in parallel with anything.**
+`provider-cache-probe`, `cancellation-economics`, `oauth-credentials` and
+`modular-components` depend on nothing else in the pool. Two of them are
+worth doing early for leverage rather than urgency: the cache probe
+unblocks three larger designs, and modular-components makes every later
+experiment's tests faster, since it is upstream of everyone's testing even
+where it is unrelated to their design.
+
+**The context-and-cache cluster.** `compaction-handover`,
+`context-updates` and `forked-subagents` share one unknown — cache-state
+prediction — which is what the cache probe exists to settle. Forked-subagents
+can start before the probe lands, because its cost and stopping claims can
+be measured against observed cached-token counts, but its fork-versus-fresh
+*routing policy* is out of scope until the probe answers; a routing result
+obtained earlier would not be interpretable. Compaction and context-updates
+are better after the probe. `limb-model` pairs naturally with
+forked-subagents, because the fork-for-cache versus safe-parallel-work
+conflict belongs to the two of them jointly and neither settles it alone.
+
+**The events-and-transport cluster.** `topology`, `multi-client-ui` and
+`persistence-analytics` share the ordered-durable-event substrate.
+Persistence has a circularity — it needs to know the shape of what it
+stores, which the other designs discover — and its own interactions section
+proposes breaking it by committing the event envelope now, deriving
+projections only where a fact is already settled, and treating the named
+query set as the compatibility surface. The one part that cannot be
+deferred is the session graph, which is structural, so persistence wants
+forked-subagents' hierarchy semantics to at least be *nameable* first.
+Multi-client-ui inherits causally positioned sends and catch-up from
+topology and should follow it. `operator-lifecycle` follows persistence and
+topology, and `self-modification` follows operator-lifecycle, because its
+compiled-shell half assumes the supervisor that operator-lifecycle owns.
+
+**Scheduling constraints that are not dependencies.** `user-turn` needs the
+user hands-on ("That one requires a lot of hands on from me tho") and is
+otherwise ready. `layered-shutdown`'s own design work concluded it probably
+has no falsifiable thesis of its own — the ownership principle is a
+discipline, already settled by walking-skeleton rulings, and only the
+timing claim is testable — so the recommendation is to fold it into
+operator-lifecycle's and topology's test matrices as a pattern note rather
+than run it. That is a user call, recorded in its doc.
+
+**Before pulling anything, note that the design docs contain unreviewed
+questions.** Each doc ends with a "Questions for review" section, and
+`design/INTERACTIONS.md` records places where two designs genuinely
+disagree — including two of the user's own whys in topology
+(centralise-once versus a brain per machine). Pulling an experiment whose
+doc has an unresolved question that changes its shape means the brief will
+encode a guess.
 
 ## Provisional core integration expectations
 
