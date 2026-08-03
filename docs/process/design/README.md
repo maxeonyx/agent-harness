@@ -63,6 +63,19 @@ analyse) then builds back up (synthesise). The stages run in this order
    design's aspects × other experiments' aspects), then develop the real
    connections or discard the empty ones. Interactions live in their own
    **section**, not an index column.
+
+   Two things come out of this stage and they have different homes. Each
+   doc gets an **Interactions section** covering what *that* design owns,
+   what it defers to a sibling, and the connections that survived scrutiny.
+   But the matrix itself is inherently cross-cutting, and the most valuable
+   findings — machinery several experiments need and none owns, conflicts
+   between two designs' whys, and the ordering those imply — belong to no
+   single doc. Those go in `INTERACTIONS.md`, which is the portfolio view.
+   Do not duplicate: a doc points at `INTERACTIONS.md` for shared
+   machinery rather than restating it.
+
+   Experiment *sequencing* consequences do not live here at all. They go to
+   `PLAN.md`, which owns the pool and its ordering.
 4. **Summary** — only now, once the design is understood: think about the
    right order to explain it, then write the L1 summary.
 

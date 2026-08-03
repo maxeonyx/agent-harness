@@ -203,9 +203,67 @@ It is falsified if: the agent gets confused or alarmed by user activity rather t
 
 Invariants touched: **2** (activity never triggers; piggyback and turn-end flush are the legal paths), **3** (two projections of one fact stream, and user activity framed as user activity), **6** (the subagent-as-user-tool and whether it sits inside a structured scope), **7** (the user wins, delivered by compare-and-swap on writes rather than by a special rule), and **10** (facts travel in the message; the face does not touch limb files even when it shares the machine).
 
-## Parked for later stages
+## Interactions
 
-**Interactions flagged for stage 3:** forked-subagents (the subagent-as-user-tool; forked vs fresh + cache-expiry judgement); compaction-handover (accumulated user-activity context is part of what a handover must decide to carry forward); context-updates (the user editing AGENTS.md/skills mid-session is exactly a context change the agent must be told about).
+### What this design owns, and what it borrows
+
+This design owns the two-projection contract and everything downstream of it: the fact stream, the tools that produce it, the projections into text the model sees, the sigils and the three-state input scheme, compare-and-swap on writes, and the rule that a UI projection is a description of state rather than a sequence of escape sequences. Those are what the experiment has to demonstrate, and most of them are only demonstrable with the user's hands on them.
+
+The things it borrows are worth being blunt about, because otherwise this experiment quietly grows to include half the portfolio.
+
+Execution belongs to the limb. Reads, writes, commands, truncation of large output, LSP annotation, and the persistent shell process are all limb-owned, and this design consumes them rather than designing them — which is exactly the ruling in the "one tool, two projections" section, arriving here as a scope boundary rather than as a principle. One consequence should be stated as a scoping decision rather than left implicit: an interactive editor driven over a *remote* limb is a materially harder problem than one over a local limb, and this experiment should be scoped to the local case with the remote case recorded as untested. That is a call, not a ruling; it is in Questions for review.
+
+Shared-live state belongs to multi-client-ui. Draft buffers, staged-but-unsent text, cursor position, which regions are expanded on *this* screen, and how any of that converges between two clients are all its deliverables. This design owns only what has finished being true.
+
+The subagent primitive belongs to forked-subagents: Task and Resume, fork versus fresh, the launch rules, what a result is, and the outcome class. The durable event log, per-emitter sequencing, and the project and working-session notions that make timesheets possible belong to persistence-analytics. The transport and the boundary discipline belong to topology. Cache-state prediction, which the forked-subagent warning needs, is shared machinery — see `INTERACTIONS.md`.
+
+### Multi-client-ui draws the line this design's projections stop at
+
+The two designs meet at a single question — what the user *did* versus what he is *in the middle of doing* — and multi-client-ui's proposal answers it in a way this design can adopt directly: the same subject produces two events in two classes, distinguished by whether the thing has finished changing. The file the user opened, the regions he expanded, the edit he saved: finished, durable, projected. The cursor as it moves and the buffer as it fills: live, shared between his clients, never projected.
+
+Applying that line exposes one thing this doc currently gets slightly wrong, or at least states too loosely. The file tool's projection is described above as including, while the file is open, "the fact that it is open and roughly where the user is". The first half survives the line — that a file is open is a fact the agent can act on, and it is what makes mutual observation live rather than retrospective. The second half does not, because a cursor position is precisely the live state multi-client-ui classifies as never projected. The reading that keeps both designs coherent is that the *regions the user expanded* are the projected signal — they are finished acts of attention, which is exactly the argument the collapsed-by-default section already makes — and the moving cursor is not. That is a narrowing of this doc's own claim and it goes to Questions for review rather than being edited in above.
+
+The staged-text rule gets stronger from this pairing rather than weaker. This doc argues that activity piggybacks and staged text does not, on the grounds that flushing half a thought defeats what staging is for. Multi-client-ui arrives at the same place from an unrelated root: an unsent draft has no durable counterpart because it is not something the user did. One rule, two derivations, which is better evidence than the composition argument alone.
+
+The second front-end is not this experiment's work. This design owes the abstraction boundary — a UI projection that a renderer realises — and multi-client-ui owes the proof that a second renderer can attach to it. That split is what keeps "we build GUI/web support in from the start, even if unimplemented" affordable.
+
+### Forked-subagents: the user's subagent is the launch button, not a new primitive
+
+The subagent-as-user-tool looked like it introduced the one unstructured piece of concurrency in a design otherwise proud of structure. Reading forked-subagents' stage 2 closely, it does not.
+
+That design already has the user launching a user-facing session into a scope by pressing a button, with no model involvement at all, and it treats dynamic sibling sets — children added to a scope after the parent blocked — as a first-class case rather than an oddity, precisely because the user can do this. The subagent-as-user-tool is the same primitive exercised through a tool surface instead of a button. So it joins the scope the user is currently looking at, the parent resumes with a result it did not ask for, and the resume framing has to tell it what it is getting — which forked-subagents already requires for exactly this reason. Nothing is unstructured except the model's expectation.
+
+Consent works out the same way. Why #7 exists so that an autonomous agent cannot manufacture a blocking obligation on an absent human; a user launching his own child is the person being obliged, so the rule is satisfied trivially and a user-launched child may be user-facing. Both of those are proposed answers to the open question above rather than rulings, and the question stands.
+
+The cache-expiry warning on a forked user subagent is the one place this design touches cache-state prediction, and it needs the weakest possible form of it: a hint, shown to a human who then decides, with the note's own argument preserved — forked can still be cheaper even with a cold cache if the alternative is many sequential tool calls. A wrong prediction here costs a slightly misleading warning, not a wrong decision, which makes this the cheapest consumer of that machinery in the portfolio.
+
+### Persistence-analytics: "in the order things happened" is harder than it sounds
+
+The reasoning trail of why #4 depends on ordering — interleaving typed text with activity in real order is what lets the model see "he said this, then looked at that, then said this". Persistence-analytics rules that every timestamp belongs to the clock of the emitter that wrote it, and invariant 10 forbids assuming a shared clock across role boundaries. But typed text is face-emitted and terminal output is limb-emitted, so the two halves of the trail come from two clocks.
+
+That does not break the design, but it does change what the projection may promise. Within one emitter, order is exact. Across emitters, order has to come from a causal relation the harness actually observes — this command was dispatched while that file was open, this text was submitted after that result arrived — rather than from comparing two timestamps. In the common deployment the face and limb are the same machine and the comparison would work in practice, which is exactly the trap invariant 10 exists to catch: it would work locally and produce a scrambled reasoning trail the first time a limb was remote. Recorded as a question, because the honest fix may be that the projection interleaves only what it can order and groups the rest.
+
+The rest of the relationship is ordinary consumption. User tool facts are events with the face or the limb as emitter, they carry the lifecycle classification, and the project and working-session notions that turn this activity into a timesheet are that design's to define.
+
+### Context-updates: two facts about one edit
+
+The user editing an AGENTS.md or a loaded skill mid-session produces an activity projection here and, potentially, a change notice there. That looks like duplication and is not, because they are different facts: this design reports that the user did something, and context-updates reports that something the agent's understanding depends on is now different.
+
+Context-updates' diff-at-flush formulation is what makes the two compose with no coordination — if this design's projection already carried the new content into the context, the comparison against the world is empty and no notice fires. The development of that is in that doc; what belongs here is the scope boundary, which is that this design never emits change notices and never needs to know whether one was emitted.
+
+### Compaction-handover, and the conflict that is empirically settleable
+
+User activity is what fills a context fastest, so in practice it is what makes a handover due. The relationship is one-directional: compaction decides what survives, and it asks for the user's own wording to be carried verbatim because paraphrasing an instruction loses intent in a way paraphrasing a tool result does not.
+
+`INTERACTIONS.md` records the genuine conflict — why #4's "input is cheap" against context-updates' arithmetic that appended material is re-read on every subsequent request for the rest of the session, so it is paid forever rather than once. This doc's own falsification list already names it as the assumption most exposed. What stage 3 adds is that neither design owns the measurement that settles it: persistence-analytics' request-attempt table does, since cache-read share and cost per unit of work are queries over it. So this is a disagreement with an experiment attached rather than a matter of position, and the honest position is that the generosity of these projections is a *tunable* parameter whose default should be set from measurement rather than argued for now.
+
+### The thin and the empty
+
+Self-modification puts almost all UI content in the soft middle, which means user tools are rapidly iterable — a good property for a design whose surface only the user can evaluate. By self-modification's own classification test the two-projection contract is shell, because other things depend on its shape, and an individual user tool is a soft-middle contribution to it. That is a pleasant confirmation rather than a constraint.
+
+Topology matters in one narrow way. A user tool is a triple spread across face, brain and limb, so terminal output is precisely the traffic the optional direct face↔limb stream exists for — and since model-token streaming is deferred by explicit ruling, tool output is the only thing that fast path can currently be tested with. Modular-components matters only for testing: the face's output port is where a UI projection is asserted, and two faces in one process is what makes the multi-client half testable at all.
+
+Oauth-credentials, cancellation-economics and layered-shutdown have no relationship with this design. Operator-lifecycle has one edge and it is not this design's to solve: a face refused on a version mismatch is told to reload, and the user's staged text must survive that, which is multi-client-ui's durability question about shared-live state rather than anything about user tools.
 
 ## Questions for review
 
@@ -221,3 +279,7 @@ Invariants touched: **2** (activity never triggers; piggyback and turn-end flush
 - **Voice attaches as activity rather than as staged text.** Leaning on "talk while they work". It is genuinely ambiguous — it is speech, which is content.
 - **Search should preserve which results you opened**, not just the query and the hits, because the path through the results is the reasoning. That is my addition to the note.
 - **The two-projection rule is being stated as the general tool contract**, not a user-tool accommodation — your own corollary about agent tools owning their UI projections points that way. If you agree, that has consequences beyond this experiment for how every tool is written.
+- **I have scoped this experiment to a local limb.** User tools over a *remote* limb — an interactive editor driven across an SSH tunnel — is a materially harder problem, and I would record it as untested rather than carry it here. The design still forbids the face touching files directly, so nothing precludes it later; the experiment just does not prove it.
+- **The live half of the file projection is too loose as written.** The what says the projection includes, while a file is open, "roughly where the user is". Multi-client-ui classifies cursor position as shared-live state that is never projected. My proposed narrowing is that the *regions you expanded* are the projected signal, being finished acts of attention, and the moving cursor is not. That is a reduction of the doc's own claim, so it wants your ruling rather than a silent edit.
+- **Cross-emitter ordering.** Typed text is face-emitted and terminal output is limb-emitted, and invariant 10 forbids assuming a shared clock across role boundaries — so "in the order things happened" is exact within one emitter and only causally approximate across two. It would work fine on your machine and scramble the first time a limb is remote. Should the projection interleave only what it can order and group the rest, or is there a causal relation you want it to rely on?
+- **The user's subagent joins the scope, by the same primitive as your launch button.** Forked-subagents already lets you add a child to an open scope with no model involvement and treats dynamic sibling sets as first-class, so I have read the subagent-as-user-tool as that primitive through a tool surface. That dissolves the unstructured-concurrency worry and makes a user-launched user-facing child fine under the consent rule. It is a proposed answer to the open question above, not a replacement for it.
