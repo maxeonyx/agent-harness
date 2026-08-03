@@ -235,6 +235,13 @@ Purpose: validate the hardest part of the client state model. Before this
 experiment, prototypes use an append-only CLI; after it, a real reactive
 TUI and a real web GUI share one underlying client state model.
 
+Sequenced before the reactive TUI and web GUI are built, and the
+append-only CLI is kept until it lands: a reactive TUI and a web GUI are
+both large pieces of work that encode assumptions about where state
+lives, so building either on a wrong state model means rewriting the UI
+and not just the model. (Moved here from the design doc's why section —
+sequencing rationale belongs to this file.)
+
 Key tests: two clients converge on the same ordered durable events; stale
 client sends are represented causally and cannot silently overwrite newer
 draft/tool state; reconnect catches up without duplicates; shared editable
@@ -253,6 +260,12 @@ Purpose: validate deployment and operational lifecycle — version
 negotiation, staged updates, activation/verification, downgrade, safe
 migrations, smooth relaunch (locally or remotely) without unnecessarily
 interrupting in-flight work.
+
+One user-gated decision before it starts: the design proposes that the
+brain is what puts a compatible binary on a remote machine (as part of
+ordinary limb creation), which the source notes do not ask for — they
+admire Pi's scp-able binary and specify SSH limbs but never say who
+deploys. The repair-vs-report resolution rests on this proposal.
 
 Exit: operational lifecycle assumptions are credible enough for core
 design.
