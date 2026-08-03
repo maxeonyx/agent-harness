@@ -51,8 +51,20 @@ analyse) then builds back up (synthesise). The stages run in this order
    this project specifically: **cost/tokens** (as above) and
    **security/isolation** — the user treats security as a low-priority
    nice-to-have, never a top driver, so proposing it as a why is almost
-   always wrong. Two more traps: stopping at a *mechanism* (the note's
-   how), and mistaking a *consequence* for a why.
+   always wrong.
+
+   But "false root" is about the *role* the thing plays, not about the word
+   being banned, and collapsing the two produces its own errors — a doc that
+   dodges naming cost when cost is the honest answer, or one that argues a
+   low-priority concern must really be high-priority because an invariant
+   depends on it. So name which role it plays. Cost and security are false
+   **drivers**. They remain legitimate as **constraints** (invariant 1 keeps
+   provider credentials brain-owned, non-negotiably, without security being
+   a driver) and as **subjects** (a doc whose question *is* "what does this
+   cost" is rooted in cost, correctly).
+
+   Two more traps: stopping at a *mechanism* (the note's how), and
+   mistaking a *consequence* for a why.
    A consequence is something that follows *from* the design choice and
    must be managed (e.g. "a forked child must reliably stop after its
    slice") — it is not a reason the thing exists, and it belongs in the
@@ -69,13 +81,17 @@ analyse) then builds back up (synthesise). The stages run in this order
    what it defers to a sibling, and the connections that survived scrutiny.
    But the matrix itself is inherently cross-cutting, and the most valuable
    findings — machinery several experiments need and none owns, conflicts
-   between two designs' whys, and the ordering those imply — belong to no
-   single doc. Those go in `INTERACTIONS.md`, which is the portfolio view.
-   Do not duplicate: a doc points at `INTERACTIONS.md` for shared
-   machinery rather than restating it.
+   between two designs' whys, and the **dependencies** those imply — belong
+   to no single doc. Those go in `INTERACTIONS.md`, which is the portfolio
+   view. Do not duplicate: a doc points at `INTERACTIONS.md` for shared
+   machinery rather than restating it, and a conflict between two designs
+   is written up once *there* rather than twice in both docs.
 
-   Experiment *sequencing* consequences do not live here at all. They go to
-   `PLAN.md`, which owns the pool and its ordering.
+   The division of labour on ordering is exact, because both files sound
+   like they own it and only one does. `INTERACTIONS.md` records
+   **dependencies**: X's result is uninterpretable before Y's. `PLAN.md`
+   turns dependencies into an **order**. So experiment *sequencing*
+   consequences do not live here at all.
 4. **Summary** — only now, once the design is understood: think about the
    right order to explain it, then write the L1 summary.
 
@@ -106,9 +122,21 @@ Rules:
   record it under "Questions for review" in the doc, don't just fix it.
 - A stage the agent produced alone is `agent-drafted, unreviewed` until the
   user says otherwise.
-- Every doc ends with a **Questions for review** section listing the calls
-  the agent made that most want the user's ruling. Empty is a smell — an
-  honest design pass at this depth generates real questions.
+- Every **design doc** ends with a **Questions for review** section listing
+  the calls the agent made that most want the user's ruling. Empty is a
+  smell — an honest design pass at this depth generates real questions.
+  `INTERACTIONS.md` carries one too, for the portfolio-level calls that
+  belong to no single design; this file and `PLAN.md` do not, being method
+  and pool rather than design.
+- **Audit the premise under a question, not just the answer above it.**
+  Escalating something to the user reads as diligence, which is exactly why
+  it is a good hiding place for an invented constraint: a question phrased
+  as "which of these two do you want?" quietly asserts that there are two,
+  and nobody re-examines it because it is already flagged. So a question
+  earns the same scrutiny as an assertion — check that the trade-off it
+  offers is real before asking the user to resolve it. Several of the
+  questions in these docs dissolved on that check, and dissolving one is
+  worth more to the user than answering it.
 
 ## Where a finished doc hands off
 
