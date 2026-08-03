@@ -44,6 +44,12 @@ The brain is the only role that drives provider requests. The reason is not prim
 
 Credentials staying brain-owned (invariant 1) falls out of this as a consequence, and is worth having, but it is not the motivating force. The motivating force is that a coherent view of cost and rate limits is impossible if N machines are independently talking to providers.
 
+**"Exactly one" is per domain, not globally — user ruling, 2026-08-04.** An earlier draft of this doc read #4 and #7 as contradicting each other, on the grounds that a brain per machine reintroduces the N-of-everything #4 exists to avoid. That was too coarse. The user's actual arrangement: "on my work machine, I have work providers and billing. On my home machine, I have home providers of billing and data access and stuff like that, like external MCP service and things like that." And the reason those are different brains is that they *must* be: "home data access, work data access, home billing, work billing should be separate."
+
+So the brain is the unit that owns one **provider, billing and data-access domain**, and the thing that should exist exactly once is one brain *per domain* — not one brain in total. Federation is therefore not a violation of #4; it is what lets domains that must stay separate stay separate while still being reachable from one place. Within a domain the original argument holds undiluted: the user is "quite happy for one home brain", so nothing here licenses a brain per machine inside a single domain.
+
+Two further points from the same ruling. The harness "should be able to act as its own brain if it has its own provider setup and the [OAuth] stuff setup" — so being your own brain is a normal configuration, not a fallback. And "connecting to another brain is ideal too", so neither self-hosting nor connecting out is the privileged case; both are ordinary.
+
 ### 5. Output should feel live — *quality*
 
 The face needs tool stdout and model tokens fairly directly; the brain should not buffer a response before forwarding it. Hence the two paths in the notes: the brain proxying the stream as the safe default (because the network may simply not allow the face to reach the limb — remote limb behind SSH, different segment), and a direct face↔limb stream as a fast path when topology permits, with the brain still in the loop for the agent loop, model calls and permissions.
@@ -60,7 +66,9 @@ The user likes the idea of brains connected to each other: establish persistent 
 
 The freshest thinking adds a second motive: rather than each brain holding only its own data, they all store all of it, so "I get backups by default. Sync all the data in the background." With the caution attached — keep provenance clear, do not duplicate or confuse remote data with local. `source-notes/analytics.md` wants the same thing from the query side: results that span all connected brains.
 
-This is the most speculative root here, and the notes treat it as a like rather than a requirement.
+The notes treat this as a like rather than a requirement, and the merged-view and backup halves are genuinely speculative. But the *separation* half is not, and the user ruling recorded under #4 upgrades it: work and home domains **must** be separate brains, which means multi-brain is a requirement of his actual setup rather than a nice-to-have layered on top of it. What stays speculative is background sync, backup-by-default and cross-brain querying — not the existence of more than one brain.
+
+That also sharpens what a limb's "primary brain affinity" is for. It is not load balancing; it is domain placement. A limb on the work machine belongs to the work brain because that is where the credentials, billing and data access it may legitimately reach are, and overriding the affinity is therefore a meaningful act rather than a preference.
 
 ## Forward: what these roots force
 

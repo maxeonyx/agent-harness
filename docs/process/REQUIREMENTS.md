@@ -187,6 +187,45 @@ ruling history with the user's original wording is in
   cannot diverge. `model` and `reasoning_effort` are request facts, not
   context facts.
 
+## Later user rulings (2026-08-04, from the design-scoping review)
+
+Recorded separately from the walking-skeleton section above because they
+come from the user reviewing the design docs, not from experiment evidence.
+Kept out of the invariants list deliberately: the first is hedged, and
+hedging is information.
+
+- **Event streaming implies snapshotting.** Wording preserved: "while we
+  have event streaming, we should also have roll ups, and we should deliver
+  snapshots, not just event streams. I would ideally like that baked into
+  the model from the very start... every thing that implements event
+  streaming should ideally implement snapshotting." Reason given: cost —
+  "otherwise it gets really, like, really expensive." Note "ideally" in
+  both halves. The word *deliver* makes this a protocol requirement as much
+  as a storage one: a joining consumer can be sent a snapshot plus
+  subsequent events rather than a replayed history. Detail in
+  `design/persistence-analytics.md`; cross-design consequences in
+  `design/INTERACTIONS.md`.
+- **A brain owns one provider, billing and data-access domain, and
+  "exactly one" is per domain rather than global.** The user's domains must
+  stay separate: "home data access, work data access, home billing, work
+  billing should be separate." Within a domain, one brain is enough — he is
+  "quite happy for one home brain". Multi-brain is therefore a requirement
+  of his real setup, not a speculative feature; what remains speculative is
+  background sync, backup-by-default and cross-brain querying. Also ruled:
+  the harness "should be able to act as its own brain if it has its own
+  provider setup and the [OAuth] stuff setup", and "connecting to another
+  brain is ideal too" — both are ordinary configurations, neither
+  privileged. This refines rather than contradicts invariant 1, which keeps
+  provider credentials brain-owned. Detail in `design/topology.md` why #4.
+- **On carrying user-turn context: it is a sizing question, not a
+  trade-off between two positions.** "this is not about a versus b. It's
+  about how much a versus how much b." Input is cheap "compared to output"
+  and "compared to repeated tool calling" — the second comparator is what
+  justifies carrying looked-at context at all. The user also observed that
+  user activity piggybacks on turns that would have happened anyway rather
+  than creating new ones, while noting he had not fully settled the point;
+  his working-through is preserved verbatim in `design/INTERACTIONS.md`.
+
 ## Engineering discipline (process rulings)
 
 - **Test flakes are bugs.** Races are structurally excluded, not made
