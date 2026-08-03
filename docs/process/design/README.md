@@ -36,6 +36,23 @@ analyse) then builds back up (synthesise). The stages run in this order
    may state a mechanism; the story is what makes it a requirement. Then
    drill *forward* to what those stories force. If a story can't be found,
    say so — that's a question for the user.
+
+   Drill to the *root*, and don't stop early. Keep asking "why does that
+   matter?" until you bottom out in one of: a **human desire of the
+   user's** (often the why is for the user, not just the agent — e.g. "I
+   want to see the structure of my own work and work in a way that follows
+   structured concurrency"); a **correctness or safety property** (e.g.
+   clean teardown of side-effecting work when it's cancelled); or an
+   **irreducible resource pressure** (cost, cache, context bloat). Do
+   *not* reflexively reach for cost/tokens — it is the easiest root to
+   name and often the wrong one. If the honest root is correctness or
+   desire, cost framing actively misleads (e.g. cancellation deliberately
+   *spends* tokens so agents can clean up). Two more traps: stopping at a
+   *mechanism* (the note's how), and mistaking a *consequence* for a why.
+   A consequence is something that follows *from* the design choice and
+   must be managed (e.g. "a forked child must reliably stop after its
+   slice") — it is not a reason the thing exists, and it belongs in the
+   *what*, not the *why*.
 2. **What** — drill deep into the details of each aspect, then piece them
    back together into a coherent design.
 3. **Interactions** — examine the breadth of the interaction matrix (this
