@@ -270,6 +270,41 @@ hedging is information.
   say something changed; the agent reloads at will. And a context rebuild
   "is basically the new snapshot" — notices are events that get rolled in.
   Detail in `design/context-updates.md`.
+- **Compaction has four trigger kinds, three of them forcible.**
+  Agent-at-milestone is one kind; the harness forcibly triggers on the
+  context-window limit ("something like 80-85% (or better, a fixed token
+  threshold like 100k-200k tokens)") and on cache expiry while the agent
+  is idle (the in-flight tool call "rewritten as still in progress, and
+  execution continues seamlessly when it completes"); the user can also
+  forcibly trigger. Replaces the earlier invite-only model. Detail in
+  `design/compaction-handover.md` §When it fires.
+- **Superseded contexts are stored directly, not reconstructed.** "in
+  practice we will probably just store the context directly. That is much
+  simpler than trying to reconstruct it deterministically from raw
+  events. While full determinism is a nice aspiration, it feels overly
+  ambitious and not important enough to justify the complexity." Also
+  recorded as fact: the append-only cache is "effectively a branching
+  structure" — suffixes may be discarded where a cache point can be
+  predicted, "That is why forked sub-agents work at all." Detail in
+  `design/persistence-analytics.md` and `design/compaction-handover.md`.
+- **Write decompressed, not short.** A process requirement rather than a
+  product one, recorded here because it governs every doc these gates
+  read: "word count is not expensive because I have a very fast reading
+  speed, but word depth is expensive because I actually have quite a slow
+  mental speed. So decompressed is much better than compressed, much,
+  much better than compressed... go through the examples. Go through the
+  story. Go through the the entire logic chain, and I'll read that much
+  faster than I'll read one sentence of compressed language." Full rules
+  in `design/README.md` §Style.
+- **Harness economics are an empirical domain, and he wants agent-run
+  tuning.** Hedges his: "compaction economics, cancellation economics...
+  and forking economics all feel like empirical domains. I am not very
+  strong in this area, so I would prefer a mechanism for agents to run
+  these experiments or perform observational tuning. For example, a
+  background meta-agent could tune global harness settings via A/B
+  testing. If we can run a scheduled meta-agent, it could also tune
+  handover instructions and other parameters over time." A capability
+  want, not a committed design; flagged in `PLAN.md`.
 
 ## Engineering discipline (process rulings)
 
@@ -282,7 +317,7 @@ hedging is information.
   the fake provider is a separate HTTP server serving the same
   OpenAI-compatible API, so real vs fake is just a base URL.
 
-## Deferred by explicit ruling
+## Deferred from early experiments by explicit ruling
 
 Streaming responses; provider error taxonomy in the fake provider;
 principled credential handling; SQLite storage design (persistence-analytics); subagents
