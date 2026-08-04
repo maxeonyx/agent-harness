@@ -276,13 +276,24 @@ design.
   `design/INTERACTIONS.md`): what are the provider's actual cache
   semantics? What counts as a cached prefix, whether append-only means
   append-only with respect to the whole context or some smaller unit, what
-  a forked child inherits, and how the OpenAI responses API and the
-  Anthropic messages API differ. Small and cheap, but three designs —
-  compaction-handover, context-updates and forked-subagents — each depend
-  on the answer and none can settle it alone. The notes are explicit that
-  this is a precondition rather than a detail: "we need to *very* correctly
-  use OpenAI responses API & Anthropic messages API w.r.t. caching for this
-  all to work."
+  a forked child inherits, the read-discount and write-multiplier prices,
+  and how the OpenAI responses API and the Anthropic messages API differ.
+  Small and cheap, but three designs — compaction-handover, context-updates
+  and forked-subagents — each depend on the answer and none can settle it
+  alone. The notes are explicit that this is a precondition rather than a
+  detail: "we need to *very* correctly use OpenAI responses API & Anthropic
+  messages API w.r.t. caching for this all to work." User-confirmed
+  2026-08-04: "Yes, definitely. That is a great, well-scoped experiment."
+- **meta-agent-tuning** (candidate, from user feedback 2026-08-04, hedges
+  his): compaction, cancellation and forking economics "all feel like
+  empirical domains", and he "would prefer a mechanism for agents to run
+  these experiments or perform observational tuning. For example, a
+  background meta-agent could tune global harness settings via A/B
+  testing. If we can run a scheduled meta-agent, it could also tune
+  handover instructions and other parameters over time." Not scoped into
+  an experiment yet; recorded so the economics experiments design their
+  parameters as *tunable settings with recorded outcomes* rather than
+  constants, which is the property the meta-agent would need.
 - **cancellation-economics** (`source-notes/analytics.md`): does
   cancelling after first byte avoid the charge? "Probably worth
   experiment."

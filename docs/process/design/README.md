@@ -191,6 +191,45 @@ details that needs more extensive explanation"):
   that need extended treatment. Not mandated and not bounded: a doc may
   have no L3 at all, or many, whatever the design's logic calls for.
 
+## Style: boring, explicit, baby steps
+
+From the user's first full read of a finished doc (compaction-handover, 2026-08-04). His verdict on the content was good ("I do not actually see anything wrong in this compaction handover document") and his verdict on the writing was not, so this section exists.
+
+### The governing principle: decompress
+
+This is the rule the others serve, and it is counter-intuitive enough to state first. Wording preserved, 2026-08-04:
+
+> "the principle been writing for me is that word count is not expensive because I have a very fast reading speed, but word depth is expensive because I actually have quite a slow mental speed. So decompressed is much better than compressed, much, much better than compressed. Priest language is really difficult for me. Decompressed language is very easy. So go through the examples. Go through the story. Go through the the entire logic chain, and I'll read that much faster than I'll read one sentence of compressed language."
+
+("Priest language" is a transcription artifact — read it as *terse* or *compressed* language.)
+
+So the cost model is not the obvious one. **Length is cheap. Depth per sentence is expensive.** A dense sentence that packs three inferences costs him more than four plain sentences that each carry one, even though the four are longer. Optimising for brevity is therefore optimising the wrong variable, and can make a doc *more* expensive to read.
+
+What that means in practice:
+
+- Walk the whole logic chain. Do not skip a step because it follows obviously — following obviously is exactly the work being pushed onto the reader.
+- Use examples and worked stories. "Go through the examples. Go through the story." These are not padding; they are the cheap form of the same content.
+- Never compress two claims into one clause to save a line. Split them.
+- Do not target a line count. Completeness of the chain beats shortness, always.
+
+His earlier feedback in the same session is compatible with this and still stands — it was aimed at *baroque* prose (words that add no content), not at length:
+
+> "It may repeat itself in places, use too many words, and not enough diagrams... explain the details first, then really go hard on the technical detail."
+
+> "re-write... into clearer, more explicit, more basic and boring technical language, with the logic laid out in baby steps instead of in baroque prose"
+
+### The rules that follow
+
+- **Boring technical language.** No rhetorical build-ups, no elegant-turn-of-phrase sentences whose content is one clause. Write the clause plainly, then write the next one.
+- **Baby steps.** Each paragraph advances the logic by one checkable step. A reader should never have to hold unstated premises to parse a sentence.
+- **Concrete statements only.** Every sentence should be checkable. His example of failure: "modular components touches this design only through testing" — "a lot of words for a not quite concrete statement." If the concrete version is unknown, say what is unknown instead.
+- **His vocabulary, or define it on first use.** He bounced off "context-lifetime collection" and "epoch-keyed rows": "These are not terms I use, so the statement is unclear to me." Coined terms get defined in plain words where they first appear, and are used sparingly.
+- **Details first, then depth.** Plain overview of a mechanism before its extended technical treatment — not interleaved.
+- **Diagrams.** Tables, ASCII diagrams, and worked sequences wherever they replace prose. "Not enough diagrams" is his direct feedback.
+- **Repetition is not the enemy; density is.** Saying a thing once at its home and pointing at it is still right for *decisions* (two prose copies drift). But re-stating a premise where it is used, rather than making the reader recall it from ten paragraphs earlier, is decompression and is wanted.
+
+A calibration datum, for measuring whether a rewrite worked: the compaction doc took him "around 20min to half an hour to read, understand and respond" at 327 lines, and he still expected he "likely still forgot some things." The target is that the same reader clears a doc faster with less forgotten — and a longer doc that achieves that is a better doc.
+
 ## The index
 
 Each doc ends with a sparse matrix that **indexes** aspects against the
