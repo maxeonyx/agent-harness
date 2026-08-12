@@ -239,17 +239,22 @@ by the rewritten doc:
   this tool code version, or not?"
 - **The ~1h elapsed-time threshold is "discoverable, that's my naive
   guess"** — a tunable, not a designed constant. (Hedge his.)
-- **An expired ("old cold") context is only ever loaded again in order to
-  compact it.** "I think we only ever need to load it up in order to
-  compact it." Ideally compaction fired right before cache expiry, but in
-  practice it may not have. On load it is not rebuilt: "just leave it
-  purely as it was? I think the latter - much easier" — it is the event
-  log of that agent session, and "we're going to present the system
-  prompt diff to the compaction agent anyway, so." (Hedges his. Also
-  touches the future compaction-handover doc.) The main why, given later:
-  tool call schemas — "we can't just renew & continue to extend the
-  context because we can't be sure that the tools even exist or work
-  anymore after say a few weeks. so yeah it just needs a rebuild."
+- **Expired ("old cold") contexts: not settled.** Constant across his
+  takes: on load it is not rebuilt — "just leave it purely as it was? I
+  think the latter - much easier"; it is the event log of that agent
+  session. First take was compact-only ("I think we only ever need to
+  load it up in order to compact it"), then revised same day: "I think
+  ideally we just keep an 'old cold' context and make it an 'old warm
+  context', append some (perhaps copious, but oh well) notices, and keep
+  going. That is the ideal state btw. it's minimum cost - we get
+  re-billed at input to compact, we might as well up it to cache write &
+  *not* compact? Perhaps an option for the user? I don't think this is
+  settled. Tool schemas for tools that will no longer work is a great
+  reason to force the compaction, though." (Hedges his. Also touches the
+  future compaction-handover doc.)
+- **Notice decision 2 is itself economic.** On reference-vs-content: "not
+  necessarily - it still depends on the economics & the agent's reaction.
+  but *all else equal*, the minimum."
 
 - **Event streaming implies snapshotting.** Wording preserved: "while we
   have event streaming, we should also have roll ups, and we should deliver
