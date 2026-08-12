@@ -1,6 +1,6 @@
 # Writing design docs
 
-These docs exist to communicate the harness design — the specific, exact technical details, use cases, and vision — to the agents who will build it. Max reviews them so he can trust what gets built. The docs are a means; the harness is the point. Spend effort on design content, not on documentation apparatus.
+These docs exist to communicate the harness design — the specific, exact technical details, use cases, and vision — to the agents who will build it. Max reviews them so he can trust what gets built. **The harness is king; deletion is queen**: spend effort on design content, not documentation apparatus, and delete superseded material outright — git history is the archive.
 
 **Sources.** Everything in a doc must trace to one of: `docs/source-notes/` (Max's notes, verbatim, the only user-written content in this repo); `docs/process/REQUIREMENTS.md` (current truth: invariants, experiment evidence, decisions from his reviews); experiment evidence. A design doc is agent output and never a source. Anything not traceable was introduced without cause — hunt it and remove it. (The first doc generation was deleted 2026-08-12 for this; git history has it.)
 
