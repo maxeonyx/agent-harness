@@ -273,16 +273,25 @@ by the rewritten doc:
   removal is a breaking change to the tool schema" — so tool removal is
   ~almost certainly rebuild, not a notice. Tool *addition*: "I'm unsure."
 - **Per-element decisions (2026-08-12):** skill content notifies "only if
-  loaded". Skill description: "provisionally no" — a no decided on a
-  guess. New skill: actionability is "technically correct, but how are we
-  gonna know? so it's just 'yes', I think?" — the logical condition
-  stands, but "there's a practical constraint on actually knowing whether
-  free-text content update X affects session Y or not". AGENTS.md and
-  other limb context: "flatly yes, that feels more like a contract to me.
-  It's technically the same though." Limb identity requires rebuild — and
-  "limb is not one thing... it's tools, context, cwd, and more".
-  cwd/hostname: low confidence — "hostname change can be legit. maybe a
-  limb can relocate too? not sure... also - not every limb has a cwd".
+  loaded". Skill description: no is "a safe general rule" — basis:
+  "skill descriptions changing is unusual without skill content changes
+  too, and descriptions are not usually load bearing". New skill: notify
+  "only if it would be available"; actionability is the logical
+  condition, but "there's a practical constraint on actually knowing
+  whether free-text content update X affects session Y or not". AGENTS.md
+  and other limb context: "almost certainly yes" — "that feels more like
+  a contract to me. It's technically the same though." Limb identity
+  requires rebuild — and "limb is not one thing... it's tools, context,
+  cwd, and more". cwd/hostname: low confidence — "hostname change can be
+  legit. maybe a limb can relocate too? not sure... also - not every limb
+  has a cwd".
+- **Option sets absolutely get notices.** They are kept out of the JSON
+  schema proper precisely so they can change without a schema change:
+  "they're still in the context just not in that spot, and they obviously
+  still change - that's the whole *point* of not putting them in the
+  schema proper - and so yes they absolutely get notices!" His examples:
+  "skill names are options for the skill tool! subagent names are options
+  for the task tool!"
 - **Model: he challenges "not a context fact".** "I think we do want to
   tell the model which model it is. But yes, changing it invalidates
   cache so we do rebuild." Refines the walking-skeleton "request fact"
