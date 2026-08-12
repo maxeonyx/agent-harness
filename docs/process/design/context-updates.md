@@ -49,7 +49,7 @@ Each context element, against the two notice decisions (claims 4 and 5).
 | New skill | Only if it would be available to this session | Name (maybe its one-line desc) | Actionability is the logical condition, but there is a practical constraint: we can't actually know whether free-text update X affects session Y |
 | AGENTS.md / other limb context | Almost certainly yes | Which file/layer | More like a contract (technically the same actionability logic) |
 | Tool removed | No — ~almost certainly rebuild | — | A breaking change to the tool schema ("tool schema" includes the tool set) |
-| Tool added | Unsure | — | Whether mid-session tool addition works at all is unproven — experiment |
+| Tool added | Mechanism unsettled — the uncertainty is not the notify decision but whether tool addition works robustly via append at all, without breaking the prefix | — | See the reversed prefix question (questions section) |
 | Tool schema changed | No — rebuild; the limb retains the old tool version (claim 7) | — | A notice isn't sufficient for correct agent behaviour |
 | Option set inside a tool | Yes | The changed options (minimum per claim 5) | Option sets live in the context but outside the JSON schema precisely so they can change without a schema change. For example: skill names are options for the skill tool; subagent names are options for the task tool |
 | Elapsed time | Yes, past a threshold — ~1h naive guess, tunable | The elapsed time itself | No retrieval path. Computed at delivery, never at detection |
@@ -69,3 +69,16 @@ Notices are batched: appended as they arise, delivered together on the next requ
 ### Bookkeeping
 
 The harness records what each context contains — versions/hashes of the skills, tools, and context layers in it. That record is how it knows what a given session needs notifying about. The same record feeds the compaction briefing's system-prompt diff.
+
+## Interactions
+
+TODO once all docs are written.
+
+## Questions for review / needs experiment
+
+- Is it ever possible to change anything about tools *without* involving the cached prefix? Unanswered. For example: does mid-session tool addition work robustly via append, without breaking the prefix? (Experiment.)
+- Do providers validate tool arguments against the advertised schema? Highly doubted, but unsure. (Experiment.)
+- Are late system parts supported, per provider? (Experiment.)
+- cwd / hostname: different limb ⇒ different session, or can a limb legitimately relocate? (Low confidence.)
+- Cold-context revival (claim 8): when is the revive-as-warm ideal not possible or practical? (Not fully settled.)
+- Is a rebuild always "compact immediately prior"? ("I think it is, if our compaction is good" — see uncached compaction, REQUIREMENTS.)

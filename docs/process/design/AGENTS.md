@@ -37,6 +37,8 @@ Provenance line (what Max has reviewed, dates) · intro (a few sentences, writte
 
 Stages: why → what → interactions → summary; each drills down then builds back up; stages advance across the portfolio, not per doc.
 
+The what stage chains forward into code shape: model the types (Max, 2026-08-12: "We haven't done the 'what' forward chaining enough. We should be modeling types & shit!"). Draft type sketches with him like any other piece.
+
 A why bottoms out in a human desire of Max's, a correctness/safety property, or an irreducible resource pressure. Cost/tokens and security/isolation are false *drivers* here — legitimate as constraints or as a doc's explicit subject; name the role. A consequence (something the design must manage) is not a why (a reason it exists).
 
 Watch for invented constraints: a priced statement read as a prohibition, or two decouplable concerns fused into a forced trade-off. For example: "credentials must live outside the database" came from an over-broad replication premise. These hide under escalated questions — check the premise under a question before asking Max to answer it.
