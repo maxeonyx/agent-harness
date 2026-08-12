@@ -264,6 +264,36 @@ by the rewritten doc:
   (they do, but we keep the old ones around until the next rebuild)."
   (Supersedes the source note's "Tools with changed schema need full
   content injection.")
+- **Three levels of context maintenance — "the original vision":** "keep
+  using warm context; rebuild existing context (incorporate notices
+  etc.); compact (make fresh context)." Old notices get rolled in on
+  rebuild, "ideally even without a compaction."
+- **"Tool schemas" always included the tool set.** "whenever I was
+  referring to 'tool schemas' I *also* meant 'tool set' as well. Tool
+  removal is a breaking change to the tool schema" — so tool removal is
+  ~almost certainly rebuild, not a notice. Tool *addition*: "I'm unsure."
+- **Per-element decisions (2026-08-12):** skill content notifies "only if
+  loaded". Skill description: "provisionally no" — a no decided on a
+  guess. New skill: actionability is "technically correct, but how are we
+  gonna know? so it's just 'yes', I think?" — the logical condition
+  stands, but "there's a practical constraint on actually knowing whether
+  free-text content update X affects session Y or not". AGENTS.md and
+  other limb context: "flatly yes, that feels more like a contract to me.
+  It's technically the same though." Limb identity requires rebuild — and
+  "limb is not one thing... it's tools, context, cwd, and more".
+  cwd/hostname: low confidence — "hostname change can be legit. maybe a
+  limb can relocate too? not sure... also - not every limb has a cwd".
+- **Model: he challenges "not a context fact".** "I think we do want to
+  tell the model which model it is. But yes, changing it invalidates
+  cache so we do rebuild." Refines the walking-skeleton "request fact"
+  ruling: mechanically a request fact, but its identity is worth telling
+  the model. Also: "tbc if rebuild is always 'compact immediately prior'
+  or not. I think it is, if our compaction is good."
+- **For the compaction-handover doc rewrite — uncached compaction.** "I
+  just realized we can't always assume the original model is available or
+  desirable to do a compaction. We may want to have an old-style
+  compaction flow - an 'uncached compaction' with a traditional
+  'compaction agent' system prompt as well as our additional context."
 - **The cold-context logic, restated by him and generalised:** "An old
   context will contain old info. where that's important for correctness,
   we need notices or rebuild. because we're relatively sure that *tool
