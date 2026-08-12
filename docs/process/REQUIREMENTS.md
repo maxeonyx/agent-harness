@@ -187,12 +187,36 @@ ruling history with the user's original wording is in
   cannot diverge. `model` and `reasoning_effort` are request facts, not
   context facts.
 
-## Later user rulings (2026-08-04, from the design-scoping review)
+## Decisions from design review (2026-08-04 onward)
 
-Recorded separately from the walking-skeleton section above because they
-come from the user reviewing the design docs, not from experiment evidence.
-Kept out of the invariants list deliberately: the first is hedged, and
-hedging is information.
+What the user decided while reviewing design docs, in his wording, dated.
+Separate from the walking-skeleton section because these come from review
+rather than experiment evidence, and kept out of the invariants list
+because several are hedged — hedging is information. Design docs fold
+these into their content and point here; "
+
+From the 2026-08-12 review of the context-updates rewrite, to be carried
+by the rewritten doc:
+
+- **A context has several cache prefixes at once, nested — "prefix" is
+  not just the system section.** His list: "system section (system
+  prompt, tools, etc); system section + messages *up to the last fork
+  boundary*; system section + messages *up to ..* + all subsequent
+  messages." A forked session has many. And new: "For user-facing
+  messages, we also need a prefix which is *everything up to n-2 messages
+  ago* (or something like that) to support message undo."
+- **Actionability is the notify-at-all test, not the content rule.** "if
+  it would not change the agent's actions in any way, then it doesn't
+  need to know!" The second, separate decision is **reference versus the
+  information itself**: a reference is less injected content ("less cost,
+  less confusion") but "the agent actually has to be able to retrieve the
+  new info somehow if it thinks it *is* relevant."
+- **The limb must continue to accept old tool calls** "until all sessions
+  that used those old tools have reached cache expiry (and so would be
+  rebuilt)."
+- On mid-session tool additions: "I'm not sure if new tools work yet or
+  not. Seems fine to me?" — waiting reads as acceptable; hedge kept.
+- **Piggybacking needs explaining** in the doc — it is important.
 
 - **Event streaming implies snapshotting.** Wording preserved: "while we
   have event streaming, we should also have roll ups, and we should deliver
@@ -202,9 +226,7 @@ hedging is information.
   "otherwise it gets really, like, really expensive." Note "ideally" in
   both halves. The word *deliver* makes this a protocol requirement as much
   as a storage one: a joining consumer can be sent a snapshot plus
-  subsequent events rather than a replayed history. Detail in
-  `design/persistence-analytics.md`; cross-design consequences in
-  `design/INTERACTIONS.md`.
+  subsequent events rather than a replayed history.md`.
 - **A brain owns one provider, billing and data-access domain, and
   "exactly one" is per domain rather than global.** The user's domains must
   stay separate: "home data access, work data access, home billing, work
@@ -216,7 +238,7 @@ hedging is information.
   provider setup and the [OAuth] stuff setup", and "connecting to another
   brain is ideal too" — both are ordinary configurations, neither
   privileged. This refines rather than contradicts invariant 1, which keeps
-  provider credentials brain-owned. Detail in `design/topology.md` why #4.
+  provider credentials brain-owned.
 - **On carrying user-turn context: it is a sizing question, not a
   trade-off between two positions.** "this is not about a versus b. It's
   about how much a versus how much b." Input is cheap "compared to output"
@@ -224,7 +246,7 @@ hedging is information.
   justifies carrying looked-at context at all. The user also observed that
   user activity piggybacks on turns that would have happened anyway rather
   than creating new ones, while noting he had not fully settled the point;
-  his working-through is preserved verbatim in `design/INTERACTIONS.md`.
+  his working-through is in git history (first-generation INTERACTIONS.md).
 - **Credentials live inside the session database.** "credentials should
   live inside the database... credentials should be treated like
   everything else we treated." Replication of credential rows is scoped by
@@ -236,15 +258,14 @@ hedging is information.
   external actions. So you can't... do the auto rollback... But that's
   fine" — recovery is re-authentication. This reverses the design docs'
   earlier keep-them-outside proposal and closes the "fourth durable store"
-  gap. Detail in `design/oauth-credentials.md`.
+  gap.
 - **Compact-and-report-back: the predecessor writes the report.** "lets
   the first agent build the report as well as their compaction summary.
   And then the compaction summary deals with the initial context of the
   new agent, and the report is given as if it was its first message. I
   guess. something like that." (Hedge his.) Report-back-to-user and
   report-back-to-parent are the same flow; compact-and-continue and
-  compact-and-report-back are the only two situations. Detail in
-  `design/compaction-handover.md`.
+  compact-and-report-back are the only two situations.
 - **Shutdown is one pattern at every scale.** A layer always has kill
   authority over its children — "it is its children for all intents and
   purposes, whilst it's blocked on its children" — exercised by command
@@ -252,7 +273,7 @@ hedging is information.
   down again) crosses a boundary, and each layer kills what it locally
   owns. The remote limb's orphan timeout is the fallback for a *vanished*
   owner, not a second form of shutdown. This rejects the design docs'
-  earlier two-forms framing. Detail in `design/layered-shutdown.md`.
+  earlier two-forms framing.
 - **The activity trail's order is the face's own recorded order.** Every
   face event carries a front-end and a back-end time anchor ("It's after
   this time on the front end. It's after that time on the back end... a
@@ -260,7 +281,7 @@ hedging is information.
   its own total order and that we can't remember that") — so "in the order
   things happened" is an ordinary recorded fact, primarily a
   representation question. Rejects a derived cross-clock-scrambling
-  concern. Detail in `design/user-turn.md`.
+  concern.
 - **Change notices are economised.** No notice for content the agent was
   never exposed to (first load simply gets the new version); some elements
   may warrant no notice even when exposed — "for example, the skill
@@ -269,15 +290,13 @@ hedging is information.
   change notifications coming into the event stream." Notices only need to
   say something changed; the agent reloads at will. And a context rebuild
   "is basically the new snapshot" — notices are events that get rolled in.
-  Detail in `design/context-updates.md`.
 - **Compaction has four trigger kinds, three of them forcible.**
   Agent-at-milestone is one kind; the harness forcibly triggers on the
   context-window limit ("something like 80-85% (or better, a fixed token
   threshold like 100k-200k tokens)") and on cache expiry while the agent
   is idle (the in-flight tool call "rewritten as still in progress, and
   execution continues seamlessly when it completes"); the user can also
-  forcibly trigger. Replaces the earlier invite-only model. Detail in
-  `design/compaction-handover.md` §When it fires.
+  forcibly trigger. Replaces the earlier invite-only model.
 - **Superseded contexts are stored directly, not reconstructed.** "in
   practice we will probably just store the context directly. That is much
   simpler than trying to reconstruct it deterministically from raw
@@ -285,8 +304,7 @@ hedging is information.
   ambitious and not important enough to justify the complexity." Also
   recorded as fact: the append-only cache is "effectively a branching
   structure" — suffixes may be discarded where a cache point can be
-  predicted, "That is why forked sub-agents work at all." Detail in
-  `design/persistence-analytics.md` and `design/compaction-handover.md`.
+  predicted, "That is why forked sub-agents work at all."md`.
 - **Write decompressed, not short.** A process requirement rather than a
   product one, recorded here because it governs every doc these gates
   read: "word count is not expensive because I have a very fast reading
@@ -294,8 +312,7 @@ hedging is information.
   mental speed. So decompressed is much better than compressed, much,
   much better than compressed... go through the examples. Go through the
   story. Go through the the entire logic chain, and I'll read that much
-  faster than I'll read one sentence of compressed language." Full rules
-  in `design/README.md` §Style.
+  faster than I'll read one sentence of compressed language." 
 - **Harness economics are an empirical domain, and he wants agent-run
   tuning.** Hedges his: "compaction economics, cancellation economics...
   and forking economics all feel like empirical domains. I am not very
