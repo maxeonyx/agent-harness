@@ -285,6 +285,14 @@ by the rewritten doc:
   cwd, and more". cwd/hostname: low confidence — "hostname change can be
   legit. maybe a limb can relocate too? not sure... also - not every limb
   has a cwd".
+- **The real tools/cache question is the reverse one.** Not "does the
+  tools array participate in the cached prefix" — "the *reverse* question
+  is the real one: is it ever possible to change anything about tools
+  *without* involving the cached prefix. That's unanswered." Tool
+  addition is the example: "I'm unsure about whether tool addition works
+  robustly at all via append (ie. without breaking prefix)" — the notify
+  decision is not the uncertain part. Provider-side validation of tool
+  arguments: "no, highly doubt it? but yes, unsure."
 - **Option sets absolutely get notices.** They are kept out of the JSON
   schema proper precisely so they can change without a schema change:
   "they're still in the context just not in that spot, and they obviously
