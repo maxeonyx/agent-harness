@@ -462,6 +462,14 @@ by the rewritten doc:
   a packet across a TCP socket. We should be able to use some kind of
   hash map backed tree structure, and a lightweight channel (with maybe
   some delayer implementation for network robustness tests)."
+- **Persistence approach for context updates (2026-08-12, his wording).**
+  "we need to preserve enough information to produce exactly the same
+  prefix in the next API request so that we can keep cache across
+  restarts. So we store notices (naturally, as part of the context
+  storage), but we don't actually need to store all data sources to
+  produce a new context from scratch. That can & should be reloaded all
+  the time, and so neither that nor the derived data need to be persisted
+  (although the data sources themselves maybe be, but that's separate)."
 - **Convex-hull definitions imply further shared docs (2026-08-12).**
   "these things will be shared constraints with shared reasoning. Some of
   it belongs not even in the agent-harness docs but in the agent-tools
