@@ -443,6 +443,29 @@ by the rewritten doc:
   catchy name for those)."
 - **Design docs document the system's ideal state, not just the
   experiment.** "I think the ideal state right? Good."
+- **Experiments need not obey all box constraints (2026-08-12).**
+  "experiments do not have to behave to all the constraints - that's
+  probably too hard, and is what core integration is for. Experiments
+  should still try to behave where doing so would be *hard* - up-front
+  the difficult innards while validating the important surface. Though it
+  could be argued those could be different experiments - the important
+  surface, then doing it in a constrained way, then integrating it into
+  core. The scope of each experiment can be negotiated later."
+- **Every feature gets a scenario test; everything else is in-memory,
+  including the box-building layer (2026-08-12).** "every feature should
+  have a 'scenario test' - a real-as-possible, possibly even
+  containerized, end-to-end 'outer' black box test." And: "the
+  box-building layer still gets in-memory e2e tests! The point is to
+  remove system call overhead & blocking calls. The box-building layer
+  should still accept I/O interfaces with in-memory implementations. We
+  should never *have* to read a file from an *actual* filesystem, or send
+  a packet across a TCP socket. We should be able to use some kind of
+  hash map backed tree structure, and a lightweight channel (with maybe
+  some delayer implementation for network robustness tests)."
+- **Convex-hull definitions imply further shared docs (2026-08-12).**
+  "these things will be shared constraints with shared reasoning. Some of
+  it belongs not even in the agent-harness docs but in the agent-tools
+  workspace docs like the testing approach definitions."
 - **Write decompressed, not short.** A process requirement rather than a
   product one, recorded here because it governs every doc these gates
   read: "word count is not expensive because I have a very fast reading
