@@ -217,6 +217,14 @@ by the rewritten doc:
 - On mid-session tool additions: "I'm not sure if new tools work yet or
   not. Seems fine to me?" — waiting reads as acceptable; hedge kept.
 - **Piggybacking needs explaining** in the doc — it is important.
+- **An expired ("old cold") context is only ever loaded again in order to
+  compact it.** "I think we only ever need to load it up in order to
+  compact it." Ideally compaction fired right before cache expiry, but in
+  practice it may not have. On load it is not rebuilt: "just leave it
+  purely as it was? I think the latter - much easier" — it is the event
+  log of that agent session, and "we're going to present the system
+  prompt diff to the compaction agent anyway, so." (Hedges his. Also
+  touches the future compaction-handover doc.)
 
 - **Event streaming implies snapshotting.** Wording preserved: "while we
   have event streaming, we should also have roll ups, and we should deliver
