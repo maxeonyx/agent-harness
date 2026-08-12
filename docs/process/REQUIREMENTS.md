@@ -255,6 +255,11 @@ by the rewritten doc:
 - **Notice decision 2 is itself economic.** On reference-vs-content: "not
   necessarily - it still depends on the economics & the agent's reaction.
   but *all else equal*, the minimum."
+- **A changed tool schema never gets a notice.** Correcting a draft that
+  had it as the full-content-injection case: "this is wrong. changed tool
+  schema never gets a notice, as discussed." (Old calls keep working at
+  the limb; the new schema arrives at rebuild. This supersedes the source
+  note's "Tools with changed schema need full content injection.")
 
 - **Event streaming implies snapshotting.** Wording preserved: "while we
   have event streaming, we should also have roll ups, and we should deliver
