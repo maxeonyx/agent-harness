@@ -408,6 +408,26 @@ by the rewritten doc:
   recorded as fact: the append-only cache is "effectively a branching
   structure" — suffixes may be discarded where a cache point can be
   predicted, "That is why forked sub-agents work at all."md`.
+- **The "what" stage defines the box the implementer works within
+  (2026-08-12).** Done when "an implementer could write the code without
+  leeway for major wrong decisions on important behavioural aspects. It
+  obviously still needs to invent stuff. But we should have broad guidance
+  about how the data should be modeled, how the code should look & feel,
+  and especially *defining the box that the implementer should work
+  within* - if the implementer uses too many capabilities, they go
+  outside the box. The more constrained the experiment code, the more
+  useful it is for the final system. Eg. did they write it as a pure
+  dataflow? or did they write it as imperative logic with I/O? Does write
+  data? or does it leave that to be done by some other kind of layer?
+  Does it read the current time? or does it take it as a parameter?...
+  Truly good code is written for the minimal capabilities & runtime." His
+  ideal module: "takes a snapshot + a batch of events over each input
+  dimension and produces its own snapshot + events. It is pure, has no
+  I/O, cannot see anything except its declared inputs, and does nothing
+  except produce its declared outputs." And: "there's stuff inside the
+  box, then there's building that box. But we should put as much as
+  possible in the former." "'Well behaved' code is the goal, and it may
+  be highly counter-intuitive."
 - **Write decompressed, not short.** A process requirement rather than a
   product one, recorded here because it governs every doc these gates
   read: "word count is not expensive because I have a very fast reading
