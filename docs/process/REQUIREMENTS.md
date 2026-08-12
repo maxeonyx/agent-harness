@@ -428,6 +428,21 @@ by the rewritten doc:
   box, then there's building that box. But we should put as much as
   possible in the former." "'Well behaved' code is the goal, and it may
   be highly counter-intuitive."
+- **The what covers the convex hull, not just the inner box
+  (2026-08-12).** "the point is to nail down the convex hull of the
+  feature across many, many dimensions. Some of those are the 'inner
+  box', but there's more." For context-updates: the pure logic is "mostly
+  'logic inside a box'", but "We have to build some I/O stuff! We have to
+  read the time, read the context files for a 'ordinary fs limb' & emit
+  the new versions, etc." Topology: "it shouldn't just be one node -
+  first of all, it's one reader per limb, one notifier per session /
+  context, etc." Also to define: "what's stored & what's ephemeral (if
+  anything), what the data lifecycle is (when do we drop the data, if
+  ever), and more." Tests: "a few black-box 'real' end-to-end tests, and
+  more in-memory-only fast end-to-end tests (still don't have a good
+  catchy name for those)."
+- **Design docs document the system's ideal state, not just the
+  experiment.** "I think the ideal state right? Good."
 - **Write decompressed, not short.** A process requirement rather than a
   product one, recorded here because it governs every doc these gates
   read: "word count is not expensive because I have a very fast reading
