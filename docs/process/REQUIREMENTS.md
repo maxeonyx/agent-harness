@@ -217,6 +217,28 @@ by the rewritten doc:
 - On mid-session tool additions: "I'm not sure if new tools work yet or
   not. Seems fine to me?" — waiting reads as acceptable; hedge kept.
 - **Piggybacking needs explaining** in the doc — it is important.
+- **"A reference" is not literal — a notice carries the minimum, possibly
+  less than a name.** "It could even be something like 'one or more skills
+  have gone stale.' (although that is too un-specific probably, it gets
+  across the idea - we don't neccessarily need to list 10 skills that have
+  updates - we might elide even that info as long as we give the agent a
+  way to re-discover reality reliably & cheaply ie. it shouldn't have to
+  reload everything just to be sure)."
+- **Notices are a contingent economic choice, and progressive disclosure
+  is the same choice.** "the actual economics is the fundamental here
+  (that the notices are actually a contingent choice - unconditional input
+  smaller, conditional billing an extra turn (so more cache read in that
+  branch), vs unconditional billing of larger number of tokens at 'input'
+  cost but no extra turn. And yes, this is exactly the same as progressive
+  disclosure." The PD connection is "a connection, not a fundamental."
+- **Waiting for rebuild is safe in one of two ways.** "to deal with
+  correctness, we *keep the old tools working*. or it might be stuff that
+  doesn't really affect correctness."
+- **The only bound on honouring old tool schemas:** "I don't see any other
+  constraint? The question is - is there ever going to be another use of
+  this tool code version, or not?"
+- **The ~1h elapsed-time threshold is "discoverable, that's my naive
+  guess"** — a tunable, not a designed constant. (Hedge his.)
 - **An expired ("old cold") context is only ever loaded again in order to
   compact it.** "I think we only ever need to load it up in order to
   compact it." Ideally compaction fired right before cache expiry, but in
@@ -224,7 +246,10 @@ by the rewritten doc:
   purely as it was? I think the latter - much easier" — it is the event
   log of that agent session, and "we're going to present the system
   prompt diff to the compaction agent anyway, so." (Hedges his. Also
-  touches the future compaction-handover doc.)
+  touches the future compaction-handover doc.) The main why, given later:
+  tool call schemas — "we can't just renew & continue to extend the
+  context because we can't be sure that the tools even exist or work
+  anymore after say a few weeks. so yeah it just needs a rebuild."
 
 - **Event streaming implies snapshotting.** Wording preserved: "while we
   have event streaming, we should also have roll ups, and we should deliver
