@@ -255,11 +255,24 @@ by the rewritten doc:
 - **Notice decision 2 is itself economic.** On reference-vs-content: "not
   necessarily - it still depends on the economics & the agent's reaction.
   but *all else equal*, the minimum."
-- **A changed tool schema never gets a notice.** Correcting a draft that
-  had it as the full-content-injection case: "this is wrong. changed tool
-  schema never gets a notice, as discussed." (Old calls keep working at
-  the limb; the new schema arrives at rebuild. This supersedes the source
-  note's "Tools with changed schema need full content injection.")
+- **Tool schemas are outside notice decision 2 — they have their own
+  correctness logic.** "changed tool schema never gets a notice, as
+  discussed"; and: "tool schemas are about correctness more than any
+  other thing in the system context. either the tools change underneath,
+  and so we either append a notice (but I don't think this is wise or
+  possible) or force a rebuild, or the tools *don't* change underneath
+  (they do, but we keep the old ones around until the next rebuild)."
+  (Supersedes the source note's "Tools with changed schema need full
+  content injection.")
+- **The cold-context logic, restated by him and generalised:** "An old
+  context will contain old info. where that's important for correctness,
+  we need notices or rebuild. because we're relatively sure that *tool
+  schemas* / *tool presence* can't be fixed via notices..., and because
+  we don't want to keep around old tool code versions forever, this might
+  mean we have to force rebuild *if the context contains tool description
+  content that is stale in a correctness-affecting way*. Importantly, the
+  same logic would apply to any *other* things, perhaps for example
+  *subagent* description content?" (Hedges his.)
 
 - **Event streaming implies snapshotting.** Wording preserved: "while we
   have event streaming, we should also have roll ups, and we should deliver
