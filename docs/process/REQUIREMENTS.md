@@ -483,7 +483,18 @@ by the rewritten doc:
   much here. Perhaps we should think about a 'tool call summary' field
   for every tool call that can be elided, then we only present that one
   sentence summary when we prune. That's another contingent economics
-  thing though."
+  thing though." Then, on the economics: "The summary is not input, but
+  output. Which is even more expensive! So yeah it seems pretty unlikely
+  to be net positive, actually." (A model-written summary is what he
+  priced.)
+- **Where pruning may happen (2026-08-12, hedges his).** "pruning is for
+  either a rebuild, or rewriting pre-cache, in a fixed-size suffix maybe
+  (fixed number of messages or token size whichever is larger). That's
+  what opencode has done in the past I believe, perhaps still." On the
+  suffix variant: "I'm not confident on 'prune within suffix', it implies
+  re-sending uncached content over and over, but on the other hand it
+  also implies much smaller context & cache write due to tool call
+  pruning / coalescing. Again, an economic decision."
 - **Persistence approach for context updates (2026-08-12, his wording).**
   "we need to preserve enough information to produce exactly the same
   prefix in the next API request so that we can keep cache across
