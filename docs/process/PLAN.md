@@ -167,18 +167,17 @@ Purpose: validate the context model's change mechanics — append vs
 rebuild, change notification as bare-minimum invalidation, progressive
 disclosure.
 
-Covers (`source-notes/context-updates.md`,
-`source-notes/context-and-agent-loop.md`): warm sessions get bare-minimum
-change notices (skill content, tool availability, AGENTS.md, option sets,
-elapsed time >1h), never eager content — except schema-changed tools,
-which need full injection; disallowed-without-rebuild changes (limb
-definitely; maybe cwd/hostname; model unclear; agent-role leaning no);
-rebuild produces canonical current context and does not replay obsolete
-append-only notices; request-trigger rules hold; progressive disclosure of
-skills and tools (gating, load-when descs, cost balance).
+The design is `docs/process/design/context-updates.md` (ideal state,
+reviewed with the user 2026-08-12); this entry does not restate it. Scope
+when pulled is a slice of that design, negotiated then.
 
-Open experiments: provider cache semantics for append/rebuild/forks;
-what append-mode is w.r.t. for forks.
+Empirical questions the design leaves open for this experiment: whether
+agents overreact to change notices (wording and frequency — also related
+to the user-turn work); whether a utility model is a viable actionability
+classifier and at what cost; the elapsed-time and debounce thresholds;
+whether mid-session tool addition works via append at all.
+
+Depends on provider-cache-probe for cache semantics.
 
 Exit: context change handling is honest against warm-cache reality and
 cheap in the common case.
@@ -290,8 +289,11 @@ design.
     breakpoint advances as history grows.
   Still open and squarely this experiment's job: whether anything about
   tools can change without involving the cached prefix; what a fork
-  inherits; real TTL behavior and observability; late system parts; and
-  the same questions on the OpenAI responses API.
+  inherits; real TTL behavior and observability; late system parts;
+  whether a *different* model (eg. Haiku as a utility model) can read a
+  prefix cached by a larger model at 0.1× — believed not, since the cache
+  key is expected to include the model, but cheap to test; and the same
+  questions on the OpenAI responses API.
 - **meta-agent-tuning** (candidate, from user feedback 2026-08-04, hedges
   his): compaction, cancellation and forking economics "all feel like
   empirical domains", and he "would prefer a mechanism for agents to run

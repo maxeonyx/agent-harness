@@ -473,7 +473,26 @@ by the rewritten doc:
   a 'small model' or 'utility model' for better quality classification &
   summary." This is a candidate mechanism for the actionability test,
   which he had previously noted was logically right but practically
-  unknowable ("how are we gonna know?").
+  unknowable ("how are we gonna know?"). On how to run it: "it's
+  potentially possible that a utility model (eg. claude haiku) can re-use
+  the same prefix at 0.1x cost. This should be confirmed empirically - if
+  true, it's useful. Otherwise we'd give it a one-shot task with a cached
+  system prompt, just enough context, and have it produce a one-word
+  answer. (which tbh may often be cheaper than 100k+ context at 0.1x."
+  Derived: the one-shot is ~two orders of magnitude cheaper than a
+  0.1×-read of a 100k prefix on a large model, so the one-shot is the
+  design regardless of how the cross-model cache question resolves.
+- **"Detail" is the name for notice specificity, and it trades three ways
+  (2026-08-12).** His correction: "i would call this detail, and note that
+  it trades off against distraction (task quality) & economics" — so not
+  a pure cost decision; a bigger notice can degrade the agent's work on
+  its actual task.
+- **Why small notices are safe, his framing (2026-08-12):** "smaller
+  notices are cheaper if the agent doesn't need them but mean that the
+  agent may need to go get more detail if it does need them. there always
+  needs to be a clear, reliable path to that information."
+- **Overreaction to notices needs empirical testing (2026-08-12)** and is
+  "also related to the user-turn stuff".
 - **"Identity of a context contribution" is the term** for what a notice
   and a content-version record point at (his naming, 2026-08-12). A
   contribution is anything that goes into a context: skill content, an
