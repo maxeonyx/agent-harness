@@ -462,6 +462,19 @@ by the rewritten doc:
   a packet across a TCP socket. We should be able to use some kind of
   hash map backed tree structure, and a lightweight channel (with maybe
   some delayer implementation for network robustness tests)."
+- **Change thresholds for content notices (2026-08-12).** His preferred
+  aspect name over "versioning". "you don't always need to actually say
+  anything." Detection: "not just time, hash (or frankly just equality -
+  hashes are for when you don't want to keep the content itself around)
+  is better."
+- **Rebuild-time coalescing and a tool-call summary field (2026-08-12,
+  hedges his).** "when rebuilding a context we can coalesce notices into
+  the system prompt & elide edits where we have a later read, etc? I
+  think that's reasonable. TBH I haven't thought about context rebuild
+  much here. Perhaps we should think about a 'tool call summary' field
+  for every tool call that can be elided, then we only present that one
+  sentence summary when we prune. That's another contingent economics
+  thing though."
 - **Persistence approach for context updates (2026-08-12, his wording).**
   "we need to preserve enough information to produce exactly the same
   prefix in the next API request so that we can keep cache across
