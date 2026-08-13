@@ -467,6 +467,15 @@ by the rewritten doc:
   anything." Detection: "not just time, hash (or frankly just equality -
   hashes are for when you don't want to keep the content itself around)
   is better."
+- **Notices are rendered at request build, not appended at detection
+  (2026-08-12).** Max on the choice: "good point!! this is a great
+  question! render notices at request build makes a lot of sense." So
+  detection records only change *facts* (element, actor, when) as durable
+  events; the request builder compares current sources against the
+  session's content versions and renders the notice block then. Falls
+  out: coalescing of repeated edits, reverts collapsing to nothing,
+  elapsed time computed at delivery by construction, and no pending-notice
+  queue to recover after a restart.
 - **Rebuild-time coalescing and a tool-call summary field (2026-08-12,
   hedges his).** "when rebuilding a context we can coalesce notices into
   the system prompt & elide edits where we have a later read, etc? I
