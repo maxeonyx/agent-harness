@@ -270,6 +270,28 @@ design.
   detail: "we need to *very* correctly use OpenAI responses API & Anthropic
   messages API w.r.t. caching for this all to work." User-confirmed
   2026-08-04: "Yes, definitely. That is a great, well-scoped experiment."
+
+  Prior knowledge to **verify, not re-discover** (from the Anthropic
+  prompt-caching docs, 2026-08-12 — documentation, not yet observed
+  against the real API):
+  - Cache write is 1.25× base input at 5-minute TTL; cache read is 0.1×;
+    breakpoints themselves cost nothing.
+  - Cache write is charged when content newly enters the cache, and that
+    includes the previous assistant turn: "input tokens represent the new
+    user message, cache creation input tokens account for new assistant
+    and user turns, cache read input tokens reflect the conversation
+    history up to the previous turn." So model output is not cached at
+    generation time — it is charged again at 1.25× on the next request if
+    the breakpoint sits after it.
+  - "The system automatically identifies and utilizes the longest
+    previously cached sequence" — supports the nested-prefix model
+    (context-updates claim 2): prefixes need not be selected.
+  - An automatic caching mode exists (top-level `cache_control`) where the
+    breakpoint advances as history grows.
+  Still open and squarely this experiment's job: whether anything about
+  tools can change without involving the cached prefix; what a fork
+  inherits; real TTL behavior and observability; late system parts; and
+  the same questions on the OpenAI responses API.
 - **meta-agent-tuning** (candidate, from user feedback 2026-08-04, hedges
   his): compaction, cancellation and forking economics "all feel like
   empirical domains", and he "would prefer a mechanism for agents to run

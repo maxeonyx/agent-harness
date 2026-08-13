@@ -487,6 +487,12 @@ by the rewritten doc:
   output. Which is even more expensive! So yeah it seems pretty unlikely
   to be net positive, actually." (A model-written summary is what he
   priced.)
+- **The fork model subsumes tail pruning (2026-08-12).** "I think the
+  forked agent design gets around this by subbing the tail with a
+  (admittedly output so 5.0x) task summary / report (kinda a
+  compaction)." So bulk that would need pruning is instead generated in a
+  child context and returned as a report; the parent never carries the
+  bulk.
 - **Where pruning may happen (2026-08-12, hedges his).** "pruning is for
   either a rebuild, or rewriting pre-cache, in a fixed-size suffix maybe
   (fixed number of messages or token size whichever is larger). That's
