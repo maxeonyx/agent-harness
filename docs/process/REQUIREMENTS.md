@@ -467,8 +467,28 @@ by the rewritten doc:
   anything." Detection: "not just time, hash (or frankly just equality -
   hashes are for when you don't want to keep the content itself around)
   is better."
+- **A utility model may classify and summarise changes (2026-08-12, hedge
+  his).** On change thresholds: "there's one more thing to consider -
+  again only if the economics justifies it - passing these things through
+  a 'small model' or 'utility model' for better quality classification &
+  summary." This is a candidate mechanism for the actionability test,
+  which he had previously noted was logically right but practically
+  unknowable ("how are we gonna know?").
+- **"Identity of a context contribution" is the term** for what a notice
+  and a content-version record point at (his naming, 2026-08-12). A
+  contribution is anything that goes into a context: skill content, an
+  AGENTS.md layer, a tool description, an option set, a notice, user
+  activity. Rename is genuinely confusing under this model (delete + add,
+  so the agent sees "skill gone" + "new skill") — open.
+- **Provenance buckets are useful to the model.** On the derivation that
+  the harness reliably knows only three buckets — changes it caused
+  itself, git state, and unattributable external edits: "this is great,
+  something I'd never thought of, and is potentially *very* useful for the
+  model, if we can give it that info."
 - **Notices are rendered at request build, not appended at detection
-  (2026-08-12).** Max on the choice: "good point!! this is a great
+  (2026-08-12).** Generalised by him: "we compute + lock notices & other
+  piggybacked contributions as we build the request" — the lock-at-build
+  rule covers every piggybacked contribution, not just change notices. Max on the choice: "good point!! this is a great
   question! render notices at request build makes a lot of sense." So
   detection records only change *facts* (element, actor, when) as durable
   events; the request builder compares current sources against the
