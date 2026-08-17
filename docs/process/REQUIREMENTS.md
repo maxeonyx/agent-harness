@@ -467,6 +467,45 @@ by the rewritten doc:
   a packet across a TCP socket. We should be able to use some kind of
   hash map backed tree structure, and a lightweight channel (with maybe
   some delayer implementation for network robustness tests)."
+
+  The two kinds, defined by him 2026-08-12. **Scenario test:** "a fully
+  black box end-to-end test including setup, probably UI eventually. Uses
+  real I/O as the boundary. Proves real usage, forces that the harness is
+  itself harnessable for tests (eg. forces observability features useful
+  for testing), can be slow (but should never be flaky) and is a happy
+  path test mostly." **Fast end-to-end test:** "uses in-memory I/O, a
+  whole distributed system in one process, relying on solid abstractions
+  and requires we never do any ad-hoc boundary breaking when programming
+  the harness code (note this is a strict requirement for core, but not
+  necessarily for experiments)." On timing: "virtual time. good. although
+  the scenario test can take real time, but should not have dumb
+  waiting/polling still - everything should have an event it waits for."
+  **The delayer channel is for fake network conditions**, not for
+  reordering robustness: "re-ordered data should NOT be a problem, a data
+  source should NOT do this. the *delayer channel* is for *fake network
+  conditions* for in-process distributed systems stuff."
+
+  These definitions are workspace-level doctrine shared by every tool
+  ("yes, excellent!"), so they belong in `agent-tools` workspace docs and
+  should be referenced rather than restated here. TODO: place them there.
+- **Analytics is a retention question, not a queryability claim
+  (2026-08-12).** Correcting a draft that treated analytics as a free
+  by-product of recording events: "analytics should be about *what* do we
+  keep, *for how long*, and especially *why*. 'keep everything' is an
+  option but not an answer."
+- **Harness voice carries ground truth; quoted content keeps its own voice
+  (2026-08-12, hedges his).** On whether notice framing is a security
+  concern: "not sure about this, but yes... harness voice is for ground
+  truth - the time, but also 'the AGENTS.md contains this content', but
+  the *content* while it is being shown by the harness, is not in the
+  voice of the harness.... tbh I think this is all relatively obvious to
+  the agent. but the channels or roles do matter, but also I just want the
+  agent to do what I want. I don't have an authority model across multiple
+  users or whatever."
+- **Economics decisions typically need measurement (2026-08-12).** On the
+  economics aspect: "maybe a point that it typically requires empirical
+  measurement or experiment?" Progressive disclosure is likewise "an
+  economic decision as well".
 - **Change thresholds for content notices (2026-08-12).** His preferred
   aspect name over "versioning". "you don't always need to actually say
   anything." Detection: "not just time, hash (or frankly just equality -
