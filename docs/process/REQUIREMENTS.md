@@ -540,6 +540,44 @@ by the rewritten doc:
   re-sending uncached content over and over, but on the other hand it
   also implies much smaller context & cache write due to tool call
   pruning / coalescing. Again, an economic decision."
+- **Context contributions come from many data sources, not just limbs
+  (2026-08-12).** "I think there are multiple data sources. A limb is a
+  data source, yes, and is so for multiple sessions (eg. forked sessions
+  especially) but I think there's also machine context, user context,
+  maybe face-specific context. Probably the user-turn stuff gets
+  implemented as a data source." So skills have multiple sources;
+  limb-local content is just one case.
+- **Consistency at request build is a vector-clock cut, not eventual
+  consistency (2026-08-12).** Rejecting a derived "notices are eventually
+  consistent" claim: "Think of the tool call loop as another data source
+  maybe, and only render + send once you've got derived data based on the
+  vector clock value that is greater (or the same) over all data sources.
+  We don't necessarily have to literally implement that (ie. what we build
+  could be a 'manually rolled out / manually compiled' version of that),
+  but that's the logic behind what we want to do."
+- **Correctness first, then cheapest (2026-08-12, hedge his).** On the
+  keep-warm / rebuild / compact ladder: "we build the harness for
+  correctness, then choose the cheapest option within that?"
+- **Rebuild is code-only and still needs design (2026-08-12).**
+  "re-projection of session history into a new context, but notably NOT a
+  compaction. It's done with only regular code, and maybe utility model
+  calls. Note that this needs to be designed still because it's a bit odd,
+  because it mixes 'event stream' and 'rollup' in a messy way." So the
+  ladder's three rungs escalate by who does the work: nothing → code (±
+  utility model) → main model output.
+- **Stored context state exists per warm cache point (2026-08-12).**
+  "there's one for each warm cache point."
+- **Resuming a weeks-old session may require storing more (2026-08-12,
+  hedge his).** "we may actually have to store some stuff in order to know
+  what's *different* when resuming a weeks-old session. so maybe storing
+  both source info and rendered api request content for caching." Reads as
+  compatible with the persistence entry below — what was *sent* is stored;
+  sources are still reloaded rather than stored as a reproduction
+  mechanism — but the "source info" half is not fully pinned.
+- **Restart cache affinity is a separate doc's problem.** Beyond
+  reproducing the same prefix, "any other surrogate ids or whatever that
+  refer to cache affinity or cache points" matter too — noted as a
+  dependency, not designed here.
 - **Persistence approach for context updates (2026-08-12, his wording).**
   "we need to preserve enough information to produce exactly the same
   prefix in the next API request so that we can keep cache across
