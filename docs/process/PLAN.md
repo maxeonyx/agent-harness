@@ -143,7 +143,7 @@ hierarchy survives restart; in-flight model/tool state represented;
 cache-supporting transient data survives while useful and is cleaned after
 expiry; cost / cache / tool-duration / stuck-scope queries work; large
 blobs separate from hot tables; schema leaves room for
-append/rebuild/request-trigger state.
+append/refurbish/request-trigger state.
 
 Replication / backup-by-default (`source-notes/federated-brain.md`, not
 previously carried into this plan): the user likes federated brains
@@ -164,7 +164,7 @@ context-lifecycle requirements without obvious rewrite.
 ### context-updates
 
 Purpose: validate the context model's change mechanics — append vs
-rebuild, change notification as bare-minimum invalidation, progressive
+refurbish, change notification as bare-minimum invalidation, progressive
 disclosure.
 
 The design is `docs/process/design/context-updates.md` (ideal state,
@@ -323,8 +323,9 @@ copied experiment code. It should likely include: face/brain/limb role
 boundaries over co-located and split topologies; SQLite-backed
 session/event storage with an explicit
 durable/transient/shared-UI/disposable data lifecycle; explicit context
-lifecycle (record, append, rebuild, trigger); the user-tool and agent-tool
-contracts; append and rebuild modes with cache-aware metadata; structured
+lifecycle (record, append, refurbish, initialise, trigger); the user-tool
+and agent-tool contracts; append and refurbish modes with cache-aware
+metadata; structured
 subagent hierarchy; a multi-client-safe shared UI state model; plugin/tool
 reload with schema stability across warm sessions; analytics-grade
 metadata from the start; a protocol/version/migration story; operator
@@ -343,7 +344,7 @@ invariants: behavioral coverage across the stakeholder breadth; would we
 choose the design fresh; no accidental narrowing of future GUI /
 multi-client / topology / analytics / reload requirements; every stored
 datum knows its lifecycle class; append stays separate from triggering;
-warm append-mode deltas distinguishable from rebuild-mode canonical
+warm append-mode deltas distinguishable from refurbish-mode canonical
 context; no experiment-code cargo culting; no security boundary erosion;
 shared UI state explicitly modeled; the experiment outcome documents
 reviewed.

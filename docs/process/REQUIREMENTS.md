@@ -95,14 +95,14 @@ of these stops and goes to the user.
 1. **The brain is the only role that drives provider API requests.**
    Provider credentials never reach limbs, faces, plugins, tool schemas,
    logs, or model context. (Design notes.)
-2. **Recording, appending, rebuilding, and triggering are distinct
+2. **Recording, appending, refurbishing, and triggering are distinct
    operations.** Passive user activity never triggers a model request;
    only turn end, tool-loop continuation, cache-nearly-expired handover,
    and explicit resume may. (Design notes; proven in the walking-skeleton experiment.)
 3. **All activity has multiple views.** An event is about its emitter, not
    *for* anyone; consumers (or a helpful middle layer) project it — to the
    model (possibly per-model), to the user (possibly per-interface), for
-   rebuild vs append. User-tool activity framed as user activity rather
+   refurbish vs append. User-tool activity framed as user activity rather
    than agent tool calls is one projection of this. (Design notes,
    reworded on walking-skeleton evidence.)
 4. **Face, brain, and limb are logical roles**; co-location versus
@@ -213,7 +213,7 @@ by the rewritten doc:
   new info somehow if it thinks it *is* relevant."
 - **The limb must continue to accept old tool calls** "until all sessions
   that used those old tools have reached cache expiry (and so would be
-  rebuilt)."
+  rebuilt [re-initialised])."
 - On mid-session tool additions: "I'm not sure if new tools work yet or
   not. Seems fine to me?" — waiting reads as acceptable; hedge kept.
 - **Piggybacking needs explaining** in the doc — it is important.
@@ -231,7 +231,7 @@ by the rewritten doc:
   branch), vs unconditional billing of larger number of tokens at 'input'
   cost but no extra turn. And yes, this is exactly the same as progressive
   disclosure." The PD connection is "a connection, not a fundamental."
-- **Waiting for rebuild is safe in one of two ways.** "to deal with
+- **Waiting for the next initialise is safe in one of two ways.** "to deal with
   correctness, we *keep the old tools working*. or it might be stuff that
   doesn't really affect correctness."
 - **The only bound on honouring old tool schemas:** "I don't see any other
@@ -240,7 +240,8 @@ by the rewritten doc:
 - **The ~1h elapsed-time threshold is "discoverable, that's my naive
   guess"** — a tunable, not a designed constant. (Hedge his.)
 - **Expired ("old cold") contexts: not settled.** Constant across his
-  takes: on load it is not rebuilt — "just leave it purely as it was? I
+  takes: on load it is neither refurbished nor re-initialised — "just
+  leave it purely as it was? I
   think the latter - much easier"; it is the event log of that agent
   session. First take was compact-only ("I think we only ever need to
   load it up in order to compact it"), then revised same day: "I think
@@ -260,18 +261,20 @@ by the rewritten doc:
   discussed"; and: "tool schemas are about correctness more than any
   other thing in the system context. either the tools change underneath,
   and so we either append a notice (but I don't think this is wise or
-  possible) or force a rebuild, or the tools *don't* change underneath
-  (they do, but we keep the old ones around until the next rebuild)."
+  possible) or force a rebuild [refurbish/compact], or the tools *don't*
+  change underneath (they do, but we keep the old ones around until the
+  next rebuild [initialise])."
   (Supersedes the source note's "Tools with changed schema need full
   content injection.")
 - **Three levels of context maintenance — "the original vision":** "keep
-  using warm context; rebuild existing context (incorporate notices
-  etc.); compact (make fresh context)." Old notices get rolled in on
-  rebuild, "ideally even without a compaction."
+  using warm context; rebuild [refurbish] existing context (incorporate
+  notices etc.); compact (make fresh context)." Old notices get rolled in
+  on refurbishment, "ideally even without a compaction."
 - **"Tool schemas" always included the tool set.** "whenever I was
   referring to 'tool schemas' I *also* meant 'tool set' as well. Tool
-  removal is a breaking change to the tool schema" — so tool removal is
-  ~almost certainly rebuild, not a notice. Tool *addition*: "I'm unsure."
+  removal is a breaking change to the tool schema" — so tool removal
+  ~almost certainly requires a refurbishment or compaction, not a notice.
+  Tool *addition*: "I'm unsure."
 - **Per-element decisions (2026-08-12):** skill content notifies "only if
   loaded". Skill description: no is "a safe general rule" — basis:
   "skill descriptions changing is unusual without skill content changes
@@ -281,7 +284,7 @@ by the rewritten doc:
   whether free-text content update X affects session Y or not". AGENTS.md
   and other limb context: "almost certainly yes" — "that feels more like
   a contract to me. It's technically the same though." Limb identity
-  requires rebuild — and "limb is not one thing... it's tools, context,
+  requires a fresh initialise — and "limb is not one thing... it's tools, context,
   cwd, and more". cwd/hostname: low confidence — "hostname change can be
   legit. maybe a limb can relocate too? not sure... also - not every limb
   has a cwd".
@@ -302,10 +305,11 @@ by the rewritten doc:
   for the task tool!"
 - **Model: he challenges "not a context fact".** "I think we do want to
   tell the model which model it is. But yes, changing it invalidates
-  cache so we do rebuild." Refines the walking-skeleton "request fact"
-  ruling: mechanically a request fact, but its identity is worth telling
-  the model. Also: "tbc if rebuild is always 'compact immediately prior'
-  or not. I think it is, if our compaction is good."
+  cache so we do rebuild [initialise]." Refines the walking-skeleton
+  "request fact" ruling: mechanically a request fact, but its identity is
+  worth telling the model. Also: "tbc if rebuild [refurbishment] is always
+  'compact immediately prior' or not. I think it is, if our compaction is
+  good."
 - **For the compaction-handover doc rewrite — uncached compaction.** "I
   just realized we can't always assume the original model is available or
   desirable to do a compaction. We may want to have an old-style
@@ -313,10 +317,10 @@ by the rewritten doc:
   'compaction agent' system prompt as well as our additional context."
 - **The cold-context logic, restated by him and generalised:** "An old
   context will contain old info. where that's important for correctness,
-  we need notices or rebuild. because we're relatively sure that *tool
-  schemas* / *tool presence* can't be fixed via notices..., and because
-  we don't want to keep around old tool code versions forever, this might
-  mean we have to force rebuild *if the context contains tool description
+  we need notices or rebuild [refurbish/compact]. because we're relatively
+  sure that *tool schemas* / *tool presence* can't be fixed via notices...,
+  and because we don't want to keep around old tool code versions forever,
+  this might mean we have to force rebuild *if the context contains tool description
   content that is stale in a correctness-affecting way*. Importantly, the
   same logic would apply to any *other* things, perhaps for example
   *subagent* description content?" (Hedges his.)
@@ -391,8 +395,9 @@ by the rewritten doc:
   description. Assumably, that's not changing too much... maybe debatable,
   but I think we need to draw these lines. Otherwise, we'll get too much
   change notifications coming into the event stream." Notices only need to
-  say something changed; the agent reloads at will. And a context rebuild
-  "is basically the new snapshot" — notices are events that get rolled in.
+  say something changed; the agent reloads at will. And a refurbished
+  context "is basically the new snapshot" — notices are events that get
+  rolled in.
 - **Compaction has four trigger kinds, three of them forcible.**
   Agent-at-milestone is one kind; the harness forcibly triggers on the
   context-window limit ("something like 80-85% (or better, a fixed token
@@ -515,11 +520,11 @@ by the rewritten doc:
   out: coalescing of repeated edits, reverts collapsing to nothing,
   elapsed time computed at delivery by construction, and no pending-notice
   queue to recover after a restart.
-- **Rebuild-time coalescing and a tool-call summary field (2026-08-12,
-  hedges his).** "when rebuilding a context we can coalesce notices into
+- **Refurbish-time coalescing and a tool-call summary field (2026-08-12,
+  hedges his).** "when rebuilding [refurbishing] a context we can coalesce notices into
   the system prompt & elide edits where we have a later read, etc? I
   think that's reasonable. TBH I haven't thought about context rebuild
-  much here. Perhaps we should think about a 'tool call summary' field
+  [refurbishment] much here. Perhaps we should think about a 'tool call summary' field
   for every tool call that can be elided, then we only present that one
   sentence summary when we prune. That's another contingent economics
   thing though." Then, on the economics: "The summary is not input, but
@@ -533,13 +538,28 @@ by the rewritten doc:
   child context and returned as a report; the parent never carries the
   bulk.
 - **Where pruning may happen (2026-08-12, hedges his).** "pruning is for
-  either a rebuild, or rewriting pre-cache, in a fixed-size suffix maybe
+  either a rebuild [refurbishment], or rewriting pre-cache, in a fixed-size suffix maybe
   (fixed number of messages or token size whichever is larger). That's
   what opencode has done in the past I believe, perhaps still." On the
   suffix variant: "I'm not confident on 'prune within suffix', it implies
   re-sending uncached content over and over, but on the other hand it
   also implies much smaller context & cache write due to tool call
   pruning / coalescing. Again, an economic decision."
+- **"Rebuild" is vetoed; the operations are initialise, refurbish, compact
+  (2026-08-12).** His veto: "rebuild is not 'build a new context'!! rebuild
+  is 'transform an existing context'... maybe we've been abusing
+  terminology here. let's veto 'rebuild'." The replacements, his wording:
+  **refurbish** a context — "transform existing to reduce token count, but
+  NOT compact - the messy one"; **initialise** a context — "this refers to
+  the system prompt only - and happens on new sessions, on compactions,
+  and yes, on refurbishments." Compaction keeps its name. Consequence: the
+  system section can only change by an initialise, and initialising an
+  existing context happens only as part of a refurbishment — otherwise the
+  change waits for a compaction into a fresh context. Earlier quotes in
+  this file predate the veto and keep his original word; glosses mark the
+  mapping where it isn't obvious. Two unrelated uses of "rebuild" survive
+  and are not this concept: the walking-skeleton's `/rebuild` of in-memory
+  state from the journal, and the harness rebuilding its own binary.
 - **Context contributions come from many data sources, not just limbs
   (2026-08-12).** "I think there are multiple data sources. A limb is a
   data source, yes, and is so for multiple sessions (eg. forked sessions
@@ -556,9 +576,9 @@ by the rewritten doc:
   could be a 'manually rolled out / manually compiled' version of that),
   but that's the logic behind what we want to do."
 - **Correctness first, then cheapest (2026-08-12, hedge his).** On the
-  keep-warm / rebuild / compact ladder: "we build the harness for
+  keep-warm / refurbish / compact ladder: "we build the harness for
   correctness, then choose the cheapest option within that?"
-- **Rebuild is code-only and still needs design (2026-08-12).**
+- **Refurbishment is code-only and still needs design (2026-08-12).**
   "re-projection of session history into a new context, but notably NOT a
   compaction. It's done with only regular code, and maybe utility model
   calls. Note that this needs to be designed still because it's a bit odd,
