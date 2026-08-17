@@ -4,6 +4,14 @@ Provenance: why layer, core claims, per-element table, and the aspect list revie
 
 Sources: `docs/source-notes/context-updates.md`, `docs/source-notes/context-and-agent-loop.md`, `docs/process/REQUIREMENTS.md` §"Decisions from design review".
 
+## What this is about
+
+An agent's context contains stuff that can go stale — the text of a skill it loaded, an AGENTS.md, the list of available subagents. The agent finds out via a note appended to the next request that was going to happen anyway.
+
+That note is written at the moment the request is built, not at the moment the change happens. Max edits a skill at 3pm; the session's next request is at 6pm; what to say is worked out at 6pm.
+
+So at 6pm, to write that note, we need to know the current state of everything that feeds the context: skill files sitting on a limb, context layers from the machine or the user, the tool set, the clock. Those are the **data sources**.
+
 ## Vocabulary
 
 - **Context contribution** — anything that goes into a context: skill content, an AGENTS.md layer, a tool description, an option set, a notice, user activity. For example: the text of the `github` skill, as sent.
@@ -49,6 +57,30 @@ Three levels of context maintenance, cheapest first — the original vision: kee
 8. The ideal for an expired ("old cold") context: revive it as warm — re-send it exactly as it was (neither refurbished nor re-initialised; it is the event log of that session), append notices (perhaps copious), and keep going. The cost logic: compacting re-bills the whole context at input anyway; for the ~same money (cache write is ~1.25× input), pay cache write instead and don't compact. The carve-out is correctness. An old context contains old info; where that matters for correctness, notices or a refurbishment are needed. We're relatively sure tool schemas and tool presence can't be fixed via notices, and we don't want to keep old tool code versions around forever — so a refurbishment or compaction may have to be forced _if the context contains tool description content that is stale in a correctness-affecting way_. The same logic applies to any other correctness-affecting stale content — perhaps subagent description content, for example. Perhaps a user option to compact. Not fully settled.
 
 9. The economics of notice content & frequency is based on the following. A "reference" type notice is eg. "`skill-a` has new content". A "full" notice would instead be the full new content of `skill-a`, or perhaps a diff. Choosing "reference" instead of full means: unconditionally smaller input, plus conditional billing of an extra turn (more cache read) in the branch where the agent does fetch for the full content. Content instead of a notice means: unconditionally larger input at input cost, no extra turn. Which side wins depends on how often the branch is taken. Progressive disclosure at session start is exactly this choice — descriptions up front, content on demand. Frequency of notices (ie. whether they should be debounced or not) depends on how important it is for an agent to know about the content, how likely it is to overreact to the notice, and also the raw token cost of the notices themselves.
+
+### Constraints the code works within
+
+Max's mental model is a dataflow graph. Whether the implementation is *explicitly* a dataflow graph is open — "that need not be explicitly a dataflow graph, but also, maybe it should be" — so the constraints below must hold either way. They exist to leave an implementer no room for a major wrong decision, and they are mostly restrictions on what the code is *allowed to know and do*.
+
+**Derived by demand.** The notice block is a derived output: "there's derived output query. if there's demand, it gets computed." The demand is a pending request. So a quiet session computes nothing, and there is no path by which producing a notice causes a request.
+
+**A data source presents a view at a point in time.** It "presents a view of various data at a given time, that can then be used in downstream computation". Downstream asks what a source says as of some point; it does not replay a change log. This is what makes a consistent cut expressible.
+
+**How a source learns of a change is invisible downstream.** A source may be a file watcher, a read-on-request, or a combination — it "may or may not always listen to changes". No downstream logic may branch on which. This is also why this design is not "eventually consistent": consistency comes from the cut, not from a source pushing promptly.
+
+**One cut per request.** A request is rendered only from a set of source views that are consistent as of the triggering point — vector-clock logic, though a hand-rolled equivalent is acceptable. A request must never mix one source's view from 3pm with another's from 1pm.
+
+**The derivation is pure.** No I/O, no clock, no storage, no network; everything it uses arrives as a declared input, and it produces only its declared outputs. This is what makes "compute elapsed time at delivery, never at detection" unbreakable rather than merely intended.
+
+**Structured values until the last step.** Notices are data, not text. Rendering to text is a separate projection, shared with `/dump` so the two cannot diverge.
+
+**Policy and tunables are data.** The per-element decisions and the thresholds are values the code reads, not branches the code hard-codes — that is what makes them tunable, and what a meta-agent would tune.
+
+**Everything has an in-memory implementation.** No code path may *require* a real filesystem or a real socket: a hash-map-backed tree and a lightweight channel must be able to stand in for them, so the whole distributed system can run in one process. Strict for core; experiments have latitude.
+
+**No ad-hoc boundary breaking.** The above only holds if code never reaches around an abstraction for convenience. Strict requirement for core.
+
+**Language split.** The data-source / dataflow framework is Rust; the logic within it is TypeScript on Deno.
 
 ### Per-element decisions
 
