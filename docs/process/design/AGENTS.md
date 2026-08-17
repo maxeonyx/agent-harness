@@ -17,6 +17,8 @@ Three tools, three jobs: compression is for brevity (the core). Expansion is for
 
 **Refinement shortens.** Each revision says everything important in fewer words; expansion is cut once it has done its job. Revision passes are mandatory — single-pass output is a draft.
 
+**But the design itself should be overdetermined, not under-determined** (Max, 2026-08-12): "I don't really care about saying the same things twice unless they conflict." So refinement cuts words that carry no design content; it does not cut a second statement of the same constraint from another angle. Hunt conflicts, not repetition.
+
 The cost model (Max): every word costs time; every opaque phrase costs a question; every extraneous wrong fact costs a correction or a decision to ignore it. And sentence _depth_ costs separately from word count — one claim per sentence, no unstated premises. Less is more.
 
 ## Rules
@@ -40,6 +42,8 @@ Stages: why → what → interactions → summary; each drills down then builds 
 The what stage chains forward into code shape: model the types (Max, 2026-08-12: "We haven't done the 'what' forward chaining enough. We should be modeling types & shit!"). Draft type sketches with him like any other piece.
 
 The what is an unordered aspect list nailing down the feature's convex hull — data design, lifecycle, topology, storage, testing, economics, security, and more. Each aspect entry must define itself: a reader who doesn't know the concept must get it from the entry alone. No word limit — "Anything between one word and one thousand" (Max) — but rarely an essay. An entry that only makes sense to its author is a failed aspect.
+
+**The aspect list is not the end of the what.** Prose about approach is not a design; the stage is not finished until there are types and signatures on the page. If a doc has no code in it, the what stage has not happened yet.
 
 A why bottoms out in a human desire of Max's, a correctness/safety property, or an irreducible resource pressure. Cost/tokens and security/isolation are false _drivers_ here — legitimate as constraints or as a doc's explicit subject; name the role. A consequence (something the design must manage) is not a why (a reason it exists).
 
