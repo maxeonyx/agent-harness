@@ -17,7 +17,7 @@ Three tools, three jobs: compression is for brevity (the core). Expansion is for
 
 **Refinement shortens.** Each revision says everything important in fewer words; expansion is cut once it has done its job. Revision passes are mandatory — single-pass output is a draft.
 
-The cost model (Max): every word costs time; every opaque phrase costs a question; every extraneous wrong fact costs a correction or a decision to ignore it. And sentence *depth* costs separately from word count — one claim per sentence, no unstated premises. Less is more.
+The cost model (Max): every word costs time; every opaque phrase costs a question; every extraneous wrong fact costs a correction or a decision to ignore it. And sentence _depth_ costs separately from word count — one claim per sentence, no unstated premises. Less is more.
 
 ## Rules
 
@@ -41,7 +41,7 @@ The what stage chains forward into code shape: model the types (Max, 2026-08-12:
 
 The what is an unordered aspect list nailing down the feature's convex hull — data design, lifecycle, topology, storage, testing, economics, security, and more. Each aspect entry must define itself: a reader who doesn't know the concept must get it from the entry alone. No word limit — "Anything between one word and one thousand" (Max) — but rarely an essay. An entry that only makes sense to its author is a failed aspect.
 
-A why bottoms out in a human desire of Max's, a correctness/safety property, or an irreducible resource pressure. Cost/tokens and security/isolation are false *drivers* here — legitimate as constraints or as a doc's explicit subject; name the role. A consequence (something the design must manage) is not a why (a reason it exists).
+A why bottoms out in a human desire of Max's, a correctness/safety property, or an irreducible resource pressure. Cost/tokens and security/isolation are false _drivers_ here — legitimate as constraints or as a doc's explicit subject; name the role. A consequence (something the design must manage) is not a why (a reason it exists).
 
 Watch for invented constraints: a priced statement read as a prohibition, or two decouplable concerns fused into a forced trade-off. For example: "credentials must live outside the database" came from an over-broad replication premise. These hide under escalated questions — check the premise under a question before asking Max to answer it.
 
