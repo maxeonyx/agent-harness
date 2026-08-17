@@ -14,5 +14,4 @@ Start by reading:
 - `docs/process/REQUIREMENTS.md`
 - `docs/process/PLAN.md`
 
-Do not implement product harness behavior without black-box tests or explicit
-review criteria. Put disposable experiment code under `experiments/`.
+Do not implement product harness behavior without black-box tests or explicit review criteria. Put disposable experiment code under `experiments/`.

@@ -24,7 +24,7 @@ Sources: `docs/source-notes/context-updates.md`, `docs/source-notes/context-and-
 
 **Why 3 — a quiet session must cost nothing.** Facts change whether or not any session is active. If change notices caused API requests, every edit to a skill would bill every idle session that ever loaded it. Root: **irreducible resource pressure** — the why under piggybacking.
 
-**Why 4 — up-front content is paid by every session.** Skill and tool descriptions in real-world cases "take up massive context paid on *every* session" (source notes). Root: the same resource pressure as Why 3, at session start instead of mid-session. This is the why under progressive disclosure, and why this doc covers both topics: they are one economics.
+**Why 4 — up-front content is paid by every session.** Skill and tool descriptions in real-world cases "take up massive context paid on _every_ session" (source notes). Root: the same resource pressure as Why 3, at session start instead of mid-session. This is the why under progressive disclosure, and why this doc covers both topics: they are one economics.
 
 ## What
 
@@ -44,9 +44,9 @@ Three levels of context maintenance, cheapest first — the original vision: kee
 
 6. A notice never causes an API request. It piggybacks: appended, then carried by the next request that happens for a real reason (user message, tool result). An inactive session never pays.
 
-7. One notable correctness example: Tool calls issued by the agent should always work. If a new version of a tool is loaded, in particular if it has a different *description* (including schema), then limb should issue calls against the old tool version on any live session that still contains the old description. This means retaining two or more versions of the tool implementation while there is any session. Why? We don't think issuing a notice for tool description changes or tool call changes is sufficient for correct agent behaviour. Thus a fresh initialise is required for tool version changes, but we also don't want to *force* all sessions to refurbish or compact immediately. The bound is the question "is there ever going to be another use of this tool code version, or not?" — the obligation ends when every session holding the old schema has been re-initialised or *would be re-initialised before it could be used* (see 8.).
+7. One notable correctness example: Tool calls issued by the agent should always work. If a new version of a tool is loaded, in particular if it has a different _description_ (including schema), then limb should issue calls against the old tool version on any live session that still contains the old description. This means retaining two or more versions of the tool implementation while there is any session. Why? We don't think issuing a notice for tool description changes or tool call changes is sufficient for correct agent behaviour. Thus a fresh initialise is required for tool version changes, but we also don't want to _force_ all sessions to refurbish or compact immediately. The bound is the question "is there ever going to be another use of this tool code version, or not?" — the obligation ends when every session holding the old schema has been re-initialised or _would be re-initialised before it could be used_ (see 8.).
 
-8. The ideal for an expired ("old cold") context: revive it as warm — re-send it exactly as it was (neither refurbished nor re-initialised; it is the event log of that session), append notices (perhaps copious), and keep going. The cost logic: compacting re-bills the whole context at input anyway; for the ~same money (cache write is ~1.25× input), pay cache write instead and don't compact. The carve-out is correctness. An old context contains old info; where that matters for correctness, notices or a refurbishment are needed. We're relatively sure tool schemas and tool presence can't be fixed via notices, and we don't want to keep old tool code versions around forever — so a refurbishment or compaction may have to be forced *if the context contains tool description content that is stale in a correctness-affecting way*. The same logic applies to any other correctness-affecting stale content — perhaps subagent description content, for example. Perhaps a user option to compact. Not fully settled.
+8. The ideal for an expired ("old cold") context: revive it as warm — re-send it exactly as it was (neither refurbished nor re-initialised; it is the event log of that session), append notices (perhaps copious), and keep going. The cost logic: compacting re-bills the whole context at input anyway; for the ~same money (cache write is ~1.25× input), pay cache write instead and don't compact. The carve-out is correctness. An old context contains old info; where that matters for correctness, notices or a refurbishment are needed. We're relatively sure tool schemas and tool presence can't be fixed via notices, and we don't want to keep old tool code versions around forever — so a refurbishment or compaction may have to be forced _if the context contains tool description content that is stale in a correctness-affecting way_. The same logic applies to any other correctness-affecting stale content — perhaps subagent description content, for example. Perhaps a user option to compact. Not fully settled.
 
 9. The economics of notice content & frequency is based on the following. A "reference" type notice is eg. "`skill-a` has new content". A "full" notice would instead be the full new content of `skill-a`, or perhaps a diff. Choosing "reference" instead of full means: unconditionally smaller input, plus conditional billing of an extra turn (more cache read) in the branch where the agent does fetch for the full content. Content instead of a notice means: unconditionally larger input at input cost, no extra turn. Which side wins depends on how often the branch is taken. Progressive disclosure at session start is exactly this choice — descriptions up front, content on demand. Frequency of notices (ie. whether they should be debounced or not) depends on how important it is for an agent to know about the content, how likely it is to overreact to the notice, and also the raw token cost of the notices themselves.
 
@@ -55,7 +55,7 @@ Three levels of context maintenance, cheapest first — the original vision: kee
 Each context element, against the two notice decisions (claims 4 and 5).
 
 | Element | Notify? | Notice carries | Basis |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Skill content | Only if this session loaded it | Name — or less, batched ("skills have gone stale") | Stale instructions alter actions. Never-loaded content just gets its new version at first load |
 | Skill description (content never loaded) | No, as a safe general rule | — | Descriptions rarely change without content changes too, and are not usually load bearing. The next initialise gets the new version |
 | New skill | Only if it would be available to this session | Name (maybe its one-line desc) | Actionability is the logical condition, but there is a practical constraint: we can't actually know whether free-text update X affects session Y |
@@ -136,7 +136,7 @@ Unordered. The point is that the approach is written down, so an implementer has
 
 **coalescing at refurbish** — Different mechanism: notices roll into the system section, and edits can be elided where a later read supersedes them.
 
-**pruning** — Considered and rejected. Inside the cached region, pruning *is* a refurbishment. In the uncached tail, it is only profitable if the content is pruned within roughly one or two turns — and that is the freshest content, which is what you least want to prune. The forked-agent design subsumes it anyway: bulk is generated in a child context and returned as a report, so the parent never carries it. A per-tool-call summary field is unattractive because a model-written summary is output-priced.
+**pruning** — Considered and rejected. Inside the cached region, pruning _is_ a refurbishment. In the uncached tail, it is only profitable if the content is pruned within roughly one or two turns — and that is the freshest content, which is what you least want to prune. The forked-agent design subsumes it anyway: bulk is generated in a child context and returned as a report, so the parent never carries it. A per-tool-call summary field is unattractive because a model-written summary is output-priced.
 
 **old tool versions** — The limb retains every tool version any live context still holds, because a notice is not sufficient for correct tool-calling behaviour. The obligation ends when no session could use it: "is there ever going to be another use of this tool code version, or not?"
 
@@ -154,7 +154,7 @@ TODO once all docs are written.
 
 ## Questions for review / needs experiment
 
-- Is it ever possible to change anything about tools *without* involving the cached prefix? Unanswered. For example: does mid-session tool addition work robustly via append, without breaking the prefix? (Experiment.)
+- Is it ever possible to change anything about tools _without_ involving the cached prefix? Unanswered. For example: does mid-session tool addition work robustly via append, without breaking the prefix? (Experiment.)
 - Do providers validate tool arguments against the advertised schema? Highly doubted, but unsure. (Experiment.)
 - Are late system parts supported, per provider? (Experiment.)
 - cwd / hostname: different limb ⇒ different session, or can a limb legitimately relocate? (Low confidence.)
