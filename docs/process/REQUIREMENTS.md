@@ -152,7 +152,17 @@ From the 2026-08-12 review of the context-updates rewrite, to be carried by the 
   projections, ladder choice) is TS.
 - **Context contributions come from many data sources, not just limbs
   (2026-08-12).** "I think there are multiple data sources. A limb is a data source, yes, and is so for multiple sessions (eg. forked sessions especially) but I think there's also machine context, user context, maybe face-specific context. Probably the user-turn stuff gets implemented as a data source." So skills have multiple sources; limb-local content is just one case.
-- **Consistency at request build is a vector-clock cut, not eventual consistency (2026-08-12).** Rejecting a derived "notices are eventually consistent" claim: "Think of the tool call loop as another data source maybe, and only render + send once you've got derived data based on the vector clock value that is greater (or the same) over all data sources. We don't necessarily have to literally implement that (ie. what we build could be a 'manually rolled out / manually compiled' version of that), but that's the logic behind what we want to do."
+- **There is a computation graph, and demand is standing during a turn
+  (2026-08-12).** "there's a computation graph. we ask it for the 6pm
+  context. it gets built for us." And: "while the agent turn is going,
+  there's constant demand - we're streaming live updates so that the
+  latest notice set is immediately ready to piggy back on the next
+  request." So the graph fetches what it needs rather than being handed a
+  world view; the notice set is kept continuously current while a turn
+  runs, so nothing waits at request-assembly time; and a session with no
+  turn running generates no demand and therefore no cost.
+- **Consistency at request build is a vector-clock cut, not eventual
+  consistency (2026-08-12).** Rejecting a derived "notices are eventually consistent" claim: "Think of the tool call loop as another data source maybe, and only render + send once you've got derived data based on the vector clock value that is greater (or the same) over all data sources. We don't necessarily have to literally implement that (ie. what we build could be a 'manually rolled out / manually compiled' version of that), but that's the logic behind what we want to do."
 - **Correctness first, then cheapest (2026-08-12, hedge his).** On the keep-warm / refurbish / compact ladder: "we build the harness for correctness, then choose the cheapest option within that?"
 - **Refurbishment is code-only and still needs design (2026-08-12).** "re-projection of session history into a new context, but notably NOT a compaction. It's done with only regular code, and maybe utility model calls. Note that this needs to be designed still because it's a bit odd, because it mixes 'event stream' and 'rollup' in a messy way." So the ladder's three rungs escalate by who does the work: nothing → code (± utility model) → main model output.
 - **Stored context state exists per warm cache point (2026-08-12).** "there's one for each warm cache point."

@@ -62,7 +62,9 @@ Three levels of context maintenance, cheapest first — the original vision: kee
 
 Max's mental model is a dataflow graph. Whether the implementation is *explicitly* a dataflow graph is open — "that need not be explicitly a dataflow graph, but also, maybe it should be" — so the constraints below must hold either way. They exist to leave an implementer no room for a major wrong decision, and they are mostly restrictions on what the code is *allowed to know and do*.
 
-**Derived by demand.** The notice block is a derived output: "there's derived output query. if there's demand, it gets computed." The demand is a pending request. So a quiet session computes nothing, and there is no path by which producing a notice causes a request.
+**There is a computation graph, and we ask it for a context.** "there's a computation graph. we ask it for the 6pm context. it gets built for us." Nothing hands the graph a view of the world; the graph fetches what it needs. So no component exists whose job is to hold the whole current world on behalf of the notice logic.
+
+**Derived by demand, and demand stands for the length of a turn.** "if there's demand, it gets computed" — and "while the agent turn is going, there's constant demand - we're streaming live updates so that the latest notice set is immediately ready to piggy back on the next request." Three consequences: nothing waits at request-assembly time, because the notice set is already current; a session with no turn running generates no demand and so costs nothing; and there is no path by which producing a notice causes a request.
 
 **A data source presents a view at a point in time.** It "presents a view of various data at a given time, that can then be used in downstream computation". Downstream asks what a source says as of some point; it does not replay a change log. This is what makes a consistent cut expressible.
 
