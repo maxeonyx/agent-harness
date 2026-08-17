@@ -1,6 +1,6 @@
 # Context updates and progressive disclosure
 
-Provenance: why layer, core claims, and per-element detail reviewed by Max 2026-08-12 with line-item corrections (recorded in REQUIREMENTS.md §"Decisions from design review"). Interactions and summary not yet written.
+Provenance: why layer, core claims, per-element table, and the aspect list reviewed with Max 2026-08-12, line by line, with his corrections folded in (recorded in REQUIREMENTS.md §"Decisions from design review"). Aspects still to review are marked unreviewed. Interactions and summary not yet written.
 
 Sources: `docs/source-notes/context-updates.md`, `docs/source-notes/context-and-agent-loop.md`, `docs/process/REQUIREMENTS.md` §"Decisions from design review".
 
@@ -70,17 +70,83 @@ Each context element, against the two notice decisions (claims 4 and 5).
 | cwd / hostname | Low confidence: probably a different limb, therefore a different session. But a hostname change can be legit; maybe a limb can relocate; not every limb has a cwd | — | Unsettled |
 | Model | Not a notice matter — changing it invalidates the cache, so a fresh initialise happens anyway | — | Mechanically a request fact; but we do want to tell the model which model it is |
 
-### Notice content
+### Aspects
 
-A notice says: what changed, the kind of change, who changed it, and the available action. Who changed it matters because user, another agent, and git imply different responses. For example: "Skill `github` changed (content edit, by the user). Reload it with the skill tool if relevant."
+Unordered. The point is that the approach is written down, so an implementer has no leeway for major wrong decisions. Aspects not yet reviewed with Max are marked **(unreviewed)**.
 
-### Notice mechanics
+**identity of a context contribution** — A notice has to point at something, and "the `github` skill" must mean the same thing across versions, across a rename, and across two data sources that each provide a `github` skill. So an id is `(data source, kind, name-or-path)`. Consequence: a rename is a delete plus an add, so the agent sees "skill gone" + "new skill" rather than "renamed". That is genuinely confusing and unresolved — open.
 
-Notices are batched: appended as they arise, delivered together on the next request (claim 6). A notice is never inserted between a tool call and its result (walking-skeleton evidence). Notices are in the harness's voice — a system-reminder-style channel is fine; a real provider channel would be perfect.
+**change thresholds for content notices** — Not every difference deserves a notice. Compare content by equality: the harness holds the content as contributed, so it can compare directly; hashes are only for when you don't want to keep the content around. Content-inequality is necessary but not sufficient — a whitespace-only edit clears that bar and shouldn't notify. Elapsed time needs its own threshold (~1h) because every request differs. A utility model is a candidate classifier here, for quality of both classification and summary, if the economics justify it.
 
-### Bookkeeping
+**content versions** — To decide whether to notify a session, the harness must know what that session has in its context. Max edits the `github` skill at 3pm: session A loaded it this morning (holds old text — notify), session B never loaded it (holds only the description — no notice), session C started at 4pm (already has new text — no notice). Those three different calls are only possible if the harness recorded, per context, which contributions went in and what content each had at the time. This is also what the compaction briefing's diff reads: what this context believed versus what is now true.
 
-The harness records what each context contains — versions/hashes of the skills, tools, and context layers in it. That record is how it knows what a given session needs notifying about. The same record feeds the compaction briefing's system-prompt diff.
+**detection** — Sources live in a data source's environment, so a reader per data source observes them and reports current content to the brain. Detection produces facts only; it decides nothing about notices, and couldn't — a reader doesn't know what any session has seen.
+
+**rendering** — Notices and other piggybacked contributions are computed and locked as the request is built, never at detection. `(content versions, current sources, now) → (notice block, updated content versions)`. Elapsed time is the sharpest case: its value doesn't exist until delivery.
+
+**purity** — That render function is pure: no file reads, no clock, no storage, no network; everything arrives as an argument. This is why "compute elapsed time at delivery" stops being a rule to remember and becomes impossible to violate — there is no clock to read at detection time, because the function isn't called then.
+
+**provenance** — Who changed it, because the right response differs: a user edit may be an instruction, a git checkout may mean the workspace moved, another agent's edit may mean coordination is needed. What is reliably knowable is three buckets: changes the harness caused itself (its own tool calls), observable git state, and unattributable external edits. Not a general audit trail. Potentially very useful to the model.
+
+**option sets** — Ordinary contributions with identity and versions, deliberately kept out of the JSON schema so they can change without a schema change. For example: skill names are the skill tool's option set; subagent names are the task tool's. They absolutely do get notices.
+
+**notice content** — What changed, the kind of change, who changed it, and the available action. For example: "Skill `github` changed (content edit, by the user). Reload it with the skill tool if relevant."
+
+**actionability** — Notify only if the change could alter what the agent does. Mechanically undecidable in general — a free-text skill edit against a session halfway through unrelated work. Three implementations, increasing cost: per-element policy (the table above), default-yes, or a utility-model classifier.
+
+**detail** — How much the notice carries: "something changed" → "the `github` skill changed" → the diff → the full content. Trades three ways: economics, distraction (a bigger notice can degrade the agent's work on its actual task), and the agent's reaction. All else equal, the minimum.
+
+**re-discovery** — Smaller notices are cheaper when the agent doesn't need the detail, but mean it must go and get more when it does. So there always needs to be a clear, reliable path to that information. The reverse doesn't follow automatically: elapsed time could be made retrievable by a clock tool, but minimising to "time has passed" would still be wrong, because the value is a few tokens and retrieval costs a whole turn. The rule is minimise when retrieval is cheaper than carrying.
+
+**overreaction** — Agents respond too strongly to notices: abandoning plans, re-reading everything, or refusing to use a new enum value they've been told is valid. Wording and frequency are empirical and need testing; related to the user-turn work.
+
+**placement** — All contributions the build-time comparison finds go in one block, not one per element. The block never separates a tool call from its result. Proposed: notices before the user's message, so the user's words are the last thing read.
+
+**channel** — Harness voice, distinct from user and agent, so a notice cannot be mistaken for the user giving an instruction. System-reminder-style is fine; a real provider channel would be better.
+
+**debouncing** — Not a cost mechanism: render-at-build already collapses repeated edits. Its only job is behavioral — while Max is actively editing a skill, a notice on every request may destabilise the agent.
+
+**thresholds** — Elapsed time ~1h (his naive guess, discoverable), the debounce window, a utility model's confidence bar. Recorded tunables with recorded outcomes, not constants, so a meta-agent could tune them.
+
+**triggering** — Nothing here ever triggers a request (invariant 2). Piggyback only, so a quiet session never pays.
+
+**data sources** — Not just limbs. A limb is one data source, serving many sessions (forked sessions especially); there is also machine context, user context, possibly face-specific context, and probably the user-turn stream. So skills have several possible sources and limb-local content is one case.
+
+**no notifier** — There is no notifier entity. Because notices are rendered at request build, nothing needs owning between requests: notification is a step inside request assembly. A consequence of the render-at-build decision, and an example of what defining the box is for.
+
+**data source cut** — Consistency at request build is a cut, not eventual consistency: render and send only once derived data covers a point at or beyond the trigger across every data source — vector-clock logic, though a hand-rolled equivalent is acceptable. The tool-call loop counts as a data source.
+
+**source resolution** — The "same" skill can come from different data sources, so resolution and precedence between them is a real question. Overlaps context-layer composition (`source-notes/configuration-model.md`, flagged there as needing significant design work). **(unreviewed)**
+
+**persistence** — Preserve enough to produce exactly the same prefix in the next API request, so cache survives restarts. Notices are stored naturally, as part of context storage.
+
+**data lifecycle** — Resuming a weeks-old session may require storing both the input (source content, so the comparison happens at the right level) and the output (the rendered API request, for cache purposes). Max has noted this contradicts the narrower "reload sources, don't store them" position; the tension is recorded, not resolved.
+
+**stored contexts per cache point** — Historic context state exists: one stored context per warm cache point. Superseded contexts are stored directly rather than reconstructed deterministically.
+
+**restarts** — A relaunch must not cost warm caches: reproducing the same prefix is necessary, and so are any surrogate ids referring to cache affinity or cache points — those belong to another doc.
+
+**prefixes** — Nested cache points per context. The provider uses the longest previously cached sequence automatically, so the harness places breakpoints but never selects a prefix.
+
+**ladder** — Keep warm → refurbish → compact. Build for correctness first, then choose the cheapest option that is correct.
+
+**refurbish** — A re-projection of session history into a transformed context: current sources in place, notices dropped because their content is now in place, body optionally coalesced. Not a compaction — regular code, possibly with utility-model calls. Still needs design: it mixes event stream and rollup in a messy way.
+
+**coalescing at delivery** — Free, by construction. Ten edits between requests produce one notice describing the latest state; an edit reverted before the next request produces none. No dedup logic, no notice-expiry logic.
+
+**coalescing at refurbish** — Different mechanism: notices roll into the system section, and edits can be elided where a later read supersedes them.
+
+**pruning** — Considered and rejected. Inside the cached region, pruning *is* a refurbishment. In the uncached tail, it is only profitable if the content is pruned within roughly one or two turns — and that is the freshest content, which is what you least want to prune. The forked-agent design subsumes it anyway: bulk is generated in a child context and returned as a report, so the parent never carries it. A per-tool-call summary field is unattractive because a model-written summary is output-priced.
+
+**old tool versions** — The limb retains every tool version any live context still holds, because a notice is not sufficient for correct tool-calling behaviour. The obligation ends when no session could use it: "is there ever going to be another use of this tool code version, or not?"
+
+**forced refurbishment** — Correctness-affecting stale description content forces a refurbishment or compaction rather than a notice — tool schemas and the tool set for certain, perhaps subagent descriptions too.
+
+**cold contexts** — Reviving an expired context as warm is the ideal, at ~the same cost as compacting it; it is re-sent exactly as it was, neither refurbished nor re-initialised. Not settled where that stops being possible.
+
+**undo** — The ~n−2 cache point exists so that message undo lands on a warm prefix.
+
+**forks** — A child inherits content versions at the fork point. What prefix a fork actually inherits is an experiment.
 
 ## Interactions
 
