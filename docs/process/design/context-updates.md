@@ -148,6 +148,26 @@ Unordered. The point is that the approach is written down, so an implementer has
 
 **forks** — A child inherits content versions at the fork point. What prefix a fork actually inherits is an experiment.
 
+**economics** — The contingent-choice arithmetic behind nearly every decision here: a notice instead of content is unconditionally smaller input plus a conditional extra turn in the branch where the agent fetches; content instead of a notice is unconditionally larger input and no extra turn. Frequency of the branch decides. The prices are known — cache write 1.25×, cache read 0.1×, model output ~5× — but which side wins typically requires empirical measurement or an experiment, not derivation.
+
+**progressive disclosure** — The same economic decision at session start: descriptions up front, content on demand. Up-front content is paid by every session forever; fetched content only by the sessions that need it. Fork-proven for skills; the same trick for tools is unproven.
+
+**analytics** — Not "we get queryability free because everything is an event". The question is what we keep, for how long, and above all why. "Keep everything" is an option, not an answer. Concretely, this feature's candidates are change facts and rendered notices, and the reason to keep them is that the overreaction question and the tunables cannot be answered without them.
+
+**authority** — No permission model over who may change sources; personal limbs run YOLO and approval theatre is explicitly unwanted. Provenance is recorded, not gated. There is no authority model across multiple users.
+
+**harness voice** — The harness's voice carries ground truth: the time, or "the AGENTS.md contains this content". Content being *shown* by the harness is not in the harness's voice — it stays quoted content. Channels and roles matter for that reason, and this is probably fairly obvious to the agent; the goal is simply that the agent does what Max wants.
+
+**scenario test** — A fully black-box end-to-end test including setup, probably UI eventually, with real I/O as the boundary. It proves real usage and forces the harness to be harnessable — which in turn forces observability features that are useful for testing. It may be slow but must never be flaky, and is mostly a happy-path test.
+
+**fast end-to-end tests** — In-memory I/O: a whole distributed system in one process. They rely on solid abstractions and require that harness code never does ad-hoc boundary breaking — a strict requirement for core, though not necessarily for experiments.
+
+**fake network conditions** — The delayer channel implementation exists to simulate network conditions for in-process distributed-systems testing. It is not for reordering robustness: reordered data should not be a problem because a data source should not do that.
+
+**flakes** — Virtual time, so no sleeps. The scenario test may take real time, but still no dumb waiting or polling — everything waits on an event. A flake is a bug; races are structurally excluded rather than made unlikely.
+
+**shared doctrine** — The two testing definitions above and the purity/box doctrine are workspace-level constraints shared by every tool, so they belong in `agent-tools` workspace docs and should be referenced from here rather than restated. TODO: place them there.
+
 ## Interactions
 
 TODO once all docs are written.
