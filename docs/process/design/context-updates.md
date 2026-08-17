@@ -32,7 +32,7 @@ Sources: `docs/source-notes/context-updates.md`, `docs/source-notes/context-and-
 
 Three levels of context maintenance, cheapest first — the original vision: keep using the warm context; **refurbish** the existing context (incorporate notices etc.); **compact** (make a fresh context). Correctness first, then the cheapest option that is correct.
 
-1. A context is append-only while we believe it's cached. The system section (system prompt + tool schemas) changes only at an **initialise**, and initialising an existing context happens only as part of a refurbishment.
+1. A context is append-only while we believe it's cached. The system section (system prompt + tool schemas) changes only at an **initialise**. Re-initialising an existing context is always part of a refurbishment, never a standalone operation: replacing the system section forfeits the cached prefix, and once that cost is paid there is no reason not to reduce tokens too ("If we expect a cache miss, then there's no reason to not optimize the context somewhat" — source notes). So the three rungs are the three cost regimes, and there is no fourth: append pays 0.1× on the prefix plus a write on the delta; refurbish forfeits the prefix and pays ~1.25× on the new whole; compaction pays model output to shrink drastically.
 
 2. A context has several cache prefixes at once, nested: the system section; everything up to any fork boundary; the whole context so far. User-facing sessions also keep a cache point ~n−2 messages back, so message undo lands on a warm prefix.
 
