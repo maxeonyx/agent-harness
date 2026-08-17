@@ -567,13 +567,16 @@ by the rewritten doc:
   utility model) → main model output.
 - **Stored context state exists per warm cache point (2026-08-12).**
   "there's one for each warm cache point."
-- **Resuming a weeks-old session may require storing more (2026-08-12,
-  hedge his).** "we may actually have to store some stuff in order to know
-  what's *different* when resuming a weeks-old session. so maybe storing
-  both source info and rendered api request content for caching." Reads as
-  compatible with the persistence entry below — what was *sent* is stored;
-  sources are still reloaded rather than stored as a reproduction
-  mechanism — but the "source info" half is not fully pinned.
+- **Resuming a weeks-old session may require storing both input and output
+  (2026-08-12, hedge his).** "we may actually have to store some stuff in
+  order to know what's *different* when resuming a weeks-old session. so
+  maybe storing both source info and rendered api request content for
+  caching." Clarified: "I meant we might have to store both input (for
+  diffing in the right place) and output (rendered API request for caching
+  purposes / close to it). Yes, this contradicts my earlier statement
+  about not storing data, just reloading it." So the persistence entry
+  below is in tension with this one, and he knows — the tension is
+  recorded, not resolved.
 - **Restart cache affinity is a separate doc's problem.** Beyond
   reproducing the same prefix, "any other surrogate ids or whatever that
   refer to cache affinity or cache points" matter too — noted as a
