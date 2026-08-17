@@ -38,6 +38,18 @@ The "non-unique soul" ("good taste" choices from other harnesses) is, non-exhaus
 - **Operator** (design notes): roles deploy co-located or split; safe updates, downgrades, protocol versioning, migrations, background persistence across user disconnects on Windows and Linux. Validated by topology and operator-lifecycle.
 - **Analyst** (design notes): session data is analytics-grade and queryable from the start — cost, cache hit rates, tool durations, session classification, stuck scopes. Validated by the persistence-analytics experiment.
 - **Security / authority boundaries** (design notes): provider credentials stay brain-owned, never reaching limbs, faces, plugins, schemas, logs, or model context; user tools and agent tools are framed differently; direct connections are capability-bound. NOT a general agent-permission model — personal limbs may run in YOLO mode; permission prompts and approval theatre are explicitly unwanted. Validated by user-turn and topology.
+- **Unwrapped markdown, by example** (design notes,
+  `source-notes/markdown-nowrap-lead-by-example.md`): Max prefers markdown
+  unwrapped "because almost all viewers deal with this gracefully, and it
+  reduces burden on editors" — and this is a product requirement, not only
+  a docs convention: "the context and system prompts, skills etc injected
+  by the harness should follow this and lead by example".
+- **Built-in browser control** (design notes,
+  `source-notes/browser-mcp.md`): because desktop work often happens in
+  web apps — his examples are Outlook web, Microsoft Teams, and a browser
+  itself — the harness should embed an MCP server that consumes a remote
+  debugging endpoint, "so that you don't have to have a separate piece of
+  software running just to control a Chromium-based web browser app".
 - **Attention / coordination** (design notes): parallel work stays legible — structured subagent concurrency, visible blocked states, explicit sibling scopes. Validated by the forked-subagents experiment.
 - **Multi-client / UI state** (design notes): multiple faces share live UI state (drafts, open files, panes) without stale clients corrupting anything; eventually a real reactive TUI and web GUI over one client state model. Validated by the multi-client-ui experiment.
 
