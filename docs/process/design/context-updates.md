@@ -62,6 +62,8 @@ Three levels of context maintenance, cheapest first — the original vision: kee
 
 Max's mental model is a dataflow graph. Whether the implementation is *explicitly* a dataflow graph is open — "that need not be explicitly a dataflow graph, but also, maybe it should be" — so the constraints below must hold either way. They exist to leave an implementer no room for a major wrong decision, and they are mostly restrictions on what the code is *allowed to know and do*.
 
+**This should be unnoticeably fast, so don't build machinery to hide latency.** There is not much data — a handful of context files and their contents. Demand standing for the length of a turn is enough; pre-warming the graph while the user drafts a message would work and is a fine idea, but is not needed, and the design should stay simple until something is measurably slow.
+
 **There is a computation graph, and we ask it for a context.** "there's a computation graph. we ask it for the 6pm context. it gets built for us." Nothing hands the graph a view of the world; the graph fetches what it needs. So no component exists whose job is to hold the whole current world on behalf of the notice logic.
 
 **Derived by demand, and demand stands for the length of a turn.** "if there's demand, it gets computed" — and "while the agent turn is going, there's constant demand - we're streaming live updates so that the latest notice set is immediately ready to piggy back on the next request." Three consequences: nothing waits at request-assembly time, because the notice set is already current; a session with no turn running generates no demand and so costs nothing; and there is no path by which producing a notice causes a request.
@@ -214,3 +216,11 @@ TODO once all docs are written.
 - cwd / hostname: different limb ⇒ different session, or can a limb legitimately relocate? (Low confidence.)
 - Cold-context revival (claim 8): when is the revive-as-warm ideal not possible or practical? (Not fully settled.)
 - Is a refurbishment always "compact immediately prior"? ("I think it is, if our compaction is good" — see uncached compaction, REQUIREMENTS.)
+
+Open at the code-shape level, deliberately not yet decided:
+
+- **Is the dataflow graph explicit?** "that need not be explicitly a dataflow graph, but also, maybe it should be."
+- **Is the clock a data source, or is `now` a parameter, or is elapsed time the request builder's job?** Treating the clock as an ordinary source looked like a unification when first written, but the clock's value changes continuously, so change-detection does nothing for it and its threshold does all the work — the uniformity may be cosmetic.
+- **How is a contribution's past content held?** A content-addressed store keyed by hash, inline copies per context, or recovery from the stored rendered request. The third only works where rendering was lossless for that contribution, which is not true where content is compressed or truncated.
+- **Is notice policy data or code?** Data makes the per-element table and the code one artifact and makes thresholds tunable by a meta-agent; code allows arbitrary per-kind logic. The utility-model classifier strains the data option, because consulting a model is an effect rather than a value.
+- Settled, not open, and recorded here only so it is not re-litigated: notices are structured values rendered by a projection shared with `/dump`. This follows from invariant 3 and the walking-skeleton ruling that the request builder and the dump share one projection.
