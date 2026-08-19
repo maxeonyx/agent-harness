@@ -60,7 +60,7 @@ Three levels of context maintenance, cheapest first — the original vision: kee
 
 ### Constraints the code works within
 
-Max's mental model is a dataflow graph. Whether the implementation is *explicitly* a dataflow graph is open — "that need not be explicitly a dataflow graph, but also, maybe it should be" — so the constraints below must hold either way. They exist to leave an implementer no room for a major wrong decision, and they are mostly restrictions on what the code is *allowed to know and do*.
+Max's mental model is a dataflow graph. Whether the implementation is _explicitly_ a dataflow graph is open — "that need not be explicitly a dataflow graph, but also, maybe it should be" — so the constraints below must hold either way. They exist to leave an implementer no room for a major wrong decision, and they are mostly restrictions on what the code is _allowed to know and do_.
 
 **This should be unnoticeably fast, so don't build machinery to hide latency.** There is not much data — a handful of context files and their contents. Demand standing for the length of a turn is enough; pre-warming the graph while the user drafts a message would work and is a fine idea, but is not needed, and the design should stay simple until something is measurably slow.
 
@@ -80,7 +80,7 @@ Max's mental model is a dataflow graph. Whether the implementation is *explicitl
 
 **Policy and tunables are data.** The per-element decisions and the thresholds are values the code reads, not branches the code hard-codes — that is what makes them tunable, and what a meta-agent would tune.
 
-**Everything has an in-memory implementation.** No code path may *require* a real filesystem or a real socket: a hash-map-backed tree and a lightweight channel must be able to stand in for them, so the whole distributed system can run in one process. Strict for core; experiments have latitude.
+**Everything has an in-memory implementation.** No code path may _require_ a real filesystem or a real socket: a hash-map-backed tree and a lightweight channel must be able to stand in for them, so the whole distributed system can run in one process. Strict for core; experiments have latitude.
 
 **No ad-hoc boundary breaking.** The above only holds if code never reaches around an abstraction for convenience. Strict requirement for core.
 
@@ -192,7 +192,7 @@ Unordered. The point is that the approach is written down, so an implementer has
 
 **authority** — No permission model over who may change sources; personal limbs run YOLO and approval theatre is explicitly unwanted. Provenance is recorded, not gated. There is no authority model across multiple users.
 
-**harness voice** — The harness's voice carries ground truth: the time, or "the AGENTS.md contains this content". Content being *shown* by the harness is not in the harness's voice — it stays quoted content. Channels and roles matter for that reason, and this is probably fairly obvious to the agent; the goal is simply that the agent does what Max wants.
+**harness voice** — The harness's voice carries ground truth: the time, or "the AGENTS.md contains this content". Content being _shown_ by the harness is not in the harness's voice — it stays quoted content. Channels and roles matter for that reason, and this is probably fairly obvious to the agent; the goal is simply that the agent does what Max wants.
 
 **scenario test** — A fully black-box end-to-end test including setup, probably UI eventually, with real I/O as the boundary. It proves real usage and forces the harness to be harnessable — which in turn forces observability features that are useful for testing. It may be slow but must never be flaky, and is mostly a happy-path test.
 

@@ -38,18 +38,8 @@ The "non-unique soul" ("good taste" choices from other harnesses) is, non-exhaus
 - **Operator** (design notes): roles deploy co-located or split; safe updates, downgrades, protocol versioning, migrations, background persistence across user disconnects on Windows and Linux. Validated by topology and operator-lifecycle.
 - **Analyst** (design notes): session data is analytics-grade and queryable from the start — cost, cache hit rates, tool durations, session classification, stuck scopes. Validated by the persistence-analytics experiment.
 - **Security / authority boundaries** (design notes): provider credentials stay brain-owned, never reaching limbs, faces, plugins, schemas, logs, or model context; user tools and agent tools are framed differently; direct connections are capability-bound. NOT a general agent-permission model — personal limbs may run in YOLO mode; permission prompts and approval theatre are explicitly unwanted. Validated by user-turn and topology.
-- **Unwrapped markdown, by example** (design notes,
-  `source-notes/markdown-nowrap-lead-by-example.md`): Max prefers markdown
-  unwrapped "because almost all viewers deal with this gracefully, and it
-  reduces burden on editors" — and this is a product requirement, not only
-  a docs convention: "the context and system prompts, skills etc injected
-  by the harness should follow this and lead by example".
-- **Built-in browser control** (design notes,
-  `source-notes/browser-mcp.md`): because desktop work often happens in
-  web apps — his examples are Outlook web, Microsoft Teams, and a browser
-  itself — the harness should embed an MCP server that consumes a remote
-  debugging endpoint, "so that you don't have to have a separate piece of
-  software running just to control a Chromium-based web browser app".
+- **Unwrapped markdown, by example** (design notes, `source-notes/markdown-nowrap-lead-by-example.md`): Max prefers markdown unwrapped "because almost all viewers deal with this gracefully, and it reduces burden on editors" — and this is a product requirement, not only a docs convention: "the context and system prompts, skills etc injected by the harness should follow this and lead by example".
+- **Built-in browser control** (design notes, `source-notes/browser-mcp.md`): because desktop work often happens in web apps — his examples are Outlook web, Microsoft Teams, and a browser itself — the harness should embed an MCP server that consumes a remote debugging endpoint, "so that you don't have to have a separate piece of software running just to control a Chromium-based web browser app".
 - **Attention / coordination** (design notes): parallel work stays legible — structured subagent concurrency, visible blocked states, explicit sibling scopes. Validated by the forked-subagents experiment.
 - **Multi-client / UI state** (design notes): multiple faces share live UI state (drafts, open files, panes) without stale clients corrupting anything; eventually a real reactive TUI and web GUI over one client state model. Validated by the multi-client-ui experiment.
 
@@ -144,25 +134,10 @@ From the 2026-08-12 review of the context-updates rewrite, to be carried by the 
 - **The fork model subsumes tail pruning (2026-08-12).** "I think the forked agent design gets around this by subbing the tail with a (admittedly output so 5.0x) task summary / report (kinda a compaction)." So bulk that would need pruning is instead generated in a child context and returned as a report; the parent never carries the bulk.
 - **Where pruning may happen (2026-08-12, hedges his).** "pruning is for either a rebuild [refurbishment], or rewriting pre-cache, in a fixed-size suffix maybe (fixed number of messages or token size whichever is larger). That's what opencode has done in the past I believe, perhaps still." On the suffix variant: "I'm not confident on 'prune within suffix', it implies re-sending uncached content over and over, but on the other hand it also implies much smaller context & cache write due to tool call pruning / coalescing. Again, an economic decision."
 - **"Rebuild" is vetoed; the operations are initialise, refurbish, compact (2026-08-12).** His veto: "rebuild is not 'build a new context'!! rebuild is 'transform an existing context'... maybe we've been abusing terminology here. let's veto 'rebuild'." The replacements, his wording: **refurbish** a context — "transform existing to reduce token count, but NOT compact - the messy one"; **initialise** a context — "this refers to the system prompt only - and happens on new sessions, on compactions, and yes, on refurbishments." Compaction keeps its name. Consequence: the system section can only change by an initialise, and initialising an existing context happens only as part of a refurbishment — otherwise the change waits for a compaction into a fresh context. Earlier quotes in this file predate the veto and keep his original word; glosses mark the mapping where it isn't obvious. Two unrelated uses of "rebuild" survive and are not this concept: the walking-skeleton's `/rebuild` of in-memory state from the journal, and the harness rebuilding its own binary.
-- **Language split: the data-source / data-flow framework is Rust,
-  everything within it is TypeScript on Deno (2026-08-12).** "the data
-  source / data flow framework is rust I think. but everything within it
-  should be deno but TS not JS." So the framework (sources, cut,
-  transport, request assembly) is Rust; the logic inside it (notice policy,
-  projections, ladder choice) is TS.
-- **Context contributions come from many data sources, not just limbs
-  (2026-08-12).** "I think there are multiple data sources. A limb is a data source, yes, and is so for multiple sessions (eg. forked sessions especially) but I think there's also machine context, user context, maybe face-specific context. Probably the user-turn stuff gets implemented as a data source." So skills have multiple sources; limb-local content is just one case.
-- **There is a computation graph, and demand is standing during a turn
-  (2026-08-12).** "there's a computation graph. we ask it for the 6pm
-  context. it gets built for us." And: "while the agent turn is going,
-  there's constant demand - we're streaming live updates so that the
-  latest notice set is immediately ready to piggy back on the next
-  request." So the graph fetches what it needs rather than being handed a
-  world view; the notice set is kept continuously current while a turn
-  runs, so nothing waits at request-assembly time; and a session with no
-  turn running generates no demand and therefore no cost.
-- **Consistency at request build is a vector-clock cut, not eventual
-  consistency (2026-08-12).** Rejecting a derived "notices are eventually consistent" claim: "Think of the tool call loop as another data source maybe, and only render + send once you've got derived data based on the vector clock value that is greater (or the same) over all data sources. We don't necessarily have to literally implement that (ie. what we build could be a 'manually rolled out / manually compiled' version of that), but that's the logic behind what we want to do."
+- **Language split: the data-source / data-flow framework is Rust, everything within it is TypeScript on Deno (2026-08-12).** "the data source / data flow framework is rust I think. but everything within it should be deno but TS not JS." So the framework (sources, cut, transport, request assembly) is Rust; the logic inside it (notice policy, projections, ladder choice) is TS.
+- **Context contributions come from many data sources, not just limbs (2026-08-12).** "I think there are multiple data sources. A limb is a data source, yes, and is so for multiple sessions (eg. forked sessions especially) but I think there's also machine context, user context, maybe face-specific context. Probably the user-turn stuff gets implemented as a data source." So skills have multiple sources; limb-local content is just one case.
+- **There is a computation graph, and demand is standing during a turn (2026-08-12).** "there's a computation graph. we ask it for the 6pm context. it gets built for us." And: "while the agent turn is going, there's constant demand - we're streaming live updates so that the latest notice set is immediately ready to piggy back on the next request." So the graph fetches what it needs rather than being handed a world view; the notice set is kept continuously current while a turn runs, so nothing waits at request-assembly time; and a session with no turn running generates no demand and therefore no cost.
+- **Consistency at request build is a vector-clock cut, not eventual consistency (2026-08-12).** Rejecting a derived "notices are eventually consistent" claim: "Think of the tool call loop as another data source maybe, and only render + send once you've got derived data based on the vector clock value that is greater (or the same) over all data sources. We don't necessarily have to literally implement that (ie. what we build could be a 'manually rolled out / manually compiled' version of that), but that's the logic behind what we want to do."
 - **Correctness first, then cheapest (2026-08-12, hedge his).** On the keep-warm / refurbish / compact ladder: "we build the harness for correctness, then choose the cheapest option within that?"
 - **Refurbishment is code-only and still needs design (2026-08-12).** "re-projection of session history into a new context, but notably NOT a compaction. It's done with only regular code, and maybe utility model calls. Note that this needs to be designed still because it's a bit odd, because it mixes 'event stream' and 'rollup' in a messy way." So the ladder's three rungs escalate by who does the work: nothing → code (± utility model) → main model output.
 - **Stored context state exists per warm cache point (2026-08-12).** "there's one for each warm cache point."
