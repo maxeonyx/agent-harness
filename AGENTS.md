@@ -7,6 +7,20 @@ build, test, and release without an `agent-tools` checkout.
 
 Run `cargo ratchet`, not plain `cargo test`. A new test must be red when first introduced and committed as `pending`; that expected red test keeps CI green. A new test must not pass when first introduced—doing so makes the ratchet and CI red. Implement only after the red commit, then rerun the ratchet and commit the promotion to `passing`.
 
+## Integration workflow
+
+Run `devenv test` before committing and pushing; it includes `actionlint`, so
+workflow syntax is checked offline. Source CI does not run on push. Open a pull
+request, merge current `main` into the feature branch, then explicitly dispatch:
+
+```bash
+gh workflow run ci.yml --ref <feature-branch> -f pr_number=<number>
+```
+
+The repository-serialized run records the required `Ready` check, builds the
+release artifacts, auto-merges the pull request, publishes those same artifacts,
+and records `integrated-ci` on the exact merge commit.
+
 ## Project Status
 
 `agent-harness` is a process-steered experimental workbench for developing an evented face/brain/limb agent harness. The product is intentionally not being implemented directly yet.
@@ -51,7 +65,7 @@ The design gist `014463e0964bebd0add4b914971c492f` is the upstream for `docs/sou
 1. Clone the gist and diff it against `docs/source-notes/`.
 2. Copy changed and new files verbatim, keeping the exact gist filenames (including any without an `.md` extension) so future diffs stay clean.
 3. Fix any process references to notes that moved or were renamed in the gist. Do not log the sync anywhere — whether source-notes matches the gist is answered by rerunning the diff, not by recorded state.
-4. A notes-only sync needs no version bump. CI (and its release guard) only triggers on the paths in `.github/workflows/ci.yml` — `Cargo.toml`, `Cargo.lock`, `src/**`, `tests/**`, `scripts/**`, `.test-status.json`, `docs/version.json`, etc. `docs/source-notes/` and `docs/process/` are not in that list, so a docs-only change never reaches the guard. Only bump the patch version in `Cargo.toml`, `Cargo.lock`, and `docs/version.json` when the same change also touches a CI-triggering path.
+4. A notes-only sync still goes through the explicitly dispatched integration workflow. Give every integration PR a fresh patch version in `Cargo.toml`, `Cargo.lock`, and `docs/version.json` so the one run can publish and attest its exact merge commit.
 5. Run the commands below under `devenv` before committing.
 
 Source notes stay verbatim. Curation happens in `docs/process/`, never by editing the imported files.
