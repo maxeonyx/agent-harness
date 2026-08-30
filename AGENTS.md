@@ -1,6 +1,7 @@
 # agent-harness - Agent Instructions
 
-This tool is developed from the `agent-tools` workspace. Work from `/home/maxeonyx/agent-tools`, not from this repository in isolation.
+This repository is self-contained for development. A standalone clone must
+build, test, and release without an `agent-tools` checkout.
 
 ## TDD ratchet — read before testing
 
@@ -68,9 +69,3 @@ cargo clippy -- -D warnings
 ```
 
 Plain `cargo test` is blocked by the gatekeeper test for the core package; use `cargo ratchet`. Disposable experiments under `experiments/` may define their own local test workflow.
-
-From the workspace root, also run:
-
-```bash
-cargo test -p standards
-```
