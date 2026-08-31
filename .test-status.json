@@ -4,6 +4,7 @@
   "tests": {
     "agent-harness::gatekeeper$tdd_ratchet_gatekeeper": "passing",
     "agent-harness::help_examples$help_examples": "passing",
+    "agent-harness::process_contract$binary_rejects_trailing_arguments_and_documents_json_version": "pending",
     "agent-harness::process_contract$binary_reports_plain_and_json_versions": "passing",
     "agent-harness::process_contract$binary_reports_product_help": "passing"
   }
