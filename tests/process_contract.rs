@@ -37,3 +37,31 @@ fn binary_reports_plain_and_json_versions() {
     assert!(stdout.contains(r#""binary":"agent-harness""#));
     assert!(stdout.contains(&format!(r#""version":"{}""#, env!("CARGO_PKG_VERSION"))));
 }
+
+#[test]
+fn binary_rejects_trailing_arguments_and_documents_json_version() {
+    for args in [
+        &["--help", "unexpected"][..],
+        &["--version", "unexpected"][..],
+        &["--version", "--json", "unexpected"][..],
+    ] {
+        let output = assert_cmd::Command::cargo_bin("agent-harness")
+            .expect("agent-harness binary should be built")
+            .args(args)
+            .output()
+            .expect("agent-harness should reject trailing arguments");
+
+        assert_eq!(output.status.code(), Some(2), "args: {args:?}");
+        let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+        assert!(stderr.contains("unexpected argument: unexpected"));
+        assert!(stderr.contains("agent-harness --help"));
+    }
+
+    let help = assert_cmd::Command::cargo_bin("agent-harness")
+        .expect("agent-harness binary should be built")
+        .arg("--help")
+        .output()
+        .expect("agent-harness --help should run");
+    let stdout = String::from_utf8(help.stdout).expect("help stdout should be UTF-8");
+    assert!(stdout.contains("agent-harness --version --json"));
+}
