@@ -75,6 +75,7 @@ See `docs/process/HANDOFF.md`.
 cargo ratchet
 cargo fmt --check
 cargo clippy -- -D warnings
+(cd experiments/provider-cache-probe && deno task check)
 ```
 
 Plain `cargo test` is blocked by the gatekeeper test for the core package; use `cargo ratchet`. Disposable experiments under `experiments/` may define their own local test workflow.

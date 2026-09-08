@@ -7,6 +7,7 @@
     pkgs.cargo-nextest
     pkgs.clippy
     pkgs.curl
+    pkgs.deno
     pkgs.gcc
     pkgs.gh
     pkgs.git
@@ -20,5 +21,6 @@
     cargo fmt --check
     cargo clippy -- -D warnings
     cargo ratchet
+    (cd experiments/provider-cache-probe && deno task check)
   '';
 }
