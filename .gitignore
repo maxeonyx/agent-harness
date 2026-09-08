@@ -1,5 +1,8 @@
 /target
 experiments/*/target/
+
+# Local-only files, including the provider-cache-probe credentials file.
+*.ignore*
 skeleton-session.jsonl
 fake-provider-requests.jsonl
 
