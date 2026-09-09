@@ -1,0 +1,15 @@
+{
+  "tasks": {
+    "probe": "deno run --allow-net=api.anthropic.com,api.openai.com --allow-read=. --allow-write=. main.ts",
+    "fake": "deno run --allow-net=127.0.0.1 --allow-env fake_provider.ts",
+    "check": "deno check main.ts fake_provider.ts && deno fmt --check && deno lint"
+  },
+  "fmt": {
+    "lineWidth": 110,
+    "exclude": ["**/*.md", "results.ignore"]
+  },
+  "lint": {
+    "exclude": ["results.ignore"]
+  },
+  "lock": false
+}
