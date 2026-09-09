@@ -1,226 +1,546 @@
 # Context updates and progressive disclosure
 
-Provenance: why layer, core claims, per-element table, and the aspect list reviewed with Max 2026-08-12, line by line, with his corrections folded in (recorded in REQUIREMENTS.md §"Decisions from design review"). Aspects still to review are marked unreviewed. Interactions and summary not yet written.
+The Context updates aspect of the harness design: what a live session is told when something already in its context changes, and what it is given up front. The code doctrine it works inside is `code-shape.md`.
 
-Sources: `docs/source-notes/context-updates.md`, `docs/source-notes/context-and-agent-loop.md`, `docs/process/REQUIREMENTS.md` §"Decisions from design review".
+## Max's statements
 
-## What this is about
+### What goes stale, and why tell the agent
 
-An agent's context contains stuff that can go stale — the text of a skill it loaded, an AGENTS.md, the list of available subagents. The agent finds out via a note appended to the next request that was going to happen anyway.
+> If the agent loads a skill, but it gets changed by the user or another agent or by git, it'd be nice if the agent could somehow know.
 
-That note is written at the moment the request is built, not at the moment the change happens. Max edits a skill at 3pm; the session's next request is at 6pm; what to say is worked out at 6pm.
+— `source-notes/context-updates.md`
 
-So at 6pm, to write that note, we need to know the current state of everything that feeds the context: skill files sitting on a limb, context layers from the machine or the user, the tool set, the clock. Those are the **data sources**.
+> But if the agent has loaded the skill, it would be nice for it to get notified that it's changed since last time it was loaded. This goes for other stuff too:
+>
+> - Tool availability (new tools, missing tools)
+> - Skill content
+> - New skills
+> - The time (special rules around this one)
 
-## Vocabulary
+— `source-notes/context-updates.md`
 
-- **Context contribution** — anything that goes into a context: skill content, an AGENTS.md layer, a tool description, an option set, a notice, user activity. For example: the text of the `github` skill, as sent.
-- **Data source** — anything that produces contributions. A limb is one; so are machine context, user context, face-specific context, and (probably) the user-turn stream. One data source serves many sessions.
-- **Initialise** — produce a context's system section (system prompt + tools). Happens on a new session, on a compaction, and as part of a refurbishment.
-- **Refurbish** — transform an existing context to reduce token count, without compacting. Code-only, possibly with utility-model calls. Re-initialises the system section as part of the job. For example: dropping notices whose content is now in place.
-- **Compact** — replace a context with a fresh one built from a model-written summary. The expensive rung.
-- **Notice** — an appended message telling the agent that a contribution it holds has changed. For example: "Skill `github` changed (content edit, by the user)."
-- **Content versions** — the record, per context, of which contributions went in and what content each had at the time. What makes "has this session seen the old version?" answerable.
-- **Utility model** — a small cheap model (e.g. Haiku) used for classification or summarisation inside harness logic, never as the session's agent.
-- **Data source cut** — the consistency rule for building a request: render only when every data source has reported at or beyond the triggering point (vector-clock logic, not necessarily a literal vector clock).
+> If it's in the system prompt, it's there with a desc only. We ignore desc changes until the context is rebuilt.
 
-## Why
+— `source-notes/context-updates.md`
 
-**Why 1 — the user changes things while sessions are live.** Max iterates on skills, AGENTS.md files, tool schemas, and prompts constantly (the process-improver stakeholder). Sessions are long-lived and many run at once. So a live agent will routinely hold facts that have gone stale. For example: an agent loaded the `github` skill an hour ago; Max has since rewritten its merge instructions; the agent is about to merge a PR the old way. Root: **correctness** — the agent's actions should follow from current reality, not from a snapshot of it. Elapsed time is a sub-case: "the time is roughly X" is a fact that goes stale ("It can be many weeks in some cases!").
+> if it would not change the agent's actions in any way, then it doesn't need to know!
 
-**Why 2 — the cache forbids the obvious fix.** The obvious fix for a stale fact is to edit the context in place. The cache forbids that: a cached context is append-only, and editing any earlier byte forfeits the prefix. This is not a why — it is the **constraint** that shapes the solution space (append a notice, or wait for the next initialise).
+— decision 2026-08-12 (the notify-at-all test)
 
-**Why 3 — a quiet session must cost nothing.** Facts change whether or not any session is active. If change notices caused API requests, every edit to a skill would bill every idle session that ever loaded it. Root: **irreducible resource pressure** — the why under piggybacking.
+> how are we gonna know?
 
-**Why 4 — up-front content is paid by every session.** Skill and tool descriptions in real-world cases "take up massive context paid on _every_ session" (source notes). Root: the same resource pressure as Why 3, at session start instead of mid-session. This is the why under progressive disclosure, and why this doc covers both topics: they are one economics.
+— decision 2026-08-12 (his own objection to the actionability test, before the utility-model idea)
 
-## What
+> there's a practical constraint on actually knowing whether free-text content update X affects session Y or not
 
-### Core
+— decision 2026-08-12
 
-Three levels of context maintenance, cheapest first — the original vision: keep using the warm context; **refurbish** the existing context (incorporate notices etc.); **compact** (make a fresh context). Correctness first, then the cheapest option that is correct.
+### How much a notice carries
 
-1. A context is append-only while we believe it's cached. The system section (system prompt + tool schemas) changes only at an **initialise**. Re-initialising an existing context is always part of a refurbishment, never a standalone operation: replacing the system section forfeits the cached prefix, and once that cost is paid there is no reason not to reduce tokens too ("If we expect a cache miss, then there's no reason to not optimize the context somewhat" — source notes). So the three rungs are the three cost regimes, and there is no fourth: append pays 0.1× on the prefix plus a write on the delta; refurbish forfeits the prefix and pays ~1.25× on the new whole; compaction pays model output to shrink drastically.
+> We don't include the new content eagerly. We only provide the *bare minimum* for the agent to efficiently invalidate its current understanding - to know that viewing the new content is an option, or to explain a missing tool, etc.
 
-2. A context has several cache prefixes at once, nested: the system section; everything up to any fork boundary; the whole context so far. User-facing sessions also keep a cache point ~n−2 messages back, so message undo lands on a warm prefix.
+— `source-notes/context-updates.md`
 
-3. When a fact changes (a skill, an AGENTS.md, a tool schema, time passing): every future initialise includes it automatically — nothing to design there. Then the unique thing: a live session may additionally get an appended notice, so that the agent can know about the change. Changes can just wait for the next initialise, if waiting is safe in one of two ways: agent behavior based on the old information is kept valid (eg. the limb keeps accepting old tool calls — claim 7), or the change doesn't affect correctness of the agent's behaviour.
+> Skills - the briefest possible mention of "these skills have changes"
 
-4. Notice decision 1 — notify at all? Only if the change could alter the agent's actions. That is what actionability means: if it would not change the agent's actions in any way, it doesn't need to know.
+— `source-notes/context-updates.md`
 
-5. Notice decision 2 — how much does the notice carry? A spectrum: from the vaguest pointer ("something has gone stale") through a name/path, up to the information itself. The choice is economic — the same economics as claim 9, plus the agent's reaction to each form. All else equal, the minimum. Whatever the form, the agent must be able to re-discover reality reliably and cheaply — it should never have to reload everything just to be sure.
+> It could even be something like 'one or more skills have gone stale.' (although that is too un-specific probably, it gets across the idea - we don't neccessarily need to list 10 skills that have updates - we might elide even that info as long as we give the agent a way to re-discover reality reliably & cheaply ie. it shouldn't have to reload everything just to be sure)
 
-6. A notice never causes an API request. It piggybacks: appended, then carried by the next request that happens for a real reason (user message, tool result). An inactive session never pays.
+— decision 2026-08-12
 
-7. One notable correctness example: Tool calls issued by the agent should always work. If a new version of a tool is loaded, in particular if it has a different _description_ (including schema), then limb should issue calls against the old tool version on any live session that still contains the old description. This means retaining two or more versions of the tool implementation while there is any session. Why? We don't think issuing a notice for tool description changes or tool call changes is sufficient for correct agent behaviour. Thus a fresh initialise is required for tool version changes, but we also don't want to _force_ all sessions to refurbish or compact immediately. The bound is the question "is there ever going to be another use of this tool code version, or not?" — the obligation ends when every session holding the old schema has been re-initialised or _would be re-initialised before it could be used_ (see 8.).
+> not necessarily - it still depends on the economics & the agent's reaction. but _all else equal_, the minimum.
 
-8. The ideal for an expired ("old cold") context: revive it as warm — re-send it exactly as it was (neither refurbished nor re-initialised; it is the event log of that session), append notices (perhaps copious), and keep going. The cost logic: compacting re-bills the whole context at input anyway; for the ~same money (cache write is ~1.25× input), pay cache write instead and don't compact. The carve-out is correctness. An old context contains old info; where that matters for correctness, notices or a refurbishment are needed. We're relatively sure tool schemas and tool presence can't be fixed via notices, and we don't want to keep old tool code versions around forever — so a refurbishment or compaction may have to be forced _if the context contains tool description content that is stale in a correctness-affecting way_. The same logic applies to any other correctness-affecting stale content — perhaps subagent description content, for example. Perhaps a user option to compact. Not fully settled.
+— decision 2026-08-12, on whether a reference always beats carrying the content
 
-9. The economics of notice content & frequency is based on the following. A "reference" type notice is eg. "`skill-a` has new content". A "full" notice would instead be the full new content of `skill-a`, or perhaps a diff. Choosing "reference" instead of full means: unconditionally smaller input, plus conditional billing of an extra turn (more cache read) in the branch where the agent does fetch for the full content. Content instead of a notice means: unconditionally larger input at input cost, no extra turn. Which side wins depends on how often the branch is taken. Progressive disclosure at session start is exactly this choice — descriptions up front, content on demand. Frequency of notices (ie. whether they should be debounced or not) depends on how important it is for an agent to know about the content, how likely it is to overreact to the notice, and also the raw token cost of the notices themselves.
+> i would call this detail, and note that it trades off against distraction (task quality) & economics
 
-### Constraints the code works within
+— decision 2026-08-12, naming the aspect
 
-Max's mental model is a dataflow graph. Whether the implementation is _explicitly_ a dataflow graph is open — "that need not be explicitly a dataflow graph, but also, maybe it should be" — so the constraints below must hold either way. They exist to leave an implementer no room for a major wrong decision, and they are mostly restrictions on what the code is _allowed to know and do_.
+> smaller notices are cheaper if the agent doesn't need them but mean that the agent may need to go get more detail if it does need them. there always needs to be a clear, reliable path to that information.
 
-**This should be unnoticeably fast, so don't build machinery to hide latency.** There is not much data — a handful of context files and their contents. Demand standing for the length of a turn is enough; pre-warming the graph while the user drafts a message would work and is a fine idea, but is not needed, and the design should stay simple until something is measurably slow.
+— decision 2026-08-12
 
-**There is a computation graph, and we ask it for a context.** "there's a computation graph. we ask it for the 6pm context. it gets built for us." Nothing hands the graph a view of the world; the graph fetches what it needs. So no component exists whose job is to hold the whole current world on behalf of the notice logic.
+> the agent actually has to be able to retrieve the new info somehow if it thinks it _is_ relevant.
 
-**Derived by demand, and demand stands for the length of a turn.** "if there's demand, it gets computed" — and "while the agent turn is going, there's constant demand - we're streaming live updates so that the latest notice set is immediately ready to piggy back on the next request." Three consequences: nothing waits at request-assembly time, because the notice set is already current; a session with no turn running generates no demand and so costs nothing; and there is no path by which producing a notice causes a request.
+— decision 2026-08-12
 
-**A data source presents a view at a point in time.** It "presents a view of various data at a given time, that can then be used in downstream computation". Downstream asks what a source says as of some point; it does not replay a change log. This is what makes a consistent cut expressible.
+> for example, the skill description. Assumably, that's not changing too much... maybe debatable, but I think we need to draw these lines. Otherwise, we'll get too much change notifications coming into the event stream.
 
-**How a source learns of a change is invisible downstream.** A source may be a file watcher, a read-on-request, or a combination — it "may or may not always listen to changes". No downstream logic may branch on which. This is also why this design is not "eventually consistent": consistency comes from the cut, not from a source pushing promptly.
+— decision, on elements that may warrant no notice even when the agent was exposed to them
 
-**One cut per request.** A request is rendered only from a set of source views that are consistent as of the triggering point — vector-clock logic, though a hand-rolled equivalent is acceptable. A request must never mix one source's view from 3pm with another's from 1pm.
+> also related to the user-turn stuff
 
-**The derivation is pure.** No I/O, no clock, no storage, no network; everything it uses arrives as a declared input, and it produces only its declared outputs. This is what makes "compute elapsed time at delivery, never at detection" unbreakable rather than merely intended.
+— decision 2026-08-12, on agents overreacting to notices
 
-**Structured values until the last step.** Notices are data, not text. Rendering to text is a separate projection, shared with `/dump` so the two cannot diverge.
+### Elapsed time
 
-**Policy and tunables are data.** The per-element decisions and the thresholds are values the code reads, not branches the code hard-codes — that is what makes them tunable, and what a meta-agent would tune.
+> This is important to have an agent understand how long between its response and the user message. It can be many weeks in some cases! Probably more than 1h is a good point to start injecting this, less no point.
 
-**Everything has an in-memory implementation.** No code path may _require_ a real filesystem or a real socket: a hash-map-backed tree and a lightweight channel must be able to stand in for them, so the whole distributed system can run in one process. Strict for core; experiments have latitude.
+— `source-notes/context-updates.md`
 
-**No ad-hoc boundary breaking.** The above only holds if code never reaches around an abstraction for convenience. Strict requirement for core.
+> discoverable, that's my naive guess
 
-**Language split.** The data-source / dataflow framework is Rust; the logic within it is TypeScript on Deno.
+— decision 2026-08-12 (the ~1h threshold; hedge his)
+
+### Piggybacking — nothing here drives a request
+
+> However- user activity should *not* trigger API requests.
+
+— `source-notes/context-and-agent-loop.md`
+
+> If there is one already happening, then that activity should *be sent with the next API request* - a user message alongside the tool result or user message. However, many types of "context additions" should not themselves trigger a request, for cost reasons.
+
+— `source-notes/context-and-agent-loop.md`
+
+> There are only a few things that should drive API requests:
+>
+> agent tool-call loop continues
+> user ends a turn
+> cache-nearly-expired proactive handover/compaction
+> maybe explicit “resume/continue” actions
+
+— `source-notes/context-and-agent-loop.md`
+
+> Most other events only piggyback:
+>
+> user opens file
+> user edits file
+> user searches
+> user terminal output arrives
+> tool schema changes
+> process config changes
+> client app reconnects
+> sibling/child agent status changes
+
+— `source-notes/context-and-agent-loop.md`
+
+### Append versus the cache
+
+> If we expect a cache miss, then there's no reason to not optimize the context somewhat. We might eagerly update the AGENTS.md and other system prompt info like agent and skills, maybe update tool call schemas (although I think that's confusing, because the chat likely contains tool calls - appending is probably still correct here), we might truncate old tool calls harder, etc.
+
+— `source-notes/context-and-agent-loop.md`
+
+> However, if we expect a cache hit, we must instead treat the context as fully immutable, append only (or at least, append only with respect to some prefix - this depends on the provider's caching implementation and needs experimenting). If we're here, instead of changing the system prompt, we append a tiny notification that would allow the agent to know that it might need to reload some file or system prompt instructions etc. that have changed.
+
+— `source-notes/context-and-agent-loop.md`
+
+### The three operations, and the ladder
+
+> rebuild is not 'build a new context'!! rebuild is 'transform an existing context'... maybe we've been abusing terminology here. let's veto 'rebuild'.
+
+— decision 2026-08-12
+
+> this refers to the system prompt only - and happens on new sessions, on compactions, and yes, on refurbishments
+
+— decision 2026-08-12 (initialise)
+
+> transform existing to reduce token count, but NOT compact - the messy one
+
+— decision 2026-08-12 (refurbish)
+
+> keep using warm context; rebuild [refurbish] existing context (incorporate notices etc.); compact (make fresh context)
+
+— decision 2026-08-12, which he called "the original vision". The bracket is the recorder's gloss, applying the veto above to his earlier word.
+
+> we build the harness for correctness, then choose the cheapest option within that?
+
+— decision 2026-08-12 (hedge his)
+
+> re-projection of session history into a new context, but notably NOT a compaction. It's done with only regular code, and maybe utility model calls. Note that this needs to be designed still because it's a bit odd, because it mixes 'event stream' and 'rollup' in a messy way.
+
+— decision 2026-08-12 (refurbishment)
+
+> when rebuilding [refurbishing] a context we can coalesce notices into the system prompt & elide edits where we have a later read, etc? I think that's reasonable. TBH I haven't thought about context rebuild [refurbishment] much here.
+
+— decision 2026-08-12 (hedges his)
+
+> tbc if rebuild [refurbishment] is always 'compact immediately prior' or not. I think it is, if our compaction is good.
+
+— decision 2026-08-12
+
+### Cache prefixes
+
+> system section (system prompt, tools, etc); system section + messages _up to the last fork boundary_; system section + messages _up to .._ + all subsequent messages.
+
+— decision 2026-08-12
+
+> For user-facing messages, we also need a prefix which is _everything up to n-2 messages ago_ (or something like that) to support message undo.
+
+— decision 2026-08-12
+
+> effectively a branching structure
+
+— decision 2026-08-12, on the append-only cache
+
+> That is why forked sub-agents work at all.
+
+— decision 2026-08-12, on discarding a suffix where a cache point can be predicted
+
+### Tool schemas and the tool set
+
+> Tools - added / missing tools get similar notification. Tools with changed schema need full content injection.
+
+— `source-notes/context-updates.md`. **Later:** the 2026-08-12 ruling below supersedes the full-content-injection half — a changed schema gets no notice at all.
+
+> whenever I was referring to 'tool schemas' I _also_ meant 'tool set' as well. Tool removal is a breaking change to the tool schema
+
+— decision 2026-08-12
+
+> changed tool schema never gets a notice, as discussed
+
+— decision 2026-08-12
+
+> tool schemas are about correctness more than any other thing in the system context. either the tools change underneath, and so we either append a notice (but I don't think this is wise or possible) or force a rebuild [refurbish/compact], or the tools _don't_ change underneath (they do, but we keep the old ones around until the next rebuild [initialise]).
+
+— decision 2026-08-12
+
+> to deal with correctness, we _keep the old tools working_. or it might be stuff that doesn't really affect correctness.
+
+— decision 2026-08-12, on the two ways waiting for the next initialise is safe
+
+> until all sessions that used those old tools have reached cache expiry (and so would be rebuilt [re-initialised])
+
+— decision 2026-08-12, on how long the limb accepts old tool calls
+
+> I don't see any other constraint? The question is - is there ever going to be another use of this tool code version, or not?
+
+— decision 2026-08-12
+
+> I'm not sure if new tools work yet or not. Seems fine to me?
+
+— decision 2026-08-12, on mid-session tool additions (hedge his)
+
+> I'm unsure
+
+— decision 2026-08-12, on tool addition, against "almost certainly" for tool removal
+
+> the _reverse_ question is the real one: is it ever possible to change anything about tools _without_ involving the cached prefix. That's unanswered.
+
+— decision 2026-08-12
+
+> I'm unsure about whether tool addition works robustly at all via append (ie. without breaking prefix)
+
+— decision 2026-08-12
+
+> no, highly doubt it? but yes, unsure.
+
+— decision 2026-08-12, on whether providers validate tool arguments against the advertised schema
+
+### Option sets
+
+> Avaialble agent types for subagent tool, available limbs for subagent tool, other tool option sets etc.
+
+— `source-notes/context-updates.md`, listed among things a notice covers
+
+> they're still in the context just not in that spot, and they obviously still change - that's the whole _point_ of not putting them in the schema proper - and so yes they absolutely get notices!
+
+— decision 2026-08-12
+
+> skill names are options for the skill tool! subagent names are options for the task tool!
+
+— decision 2026-08-12
 
 ### Per-element decisions
 
-Each context element, against the two notice decisions (claims 4 and 5).
+> only if loaded
 
-| Element | Notify? | Notice carries | Basis |
-| --- | --- | --- | --- |
-| Skill content | Only if this session loaded it | Name — or less, batched ("skills have gone stale") | Stale instructions alter actions. Never-loaded content just gets its new version at first load |
-| Skill description (content never loaded) | No, as a safe general rule | — | Descriptions rarely change without content changes too, and are not usually load bearing. The next initialise gets the new version |
-| New skill | Only if it would be available to this session | Name (maybe its one-line desc) | Actionability is the logical condition, but there is a practical constraint: we can't actually know whether free-text update X affects session Y |
-| AGENTS.md / other limb context | Almost certainly yes | Which file/layer | More like a contract (technically the same actionability logic) |
-| Tool removed | No — ~almost certainly a refurbishment or compaction | — | A breaking change to the tool schema ("tool schema" includes the tool set) |
-| Tool added | Mechanism unsettled — the uncertainty is not the notify decision but whether tool addition works robustly via append at all, without breaking the prefix | — | See the reversed prefix question (questions section) |
-| Tool schema changed | No — waits for a fresh initialise; the limb retains the old tool version (claim 7) | — | A notice isn't sufficient for correct agent behaviour |
-| Option set inside a tool | Yes | The changed options (minimum per claim 5) | Option sets live in the context but outside the JSON schema precisely so they can change without a schema change. For example: skill names are options for the skill tool; subagent names are options for the task tool |
-| Elapsed time | Yes, past a threshold — ~1h naive guess, tunable | The elapsed time itself | No retrieval path. Computed at delivery, never at detection |
-| Limb identity | No — requires a fresh initialise | — | A limb is not one thing — tools, context, cwd, and more; load bearing |
-| Agent role / mandate | No — requires a fresh initialise | — | The model can't be expected to respect role changes that occur later in the context |
-| cwd / hostname | Low confidence: probably a different limb, therefore a different session. But a hostname change can be legit; maybe a limb can relocate; not every limb has a cwd | — | Unsettled |
-| Model | Not a notice matter — changing it invalidates the cache, so a fresh initialise happens anyway | — | Mechanically a request fact; but we do want to tell the model which model it is |
+— decision 2026-08-12 (skill content)
 
-### Aspects
+> a safe general rule
 
-Unordered. The point is that the approach is written down, so an implementer has no leeway for major wrong decisions. Aspects not yet reviewed with Max are marked **(unreviewed)**.
+— decision 2026-08-12, on not notifying when only a skill description changed
 
-**identity of a context contribution** — A notice has to point at something, and "the `github` skill" must mean the same thing across versions, across a rename, and across two data sources that each provide a `github` skill. So an id is `(data source, kind, name-or-path)`. Consequence: a rename is a delete plus an add, so the agent sees "skill gone" + "new skill" rather than "renamed". That is genuinely confusing and unresolved — open.
+> skill descriptions changing is unusual without skill content changes too, and descriptions are not usually load bearing
 
-**change thresholds for content notices** — Not every difference deserves a notice. Compare content by equality: the harness holds the content as contributed, so it can compare directly; hashes are only for when you don't want to keep the content around. Content-inequality is necessary but not sufficient — a whitespace-only edit clears that bar and shouldn't notify. Elapsed time needs its own threshold (~1h) because every request differs. A utility model is a candidate classifier here, for quality of both classification and summary, if the economics justify it.
+— decision 2026-08-12
 
-**content versions** — To decide whether to notify a session, the harness must know what that session has in its context. Max edits the `github` skill at 3pm: session A loaded it this morning (holds old text — notify), session B never loaded it (holds only the description — no notice), session C started at 4pm (already has new text — no notice). Those three different calls are only possible if the harness recorded, per context, which contributions went in and what content each had at the time. This is also what the compaction briefing's diff reads: what this context believed versus what is now true.
+> only if it would be available
 
-**detection** — Sources live in a data source's environment, so a reader per data source observes them and reports current content to the brain. Detection produces facts only; it decides nothing about notices, and couldn't — a reader doesn't know what any session has seen.
+— decision 2026-08-12 (a new skill)
 
-**rendering** — Notices and other piggybacked contributions are computed and locked as the request is built, never at detection. `(content versions, current sources, now) → (notice block, updated content versions)`. Elapsed time is the sharpest case: its value doesn't exist until delivery.
+> almost certainly yes
 
-**purity** — That render function is pure: no file reads, no clock, no storage, no network; everything arrives as an argument. This is why "compute elapsed time at delivery" stops being a rule to remember and becomes impossible to violate — there is no clock to read at detection time, because the function isn't called then.
+— decision 2026-08-12 (AGENTS.md and other limb context)
 
-**provenance** — Who changed it, because the right response differs: a user edit may be an instruction, a git checkout may mean the workspace moved, another agent's edit may mean coordination is needed. What is reliably knowable is three buckets: changes the harness caused itself (its own tool calls), observable git state, and unattributable external edits. Not a general audit trail. Potentially very useful to the model.
+> that feels more like a contract to me. It's technically the same though.
 
-**option sets** — Ordinary contributions with identity and versions, deliberately kept out of the JSON schema so they can change without a schema change. For example: skill names are the skill tool's option set; subagent names are the task tool's. They absolutely do get notices.
+— decision 2026-08-12
 
-**notice content** — What changed, the kind of change, who changed it, and the available action. For example: "Skill `github` changed (content edit, by the user). Reload it with the skill tool if relevant."
+> Other context eg. AGENTS.md files, global / machine / user context.
 
-**actionability** — Notify only if the change could alter what the agent does. Mechanically undecidable in general — a free-text skill edit against a session halfway through unrelated work. Three implementations, increasing cost: per-element policy (the table above), default-yes, or a utility-model classifier.
+— `source-notes/context-updates.md`
 
-**detail** — How much the notice carries: "something changed" → "the `github` skill changed" → the diff → the full content. Trades three ways: economics, distraction (a bigger notice can degrade the agent's work on its actual task), and the agent's reaction. All else equal, the minimum.
+### What cannot change without an initialise
 
-**re-discovery** — Smaller notices are cheaper when the agent doesn't need the detail, but mean it must go and get more when it does. So there always needs to be a clear, reliable path to that information. The reverse doesn't follow automatically: elapsed time could be made retrievable by a clock tool, but minimising to "time has passed" would still be wrong, because the value is a few tokens and retrieval costs a whole turn. The rule is minimise when retrieval is cheaper than carrying.
+> Changed limb (notably - this changes the limb-specific context hierarchy. this is load bearing and shan't change without a compaction / context re-build.)
 
-**overreaction** — Agents respond too strongly to notices: abandoning plans, re-reading everything, or refusing to use a new enum value they've been told is valid. Wording and frequency are empirical and need testing; related to the user-turn work.
+— `source-notes/context-updates.md`
 
-**placement** — All contributions the build-time comparison finds go in one block, not one per element. The block never separates a tool call from its result. Proposed: notices before the user's message, so the user's words are the last thing read.
+> limb is not one thing... it's tools, context, cwd, and more
 
-**channel** — Harness voice, distinct from user and agent, so a notice cannot be mistaken for the user giving an instruction. System-reminder-style is fine; a real provider channel would be better.
+— decision 2026-08-12
 
-**debouncing** — Not a cost mechanism: render-at-build already collapses repeated edits. Its only job is behavioral — while Max is actively editing a skill, a notice on every request may destabilise the agent.
+> Maybe likewise for changed working directory and/or hostname etc.
 
-**thresholds** — Elapsed time ~1h (his naive guess, discoverable), the debounce window, a utility model's confidence bar. Recorded tunables with recorded outcomes, not constants, so a meta-agent could tune them.
+— `source-notes/context-updates.md`
 
-**triggering** — Nothing here ever triggers a request (invariant 2). Piggyback only, so a quiet session never pays.
+> hostname change can be legit. maybe a limb can relocate too? not sure... also - not every limb has a cwd
 
-**data sources** — Not just limbs. A limb is one data source, serving many sessions (forked sessions especially); there is also machine context, user context, possibly face-specific context, and probably the user-turn stream. So skills have several possible sources and limb-local content is one case.
+— decision 2026-08-12 (low confidence, his)
 
-**no notifier** — There is no notifier entity. Because notices are rendered at request build, nothing needs owning between requests: notification is a step inside request assembly. A consequence of the render-at-build decision, and an example of what defining the box is for.
+> not sure if this is allowed or not - I tend to think not without a compaction, as model can't be expected to respect role changes that occur later in the context
 
-**data source cut** — Consistency at request build is a cut, not eventual consistency: render and send only once derived data covers a point at or beyond the trigger across every data source — vector-clock logic, though a hand-rolled equivalent is acceptable. The tool-call loop counts as a data source.
+— `source-notes/context-updates.md`, on changing the agent's role / mandate
 
-**source resolution** — The "same" skill can come from different data sources, so resolution and precedence between them is a real question. Overlaps context-layer composition (`source-notes/configuration-model.md`, flagged there as needing significant design work). **(unreviewed)**
+> Changed model? Unclear.
 
-**persistence** — Preserve enough to produce exactly the same prefix in the next API request, so cache survives restarts. Notices are stored naturally, as part of context storage.
+— `source-notes/context-updates.md`
 
-**data lifecycle** — Resuming a weeks-old session may require storing both the input (source content, so the comparison happens at the right level) and the output (the rendered API request, for cache purposes). Max has noted this contradicts the narrower "reload sources, don't store them" position; the tension is recorded, not resolved.
+> I think we do want to tell the model which model it is. But yes, changing it invalidates cache so we do rebuild [initialise].
 
-**stored contexts per cache point** — Historic context state exists: one stored context per warm cache point. Superseded contexts are stored directly rather than reconstructed deterministically.
+— decision 2026-08-12
 
-**restarts** — A relaunch must not cost warm caches: reproducing the same prefix is necessary, and so are any surrogate ids referring to cache affinity or cache points — those belong to another doc.
+### Economics
 
-**prefixes** — Nested cache points per context. The provider uses the longest previously cached sequence automatically, so the harness places breakpoints but never selects a prefix.
+> the actual economics is the fundamental here (that the notices are actually a contingent choice - unconditional input smaller, conditional billing an extra turn (so more cache read in that branch), vs unconditional billing of larger number of tokens at 'input' cost but no extra turn. And yes, this is exactly the same as progressive disclosure.
 
-**ladder** — Keep warm → refurbish → compact. Build for correctness first, then choose the cheapest option that is correct.
+— decision 2026-08-12
 
-**refurbish** — A re-projection of session history into a transformed context: current sources in place, notices dropped because their content is now in place, body optionally coalesced. Not a compaction — regular code, possibly with utility-model calls. Still needs design: it mixes event stream and rollup in a messy way.
+> a connection, not a fundamental
 
-**coalescing at delivery** — Free, by construction. Ten edits between requests produce one notice describing the latest state; an edit reverted before the next request produces none. No dedup logic, no notice-expiry logic.
+— decision 2026-08-12, on the progressive-disclosure link
 
-**coalescing at refurbish** — Different mechanism: notices roll into the system section, and edits can be elided where a later read supersedes them.
+> maybe a point that it typically requires empirical measurement or experiment?
 
-**pruning** — Considered and rejected. Inside the cached region, pruning _is_ a refurbishment. In the uncached tail, it is only profitable if the content is pruned within roughly one or two turns — and that is the freshest content, which is what you least want to prune. The forked-agent design subsumes it anyway: bulk is generated in a child context and returned as a report, so the parent never carries it. A per-tool-call summary field is unattractive because a model-written summary is output-priced.
+— decision 2026-08-12
 
-**old tool versions** — The limb retains every tool version any live context still holds, because a notice is not sufficient for correct tool-calling behaviour. The obligation ends when no session could use it: "is there ever going to be another use of this tool code version, or not?"
+> an economic decision as well
 
-**forced refurbishment** — Correctness-affecting stale description content forces a refurbishment or compaction rather than a notice — tool schemas and the tool set for certain, perhaps subagent descriptions too.
+— decision 2026-08-12, on progressive disclosure
 
-**cold contexts** — Reviving an expired context as warm is the ideal, at ~the same cost as compacting it; it is re-sent exactly as it was, neither refurbished nor re-initialised. Not settled where that stops being possible.
+> compaction economics, cancellation economics... and forking economics all feel like empirical domains. I am not very strong in this area, so I would prefer a mechanism for agents to run these experiments or perform observational tuning. For example, a background meta-agent could tune global harness settings via A/B testing. If we can run a scheduled meta-agent, it could also tune handover instructions and other parameters over time.
 
-**undo** — The ~n−2 cache point exists so that message undo lands on a warm prefix.
+— decision (hedges his; a capability want, not a committed design)
 
-**forks** — A child inherits content versions at the fork point. What prefix a fork actually inherits is an experiment.
+### Progressive disclosure
 
-**economics** — The contingent-choice arithmetic behind nearly every decision here: a notice instead of content is unconditionally smaller input plus a conditional extra turn in the branch where the agent fetches; content instead of a notice is unconditionally larger input and no extra turn. Frequency of the branch decides. The prices are known — cache write 1.25×, cache read 0.1×, model output ~5× — but which side wins typically requires empirical measurement or an experiment, not derivation.
+> Not all innformation can or should be made available to the agent at the get go. this is a careful balance between always up-front input cost and conditional repeated cached-input cost from tool calling to get more info.
 
-**progressive disclosure** — The same economic decision at session start: descriptions up front, content on demand. Up-front content is paid by every session forever; fetched content only by the sessions that need it. Fork-proven for skills; the same trick for tools is unproven.
+— `source-notes/context-updates.md`
 
-**analytics** — Not "we get queryability free because everything is an event". The question is what we keep, for how long, and above all why. "Keep everything" is an option, not an answer. Concretely, this feature's candidates are change facts and rendered notices, and the reason to keep them is that the overreaction question and the tunables cannot be answered without them.
+> In real world cases, skill and tool descs can otherwise take up massive context paid on *every* session.
 
-**authority** — No permission model over who may change sources; personal limbs run YOLO and approval theatre is explicitly unwanted. Provenance is recorded, not gated. There is no authority model across multiple users.
+— `source-notes/context-updates.md`
 
-**harness voice** — The harness's voice carries ground truth: the time, or "the AGENTS.md contains this content". Content being _shown_ by the harness is not in the harness's voice — it stays quoted content. Channels and roles matter for that reason, and this is probably fairly obvious to the agent; the goal is simply that the agent does what Max wants.
+> Some skills can be gated behind other, strictly more broadly applicable skills being loaded first. Skill desc need to say when to load.
 
-**scenario test** — A fully black-box end-to-end test including setup, probably UI eventually, with real I/O as the boundary. It proves real usage and forces the harness to be harnessable — which in turn forces observability features that are useful for testing. It may be slow but must never be flaky, and is mostly a happy-path test.
+— `source-notes/context-updates.md`
 
-**fast end-to-end tests** — In-memory I/O: a whole distributed system in one process. They rely on solid abstractions and require that harness code never does ad-hoc boundary breaking — a strict requirement for core, though not necessarily for experiments.
+> We should have an info architecture skill and a skill writing workflow that helps motivate & get this correct.
 
-**fake network conditions** — The delayer channel implementation exists to simulate network conditions for in-process distributed-systems testing. It is not for reordering robustness: reordered data should not be a problem because a data source should not do that.
+— `source-notes/context-updates.md`
 
-**flakes** — Virtual time, so no sleeps. The scenario test may take real time, but still no dumb waiting or polling — everything waits on an event. A flake is a bug; races are structurally excluded rather than made unlikely.
+> previously implemented in my opencode fork.
 
-**shared doctrine** — The two testing definitions above and the purity/box doctrine are workspace-level constraints shared by every tool, so they belong in `agent-tools` workspace docs and should be referenced from here rather than restated. TODO: place them there.
+— `source-notes/context-updates.md`
 
-## Interactions
+> something similar can & should be done for tools.
 
-TODO once all docs are written.
+— `source-notes/context-updates.md`
 
-## Questions for review / needs experiment
+> Limb model should also help to reduce this - a subagent can be given a specific limb that has a context-specific tool set. those tools do not need to be available in every session.
 
-- Is it ever possible to change anything about tools _without_ involving the cached prefix? Unanswered. For example: does mid-session tool addition work robustly via append, without breaking the prefix? (Experiment.)
-- Do providers validate tool arguments against the advertised schema? Highly doubted, but unsure. (Experiment.)
-- Are late system parts supported, per provider? (Experiment.)
-- cwd / hostname: different limb ⇒ different session, or can a limb legitimately relocate? (Low confidence.)
-- Cold-context revival (claim 8): when is the revive-as-warm ideal not possible or practical? (Not fully settled.)
-- Is a refurbishment always "compact immediately prior"? ("I think it is, if our compaction is good" — see uncached compaction, REQUIREMENTS.)
+— `source-notes/context-updates.md`
 
-Open at the code-shape level, deliberately not yet decided:
+### Change thresholds, and the utility model
 
-- **Is the dataflow graph explicit?** "that need not be explicitly a dataflow graph, but also, maybe it should be."
-- **Is the clock a data source, or is `now` a parameter, or is elapsed time the request builder's job?** Treating the clock as an ordinary source looked like a unification when first written, but the clock's value changes continuously, so change-detection does nothing for it and its threshold does all the work — the uniformity may be cosmetic.
-- **How is a contribution's past content held?** A content-addressed store keyed by hash, inline copies per context, or recovery from the stored rendered request. The third only works where rendering was lossless for that contribution, which is not true where content is compressed or truncated.
-- **Is notice policy data or code?** Data makes the per-element table and the code one artifact and makes thresholds tunable by a meta-agent; code allows arbitrary per-kind logic. The utility-model classifier strains the data option, because consulting a model is an effect rather than a value.
-- Settled, not open, and recorded here only so it is not re-litigated: notices are structured values rendered by a projection shared with `/dump`. This follows from invariant 3 and the walking-skeleton ruling that the request builder and the dump share one projection.
+> you don't always need to actually say anything.
+
+— decision 2026-08-12. "Change thresholds for content notices" is his preferred name for this over "versioning".
+
+> not just time, hash (or frankly just equality - hashes are for when you don't want to keep the content itself around) is better.
+
+— decision 2026-08-12
+
+> there's one more thing to consider - again only if the economics justifies it - passing these things through a 'small model' or 'utility model' for better quality classification & summary.
+
+— decision 2026-08-12 (hedge his)
+
+> it's potentially possible that a utility model (eg. claude haiku) can re-use the same prefix at 0.1x cost. This should be confirmed empirically - if true, it's useful. Otherwise we'd give it a one-shot task with a cached system prompt, just enough context, and have it produce a one-word answer. (which tbh may often be cheaper than 100k+ context at 0.1x.
+
+— decision 2026-08-12
+
+### Provenance
+
+> this is great, something I'd never thought of, and is potentially _very_ useful for the model, if we can give it that info.
+
+— decision 2026-08-12, on the derived claim that the harness reliably knows only three buckets: changes it caused itself, observable git state, and unattributable external edits
+
+### Rendering at request build
+
+> good point!! this is a great question! render notices at request build makes a lot of sense.
+
+— decision 2026-08-12
+
+> we compute + lock notices & other piggybacked contributions as we build the request
+
+— decision 2026-08-12, generalising the rule past change notices to every piggybacked contribution
+
+### Data sources, the graph, and the cut
+
+> I think there are multiple data sources. A limb is a data source, yes, and is so for multiple sessions (eg. forked sessions especially) but I think there's also machine context, user context, maybe face-specific context. Probably the user-turn stuff gets implemented as a data source.
+
+— decision 2026-08-12
+
+> there's a computation graph. we ask it for the 6pm context. it gets built for us.
+
+— decision 2026-08-12
+
+> while the agent turn is going, there's constant demand - we're streaming live updates so that the latest notice set is immediately ready to piggy back on the next request.
+
+— decision 2026-08-12
+
+> Think of the tool call loop as another data source maybe, and only render + send once you've got derived data based on the vector clock value that is greater (or the same) over all data sources. We don't necessarily have to literally implement that (ie. what we build could be a 'manually rolled out / manually compiled' version of that), but that's the logic behind what we want to do.
+
+— decision 2026-08-12
+
+> re-ordered data should NOT be a problem, a data source should NOT do this.
+
+— decision 2026-08-12
+
+### Topology, and the I/O around the pure logic
+
+> it shouldn't just be one node - first of all, it's one reader per limb, one notifier per session / context, etc.
+
+— decision 2026-08-12
+
+> We have to build some I/O stuff! We have to read the time, read the context files for a 'ordinary fs limb' & emit the new versions, etc.
+
+— decision 2026-08-12
+
+### Cold contexts
+
+> I think we only ever need to load it up in order to compact it
+
+— decision 2026-08-12, his first take, revised the same day
+
+> I think ideally we just keep an 'old cold' context and make it an 'old warm context', append some (perhaps copious, but oh well) notices, and keep going. That is the ideal state btw. it's minimum cost - we get re-billed at input to compact, we might as well up it to cache write & _not_ compact? Perhaps an option for the user? I don't think this is settled. Tool schemas for tools that will no longer work is a great reason to force the compaction, though.
+
+— decision 2026-08-12 (hedges his)
+
+> just leave it purely as it was? I think the latter - much easier
+
+— decision 2026-08-12, on whether a revived context is refurbished or re-initialised on load
+
+> An old context will contain old info. where that's important for correctness, we need notices or rebuild [refurbish/compact]. because we're relatively sure that _tool schemas_ / _tool presence_ can't be fixed via notices..., and because we don't want to keep around old tool code versions forever, this might mean we have to force rebuild _if the context contains tool description content that is stale in a correctness-affecting way_. Importantly, the same logic would apply to any _other_ things, perhaps for example _subagent_ description content?
+
+— decision 2026-08-12 (hedges his)
+
+### Pruning, and what the fork model absorbs
+
+> I think the forked agent design gets around this by subbing the tail with a (admittedly output so 5.0x) task summary / report (kinda a compaction).
+
+— decision 2026-08-12
+
+> pruning is for either a rebuild [refurbishment], or rewriting pre-cache, in a fixed-size suffix maybe (fixed number of messages or token size whichever is larger). That's what opencode has done in the past I believe, perhaps still.
+
+— decision 2026-08-12 (hedges his)
+
+> I'm not confident on 'prune within suffix', it implies re-sending uncached content over and over, but on the other hand it also implies much smaller context & cache write due to tool call pruning / coalescing. Again, an economic decision.
+
+— decision 2026-08-12
+
+> Perhaps we should think about a 'tool call summary' field for every tool call that can be elided, then we only present that one sentence summary when we prune. That's another contingent economics thing though.
+
+— decision 2026-08-12 (hedge his)
+
+> The summary is not input, but output. Which is even more expensive! So yeah it seems pretty unlikely to be net positive, actually.
+
+— decision 2026-08-12, pricing the model-written summary he had just proposed
+
+### Persistence and stored contexts
+
+> we need to preserve enough information to produce exactly the same prefix in the next API request so that we can keep cache across restarts. So we store notices (naturally, as part of the context storage), but we don't actually need to store all data sources to produce a new context from scratch. That can & should be reloaded all the time, and so neither that nor the derived data need to be persisted (although the data sources themselves maybe be, but that's separate).
+
+— decision 2026-08-12
+
+> there's one for each warm cache point.
+
+— decision 2026-08-12, on stored context state
+
+> in practice we will probably just store the context directly. That is much simpler than trying to reconstruct it deterministically from raw events. While full determinism is a nice aspiration, it feels overly ambitious and not important enough to justify the complexity.
+
+— decision 2026-08-12
+
+> any other surrogate ids or whatever that refer to cache affinity or cache points
+
+— decision 2026-08-12, noted as a dependency on another doc rather than designed here
+
+### Analytics
+
+> analytics should be about _what_ do we keep, _for how long_, and especially _why_. 'keep everything' is an option but not an answer.
+
+— decision 2026-08-12
+
+### Harness voice
+
+> not sure about this, but yes... harness voice is for ground truth - the time, but also 'the AGENTS.md contains this content', but the _content_ while it is being shown by the harness, is not in the voice of the harness.... tbh I think this is all relatively obvious to the agent. but the channels or roles do matter, but also I just want the agent to do what I want. I don't have an authority model across multiple users or whatever.
+
+— decision 2026-08-12 (hedges his)
+
+### Tension: reload the sources, or store them
+
+> That can & should be reloaded all the time, and so neither that nor the derived data need to be persisted
+
+— decision 2026-08-12
+
+> we may actually have to store some stuff in order to know what's _different_ when resuming a weeks-old session. so maybe storing both source info and rendered api request content for caching.
+
+— decision 2026-08-12
+
+> I meant we might have to store both input (for diffing in the right place) and output (rendered API request for caching purposes / close to it). Yes, this contradicts my earlier statement about not storing data, just reloading it.
+
+— decision 2026-08-12
+
+Both are his, same day. He named the contradiction himself and left it there; no ordering between them is recoverable from the record.
+
+## Open questions
+
+1. **Are there exactly three rungs?** The previous doc claimed the ladder has no fourth rung, because the three are the three cost regimes: append pays 0.1× on the prefix plus a write on the delta, refurbish forfeits the prefix and pays ~1.25× on the new whole, compaction pays model output. Those prices come from Anthropic's docs via `PLAN.md`, not from you. Your "original vision" names three. Is "no fourth" your claim, or just the three you happened to list?
+
+2. **Elapsed time: the value, or the fact?** The per-element table said the elapsed-time notice carries the elapsed time itself, and argued that minimising it to "time has passed" would be wrong because the value is a few tokens and retrieval costs a whole turn. Your note gives the threshold — `"Probably more than 1h is a good point to start injecting this"` — but not the payload. The value, the bare fact, or a clock tool?
+
+3. **Is there a notifier?** The doc concluded `"There is no notifier entity"`, because notices are rendered at request build so nothing needs owning between requests. Your topology note says `"it's one reader per limb, one notifier per session / context, etc."` Did render-at-build remove the notifier, or is the notifier the thing that does the rendering?
+
+4. **A reader per data source, or per limb?** The doc said `"a reader per data source observes them and reports current content to the brain"`. You said one reader per limb. Machine context, user context and the user-turn stream are data sources that are not limbs — do they each get a reader, and where does it live?
+
+5. **Is a contribution's identity `(data source, kind, name-or-path)`?** You named the aspect "identity of a context contribution". The doc's answer was that triple, over a contribution defined as `"anything that goes into a context: skill content, an AGENTS.md layer, a tool description, an option set, a notice, user activity"`. Its consequence, which it called genuinely confusing and left open: a rename becomes a delete plus an add, so the agent sees "skill gone" plus "new skill". Is the triple right, and is delete-plus-add acceptable?
+
+6. **Is "content versions" the right name and the right granularity?** The doc used it for the per-context record of which contributions went in and what each said at the time — the thing that answers "has this session seen the old version?". You renamed the neighbouring aspect away from "versioning" to "change thresholds". Same objection here, or is this one fine?
+
+7. **What does a notice actually say?** The doc proposed four parts — `"What changed, the kind of change, who changed it, and the available action"` — with the example `"Skill github changed (content edit, by the user). Reload it with the skill tool if relevant."` Your own worked example is at the other end: `"one or more skills have gone stale."` Is the four-part form the default and yours the batched fallback, or the reverse?
+
+8. **Placement.** No source behind any of it: the doc asserted that everything the build-time comparison finds goes `"in one block, not one per element"`, that the block `"never separates a tool call from its result"`, and proposed notices before the user's message `"so the user's words are the last thing read"`. Confirm, deny, refine.
+
+9. **Channel.** You said harness voice carries ground truth and that channels and roles matter. The doc went further: `"System-reminder-style is fine; a real provider channel would be better."` Is that your preference, where a provider offers one?
+
+10. **What is debouncing for?** The doc said it is `"Not a cost mechanism"` — render-at-build already collapses repeated edits — and that its `"only job is behavioral"`: while you are actively editing a skill, a notice on every request may destabilise the agent. Is behaviour the only reason left, and is the window a tunable like the ~1h one?
+
+11. **Does the harness ever choose a prefix?** The doc claimed `"The provider uses the longest previously cached sequence automatically, so the harness places breakpoints but never selects a prefix."` That comes from Anthropic's documentation quoted in `PLAN.md`. Is it a design commitment, or a `provider-cache-probe` question — given the OpenAI responses API may differ?
+
+12. **Was pruning rejected?** The doc recorded it as `"Considered and rejected"`: inside the cached region pruning is a refurbishment, in the tail it only pays within a turn or two and that is the freshest content, and the fork model subsumes it. Your words are softer — pruning `"is for either a rebuild [refurbishment], or rewriting pre-cache, in a fixed-size suffix maybe"`, and `"I'm not confident on 'prune within suffix'"`. Rejected, or still an open economic question?
+
+13. **What does a fork inherit?** The doc said `"A child inherits content versions at the fork point"`, and that what prefix a fork actually inherits `"is an experiment"`. The inheritance rule has no source. Does a child that never loaded a skill itself, but inherited it from the parent, get that skill's notices?
+
+14. **Authority.** The doc said `"No permission model over who may change sources; personal limbs run YOLO and approval theatre is explicitly unwanted."` Your words are `"I don't have an authority model across multiple users or whatever"`. The YOLO and approval-theatre position appears only in agent-written text — `REQUIREMENTS.md` L40 and `PLAN.md` L144 — with no hit in `source-notes/`. Do you stand by it as written, or is it just "no authority model, not designed"?
+
+15. **Tool addition, if append turns out to work.** You are unsure whether tool addition works robustly via append at all, and the doc made that the whole content of its per-element row: `"the uncertainty is not the notify decision but whether tool addition works robustly via append at all"`. Suppose the experiment says append works. Is the answer then simply "notify, like an option set"?
+
+16. **What else forces the expensive path?** You hedged that the correctness logic applies beyond tools — `"perhaps for example _subagent_ description content?"` The doc hardened that into an aspect: `"tool schemas and the tool set for certain, perhaps subagent descriptions too"`. Which other content is correctness-affecting enough that a notice will not do?
+
+17. **Where does revive-as-warm stop?** You called it the ideal state, said `"I don't think this is settled"`, and named stale tool schemas as `"a great reason to force the compaction"`. The doc left the boundary open. Is anything besides tool schemas and the tool set enough to stop it — a very long gap, a very large context, a model change?
+
+18. **Source resolution.** Marked unreviewed in the doc: the "same" skill can come from different data sources, so resolution and precedence between them is a real question, overlapping context-layer composition (`source-notes/configuration-model.md`, flagged there as needing significant design work). Does precedence belong to this aspect or to the configuration model?
+
+19. **What analytics keeps, for this feature.** You ruled that analytics is about what we keep, for how long, and why. The doc's answer for this feature was change facts and rendered notices, `"and the reason to keep them is that the overreaction question and the tunables cannot be answered without them"`. Is that the right pair, and for how long?

@@ -160,7 +160,7 @@ The Lifecycle aspect of the harness design, elicited for the `forked-subagents` 
 
 > Not yet designed. Principle: strict and principled, or not at all. A half-measures permissions model is worse than none — it creates false confidence without real protection.
 
-— `source-notes/agent-harness-design.md` (§ Permissions / safety model). The opposing "YOLO mode" position is agent-written throughout — `REQUIREMENTS.md` L40, `PLAN.md` L144, `design/context-updates.md` L193 — and `YOLO`, `approval theatre` and `permission prompts ... unwanted` have no hit in `source-notes/`.
+— `source-notes/agent-harness-design.md` (§ Permissions / safety model). The opposing "YOLO mode" position is agent-written — `REQUIREMENTS.md` L40 and `PLAN.md` L144 — and `YOLO`, `approval theatre` and `permission prompts ... unwanted` have no hit in `source-notes/`.
 
 ### The main-thread pattern
 

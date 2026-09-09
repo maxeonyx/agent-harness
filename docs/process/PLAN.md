@@ -82,7 +82,7 @@ Exit: the storage model supports worker, operator, analyst, and future context-l
 
 Purpose: validate the context model's change mechanics — append vs refurbish, change notification as bare-minimum invalidation, progressive disclosure.
 
-The design is `docs/design/context-updates.md` (ideal state, reviewed with the user 2026-08-12); this entry does not restate it. Scope when pulled is a slice of that design, negotiated then.
+The design is `docs/design/context-updates.md` — his statements, and the questions they leave open; this entry does not restate it. Scope when pulled is a slice of that design, negotiated then.
 
 Empirical questions the design leaves open for this experiment: whether agents overreact to change notices (wording and frequency — also related to the user-turn work); whether a utility model is a viable actionability classifier and at what cost; the elapsed-time and debounce thresholds; whether mid-session tool addition works via append at all.
 
@@ -131,7 +131,7 @@ Exit: operational lifecycle assumptions are credible enough for core design.
   Prior knowledge to **verify, not re-discover** (from the Anthropic prompt-caching docs, 2026-08-12 — documentation, not yet observed against the real API):
   - Cache write is 1.25× base input at 5-minute TTL; cache read is 0.1×; breakpoints themselves cost nothing.
   - Cache write is charged when content newly enters the cache, and that includes the previous assistant turn: "input tokens represent the new user message, cache creation input tokens account for new assistant and user turns, cache read input tokens reflect the conversation history up to the previous turn." So model output is not cached at generation time — it is charged again at 1.25× on the next request if the breakpoint sits after it.
-  - "The system automatically identifies and utilizes the longest previously cached sequence" — supports the nested-prefix model (context-updates claim 2): prefixes need not be selected.
+  - "The system automatically identifies and utilizes the longest previously cached sequence" — supports his nested-prefix list in `design/context-updates.md`, and is the only basis for that doc's open question on whether the harness ever selects a prefix rather than only placing breakpoints.
   - An automatic caching mode exists (top-level `cache_control`) where the breakpoint advances as history grows. Still open and squarely this experiment's job: whether anything about tools can change without involving the cached prefix; what a fork inherits; real TTL behavior and observability; late system parts; whether a _different_ model (eg. Haiku as a utility model) can read a prefix cached by a larger model at 0.1× — believed not, since the cache key is expected to include the model, but cheap to test; and the same questions on the OpenAI responses API.
 
 - **meta-agent-tuning** (candidate, from user feedback 2026-08-04, hedges his): compaction, cancellation and forking economics "all feel like empirical domains", and he "would prefer a mechanism for agents to run these experiments or perform observational tuning. For example, a background meta-agent could tune global harness settings via A/B testing. If we can run a scheduled meta-agent, it could also tune handover instructions and other parameters over time." Not scoped into an experiment yet; recorded so the economics experiments design their parameters as _tunable settings with recorded outcomes_ rather than constants, which is the property the meta-agent would need.
