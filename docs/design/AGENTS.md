@@ -1,58 +1,26 @@
 # Writing design docs
 
-These docs exist to communicate the harness design — the specific, exact technical details, use cases, and vision — to the agents who will build it. Max reviews them so he can trust what gets built. **The harness is king; deletion is queen**: spend effort on design content, not documentation apparatus, and delete superseded material outright — git history is the archive.
-
-**Sources.** Everything in a doc must trace to one of: `docs/source-notes/` (Max's notes, verbatim, the only user-written content in this repo); `docs/process/REQUIREMENTS.md` (current truth: invariants, experiment evidence, decisions from his reviews); experiment evidence. A design doc is agent output and never a source. Anything not traceable was introduced without cause — hunt it and remove it. (The first doc generation was deleted 2026-08-12 for this; git history has it.)
-
-## The document model
-
-A document is a normalized database. Four kinds of content, labeled so the reader knows which they are reading:
-
-- **Core** — the claims and decisions. Compressed: few words, one claim per sentence.
-- **Why** — the concrete stories and use cases the core derives from.
-- **Implications** — consequences; interactions with sibling designs.
-- **Examples** — expansion of any of the above, so the reader can compress. Compression is understanding — the reader's.
-
-Three tools, three jobs: compression is for brevity (the core). Expansion is for understanding. Clever prose is for reader motivation — the readers here need none, so use almost none.
-
-**Refinement shortens.** Each revision says everything important in fewer words; expansion is cut once it has done its job. Revision passes are mandatory — single-pass output is a draft.
-
-**But the design itself should be overdetermined, not under-determined** (Max, 2026-08-12): "I don't really care about saying the same things twice unless they conflict." So refinement cuts words that carry no design content; it does not cut a second statement of the same constraint from another angle. Hunt conflicts, not repetition.
-
-The cost model (Max): every word costs time; every opaque phrase costs a question; every extraneous wrong fact costs a correction or a decision to ignore it. And sentence _depth_ costs separately from word count — one claim per sentence, no unstated premises. Less is more.
-
-## Rules
-
-- Drab, functional, boring. Content first — no scene-setting, no narrative hooks.
-- Concrete before abstract; core facts before derived facts.
-- Every abstract claim gets a "for example". A wrong concrete commitment is visible and correctable — this is how the wrong "prefix" definition was caught.
-- Vocabulary section up front, written last, only terms the doc uses: one line + one example each.
-- Sections stand alone; the doc is scannable.
-- Write what the reader needs to read. This goes against the model's natural style — fight it.
-- No READMEs for agent consumption. AGENTS.md always.
-
-## Structure
-
-Provenance line (what Max has reviewed, dates) · intro (a few sentences, written last) · vocabulary · **why** (first: the stories and use cases, drilled to roots) · **what** (the core and details) · **interactions** · questions for review (strike answered items with the date) · index.
+One file per design aspect, so the agents who build the harness read the design and Max can trust what gets built. A design doc is Max's statements, his answers, and the questions still open. Agents write no design prose in it — the only agent words are headings, a one-line intro, and the `Question:` / `Max:` labels.
 
 ## Method
 
-Stages: why → what → interactions → summary; each drills down then builds back up; stages advance across the portfolio, not per doc.
+Per aspect: assemble his statements and the gap questions, put the questions to him, record his answers verbatim. Three sections, in this order.
 
-The what stage chains forward into code shape: model the types (Max, 2026-08-12: "We haven't done the 'what' forward chaining enough. We should be modeling types & shit!"). Draft type sketches with him like any other piece.
+**`## Max's statements`** — his words only, quoted, each with its source, grouped by topic. Sources are `docs/source-notes/` and material quoted from him inside `docs/process/`. A design doc is agent output and never a source. Anything not traceable was introduced without cause — hunt it and remove it. Where two of his statements conflict, keep both under a `### Tension:` heading and say whether an ordering between them is recoverable; where later wording supersedes earlier, mark the supersession and keep both. Where a claim rests on agent-written text with no source of his behind it, say so at the quote.
 
-The what is an unordered aspect list nailing down the feature's convex hull — data design, lifecycle, topology, storage, testing, economics, security, and more. Each aspect entry must define itself: a reader who doesn't know the concept must get it from the entry alone. No word limit — "Anything between one word and one thousand" (Max) — but rarely an essay. An entry that only makes sense to its author is a failed aspect.
+**`## Answers`** — his answer verbatim, under the question it answers.
 
-**The aspect list is not the end of the what.** Prose about approach is not a design; the stage is not finished until there are types and signatures on the page. If a doc has no code in it, the what stage has not happened yet.
+**`## Open questions`** — one per gap, saying only what his notes say either way. Never a proposal: options read to him as rules the agent wrote, and he will answer the rule instead of the question. An answer of "needs thinking" leaves the question here with his answer attached.
 
-A why bottoms out in a human desire of Max's, a correctness/safety property, or an irreducible resource pressure. Cost/tokens and security/isolation are false _drivers_ here — legitimate as constraints or as a doc's explicit subject; name the role. A consequence (something the design must manage) is not a why (a reason it exists).
+Never paraphrase him. Never remove a hedge. Never sharpen a conditional into a rule.
 
-Watch for invented constraints: a priced statement read as a prohibition, or two decouplable concerns fused into a forced trade-off. For example: "credentials must live outside the database" came from an over-broad replication premise. These hide under escalated questions — check the premise under a question before asking Max to answer it.
+A statement that bears on several aspects goes in all of them (Max, 2026-08-12: "I don't really care about saying the same things twice unless they conflict"). Hunt conflicts, not repetition.
 
-Max's review decisions get folded directly into the design content, plainly. `REQUIREMENTS.md` carries current truth; docs point at it rather than embedding transcripts.
+## Check the premise before you ask
 
-## Index
+An invented constraint produces a question with no answer: a priced statement read as a prohibition, or two decouplable concerns fused into a forced trade-off. For example, "credentials must live outside the database" came from an over-broad replication premise.
 
-Sparse matrix `Aspect | L1 | L2 | L3`, written last — a table of contents. L1 holds the status letter; L2/L3 point at sections. Status: `S` settled (notes or review) · `F` fork-proven · `P` proposed · `O` open · `E` needs experiment.
+## Rules
 
-Aspects: Model framing · Wire & cache · Tool surface · UX & input · Ownership & placement · Lifecycle · Storage · Economics · Security · Testing & verification · Code shape · Dev workflow & references · Core migration.
+- Markdown is never hard-wrapped.
+- No READMEs for agent consumption. AGENTS.md always.
