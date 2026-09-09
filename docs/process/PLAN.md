@@ -80,7 +80,7 @@ Exit: the storage model supports worker, operator, analyst, and future context-l
 
 Purpose: validate the context model's change mechanics — append vs refurbish, change notification as bare-minimum invalidation, progressive disclosure.
 
-The design is `docs/process/design/context-updates.md` (ideal state, reviewed with the user 2026-08-12); this entry does not restate it. Scope when pulled is a slice of that design, negotiated then.
+The design is `docs/design/context-updates.md` (ideal state, reviewed with the user 2026-08-12); this entry does not restate it. Scope when pulled is a slice of that design, negotiated then.
 
 Empirical questions the design leaves open for this experiment: whether agents overreact to change notices (wording and frequency — also related to the user-turn work); whether a utility model is a viable actionability classifier and at what cost; the elapsed-time and debounce thresholds; whether mid-session tool addition works via append at all.
 
