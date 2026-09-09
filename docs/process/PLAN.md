@@ -34,6 +34,8 @@ Covers: structured concurrency scopes; fork by default within a limb, fresh acro
 
 Key tests: parent suspends while children run and resumes only when all complete; sibling status visible, sibling results hidden until the parent resumes; user-facing child completes on `/done`; failed child returns an error result (open experiment: abort-scope vs error-return semantics); abandoned/stuck child visible; fresh session required across a limb boundary, fork default within one limb; forked context is append-mode w.r.t. the parent. Open: shared-workspace parallelism strategy.
 
+Eight aspects need statements before this can be scoped down, elicited in this order: Lifecycle, Model framing, Wire & cache, Tool surface, Ownership & placement, UX & input, Economics, Storage. Security, Testing & verification, Code shape, Dev workflow & references and Core migration do not. `docs/design/lifecycle.md` and `docs/design/model-framing.md` are written; see `docs/design/AGENTS.md` for how. Wire & cache will not close by asking the user — its questions are the measurement list for `provider-cache-probe`, so elicit them as measurements rather than putting them to him.
+
 Exit: structured concurrency is usable and understandable, not just formally clean — and forking is demonstrably cache-cheap.
 
 ### limb-model
