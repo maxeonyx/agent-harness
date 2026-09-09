@@ -12,6 +12,19 @@ Per aspect: assemble his statements and the gap questions, put the questions to 
 
 **`## Open questions`** — one per gap, saying only what his notes say either way. Never a proposal: options read to him as rules the agent wrote, and he will answer the rule instead of the question. An answer of "needs thinking" leaves the question here with his answer attached.
 
+Max, 2026-09-09: "BTW questions in these design dos should not be too open, or they will be useless - they need to jog my memory." So a question quotes the specific claim, choice or example in front of him and asks him to confirm, deny or refine it — "the doc claimed X; your note leans Y; which?" — never "how should Z work?".
+
+```text
+Bad, and he has to invent the whole answer:
+  How should notice policy be represented?
+
+Good, because it hands him both sides:
+  The doc said policy and thresholds are "values the code reads, not branches
+  the code hard-codes". Toward data: you want a meta-agent to A/B tune them.
+  Toward code: your utility-model classifier consults a model, which is an
+  effect rather than a value. Data with the classifier as a declared effect?
+```
+
 Never paraphrase him. Never remove a hedge. Never sharpen a conditional into a rule.
 
 A statement that bears on several aspects goes in all of them (Max, 2026-08-12: "I don't really care about saying the same things twice unless they conflict"). Hunt conflicts, not repetition.
