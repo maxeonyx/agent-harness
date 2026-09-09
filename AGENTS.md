@@ -4,7 +4,7 @@ This repository is self-contained for development. A standalone clone must build
 
 ## TDD ratchet — read before testing
 
-Run `cargo ratchet`, not plain `cargo test`. A new test must be red when first introduced and committed as `pending`; that expected red test keeps CI green. A new test must not pass when first introduced—doing so makes the ratchet and CI red. Implement only after the red commit, then rerun the ratchet and commit the promotion to `passing`.
+Run `cargo ratchet`, not plain `cargo test`. A new test must be red when first introduced and committed as `pending`; that expected red test keeps CI green. A new test must not pass when first introduced—doing so makes the ratchet and CI red. Push the red implementation commit, then wait for the trusted ledger workflow's ledger-only bot commit before implementing the fix. After implementation, rerun the ratchet, push the green commit, and again wait for the bot commit that records the promotion to `passing`.
 
 ## Integration workflow
 
@@ -15,6 +15,8 @@ gh workflow run ci.yml --ref <feature-branch> -f pr_number=<number>
 ```
 
 The repository-serialized run records the required `Ready` check, builds the release artifacts, auto-merges the pull request, publishes those same artifacts, and records `integrated-ci` on the exact merge commit.
+
+The trusted ledger workflow runs on every push to an open pull request and commits even when the ledger is unchanged, so every ledger run moves the head SHA. Dispatch only once the ledger run for that push has finished. Dispatch first and the bot's commit lands after `Ready` was recorded, leaving the required status on a commit that is no longer the head, so auto-merge waits for a check that will never arrive and the Merge job fails.
 
 ## Project Status
 
