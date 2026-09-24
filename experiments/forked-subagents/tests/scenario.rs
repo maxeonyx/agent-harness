@@ -799,6 +799,9 @@ struct Tree {
     region_reads_wrong_case_policy: bool,
     /// Finding 3: how the root dresses its totals block.
     totals_style: Style,
+    /// A leaf that splits its work again, and whose assignment names no
+    /// ledger path — so its remit cannot be established either.
+    leaf_forks_anonymously: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -808,6 +811,17 @@ enum Style {
     Markdown,
     /// A correct block preceded by an earlier, wrong value for one name.
     WrongThenRight,
+}
+
+/// Normally `weka`, doing weka's work. When the tree is testing an
+/// unidentifiable leaf, an agent with a name that matches no branch and an
+/// assignment that names no ledger — which then splits its work again.
+fn weka_entry(tree: &Tree) -> Value {
+    if tree.leaf_forks_anonymously {
+        json!({"name": "extra", "task": "handle whatever is left over"})
+    } else {
+        json!({"name": "weka", "task": leaf_task("awa", "weka", tree)})
+    }
 }
 
 fn leaf_task(region: &str, branch: &str, tree: &Tree) -> String {
@@ -845,7 +859,7 @@ fn bench_rules(tree: &Tree) -> Value {
         json!({"when": "^You are agent `awa`", "tool_calls": [{"name": "task", "arguments": {"agents": [
             {"name": "tui", "task": leaf_task("awa", "tui", tree)},
             {"name": "kea", "task": leaf_task("awa", "kea", tree)},
-            {"name": "weka", "task": leaf_task("awa", "weka", tree)}
+            weka_entry(tree)
         ]}}]}),
     ];
     if tree.region_reads_wrong_case_policy {
@@ -908,6 +922,13 @@ fn bench_rules(tree: &Tree) -> Value {
             format!("{branch}: {:.2}", tree.totals.get(branch).unwrap_or(&1.0))
         };
         rules.push(json!({ "when": format!("# ledger: {region}/{branch}"), "text": report }));
+    }
+    if tree.leaf_forks_anonymously {
+        rules.push(json!({"when": "^You are agent `extra`",
+                          "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"name": "helper", "task": "look at the ledgers for me"}
+        ]}}]}));
+        rules.push(json!({"when": "levels below the root", "text": "extra: 0.00"}));
     }
     rules.push(json!({"when": "## `kowhai`", "text": "maunga done"}));
     rules.push(json!({"when": "## `tui`", "text": "awa done"}));
@@ -1027,6 +1048,7 @@ fn learn_fixture(name: &str) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
         leaf_protests_innocence: false,
         region_reads_wrong_case_policy: false,
         totals_style: Style::Plain,
+        leaf_forks_anonymously: false,
     };
     let (_, bench_dir) = run_bench(name, &tree);
     (
@@ -1047,6 +1069,7 @@ fn the_benchmark_prints_the_caps_that_bound_a_trial() {
             leaf_protests_innocence: false,
             region_reads_wrong_case_policy: false,
             totals_style: Style::Plain,
+            leaf_forks_anonymously: false,
         },
     );
     assert!(
@@ -1070,6 +1093,7 @@ fn the_benchmark_scores_a_disciplined_tree_clean_and_correct() {
             leaf_protests_innocence: false,
             region_reads_wrong_case_policy: false,
             totals_style: Style::Plain,
+            leaf_forks_anonymously: false,
         },
     );
     assert!(
@@ -1093,6 +1117,7 @@ fn the_benchmark_counts_leaves_that_stray_outside_their_assignment() {
             leaf_protests_innocence: false,
             region_reads_wrong_case_policy: false,
             totals_style: Style::Plain,
+            leaf_forks_anonymously: false,
         },
     );
     assert!(
@@ -1116,6 +1141,7 @@ fn the_benchmark_rejects_totals_that_ignore_the_refund_rule() {
             leaf_protests_innocence: false,
             region_reads_wrong_case_policy: false,
             totals_style: Style::Plain,
+            leaf_forks_anonymously: false,
         },
     );
     assert!(text.contains("totals WRONG"), "{text}");
@@ -1136,6 +1162,7 @@ fn a_policy_re_read_is_counted_and_is_not_over_reach() {
             leaf_protests_innocence: false,
             region_reads_wrong_case_policy: false,
             totals_style: Style::Plain,
+            leaf_forks_anonymously: false,
         },
     );
     assert!(
@@ -1155,6 +1182,7 @@ fn tree(correct: BTreeMap<String, f64>) -> Tree {
         leaf_protests_innocence: false,
         region_reads_wrong_case_policy: false,
         totals_style: Style::Plain,
+        leaf_forks_anonymously: false,
     }
 }
 
@@ -1407,4 +1435,20 @@ fn cpu_jiffies(pid: u32) -> u64 {
     let utime: u64 = fields[11].parse().unwrap_or(0);
     let stime: u64 = fields[12].parse().unwrap_or(0);
     utime + stime
+}
+
+/// A leaf splitting its work again is over-reach whatever it was assigned —
+/// it is the bottom of the intended tree. Judging its remit first meant an
+/// agent whose assignment named no ledger was filed as unscoreable and its
+/// `task` call went uncounted.
+#[test]
+fn a_leaf_that_forks_is_over_reach_even_when_its_remit_is_unclear() {
+    let (correct, _) = learn_fixture("bench-learn-f-anon");
+    let mut plan = tree(correct);
+    plan.leaf_forks_anonymously = true;
+    let (text, _) = run_bench("bench-f-anon", &plan);
+    assert!(
+        text.contains("leaf over-reach 1/6"),
+        "a leaf called task and was not counted:\n{text}"
+    );
 }

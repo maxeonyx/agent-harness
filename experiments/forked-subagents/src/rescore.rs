@@ -115,12 +115,21 @@ fn verdict(row: &serde_json::Value) -> String {
             "WRONG"
         }
     };
+    let aside = |count: u64| {
+        if count > 0 {
+            format!("[{count}?]")
+        } else {
+            String::new()
+        }
+    };
     format!(
-        "leaf {}/{} region {}/{} policy {}/{} structure {} totals {}",
+        "leaf {}/{}{} region {}/{}{} policy {}/{} structure {} totals {}",
         n("leaf_overreach"),
         n("leaves"),
+        aside(n("leaves_unscoreable")),
         n("region_overreach"),
         n("regions"),
+        aside(n("regions_unscoreable")),
         n("policy_rereads"),
         n("below_root"),
         flag("structure_ok"),
@@ -226,9 +235,11 @@ fn read_wire(path: &Path) -> Result<BTreeMap<String, Seen>, String> {
     let mut calls: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
     let mut results: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut seen: BTreeMap<String, Seen> = BTreeMap::new();
+    let mut unreadable = 0usize;
 
     for line in text.lines() {
         let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+            unreadable += 1;
             continue;
         };
         let agent = entry["agent"].as_str().unwrap_or("").to_string();
@@ -300,6 +311,15 @@ fn read_wire(path: &Path) -> Result<BTreeMap<String, Seen>, String> {
                 .is_some_and(|answer| !answer.starts_with("Error:"));
             entry.reads.push(ReadAttempt { path: target, ok });
         }
+    }
+    if unreadable > 0 {
+        // Two benchmarks that shared a run directory also shared this file,
+        // and their writes interleaved. Whatever is left is partial, and
+        // saying so is the only honest thing to do with it.
+        eprintln!(
+            "  WARNING {}: {unreadable} line(s) of wire.jsonl could not be read; this trial's evidence is incomplete",
+            path.display()
+        );
     }
     Ok(seen)
 }

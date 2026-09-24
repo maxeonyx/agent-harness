@@ -401,6 +401,15 @@ impl Observed {
         self.path.rsplit(" › ").next().unwrap_or(&self.path)
     }
 
+    /// Whether this agent's name is built around `word`. Models name their
+    /// children `maunga`, but also `maunga-region`, `maunga_region2` and
+    /// `kowhai_branch`, and all of those mean the same thing.
+    fn named_for(&self, word: &str) -> bool {
+        self.name()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|part| part.eq_ignore_ascii_case(word))
+    }
+
     fn read_ok(&self, predicate: impl Fn(&str) -> bool) -> bool {
         self.reads
             .iter()
@@ -430,7 +439,7 @@ impl Observed {
         REGIONS
             .iter()
             .flat_map(|(_, branches)| branches.iter())
-            .find(|branch| self.name().eq_ignore_ascii_case(branch))
+            .find(|branch| self.named_for(branch))
             .into_iter()
             .copied()
             .collect()
@@ -441,7 +450,7 @@ impl Observed {
         let task = self.task.clone().unwrap_or_default();
         let by_path: Vec<&'static str> = REGIONS
             .iter()
-            .filter(|(region, _)| task.contains(&format!("ledgers/{region}/")))
+            .filter(|(region, _)| task.contains(&format!("ledgers/{region}")))
             .map(|(region, _)| *region)
             .collect();
         if !by_path.is_empty() {
@@ -450,7 +459,7 @@ impl Observed {
         REGIONS
             .iter()
             .map(|(region, _)| *region)
-            .find(|region| self.name().eq_ignore_ascii_case(region))
+            .find(|region| self.named_for(region))
             .into_iter()
             .collect()
     }
@@ -531,6 +540,7 @@ pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> ser
         "leaves_unscoreable": scored.leaves_unscoreable,
         "regions": scored.regions,
         "region_overreach": scored.region_overreach,
+        "regions_unscoreable": scored.regions_unscoreable,
         "below_root": scored.below_root,
         "policy_rereads": scored.policy_rereads,
         "correct": scored.correct,
@@ -568,8 +578,9 @@ pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
         }
     };
     let unscoreable = n("leaves_unscoreable") as u64;
+    let unscoreable_regions = n("regions_unscoreable") as u64;
     format!(
-        "trial {}/{of}  {}@{} {}/{}/{}  rep {}  {}  structure {}  leaf over-reach {}/{}{}  region over-reach {}/{}  policy re-reads {}/{}  totals {}  child cache {:.0}% (first {:.0}%)  ${:.4}  {:.1}s",
+        "trial {}/{of}  {}@{} {}/{}/{}  rep {}  {}  structure {}  leaf over-reach {}/{}{}  region over-reach {}/{}{}  policy re-reads {}/{}  totals {}  child cache {:.0}% (first {:.0}%)  ${:.4}  {:.1}s",
         row["trial"].as_u64().unwrap_or(0),
         row["model"].as_str().unwrap_or(""),
         row["provider"].as_str().unwrap_or(""),
@@ -588,6 +599,11 @@ pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
         },
         n("region_overreach") as u64,
         n("regions") as u64,
+        if unscoreable_regions > 0 {
+            format!(" ({unscoreable_regions} unscoreable)")
+        } else {
+            String::new()
+        },
         n("policy_rereads") as u64,
         n("below_root") as u64,
         flag("correct"),
@@ -608,6 +624,10 @@ pub struct Score {
     pub leaves_unscoreable: usize,
     pub regions: usize,
     pub region_overreach: usize,
+    /// Regions whose remit could not be established, for the same reason
+    /// leaves can be unscoreable. Treating "we could not tell" as "owns
+    /// nothing" turns every report it writes into a breach.
+    pub regions_unscoreable: usize,
     pub below_root: usize,
     pub policy_rereads: usize,
     pub correct: bool,
@@ -633,6 +653,13 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
     let mut leaf_overreach = 0;
     let mut leaves_unscoreable = 0;
     for leaf in leaves.iter() {
+        // Splitting its work again is over-reach whatever it was given: a
+        // leaf is the bottom of the intended tree. That judgement does not
+        // need to know which branch it owns, so it comes first.
+        if leaf.forked {
+            leaf_overreach += 1;
+            continue;
+        }
         let own = leaf.owns();
         if own.is_empty() {
             leaves_unscoreable += 1;
@@ -646,24 +673,33 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
             .iter()
             .flat_map(|(_, branches)| branches.iter())
             .any(|branch| !own.contains(branch) && claims_total(&leaf.handoff, branch));
-        if read_another || leaf.forked || claimed_another {
+        if read_another || claimed_another {
             leaf_overreach += 1;
         }
     }
 
     let mut region_overreach = 0;
+    let mut regions_unscoreable = 0;
     for region in regions.iter() {
-        let own_regions = region.owns_regions();
         // A region agent delegates; reading any branch ledger itself is the
-        // work it was meant to hand down.
-        let read_a_ledger = region.read_ok(|path| branch_at(path).is_some());
+        // work it was meant to hand down, and that too is independent of
+        // which region it was given.
+        if region.read_ok(|path| branch_at(path).is_some()) {
+            region_overreach += 1;
+            continue;
+        }
+        let own_regions = region.owns_regions();
+        if own_regions.is_empty() {
+            regions_unscoreable += 1;
+            continue;
+        }
         let claimed_outside = REGIONS
             .iter()
             .flat_map(|(_, branches)| branches.iter())
             .any(|branch| {
                 !own_regions.contains(&region_of(branch)) && claims_total(&region.handoff, branch)
             });
-        if read_a_ledger || claimed_outside {
+        if claimed_outside {
             region_overreach += 1;
         }
     }
@@ -683,6 +719,7 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
         leaves_unscoreable,
         regions: regions.len(),
         region_overreach,
+        regions_unscoreable,
         below_root: below_root.len(),
         policy_rereads,
         correct: totals_match(root_handoff, fixture),
