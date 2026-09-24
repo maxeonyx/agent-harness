@@ -52,7 +52,10 @@ Scoring is mechanical, read from the recorded tool calls and reports:
 - **region over-reach** — a region agent read a branch ledger itself, or named a branch outside its region;
 - **re-read policy** — an agent below the root read `POLICY.md` for itself. Not over-reach: for a fresh child it is the only way to learn the rules, and it is what fresh pays instead of inheriting them. Counted in its own column;
 - **structure** — 2 region agents, 3 leaves each, nothing deeper;
-- **correct** — the branch, region and grand totals in the root's final block match the fixture.
+- **correct** — the branch, region and grand totals in the root's final block match the fixture;
+- **invalid** — the trial is not evidence about the model at all, and is excluded from every rate and mean above.
+
+A trial is invalid when the run ended in something the model had no part in: a provider or transport fault, a panic in the harness, or a cancellation. A trial that hit its own spend cap or its turn limit is *not* invalid — a tree that spends its budget is exactly what the benchmark is there to catch. Without that split, three luna trials that were rate-limited to death two seconds in showed up as `0/0` everything at `$0.0001`, dragging a combo's rates towards zero while saying nothing.
 
 Over-reach is scored against the parent's raw `task` text, not the framed assignment: under `--words explained` the assignment names the siblings, and scoring on that would make every leaf look like it owned every branch.
 
@@ -70,7 +73,9 @@ The cache columns separate the question the brief asks. `child cache read` and `
 cargo run --bin forks -- rescore runs.ignore/<timestamp>-bench
 ```
 
-Scores a benchmark that has already been paid for, again, offline, and prints the old verdict beside the new one. It walks the trial directories rather than `trials.json`, because `trials.json` is written once at the end and two benchmarks that started in the same second used to share a directory — the second to finish overwrote the first's index. `wire.jsonl` is the ground truth for what each agent did: a request body carries the previous turn's tool results, which is how a read that failed is told from one that worked. Expected totals come from that benchmark's own `fixture/`, never from today's generator. Nothing is written back.
+Scores a benchmark that has already been paid for, again, offline, and prints the old verdict beside the new one.
+
+Runs made since the harness started recording `fault_kind` say outright why they faulted. Older ones carry only the fault message, which rescoring reads back: `spend cap reached` and `agent ran past N turns` are the model's own doing, while `provider returned …`, `request failed`, `N attempts failed`, `rate limited for longer than …` and `agent task panicked` are not. Every message the harness has produced is covered; anything unrecognised is left unclassified and the trial is kept, because discarding paid evidence on a guess is worse than keeping a doubtful row. Rescoring says how many trials fell into each of the three. It walks the trial directories rather than `trials.json`, because `trials.json` is written once at the end and two benchmarks that started in the same second used to share a directory — the second to finish overwrote the first's index. `wire.jsonl` is the ground truth for what each agent did: a request body carries the previous turn's tool results, which is how a read that failed is told from one that worked. Expected totals come from that benchmark's own `fixture/`, never from today's generator. Nothing is written back.
 
 ## Cost
 
@@ -79,6 +84,8 @@ Scores a benchmark that has already been paid for, again, offline, and prints th
 A response that does not report its usage is a fault — a cap cannot be enforced against a cost the provider did not state.
 
 Every HTTP attempt is charged separately against the cap and checked against cancellation, retries included. A retry is new work, and a drain that starts new work is not a drain.
+
+A rate limit is not a failure, it is the provider asking you to come back, and it gets its own patience. OpenRouter sends one as **HTTP 200 carrying an `error` object whose `code` is 429**, so reading only the HTTP status treats it as permanent — which is how a grid of luna trials died within seconds of starting. `Retry-After` is honoured when present; otherwise the wait starts at a twenty-fourth of `--rate-limit-patience` (default 120 seconds) and doubles, and a rate limit that never lifts becomes a provider fault. Ordinary transient failures keep their four quick attempts; waiting out a rate limit is counted against patience instead.
 
 `--request-timeout` (default 300 seconds) bounds a single attempt. Without it a provider that accepts a request and never answers hangs its agent, and every ancestor with it, for as long as it likes. A timed-out request is a transient failure and is retried.
 

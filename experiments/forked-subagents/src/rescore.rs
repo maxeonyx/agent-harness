@@ -15,6 +15,7 @@
 //! Nothing is written back into the run directory. The evidence is read-only.
 
 use crate::Args;
+use crate::agent::FaultKind;
 use crate::bench::{Fixture, Observed, ReadAttempt, TrialFacts, score, summarise, trial_row};
 
 use std::collections::BTreeMap;
@@ -55,8 +56,15 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
 
     let mut rows = Vec::new();
     let mut changes = Vec::new();
+    let (mut recorded, mut read_back, mut unknown) = (0usize, 0usize, 0usize);
     for (number, trial) in trials.iter().enumerate() {
-        let (facts, agents, root_handoff) = read_trial(trial, number as u64 + 1)?;
+        let (facts, agents, root_handoff, provenance) = read_trial(trial, number as u64 + 1)?;
+        match provenance {
+            Provenance::Recorded => recorded += 1,
+            Provenance::ReadBack => read_back += 1,
+            Provenance::Unknown => unknown += 1,
+            Provenance::NoFault => {}
+        }
         let scored = score(&agents, &root_handoff, &fixture);
         let row = trial_row(&facts, &agents, &scored);
         let key = format!(
@@ -78,6 +86,11 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
         trials.len(),
         old.len()
     );
+    if recorded + read_back + unknown > 0 {
+        println!(
+            "faulted trials: {recorded} recorded why, {read_back} read back from the fault message, {unknown} unclassified (kept, since discarding evidence on a guess is worse)."
+        );
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -158,7 +171,10 @@ fn compare(label: &str, old: Option<&serde_json::Value>, new: &serde_json::Value
 }
 
 /// One recorded trial, rebuilt into the same shape a live trial is scored in.
-fn read_trial(dir: &Path, number: u64) -> Result<(TrialFacts, Vec<Observed>, String), String> {
+fn read_trial(
+    dir: &Path,
+    number: u64,
+) -> Result<(TrialFacts, Vec<Observed>, String, Provenance), String> {
     let summary: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(dir.join("summary.json"))
             .map_err(|e| format!("read {}/summary.json: {e}", dir.display()))?,
@@ -172,6 +188,7 @@ fn read_trial(dir: &Path, number: u64) -> Result<(TrialFacts, Vec<Observed>, Str
         .and_then(|name| name.rsplit_once("-rep"))
         .and_then(|(_, rep)| rep.parse().ok())
         .unwrap_or(0);
+    let (kind, provenance) = fault_kind_with_provenance(&summary);
     let facts = TrialFacts {
         trial: number,
         rep,
@@ -184,6 +201,7 @@ fn read_trial(dir: &Path, number: u64) -> Result<(TrialFacts, Vec<Observed>, Str
         detail: text("detail"),
         cost: summary["cost"].as_f64().unwrap_or(0.0),
         millis: summary["millis"].as_u64().unwrap_or(0) as u128,
+        fault_kind: kind,
     };
 
     let wire = read_wire(&dir.join("wire.jsonl"))?;
@@ -213,7 +231,70 @@ fn read_trial(dir: &Path, number: u64) -> Result<(TrialFacts, Vec<Observed>, Str
             }
         })
         .collect();
-    Ok((facts, observed, text("root_handoff")))
+    Ok((facts, observed, text("root_handoff"), provenance))
+}
+
+/// Why a recorded run faulted. Runs made since the harness started recording
+/// `fault_kind` say so outright; older ones are read back from the fault
+/// message, which is the only evidence they carry. Every message the harness
+/// has ever produced is covered, and anything unrecognised is left
+/// unclassified rather than guessed at — an unclassified fault keeps the
+/// trial, because silently discarding evidence is worse than keeping a
+/// doubtful row.
+pub enum Provenance {
+    /// The run recorded why it faulted.
+    Recorded,
+    /// Read back from the fault message, which is all an older run carries.
+    ReadBack,
+    /// It faulted, and nothing on disk says why.
+    Unknown,
+    NoFault,
+}
+
+fn fault_kind_with_provenance(summary: &serde_json::Value) -> (Option<FaultKind>, Provenance) {
+    if summary["fault"].is_null() {
+        return (None, Provenance::NoFault);
+    }
+    let recorded = summary["fault_kind"].as_str().is_some();
+    match fault_kind(summary) {
+        Some(kind) if recorded => (Some(kind), Provenance::Recorded),
+        Some(kind) => (Some(kind), Provenance::ReadBack),
+        None => (None, Provenance::Unknown),
+    }
+}
+
+fn fault_kind(summary: &serde_json::Value) -> Option<FaultKind> {
+    if let Some(name) = summary["fault_kind"].as_str() {
+        return match name {
+            "provider" => Some(FaultKind::Provider),
+            "budget" => Some(FaultKind::Budget),
+            "runaway" => Some(FaultKind::Runaway),
+            "panic" => Some(FaultKind::Panic),
+            _ => None,
+        };
+    }
+    let fault = summary["fault"].as_str()?;
+    let reason = fault
+        .split_once(": ")
+        .map(|(_, rest)| rest)
+        .unwrap_or(fault);
+    if reason.starts_with("spend cap reached") {
+        Some(FaultKind::Budget)
+    } else if reason.starts_with("agent ran past") {
+        Some(FaultKind::Runaway)
+    } else if reason.starts_with("agent task panicked") {
+        Some(FaultKind::Panic)
+    } else if reason.starts_with("provider returned")
+        || reason.starts_with("request failed")
+        || reason.starts_with("response was not JSON")
+        || reason.starts_with("could not parse response")
+        || reason.starts_with("rate limited for longer than")
+        || reason.contains("attempts failed")
+    {
+        Some(FaultKind::Provider)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Default)]

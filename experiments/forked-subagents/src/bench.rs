@@ -14,7 +14,7 @@
 //! refunds wrong.
 
 use crate::Args;
-use crate::agent::{AgentRecord, Mode};
+use crate::agent::{AgentRecord, FaultKind, Mode};
 use crate::framing::{Cut, Framing, Words};
 use crate::session::Session;
 
@@ -504,6 +504,19 @@ impl Observed {
 
 /// Everything about a trial that is not scoring: who ran it and how it
 /// ended. Rescoring keeps these and replaces the rest.
+/// Whether a trial is evidence about the model at all. A run the provider
+/// broke tells you nothing about how the model behaves, and folding it into
+/// the rates as a row of zeroes quietly drags every number towards zero.
+pub fn trial_is_valid(outcome: &str, fault_kind: Option<FaultKind>) -> bool {
+    if outcome == "cancelled" {
+        return false;
+    }
+    match fault_kind {
+        None => true,
+        Some(kind) => kind.is_the_models_doing(),
+    }
+}
+
 pub struct TrialFacts {
     pub trial: u64,
     pub rep: u64,
@@ -516,6 +529,7 @@ pub struct TrialFacts {
     pub detail: String,
     pub cost: f64,
     pub millis: u128,
+    pub fault_kind: Option<FaultKind>,
 }
 
 /// One trial's record. Built identically by `bench` and by `rescore`, so a
@@ -534,6 +548,8 @@ pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> ser
         "mode": facts.mode,
         "outcome": facts.outcome,
         "detail": facts.detail,
+        "fault_kind": facts.fault_kind.map(|kind| kind.name()),
+        "valid": trial_is_valid(&facts.outcome, facts.fault_kind),
         "structure_ok": scored.structure_ok,
         "leaves": scored.leaves,
         "leaf_overreach": scored.leaf_overreach,
@@ -579,6 +595,27 @@ pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
     };
     let unscoreable = n("leaves_unscoreable") as u64;
     let unscoreable_regions = n("regions_unscoreable") as u64;
+    if !row["valid"].as_bool().unwrap_or(true) {
+        return format!(
+            "trial {}/{of}  {}@{} {}/{}/{}  rep {}  INVALID ({} fault: {})  ${:.4}  {:.1}s",
+            row["trial"].as_u64().unwrap_or(0),
+            row["model"].as_str().unwrap_or(""),
+            row["provider"].as_str().unwrap_or(""),
+            row["cut"].as_str().unwrap_or(""),
+            row["words"].as_str().unwrap_or(""),
+            row["mode"].as_str().unwrap_or(""),
+            row["rep"].as_u64().unwrap_or(0),
+            row["fault_kind"].as_str().unwrap_or("cancelled"),
+            row["detail"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(70)
+                .collect::<String>(),
+            n("cost"),
+            n("millis") / 1000.0,
+        );
+    }
     format!(
         "trial {}/{of}  {}@{} {}/{}/{}  rep {}  {}  structure {}  leaf over-reach {}/{}{}  region over-reach {}/{}{}  policy re-reads {}/{}  totals {}  child cache {:.0}% (first {:.0}%)  ${:.4}  {:.1}s",
         row["trial"].as_u64().unwrap_or(0),
@@ -878,6 +915,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
                 detail: outcome.label(),
                 cost: ending.cost,
                 millis: ending.agents.iter().map(|a| a.millis).max().unwrap_or(0),
+                fault_kind: ending.fault_kind,
             };
             let row = trial_row(&facts, &observed, &scored);
             println!("{}", trial_line(&row, total_trials));
@@ -902,7 +940,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
 
 pub fn summarise(rows: &[serde_json::Value]) -> String {
     let mut text = String::from(
-        "| combo | trials | leaf over-reach | region over-reach | re-read policy | structure ok | correct | mean cost | child cache read | child first-request cache | cache written | all-agent cache read | mean wall |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n",
+        "| combo | trials | invalid | leaf over-reach | region over-reach | re-read policy | structure ok | correct | mean cost | child cache read | child first-request cache | cache written | all-agent cache read | mean wall |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n",
     );
     let mut combos: Vec<String> = Vec::new();
     for row in rows {
@@ -912,8 +950,23 @@ pub fn summarise(rows: &[serde_json::Value]) -> String {
         }
     }
     for combo in combos {
-        let group: Vec<&serde_json::Value> =
+        let all: Vec<&serde_json::Value> =
             rows.iter().filter(|row| combo_of(row) == combo).collect();
+        // Everything past this point is computed over the trials that are
+        // evidence about the model. A provider fault is reported, and then
+        // kept out of every rate and every mean.
+        let group: Vec<&&serde_json::Value> = all
+            .iter()
+            .filter(|row| row["valid"].as_bool().unwrap_or(true))
+            .collect();
+        let invalid = all.len() - group.len();
+        if group.is_empty() {
+            text.push_str(&format!(
+                "| {combo} | {} | {invalid} | — | — | — | — | — | — | — | — | — | — | — |\n",
+                all.len()
+            ));
+            continue;
+        }
         let n = group.len() as f64;
         let number = |row: &serde_json::Value, key: &str| row[key].as_f64().unwrap_or(0.0);
         let sum = |key: &str| group.iter().map(|r| number(r, key)).sum::<f64>();
@@ -924,18 +977,23 @@ pub fn summarise(rows: &[serde_json::Value]) -> String {
                 .count()
         };
         let unscoreable = sum("leaves_unscoreable") as u64;
-        text.push_str(&format!(
-            "| {combo} | {} | {}/{}{} | {}/{} | {}/{} | {}/{} | {}/{} | ${:.4} | {:.1}% | {:.1}% | {} | {:.1}% | {:.1}s |\n",
-            group.len(),
-            sum("leaf_overreach") as u64,
-            sum("leaves") as u64,
-            if unscoreable > 0 {
-                format!(" ({unscoreable} unscoreable)")
+        let unscoreable_regions = sum("regions_unscoreable") as u64;
+        let aside = |count: u64| {
+            if count > 0 {
+                format!(" ({count} unscoreable)")
             } else {
                 String::new()
-            },
+            }
+        };
+        text.push_str(&format!(
+            "| {combo} | {} | {invalid} | {}/{}{} | {}/{}{} | {}/{} | {}/{} | {}/{} | ${:.4} | {:.1}% | {:.1}% | {} | {:.1}% | {:.1}s |\n",
+            all.len(),
+            sum("leaf_overreach") as u64,
+            sum("leaves") as u64,
+            aside(unscoreable),
             sum("region_overreach") as u64,
             sum("regions") as u64,
+            aside(unscoreable_regions),
             sum("policy_rereads") as u64,
             sum("below_root") as u64,
             counted("structure_ok"),

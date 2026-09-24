@@ -22,12 +22,62 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// HTTP attempts per request, each separately gated by the spend cap and by
-/// cancellation.
+/// HTTP attempts per request for an ordinary transient failure, each
+/// separately gated by the spend cap and by cancellation. A rate limit is not
+/// counted against this: it is waited out against `--rate-limit-patience`
+/// instead.
 const ATTEMPTS: usize = 4;
 
+/// Why the harness could not get past something. The distinction matters to
+/// the benchmark: a run the provider broke says nothing about the model,
+/// while a run that hit its spend cap or its turn limit says the tree ran
+/// away, which is exactly what is being measured.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FaultKind {
+    /// The provider or the transport. Nothing to do with the model's choices.
+    Provider,
+    /// The spend cap.
+    Budget,
+    /// The turn limit.
+    Runaway,
+    /// A bug in the harness.
+    Panic,
+}
+
+impl FaultKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            FaultKind::Provider => "provider",
+            FaultKind::Budget => "budget",
+            FaultKind::Runaway => "runaway",
+            FaultKind::Panic => "panic",
+        }
+    }
+
+    /// Whether a trial that ended this way can be read as evidence about the
+    /// model.
+    pub fn is_the_models_doing(self) -> bool {
+        matches!(self, FaultKind::Budget | FaultKind::Runaway)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Fault {
+    pub kind: FaultKind,
+    pub reason: String,
+}
+
+impl Fault {
+    pub fn provider(reason: impl Into<String>) -> Fault {
+        Fault {
+            kind: FaultKind::Provider,
+            reason: reason.into(),
+        }
+    }
+}
+
 pub enum RequestEnd {
-    Faulted(String),
+    Faulted(Fault),
     Cancelled,
 }
 use tokio::sync::watch;
@@ -80,6 +130,8 @@ pub struct Config {
     pub max_cost: f64,
     pub max_depth: usize,
     pub max_turns: usize,
+    /// How long to keep waiting out a rate limit before giving up on it.
+    pub rate_limit_patience: Duration,
     /// Fault injection. Naming an agent's path makes that agent's task panic
     /// as it starts, which is the only way to watch the harness record a
     /// panicked agent without shipping a bug.
@@ -233,6 +285,7 @@ struct RunState {
     in_flight: usize,
     worst: f64,
     fault: Option<String>,
+    fault_kind: Option<FaultKind>,
     agents: Vec<AgentRecord>,
     index: HashMap<String, usize>,
 }
@@ -279,6 +332,7 @@ impl Run {
                 in_flight: 0,
                 worst: 0.0,
                 fault: None,
+                fault_kind: None,
                 agents: Vec::new(),
                 index: HashMap::new(),
             }),
@@ -344,7 +398,13 @@ impl Run {
     /// ends with a recorded outcome, so `summary.json` never claims an agent
     /// is still running after the run is over.
     pub fn record_panic(&self, path: &str, reason: &str) {
-        self.raise_fault(path, &format!("agent task panicked: {reason}"));
+        self.raise_fault(
+            path,
+            &Fault {
+                kind: FaultKind::Panic,
+                reason: format!("agent task panicked: {reason}"),
+            },
+        );
         if let Some(index) = self.index_of(path) {
             self.note(index, |record| {
                 record.state = AgentState::Ended(Outcome::Panicked(reason.to_string()))
@@ -360,16 +420,22 @@ impl Run {
         self.state().fault.clone()
     }
 
+    pub fn fault_kind(&self) -> Option<FaultKind> {
+        self.state().fault_kind
+    }
+
     /// An out-of-band failure stops the whole run: nothing new starts
     /// anywhere, and every ancestor of the faulting agent stays suspended.
-    fn raise_fault(&self, path: &str, reason: &str) {
+    fn raise_fault(&self, path: &str, fault: &Fault) {
         {
             let mut state = self.state();
             if state.fault.is_none() {
-                state.fault = Some(format!("{path}: {reason}"));
+                state.fault = Some(format!("{path}: {}", fault.reason));
+                state.fault_kind = Some(fault.kind);
             }
         }
-        self.face.say(&format!("{path:<28} FAULT: {reason}"));
+        self.face
+            .say(&format!("{path:<28} FAULT: {}", fault.reason));
         self.cancel.cancel();
     }
 
@@ -401,21 +467,19 @@ impl Run {
                 .map(|slug| serde_json::json!({ "order": [slug], "allow_fallbacks": false })),
             session_id: self.session_id.clone(),
         };
-        let body =
-            serde_json::to_value(&request).map_err(|e| RequestEnd::Faulted(e.to_string()))?;
+        let body = serde_json::to_value(&request)
+            .map_err(|e| RequestEnd::Faulted(Fault::provider(e.to_string())))?;
 
+        // Two kinds of patience. An ordinary transient failure gets a few
+        // quick attempts; a rate limit gets waited out, because the provider
+        // is asking us to come back rather than failing.
         let mut backoff = Duration::from_millis(500);
-        let mut last = String::new();
-        for attempt in 1..=ATTEMPTS {
-            if attempt > 1 {
-                // A retry is new work. Cancellation must reach it, both while
-                // it waits and before it is sent.
-                tokio::select! {
-                    _ = tokio::time::sleep(backoff) => {}
-                    _ = self.cancel.cancelled() => return Err(RequestEnd::Cancelled),
-                }
-                backoff *= 3;
-            }
+        let patience = self.config.rate_limit_patience;
+        let mut rate_backoff = patience / 24;
+        let mut waited_out = Duration::ZERO;
+        let mut attempt = 0usize;
+        loop {
+            attempt += 1;
             if self.cancel.is_cancelled() {
                 return Err(RequestEnd::Cancelled);
             }
@@ -424,10 +488,13 @@ impl Run {
                 let mut state = self.state();
                 let committed = state.spent + state.in_flight as f64 * state.worst;
                 if committed >= self.config.max_cost {
-                    return Err(RequestEnd::Faulted(format!(
-                        "spend cap reached: ${:.4} spent, {} request(s) in flight at up to ${:.4} each, cap ${:.4}",
-                        state.spent, state.in_flight, state.worst, self.config.max_cost
-                    )));
+                    return Err(RequestEnd::Faulted(Fault {
+                        kind: FaultKind::Budget,
+                        reason: format!(
+                            "spend cap reached: ${:.4} spent, {} request(s) in flight at up to ${:.4} each, cap ${:.4}",
+                            state.spent, state.in_flight, state.worst, self.config.max_cost
+                        ),
+                    }));
                 }
                 state.in_flight += 1;
             }
@@ -437,7 +504,7 @@ impl Run {
                 &if attempt == 1 {
                     "request sent".to_string()
                 } else {
-                    format!("request sent (attempt {attempt} of {ATTEMPTS})")
+                    format!("request sent (attempt {attempt})")
                 },
             );
             let attempted = wire::send_once(
@@ -449,23 +516,71 @@ impl Run {
             .await;
             self.state().in_flight -= 1;
 
-            match attempted {
+            let again = match attempted {
                 wire::Attempt::Answered(sent) => {
                     self.recorder.wire(path, "response", &sent.body);
                     self.absorb(path, index, &sent);
                     return Ok(sent.response.choices.into_iter().next().unwrap().message);
                 }
-                wire::Attempt::Fatal(reason) => return Err(RequestEnd::Faulted(reason)),
-                wire::Attempt::Transient(reason) => {
-                    self.face
-                        .line(path, &format!("request failed, will retry: {reason}"));
-                    last = reason;
+                wire::Attempt::Fatal(reason) => {
+                    self.recorder
+                        .wire(path, "failure", &serde_json::json!({ "reason": reason }));
+                    return Err(RequestEnd::Faulted(Fault::provider(reason)));
                 }
+                wire::Attempt::Transient(again) => again,
+            };
+            self.recorder.wire(
+                path,
+                "failure",
+                &serde_json::json!({
+                    "reason": again.reason,
+                    "rate_limited": again.rate_limited,
+                }),
+            );
+
+            let delay = again.retry_after.unwrap_or(if again.rate_limited {
+                rate_backoff
+            } else {
+                backoff
+            });
+            if again.rate_limited {
+                if waited_out + delay > patience {
+                    return Err(RequestEnd::Faulted(Fault::provider(format!(
+                        "rate limited for longer than {:.0}s: {}",
+                        patience.as_secs_f64(),
+                        again.reason
+                    ))));
+                }
+                waited_out += delay;
+                rate_backoff *= 2;
+                self.face.line(
+                    path,
+                    &format!(
+                        "rate limited, waiting {:.1}s ({:.0}s of {:.0}s patience used)",
+                        delay.as_secs_f64(),
+                        waited_out.as_secs_f64(),
+                        patience.as_secs_f64()
+                    ),
+                );
+            } else {
+                if attempt >= ATTEMPTS {
+                    return Err(RequestEnd::Faulted(Fault::provider(format!(
+                        "{attempt} attempts failed; last: {}",
+                        again.reason
+                    ))));
+                }
+                backoff *= 3;
+                self.face.line(
+                    path,
+                    &format!("request failed, will retry: {}", again.reason),
+                );
+            }
+            // A retry is new work. Cancellation must reach it while it waits.
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                _ = self.cancel.cancelled() => return Err(RequestEnd::Cancelled),
             }
         }
-        Err(RequestEnd::Faulted(format!(
-            "{ATTEMPTS} attempts failed; last: {last}"
-        )))
     }
 
     /// Book one answered request against the run and the agent.
@@ -620,9 +735,12 @@ pub fn run_agent(
             }
             turns += 1;
             if turns > run.config.max_turns {
-                let reason = format!("agent ran past {} turns", run.config.max_turns);
-                run.raise_fault(&path, &reason);
-                return end(&run, Outcome::Faulted(reason), handoff, messages);
+                let fault = Fault {
+                    kind: FaultKind::Runaway,
+                    reason: format!("agent ran past {} turns", run.config.max_turns),
+                };
+                run.raise_fault(&path, &fault);
+                return end(&run, Outcome::Faulted(fault.reason), handoff, messages);
             }
 
             let reply = match run.request(&path, index, &messages).await {
@@ -630,9 +748,9 @@ pub fn run_agent(
                 Err(RequestEnd::Cancelled) => {
                     return end(&run, Outcome::Cancelled, handoff, messages);
                 }
-                Err(RequestEnd::Faulted(reason)) => {
-                    run.raise_fault(&path, &reason);
-                    return end(&run, Outcome::Faulted(reason), handoff, messages);
+                Err(RequestEnd::Faulted(fault)) => {
+                    run.raise_fault(&path, &fault);
+                    return end(&run, Outcome::Faulted(fault.reason), handoff, messages);
                 }
             };
             let text = reply.content.clone().unwrap_or_default();

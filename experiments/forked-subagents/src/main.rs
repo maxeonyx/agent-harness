@@ -52,6 +52,9 @@ Limits:
                       which is exactly the shape its task asks for)
   --max-turns <n>     requests one agent may make (default 20)
   --request-timeout <seconds>  give up on a silent provider and retry (default 300)
+  --rate-limit-patience <seconds>  how long to keep waiting out a 429 before
+                      giving up on it (default 120; the first wait is a
+                      twenty-fourth of it, doubling, and `Retry-After` wins)
   --runs-dir <path>   default <experiment>/runs.ignore
   --panic-in <agent path>  fault injection: make that agent's task panic
 
@@ -239,6 +242,7 @@ const COMMON: &[&str] = &[
     "max-depth",
     "max-turns",
     "request-timeout",
+    "rate-limit-patience",
     "panic-in",
     "runs-dir",
     "session-id",
@@ -419,6 +423,9 @@ impl Args {
                 .cloned(),
             request_timeout: std::time::Duration::from_secs_f64(
                 self.number("request-timeout", 300.0)?,
+            ),
+            rate_limit_patience: std::time::Duration::from_secs_f64(
+                self.number("rate-limit-patience", 120.0)?,
             ),
         })
     }

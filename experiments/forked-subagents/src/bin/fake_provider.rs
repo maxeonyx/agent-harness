@@ -202,8 +202,8 @@ fn converse(stream: TcpStream, fake: &Fake) {
     let mut reader = BufReader::new(read_half);
     let mut stream = stream;
     while let Some((target, body)) = read_request(&mut reader) {
-        let (status, response) = answer(&target, &body, fake);
-        if write_response(&mut stream, status, &response).is_err() {
+        let (status, response, retry_after) = answer(&target, &body, fake);
+        if write_response(&mut stream, status, &response, retry_after).is_err() {
             return;
         }
     }
@@ -236,22 +236,31 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Option<(String, String)> {
     Some((target, String::from_utf8_lossy(&body).to_string()))
 }
 
-fn write_response(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
+fn write_response(
+    stream: &mut TcpStream,
+    status: u16,
+    body: &str,
+    retry_after: Option<u64>,
+) -> std::io::Result<()> {
+    let retry = match retry_after {
+        Some(seconds) => format!("Retry-After: {seconds}\r\n"),
+        None => String::new(),
+    };
     write!(
         stream,
-        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{retry}Connection: keep-alive\r\n\r\n{body}",
         body.len()
     )?;
     stream.flush()
 }
 
-fn answer(target: &str, text: &str, fake: &Fake) -> (u16, String) {
+fn answer(target: &str, text: &str, fake: &Fake) -> (u16, String, Option<u64>) {
     if target == "POST /release" {
         fake.release();
-        return (200, "{}".to_string());
+        return (200, "{}".to_string(), None);
     }
     if !target.starts_with("POST ") || !target.ends_with("/chat/completions") {
-        return (404, "{}".to_string());
+        return (404, "{}".to_string(), None);
     }
 
     let received = millis();
@@ -280,6 +289,16 @@ fn answer(target: &str, text: &str, fake: &Fake) -> (u16, String) {
     }
 
     let status = rule["status"].as_u64().unwrap_or(200) as u16;
+    // OpenRouter answers a rate limit with HTTP 200 and an `error` object
+    // whose `code` is 429. `error_code` scripts exactly that shape.
+    if let Some(code) = rule["error_code"].as_u64() {
+        let body = json!({
+            "id": "gen-fake",
+            "error": { "message": rule["text"].as_str().unwrap_or("upstream said no"), "code": code },
+        });
+        fake.record(json!({ "kind": "answered", "seq": sequence, "at": millis(), "stuck": stuck }));
+        return (200, body.to_string(), rule["retry_after"].as_u64());
+    }
     let response = if status == 200 {
         let tool_calls: Vec<Value> = rule["tool_calls"]
             .as_array()
@@ -325,5 +344,5 @@ fn answer(target: &str, text: &str, fake: &Fake) -> (u16, String) {
     fake.record(json!({
         "kind": "answered", "seq": sequence, "at": millis(), "stuck": stuck,
     }));
-    (status, response.to_string())
+    (status, response.to_string(), rule["retry_after"].as_u64())
 }

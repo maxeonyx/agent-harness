@@ -1452,3 +1452,165 @@ fn a_leaf_that_forks_is_over_reach_even_when_its_remit_is_unclear() {
         "a leaf called task and was not counted:\n{text}"
     );
 }
+
+// ------------------------------------------------------------ rate limits
+
+/// OpenRouter answers a rate limit with HTTP 200 and an `error` object whose
+/// code is 429. Reading only the HTTP status made that permanent, and a whole
+/// grid of luna trials died in seconds.
+#[test]
+fn a_rate_limit_arriving_as_a_200_is_waited_out_not_treated_as_fatal() {
+    let dir = workspace("rate-limit");
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "error_code": 429, "times": 2,
+             "text": "temporarily rate-limited upstream. Please retry shortly"},
+            {"when": "^SPLIT", "text": "answered once the rate limit passed"}
+        ]),
+    );
+    let out = forks(
+        &dir,
+        &fake,
+        &["--rate-limit-patience", "2"],
+        "SPLIT the work",
+    );
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("rate limited, waiting"),
+        "the rate limit was not waited out:\n{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("answered once the rate limit passed"));
+    assert_eq!(
+        fake.requests().len(),
+        3,
+        "both 429s should have been retried"
+    );
+}
+
+/// `Retry-After` is what the provider asked for, so it wins over the schedule.
+#[test]
+fn retry_after_is_honoured() {
+    let dir = workspace("retry-after");
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "status": 429, "retry_after": 1, "times": 1,
+             "text": "slow down"},
+            {"when": "^SPLIT", "text": "answered after the requested wait"}
+        ]),
+    );
+    // The schedule would wait 100s/24 ≈ 4s. Retry-After says one second, and
+    // the run finishes in less than the schedule would have allowed.
+    let started = Instant::now();
+    let out = forks(
+        &dir,
+        &fake,
+        &["--rate-limit-patience", "100"],
+        "SPLIT the work",
+    );
+    let took = started.elapsed();
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("rate limited, waiting 1.0s"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        took < Duration::from_secs(4),
+        "waited {took:?}, so Retry-After was ignored in favour of the schedule"
+    );
+}
+
+/// Patience runs out eventually, and that is a provider fault.
+#[test]
+fn a_rate_limit_that_never_lifts_ends_as_a_provider_fault() {
+    let dir = workspace("rate-limit-forever");
+    let fake = Fake::start(
+        &dir,
+        json!([{"when": "^SPLIT", "error_code": 429, "text": "still rate-limited"}]),
+    );
+    let out = forks(
+        &dir,
+        &fake,
+        &["--rate-limit-patience", "0.3"],
+        "SPLIT the work",
+    );
+    assert_ne!(out.code, 0);
+    assert!(
+        out.stdout.contains("rate limited for longer than"),
+        "{}",
+        out.stdout
+    );
+}
+
+/// A trial the provider broke is not evidence about the model: it is shown as
+/// invalid, counted on its own, and kept out of every rate and mean. A trial
+/// that hit its spend cap is the model's own doing and stays in.
+#[test]
+fn a_provider_fault_invalidates_a_trial_while_a_spend_cap_does_not() {
+    let (correct, _) = learn_fixture("bench-learn-invalid");
+    let plan = tree(correct);
+
+    // One combo whose root is rate-limited past all patience, and one whose
+    // root simply costs more than the cap allows.
+    let dir = workspace("bench-invalid");
+    let mut rules = bench_rules(&plan).as_array().unwrap().clone();
+    rules.insert(
+        0,
+        json!({"when": "Read `ledgers/POLICY.md` first", "error_code": 429,
+               "text": "temporarily rate-limited upstream"}),
+    );
+    let fake = Fake::start(&dir, Value::Array(rules));
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("bench")
+        .arg("--base-url")
+        .arg(fake.base_url())
+        .arg("--grid")
+        .arg("fake@")
+        .arg("--reps")
+        .arg("1")
+        .arg("--rate-limit-patience")
+        .arg("0.2")
+        .arg("--runs-dir")
+        .arg(dir.join("runs"))
+        .output()
+        .expect("run forks bench");
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains("INVALID (provider fault"),
+        "a provider fault was not shown as invalid:\n{text}"
+    );
+    // Every rate is withheld rather than reported as a row of zeroes.
+    assert!(
+        text.contains("| 1 | 1 | — | — | — | — | — | — | — | — | — | — |"),
+        "an invalid trial was folded into the rates:\n{text}"
+    );
+
+    // The same tree, but stopped by its own spending: still a real trial.
+    let dir = workspace("bench-capped");
+    let fake = Fake::start(&dir, bench_rules(&plan));
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("bench")
+        .arg("--base-url")
+        .arg(fake.base_url())
+        .arg("--grid")
+        .arg("fake@")
+        .arg("--reps")
+        .arg("1")
+        .arg("--max-cost")
+        .arg("0.0")
+        .arg("--runs-dir")
+        .arg(dir.join("runs"))
+        .output()
+        .expect("run forks bench");
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(output.status.success(), "{text}");
+    assert!(
+        !text.contains("INVALID"),
+        "a trial stopped by its own spending was discarded:\n{text}"
+    );
+    assert!(text.contains("| 1 | 0 |"), "{text}");
+}

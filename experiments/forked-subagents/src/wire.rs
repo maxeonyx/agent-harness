@@ -5,6 +5,7 @@
 //! knows about agents.
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ToolCallFunction {
@@ -121,16 +122,48 @@ pub struct ChatResponse {
 pub enum Attempt {
     Answered(Sent),
     /// Worth another attempt: the network, a 429, a 5xx, a timeout.
-    Transient(String),
+    Transient(Retryable),
     /// An out-of-band fault. The harness cannot get past it, so the agent
     /// cannot be said to have completed.
     Fatal(String),
+}
+
+pub struct Retryable {
+    pub reason: String,
+    /// Rate limits deserve far more patience than a 5xx: the provider is
+    /// telling us to come back, not failing.
+    pub rate_limited: bool,
+    /// What the provider asked us to wait, when it said.
+    pub retry_after: Option<Duration>,
 }
 
 pub struct Sent {
     pub response: ChatResponse,
     /// The raw response body, for the wire log.
     pub body: serde_json::Value,
+}
+
+/// Seconds, which is what OpenRouter sends. An HTTP-date `Retry-After` is
+/// ignored in favour of the backoff schedule rather than parsed.
+fn retry_after(response: &reqwest::Response) -> Option<Duration> {
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+}
+
+/// A status that is worth another attempt, and whether it is a rate limit.
+fn retryable_status(code: u16) -> Option<bool> {
+    match code {
+        429 => Some(true),
+        408 | 500..=599 => Some(false),
+        _ => None,
+    }
 }
 
 pub async fn send_once(
@@ -146,16 +179,26 @@ pub async fn send_once(
     }
     let response = match builder.send().await {
         Ok(response) => response,
-        Err(error) => return Attempt::Transient(format!("request failed: {error}")),
+        Err(error) => {
+            return Attempt::Transient(Retryable {
+                reason: format!("request failed: {error}"),
+                rate_limited: false,
+                retry_after: None,
+            });
+        }
     };
     let status = response.status();
+    let wait = retry_after(&response);
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        let message = format!("provider returned {status}: {text}");
-        return if status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error() {
-            Attempt::Transient(message)
-        } else {
-            Attempt::Fatal(message)
+        let reason = format!("provider returned {status}: {text}");
+        return match retryable_status(status.as_u16()) {
+            Some(rate_limited) => Attempt::Transient(Retryable {
+                reason,
+                rate_limited,
+                retry_after: wait,
+            }),
+            None => Attempt::Fatal(reason),
         };
     }
     let body: serde_json::Value = match serde_json::from_str(&text) {
@@ -164,10 +207,24 @@ pub async fn send_once(
             return Attempt::Fatal(format!("response was not JSON: {error}; body: {text}"));
         }
     };
-    // OpenRouter reports some upstream failures as a 200 with an `error`
-    // object and no choices.
-    if body.get("error").is_some() {
-        return Attempt::Fatal(format!("provider returned an error: {text}"));
+    // OpenRouter reports upstream failures as a 200 carrying an `error`
+    // object — including rate limits, which arrive as `"code": 429` with an
+    // HTTP 200. Reading only the HTTP status treats a "come back shortly" as
+    // permanent, which is how a whole grid of trials died in seconds.
+    if let Some(error) = body.get("error") {
+        let reason = format!("provider returned an error: {text}");
+        let code = error
+            .get("code")
+            .and_then(|code| code.as_u64())
+            .unwrap_or(0) as u16;
+        return match retryable_status(code) {
+            Some(rate_limited) => Attempt::Transient(Retryable {
+                reason,
+                rate_limited,
+                retry_after: wait,
+            }),
+            None => Attempt::Fatal(reason),
+        };
     }
     let response: ChatResponse = match serde_json::from_value(body.clone()) {
         Ok(response) => response,

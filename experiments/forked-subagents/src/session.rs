@@ -20,6 +20,7 @@ pub struct Session {
 }
 
 pub struct Ending {
+    pub fault_kind: Option<crate::agent::FaultKind>,
     pub handoff: String,
     pub agents: Vec<AgentRecord>,
     pub cost: f64,
@@ -107,6 +108,7 @@ impl Session {
             "outcome": outcome.short(),
             "detail": outcome.label(),
             "fault": self.run.fault(),
+            "fault_kind": self.run.fault_kind().map(|kind| kind.name()),
             "model": self.run.config.model,
             "provider": self.run.config.provider,
             "cut": self.run.config.framing.cut.name(),
@@ -124,6 +126,7 @@ impl Session {
             &serde_json::to_string_pretty(&summary).unwrap(),
         );
         Ending {
+            fault_kind: self.run.fault_kind(),
             handoff,
             agents,
             cost: self.run.total_cost(),
