@@ -74,7 +74,9 @@ pub struct ChatRequest {
     /// that had never seen the parent's prefix (probe, 2026-09-24).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<serde_json::Value>,
-    /// Shared by every agent in one run, for sticky routing.
+    /// Shared by every agent in one run, for sticky routing. Empty means
+    /// the field is not sent at all.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub session_id: String,
 }
 
@@ -86,13 +88,14 @@ pub struct PromptTokensDetails {
     pub cache_write_tokens: u64,
 }
 
-#[derive(Deserialize, Debug, Default, Clone)]
+/// Required, not defaulted: a spend cap cannot be enforced against a response
+/// that did not say what it cost, so a response without usage is a fault.
+#[derive(Deserialize, Debug, Clone)]
 pub struct Usage {
     #[serde(default)]
     pub prompt_tokens: u64,
     #[serde(default)]
     pub completion_tokens: u64,
-    #[serde(default)]
     pub cost: f64,
     #[serde(default)]
     pub prompt_tokens_details: PromptTokensDetails,
@@ -107,7 +110,6 @@ pub struct Choice {
 pub struct ChatResponse {
     #[serde(default)]
     pub choices: Vec<Choice>,
-    #[serde(default)]
     pub usage: Usage,
     #[serde(default)]
     pub provider: Option<String>,

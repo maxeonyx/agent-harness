@@ -291,7 +291,14 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
                 mode.name()
             );
             let config = args.config_with(model, provider, *cut, *word, *mode)?;
-            let mut session = Session::open(config, &fixture.dir, &bench_dir, &label, false)?;
+            let mut session = Session::open(
+                config,
+                &fixture.dir,
+                &bench_dir,
+                &label,
+                false,
+                args.session_id(),
+            )?;
             session.say(ROOT_TASK);
             let outcome = session.turn().await;
             let ending = session.finish(&outcome);

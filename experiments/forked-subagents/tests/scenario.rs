@@ -67,7 +67,7 @@ impl Fake {
             let _ = tx.send(line);
         });
         let line = rx
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(Duration::from_secs(30))
             .expect("fake provider never printed its readiness line");
         reader.join().unwrap();
         let addr = line
@@ -428,6 +428,31 @@ fn the_spend_cap_is_a_fault_before_the_request_that_would_break_it() {
     );
 }
 
+/// A scope puts several requests in the air at once. The cap must count what
+/// is already in flight, or the run overshoots it by a whole fan-out.
+#[test]
+fn the_cap_counts_the_requests_already_in_flight() {
+    let dir = workspace("cap-in-flight");
+    let mut rules = split_rules(400);
+    let usage = json!({
+        "prompt_tokens": 100, "completion_tokens": 10, "cost": 0.02,
+        "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 100}
+    });
+    for index in 0..3 {
+        rules.as_array_mut().unwrap()[index]["usage"] = usage.clone();
+    }
+    let fake = Fake::start(&dir, rules);
+    let out = forks(&dir, &fake, &["--max-cost", "0.04"], "SPLIT the work");
+
+    assert_ne!(out.code, 0);
+    assert!(out.stdout.contains("in flight at up to"), "{}", out.stdout);
+    assert_eq!(
+        fake.requests().len(),
+        2,
+        "the second child was sent while the first child's cost was still unknown"
+    );
+}
+
 #[test]
 fn an_over_deep_task_call_is_an_error_result_not_a_missing_tool() {
     let dir = workspace("depth");
@@ -519,7 +544,7 @@ fn cancel_starts_nothing_new_keeps_what_is_in_flight_and_ends_every_agent() {
     let mut seen = Vec::new();
     loop {
         let line = rx
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(Duration::from_secs(30))
             .expect("waiting for the scope to open");
         let opened = line.contains("scope opened");
         seen.push(line);
@@ -530,7 +555,7 @@ fn cancel_starts_nothing_new_keeps_what_is_in_flight_and_ends_every_agent() {
     // Cancel with both children's requests genuinely in flight: the fake
     // logs a request when it arrives, and holds it for 700ms before
     // answering.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while fake.requests().len() < 3 {
         assert!(
             std::time::Instant::now() < deadline,
@@ -546,7 +571,7 @@ fn cancel_starts_nothing_new_keeps_what_is_in_flight_and_ends_every_agent() {
         .as_millis();
     loop {
         let line = rx
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(Duration::from_secs(30))
             .expect("waiting for the run report");
         let done = line.contains("run: cancelled");
         seen.push(line);

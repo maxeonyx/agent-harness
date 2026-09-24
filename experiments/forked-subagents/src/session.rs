@@ -32,6 +32,7 @@ impl Session {
         runs_dir: &Path,
         label: &str,
         verbose: bool,
+        session_id: Option<String>,
     ) -> Result<Session, String> {
         let limb = Limb::new(dir)?;
         let recorder = Recorder::create(runs_dir, label)?;
@@ -39,13 +40,17 @@ impl Session {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let session_id = match session_id {
+            Some(given) => given,
+            None => format!("forks-{nanos}"),
+        };
         let run = Arc::new(Run::new(
             config,
             limb,
             Face::new(verbose),
             recorder,
             CancellationToken::new(),
-            format!("forks-{nanos}"),
+            session_id,
         ));
         let root_index = run.register("root", 0, false, None, None);
         Ok(Session {

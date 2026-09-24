@@ -178,6 +178,13 @@ impl AgentRecord {
 
 struct RunState {
     spent: f64,
+    /// Requests sent and not yet answered, and the most any single request
+    /// has cost so far. A scope puts many requests in the air at once, so a
+    /// cap checked against `spent` alone is overshot by whatever they turn
+    /// out to cost; charging each in-flight request the worst seen keeps the
+    /// overshoot to about one request's worth.
+    in_flight: usize,
+    worst: f64,
     fault: Option<String>,
     agents: Vec<AgentRecord>,
     index: HashMap<String, usize>,
@@ -219,6 +226,8 @@ impl Run {
             session_id,
             state: Mutex::new(RunState {
                 spent: 0.0,
+                in_flight: 0,
+                worst: 0.0,
                 fault: None,
                 agents: Vec::new(),
                 index: HashMap::new(),
@@ -301,13 +310,15 @@ impl Run {
         messages: &[Message],
     ) -> Result<Message, String> {
         {
-            let state = self.state.lock().unwrap();
-            if state.spent >= self.config.max_cost {
+            let mut state = self.state.lock().unwrap();
+            let committed = state.spent + state.in_flight as f64 * state.worst;
+            if committed >= self.config.max_cost {
                 return Err(format!(
-                    "spend cap reached: ${:.4} of ${:.4}",
-                    state.spent, self.config.max_cost
+                    "spend cap reached: ${:.4} spent, {} request(s) in flight at up to ${:.4} each, cap ${:.4}",
+                    state.spent, state.in_flight, state.worst, self.config.max_cost
                 ));
             }
+            state.in_flight += 1;
         }
         let request = ChatRequest {
             model: self.config.model.clone(),
@@ -330,8 +341,14 @@ impl Run {
             self.config.api_key.as_deref(),
             &request,
         )
-        .await
-        .map_err(|fault| fault.0)?;
+        .await;
+        let sent = match sent {
+            Ok(sent) => sent,
+            Err(fault) => {
+                self.state.lock().unwrap().in_flight -= 1;
+                return Err(fault.0);
+            }
+        };
         self.recorder.wire(path, "response", &sent.body);
         let usage = sent.response.usage.clone();
         let uncached = usage
@@ -339,7 +356,9 @@ impl Run {
             .saturating_sub(usage.prompt_tokens_details.cached_tokens);
         {
             let mut state = self.state.lock().unwrap();
+            state.in_flight -= 1;
             state.spent += usage.cost;
+            state.worst = state.worst.max(usage.cost);
             let record = &mut state.agents[index];
             record.requests += 1;
             record.cached_in += usage.prompt_tokens_details.cached_tokens;

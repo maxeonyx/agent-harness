@@ -97,6 +97,7 @@ async fn command_run(args: &Args) -> Result<ExitCode, String> {
         &args.runs_dir(),
         "run",
         true,
+        args.session_id(),
     )?;
     session.say(&task);
     let run = session.run.clone();
@@ -127,6 +128,7 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
         &args.runs_dir(),
         "chat",
         true,
+        args.session_id(),
     )?;
     let run = session.run.clone();
     run.face
@@ -204,6 +206,7 @@ const COMMON: &[&str] = &[
     "max-depth",
     "max-turns",
     "runs-dir",
+    "session-id",
 ];
 
 /// The experiment's own directory, known at build time. The binary is always
@@ -305,6 +308,14 @@ impl Args {
                 .map_err(|_| format!("--{name} {text} is not a number")),
             None => Ok(default),
         }
+    }
+
+    /// `--session-id ""` sends no session id at all.
+    pub fn session_id(&self) -> Option<String> {
+        self.flags
+            .get("session-id")
+            .and_then(|values| values.last())
+            .cloned()
     }
 
     pub fn runs_dir(&self) -> PathBuf {
