@@ -6,6 +6,10 @@
 //! last message instead — which is exactly the tail that distinguishes one
 //! agent from another. Requests are served on several threads, so overlapping
 //! requests really do overlap.
+//!
+//! A request is logged the moment it arrives, before the scripted delay, so a
+//! test can wait for requests to be in flight. `answered_ms` is when the delay
+//! elapses and the response goes out.
 
 use serde_json::{Value, json};
 use std::io::Write;
@@ -118,7 +122,18 @@ fn serve(
         || json!({ "text": format!("FAKE PROVIDER: no rule matched last message: {last}") }),
     );
 
-    if let Some(delay) = rule["delay_ms"].as_u64() {
+    let delay = rule["delay_ms"].as_u64().unwrap_or(0);
+    {
+        let entry = json!({
+            "received_ms": received,
+            "answered_ms": received + delay as u128,
+            "body": body,
+        });
+        let mut file = log.lock().unwrap();
+        let _ = writeln!(file, "{entry}");
+        let _ = file.flush();
+    }
+    if delay > 0 {
         std::thread::sleep(std::time::Duration::from_millis(delay));
     }
 
@@ -162,14 +177,6 @@ fn serve(
     } else {
         json!({ "error": { "message": rule["text"].as_str().unwrap_or("scripted failure"), "code": status } })
     };
-
-    let responded = millis();
-    {
-        let entry = json!({ "received_ms": received, "responded_ms": responded, "body": body });
-        let mut file = log.lock().unwrap();
-        let _ = writeln!(file, "{entry}");
-        let _ = file.flush();
-    }
 
     let response = tiny_http::Response::from_string(response_body.to_string())
         .with_status_code(status as u16)

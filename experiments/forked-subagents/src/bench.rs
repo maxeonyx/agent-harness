@@ -150,7 +150,7 @@ fn score(agents: &[AgentRecord], root_handoff: &str, fixture: &Fixture) -> Score
 
     let mut leaf_overreach = 0;
     for leaf in &leaf_agents {
-        let assignment = leaf.assignment.clone().unwrap_or_default();
+        let assignment = leaf.task.clone().unwrap_or_default();
         let own: Vec<&str> = all_branches
             .iter()
             .copied()
@@ -170,7 +170,7 @@ fn score(agents: &[AgentRecord], root_handoff: &str, fixture: &Fixture) -> Score
 
     let mut region_overreach = 0;
     for region_agent in &region_agents {
-        let assignment = region_agent.assignment.clone().unwrap_or_default();
+        let assignment = region_agent.task.clone().unwrap_or_default();
         let own: Vec<&str> = REGIONS
             .iter()
             .filter(|(region, _)| mentions(&assignment, region))

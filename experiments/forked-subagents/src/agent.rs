@@ -129,6 +129,9 @@ pub struct AgentRecord {
     pub millis: u128,
     pub tool_calls: Vec<ToolCallRecord>,
     pub children: Vec<String>,
+    /// The `task` text the parent wrote for this agent, before any framing.
+    pub task: Option<String>,
+    /// That text plus the framing under test, as the child actually saw it.
     pub assignment: Option<String>,
     pub handoff: String,
     pub messages: Vec<Message>,
@@ -166,6 +169,7 @@ impl AgentRecord {
             "tool_calls": self.tool_calls.iter().map(|c| serde_json::json!({
                 "name": c.name, "arguments": c.arguments
             })).collect::<Vec<_>>(),
+            "task": self.task,
             "assignment": self.assignment,
             "handoff": self.handoff,
         })
@@ -227,7 +231,7 @@ impl Run {
         path: &str,
         depth: usize,
         fresh: bool,
-        assignment: Option<String>,
+        task: Option<String>,
         parent: Option<&str>,
     ) -> usize {
         let mut state = self.state.lock().unwrap();
@@ -246,7 +250,8 @@ impl Run {
             millis: 0,
             tool_calls: Vec::new(),
             children: Vec::new(),
-            assignment,
+            task,
+            assignment: None,
             handoff: String::new(),
             messages: Vec::new(),
         });
