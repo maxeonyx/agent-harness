@@ -161,7 +161,7 @@ fn explained_words(name: &str, siblings: &[String]) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         text.push_str(&format!(
-            "You are one branch of a split. Several agents were launched at once and given one assignment each; you are `{name}`, and the other assignments belong to {others}, who are working on them right now. Anything you do towards their assignments is work done twice and is thrown away. Do your own assignment and none of theirs."
+            "You are one branch of a split. Several agents were launched at once and given one assignment each; you are `{name}`, and the other assignments belong to {others}. Those agents are working on them right now, so anything you do towards their assignments is work done twice and is thrown away. Do your own assignment and none of theirs."
         ));
     }
     text.push_str(
