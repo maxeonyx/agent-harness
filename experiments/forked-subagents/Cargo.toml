@@ -1,0 +1,40 @@
+[package]
+name = "forked-subagents"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Disposable experiment, deliberately outside the agent-harness workspace.
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+tiny_http = "0.12"
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "signal",
+    "io-std",
+    "io-util",
+    "fs",
+] }
+tokio-util = "0.7"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+
+[dev-dependencies]
+wait-timeout = "0.2"
+
+[[bin]]
+name = "forks"
+path = "src/main.rs"
+
+[[bin]]
+name = "fake-provider"
+path = "src/bin/fake_provider.rs"
