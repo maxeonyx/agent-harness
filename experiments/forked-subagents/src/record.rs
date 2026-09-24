@@ -12,9 +12,29 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    /// Two runs started in the same second must not share a directory. They
+    /// did, once: a luna grid and a sonnet grid landed in the same one and
+    /// the second to finish overwrote the first's `trials.json`, losing the
+    /// index of trials that had already been paid for. The timestamp is for
+    /// reading; uniqueness comes from `create_dir` refusing to clobber.
     pub fn create(base: &Path, label: &str) -> Result<Recorder, String> {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let dir = base.join(format!("{stamp}-{label}"));
+        std::fs::create_dir_all(base)
+            .map_err(|e| format!("create runs directory {}: {e}", base.display()))?;
+        let mut dir = base.join(format!("{stamp}-{label}"));
+        let mut attempt = 2;
+        loop {
+            match std::fs::create_dir(&dir) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    dir = base.join(format!("{stamp}-{label}-{attempt}"));
+                    attempt += 1;
+                }
+                Err(error) => {
+                    return Err(format!("create run directory {}: {error}", dir.display()));
+                }
+            }
+        }
         std::fs::create_dir_all(dir.join("agents"))
             .map_err(|e| format!("create run directory {}: {e}", dir.display()))?;
         let wire = std::fs::File::create(dir.join("wire.jsonl"))

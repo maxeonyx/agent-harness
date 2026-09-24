@@ -5,7 +5,6 @@
 //! knows about agents.
 
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ToolCallFunction {
@@ -115,11 +114,18 @@ pub struct ChatResponse {
     pub provider: Option<String>,
 }
 
-/// Everything that is not a completed response is an out-of-band fault: the
-/// harness cannot get past it, so the agent cannot be said to have completed.
-/// Transient shapes are retried first and only become a fault when the
-/// retries run out.
-pub struct Fault(pub String);
+/// What one HTTP attempt came back with. Retrying is the caller's decision,
+/// because only the caller knows whether the run has been cancelled and
+/// whether another attempt is still inside the spend cap — both of which must
+/// be checked per attempt, not per logical request.
+pub enum Attempt {
+    Answered(Sent),
+    /// Worth another attempt: the network, a 429, a 5xx, a timeout.
+    Transient(String),
+    /// An out-of-band fault. The harness cannot get past it, so the agent
+    /// cannot be said to have completed.
+    Fatal(String),
+}
 
 pub struct Sent {
     pub response: ChatResponse,
@@ -127,56 +133,50 @@ pub struct Sent {
     pub body: serde_json::Value,
 }
 
-const ATTEMPTS: usize = 4;
-
-pub async fn send(
+pub async fn send_once(
     client: &reqwest::Client,
     base_url: &str,
     api_key: Option<&str>,
     request: &ChatRequest,
-) -> Result<Sent, Fault> {
+) -> Attempt {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let mut backoff = Duration::from_millis(500);
-    let mut last = String::new();
-    for attempt in 1..=ATTEMPTS {
-        if attempt > 1 {
-            tokio::time::sleep(backoff).await;
-            backoff *= 3;
-        }
-        let mut builder = client.post(&url).json(request);
-        if let Some(key) = api_key {
-            builder = builder.bearer_auth(key);
-        }
-        let response = match builder.send().await {
-            Ok(response) => response,
-            Err(error) => {
-                last = format!("request failed: {error}");
-                continue;
-            }
-        };
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if status.is_success() {
-            let body: serde_json::Value = serde_json::from_str(&text)
-                .map_err(|e| Fault(format!("response was not JSON: {e}; body: {text}")))?;
-            // OpenRouter reports some upstream failures as a 200 with an
-            // `error` object and no choices.
-            if body.get("error").is_some() {
-                return Err(Fault(format!("provider returned an error: {text}")));
-            }
-            let response: ChatResponse = serde_json::from_value(body.clone())
-                .map_err(|e| Fault(format!("could not parse response: {e}; body: {text}")))?;
-            if response.choices.is_empty() {
-                return Err(Fault(format!("provider returned no choices: {text}")));
-            }
-            return Ok(Sent { response, body });
-        }
-        let transient =
-            status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error();
-        last = format!("provider returned {status}: {text}");
-        if !transient {
-            return Err(Fault(last));
-        }
+    let mut builder = client.post(&url).json(request);
+    if let Some(key) = api_key {
+        builder = builder.bearer_auth(key);
     }
-    Err(Fault(format!("{ATTEMPTS} attempts failed; last: {last}")))
+    let response = match builder.send().await {
+        Ok(response) => response,
+        Err(error) => return Attempt::Transient(format!("request failed: {error}")),
+    };
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let message = format!("provider returned {status}: {text}");
+        return if status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error() {
+            Attempt::Transient(message)
+        } else {
+            Attempt::Fatal(message)
+        };
+    }
+    let body: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(body) => body,
+        Err(error) => {
+            return Attempt::Fatal(format!("response was not JSON: {error}; body: {text}"));
+        }
+    };
+    // OpenRouter reports some upstream failures as a 200 with an `error`
+    // object and no choices.
+    if body.get("error").is_some() {
+        return Attempt::Fatal(format!("provider returned an error: {text}"));
+    }
+    let response: ChatResponse = match serde_json::from_value(body.clone()) {
+        Ok(response) => response,
+        Err(error) => {
+            return Attempt::Fatal(format!("could not parse response: {error}; body: {text}"));
+        }
+    };
+    if response.choices.is_empty() {
+        return Attempt::Fatal(format!("provider returned no choices: {text}"));
+    }
+    Attempt::Answered(Sent { response, body })
 }

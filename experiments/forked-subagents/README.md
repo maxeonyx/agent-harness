@@ -24,7 +24,9 @@ The key comes from `$OPENROUTER_API_KEY` or `keys.ignore.env` beside this README
 diff runs.ignore/<run>/agents/root.md runs.ignore/<run>/agents/root.alpha.md
 ```
 
-In `chat`, a line is a message to the root and ends your turn. While a turn is running only `/tree` and `/cancel` are accepted; `/quit` exits. Ctrl-C cancels a `run`.
+In `chat`, a line is a message to the root and ends your turn. While a turn is running only `/tree` and `/cancel` are accepted; `/quit` exits. Ctrl-C cancels; a second Ctrl-C stops waiting for in-flight responses and exits with 130.
+
+`--panic-in <agent path>` is fault injection: it makes that agent's task panic, which is how the tests watch the harness record a panicked agent. Every agent ends with a recorded outcome — `completed`, `cancelled`, `faulted`, `suspended` or `panicked` — and a `summary.json` is written even when the root itself panicked.
 
 ## The knobs
 
@@ -56,7 +58,19 @@ Over-reach is scored against the parent's raw `task` text, not the framed assign
 
 A trial gets `--max-depth 2` — exactly the shape the task asks for — and `--max-cost 0.15`; both are printed when the benchmark starts, along with the whole-benchmark `--budget`. A trial that reaches its own cap is a scored trial, faulted and almost certainly wrong. Only `--budget` stops the benchmark.
 
-`--grid model@provider,...`, `--reps N`, and `--cut`/`--words`/`--mode` taking comma-separated lists, sweep the cross product. `--budget` caps the whole benchmark and stops it cleanly.
+`--grid model@provider,...`, `--reps N`, and `--cut`/`--words`/`--mode` taking comma-separated lists, sweep the cross product. `bench` defaults to `--mode fork`, unlike `run` and `chat`, which default to `declared`. `--budget` caps the whole benchmark and stops it cleanly.
+
+Over-reach is judged on what an agent did, not on what it wrote: a read counts only if the limb answered it, and a report counts only if it *claims a total* for a branch that is not this agent's — naming a sibling to say you left it alone is discipline, not a breach, and `--words explained` hands every child its siblings' names. Which branches an agent owns comes from the ledger paths its assignment names, so a parent cannot widen its child's licence by mentioning other branches in prose. A leaf whose assignment names no ledger and whose own name matches no branch is reported as unscoreable rather than quietly scored clean.
+
+The cache columns separate the question the brief asks. `child cache read` and `child first-request cache` cover agents below the root only — the first request of a forked child is the direct measure of whether it inherited the parent's prefix — while `all-agent cache read` includes the root's own re-reads, which dilute the comparison. `cache written` is the tokens paid to fill the cache.
+
+## Rescoring
+
+```bash
+cargo run --bin forks -- rescore runs.ignore/<timestamp>-bench
+```
+
+Scores a benchmark that has already been paid for, again, offline, and prints the old verdict beside the new one. It walks the trial directories rather than `trials.json`, because `trials.json` is written once at the end and two benchmarks that started in the same second used to share a directory — the second to finish overwrote the first's index. `wire.jsonl` is the ground truth for what each agent did: a request body carries the previous turn's tool results, which is how a read that failed is told from one that worked. Expected totals come from that benchmark's own `fixture/`, never from today's generator. Nothing is written back.
 
 ## Cost
 
@@ -64,7 +78,9 @@ A trial gets `--max-depth 2` — exactly the shape the task asks for — and `--
 
 A response that does not report its usage is a fault — a cap cannot be enforced against a cost the provider did not state.
 
-`--request-timeout` (default 300 seconds) bounds a single request. Without it a provider that accepts a request and never answers hangs its agent, and every ancestor with it, for as long as it likes. A timed-out request is a transient failure and is retried.
+Every HTTP attempt is charged separately against the cap and checked against cancellation, retries included. A retry is new work, and a drain that starts new work is not a drain.
+
+`--request-timeout` (default 300 seconds) bounds a single attempt. Without it a provider that accepts a request and never answers hangs its agent, and every ancestor with it, for as long as it likes. A timed-out request is a transient failure and is retried.
 
 Reaching the cap is an out-of-band fault, and out-of-band faults behave the same way whatever caused them: the failing agent is marked `faulted`, every ancestor stays `suspended` because its scope never returned, the run stops, and the exit code is non-zero. An agent that simply cannot do its task says so in its report; that is a completed agent.
 
@@ -80,7 +96,7 @@ Beyond those: one `task` call per assistant turn (a second in the same turn gets
 cargo test
 ```
 
-Under a second, and nothing in it waits for wall-clock time to pass.
+Under two seconds. One test waits on wall-clock time — `a_silent_provider_times_out_and_the_retry_succeeds`, which spends 0.2s on the timeout it is testing plus 0.5s of retry backoff — and `chat_does_not_spin_after_stdin_closes` samples CPU over a fixed window, because a rate needs one. Nothing else does: no test passes because an interval elapsed.
 
 `tests/scenario.rs` drives the `forks` binary against the fake provider and asserts on what it printed and on what the provider received. Concurrency is proved by a barrier: the children's requests are not answered until both are in flight together, which a harness that ran them one after another could never satisfy. Ordering is proved by content — the dependent child's request contains its dependency's report, so it cannot have been built before it. Cancellation and the spend cap hold requests open at the provider and release them when the test is ready. Every test also asserts the system prompt and tool list are byte-identical across every agent in the run.
 

@@ -21,6 +21,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// HTTP attempts per request, each separately gated by the spend cap and by
+/// cancellation.
+const ATTEMPTS: usize = 4;
+
+pub enum RequestEnd {
+    Faulted(String),
+    Cancelled,
+}
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -71,6 +80,10 @@ pub struct Config {
     pub max_cost: f64,
     pub max_depth: usize,
     pub max_turns: usize,
+    /// Fault injection. Naming an agent's path makes that agent's task panic
+    /// as it starts, which is the only way to watch the harness record a
+    /// panicked agent without shipping a bug.
+    pub panic_in: Option<String>,
     /// No timeout means a provider that stops answering hangs the whole tree
     /// for as long as it likes. A timed-out request is a transient failure
     /// and is retried.
@@ -88,6 +101,9 @@ pub enum Outcome {
     /// An ancestor of a faulted agent: still inside its `task` call, never
     /// resumed.
     Suspended,
+    /// The agent's task panicked. A bug, and an out-of-band fault like any
+    /// other — but it still ends with a recorded outcome.
+    Panicked(String),
 }
 
 impl Outcome {
@@ -97,6 +113,7 @@ impl Outcome {
             Outcome::Cancelled => "cancelled".to_string(),
             Outcome::Faulted(reason) => format!("faulted: {reason}"),
             Outcome::Suspended => "suspended".to_string(),
+            Outcome::Panicked(reason) => format!("panicked: {reason}"),
         }
     }
 
@@ -106,6 +123,38 @@ impl Outcome {
             Outcome::Cancelled => "cancelled",
             Outcome::Faulted(_) => "faulted",
             Outcome::Suspended => "suspended",
+            Outcome::Panicked(_) => "panicked",
+        }
+    }
+
+    /// Both kinds of out-of-band fault: the harness cannot get past either,
+    /// so neither resumes an ancestor.
+    fn blocks_the_parent(&self) -> bool {
+        matches!(
+            self,
+            Outcome::Faulted(_) | Outcome::Suspended | Outcome::Panicked(_)
+        )
+    }
+}
+
+/// Where an agent is. Every agent reaches `Ended` exactly once, including one
+/// whose task panicked — a `state` that is still `Running` in `summary.json`
+/// after the run is over means the harness lost track of an agent.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentState {
+    Waiting,
+    Running,
+    Suspended,
+    Ended(Outcome),
+}
+
+impl AgentState {
+    pub fn short(&self) -> &'static str {
+        match self {
+            AgentState::Waiting => "waiting",
+            AgentState::Running => "running",
+            AgentState::Suspended => "suspended",
+            AgentState::Ended(outcome) => outcome.short(),
         }
     }
 }
@@ -114,6 +163,10 @@ impl Outcome {
 pub struct ToolCallRecord {
     pub name: String,
     pub arguments: String,
+    /// What the tool answered. A read that failed is not a read, and the
+    /// benchmark must not score it as one, so the result is recorded next to
+    /// the call rather than inferred from the arguments.
+    pub result: Option<String>,
 }
 
 #[derive(Clone)]
@@ -121,11 +174,15 @@ pub struct AgentRecord {
     pub path: String,
     pub depth: usize,
     pub fresh: bool,
-    pub state: String,
+    pub state: AgentState,
     pub requests: usize,
     pub cached_in: u64,
     pub written_in: u64,
     pub uncached_in: u64,
+    /// The first request only. For a child that is the fork itself: how much
+    /// of the parent's prefix the provider served from cache.
+    pub first_cached_in: u64,
+    pub first_uncached_in: u64,
     pub out: u64,
     pub cost: f64,
     pub millis: u128,
@@ -140,36 +197,24 @@ pub struct AgentRecord {
 }
 
 impl AgentRecord {
-    pub fn reads(&self) -> Vec<String> {
-        self.tool_calls
-            .iter()
-            .filter(|call| call.name == "read_file")
-            .filter_map(|call| {
-                serde_json::from_str::<serde_json::Value>(&call.arguments)
-                    .ok()?
-                    .get("path")?
-                    .as_str()
-                    .map(|s| s.to_string())
-            })
-            .collect()
-    }
-
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "path": self.path,
             "depth": self.depth,
             "fresh": self.fresh,
-            "state": self.state,
+            "state": self.state.short(),
             "requests": self.requests,
             "cached_in": self.cached_in,
             "written_in": self.written_in,
             "uncached_in": self.uncached_in,
+            "first_cached_in": self.first_cached_in,
+            "first_uncached_in": self.first_uncached_in,
             "out": self.out,
             "cost": self.cost,
             "millis": self.millis,
             "children": self.children,
             "tool_calls": self.tool_calls.iter().map(|c| serde_json::json!({
-                "name": c.name, "arguments": c.arguments
+                "name": c.name, "arguments": c.arguments, "result": c.result
             })).collect::<Vec<_>>(),
             "task": self.task,
             "assignment": self.assignment,
@@ -248,17 +293,19 @@ impl Run {
         task: Option<String>,
         parent: Option<&str>,
     ) -> usize {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state();
         let index = state.agents.len();
         state.agents.push(AgentRecord {
             path: path.to_string(),
             depth,
             fresh,
-            state: "waiting".to_string(),
+            state: AgentState::Waiting,
             requests: 0,
             cached_in: 0,
             written_in: 0,
             uncached_in: 0,
+            first_cached_in: 0,
+            first_uncached_in: 0,
             out: 0,
             cost: 0.0,
             millis: 0,
@@ -270,28 +317,54 @@ impl Run {
             messages: Vec::new(),
         });
         state.index.insert(path.to_string(), index);
-        if let Some(parent) = parent
-            && let Some(&parent_index) = state.index.get(parent)
-        {
+        if let Some(parent) = parent {
+            let parent_index = *state
+                .index
+                .get(parent)
+                .unwrap_or_else(|| panic!("agent {path} registered under unknown parent {parent}"));
             state.agents[parent_index].children.push(path.to_string());
         }
         index
     }
 
+    /// A panic while an agent's record is being written must not take the
+    /// rest of the run's bookkeeping with it — losing `summary.json` is how
+    /// you lose the evidence for a run you already paid for.
+    fn state(&self) -> std::sync::MutexGuard<'_, RunState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn note(&self, index: usize, f: impl FnOnce(&mut AgentRecord)) {
-        let mut state = self.state.lock().unwrap();
-        f(&mut state.agents[index]);
+        f(&mut self.state().agents[index]);
+    }
+
+    /// A panicked agent is a bug, and an out-of-band fault — but it still
+    /// ends with a recorded outcome, so `summary.json` never claims an agent
+    /// is still running after the run is over.
+    pub fn record_panic(&self, path: &str, reason: &str) {
+        self.raise_fault(path, &format!("agent task panicked: {reason}"));
+        if let Some(index) = self.index_of(path) {
+            self.note(index, |record| {
+                record.state = AgentState::Ended(Outcome::Panicked(reason.to_string()))
+            });
+        }
+    }
+
+    pub fn index_of(&self, path: &str) -> Option<usize> {
+        self.state().index.get(path).copied()
     }
 
     pub fn fault(&self) -> Option<String> {
-        self.state.lock().unwrap().fault.clone()
+        self.state().fault.clone()
     }
 
     /// An out-of-band failure stops the whole run: nothing new starts
     /// anywhere, and every ancestor of the faulting agent stays suspended.
     fn raise_fault(&self, path: &str, reason: &str) {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state();
             if state.fault.is_none() {
                 state.fault = Some(format!("{path}: {reason}"));
             }
@@ -301,30 +374,21 @@ impl Run {
     }
 
     pub fn agents(&self) -> Vec<AgentRecord> {
-        self.state.lock().unwrap().agents.clone()
+        self.state().agents.clone()
     }
 
     pub fn total_cost(&self) -> f64 {
-        self.state.lock().unwrap().spent
+        self.state().spent
     }
 
+    /// How a request ended. Cancellation is not a fault: nothing went wrong,
+    /// the run was stopped.
     async fn request(
         &self,
         path: &str,
         index: usize,
         messages: &[Message],
-    ) -> Result<Message, String> {
-        {
-            let mut state = self.state.lock().unwrap();
-            let committed = state.spent + state.in_flight as f64 * state.worst;
-            if committed >= self.config.max_cost {
-                return Err(format!(
-                    "spend cap reached: ${:.4} spent, {} request(s) in flight at up to ${:.4} each, cap ${:.4}",
-                    state.spent, state.in_flight, state.worst, self.config.max_cost
-                ));
-            }
-            state.in_flight += 1;
-        }
+    ) -> Result<Message, RequestEnd> {
         let request = ChatRequest {
             model: self.config.model.clone(),
             messages: messages.to_vec(),
@@ -337,34 +401,88 @@ impl Run {
                 .map(|slug| serde_json::json!({ "order": [slug], "allow_fallbacks": false })),
             session_id: self.session_id.clone(),
         };
-        let body = serde_json::to_value(&request).map_err(|e| e.to_string())?;
-        self.recorder.wire(path, "request", &body);
-        self.face.line(path, "request sent");
-        let sent = wire::send(
-            &self.client,
-            &self.config.base_url,
-            self.config.api_key.as_deref(),
-            &request,
-        )
-        .await;
-        let sent = match sent {
-            Ok(sent) => sent,
-            Err(fault) => {
-                self.state.lock().unwrap().in_flight -= 1;
-                return Err(fault.0);
+        let body =
+            serde_json::to_value(&request).map_err(|e| RequestEnd::Faulted(e.to_string()))?;
+
+        let mut backoff = Duration::from_millis(500);
+        let mut last = String::new();
+        for attempt in 1..=ATTEMPTS {
+            if attempt > 1 {
+                // A retry is new work. Cancellation must reach it, both while
+                // it waits and before it is sent.
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {}
+                    _ = self.cancel.cancelled() => return Err(RequestEnd::Cancelled),
+                }
+                backoff *= 3;
             }
-        };
-        self.recorder.wire(path, "response", &sent.body);
+            if self.cancel.is_cancelled() {
+                return Err(RequestEnd::Cancelled);
+            }
+            // Every attempt is a separate charge, so every attempt is gated.
+            {
+                let mut state = self.state();
+                let committed = state.spent + state.in_flight as f64 * state.worst;
+                if committed >= self.config.max_cost {
+                    return Err(RequestEnd::Faulted(format!(
+                        "spend cap reached: ${:.4} spent, {} request(s) in flight at up to ${:.4} each, cap ${:.4}",
+                        state.spent, state.in_flight, state.worst, self.config.max_cost
+                    )));
+                }
+                state.in_flight += 1;
+            }
+            self.recorder.wire(path, "request", &body);
+            self.face.line(
+                path,
+                &if attempt == 1 {
+                    "request sent".to_string()
+                } else {
+                    format!("request sent (attempt {attempt} of {ATTEMPTS})")
+                },
+            );
+            let attempted = wire::send_once(
+                &self.client,
+                &self.config.base_url,
+                self.config.api_key.as_deref(),
+                &request,
+            )
+            .await;
+            self.state().in_flight -= 1;
+
+            match attempted {
+                wire::Attempt::Answered(sent) => {
+                    self.recorder.wire(path, "response", &sent.body);
+                    self.absorb(path, index, &sent);
+                    return Ok(sent.response.choices.into_iter().next().unwrap().message);
+                }
+                wire::Attempt::Fatal(reason) => return Err(RequestEnd::Faulted(reason)),
+                wire::Attempt::Transient(reason) => {
+                    self.face
+                        .line(path, &format!("request failed, will retry: {reason}"));
+                    last = reason;
+                }
+            }
+        }
+        Err(RequestEnd::Faulted(format!(
+            "{ATTEMPTS} attempts failed; last: {last}"
+        )))
+    }
+
+    /// Book one answered request against the run and the agent.
+    fn absorb(&self, path: &str, index: usize, sent: &wire::Sent) {
         let usage = sent.response.usage.clone();
         let uncached = usage
             .prompt_tokens
             .saturating_sub(usage.prompt_tokens_details.cached_tokens);
         {
-            let mut state = self.state.lock().unwrap();
-            state.in_flight -= 1;
+            let mut state = self.state();
             state.spent += usage.cost;
             state.worst = state.worst.max(usage.cost);
             let record = &mut state.agents[index];
+            if record.requests == 0 {
+                record.first_cached_in = usage.prompt_tokens_details.cached_tokens;
+                record.first_uncached_in = uncached;
+            }
             record.requests += 1;
             record.cached_in += usage.prompt_tokens_details.cached_tokens;
             record.written_in += usage.prompt_tokens_details.cache_write_tokens;
@@ -384,7 +502,6 @@ impl Run {
                 sent.response.provider.as_deref().unwrap_or("?")
             ),
         );
-        Ok(sent.response.choices.into_iter().next().unwrap().message)
     }
 
     pub fn snapshot(&self) -> String {
@@ -392,7 +509,7 @@ impl Run {
         let mut text = String::from(
             "agent                            state      reqs   cached  written  uncached      out      cost     time\n",
         );
-        let mut totals = (0usize, 0u64, 0u64, 0u64, 0u64, 0.0f64);
+        let mut total = Tally::default();
         for agent in &agents {
             let name = format!(
                 "{}{}",
@@ -402,7 +519,7 @@ impl Run {
             text.push_str(&format!(
                 "{:<32} {:<10} {:>4} {:>8} {:>8} {:>9} {:>8} {:>9} {:>7.1}s\n",
                 name,
-                agent.state,
+                agent.state.short(),
                 agent.requests,
                 agent.cached_in,
                 agent.written_in,
@@ -411,34 +528,54 @@ impl Run {
                 format!("${:.4}", agent.cost),
                 agent.millis as f64 / 1000.0,
             ));
-            totals.0 += agent.requests;
-            totals.1 += agent.cached_in;
-            totals.2 += agent.written_in;
-            totals.3 += agent.uncached_in;
-            totals.4 += agent.out;
-            totals.5 += agent.cost;
+            total.add(agent);
         }
         text.push_str(&format!(
             "{:<32} {:<10} {:>4} {:>8} {:>8} {:>9} {:>8} {:>9}\n",
             "TOTAL",
             "",
-            totals.0,
-            totals.1,
-            totals.2,
-            totals.3,
-            totals.4,
-            format!("${:.4}", totals.5),
+            total.requests,
+            total.cached_in,
+            total.written_in,
+            total.uncached_in,
+            total.out,
+            format!("${:.4}", total.cost),
         ));
-        let cache_share = if totals.1 + totals.3 > 0 {
-            totals.1 as f64 / (totals.1 + totals.3) as f64
-        } else {
-            0.0
-        };
         text.push_str(&format!(
             "cache-read share of input: {:.1}%\n",
-            cache_share * 100.0
+            total.cache_share() * 100.0
         ));
         text
+    }
+}
+
+#[derive(Default)]
+struct Tally {
+    requests: usize,
+    cached_in: u64,
+    written_in: u64,
+    uncached_in: u64,
+    out: u64,
+    cost: f64,
+}
+
+impl Tally {
+    fn add(&mut self, agent: &AgentRecord) {
+        self.requests += agent.requests;
+        self.cached_in += agent.cached_in;
+        self.written_in += agent.written_in;
+        self.uncached_in += agent.uncached_in;
+        self.out += agent.out;
+        self.cost += agent.cost;
+    }
+
+    fn cache_share(&self) -> f64 {
+        let input = self.cached_in + self.uncached_in;
+        if input == 0 {
+            0.0
+        } else {
+            self.cached_in as f64 / input as f64
+        }
     }
 }
 
@@ -453,14 +590,17 @@ pub fn run_agent(
 ) -> Pin<Box<dyn Future<Output = AgentEnd> + Send>> {
     Box::pin(async move {
         let started = Instant::now();
-        run.note(index, |record| record.state = "running".to_string());
+        run.note(index, |record| record.state = AgentState::Running);
+        if run.config.panic_in.as_deref() == Some(path.as_str()) {
+            panic!("--panic-in {path}");
+        }
         let mut messages = messages;
         let mut handoff = String::new();
         let mut turns = 0usize;
 
         let end = |run: &Arc<Run>, outcome: Outcome, handoff: String, messages: Vec<Message>| {
             run.note(index, |record| {
-                record.state = outcome.short().to_string();
+                record.state = AgentState::Ended(outcome.clone());
                 record.millis = started.elapsed().as_millis();
                 record.handoff = handoff.clone();
                 record.messages = messages.clone();
@@ -487,7 +627,10 @@ pub fn run_agent(
 
             let reply = match run.request(&path, index, &messages).await {
                 Ok(reply) => reply,
-                Err(reason) => {
+                Err(RequestEnd::Cancelled) => {
+                    return end(&run, Outcome::Cancelled, handoff, messages);
+                }
+                Err(RequestEnd::Faulted(reason)) => {
                     run.raise_fault(&path, &reason);
                     return end(&run, Outcome::Faulted(reason), handoff, messages);
                 }
@@ -502,63 +645,72 @@ pub fn run_agent(
             if !text.trim().is_empty() {
                 handoff = text;
             }
-            run.note(index, |record| {
-                for call in &calls {
-                    record.tool_calls.push(ToolCallRecord {
-                        name: call.function.name.clone(),
-                        arguments: call.function.arguments.clone(),
-                    });
-                }
-            });
             if run.cancel.is_cancelled() {
                 return end(&run, Outcome::Cancelled, handoff, messages);
+            }
+
+            // Sort the turn's calls once: the locals, and at most one scope.
+            // Everything after this point knows which is which, so no later
+            // step has to ask whether a slot was filled in.
+            let mut locals: Vec<(usize, Local)> = Vec::new();
+            let mut refusals: Vec<(usize, String)> = Vec::new();
+            let mut scope_at: Option<usize> = None;
+            for (i, call) in calls.iter().enumerate() {
+                let arguments: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                    .unwrap_or(serde_json::Value::Null);
+                let target = arguments
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                match call.function.name.as_str() {
+                    "list_dir" => locals.push((i, Local::ListDir(target))),
+                    "read_file" => locals.push((i, Local::ReadFile(target))),
+                    "task" if scope_at.is_none() => scope_at = Some(i),
+                    "task" => refusals.push((
+                        i,
+                        "Error: only one `task` call per turn. This one did not run.".to_string(),
+                    )),
+                    other => {
+                        refusals.push((i, format!("Error: there is no tool called `{other}`.")))
+                    }
+                }
             }
 
             // The local tools run first, so a forked child's context can
             // carry their results alongside its own assignment and stay a
             // valid transcript.
             let mut results: Vec<Option<Message>> = vec![None; calls.len()];
-            let mut task_index: Option<usize> = None;
-            for (i, call) in calls.iter().enumerate() {
-                let arguments: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                    .unwrap_or(serde_json::Value::Null);
-                let argument = |key: &str| {
-                    arguments
-                        .get(key)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string()
+            for (i, local) in &locals {
+                let (label, answer) = match local {
+                    Local::ListDir(target) => {
+                        (format!("list_dir({target})"), run.limb.list_dir(target))
+                    }
+                    Local::ReadFile(target) => {
+                        (format!("read_file({target})"), run.limb.read_file(target))
+                    }
                 };
-                match call.function.name.as_str() {
-                    "list_dir" => {
-                        let target = argument("path");
-                        run.face.line(&path, &format!("tool list_dir({target})"));
-                        results[i] =
-                            Some(Message::tool_result(&call.id, &run.limb.list_dir(&target)));
-                    }
-                    "read_file" => {
-                        let target = argument("path");
-                        run.face.line(&path, &format!("tool read_file({target})"));
-                        results[i] =
-                            Some(Message::tool_result(&call.id, &run.limb.read_file(&target)));
-                    }
-                    "task" if task_index.is_none() => task_index = Some(i),
-                    "task" => {
-                        results[i] = Some(Message::tool_result(
-                            &call.id,
-                            "Error: only one `task` call per turn. This one did not run.",
-                        ));
-                    }
-                    other => {
-                        results[i] = Some(Message::tool_result(
-                            &call.id,
-                            &format!("Error: there is no tool called `{other}`."),
-                        ));
-                    }
-                }
+                run.face.line(&path, &format!("tool {label}"));
+                results[*i] = Some(Message::tool_result(&calls[*i].id, &answer));
+            }
+            for (i, refusal) in &refusals {
+                results[*i] = Some(Message::tool_result(&calls[*i].id, refusal));
             }
 
-            if let Some(i) = task_index {
+            // Recorded with their results: a read that failed is not a read.
+            run.note(index, |record| {
+                for (i, call) in calls.iter().enumerate() {
+                    record.tool_calls.push(ToolCallRecord {
+                        name: call.function.name.clone(),
+                        arguments: call.function.arguments.clone(),
+                        result: results[i]
+                            .as_ref()
+                            .and_then(|message| message.content.clone()),
+                    });
+                }
+            });
+
+            if let Some(i) = scope_at {
                 let turn = ParentTurn {
                     messages: messages.clone(),
                     calls: calls.clone(),
@@ -566,12 +718,26 @@ pub fn run_agent(
                     results: results.clone(),
                 };
                 match scope(&run, &path, depth, index, turn).await {
-                    Ok(text) => results[i] = Some(Message::tool_result(&calls[i].id, &text)),
+                    Ok(text) => {
+                        run.note(index, |record| {
+                            if let Some(call) = record
+                                .tool_calls
+                                .iter_mut()
+                                .rev()
+                                .find(|call| call.name == "task" && call.result.is_none())
+                            {
+                                call.result = Some(text.clone());
+                            }
+                        });
+                        results[i] = Some(Message::tool_result(&calls[i].id, &text));
+                    }
                     Err(outcome) => return end(&run, outcome, handoff, messages),
                 }
             }
             for result in results {
-                messages.push(result.expect("every tool call answered"));
+                messages.push(result.expect(
+                    "the turn's calls were classified as locals, refusals and at most one scope, and every one of those was answered",
+                ));
             }
         }
     })
@@ -586,6 +752,11 @@ struct ParentTurn {
     calls: Vec<ToolCall>,
     call_index: usize,
     results: Vec<Option<Message>>,
+}
+
+enum Local {
+    ListDir(String),
+    ReadFile(String),
 }
 
 struct ChildSpec {
@@ -629,9 +800,7 @@ async fn scope(
         parent_path,
         &format!("scope opened: {} — suspended", names.join(", ")),
     );
-    run.note(parent_index, |record| {
-        record.state = "suspended".to_string()
-    });
+    run.note(parent_index, |record| record.state = AgentState::Suspended);
 
     let turn = Arc::new(turn);
 
@@ -684,7 +853,9 @@ async fn scope(
                 dependency_reports.push((dependency, report.handoff.clone()));
             }
             if run.cancel.is_cancelled() {
-                run.note(child_index, |record| record.state = "cancelled".to_string());
+                run.note(child_index, |record| {
+                    record.state = AgentState::Ended(Outcome::Cancelled)
+                });
                 let report = Arc::new(ChildReport {
                     outcome: Outcome::Cancelled,
                     handoff: String::new(),
@@ -719,15 +890,17 @@ async fn scope(
         let report = match handle.await {
             Ok(report) => report,
             Err(error) => {
-                let reason = format!("child agent task panicked: {error}");
-                run.raise_fault(&format!("{parent_path} › {}", spec.name), &reason);
+                // A panicked agent still ends with a recorded outcome.
+                let child_path = format!("{parent_path} › {}", spec.name);
+                let reason = error.to_string();
+                run.record_panic(&child_path, &reason);
                 Arc::new(ChildReport {
-                    outcome: Outcome::Faulted(reason),
+                    outcome: Outcome::Panicked(reason),
                     handoff: String::new(),
                 })
             }
         };
-        if matches!(report.outcome, Outcome::Faulted(_) | Outcome::Suspended) {
+        if report.outcome.blocks_the_parent() {
             blocked = true;
         }
         reports.push((
@@ -745,7 +918,7 @@ async fn scope(
         return Err(Outcome::Suspended);
     }
     run.face.line(parent_path, "scope returned — resuming");
-    run.note(parent_index, |record| record.state = "running".to_string());
+    run.note(parent_index, |record| record.state = AgentState::Running);
     Ok(framing::scope_result(&reports))
 }
 
@@ -894,7 +1067,7 @@ fn child_context(
             messages.push(
                 turn.results[i]
                     .clone()
-                    .expect("tool call answered before the scope"),
+                    .expect("only the scope's own slot is unanswered while the scope runs"),
             );
         }
     }
@@ -908,7 +1081,7 @@ pub fn render_context(record: &AgentRecord) -> String {
         "# {}\n\n{} · {} · {} requests · ${:.4}\n",
         record.path,
         if record.fresh { "fresh" } else { "fork" },
-        record.state,
+        record.state.short(),
         record.requests,
         record.cost
     );

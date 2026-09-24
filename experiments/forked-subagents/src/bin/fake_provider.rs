@@ -4,6 +4,13 @@
 //! belongs to which agent. A rule matches on the content of the request's
 //! last message instead — the tail that distinguishes one agent from another.
 //!
+//! A needle beginning with `^` matches only the last message's first line.
+//! Agent identity is always on that first line ("You are agent `x`."), while
+//! a child declared with `after` carries its dependency's whole report
+//! further down the same message — so an unanchored needle meant for one
+//! agent could be captured by another's inherited text, and changing the
+//! framing's wording would silently re-point a rule.
+//!
 //! It speaks HTTP/1.1 itself, over a thread per connection. An off-the-shelf
 //! server with a connection thread pool stalled here: under CPU contention it
 //! stopped reading accepted sockets, requests sat unread in the kernel, and
@@ -111,7 +118,10 @@ impl Fake {
             .enumerate()
             .find(|(index, rule)| {
                 let matched = match rule["when"].as_str() {
-                    Some(needle) => last.contains(needle),
+                    Some(needle) => match needle.strip_prefix('^') {
+                        Some(needle) => last.lines().next().unwrap_or("").contains(needle),
+                        None => last.contains(needle),
+                    },
                     None => true,
                 };
                 matched && used[*index] < rule["times"].as_u64().unwrap_or(u64::MAX)
@@ -167,6 +177,15 @@ fn main() {
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("failed to bind fake provider");
     println!("listening on {}", listener.local_addr().unwrap());
     std::io::stdout().flush().ok();
+
+    // Stdin closing is the shutdown signal: when the test process that
+    // started this one goes away, so does this one. Without it a fake
+    // provider outlives its test and sits there holding a port.
+    std::thread::spawn(|| {
+        let mut sink = Vec::new();
+        let _ = std::io::stdin().read_to_end(&mut sink);
+        std::process::exit(0);
+    });
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };

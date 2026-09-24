@@ -67,18 +67,29 @@ impl Session {
 
     /// Drive the root until it ends its turn. The messages come back so a
     /// chat session can carry the same root forward into the next turn.
+    /// Spawned rather than awaited in place: a panic in the root would
+    /// otherwise unwind out of `main` with no report and no `summary.json`,
+    /// which is the one run whose evidence you most want.
     pub async fn turn(&mut self) -> Outcome {
         let messages = std::mem::take(&mut self.messages);
-        let end = run_agent(
+        let root = tokio::spawn(run_agent(
             self.run.clone(),
             "root".to_string(),
             0,
             self.root_index,
             messages,
-        )
-        .await;
-        self.messages = end.messages;
-        end.outcome
+        ));
+        match root.await {
+            Ok(end) => {
+                self.messages = end.messages;
+                end.outcome
+            }
+            Err(error) => {
+                let reason = error.to_string();
+                self.run.record_panic("root", &reason);
+                Outcome::Panicked(reason)
+            }
+        }
     }
 
     pub fn finish(&self, outcome: &Outcome) -> Ending {

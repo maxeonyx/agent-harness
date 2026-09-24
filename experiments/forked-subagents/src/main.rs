@@ -4,6 +4,7 @@ mod face;
 mod framing;
 mod limb;
 mod record;
+mod rescore;
 mod session;
 mod wire;
 
@@ -19,6 +20,7 @@ forks — agents as structured concurrency
   forks run  --dir <path> \"<task>\"   one autonomous root, run to completion
   forks chat --dir <path>            talk to the root; it forks when it wants to
   forks bench                        the discipline benchmark over a grid of framings
+  forks rescore <bench-dir>          score a recorded benchmark again, offline
 
 Framing (the two knobs the benchmark sweeps):
   --cut full|own|before   what a forked child inherits (default full)
@@ -33,8 +35,9 @@ Framing (the two knobs the benchmark sweeps):
       explained  also: that it is one branch of a split, that its siblings
                  hold the other assignments, and that its final message is
                  exactly what its parent receives
-  --mode fork|fresh|declared   force every child's mode (default declared:
-                               honour each `task` entry's `fresh`)
+  --mode fork|fresh|declared   force every child's mode (run and chat default
+                               to declared: honour each `task` entry's `fresh`.
+                               bench defaults to fork)
 
 Provider:
   --model <id>        default anthropic/claude-sonnet-5
@@ -50,6 +53,7 @@ Limits:
   --max-turns <n>     requests one agent may make (default 20)
   --request-timeout <seconds>  give up on a silent provider and retry (default 300)
   --runs-dir <path>   default <experiment>/runs.ignore
+  --panic-in <agent path>  fault injection: make that agent's task panic
 
 Benchmark only:
   --grid <model@provider,...>   default <model>@<provider>
@@ -84,6 +88,7 @@ async fn run(argv: Vec<String>) -> Result<ExitCode, String> {
         "run" => command_run(&args).await,
         "chat" => command_chat(&args).await,
         "bench" => bench::command(&args).await,
+        "rescore" => rescore::command(&args).await,
         other => Err(format!("unknown command `{other}`; try --help")),
     }
 }
@@ -106,20 +111,9 @@ async fn command_run(args: &Args) -> Result<ExitCode, String> {
     )?;
     session.say(&task);
     let run = session.run.clone();
-    let outcome = {
-        let turn = session.turn();
-        tokio::pin!(turn);
-        loop {
-            tokio::select! {
-                outcome = &mut turn => break outcome,
-                _ = tokio::signal::ctrl_c(), if !run.cancel.is_cancelled() => {
-                    run.face.say("");
-                    run.face.say("cancelling: nothing new starts; in-flight responses are kept");
-                    run.cancel.cancel();
-                }
-            }
-        }
-    };
+    let interrupts = watch_interrupts(run.clone());
+    let outcome = session.turn().await;
+    interrupts.abort();
     session.report(&outcome);
     Ok(exit_code(&outcome))
 }
@@ -139,8 +133,9 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
     run.face
         .say("chat: a line is a message to the root. /tree, /cancel, /quit.");
 
+    let interrupts = watch_interrupts(run.clone());
     let (lines_tx, mut lines) = tokio::sync::mpsc::channel::<String>(8);
-    tokio::spawn(async move {
+    let reader = tokio::spawn(async move {
         use tokio::io::AsyncBufReadExt;
         let mut reader = tokio::io::BufReader::new(tokio::io::stdin()).lines();
         while let Ok(Some(line)) = reader.next_line().await {
@@ -151,6 +146,10 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
     });
 
     let mut last = Outcome::Completed;
+    // Once stdin is gone it stays gone, and a closed channel is ready
+    // forever. Selecting on it again would spin a core for as long as the
+    // turn runs.
+    let mut stdin_open = true;
     while let Some(line) = lines.recv().await {
         let line = line.trim().to_string();
         match line.as_str() {
@@ -172,14 +171,14 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
         last = loop {
             tokio::select! {
                 outcome = &mut turn => break outcome,
-                line = lines.recv() => match line.as_deref().map(str::trim) {
+                line = lines.recv(), if stdin_open => match line.as_deref().map(str::trim) {
                     Some("/tree") => run.face.say(&run.snapshot()),
                     Some("/cancel") => {
                         run.face.say("cancelling: nothing new starts; in-flight responses are kept");
                         run.cancel.cancel();
                     }
                     Some(_) => run.face.say("a turn is running; only /tree and /cancel are accepted"),
-                    None => {}
+                    None => stdin_open = false,
                 },
             }
         };
@@ -187,15 +186,44 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
             break;
         }
         run.face.say(&run.snapshot());
+        if !stdin_open {
+            break;
+        }
     }
+    interrupts.abort();
+    reader.abort();
     session.report(&last);
     Ok(exit_code(&last))
+}
+
+/// Ctrl-C cancels; a second Ctrl-C gives up on the drain and leaves. One
+/// watcher for the whole session, so the interrupt is never disarmed — with a
+/// guard on the listener, the second one went nowhere and the run could not
+/// be interrupted at all.
+fn watch_interrupts(run: std::sync::Arc<agent::Run>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut seen = 0usize;
+        while tokio::signal::ctrl_c().await.is_ok() {
+            seen += 1;
+            if seen == 1 {
+                run.face.say("");
+                run.face.say(
+                    "cancelling: nothing new starts; in-flight responses are kept. Ctrl-C again to exit now.",
+                );
+                run.cancel.cancel();
+            } else {
+                run.face
+                    .say("interrupted again: exiting without waiting for in-flight responses");
+                std::process::exit(130);
+            }
+        }
+    })
 }
 
 fn exit_code(outcome: &Outcome) -> ExitCode {
     match outcome {
         Outcome::Completed | Outcome::Cancelled => ExitCode::SUCCESS,
-        Outcome::Faulted(_) | Outcome::Suspended => ExitCode::FAILURE,
+        Outcome::Faulted(_) | Outcome::Suspended | Outcome::Panicked(_) => ExitCode::FAILURE,
     }
 }
 
@@ -211,6 +239,7 @@ const COMMON: &[&str] = &[
     "max-depth",
     "max-turns",
     "request-timeout",
+    "panic-in",
     "runs-dir",
     "session-id",
 ];
@@ -383,6 +412,11 @@ impl Args {
             max_cost: self.number("max-cost", default_max_cost)?,
             max_depth: self.number("max-depth", default_max_depth)?,
             max_turns: self.number("max-turns", 20usize)?,
+            panic_in: self
+                .flags
+                .get("panic-in")
+                .and_then(|values| values.last())
+                .cloned(),
             request_timeout: std::time::Duration::from_secs_f64(
                 self.number("request-timeout", 300.0)?,
             ),

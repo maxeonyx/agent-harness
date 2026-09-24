@@ -30,6 +30,9 @@ impl Drop for KillOnDrop {
 
 struct Fake {
     _child: KillOnDrop,
+    /// Held open on purpose: the fake provider exits when its stdin closes,
+    /// so it can never outlive the test that started it.
+    _stdin: std::process::ChildStdin,
     addr: String,
     log: PathBuf,
 }
@@ -63,9 +66,11 @@ impl Fake {
             .env("FAKE_PROVIDER_PORT", "0")
             .env("FAKE_PROVIDER_SCRIPT", &script)
             .env("FAKE_PROVIDER_LOG", &log)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .expect("spawn fake provider");
+        let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let child = KillOnDrop(child);
         let (tx, rx) = mpsc::channel();
@@ -85,6 +90,7 @@ impl Fake {
             .to_string();
         Fake {
             _child: child,
+            _stdin: stdin,
             addr,
             log,
         }
@@ -261,6 +267,23 @@ impl Live {
         }
     }
 
+    fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn interrupt(&self) {
+        let done = Command::new("kill")
+            .arg("-INT")
+            .arg(self.pid().to_string())
+            .status()
+            .expect("send SIGINT");
+        assert!(done.success(), "could not signal forks");
+    }
+
+    fn close_stdin(&mut self) {
+        drop(self.stdin.take());
+    }
+
     fn send(&mut self, line: &str) {
         let stdin = self.stdin.as_mut().expect("stdin open");
         writeln!(stdin, "{line}").unwrap();
@@ -309,8 +332,8 @@ fn prefix_is_identical(fake: &Fake) {
 /// held: at a barrier that only genuine concurrency can clear, or until the
 /// test releases it.
 fn split_rules(hold: Value) -> Value {
-    let mut north = json!({"when": "agent `north`", "text": "north says kowhai"});
-    let mut south = json!({"when": "agent `south`", "text": "south says tui"});
+    let mut north = json!({"when": "^You are agent `north`", "text": "north says kowhai"});
+    let mut south = json!({"when": "^You are agent `south`", "text": "south says tui"});
     for (key, value) in hold.as_object().into_iter().flatten() {
         north[key] = value.clone();
         south[key] = value.clone();
@@ -372,8 +395,8 @@ fn after_makes_a_sibling_wait_and_hands_it_the_report() {
                 {"name": "first", "task": "go first"},
                 {"name": "second", "task": "go second", "after": ["first"]}
             ]}}]},
-            {"when": "agent `first`", "text": "first says rimu"},
-            {"when": "agent `second`", "text": "second says weka"},
+            {"when": "^You are agent `first`", "text": "first says rimu"},
+            {"when": "^You are agent `second`", "text": "second says weka"},
             {"when": "Every agent you launched has finished", "text": "both reported"}
         ]),
     );
@@ -402,10 +425,10 @@ fn nested_scopes_resume_bottom_up() {
             {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"agents": [
                 {"name": "middle", "task": "split again"}
             ]}}]},
-            {"when": "agent `middle`", "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"when": "^You are agent `middle`", "tool_calls": [{"name": "task", "arguments": {"agents": [
                 {"name": "leaf", "task": "do the actual work"}
             ]}}]},
-            {"when": "agent `leaf`", "text": "leaf says totara"},
+            {"when": "^You are agent `leaf`", "text": "leaf says totara"},
             {"when": "## `leaf`", "text": "middle passes on totara"},
             {"when": "## `middle`", "text": "root passes on totara"}
         ]),
@@ -532,7 +555,7 @@ fn a_rejected_request_faults_the_agent_and_leaves_its_ancestors_suspended() {
     let dir = workspace("fault");
     let mut rules = split_rules(json!({}));
     rules.as_array_mut().unwrap()[1] = json!({
-        "when": "agent `north`", "status": 401, "text": "No auth credentials found"
+        "when": "^You are agent `north`", "status": 401, "text": "No auth credentials found"
     });
     let fake = Fake::start(&dir, rules);
     let out = forks(&dir, &fake, &[], "SPLIT the work");
@@ -643,7 +666,7 @@ fn an_over_deep_task_call_is_an_error_result_not_a_missing_tool() {
             {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"agents": [
                 {"name": "middle", "task": "split again"}
             ]}}]},
-            {"when": "agent `middle`", "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"when": "^You are agent `middle`", "tool_calls": [{"name": "task", "arguments": {"agents": [
                 {"name": "leaf", "task": "one level too deep"}
             ]}}]},
             {"when": "levels below the root", "text": "middle did it itself"},
@@ -765,6 +788,43 @@ struct Tree {
     re_reads_policy: bool,
     /// The totals block the root ends with.
     totals: BTreeMap<String, f64>,
+    /// Finding 1: the region agent names the siblings in the leaf's task,
+    /// and the leaf then reads one of them.
+    task_names_siblings: bool,
+    /// Finding 2: a leaf says, in prose, that it stayed out of its siblings'
+    /// ledgers.
+    leaf_protests_innocence: bool,
+    /// Finding 4: a region agent reads `ledgers/policy.md`, which does not
+    /// exist — the real file is `POLICY.md`.
+    region_reads_wrong_case_policy: bool,
+    /// Finding 3: how the root dresses its totals block.
+    totals_style: Style,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Style {
+    Plain,
+    /// Bold, backticked, bulleted, and followed by a blank line.
+    Markdown,
+    /// A correct block preceded by an earlier, wrong value for one name.
+    WrongThenRight,
+}
+
+fn leaf_task(region: &str, branch: &str, tree: &Tree) -> String {
+    let base = format!("total ledgers/{region}/{branch}.txt");
+    if tree.task_names_siblings {
+        let siblings: Vec<&str> = BRANCHES
+            .iter()
+            .filter(|(r, b)| *r == region && *b != branch)
+            .map(|(_, b)| *b)
+            .collect();
+        format!(
+            "{base} ({} are being handled by other agents, do not touch them)",
+            siblings.join(" and ")
+        )
+    } else {
+        base
+    }
 }
 
 /// A scripted run of the benchmark's intended shape.
@@ -777,23 +837,39 @@ fn bench_rules(tree: &Tree) -> Value {
             {"name": "maunga", "task": "total the maunga branches"},
             {"name": "awa", "task": "total the awa branches"}
         ]}}]}),
-        json!({"when": "agent `maunga`", "tool_calls": [{"name": "task", "arguments": {"agents": [
-            {"name": "kowhai", "task": "total ledgers/maunga/kowhai.txt"},
-            {"name": "rimu", "task": "total ledgers/maunga/rimu.txt"},
-            {"name": "totara", "task": "total ledgers/maunga/totara.txt"}
+        json!({"when": "^You are agent `maunga`", "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"name": "kowhai", "task": leaf_task("maunga", "kowhai", tree)},
+            {"name": "rimu", "task": leaf_task("maunga", "rimu", tree)},
+            {"name": "totara", "task": leaf_task("maunga", "totara", tree)}
         ]}}]}),
-        json!({"when": "agent `awa`", "tool_calls": [{"name": "task", "arguments": {"agents": [
-            {"name": "tui", "task": "total ledgers/awa/tui.txt"},
-            {"name": "kea", "task": "total ledgers/awa/kea.txt"},
-            {"name": "weka", "task": "total ledgers/awa/weka.txt"}
+        json!({"when": "^You are agent `awa`", "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"name": "tui", "task": leaf_task("awa", "tui", tree)},
+            {"name": "kea", "task": leaf_task("awa", "kea", tree)},
+            {"name": "weka", "task": leaf_task("awa", "weka", tree)}
         ]}}]}),
     ];
+    if tree.region_reads_wrong_case_policy {
+        rules.insert(
+            2,
+            json!({"when": "^You are agent `maunga`", "times": 1,
+                   "tool_calls": [{"name": "read_file", "arguments": {"path": "ledgers/policy.md"}}]}),
+        );
+        rules.insert(
+            3,
+            json!({"when": "Error: ledgers/policy.md", "times": 1,
+                   "tool_calls": [{"name": "task", "arguments": {"agents": [
+                {"name": "kowhai", "task": leaf_task("maunga", "kowhai", tree)},
+                {"name": "rimu", "task": leaf_task("maunga", "rimu", tree)},
+                {"name": "totara", "task": leaf_task("maunga", "totara", tree)}
+            ]}}]}),
+        );
+    }
     if tree.re_reads_policy {
         // `maunga` reads the policy itself before splitting; the rule that
         // answers it sits ahead of the plain one, and both are used once.
         rules.insert(
             2,
-            json!({"when": "agent `maunga`", "times": 1,
+            json!({"when": "^You are agent `maunga`", "times": 1,
                    "tool_calls": [{"name": "read_file", "arguments": {"path": "ledgers/POLICY.md"}}]}),
         );
         rules.insert(
@@ -819,9 +895,15 @@ fn bench_rules(tree: &Tree) -> Value {
                 json!({"name": "read_file", "arguments": {"path": "ledgers/POLICY.md"}}),
             );
         }
-        rules.push(json!({ "when": format!("agent `{branch}`"), "tool_calls": reads }));
-        let report = if tree.over_reach && branch == "tui" {
-            "tui: 1.00, and kea looks like 2.00 as well".to_string()
+        rules.push(json!({ "when": format!("^You are agent `{branch}`"), "tool_calls": reads }));
+        let report = if tree.leaf_protests_innocence && branch == "kowhai" {
+            format!(
+                "kowhai: {:.2} — I did not read rimu or totara, as instructed.",
+                tree.totals.get("kowhai").unwrap_or(&1.0)
+            )
+        } else if tree.over_reach && branch == "tui" {
+            // A claimed total for a branch that is not its own.
+            "tui: 1.00\nkea: 2.00".to_string()
         } else {
             format!("{branch}: {:.2}", tree.totals.get(branch).unwrap_or(&1.0))
         };
@@ -829,13 +911,35 @@ fn bench_rules(tree: &Tree) -> Value {
     }
     rules.push(json!({"when": "## `kowhai`", "text": "maunga done"}));
     rules.push(json!({"when": "## `tui`", "text": "awa done"}));
-    let block = [
+    let names = [
         "kowhai", "rimu", "totara", "tui", "kea", "weka", "maunga", "awa", "grand",
-    ]
-    .iter()
-    .map(|name| format!("{name}: {:.2}", tree.totals.get(*name).unwrap_or(&1.0)))
-    .collect::<Vec<_>>()
-    .join("\n");
+    ];
+    let value = |name: &str| *tree.totals.get(name).unwrap_or(&1.0);
+    let block = match tree.totals_style {
+        Style::Plain => names
+            .iter()
+            .map(|name| format!("{name}: {:.2}", value(name)))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Style::Markdown => {
+            format!(
+                "Here are the totals.\n\n{}\n",
+                names
+                    .iter()
+                    .map(|name| format!("- **{name}: {:.2}**", value(name)))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        }
+        Style::WrongThenRight => format!(
+            "kowhai: 0.01\n{}",
+            names
+                .iter()
+                .map(|name| format!("{name}: {:.2}", value(name)))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    };
     rules.push(json!({"when": "## `maunga`", "text": block}));
     Value::Array(rules)
 }
@@ -919,6 +1023,10 @@ fn learn_fixture(name: &str) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
         over_reach: false,
         re_reads_policy: false,
         totals: BTreeMap::new(),
+        task_names_siblings: false,
+        leaf_protests_innocence: false,
+        region_reads_wrong_case_policy: false,
+        totals_style: Style::Plain,
     };
     let (_, bench_dir) = run_bench(name, &tree);
     (
@@ -935,6 +1043,10 @@ fn the_benchmark_prints_the_caps_that_bound_a_trial() {
             over_reach: false,
             re_reads_policy: false,
             totals: BTreeMap::new(),
+            task_names_siblings: false,
+            leaf_protests_innocence: false,
+            region_reads_wrong_case_policy: false,
+            totals_style: Style::Plain,
         },
     );
     assert!(
@@ -954,6 +1066,10 @@ fn the_benchmark_scores_a_disciplined_tree_clean_and_correct() {
             over_reach: false,
             re_reads_policy: false,
             totals: correct,
+            task_names_siblings: false,
+            leaf_protests_innocence: false,
+            region_reads_wrong_case_policy: false,
+            totals_style: Style::Plain,
         },
     );
     assert!(
@@ -973,6 +1089,10 @@ fn the_benchmark_counts_leaves_that_stray_outside_their_assignment() {
             over_reach: true,
             re_reads_policy: false,
             totals: correct,
+            task_names_siblings: false,
+            leaf_protests_innocence: false,
+            region_reads_wrong_case_policy: false,
+            totals_style: Style::Plain,
         },
     );
     assert!(
@@ -992,6 +1112,10 @@ fn the_benchmark_rejects_totals_that_ignore_the_refund_rule() {
             over_reach: false,
             re_reads_policy: false,
             totals: refunds_added,
+            task_names_siblings: false,
+            leaf_protests_innocence: false,
+            region_reads_wrong_case_policy: false,
+            totals_style: Style::Plain,
         },
     );
     assert!(text.contains("totals WRONG"), "{text}");
@@ -1008,10 +1132,279 @@ fn a_policy_re_read_is_counted_and_is_not_over_reach() {
             over_reach: false,
             re_reads_policy: true,
             totals: correct,
+            task_names_siblings: false,
+            leaf_protests_innocence: false,
+            region_reads_wrong_case_policy: false,
+            totals_style: Style::Plain,
         },
     );
     assert!(
         text.contains("leaf over-reach 0/6  region over-reach 0/2  policy re-reads 2/8"),
         "{text}"
     );
+}
+
+// ------------------------------------------- the reviewer's reproductions
+
+fn tree(correct: BTreeMap<String, f64>) -> Tree {
+    Tree {
+        over_reach: false,
+        re_reads_policy: false,
+        totals: correct,
+        task_names_siblings: false,
+        leaf_protests_innocence: false,
+        region_reads_wrong_case_policy: false,
+        totals_style: Style::Plain,
+    }
+}
+
+/// Finding 1. The set of branches a leaf may touch used to be every branch
+/// name appearing anywhere in its assignment, which handed the parent control
+/// of the scorer: name the siblings in the prose and reading them became free.
+#[test]
+fn a_leaf_that_reads_a_siblings_ledger_is_over_reach_even_when_its_task_names_the_sibling() {
+    let (correct, _) = learn_fixture("bench-learn-f1");
+    let mut plan = tree(correct);
+    plan.task_names_siblings = true;
+    plan.over_reach = true;
+    let (text, _) = run_bench("bench-f1", &plan);
+    assert!(
+        text.contains("leaf over-reach 2/6"),
+        "a leaf read a sibling's ledger and was scored clean:\n{text}"
+    );
+}
+
+/// Finding 2. Naming a sibling is not doing its work. The `explained` framing
+/// hands every child its siblings' names, so a mention-counting metric
+/// punished the treatment under test for being explicit.
+#[test]
+fn a_leaf_that_only_says_it_stayed_out_is_not_over_reach() {
+    let (correct, _) = learn_fixture("bench-learn-f2");
+    let mut plan = tree(correct);
+    plan.leaf_protests_innocence = true;
+    let (text, _) = run_bench("bench-f2", &plan);
+    assert!(
+        text.contains("leaf over-reach 0/6"),
+        "perfect discipline was scored as a violation:\n{text}"
+    );
+}
+
+/// Finding 3, the false-negative half: a model that writes its totals as a
+/// bulleted, bolded list with a trailing blank line has still answered.
+#[test]
+fn totals_survive_the_markdown_a_model_actually_writes() {
+    let (correct, _) = learn_fixture("bench-learn-f3a");
+    let mut plan = tree(correct);
+    plan.totals_style = Style::Markdown;
+    let (text, _) = run_bench("bench-f3a", &plan);
+    assert!(text.contains("totals ok"), "{text}");
+}
+
+/// Finding 3, the false-positive half: the old check asked whether *some*
+/// line gave the right value, so a wrong value earlier in the block passed.
+#[test]
+fn a_name_given_the_wrong_value_anywhere_in_the_block_fails() {
+    let (correct, _) = learn_fixture("bench-learn-f3b");
+    let mut plan = tree(correct);
+    plan.totals_style = Style::WrongThenRight;
+    let (text, _) = run_bench("bench-f3b", &plan);
+    assert!(text.contains("totals WRONG"), "{text}");
+}
+
+/// Finding 4. A read that returned an error is not a read. `ledgers/policy.md`
+/// is not the policy — the real file is `POLICY.md` — so the attempt is
+/// neither over-reach nor a policy re-read.
+#[test]
+fn a_failed_read_is_not_a_read() {
+    let (correct, _) = learn_fixture("bench-learn-f4");
+    let mut plan = tree(correct);
+    plan.region_reads_wrong_case_policy = true;
+    let (text, _) = run_bench("bench-f4", &plan);
+    assert!(
+        text.contains("region over-reach 0/2  policy re-reads 0/8"),
+        "a failed read was counted:\n{text}"
+    );
+}
+
+/// `forks rescore` must reach the same verdict as the benchmark did, from the
+/// trial directory alone.
+#[test]
+fn rescoring_a_recorded_benchmark_reproduces_its_scores() {
+    let (correct, _) = learn_fixture("bench-learn-rescore");
+    let mut plan = tree(correct);
+    plan.over_reach = true;
+    plan.re_reads_policy = true;
+    let (bench_text, bench_dir) = run_bench("bench-rescore", &plan);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("rescore")
+        .arg(&bench_dir)
+        .output()
+        .expect("run forks rescore");
+    let rescored = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(output.status.success(), "{rescored}");
+
+    for claim in [
+        "leaf over-reach 2/6",
+        "region over-reach 0/2",
+        "policy re-reads 2/8",
+    ] {
+        assert!(bench_text.contains(claim), "bench line lost {claim}");
+    }
+    assert!(
+        rescored.contains("leaf 2/6 region 0/2 policy 2/8"),
+        "rescore disagreed with the run it replayed:\n{rescored}"
+    );
+    assert!(rescored.contains("[unchanged]"), "{rescored}");
+}
+
+// ------------------------------------------------- majors and moderates
+
+/// Finding 5. A retry is new work, and cancellation has to reach it. The
+/// provider holds the first attempt, answers it with a 503 once released, and
+/// the retry must never be sent.
+#[test]
+fn cancelling_stops_the_retries() {
+    let dir = workspace("cancel-retries");
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "status": 503, "hold": true, "times": 1, "text": "upstream is busy"},
+            {"when": "^SPLIT", "status": 503, "text": "upstream is still busy"}
+        ]),
+    );
+    let mut live = Live::start(&dir, &fake, "run", &[], Some("SPLIT the work"));
+    fake.await_requests(1);
+    live.interrupt();
+    live.wait_for("cancelling");
+    fake.release();
+    let (transcript, code) = live.finish();
+
+    assert_eq!(
+        fake.requests().len(),
+        1,
+        "a retry was sent after the cancel:\n{transcript}"
+    );
+    assert_eq!(code, 0, "cancelling is not a failure:\n{transcript}");
+}
+
+/// Finding 8. The interrupt must stay armed: the second Ctrl-C gives up on
+/// the drain and leaves.
+#[test]
+fn a_second_interrupt_exits_without_waiting() {
+    let dir = workspace("second-interrupt");
+    let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
+    let mut live = Live::start(&dir, &fake, "run", &[], Some("SPLIT the work"));
+    fake.await_requests(1);
+    live.interrupt();
+    live.wait_for("Ctrl-C again to exit now");
+    live.interrupt();
+    let (transcript, code) = live.finish();
+    assert_eq!(
+        code, 130,
+        "the second interrupt was swallowed:\n{transcript}"
+    );
+}
+
+/// Finding 6. A panicked agent is still an agent that ended.
+#[test]
+fn a_panicked_child_ends_with_a_recorded_outcome() {
+    let dir = workspace("panic-child");
+    let fake = Fake::start(&dir, split_rules(json!({})));
+    let out = forks(
+        &dir,
+        &fake,
+        &["--panic-in", "root › north"],
+        "SPLIT the work",
+    );
+    assert_ne!(out.code, 0, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("panicked"),
+        "the face did not report the panic:\n{}",
+        out.stdout
+    );
+    let states = agent_states(&dir);
+    assert_eq!(
+        states.get("root › north").map(String::as_str),
+        Some("panicked"),
+        "the panicked agent has no recorded outcome: {states:?}"
+    );
+    assert!(
+        !states.values().any(|state| state == "running"),
+        "an agent was left running after the run ended: {states:?}"
+    );
+}
+
+/// The root is the one whose evidence you most want: a panic there must still
+/// leave a `summary.json` behind.
+#[test]
+fn a_panicked_root_still_writes_its_summary() {
+    let dir = workspace("panic-root");
+    let fake = Fake::start(&dir, split_rules(json!({})));
+    let out = forks(&dir, &fake, &["--panic-in", "root"], "SPLIT the work");
+    assert_ne!(out.code, 0, "{}", out.stdout);
+    let states = agent_states(&dir);
+    assert_eq!(
+        states.get("root").map(String::as_str),
+        Some("panicked"),
+        "{states:?}"
+    );
+}
+
+fn agent_states(dir: &Path) -> BTreeMap<String, String> {
+    let summary: Value = serde_json::from_str(
+        &std::fs::read_to_string(newest(&dir.join("runs")).join("summary.json"))
+            .expect("a run that panicked still writes summary.json"),
+    )
+    .unwrap();
+    summary["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| {
+            (
+                agent["path"].as_str().unwrap().to_string(),
+                agent["state"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Finding 7. Stdin closing during a turn must not turn into a busy loop on a
+/// channel that is ready forever.
+#[test]
+fn chat_does_not_spin_after_stdin_closes() {
+    let dir = workspace("chat-eof");
+    let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
+    let mut live = Live::start(&dir, &fake, "chat", &[], None);
+    live.send("SPLIT the work");
+    fake.await_requests(3);
+    live.close_stdin();
+
+    let pid = live.pid();
+    std::thread::sleep(Duration::from_millis(300));
+    let before = cpu_jiffies(pid);
+    std::thread::sleep(Duration::from_millis(500));
+    let spent = cpu_jiffies(pid) - before;
+
+    fake.release();
+    let (transcript, _) = live.finish();
+    // A spinning select burns a whole core: ~50 jiffies in half a second.
+    // Waiting properly costs none of them.
+    assert!(
+        spent < 15,
+        "forks chat burned {spent} jiffies in 500ms with nothing to do:\n{transcript}"
+    );
+}
+
+/// User plus system time, in clock ticks, from `/proc/<pid>/stat`.
+fn cpu_jiffies(pid: u32) -> u64 {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("read /proc stat");
+    // The process name can contain spaces and brackets; fields are counted
+    // from after the closing bracket.
+    let tail = stat.rsplit_once(')').expect("stat has a name").1;
+    let fields: Vec<&str> = tail.split_whitespace().collect();
+    let utime: u64 = fields[11].parse().unwrap_or(0);
+    let stime: u64 = fields[12].parse().unwrap_or(0);
+    utime + stime
 }

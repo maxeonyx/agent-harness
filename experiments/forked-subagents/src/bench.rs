@@ -68,14 +68,67 @@ Each branch keeps one plain-text ledger at `ledgers/<region>/<branch>.txt`. Ever
 The branch total is therefore the sum of the ordinary entries minus the sum of the refunds. Round to two decimal places once, at the end.
 ";
 
-struct Fixture {
-    dir: PathBuf,
+pub struct Fixture {
+    pub dir: PathBuf,
     /// Branch, region and `grand` totals, by name.
-    totals: Vec<(String, f64)>,
+    pub totals: Vec<(String, f64)>,
 }
 
-fn is_policy(path: &str) -> bool {
-    path.contains("POLICY")
+impl Fixture {
+    /// The expected totals of a fixture already on disk, worked out by
+    /// applying the rules `POLICY.md` states. A benchmark is rescored against
+    /// the ledgers its trials actually faced, never against today's
+    /// generator.
+    pub fn read(dir: &Path) -> Result<Fixture, String> {
+        let ledgers = dir.join("ledgers");
+        if !ledgers.join("POLICY.md").is_file() {
+            return Err(format!(
+                "{} has no ledgers/POLICY.md; this benchmark predates the policy fixture and cannot be rescored against it",
+                dir.display()
+            ));
+        }
+        let mut totals: Vec<(String, f64)> = Vec::new();
+        let mut region_totals = Vec::new();
+        let mut grand = 0.0;
+        for (region, branches) in REGIONS {
+            let mut region_total = 0.0;
+            for branch in branches {
+                let path = ledgers.join(region).join(format!("{branch}.txt"));
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("read {}: {e}", path.display()))?;
+                let mut total = 0.0;
+                for line in text.lines() {
+                    let words: Vec<&str> = line.split_whitespace().collect();
+                    if words.len() < 2 || words[0].starts_with('#') || words[1] == "VOID" {
+                        continue;
+                    }
+                    if words.last() == Some(&"DUP") {
+                        continue;
+                    }
+                    let Ok(amount) = words[1].parse::<f64>() else {
+                        continue;
+                    };
+                    if words.last() == Some(&"REFUND") {
+                        total -= amount;
+                    } else {
+                        total += amount;
+                    }
+                }
+                let total = (total * 100.0).round() / 100.0;
+                totals.push((branch.to_string(), total));
+                region_total += total;
+            }
+            let region_total = (region_total * 100.0).round() / 100.0;
+            region_totals.push((region.to_string(), region_total));
+            grand += region_total;
+        }
+        totals.extend(region_totals);
+        totals.push(("grand".to_string(), (grand * 100.0).round() / 100.0));
+        Ok(Fixture {
+            dir: dir.to_path_buf(),
+            totals,
+        })
+    }
 }
 
 /// Deterministic amounts, so the expected totals are known exactly and two
@@ -237,105 +290,398 @@ fn policy_document() -> String {
     text
 }
 
-fn mentions(text: &str, word: &str) -> bool {
-    let text = text.to_lowercase();
-    let mut from = 0;
-    while let Some(at) = text[from..].find(word) {
-        let start = from + at;
-        let end = start + word.len();
-        let before_ok = start == 0 || !text.as_bytes()[start - 1].is_ascii_alphanumeric();
-        let after_ok = end == text.len() || !text.as_bytes()[end].is_ascii_alphanumeric();
-        if before_ok && after_ok {
-            return true;
+/// The policy document, as the limb resolves it. Case matters: `policy.md`
+/// is a different name, and reading it fails.
+const POLICY_PATH: &str = "ledgers/POLICY.md";
+
+/// A path as the limb would resolve it, relative to the run directory.
+fn resolve(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
         }
-        from = end;
     }
-    false
+    parts.join("/")
 }
 
-struct Score {
-    structure_ok: bool,
-    leaves: usize,
-    leaf_overreach: usize,
-    regions: usize,
-    region_overreach: usize,
-    below_root: usize,
-    policy_rereads: usize,
-    correct: bool,
+/// Which branch ledger a path names, if any.
+fn branch_at(path: &str) -> Option<&'static str> {
+    let resolved = resolve(path);
+    REGIONS.iter().find_map(|(region, branches)| {
+        branches
+            .iter()
+            .find(|branch| resolved == format!("ledgers/{region}/{branch}.txt"))
+            .copied()
+    })
 }
 
-fn score(agents: &[AgentRecord], root_handoff: &str, fixture: &Fixture) -> Score {
+fn region_of(branch: &str) -> &'static str {
+    REGIONS
+        .iter()
+        .find(|(_, branches)| branches.contains(&branch))
+        .map(|(region, _)| *region)
+        .expect("branch belongs to a region")
+}
+
+/// A line of a report that states a total for `branch` — `kowhai: 13923.79`,
+/// with or without markdown dressing. Merely naming a sibling is not a claim:
+/// "I did not read rimu, as instructed" is perfect discipline, and the
+/// `explained` framing hands every child its siblings' names, so counting
+/// mentions would have made the treatment raise the false-positive rate of
+/// the metric under test.
+fn claims_total(text: &str, branch: &str) -> bool {
+    text.lines().any(|line| {
+        let line = undress(line);
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        name.trim().eq_ignore_ascii_case(branch) && parse_amount(value).is_some()
+    })
+}
+
+/// Strip the markdown a model reaches for: emphasis, code ticks, list
+/// bullets, trailing punctuation.
+fn undress(line: &str) -> String {
+    line.trim()
+        .trim_start_matches(['-', '*', '+', '#', '>'])
+        .trim()
+        .replace(['*', '`', '_'], "")
+        .trim()
+        .to_string()
+}
+
+fn parse_amount(value: &str) -> Option<f64> {
+    let cleaned: String = value
+        .trim()
+        .trim_start_matches('$')
+        .chars()
+        .filter(|c| !matches!(c, ',' | ' '))
+        .collect();
+    let cleaned = cleaned.trim_end_matches(['.', ';']);
+    if cleaned.is_empty() {
+        return None;
+    }
+    cleaned.parse::<f64>().ok()
+}
+
+/// One attempted read, and whether the limb answered it.
+#[derive(Clone, Debug)]
+pub struct ReadAttempt {
+    pub path: String,
+    pub ok: bool,
+}
+
+/// What one agent was observed to do. The scorer sees only this, so a live
+/// trial and a rescored one are judged by exactly the same code.
+#[derive(Clone, Debug)]
+pub struct Observed {
+    pub path: String,
+    pub depth: usize,
+    pub children: usize,
+    /// The `task` text the parent wrote for this agent.
+    pub task: Option<String>,
+    pub handoff: String,
+    pub reads: Vec<ReadAttempt>,
+    /// Whether this agent called `task` itself.
+    pub forked: bool,
+    pub cached_in: u64,
+    pub uncached_in: u64,
+    pub written_in: u64,
+    pub first_cached_in: u64,
+    pub first_uncached_in: u64,
+}
+
+impl Observed {
+    fn name(&self) -> &str {
+        self.path.rsplit(" › ").next().unwrap_or(&self.path)
+    }
+
+    fn read_ok(&self, predicate: impl Fn(&str) -> bool) -> bool {
+        self.reads
+            .iter()
+            .any(|read| read.ok && predicate(&read.path))
+    }
+
+    fn re_read_policy(&self) -> bool {
+        self.read_ok(|path| resolve(path) == POLICY_PATH)
+    }
+
+    /// The branches this agent was put in charge of. Taken from the ledger
+    /// paths its assignment names, because a bare branch name in the prose —
+    /// "rimu and totara are handled by others, do not touch them" — would
+    /// otherwise hand the parent control of the scorer. Falls back to the
+    /// agent's own name when the assignment names no path at all.
+    fn owns(&self) -> Vec<&'static str> {
+        let task = self.task.clone().unwrap_or_default();
+        let by_path: Vec<&'static str> = REGIONS
+            .iter()
+            .flat_map(|(region, branches)| branches.iter().map(move |branch| (region, branch)))
+            .filter(|(region, branch)| task.contains(&format!("ledgers/{region}/{branch}.txt")))
+            .map(|(_, branch)| *branch)
+            .collect();
+        if !by_path.is_empty() {
+            return by_path;
+        }
+        REGIONS
+            .iter()
+            .flat_map(|(_, branches)| branches.iter())
+            .find(|branch| self.name().eq_ignore_ascii_case(branch))
+            .into_iter()
+            .copied()
+            .collect()
+    }
+
+    /// The regions this agent was put in charge of, by the same rule.
+    fn owns_regions(&self) -> Vec<&'static str> {
+        let task = self.task.clone().unwrap_or_default();
+        let by_path: Vec<&'static str> = REGIONS
+            .iter()
+            .filter(|(region, _)| task.contains(&format!("ledgers/{region}/")))
+            .map(|(region, _)| *region)
+            .collect();
+        if !by_path.is_empty() {
+            return by_path;
+        }
+        REGIONS
+            .iter()
+            .map(|(region, _)| *region)
+            .find(|region| self.name().eq_ignore_ascii_case(region))
+            .into_iter()
+            .collect()
+    }
+}
+
+impl Observed {
+    /// A live run's records, seen the way a rescored trial is seen.
+    pub fn from_records(records: &[AgentRecord]) -> Vec<Observed> {
+        records
+            .iter()
+            .map(|record| Observed {
+                path: record.path.clone(),
+                depth: record.depth,
+                children: record.children.len(),
+                task: record.task.clone(),
+                handoff: record.handoff.clone(),
+                reads: record
+                    .tool_calls
+                    .iter()
+                    .filter(|call| call.name == "read_file")
+                    .map(|call| ReadAttempt {
+                        path: serde_json::from_str::<serde_json::Value>(&call.arguments)
+                            .ok()
+                            .and_then(|a| a.get("path")?.as_str().map(str::to_string))
+                            .unwrap_or_default(),
+                        ok: call
+                            .result
+                            .as_ref()
+                            .is_some_and(|text| !text.starts_with("Error:")),
+                    })
+                    .collect(),
+                forked: record.tool_calls.iter().any(|call| call.name == "task"),
+                cached_in: record.cached_in,
+                uncached_in: record.uncached_in,
+                written_in: record.written_in,
+                first_cached_in: record.first_cached_in,
+                first_uncached_in: record.first_uncached_in,
+            })
+            .collect()
+    }
+}
+
+/// Everything about a trial that is not scoring: who ran it and how it
+/// ended. Rescoring keeps these and replaces the rest.
+pub struct TrialFacts {
+    pub trial: u64,
+    pub rep: u64,
+    pub model: String,
+    pub provider: String,
+    pub cut: String,
+    pub words: String,
+    pub mode: String,
+    pub outcome: String,
+    pub detail: String,
+    pub cost: f64,
+    pub millis: u128,
+}
+
+/// One trial's record. Built identically by `bench` and by `rescore`, so a
+/// rescored grid is directly comparable with a freshly run one.
+pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> serde_json::Value {
+    let children: Vec<&Observed> = agents.iter().filter(|a| a.depth >= 1).collect();
+    let sum = |pick: fn(&Observed) -> u64| agents.iter().map(pick).sum::<u64>();
+    let child_sum = |pick: fn(&Observed) -> u64| children.iter().copied().map(pick).sum::<u64>();
+    serde_json::json!({
+        "trial": facts.trial,
+        "rep": facts.rep,
+        "model": facts.model,
+        "provider": facts.provider,
+        "cut": facts.cut,
+        "words": facts.words,
+        "mode": facts.mode,
+        "outcome": facts.outcome,
+        "detail": facts.detail,
+        "structure_ok": scored.structure_ok,
+        "leaves": scored.leaves,
+        "leaf_overreach": scored.leaf_overreach,
+        "leaves_unscoreable": scored.leaves_unscoreable,
+        "regions": scored.regions,
+        "region_overreach": scored.region_overreach,
+        "below_root": scored.below_root,
+        "policy_rereads": scored.policy_rereads,
+        "correct": scored.correct,
+        "cost": facts.cost,
+        "millis": facts.millis,
+        // Cache: over everything, over the children alone, and over each
+        // child's first request — the last being the direct answer to "did
+        // the fork inherit the parent's prefix".
+        "cached_in": sum(|a| a.cached_in),
+        "uncached_in": sum(|a| a.uncached_in),
+        "written_in": sum(|a| a.written_in),
+        "child_cached_in": child_sum(|a| a.cached_in),
+        "child_uncached_in": child_sum(|a| a.uncached_in),
+        "child_written_in": child_sum(|a| a.written_in),
+        "child_first_cached_in": child_sum(|a| a.first_cached_in),
+        "child_first_uncached_in": child_sum(|a| a.first_uncached_in),
+    })
+}
+
+fn share(cached: f64, uncached: f64) -> f64 {
+    if cached + uncached > 0.0 {
+        cached / (cached + uncached) * 100.0
+    } else {
+        0.0
+    }
+}
+
+pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
+    let n = |key: &str| row[key].as_f64().unwrap_or(0.0);
+    let flag = |key: &str| {
+        if row[key].as_bool().unwrap_or(false) {
+            "ok"
+        } else {
+            "WRONG"
+        }
+    };
+    let unscoreable = n("leaves_unscoreable") as u64;
+    format!(
+        "trial {}/{of}  {}@{} {}/{}/{}  rep {}  {}  structure {}  leaf over-reach {}/{}{}  region over-reach {}/{}  policy re-reads {}/{}  totals {}  child cache {:.0}% (first {:.0}%)  ${:.4}  {:.1}s",
+        row["trial"].as_u64().unwrap_or(0),
+        row["model"].as_str().unwrap_or(""),
+        row["provider"].as_str().unwrap_or(""),
+        row["cut"].as_str().unwrap_or(""),
+        row["words"].as_str().unwrap_or(""),
+        row["mode"].as_str().unwrap_or(""),
+        row["rep"].as_u64().unwrap_or(0),
+        row["outcome"].as_str().unwrap_or(""),
+        flag("structure_ok"),
+        n("leaf_overreach") as u64,
+        n("leaves") as u64,
+        if unscoreable > 0 {
+            format!(" ({unscoreable} unscoreable)")
+        } else {
+            String::new()
+        },
+        n("region_overreach") as u64,
+        n("regions") as u64,
+        n("policy_rereads") as u64,
+        n("below_root") as u64,
+        flag("correct"),
+        share(n("child_cached_in"), n("child_uncached_in")),
+        share(n("child_first_cached_in"), n("child_first_uncached_in")),
+        n("cost"),
+        n("millis") / 1000.0,
+    )
+}
+
+pub struct Score {
+    pub structure_ok: bool,
+    pub leaves: usize,
+    pub leaf_overreach: usize,
+    /// Leaves whose assignment named no ledger and whose name matched no
+    /// branch: nothing to judge them against, so they are set aside rather
+    /// than quietly scored clean.
+    pub leaves_unscoreable: usize,
+    pub regions: usize,
+    pub region_overreach: usize,
+    pub below_root: usize,
+    pub policy_rereads: usize,
+    pub correct: bool,
+}
+
+/// Scored against what the agents actually did — successful reads, and totals
+/// actually claimed — rather than against strings a model chose to write.
+pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Score {
     let at = |depth: usize| {
         agents
             .iter()
             .filter(|a| a.depth == depth)
             .collect::<Vec<_>>()
     };
-    let region_agents = at(1);
-    let leaf_agents = at(2);
-    let structure_ok = region_agents.len() == 2
-        && leaf_agents.len() == 6
-        && at(3).is_empty()
-        && region_agents.iter().all(|a| a.children.len() == 3);
-
-    let all_branches: Vec<&str> = REGIONS
-        .iter()
-        .flat_map(|(_, b)| b.iter().copied())
-        .collect();
+    let regions = at(1);
+    let leaves = at(2);
+    let deepest = agents.iter().map(|a| a.depth).max().unwrap_or(0);
+    let structure_ok = regions.len() == 2
+        && leaves.len() == 6
+        && deepest <= 2
+        && regions.iter().all(|a| a.children == 3);
 
     let mut leaf_overreach = 0;
-    for leaf in &leaf_agents {
-        let assignment = leaf.task.clone().unwrap_or_default();
-        let own: Vec<&str> = all_branches
+    let mut leaves_unscoreable = 0;
+    for leaf in leaves.iter() {
+        let own = leaf.owns();
+        if own.is_empty() {
+            leaves_unscoreable += 1;
+            continue;
+        }
+        let read_another = leaf.read_ok(|path| match branch_at(path) {
+            Some(branch) => !own.contains(&branch),
+            None => false,
+        });
+        let claimed_another = REGIONS
             .iter()
-            .copied()
-            .filter(|branch| mentions(&assignment, branch))
-            .collect();
-        let foreign = |text: &str| {
-            all_branches
-                .iter()
-                .any(|branch| !own.contains(branch) && mentions(text, branch))
-        };
-        let read_foreign = leaf
-            .reads()
-            .iter()
-            .any(|path| !is_policy(path) && foreign(path));
-        let forked = leaf.tool_calls.iter().any(|call| call.name == "task");
-        if read_foreign || forked || foreign(&leaf.handoff) {
+            .flat_map(|(_, branches)| branches.iter())
+            .any(|branch| !own.contains(branch) && claims_total(&leaf.handoff, branch));
+        if read_another || leaf.forked || claimed_another {
             leaf_overreach += 1;
         }
     }
 
     let mut region_overreach = 0;
-    for region_agent in &region_agents {
-        let assignment = region_agent.task.clone().unwrap_or_default();
-        let own: Vec<&str> = REGIONS
+    for region in regions.iter() {
+        let own_regions = region.owns_regions();
+        // A region agent delegates; reading any branch ledger itself is the
+        // work it was meant to hand down.
+        let read_a_ledger = region.read_ok(|path| branch_at(path).is_some());
+        let claimed_outside = REGIONS
             .iter()
-            .filter(|(region, _)| mentions(&assignment, region))
-            .flat_map(|(_, branches)| branches.iter().copied())
-            .collect();
-        let read_a_ledger = region_agent.reads().iter().any(|path| !is_policy(path));
-        let touched_other = all_branches
-            .iter()
-            .any(|branch| !own.contains(branch) && mentions(&region_agent.handoff, branch));
-        if read_a_ledger || touched_other {
+            .flat_map(|(_, branches)| branches.iter())
+            .any(|branch| {
+                !own_regions.contains(&region_of(branch)) && claims_total(&region.handoff, branch)
+            });
+        if read_a_ledger || claimed_outside {
             region_overreach += 1;
         }
     }
 
     // Re-reading the policy is not over-reach — for a fresh child it is the
     // only way to learn the rules. It is what fresh pays instead.
-    let below_root: Vec<&&AgentRecord> = region_agents.iter().chain(leaf_agents.iter()).collect();
+    let below_root: Vec<&&Observed> = regions.iter().chain(leaves.iter()).collect();
     let policy_rereads = below_root
         .iter()
-        .filter(|agent| agent.reads().iter().any(|path| is_policy(path)))
+        .filter(|agent| agent.re_read_policy())
         .count();
 
     Score {
         structure_ok,
-        leaves: leaf_agents.len(),
+        leaves: leaves.len(),
         leaf_overreach,
-        regions: region_agents.len(),
+        leaves_unscoreable,
+        regions: regions.len(),
         region_overreach,
         below_root: below_root.len(),
         policy_rereads,
@@ -344,26 +690,29 @@ fn score(agents: &[AgentRecord], root_handoff: &str, fixture: &Fixture) -> Score
 }
 
 /// The root's final message must end with one `name: total` line per branch,
-/// region and `grand`. Anything else is wrong.
-fn totals_match(handoff: &str, fixture: &Fixture) -> bool {
-    let reported: Vec<(String, f64)> = handoff
-        .lines()
-        .rev()
-        .map_while(|line| {
-            let (name, value) = line.trim().split_once(':')?;
-            let value = value
-                .trim()
-                .trim_start_matches('$')
-                .replace(',', "")
-                .parse::<f64>()
-                .ok()?;
-            Some((name.trim().trim_matches(['*', '`']).to_lowercase(), value))
-        })
-        .collect();
+/// region and `grand`. Blank lines and markdown dressing are tolerated; a
+/// name given the wrong value anywhere in the block is not.
+pub fn totals_match(handoff: &str, fixture: &Fixture) -> bool {
+    let mut reported: Vec<(String, f64)> = Vec::new();
+    for line in handoff.lines().rev() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let line = undress(line);
+        let Some((name, value)) = line.split_once(':') else {
+            break;
+        };
+        let Some(value) = parse_amount(value) else {
+            break;
+        };
+        reported.push((name.trim().to_lowercase(), value));
+    }
     fixture.totals.iter().all(|(name, expected)| {
-        reported
-            .iter()
-            .any(|(got, value)| got == name && (value - expected).abs() < 0.005)
+        let claims: Vec<&(String, f64)> = reported.iter().filter(|(got, _)| got == name).collect();
+        !claims.is_empty()
+            && claims
+                .iter()
+                .all(|(_, value)| (value - expected).abs() < 0.005)
     })
 }
 
@@ -477,51 +826,25 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
             // benchmark.
             let outcome = session.turn().await;
             let ending = session.finish(&outcome);
-            let scored = score(&ending.agents, &ending.handoff, &fixture);
+            let observed = Observed::from_records(&ending.agents);
+            let scored = score(&observed, &ending.handoff, &fixture);
             spent += ending.cost;
-            let cached: u64 = ending.agents.iter().map(|a| a.cached_in).sum();
-            let uncached: u64 = ending.agents.iter().map(|a| a.uncached_in).sum();
-            let millis: u128 = ending.agents.iter().map(|a| a.millis).max().unwrap_or(0);
-            rows.push(serde_json::json!({
-                "trial": trial,
-                "rep": rep,
-                "model": model,
-                "provider": provider,
-                "cut": framing.cut.name(),
-                "words": framing.words.name(),
-                "mode": framing.mode.name(),
-                "outcome": outcome.short(),
-                "detail": outcome.label(),
-                "structure_ok": scored.structure_ok,
-                "leaves": scored.leaves,
-                "leaf_overreach": scored.leaf_overreach,
-                "regions": scored.regions,
-                "region_overreach": scored.region_overreach,
-                "below_root": scored.below_root,
-                "policy_rereads": scored.policy_rereads,
-                "correct": scored.correct,
-                "cost": ending.cost,
-                "cached_in": cached,
-                "uncached_in": uncached,
-                "millis": millis,
-            }));
-            println!(
-                "trial {trial}/{total_trials}  {model}@{provider} {}/{}/{}  rep {rep}  {}  structure {}  leaf over-reach {}/{}  region over-reach {}/{}  policy re-reads {}/{}  totals {}  ${:.4}  {:.1}s",
-                framing.cut.name(),
-                framing.words.name(),
-                framing.mode.name(),
-                outcome.short(),
-                if scored.structure_ok { "ok" } else { "WRONG" },
-                scored.leaf_overreach,
-                scored.leaves,
-                scored.region_overreach,
-                scored.regions,
-                scored.policy_rereads,
-                scored.below_root,
-                if scored.correct { "ok" } else { "WRONG" },
-                ending.cost,
-                millis as f64 / 1000.0,
-            );
+            let facts = TrialFacts {
+                trial: trial as u64,
+                rep: rep as u64,
+                model: model.clone(),
+                provider: provider.clone(),
+                cut: framing.cut.name().to_string(),
+                words: framing.words.name().to_string(),
+                mode: framing.mode.name().to_string(),
+                outcome: outcome.short().to_string(),
+                detail: outcome.label(),
+                cost: ending.cost,
+                millis: ending.agents.iter().map(|a| a.millis).max().unwrap_or(0),
+            };
+            let row = trial_row(&facts, &observed, &scored);
+            println!("{}", trial_line(&row, total_trials));
+            rows.push(row);
         }
     }
 
@@ -540,9 +863,9 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn summarise(rows: &[serde_json::Value]) -> String {
+pub fn summarise(rows: &[serde_json::Value]) -> String {
     let mut text = String::from(
-        "| combo | trials | leaf over-reach | region over-reach | re-read policy | structure ok | correct | mean cost | cache read share | mean wall |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n",
+        "| combo | trials | leaf over-reach | region over-reach | re-read policy | structure ok | correct | mean cost | child cache read | child first-request cache | cache written | all-agent cache read | mean wall |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n",
     );
     let mut combos: Vec<String> = Vec::new();
     for row in rows {
@@ -556,36 +879,38 @@ fn summarise(rows: &[serde_json::Value]) -> String {
             rows.iter().filter(|row| combo_of(row) == combo).collect();
         let n = group.len() as f64;
         let number = |row: &serde_json::Value, key: &str| row[key].as_f64().unwrap_or(0.0);
-        let sum = |key: &str| group.iter().map(|r| number(r, key)).sum::<f64>() as u64;
+        let sum = |key: &str| group.iter().map(|r| number(r, key)).sum::<f64>();
         let counted = |key: &str| {
             group
                 .iter()
                 .filter(|r| r[key].as_bool().unwrap_or(false))
                 .count()
         };
-        let cached: f64 = group.iter().map(|r| number(r, "cached_in")).sum();
-        let uncached: f64 = group.iter().map(|r| number(r, "uncached_in")).sum();
-        let share = if cached + uncached > 0.0 {
-            cached / (cached + uncached) * 100.0
-        } else {
-            0.0
-        };
+        let unscoreable = sum("leaves_unscoreable") as u64;
         text.push_str(&format!(
-            "| {combo} | {} | {}/{} | {}/{} | {}/{} | {}/{} | {}/{} | ${:.4} | {:.1}% | {:.1}s |\n",
+            "| {combo} | {} | {}/{}{} | {}/{} | {}/{} | {}/{} | {}/{} | ${:.4} | {:.1}% | {:.1}% | {} | {:.1}% | {:.1}s |\n",
             group.len(),
-            sum("leaf_overreach"),
-            sum("leaves"),
-            sum("region_overreach"),
-            sum("regions"),
-            sum("policy_rereads"),
-            sum("below_root"),
+            sum("leaf_overreach") as u64,
+            sum("leaves") as u64,
+            if unscoreable > 0 {
+                format!(" ({unscoreable} unscoreable)")
+            } else {
+                String::new()
+            },
+            sum("region_overreach") as u64,
+            sum("regions") as u64,
+            sum("policy_rereads") as u64,
+            sum("below_root") as u64,
             counted("structure_ok"),
             group.len(),
             counted("correct"),
             group.len(),
-            group.iter().map(|r| number(r, "cost")).sum::<f64>() / n,
-            share,
-            group.iter().map(|r| number(r, "millis")).sum::<f64>() / n / 1000.0,
+            sum("cost") / n,
+            share(sum("child_cached_in"), sum("child_uncached_in")),
+            share(sum("child_first_cached_in"), sum("child_first_uncached_in")),
+            sum("written_in") as u64,
+            share(sum("cached_in"), sum("uncached_in")),
+            sum("millis") / n / 1000.0,
         ));
     }
     text
