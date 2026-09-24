@@ -560,6 +560,8 @@ pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> ser
         "below_root": scored.below_root,
         "policy_rereads": scored.policy_rereads,
         "correct": scored.correct,
+        "overreached": scored.overreached,
+        "unscoreable": scored.unscoreable,
         "cost": facts.cost,
         "millis": facts.millis,
         // Cache: over everything, over the children alone, and over each
@@ -668,6 +670,9 @@ pub struct Score {
     pub below_root: usize,
     pub policy_rereads: usize,
     pub correct: bool,
+    /// The paths behind the over-reach and unscoreable counts.
+    pub overreached: Vec<String>,
+    pub unscoreable: Vec<String>,
 }
 
 /// Scored against what the agents actually did — successful reads, and totals
@@ -687,6 +692,8 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
         && deepest <= 2
         && regions.iter().all(|a| a.children == 3);
 
+    let mut overreached = Vec::new();
+    let mut unscoreable = Vec::new();
     let mut leaf_overreach = 0;
     let mut leaves_unscoreable = 0;
     for leaf in leaves.iter() {
@@ -695,11 +702,13 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
         // need to know which branch it owns, so it comes first.
         if leaf.forked {
             leaf_overreach += 1;
+            overreached.push(leaf.path.clone());
             continue;
         }
         let own = leaf.owns();
         if own.is_empty() {
             leaves_unscoreable += 1;
+            unscoreable.push(leaf.path.clone());
             continue;
         }
         let read_another = leaf.read_ok(|path| match branch_at(path) {
@@ -712,6 +721,7 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
             .any(|branch| !own.contains(branch) && claims_total(&leaf.handoff, branch));
         if read_another || claimed_another {
             leaf_overreach += 1;
+            overreached.push(leaf.path.clone());
         }
     }
 
@@ -723,11 +733,13 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
         // which region it was given.
         if region.read_ok(|path| branch_at(path).is_some()) {
             region_overreach += 1;
+            overreached.push(region.path.clone());
             continue;
         }
         let own_regions = region.owns_regions();
         if own_regions.is_empty() {
             regions_unscoreable += 1;
+            unscoreable.push(region.path.clone());
             continue;
         }
         let claimed_outside = REGIONS
@@ -738,6 +750,7 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
             });
         if claimed_outside {
             region_overreach += 1;
+            overreached.push(region.path.clone());
         }
     }
 
@@ -760,6 +773,8 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
         below_root: below_root.len(),
         policy_rereads,
         correct: totals_match(root_handoff, fixture),
+        overreached,
+        unscoreable,
     }
 }
 

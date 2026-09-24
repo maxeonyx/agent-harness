@@ -20,7 +20,8 @@ forks — agents as structured concurrency
   forks run  --dir <path> \"<task>\"   one autonomous root, run to completion
   forks chat --dir <path>            talk to the root; it forks when it wants to
   forks bench                        the discipline benchmark over a grid of framings
-  forks rescore <bench-dir>          score a recorded benchmark again, offline
+  forks rescore <bench-dir> [--json <file>]  score a recorded benchmark again, offline;
+                                     --json also writes every trial row as JSON
 
 Framing (the two knobs the benchmark sweeps):
   --cut full|own|before   what a forked child inherits (default before)

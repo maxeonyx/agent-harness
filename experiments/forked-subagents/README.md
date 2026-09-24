@@ -70,7 +70,7 @@ The cache columns separate the question the brief asks. `child cache read` and `
 ## Rescoring
 
 ```bash
-cargo run --bin forks -- rescore runs.ignore/<timestamp>-bench
+cargo run --bin forks -- rescore runs.ignore/<timestamp>-bench [--json rows.json]
 ```
 
 Scores a benchmark that has already been paid for, again, offline, and prints the old verdict beside the new one.
@@ -108,3 +108,7 @@ Under two seconds. One test waits on wall-clock time — `a_silent_provider_time
 `tests/scenario.rs` drives the `forks` binary against the fake provider and asserts on what it printed and on what the provider received. Concurrency is proved by a barrier: the children's requests are not answered until both are in flight together, which a harness that ran them one after another could never satisfy. Ordering is proved by content — the dependent child's request contains its dependency's report, so it cannot have been built before it. Cancellation and the spend cap hold requests open at the provider and release them when the test is ready. Every test also asserts the system prompt and tool list are byte-identical across every agent in the run.
 
 The fake provider speaks HTTP/1.1 itself, on a thread per connection. An off-the-shelf server with a connection thread pool stalled under CPU contention: it stopped reading sockets it had accepted, requests sat unread in the kernel, and the suite took three minutes instead of one second while still passing.
+
+## Overview
+
+`python3 overview/build.py` turns the recorded runs and this source into one self-contained page, `overview.ignore.html`: the fork replayed from a real run, every trial as the tree it built, every word said to a model, the loop as code, and every request exactly as sent. It needs `target/release/forks` and the benchmark runs under `runs.ignore/`. Append `?still` to the URL to render every animation at its end, and `#watch/request/clean/3`, `#trials/trial/<trial dir>` or `#machine/source/src/agent.rs/895` to open straight onto a drill-down.

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 pub async fn command(args: &Args) -> Result<ExitCode, String> {
-    args.known(&["grid"])?;
+    args.known(&["grid", "json"])?;
     let dir = args
         .positional
         .first()
@@ -66,7 +66,8 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
             Provenance::NoFault => {}
         }
         let scored = score(&agents, &root_handoff, &fixture);
-        let row = trial_row(&facts, &agents, &scored);
+        let mut row = trial_row(&facts, &agents, &scored);
+        row["dir"] = serde_json::json!(trial.to_string_lossy());
         let key = format!(
             "{}|{}|{}|{}|{}",
             facts.model, facts.cut, facts.words, facts.mode, facts.rep
@@ -79,6 +80,11 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
         rows.push(row);
     }
 
+    let json = args.one("json", "");
+    if !json.is_empty() {
+        let text = serde_json::to_string_pretty(&rows).map_err(|e| format!("encode rows: {e}"))?;
+        std::fs::write(&json, text).map_err(|e| format!("write {json}: {e}"))?;
+    }
     println!("\n{}", changes.join("\n"));
     println!("\n{}", summarise(&rows));
     println!(
