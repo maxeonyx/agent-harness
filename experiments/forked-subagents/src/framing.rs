@@ -87,6 +87,16 @@ pub fn tool_schemas() -> Vec<Value> {
     ]
 }
 
+/// The framing under test: what a forked child inherits, what its assignment
+/// says, and whether it is forked at all. One point in the space the
+/// benchmark sweeps.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Framing {
+    pub cut: Cut,
+    pub words: Words,
+    pub mode: crate::agent::Mode,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Words {
     Stop,
