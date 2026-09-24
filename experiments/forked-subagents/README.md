@@ -36,7 +36,7 @@ Every agent in a run gets the identical system prompt and the identical tool lis
 - `--words stop|explained` — what the assignment says. `stop` is the probe's naive framing. `explained` also says it is one branch of a split, names the siblings holding the other assignments, and says its final message is exactly what its parent receives. These two texts are the experimental treatment; they are constants in `src/framing.rs`.
 - `--mode fork|fresh|declared` — `declared` honours each `task` entry's own `fresh` flag, which is how the model routes; `fork` and `fresh` force every child.
 
-The defaults (`full`, `explained`, `declared`) are a choice about what is pleasant to watch, not a finding. The benchmark is what decides between them.
+The default cut is `before`, the one the benchmark found keeps Sonnet's children in their lane (`docs/process/experiments/forked-subagents-outcome.md`). The other defaults (`explained`, `declared`) are a choice about what is pleasant to watch, not a finding.
 
 ## The benchmark
 
@@ -85,7 +85,7 @@ A response that does not report its usage is a fault — a cap cannot be enforce
 
 Every HTTP attempt is charged separately against the cap and checked against cancellation, retries included. A retry is new work, and a drain that starts new work is not a drain.
 
-A rate limit is not a failure, it is the provider asking you to come back, and it gets its own patience. OpenRouter sends one as **HTTP 200 carrying an `error` object whose `code` is 429**, so reading only the HTTP status treats it as permanent — which is how a grid of luna trials died within seconds of starting. `Retry-After` is honoured when present; otherwise the wait starts at a twenty-fourth of `--rate-limit-patience` (default 120 seconds) and doubles, and a rate limit that never lifts becomes a provider fault. Ordinary transient failures keep their four quick attempts; waiting out a rate limit is counted against patience instead.
+A rate limit is not a failure, it is the provider asking you to come back, and it gets its own patience. OpenRouter sends one as **HTTP 200 carrying an `error` object whose `code` is 429**, so a rate limit is recognised by that code, not by the HTTP status. `Retry-After` is honoured when present; otherwise the wait starts at a twenty-fourth of `--rate-limit-patience` (default 120 seconds) and doubles, and a rate limit that never lifts becomes a provider fault. Ordinary transient failures keep their four quick attempts; waiting out a rate limit is counted against patience instead.
 
 `--request-timeout` (default 300 seconds) bounds a single attempt. Without it a provider that accepts a request and never answers hangs its agent, and every ancestor with it, for as long as it likes. A timed-out request is a transient failure and is retried.
 

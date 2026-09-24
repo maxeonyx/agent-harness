@@ -23,7 +23,7 @@ forks — agents as structured concurrency
   forks rescore <bench-dir>          score a recorded benchmark again, offline
 
 Framing (the two knobs the benchmark sweeps):
-  --cut full|own|before   what a forked child inherits (default full)
+  --cut full|own|before   what a forked child inherits (default before)
       full    the parent's messages through the `task` turn, then a tool
               result addressed to this child
       own     the same, but this child's copy of the `task` arguments holds
@@ -383,7 +383,7 @@ impl Args {
             &self.one("model", "anthropic/claude-sonnet-5"),
             &self.one("provider", "amazon-bedrock"),
             Framing {
-                cut: Cut::parse(&self.one("cut", "full"))?,
+                cut: Cut::parse(&self.one("cut", "before"))?,
                 words: Words::parse(&self.one("words", "explained"))?,
                 mode: Mode::parse(&self.one("mode", "declared"))?,
             },

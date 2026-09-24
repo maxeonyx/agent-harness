@@ -801,7 +801,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
     );
     let grid = args.list("grid", &default_grid);
     let cuts = args
-        .list("cut", "full")
+        .list("cut", "before")
         .iter()
         .map(|c| Cut::parse(c))
         .collect::<Result<Vec<_>, _>>()?;

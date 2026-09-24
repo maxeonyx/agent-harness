@@ -28,6 +28,8 @@ Exit: the user-tool contract is expressive and disciplined enough to build aroun
 
 ### forked-subagents
 
+Pulled 2026-09-24 and built; awaiting Gate 1. Brief and outcome: `experiments/forked-subagents-brief.md`, `experiments/forked-subagents-outcome.md`.
+
 Purpose: validate hierarchy, blocking, fork/fresh, cache-efficient launching, and attention semantics.
 
 Covers: structured concurrency scopes; fork by default within a limb, fresh across limbs; shared seed contexts and attachments (`source-notes/handoff-improvements.md`); the main-thread pattern; Task/Resume; whether deeply forked agents reliably end their turn at the assigned subtask (the A.1.3 framing question in `source-notes/agent-hierarchy.md`).
