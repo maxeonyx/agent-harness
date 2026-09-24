@@ -121,6 +121,12 @@ fn old_scores(dir: &Path) -> BTreeMap<String, serde_json::Value> {
 
 fn verdict(row: &serde_json::Value) -> String {
     let n = |key: &str| row[key].as_f64().unwrap_or(0.0) as u64;
+    if !row["valid"].as_bool().unwrap_or(true) {
+        return format!(
+            "INVALID ({} fault) — excluded from every rate",
+            row["fault_kind"].as_str().unwrap_or("cancelled")
+        );
+    }
     let flag = |key: &str| {
         if row[key].as_bool().unwrap_or(false) {
             "ok"
