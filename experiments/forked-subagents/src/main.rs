@@ -8,7 +8,7 @@ mod session;
 mod wire;
 
 use agent::{Config, Mode, Outcome};
-use framing::{Cut, Words};
+use framing::{Cut, Framing, Words};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -43,15 +43,20 @@ Provider:
   --keys <file>       default <experiment>/keys.ignore.env; or $OPENROUTER_API_KEY
 
 Limits:
-  --max-cost <usd>    stop the run before the request that would exceed it (default 0.50)
-  --max-depth <n>     levels of agents below the root (default 3)
+  --max-cost <usd>    stop before the request that would exceed it (default 0.50;
+                      bench uses 0.15 per trial)
+  --max-depth <n>     levels of agents below the root (default 3; bench uses 2,
+                      which is exactly the shape its task asks for)
   --max-turns <n>     requests one agent may make (default 20)
+  --request-timeout <seconds>  give up on a silent provider and retry (default 300)
   --runs-dir <path>   default <experiment>/runs.ignore
 
 Benchmark only:
   --grid <model@provider,...>   default <model>@<provider>
   --reps <n>                    trials per combination (default 1)
-  --budget <usd>                total for the whole benchmark; stops cleanly (default 5.00)
+  --budget <usd>                total for the whole benchmark; the only thing
+                                that stops it early (default 5.00). A trial that
+                                reaches its own --max-cost is a scored trial.
   --cut / --words / --mode      accept comma-separated lists here
 
 In chat: a line is a message to the root; /tree, /cancel, /quit.
@@ -205,6 +210,7 @@ const COMMON: &[&str] = &[
     "max-cost",
     "max-depth",
     "max-turns",
+    "request-timeout",
     "runs-dir",
     "session-id",
 ];
@@ -343,9 +349,13 @@ impl Args {
         self.config_with(
             &self.one("model", "anthropic/claude-sonnet-5"),
             &self.one("provider", "amazon-bedrock"),
-            Cut::parse(&self.one("cut", "full"))?,
-            Words::parse(&self.one("words", "explained"))?,
-            Mode::parse(&self.one("mode", "declared"))?,
+            Framing {
+                cut: Cut::parse(&self.one("cut", "full"))?,
+                words: Words::parse(&self.one("words", "explained"))?,
+                mode: Mode::parse(&self.one("mode", "declared"))?,
+            },
+            3,
+            0.50,
         )
     }
 
@@ -353,9 +363,9 @@ impl Args {
         &self,
         model: &str,
         provider: &str,
-        cut: Cut,
-        words: Words,
-        mode: Mode,
+        framing: Framing,
+        default_max_depth: usize,
+        default_max_cost: f64,
     ) -> Result<Config, String> {
         let base_url = self.one("base-url", "https://openrouter.ai/api/v1");
         let api_key = self.api_key()?;
@@ -369,12 +379,13 @@ impl Args {
             provider: (!provider.is_empty()).then(|| provider.to_string()),
             base_url,
             api_key,
-            cut,
-            words,
-            mode,
-            max_cost: self.number("max-cost", 0.50)?,
-            max_depth: self.number("max-depth", 3usize)?,
+            framing,
+            max_cost: self.number("max-cost", default_max_cost)?,
+            max_depth: self.number("max-depth", default_max_depth)?,
             max_turns: self.number("max-turns", 20usize)?,
+            request_timeout: std::time::Duration::from_secs_f64(
+                self.number("request-timeout", 300.0)?,
+            ),
         })
     }
 }

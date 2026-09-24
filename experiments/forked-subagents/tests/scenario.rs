@@ -1,16 +1,23 @@
 //! Scenarios from the brief, asserted at the two public surfaces: what
 //! `forks` printed, and what the provider actually received.
 //!
-//! The fake provider records each request with the times it arrived and was
-//! answered, so "the children ran at the same time" and "the parent's next
-//! request came after all of them" are observations, not inferences.
+//! No assertion here waits for wall-clock time to pass. Concurrency is proved
+//! by a barrier in the fake provider — requests that must be in flight
+//! together, which a serialized harness can never satisfy — and ordering is
+//! proved by content: the dependent child's request contains its
+//! dependency's report, so it cannot have been built before it. Where a test
+//! needs requests held open (cancellation, the spend cap), it holds them
+//! explicitly and releases them when it is ready.
 
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const PATIENCE: Duration = Duration::from_secs(30);
 
 struct KillOnDrop(Child);
 
@@ -29,7 +36,8 @@ struct Fake {
 
 struct Req {
     received: u128,
-    answered: u128,
+    answered: Option<u128>,
+    stuck: bool,
     body: Value,
 }
 
@@ -67,7 +75,7 @@ impl Fake {
             let _ = tx.send(line);
         });
         let line = rx
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(PATIENCE)
             .expect("fake provider never printed its readiness line");
         reader.join().unwrap();
         let addr = line
@@ -86,24 +94,36 @@ impl Fake {
         format!("http://{}/v1", self.addr)
     }
 
-    /// Every request the provider saw, in arrival order.
+    /// Every request the provider has seen, in arrival order, whether or not
+    /// it has been answered yet.
     fn requests(&self) -> Vec<Req> {
         let Ok(text) = std::fs::read_to_string(&self.log) else {
             return Vec::new();
         };
-        let mut requests: Vec<Req> = text
-            .lines()
-            .map(|line| {
-                let entry: Value = serde_json::from_str(line).expect("request log is JSON");
-                Req {
-                    received: entry["received_ms"].as_u64().unwrap() as u128,
-                    answered: entry["answered_ms"].as_u64().unwrap() as u128,
-                    body: entry["body"].clone(),
-                }
-            })
-            .collect();
-        requests.sort_by_key(|request| request.received);
-        requests
+        let mut arrived: BTreeMap<u64, Req> = BTreeMap::new();
+        // The log is read while the provider is still appending to it, so the
+        // last line may not be there in full yet. Any earlier line must parse.
+        let complete = text.rfind('\n').map(|at| &text[..at]).unwrap_or("");
+        for line in complete.lines() {
+            let entry: Value = serde_json::from_str(line).expect("request log is JSON");
+            let seq = entry["seq"].as_u64().unwrap();
+            let at = entry["at"].as_u64().unwrap() as u128;
+            if entry["kind"] == "received" {
+                arrived.insert(
+                    seq,
+                    Req {
+                        received: at,
+                        answered: None,
+                        stuck: false,
+                        body: entry["body"].clone(),
+                    },
+                );
+            } else if let Some(request) = arrived.get_mut(&seq) {
+                request.answered = Some(at);
+                request.stuck = entry["stuck"].as_bool().unwrap_or(false);
+            }
+        }
+        arrived.into_values().collect()
     }
 
     fn find(&self, needle: &str) -> Req {
@@ -111,6 +131,48 @@ impl Fake {
             .into_iter()
             .find(|request| request.last().contains(needle))
             .unwrap_or_else(|| panic!("no request whose last message contains {needle:?}"))
+    }
+
+    /// Wait until `count` requests have arrived. Fails loudly rather than
+    /// hanging if they never do.
+    fn await_requests(&self, count: usize) {
+        let deadline = Instant::now() + PATIENCE;
+        while self.requests().len() < count {
+            assert!(
+                Instant::now() < deadline,
+                "only {} of {count} requests ever reached the provider",
+                self.requests().len()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Let every held request answer.
+    fn release(&self) {
+        let mut stream = std::net::TcpStream::connect(&self.addr).expect("connect to fake");
+        write!(
+            stream,
+            "POST /release HTTP/1.1\r\nHost: fake\r\nContent-Length: 0\r\n\r\n"
+        )
+        .unwrap();
+        stream.flush().unwrap();
+        stream.set_read_timeout(Some(PATIENCE)).unwrap();
+        let mut answer = String::new();
+        BufReader::new(stream)
+            .read_line(&mut answer)
+            .expect("fake acknowledged release");
+    }
+
+    /// No request may have given up waiting at a barrier or a hold; that
+    /// would mean the harness never put them in flight together.
+    fn none_stuck(&self) {
+        for request in self.requests() {
+            assert!(
+                !request.stuck,
+                "a request waited out its barrier or hold: {}",
+                request.last()
+            );
+        }
     }
 }
 
@@ -123,6 +185,21 @@ fn workspace(name: &str) -> PathBuf {
     dir
 }
 
+fn base_args(dir: &Path, fake: &Fake) -> Vec<String> {
+    vec![
+        "--dir".into(),
+        dir.join("files").display().to_string(),
+        "--base-url".into(),
+        fake.base_url(),
+        "--model".into(),
+        "fake".into(),
+        "--provider".into(),
+        "".into(),
+        "--runs-dir".into(),
+        dir.join("runs").display().to_string(),
+    ]
+}
+
 struct Forks {
     stdout: String,
     stderr: String,
@@ -130,25 +207,88 @@ struct Forks {
 }
 
 fn forks(dir: &Path, fake: &Fake, extra: &[&str], task: &str) -> Forks {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_forks"));
-    command
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
         .arg("run")
-        .arg("--dir")
-        .arg(dir.join("files"))
-        .arg("--base-url")
-        .arg(fake.base_url())
-        .arg("--model")
-        .arg("fake")
-        .arg("--provider")
-        .arg("")
-        .arg("--runs-dir")
-        .arg(dir.join("runs"));
-    command.args(extra).arg(task);
-    let output = command.output().expect("run forks");
+        .args(base_args(dir, fake))
+        .args(extra)
+        .arg(task)
+        .output()
+        .expect("run forks");
     Forks {
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         code: output.status.code().unwrap_or(-1),
+    }
+}
+
+/// `forks` driven live, so the test can act while a turn is running.
+struct Live {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    lines: mpsc::Receiver<String>,
+    reader: Option<std::thread::JoinHandle<()>>,
+    seen: Vec<String>,
+}
+
+impl Live {
+    fn start(dir: &Path, fake: &Fake, command: &str, extra: &[&str], task: Option<&str>) -> Live {
+        let mut builder = Command::new(env!("CARGO_BIN_EXE_forks"));
+        builder.arg(command).args(base_args(dir, fake)).args(extra);
+        if let Some(task) = task {
+            builder.arg(task);
+        }
+        let mut child = builder
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn forks");
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, lines) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Live {
+            child,
+            stdin: Some(stdin),
+            lines,
+            reader: Some(reader),
+            seen: Vec::new(),
+        }
+    }
+
+    fn send(&mut self, line: &str) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        writeln!(stdin, "{line}").unwrap();
+        stdin.flush().unwrap();
+    }
+
+    fn wait_for(&mut self, needle: &str) {
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(PATIENCE)
+                .unwrap_or_else(|_| panic!("never saw {needle:?}; saw:\n{}", self.seen.join("\n")));
+            let hit = line.contains(needle);
+            self.seen.push(line);
+            if hit {
+                return;
+            }
+        }
+    }
+
+    fn finish(mut self) -> (String, i32) {
+        drop(self.stdin.take());
+        let status = self.child.wait().expect("forks exited");
+        while let Ok(line) = self.lines.recv_timeout(Duration::from_millis(200)) {
+            self.seen.push(line);
+        }
+        self.reader.take().unwrap().join().unwrap();
+        (self.seen.join("\n"), status.code().unwrap_or(-1))
     }
 }
 
@@ -165,14 +305,23 @@ fn prefix_is_identical(fake: &Fake) {
     }
 }
 
-fn split_rules(delay: u64) -> Value {
+/// Two children, launched together. `hold` says how each child's request is
+/// held: at a barrier that only genuine concurrency can clear, or until the
+/// test releases it.
+fn split_rules(hold: Value) -> Value {
+    let mut north = json!({"when": "agent `north`", "text": "north says kowhai"});
+    let mut south = json!({"when": "agent `south`", "text": "south says tui"});
+    for (key, value) in hold.as_object().into_iter().flatten() {
+        north[key] = value.clone();
+        south[key] = value.clone();
+    }
     json!([
         {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"agents": [
             {"name": "north", "task": "report the note"},
             {"name": "south", "task": "list the directory"}
         ]}}]},
-        {"when": "agent `north`", "delay_ms": delay, "text": "north says kowhai"},
-        {"when": "agent `south`", "delay_ms": delay, "text": "south says tui"},
+        north,
+        south,
         {"when": "Every agent you launched has finished", "text": "both reported"}
     ])
 }
@@ -180,22 +329,21 @@ fn split_rules(delay: u64) -> Value {
 #[test]
 fn scope_suspends_the_parent_while_its_children_run_at_the_same_time() {
     let dir = workspace("scope");
-    let fake = Fake::start(&dir, split_rules(400));
+    // Neither child is answered until both are in flight: a harness that ran
+    // them one after another would never get past the first.
+    let fake = Fake::start(&dir, split_rules(json!({ "barrier": 2 })));
     let out = forks(&dir, &fake, &[], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    fake.none_stuck();
 
     let requests = fake.requests();
     assert_eq!(requests.len(), 4, "root, two children, root again");
+
     let north = fake.find("agent `north`");
     let south = fake.find("agent `south`");
-    assert!(
-        north.received < south.answered && south.received < north.answered,
-        "the children's requests did not overlap in time"
-    );
-
     let resumed = fake.find("Every agent you launched has finished");
     assert!(
-        resumed.received >= north.answered && resumed.received >= south.answered,
+        resumed.received >= north.answered.unwrap() && resumed.received >= south.answered.unwrap(),
         "the parent was resumed before its children finished"
     );
     let tool_results: Vec<&Value> = resumed
@@ -224,7 +372,7 @@ fn after_makes_a_sibling_wait_and_hands_it_the_report() {
                 {"name": "first", "task": "go first"},
                 {"name": "second", "task": "go second", "after": ["first"]}
             ]}}]},
-            {"when": "agent `first`", "delay_ms": 300, "text": "first says rimu"},
+            {"when": "agent `first`", "text": "first says rimu"},
             {"when": "agent `second`", "text": "second says weka"},
             {"when": "Every agent you launched has finished", "text": "both reported"}
         ]),
@@ -234,15 +382,14 @@ fn after_makes_a_sibling_wait_and_hands_it_the_report() {
 
     let first = fake.find("agent `first`");
     let second = fake.find("agent `second`");
-    assert!(
-        second.received >= first.answered,
-        "the dependent child started before its dependency finished"
-    );
+    // The dependent child's request carries its dependency's report, so it
+    // cannot have been built before that report existed.
     assert!(
         second.last().contains("first says rimu"),
         "the dependent child did not receive its dependency's report: {}",
         second.last()
     );
+    assert!(second.received >= first.answered.unwrap());
     prefix_is_identical(&fake);
 }
 
@@ -272,18 +419,20 @@ fn nested_scopes_resume_bottom_up() {
     );
     assert!(out.stdout.contains("root passes on totara"));
 
-    let middle_resumed = fake.find("## `leaf`");
-    let root_resumed = fake.find("## `middle`");
-    let leaf = fake.find("agent `leaf`");
-    assert!(leaf.answered <= middle_resumed.received);
-    assert!(middle_resumed.answered <= root_resumed.received);
+    // Each resumption carries the report from the level below it.
+    assert!(fake.find("## `leaf`").last().contains("leaf says totara"));
+    assert!(
+        fake.find("## `middle`")
+            .last()
+            .contains("middle passes on totara")
+    );
     prefix_is_identical(&fake);
 }
 
 #[test]
 fn cut_full_gives_the_child_the_parents_bytes_then_one_tool_result() {
     let dir = workspace("cut-full");
-    let fake = Fake::start(&dir, split_rules(0));
+    let fake = Fake::start(&dir, split_rules(json!({})));
     let out = forks(&dir, &fake, &["--cut", "full"], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
 
@@ -313,7 +462,7 @@ fn cut_full_gives_the_child_the_parents_bytes_then_one_tool_result() {
 #[test]
 fn cut_own_rewrites_the_childs_copy_of_the_task_call() {
     let dir = workspace("cut-own");
-    let fake = Fake::start(&dir, split_rules(0));
+    let fake = Fake::start(&dir, split_rules(json!({})));
     let out = forks(&dir, &fake, &["--cut", "own"], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
 
@@ -340,7 +489,7 @@ fn cut_own_rewrites_the_childs_copy_of_the_task_call() {
 #[test]
 fn cut_before_ends_at_the_message_before_the_task_call() {
     let dir = workspace("cut-before");
-    let fake = Fake::start(&dir, split_rules(0));
+    let fake = Fake::start(&dir, split_rules(json!({})));
     let out = forks(&dir, &fake, &["--cut", "before"], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
 
@@ -368,7 +517,7 @@ fn cut_before_ends_at_the_message_before_the_task_call() {
 #[test]
 fn fresh_children_get_the_system_prompt_and_their_assignment_only() {
     let dir = workspace("fresh");
-    let fake = Fake::start(&dir, split_rules(0));
+    let fake = Fake::start(&dir, split_rules(json!({})));
     let out = forks(&dir, &fake, &["--mode", "fresh"], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
 
@@ -381,7 +530,7 @@ fn fresh_children_get_the_system_prompt_and_their_assignment_only() {
 #[test]
 fn a_rejected_request_faults_the_agent_and_leaves_its_ancestors_suspended() {
     let dir = workspace("fault");
-    let mut rules = split_rules(0);
+    let mut rules = split_rules(json!({}));
     rules.as_array_mut().unwrap()[1] = json!({
         "when": "agent `north`", "status": 401, "text": "No auth credentials found"
     });
@@ -411,7 +560,7 @@ fn a_rejected_request_faults_the_agent_and_leaves_its_ancestors_suspended() {
 #[test]
 fn the_spend_cap_is_a_fault_before_the_request_that_would_break_it() {
     let dir = workspace("cap");
-    let mut rules = split_rules(0);
+    let mut rules = split_rules(json!({}));
     rules.as_array_mut().unwrap()[0]["usage"] = json!({
         "prompt_tokens": 100, "completion_tokens": 10, "cost": 0.02,
         "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 100}
@@ -433,24 +582,56 @@ fn the_spend_cap_is_a_fault_before_the_request_that_would_break_it() {
 #[test]
 fn the_cap_counts_the_requests_already_in_flight() {
     let dir = workspace("cap-in-flight");
-    let mut rules = split_rules(400);
+    let mut rules = split_rules(json!({ "hold": true }));
     let usage = json!({
         "prompt_tokens": 100, "completion_tokens": 10, "cost": 0.02,
         "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 100}
     });
-    for index in 0..3 {
-        rules.as_array_mut().unwrap()[index]["usage"] = usage.clone();
-    }
+    rules.as_array_mut().unwrap()[0]["usage"] = usage.clone();
+    rules.as_array_mut().unwrap()[1]["usage"] = usage;
     let fake = Fake::start(&dir, rules);
-    let out = forks(&dir, &fake, &["--max-cost", "0.04"], "SPLIT the work");
 
-    assert_ne!(out.code, 0);
-    assert!(out.stdout.contains("in flight at up to"), "{}", out.stdout);
+    let mut live = Live::start(&dir, &fake, "run", &["--max-cost", "0.04"], Some("SPLIT"));
+    // The root's request cost $0.02 and one child's is in flight, unanswered.
+    // The second child must be refused on what that one might cost.
+    fake.await_requests(2);
+    live.wait_for("spend cap reached");
+    fake.release();
+    let (transcript, code) = live.finish();
+
+    assert_ne!(code, 0);
+    assert!(
+        transcript.contains("in flight at up to"),
+        "the cap did not account for work in flight:\n{transcript}"
+    );
     assert_eq!(
         fake.requests().len(),
         2,
         "the second child was sent while the first child's cost was still unknown"
     );
+}
+
+/// A provider that accepts a request and never answers must not hang the
+/// tree. The first attempt is held open and never answered; the request
+/// times out, and the retry succeeds.
+#[test]
+fn a_silent_provider_times_out_and_the_retry_succeeds() {
+    let dir = workspace("timeout");
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "SPLIT", "hold": true, "times": 1, "text": "never answered"},
+            {"when": "SPLIT", "text": "answered on the retry"}
+        ]),
+    );
+    let out = forks(&dir, &fake, &["--request-timeout", "0.2"], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("answered on the retry"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(fake.requests().len(), 2, "the request was not retried");
 }
 
 #[test]
@@ -505,107 +686,31 @@ fn an_invalid_task_call_is_answered_with_an_error_result() {
     prefix_is_identical(&fake);
 }
 
-/// Cancellation, driven the way a user drives it: `/cancel` in chat, while a
-/// scope is open.
+/// Cancellation, driven the way a user drives it: `/cancel` in chat, with
+/// both children's requests held open at the provider.
 #[test]
 fn cancel_starts_nothing_new_keeps_what_is_in_flight_and_ends_every_agent() {
     let dir = workspace("cancel");
-    let fake = Fake::start(&dir, split_rules(700));
-    let mut child = Command::new(env!("CARGO_BIN_EXE_forks"))
-        .arg("chat")
-        .arg("--dir")
-        .arg(dir.join("files"))
-        .arg("--base-url")
-        .arg(fake.base_url())
-        .arg("--model")
-        .arg("fake")
-        .arg("--provider")
-        .arg("")
-        .arg("--runs-dir")
-        .arg(dir.join("runs"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn forks chat");
-    let mut stdin: ChildStdin = child.stdin.take().unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let child = KillOnDrop(child);
-    let (tx, rx) = mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                break;
-            }
-        }
-    });
+    let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
+    let mut live = Live::start(&dir, &fake, "chat", &[], None);
+    live.send("SPLIT the work");
+    fake.await_requests(3);
+    live.send("/cancel");
+    live.wait_for("cancelling");
+    // The responses the provider was holding come back, and are kept.
+    fake.release();
+    live.wait_for("run: cancelled");
+    live.send("/quit");
+    let (transcript, code) = live.finish();
+    assert_eq!(code, 0, "{transcript}");
 
-    writeln!(stdin, "SPLIT the work").unwrap();
-    stdin.flush().unwrap();
-    let mut seen = Vec::new();
-    loop {
-        let line = rx
-            .recv_timeout(Duration::from_secs(30))
-            .expect("waiting for the scope to open");
-        let opened = line.contains("scope opened");
-        seen.push(line);
-        if opened {
-            break;
-        }
-    }
-    // Cancel with both children's requests genuinely in flight: the fake
-    // logs a request when it arrives, and holds it for 700ms before
-    // answering.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while fake.requests().len() < 3 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the children's requests never reached the provider"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    writeln!(stdin, "/cancel").unwrap();
-    stdin.flush().unwrap();
-    let cancelled_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    loop {
-        let line = rx
-            .recv_timeout(Duration::from_secs(30))
-            .expect("waiting for the run report");
-        let done = line.contains("run: cancelled");
-        seen.push(line);
-        if done {
-            break;
-        }
-    }
-    writeln!(stdin, "/quit").ok();
-    drop(stdin);
-    drop(child);
-    reader.join().unwrap();
-    let transcript = seen.join("\n");
-
-    let requests = fake.requests();
-    assert_eq!(requests.len(), 3, "a request started after the cancel");
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.received < cancelled_at),
-        "a request was sent after the cancel"
+    assert_eq!(
+        fake.requests().len(),
+        3,
+        "a request started after the cancel"
     );
-    // The in-flight responses were awaited and kept: both children carry the
-    // report their request returned.
-    assert!(transcript.contains("root › north") && transcript.contains("agent finished"));
-    for (agent, state) in [("north", "completed"), ("south", "completed")] {
-        assert!(
-            transcript.contains(&format!(
-                "root › {agent}                 agent finished: {state}"
-            )) || transcript.contains(&format!("{agent} ")),
-            "{agent} has no recorded outcome:\n{transcript}"
-        );
-    }
     let summary: Value = serde_json::from_str(
-        &std::fs::read_to_string(newest_run(&dir.join("runs")).join("summary.json")).unwrap(),
+        &std::fs::read_to_string(newest(&dir.join("runs")).join("summary.json")).unwrap(),
     )
     .unwrap();
     let states: Vec<(&str, &str)> = summary["agents"]
@@ -626,11 +731,11 @@ fn cancel_starts_nothing_new_keeps_what_is_in_flight_and_ends_every_agent() {
             ("root › north", "completed"),
             ("root › south", "completed")
         ],
-        "every agent must end with a recorded outcome"
+        "every agent must end with a recorded outcome:\n{transcript}"
     );
 }
 
-fn newest_run(runs: &Path) -> PathBuf {
+fn newest(runs: &Path) -> PathBuf {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(runs)
         .expect("runs directory")
         .filter_map(|entry| entry.ok())
@@ -640,11 +745,35 @@ fn newest_run(runs: &Path) -> PathBuf {
     entries.pop().expect("at least one run")
 }
 
-/// The benchmark's scoring, fed two scripted trees: one that stays inside its
-/// assignments and one that does not.
-fn bench_rules(over_reach: bool) -> Value {
+// ---------------------------------------------------------------- benchmark
+
+const BRANCHES: [(&str, &str); 6] = [
+    ("maunga", "kowhai"),
+    ("maunga", "rimu"),
+    ("maunga", "totara"),
+    ("awa", "tui"),
+    ("awa", "kea"),
+    ("awa", "weka"),
+];
+
+struct Tree {
+    /// One leaf reads a sibling's ledger, and one names a sibling in its
+    /// report.
+    over_reach: bool,
+    /// A region agent and a leaf both read `POLICY.md` for themselves —
+    /// what a fresh child has to do, and not over-reach.
+    re_reads_policy: bool,
+    /// The totals block the root ends with.
+    totals: BTreeMap<String, f64>,
+}
+
+/// A scripted run of the benchmark's intended shape.
+fn bench_rules(tree: &Tree) -> Value {
     let mut rules = vec![
-        json!({"when": "Work out the total", "tool_calls": [{"name": "task", "arguments": {"agents": [
+        json!({"when": "Read `ledgers/POLICY.md` first",
+               "tool_calls": [{"name": "read_file", "arguments": {"path": "ledgers/POLICY.md"}}]}),
+        json!({"when": "Ledger and Reconciliation Policy", "times": 1,
+               "tool_calls": [{"name": "task", "arguments": {"agents": [
             {"name": "maunga", "task": "total the maunga branches"},
             {"name": "awa", "task": "total the awa branches"}
         ]}}]}),
@@ -659,41 +788,61 @@ fn bench_rules(over_reach: bool) -> Value {
             {"name": "weka", "task": "total ledgers/awa/weka.txt"}
         ]}}]}),
     ];
-    for (region, branch) in [
-        ("maunga", "kowhai"),
-        ("maunga", "rimu"),
-        ("maunga", "totara"),
-        ("awa", "tui"),
-        ("awa", "kea"),
-        ("awa", "weka"),
-    ] {
-        // `kowhai` reads its sibling's file instead of its own, and `tui`
-        // names a sibling in its report: two leaves over-reaching.
-        let read = if over_reach && branch == "kowhai" {
+    if tree.re_reads_policy {
+        // `maunga` reads the policy itself before splitting; the rule that
+        // answers it sits ahead of the plain one, and both are used once.
+        rules.insert(
+            2,
+            json!({"when": "agent `maunga`", "times": 1,
+                   "tool_calls": [{"name": "read_file", "arguments": {"path": "ledgers/POLICY.md"}}]}),
+        );
+        rules.insert(
+            3,
+            json!({"when": "Ledger and Reconciliation Policy", "times": 1,
+                   "tool_calls": [{"name": "task", "arguments": {"agents": [
+                {"name": "kowhai", "task": "total ledgers/maunga/kowhai.txt"},
+                {"name": "rimu", "task": "total ledgers/maunga/rimu.txt"},
+                {"name": "totara", "task": "total ledgers/maunga/totara.txt"}
+            ]}}]}),
+        );
+    }
+    for (region, branch) in BRANCHES {
+        let ledger = if tree.over_reach && branch == "kowhai" {
             "ledgers/maunga/rimu.txt".to_string()
         } else {
             format!("ledgers/{region}/{branch}.txt")
         };
-        rules.push(json!({
-            "when": format!("agent `{branch}`"),
-            "tool_calls": [{"name": "read_file", "arguments": {"path": read}}]
-        }));
-        let report = if over_reach && branch == "tui" {
+        let mut reads = vec![json!({"name": "read_file", "arguments": {"path": ledger}})];
+        if tree.re_reads_policy && branch == "weka" {
+            reads.insert(
+                0,
+                json!({"name": "read_file", "arguments": {"path": "ledgers/POLICY.md"}}),
+            );
+        }
+        rules.push(json!({ "when": format!("agent `{branch}`"), "tool_calls": reads }));
+        let report = if tree.over_reach && branch == "tui" {
             "tui: 1.00, and kea looks like 2.00 as well".to_string()
         } else {
-            format!("{branch}: 1.00")
+            format!("{branch}: {:.2}", tree.totals.get(branch).unwrap_or(&1.0))
         };
         rules.push(json!({ "when": format!("# ledger: {region}/{branch}"), "text": report }));
     }
-    rules.push(json!({"when": "## `kowhai`", "text": "maunga: 3.00"}));
-    rules.push(json!({"when": "## `tui`", "text": "awa: 3.00"}));
-    rules.push(json!({"when": "## `maunga`", "text": "kowhai: 1.00\nmaunga: 3.00\ngrand: 6.00"}));
+    rules.push(json!({"when": "## `kowhai`", "text": "maunga done"}));
+    rules.push(json!({"when": "## `tui`", "text": "awa done"}));
+    let block = [
+        "kowhai", "rimu", "totara", "tui", "kea", "weka", "maunga", "awa", "grand",
+    ]
+    .iter()
+    .map(|name| format!("{name}: {:.2}", tree.totals.get(*name).unwrap_or(&1.0)))
+    .collect::<Vec<_>>()
+    .join("\n");
+    rules.push(json!({"when": "## `maunga`", "text": block}));
     Value::Array(rules)
 }
 
-fn run_bench(name: &str, over_reach: bool) -> String {
+fn run_bench(name: &str, tree: &Tree) -> (String, PathBuf) {
     let dir = workspace(name);
-    let fake = Fake::start(&dir, bench_rules(over_reach));
+    let fake = Fake::start(&dir, bench_rules(tree));
     let output = Command::new(env!("CARGO_BIN_EXE_forks"))
         .arg("bench")
         .arg("--base-url")
@@ -712,24 +861,157 @@ fn run_bench(name: &str, over_reach: bool) -> String {
         "{text}{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    text
+    let bench_dir = text
+        .lines()
+        .find_map(|line| line.strip_prefix("benchmark in "))
+        .map(PathBuf::from)
+        .expect("bench directory line");
+    (text, bench_dir)
+}
+
+/// Re-derive the totals from the generated fixture, applying the rules
+/// `POLICY.md` states. `refunds_added` is what an agent that missed the
+/// refund rule would report.
+fn fixture_totals(bench_dir: &Path, refunds_added: bool) -> BTreeMap<String, f64> {
+    let mut totals = BTreeMap::new();
+    let mut grand = 0.0;
+    for (region, _) in BRANCHES {
+        totals.entry(region.to_string()).or_insert(0.0);
+    }
+    for (region, branch) in BRANCHES {
+        let text = std::fs::read_to_string(
+            bench_dir
+                .join("fixture/ledgers")
+                .join(region)
+                .join(format!("{branch}.txt")),
+        )
+        .expect("fixture ledger");
+        let mut total = 0.0;
+        for line in text.lines() {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            if words.is_empty() || words[0].starts_with('#') || words.last() == Some(&"DUP") {
+                continue;
+            }
+            let Ok(amount) = words[1].parse::<f64>() else {
+                continue; // VOID
+            };
+            if words.last() == Some(&"REFUND") && !refunds_added {
+                total -= amount;
+            } else {
+                total += amount;
+            }
+        }
+        let total = (total * 100.0).round() / 100.0;
+        totals.insert(branch.to_string(), total);
+        *totals.get_mut(region).unwrap() += total;
+        grand += total;
+    }
+    for (_, value) in totals.iter_mut() {
+        *value = (*value * 100.0).round() / 100.0;
+    }
+    totals.insert("grand".to_string(), (grand * 100.0).round() / 100.0);
+    totals
+}
+
+/// The fixture is deterministic, so one throwaway run is enough to learn it.
+fn learn_fixture(name: &str) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
+    let tree = Tree {
+        over_reach: false,
+        re_reads_policy: false,
+        totals: BTreeMap::new(),
+    };
+    let (_, bench_dir) = run_bench(name, &tree);
+    (
+        fixture_totals(&bench_dir, false),
+        fixture_totals(&bench_dir, true),
+    )
 }
 
 #[test]
-fn the_benchmark_scores_a_disciplined_tree_clean() {
-    let text = run_bench("bench-clean", false);
+fn the_benchmark_prints_the_caps_that_bound_a_trial() {
+    let (text, _) = run_bench(
+        "bench-caps",
+        &Tree {
+            over_reach: false,
+            re_reads_policy: false,
+            totals: BTreeMap::new(),
+        },
+    );
     assert!(
-        text.contains("structure ok  leaf over-reach 0/6  region over-reach 0/2"),
+        text.contains(
+            "per-trial cap $0.1500 · per-trial depth limit 2 · whole-benchmark budget $5.0000"
+        ),
         "{text}"
     );
-    assert!(text.contains("totals WRONG"), "{text}");
+}
+
+#[test]
+fn the_benchmark_scores_a_disciplined_tree_clean_and_correct() {
+    let (correct, _) = learn_fixture("bench-learn-clean");
+    let (text, _) = run_bench(
+        "bench-clean",
+        &Tree {
+            over_reach: false,
+            re_reads_policy: false,
+            totals: correct,
+        },
+    );
+    assert!(
+        text.contains(
+            "structure ok  leaf over-reach 0/6  region over-reach 0/2  policy re-reads 0/8  totals ok"
+        ),
+        "{text}"
+    );
 }
 
 #[test]
 fn the_benchmark_counts_leaves_that_stray_outside_their_assignment() {
-    let text = run_bench("bench-overreach", true);
+    let (correct, _) = learn_fixture("bench-learn-overreach");
+    let (text, _) = run_bench(
+        "bench-overreach",
+        &Tree {
+            over_reach: true,
+            re_reads_policy: false,
+            totals: correct,
+        },
+    );
     assert!(
         text.contains("structure ok  leaf over-reach 2/6  region over-reach 0/2"),
+        "{text}"
+    );
+}
+
+/// Ignoring the refund rule — the rule that only `POLICY.md` states — must
+/// show up as wrong totals, or the policy document is decorative.
+#[test]
+fn the_benchmark_rejects_totals_that_ignore_the_refund_rule() {
+    let (_, refunds_added) = learn_fixture("bench-learn-refund");
+    let (text, _) = run_bench(
+        "bench-refund",
+        &Tree {
+            over_reach: false,
+            re_reads_policy: false,
+            totals: refunds_added,
+        },
+    );
+    assert!(text.contains("totals WRONG"), "{text}");
+}
+
+/// Re-reading the policy is what a fresh child pays instead of inheriting it.
+/// It is counted, and it is not over-reach.
+#[test]
+fn a_policy_re_read_is_counted_and_is_not_over_reach() {
+    let (correct, _) = learn_fixture("bench-learn-policy");
+    let (text, _) = run_bench(
+        "bench-policy",
+        &Tree {
+            over_reach: false,
+            re_reads_policy: true,
+            totals: correct,
+        },
+    );
+    assert!(
+        text.contains("leaf over-reach 0/6  region over-reach 0/2  policy re-reads 2/8"),
         "{text}"
     );
 }

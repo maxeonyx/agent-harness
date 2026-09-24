@@ -1,26 +1,129 @@
-//! A separate HTTP server speaking the chat-completions API from a script,
-//! recording every request body with the times it arrived and was answered.
+//! A scripted chat-completions server, for the scenario tests.
 //!
 //! Agents run concurrently, so a positional script cannot say which response
 //! belongs to which agent. A rule matches on the content of the request's
-//! last message instead — which is exactly the tail that distinguishes one
-//! agent from another. Requests are served on several threads, so overlapping
-//! requests really do overlap.
+//! last message instead — the tail that distinguishes one agent from another.
 //!
-//! A request is logged the moment it arrives, before the scripted delay, so a
-//! test can wait for requests to be in flight. `answered_ms` is when the delay
-//! elapses and the response goes out.
+//! It speaks HTTP/1.1 itself, over a thread per connection. An off-the-shelf
+//! server with a connection thread pool stalled here: under CPU contention it
+//! stopped reading accepted sockets, requests sat unread in the kernel, and
+//! the suite passed in three minutes instead of one second.
+//!
+//! Nothing in the script measures out wall-clock time. A rule can hold its
+//! request at a `barrier` until a given number of requests are in flight
+//! together — which a serialized harness can never satisfy — or `hold` it
+//! until the test sends `POST /release`.
 
 use serde_json::{Value, json};
-use std::io::Write;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Bounds on the two waits. Reaching either is a failure the test is told
+/// about, not something any assertion waits for.
+const BARRIER_LIMIT: Duration = Duration::from_secs(5);
+const HOLD_LIMIT: Duration = Duration::from_secs(30);
 
 fn millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis()
+}
+
+struct Gate {
+    waiting: usize,
+    generation: u64,
+    released: bool,
+}
+
+struct Fake {
+    rules: Vec<Value>,
+    used: Mutex<Vec<u64>>,
+    gate: Mutex<Gate>,
+    signal: Condvar,
+    log: Mutex<std::fs::File>,
+    sequence: AtomicU64,
+}
+
+impl Fake {
+    /// One `write_all` per entry: a test polling this file while it is being
+    /// appended to must never see half a line.
+    fn record(&self, entry: Value) {
+        let line = format!("{entry}\n");
+        let mut file = self.log.lock().unwrap();
+        let _ = file.write_all(line.as_bytes());
+        let _ = file.flush();
+    }
+
+    /// Hold until `count` requests are waiting here together. Returns true if
+    /// that never happened.
+    fn barrier(&self, count: usize) -> bool {
+        let mut gate = self.gate.lock().unwrap();
+        gate.waiting += 1;
+        if gate.waiting >= count {
+            gate.waiting = 0;
+            gate.generation += 1;
+            self.signal.notify_all();
+            return false;
+        }
+        let generation = gate.generation;
+        loop {
+            let (next, outcome) = self.signal.wait_timeout(gate, BARRIER_LIMIT).unwrap();
+            gate = next;
+            if gate.generation != generation {
+                return false;
+            }
+            if outcome.timed_out() {
+                gate.waiting -= 1;
+                return true;
+            }
+        }
+    }
+
+    /// Hold until the test sends `POST /release`. Returns true if it never did.
+    fn hold(&self) -> bool {
+        let mut gate = self.gate.lock().unwrap();
+        loop {
+            if gate.released {
+                return false;
+            }
+            let (next, outcome) = self.signal.wait_timeout(gate, HOLD_LIMIT).unwrap();
+            gate = next;
+            if outcome.timed_out() && !gate.released {
+                return true;
+            }
+        }
+    }
+
+    fn release(&self) {
+        let mut gate = self.gate.lock().unwrap();
+        gate.released = true;
+        self.signal.notify_all();
+    }
+
+    fn pick(&self, last: &str) -> Value {
+        let mut used = self.used.lock().unwrap();
+        self.rules
+            .iter()
+            .enumerate()
+            .find(|(index, rule)| {
+                let matched = match rule["when"].as_str() {
+                    Some(needle) => last.contains(needle),
+                    None => true,
+                };
+                matched && used[*index] < rule["times"].as_u64().unwrap_or(u64::MAX)
+            })
+            .map(|(index, rule)| {
+                used[index] += 1;
+                rule.clone()
+            })
+            .unwrap_or_else(|| {
+                json!({ "text": format!("FAKE PROVIDER: no rule matched last message: {last}") })
+            })
+    }
 }
 
 fn main() {
@@ -37,108 +140,128 @@ fn main() {
         &std::fs::read_to_string(&script_path).expect("failed to read FAKE_PROVIDER_SCRIPT"),
     )
     .expect("FAKE_PROVIDER_SCRIPT must be JSON");
-    let rules: Arc<Vec<Value>> = Arc::new(
-        script["rules"]
-            .as_array()
-            .expect("script needs a `rules` array")
-            .clone(),
-    );
+    let rules = script["rules"]
+        .as_array()
+        .expect("script needs a `rules` array")
+        .clone();
 
-    let server = Arc::new(
-        tiny_http::Server::http(("127.0.0.1", port)).expect("failed to bind fake provider"),
-    );
-    println!("listening on {}", server.server_addr());
+    let fake = Arc::new(Fake {
+        used: Mutex::new(vec![0; rules.len()]),
+        rules,
+        gate: Mutex::new(Gate {
+            waiting: 0,
+            generation: 0,
+            released: false,
+        }),
+        signal: Condvar::new(),
+        log: Mutex::new(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+                .expect("open FAKE_PROVIDER_LOG"),
+        ),
+        sequence: AtomicU64::new(0),
+    });
+
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("failed to bind fake provider");
+    println!("listening on {}", listener.local_addr().unwrap());
     std::io::stdout().flush().ok();
 
-    let log = Arc::new(Mutex::new(
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .expect("open FAKE_PROVIDER_LOG"),
-    ));
-    let used: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(vec![0; rules.len()]));
-
-    let mut workers = Vec::new();
-    for _ in 0..8 {
-        let server = server.clone();
-        let rules = rules.clone();
-        let log = log.clone();
-        let used = used.clone();
-        workers.push(std::thread::spawn(move || {
-            while let Ok(request) = server.recv() {
-                serve(request, &rules, &log, &used);
-            }
-        }));
-    }
-    for worker in workers {
-        let _ = worker.join();
+    for stream in listener.incoming() {
+        let Ok(stream) = stream else { continue };
+        let fake = fake.clone();
+        std::thread::spawn(move || converse(stream, &fake));
     }
 }
 
-fn serve(
-    mut request: tiny_http::Request,
-    rules: &[Value],
-    log: &Mutex<std::fs::File>,
-    used: &Mutex<Vec<usize>>,
-) {
-    let received = millis();
-    let mut text = String::new();
-    request.as_reader().read_to_string(&mut text).ok();
-    if request.method() != &tiny_http::Method::Post || !request.url().ends_with("/chat/completions")
-    {
-        let _ =
-            request.respond(tiny_http::Response::from_string("not found").with_status_code(404));
+/// One connection, one keep-alive conversation.
+fn converse(stream: TcpStream, fake: &Fake) {
+    let Ok(read_half) = stream.try_clone() else {
         return;
+    };
+    let mut reader = BufReader::new(read_half);
+    let mut stream = stream;
+    while let Some((target, body)) = read_request(&mut reader) {
+        let (status, response) = answer(&target, &body, fake);
+        if write_response(&mut stream, status, &response).is_err() {
+            return;
+        }
     }
-    let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+}
+
+fn read_request(reader: &mut BufReader<TcpStream>) -> Option<(String, String)> {
+    let mut line = String::new();
+    if reader.read_line(&mut line).ok()? == 0 {
+        return None;
+    }
+    let mut words = line.split_whitespace();
+    let target = format!("{} {}", words.next()?, words.next()?);
+    let mut length = 0usize;
+    loop {
+        let mut header = String::new();
+        if reader.read_line(&mut header).ok()? == 0 {
+            return None;
+        }
+        if header.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse().ok()?;
+        }
+    }
+    let mut body = vec![0u8; length];
+    reader.read_exact(&mut body).ok()?;
+    Some((target, String::from_utf8_lossy(&body).to_string()))
+}
+
+fn write_response(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+        body.len()
+    )?;
+    stream.flush()
+}
+
+fn answer(target: &str, text: &str, fake: &Fake) -> (u16, String) {
+    if target == "POST /release" {
+        fake.release();
+        return (200, "{}".to_string());
+    }
+    if !target.starts_with("POST ") || !target.ends_with("/chat/completions") {
+        return (404, "{}".to_string());
+    }
+
+    let received = millis();
+    let sequence = fake.sequence.fetch_add(1, Ordering::SeqCst);
+    let body: Value = serde_json::from_str(text).unwrap_or(Value::Null);
     let last = body["messages"]
         .as_array()
         .and_then(|messages| messages.last())
         .and_then(|message| message["content"].as_str())
         .unwrap_or("")
         .to_string();
+    let rule = fake.pick(&last);
 
-    let rule = {
-        let mut used = used.lock().unwrap();
-        rules
-            .iter()
-            .enumerate()
-            .find(|(index, rule)| {
-                let matched = match rule["when"].as_str() {
-                    Some(needle) => last.contains(needle),
-                    None => true,
-                };
-                let times = rule["times"].as_u64().unwrap_or(u64::MAX);
-                matched && (used[*index] as u64) < times
-            })
-            .map(|(index, rule)| {
-                used[index] += 1;
-                rule.clone()
-            })
-    };
+    // Logged on arrival, before any waiting, so a test can see what is in
+    // flight.
+    fake.record(json!({
+        "kind": "received", "seq": sequence, "at": received, "body": body,
+    }));
 
-    let rule = rule.unwrap_or_else(
-        || json!({ "text": format!("FAKE PROVIDER: no rule matched last message: {last}") }),
-    );
-
-    let delay = rule["delay_ms"].as_u64().unwrap_or(0);
-    {
-        let entry = json!({
-            "received_ms": received,
-            "answered_ms": received + delay as u128,
-            "body": body,
-        });
-        let mut file = log.lock().unwrap();
-        let _ = writeln!(file, "{entry}");
-        let _ = file.flush();
+    let mut stuck = false;
+    if let Some(count) = rule["barrier"].as_u64() {
+        stuck |= fake.barrier(count as usize);
     }
-    if delay > 0 {
-        std::thread::sleep(std::time::Duration::from_millis(delay));
+    if rule["hold"].as_bool().unwrap_or(false) {
+        stuck |= fake.hold();
     }
 
-    let status = rule["status"].as_u64().unwrap_or(200);
-    let response_body = if status == 200 {
+    let status = rule["status"].as_u64().unwrap_or(200) as u16;
+    let response = if status == 200 {
         let tool_calls: Vec<Value> = rule["tool_calls"]
             .as_array()
             .map(|calls| {
@@ -147,7 +270,7 @@ fn serve(
                     .enumerate()
                     .map(|(index, call)| {
                         json!({
-                            "id": format!("call_{received}_{index}"),
+                            "id": format!("call_{sequence}_{index}"),
                             "type": "function",
                             "function": {
                                 "name": call["name"],
@@ -158,8 +281,10 @@ fn serve(
                     .collect()
             })
             .unwrap_or_default();
-        let mut message =
-            json!({ "role": "assistant", "content": rule["text"].as_str().unwrap_or("") });
+        let mut message = json!({
+            "role": "assistant",
+            "content": rule["text"].as_str().unwrap_or(""),
+        });
         if !tool_calls.is_empty() {
             message["tool_calls"] = Value::Array(tool_calls);
         }
@@ -178,10 +303,8 @@ fn serve(
         json!({ "error": { "message": rule["text"].as_str().unwrap_or("scripted failure"), "code": status } })
     };
 
-    let response = tiny_http::Response::from_string(response_body.to_string())
-        .with_status_code(status as u16)
-        .with_header(
-            tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
-        );
-    let _ = request.respond(response);
+    fake.record(json!({
+        "kind": "answered", "seq": sequence, "at": millis(), "stuck": stuck,
+    }));
+    (status, response.to_string())
 }

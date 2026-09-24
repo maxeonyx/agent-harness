@@ -11,7 +11,7 @@
 //! serves the whole prefix from cache; only its own tail is new.
 
 use crate::face::Face;
-use crate::framing::{self, Cut, Words};
+use crate::framing::{self, Cut, Framing};
 use crate::limb::Limb;
 use crate::record::Recorder;
 use crate::wire::{self, ChatRequest, Message, ToolCall};
@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -67,12 +67,14 @@ pub struct Config {
     pub provider: Option<String>,
     pub base_url: String,
     pub api_key: Option<String>,
-    pub cut: Cut,
-    pub words: Words,
-    pub mode: Mode,
+    pub framing: Framing,
     pub max_cost: f64,
     pub max_depth: usize,
     pub max_turns: usize,
+    /// No timeout means a provider that stops answering hangs the whole tree
+    /// for as long as it likes. A timed-out request is a transient failure
+    /// and is retried.
+    pub request_timeout: Duration,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -217,13 +219,16 @@ impl Run {
         session_id: String,
     ) -> Run {
         Run {
-            config,
             face,
             recorder,
             cancel,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(config.request_timeout)
+                .build()
+                .expect("build HTTP client"),
             limb,
             session_id,
+            config,
             state: Mutex::new(RunState {
                 spent: 0.0,
                 in_flight: 0,
@@ -641,7 +646,7 @@ async fn scope(
     let mut handles = Vec::new();
     for spec in &specs {
         let child_path = format!("{parent_path} › {}", spec.name);
-        let fresh = run.config.mode.resolve(spec.fresh);
+        let fresh = run.config.framing.mode.resolve(spec.fresh);
         let siblings: Vec<String> = names
             .iter()
             .filter(|name| *name != &spec.name)
@@ -688,13 +693,13 @@ async fn scope(
                 return report;
             }
             let assignment = framing::assignment(
-                run.config.words,
+                run.config.framing.words,
                 &name,
                 &task,
                 &siblings,
                 &dependency_reports,
             );
-            let messages = child_context(run.config.cut, fresh, &turn, &raw, &assignment);
+            let messages = child_context(run.config.framing.cut, fresh, &turn, &raw, &assignment);
             run.note(child_index, |record| {
                 record.assignment = Some(assignment.clone())
             });
