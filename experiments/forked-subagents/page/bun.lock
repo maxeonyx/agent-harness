@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "forked-subagents-page",
+      "dependencies": {
+        "underview": "link:underview",
+      },
+    },
+  },
+  "packages": {
+    "underview": ["underview@link:underview", { "bin": { "underview": "bin/underview" } }],
+  }
+}

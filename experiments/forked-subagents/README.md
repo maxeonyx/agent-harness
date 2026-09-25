@@ -109,6 +109,12 @@ Under two seconds. One test waits on wall-clock time — `a_silent_provider_time
 
 The fake provider speaks HTTP/1.1 itself, on a thread per connection. An off-the-shelf server with a connection thread pool stalled under CPU contention: it stopped reading sockets it had accepted, requests sat unread in the kernel, and the suite took three minutes instead of one second while still passing.
 
-## Overview
+## The page
 
-`python3 overview/build.py` turns the recorded runs and this source into one self-contained page, `overview.ignore.html`: the fork replayed from a real run, every trial as the tree it built, every word said to a model, the loop as code, and every request exactly as sent. It needs `target/release/forks` and the benchmark runs under `runs.ignore/`. Append `?still` to the URL to render every animation at its end, and `#watch/request/clean/3`, `#trials/trial/<trial dir>` or `#machine/source/src/agent.rs/895` to open straight onto a drill-down.
+`page/` is an [underview](https://github.com/maxeonyx/underview) page about this experiment: what was run, down to every request as sent; what it claims and what each claim rests on; the code as nested boxes, where an arrow means "delete that and this breaks"; how data moves; every type; and the cross-cutting concerns. Everything in it is read from the recorded runs and the source when it is built:
+
+```bash
+cd page && bun install && bun build --compile --target=browser ./index.html --outdir out
+```
+
+It needs `target/release/forks` and the benchmark runs under `runs.ignore/`. `page/deps.json` is the dependency graph, made by deleting each of the crate's items in turn and recording what `cargo check --all-targets` then fails on.
