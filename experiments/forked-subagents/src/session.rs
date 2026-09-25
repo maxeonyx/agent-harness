@@ -143,11 +143,6 @@ impl Session {
             self.started.elapsed().as_secs_f64(),
             self.run.recorder.dir().display()
         ));
-        if !ending.handoff.is_empty() {
-            self.run.face.say("");
-            self.run.face.say("root's report:");
-            self.run.face.say(&ending.handoff);
-        }
         ending
     }
 }

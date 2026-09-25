@@ -237,6 +237,9 @@ pub struct AgentRecord {
     pub first_uncached_in: u64,
     pub out: u64,
     pub cost: f64,
+    /// When the agent was registered, so `/tree` can show how long one that
+    /// is still going has been going.
+    pub started: Instant,
     pub millis: u128,
     pub tool_calls: Vec<ToolCallRecord>,
     pub children: Vec<String>,
@@ -249,6 +252,14 @@ pub struct AgentRecord {
 }
 
 impl AgentRecord {
+    /// Wall time so far: how long it took, or how long it has been going.
+    pub fn elapsed_millis(&self) -> u128 {
+        match self.state {
+            AgentState::Ended(_) => self.millis,
+            _ => self.started.elapsed().as_millis(),
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "path": self.path,
@@ -362,6 +373,7 @@ impl Run {
             first_uncached_in: 0,
             out: 0,
             cost: 0.0,
+            started: Instant::now(),
             millis: 0,
             tool_calls: Vec::new(),
             children: Vec::new(),
@@ -641,7 +653,7 @@ impl Run {
                 agent.uncached_in,
                 agent.out,
                 format!("${:.4}", agent.cost),
-                agent.millis as f64 / 1000.0,
+                agent.elapsed_millis() as f64 / 1000.0,
             ));
             total.add(agent);
         }
@@ -713,7 +725,12 @@ pub fn run_agent(
         let mut handoff = String::new();
         let mut turns = 0usize;
 
+        // The root answers whoever asked; a child reports to its parent.
+        let final_label = if depth == 0 { "reply:" } else { "report:" };
         let end = |run: &Arc<Run>, outcome: Outcome, handoff: String, messages: Vec<Message>| {
+            if !handoff.trim().is_empty() {
+                run.face.block(&path, final_label, &handoff);
+            }
             run.note(index, |record| {
                 record.state = AgentState::Ended(outcome.clone());
                 record.millis = started.elapsed().as_millis();
@@ -761,6 +778,8 @@ pub fn run_agent(
                 return end(&run, Outcome::Completed, text, messages);
             }
             if !text.trim().is_empty() {
+                // Said while still working, so it is not the report.
+                run.face.block(&path, "says:", &text);
                 handoff = text;
             }
             if run.cancel.is_cancelled() {
@@ -808,10 +827,12 @@ pub fn run_agent(
                         (format!("read_file({target})"), run.limb.read_file(target))
                     }
                 };
-                run.face.line(&path, &format!("tool {label}"));
+                run.face.result(&path, &format!("tool {label}"), &answer);
                 results[*i] = Some(Message::tool_result(&calls[*i].id, &answer));
             }
             for (i, refusal) in &refusals {
+                run.face
+                    .result(&path, &format!("tool {}", calls[*i].function.name), refusal);
                 results[*i] = Some(Message::tool_result(&calls[*i].id, refusal));
             }
 

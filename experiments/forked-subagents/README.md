@@ -28,6 +28,25 @@ In `chat`, a line is a message to the root and ends your turn. While a turn is r
 
 `--panic-in <agent path>` is fault injection: it makes that agent's task panic, which is how the tests watch the harness record a panicked agent. Every agent ends with a recorded outcome — `completed`, `cancelled`, `faulted`, `suspended` or `panicked` — and a `summary.json` is written even when the root itself panicked.
 
+## Watching it
+
+Every line is prefixed with the agent's path. Anything an agent wrote, and anything a tool answered, is shown under the agent it belongs to, indented rather than re-prefixed, and written in one piece so two agents running at once cannot interleave halfway through:
+
+```
+root                         says:
+    Let me look at the run directory first.
+root                         tool read_file(/home/mclarke/.ssh/id_rsa)
+    Error: path must be relative to the run directory; got /home/mclarke/.ssh/id_rsa
+root › kowhai                report:
+    kowhai: 2673.49
+root                         reply:
+    I could not read your SSH key: my tools are confined to the run directory.
+```
+
+`says:` is text written while still working; `report:` is a child's final message, which is what its parent receives; `reply:` is the root's, which is the answer to whoever asked. A tool's answer is trimmed to its first few lines with a count of the rest, except an error, which is shown whole — an error is usually the entire explanation. A `task` call's result is not repeated, because it is the children's reports and they have already been shown.
+
+`/tree` shows an agent that is still going with the time it has been going, not the time it took.
+
 ## The knobs
 
 Every agent in a run gets the identical system prompt and the identical tool list — Anthropic caches tools, then system, then messages, so any difference between parent and child breaks the child's inherited prefix. The depth limit is therefore enforced by answering an over-deep `task` call with an error tool result, never by taking the tool away. All per-agent framing lives in the tail.

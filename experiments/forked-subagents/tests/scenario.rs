@@ -1614,3 +1614,124 @@ fn a_provider_fault_invalidates_a_trial_while_a_spend_cap_does_not() {
     );
     assert!(text.contains("| 1 | 0 |"), "{text}");
 }
+
+// ------------------------------------------------------------------- face
+
+/// The face is how the tree is watched. An agent's words are the substance of
+/// what it did, and a run that prints only `request returned` leaves the
+/// watcher unable to tell whether anything worked — which is exactly what
+/// happened: a root explained twice, at length, that its tools were confined
+/// to the run directory, and none of it reached the screen.
+#[test]
+fn the_face_shows_what_every_agent_said_in_full() {
+    let dir = workspace("face-said");
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "text": "Looking first.",
+             "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}},
+                            {"name": "task", "arguments": {"agents": [
+                {"name": "north", "task": "report the note"}
+             ]}}]},
+            {"when": "^You are agent `north`", "text": "north line one\nnorth line two"},
+            {"when": "Every agent you launched has finished",
+             "text": "First paragraph of the answer.\n\nSecond paragraph of the answer."}
+        ]),
+    );
+    let out = forks(&dir, &fake, &[], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+
+    // Said while still working: under the agent, indented, not repeated.
+    assert!(
+        out.stdout.contains("says:\n    Looking first."),
+        "text written alongside a tool call was not shown:\n{}",
+        out.stdout
+    );
+    // A child's final message is its report to its parent.
+    assert!(
+        out.stdout.contains(
+            "root › north                 report:\n    north line one\n    north line two"
+        ),
+        "a child's report was not shown under it:\n{}",
+        out.stdout
+    );
+    // The root's final message is the reply to whoever asked, in full.
+    assert!(
+        out.stdout.contains(
+            "reply:\n    First paragraph of the answer.\n    \n    Second paragraph of the answer."
+        ),
+        "the root's reply was not shown in full:\n{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn the_face_shows_tool_results_abbreviated_and_errors_whole() {
+    let dir = workspace("face-results");
+    std::fs::write(
+        dir.join("files").join("long.txt"),
+        (1..=20)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT",
+             "tool_calls": [{"name": "read_file", "arguments": {"path": "long.txt"}},
+                            {"name": "read_file", "arguments": {"path": "/etc/passwd"}}]},
+            {"when": "line 1", "text": "done"}
+        ]),
+    );
+    let out = forks(&dir, &fake, &[], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+
+    assert!(
+        out.stdout.contains("tool read_file(long.txt)\n    line 1\n    line 2\n    line 3\n    line 4\n    line 5\n    … 15 more lines"),
+        "a tool result was not shown, or not abbreviated:\n{}",
+        out.stdout
+    );
+    // The error is the whole explanation, so it is never trimmed.
+    assert!(
+        out.stdout.contains(
+            "tool read_file(/etc/passwd)\n    Error: path must be relative to the run directory; got /etc/passwd"
+        ),
+        "the limb's error was not shown:\n{}",
+        out.stdout
+    );
+}
+
+/// `/tree` showed `0.0s` against the agent that was still going, which is the
+/// one time you want to know how long it has been.
+#[test]
+fn tree_shows_how_long_a_running_agent_has_been_going() {
+    let dir = workspace("face-elapsed");
+    let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
+    let mut live = Live::start(&dir, &fake, "chat", &[], None);
+    live.send("SPLIT the work");
+    fake.await_requests(3);
+    // Testing elapsed time needs time to elapse; a quarter of a second is
+    // enough to tell 0.0s from a number.
+    std::thread::sleep(Duration::from_millis(250));
+    live.send("/tree");
+    live.wait_for("TOTAL");
+    fake.release();
+    live.send("/quit");
+    let (transcript, _) = live.finish();
+
+    let running: Vec<&str> = transcript
+        .lines()
+        .filter(|line| line.contains(" running ") || line.contains(" suspended "))
+        .collect();
+    assert!(
+        !running.is_empty(),
+        "no agent was shown as still going:\n{transcript}"
+    );
+    assert!(
+        running.iter().all(|line| !line.ends_with("0.0s")),
+        "a running agent was shown as having taken no time:\n{}",
+        running.join("\n")
+    );
+}

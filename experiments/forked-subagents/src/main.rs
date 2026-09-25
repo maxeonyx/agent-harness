@@ -67,7 +67,8 @@ Benchmark only:
                                 reaches its own --max-cost is a scored trial.
   --cut / --words / --mode      accept comma-separated lists here
 
-In chat: a line is a message to the root; /tree, /cancel, /quit.
+In chat: a line is a message to the root; /tree, /cancel, /quit. A line typed
+while a turn is running is refused and discarded, not queued.
 ";
 
 #[tokio::main]
@@ -189,7 +190,8 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
         if !matches!(last, Outcome::Completed) {
             break;
         }
-        run.face.say(&run.snapshot());
+        // No tree here: the root's reply is what Max is waiting for, and it
+        // must be the last thing on the screen. `/tree` is a keystroke away.
         if !stdin_open {
             break;
         }
