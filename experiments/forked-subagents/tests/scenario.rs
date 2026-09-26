@@ -41,6 +41,7 @@ struct Req {
     received: u128,
     answered: Option<u128>,
     stuck: bool,
+    headers: Value,
     body: Value,
 }
 
@@ -121,6 +122,7 @@ impl Fake {
                         received: at,
                         answered: None,
                         stuck: false,
+                        headers: entry["headers"].clone(),
                         body: entry["body"].clone(),
                     },
                 );
@@ -195,6 +197,8 @@ fn base_args(dir: &Path, fake: &Fake) -> Vec<String> {
     vec![
         "--dir".into(),
         dir.join("files").display().to_string(),
+        "--backend".into(),
+        "openrouter".into(),
         "--base-url".into(),
         fake.base_url(),
         "--model".into(),
@@ -302,6 +306,29 @@ impl Live {
                 return;
             }
         }
+    }
+
+    /// Wait for forks to exit on its own, with stdin still open: closing it
+    /// would hand the process a way out the user never gave it.
+    fn exits_by_itself(mut self) -> (String, i32) {
+        let deadline = Instant::now() + PATIENCE;
+        let status = loop {
+            if let Some(status) = self.child.try_wait().expect("poll forks") {
+                break status;
+            }
+            if Instant::now() > deadline {
+                let _ = self.child.kill();
+                while let Ok(line) = self.lines.recv_timeout(Duration::from_millis(200)) {
+                    self.seen.push(line);
+                }
+                panic!("forks never exited:\n{}", self.seen.join("\n"));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        while let Ok(line) = self.lines.recv_timeout(Duration::from_millis(200)) {
+            self.seen.push(line);
+        }
+        (self.seen.join("\n"), status.code().unwrap_or(-1))
     }
 
     fn finish(mut self) -> (String, i32) {
@@ -709,23 +736,23 @@ fn an_invalid_task_call_is_answered_with_an_error_result() {
     prefix_is_identical(&fake);
 }
 
-/// Cancellation, driven the way a user drives it: `/cancel` in chat, with
-/// both children's requests held open at the provider.
+/// Cancellation, driven the way a user drives it: Ctrl-C in chat, with both
+/// children's requests held open at the provider. It waits for them, and
+/// then it closes.
 #[test]
-fn cancel_starts_nothing_new_keeps_what_is_in_flight_and_ends_every_agent() {
+fn cancel_waits_for_what_is_in_flight_then_closes() {
     let dir = workspace("cancel");
     let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
     let mut live = Live::start(&dir, &fake, "chat", &[], None);
     live.send("SPLIT the work");
     fake.await_requests(3);
-    live.send("/cancel");
+    live.interrupt();
     live.wait_for("cancelling");
     // The responses the provider was holding come back, and are kept.
     fake.release();
-    live.wait_for("run: cancelled");
-    live.send("/quit");
-    let (transcript, code) = live.finish();
+    let (transcript, code) = live.exits_by_itself();
     assert_eq!(code, 0, "{transcript}");
+    assert!(transcript.contains("run: cancelled"), "{transcript}");
 
     assert_eq!(
         fake.requests().len(),
@@ -970,6 +997,7 @@ fn run_bench(name: &str, tree: &Tree) -> (String, PathBuf) {
     let fake = Fake::start(&dir, bench_rules(tree));
     let output = Command::new(env!("CARGO_BIN_EXE_forks"))
         .arg("bench")
+        .args(["--backend", "openrouter"])
         .arg("--base-url")
         .arg(fake.base_url())
         .arg("--grid")
@@ -1288,6 +1316,19 @@ fn rescoring_a_recorded_benchmark_reproduces_its_scores() {
 
 // ------------------------------------------------- majors and moderates
 
+/// Ctrl-C at the chat prompt, with nothing running, closes at once.
+#[test]
+fn cancel_at_an_idle_prompt_closes() {
+    let dir = workspace("cancel-idle");
+    let fake = Fake::start(&dir, split_rules(json!({})));
+    let mut live = Live::start(&dir, &fake, "chat", &[], None);
+    live.wait_for("chat:");
+    live.interrupt();
+    let (transcript, code) = live.exits_by_itself();
+    assert_eq!(code, 0, "{transcript}");
+    assert_eq!(fake.requests().len(), 0, "{transcript}");
+}
+
 /// Finding 5. A retry is new work, and cancellation has to reach it. The
 /// provider holds the first attempt, answers it with a 503 once released, and
 /// the retry must never be sent.
@@ -1316,21 +1357,33 @@ fn cancelling_stops_the_retries() {
     assert_eq!(code, 0, "cancelling is not a failure:\n{transcript}");
 }
 
-/// Finding 8. The interrupt must stay armed: the second Ctrl-C gives up on
-/// the drain and leaves.
+/// The interrupt stays armed: a second Ctrl-C force-cancels. The responses
+/// the provider is still holding are abandoned, the run closes at once, and
+/// every agent still ends with a recorded outcome.
 #[test]
-fn a_second_interrupt_exits_without_waiting() {
+fn a_second_interrupt_force_cancels() {
     let dir = workspace("second-interrupt");
     let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
     let mut live = Live::start(&dir, &fake, "run", &[], Some("SPLIT the work"));
-    fake.await_requests(1);
+    fake.await_requests(3);
     live.interrupt();
-    live.wait_for("Ctrl-C again to exit now");
+    live.wait_for("Ctrl-C again to force-cancel");
     live.interrupt();
-    let (transcript, code) = live.finish();
+    let (transcript, code) = live.exits_by_itself();
     assert_eq!(
         code, 130,
         "the second interrupt was swallowed:\n{transcript}"
+    );
+    let states = agent_states(&dir);
+    assert!(
+        states.values().all(|state| state == "cancelled"),
+        "every agent must end cancelled: {states:?}\n{transcript}"
+    );
+    let wire = std::fs::read_to_string(newest(&dir.join("runs")).join("wire.jsonl")).unwrap();
+    assert_eq!(
+        wire.matches(r#""kind":"abandoned""#).count(),
+        2,
+        "both held requests should be recorded as abandoned:\n{wire}"
     );
 }
 
@@ -1565,6 +1618,7 @@ fn a_provider_fault_invalidates_a_trial_while_a_spend_cap_does_not() {
     let fake = Fake::start(&dir, Value::Array(rules));
     let output = Command::new(env!("CARGO_BIN_EXE_forks"))
         .arg("bench")
+        .args(["--backend", "openrouter"])
         .arg("--base-url")
         .arg(fake.base_url())
         .arg("--grid")
@@ -1594,6 +1648,7 @@ fn a_provider_fault_invalidates_a_trial_while_a_spend_cap_does_not() {
     let fake = Fake::start(&dir, bench_rules(&plan));
     let output = Command::new(env!("CARGO_BIN_EXE_forks"))
         .arg("bench")
+        .args(["--backend", "openrouter"])
         .arg("--base-url")
         .arg(fake.base_url())
         .arg("--grid")
@@ -1617,14 +1672,13 @@ fn a_provider_fault_invalidates_a_trial_while_a_spend_cap_does_not() {
 
 // ------------------------------------------------------------------- face
 
-/// The face is how the tree is watched. An agent's words are the substance of
-/// what it did, and a run that prints only `request returned` leaves the
-/// watcher unable to tell whether anything worked — which is exactly what
-/// happened: a root explained twice, at length, that its tools were confined
-/// to the run directory, and none of it reached the screen.
+/// Max: "I want to know *exactly* what's in the model's context window". So
+/// every message entering any agent's context is on the screen, whole and
+/// exact: the `task` call's arguments, the child's own tail, the tool result
+/// its parent is resumed with, and the final replies.
 #[test]
-fn the_face_shows_what_every_agent_said_in_full() {
-    let dir = workspace("face-said");
+fn the_face_shows_every_message_exactly_as_it_enters_a_context() {
+    let dir = workspace("face-exact");
     let fake = Fake::start(
         &dir,
         json!([
@@ -1641,32 +1695,28 @@ fn the_face_shows_what_every_agent_said_in_full() {
     let out = forks(&dir, &fake, &[], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
 
-    // Said while still working: under the agent, indented, not repeated.
-    assert!(
-        out.stdout.contains("says:\n    Looking first."),
-        "text written alongside a tool call was not shown:\n{}",
-        out.stdout
-    );
-    // A child's final message is its report to its parent.
-    assert!(
-        out.stdout.contains(
-            "root › north                 report:\n    north line one\n    north line two"
-        ),
-        "a child's report was not shown under it:\n{}",
-        out.stdout
-    );
-    // The root's final message is the reply to whoever asked, in full.
-    assert!(
-        out.stdout.contains(
-            "reply:\n    First paragraph of the answer.\n    \n    Second paragraph of the answer."
-        ),
-        "the root's reply was not shown in full:\n{}",
-        out.stdout
-    );
+    for expected in [
+        "root                         [1 user]\n    │ SPLIT the work",
+        "root                         [2 assistant]\n    │ Looking first.",
+        "root                         [2 assistant tool_use list_dir call_0_0]\n    │ {\"path\":\".\"}",
+        "root                         [2 assistant tool_use task call_0_1]\n    │ {\"agents\":[{\"name\":\"north\",\"task\":\"report the note\"}]}",
+        "root                         [3 tool list_dir call_0_0]\n    │ note.txt",
+        "root › north                 context: root's messages 0–1, then\nroot › north                 [2 user]\n    │ You are agent `north`.\n    │\n    │ Your assignment:\n    │ report the note",
+        "root › north                 [3 assistant]\n    │ north line one\n    │ north line two",
+        "root                         [4 tool task call_0_1]\n    │ Every agent you launched has finished.",
+        "\n    │ ## `north` — completed\n    │ north line one\n    │ north line two",
+        "root                         [5 assistant]\n    │ First paragraph of the answer.\n    │\n    │ Second paragraph of the answer.",
+    ] {
+        assert!(
+            out.stdout.contains(expected),
+            "missing from the face:\n{expected}\n\nface:\n{}",
+            out.stdout
+        );
+    }
 }
 
 #[test]
-fn the_face_shows_tool_results_abbreviated_and_errors_whole() {
+fn tool_results_are_shown_whole() {
     let dir = workspace("face-results");
     std::fs::write(
         dir.join("files").join("long.txt"),
@@ -1688,15 +1738,18 @@ fn the_face_shows_tool_results_abbreviated_and_errors_whole() {
     let out = forks(&dir, &fake, &[], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
 
+    let whole = (1..=20)
+        .map(|n| format!("\n    │ line {n}"))
+        .collect::<String>();
     assert!(
-        out.stdout.contains("tool read_file(long.txt)\n    line 1\n    line 2\n    line 3\n    line 4\n    line 5\n    … 15 more lines"),
-        "a tool result was not shown, or not abbreviated:\n{}",
+        out.stdout
+            .contains(&format!("[3 tool read_file call_0_0]{whole}\n")),
+        "a tool result was not shown whole:\n{}",
         out.stdout
     );
-    // The error is the whole explanation, so it is never trimmed.
     assert!(
         out.stdout.contains(
-            "tool read_file(/etc/passwd)\n    Error: path must be relative to the run directory; got /etc/passwd"
+            "[4 tool read_file call_0_1]\n    │ Error: path must be relative to the run directory; got /etc/passwd"
         ),
         "the limb's error was not shown:\n{}",
         out.stdout
@@ -1734,4 +1787,204 @@ fn tree_shows_how_long_a_running_agent_has_been_going() {
         "a running agent was shown as having taken no time:\n{}",
         running.join("\n")
     );
+}
+
+/// opencode's credential store, as opencode2 lays it out, holding one Claude
+/// subscription token that expires `expires_in_ms` from now.
+fn opencode_db(dir: &Path, expires_in_ms: i64) -> PathBuf {
+    let path = dir.join("opencode.db");
+    let _ = std::fs::remove_file(&path);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE credential (id text PRIMARY KEY, integration_id text, label text NOT NULL, value text NOT NULL, connector_id text, method_id text, active integer, time_created integer NOT NULL, time_updated integer NOT NULL);",
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let value = json!({
+        "type": "oauth", "methodID": "claude-pro-max",
+        "refresh": "sk-ant-ort-fixture", "access": "sk-ant-oat-fixture",
+        "expires": now + expires_in_ms, "metadata": {"email": "max@example.com"},
+    });
+    db.execute(
+        "INSERT INTO credential VALUES ('cred_1', 'anthropic', 'max@example.com', ?1, NULL, NULL, NULL, ?2, ?2)",
+        rusqlite::params![value.to_string(), now],
+    )
+    .unwrap();
+    path
+}
+
+fn forks_on_claude(dir: &Path, fake: &Fake, db: &Path, extra: &[&str], task: &str) -> Forks {
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("run")
+        .arg("--dir")
+        .arg(dir.join("files"))
+        .args([
+            "--backend",
+            "claude",
+            "--model",
+            "anthropic/claude-sonnet-5",
+        ])
+        .arg("--base-url")
+        .arg(format!("http://{}", fake.addr))
+        .arg("--credentials")
+        .arg(db)
+        .arg("--runs-dir")
+        .arg(dir.join("runs"))
+        .args(extra)
+        .arg(task)
+        .output()
+        .expect("run forks");
+    Forks {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        code: output.status.code().unwrap_or(-1),
+    }
+}
+
+/// Max's Claude subscription, with the two things Anthropic needs to accept
+/// its token: the OAuth beta, and Claude Code's identity as `system[0]`. A
+/// fork is still its parent's bytes: on this API one turn's tool results
+/// travel together in one user message, and the child's copy of that
+/// message differs from its parent's only in the `task` slot.
+#[test]
+fn the_claude_backend_sends_the_subscription_token_and_forks_share_bytes() {
+    let dir = workspace("claude-backend");
+    let db = opencode_db(&dir, 3_600_000);
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "text": "Looking first.", "thinking": "Two files, so two agents.",
+             "usage": {"input_tokens": 10, "cache_creation_input_tokens": 200,
+                       "cache_read_input_tokens": 3000, "output_tokens": 7},
+             "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}},
+                            {"name": "task", "arguments": {"agents": [
+                {"name": "north", "task": "report the note"}
+             ]}}]},
+            {"when": "^You are agent `north`", "text": "north says kowhai"},
+            {"when": "Every agent you launched has finished", "text": "done"}
+        ]),
+    );
+    let out = forks_on_claude(&dir, &fake, &db, &["--cut", "full"], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(
+            "request returned   in 3210 (cached 3000, written 200)  out 7  $0.0000  via claude subscription, billed to five_hour"
+        ),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("[3 assistant thinking]\n    │ Two files, so two agents."),
+        "{}",
+        out.stdout
+    );
+
+    let requests = fake.requests();
+    assert_eq!(requests.len(), 3, "{}", out.stdout);
+    for request in &requests {
+        assert_eq!(
+            request.headers["authorization"],
+            "Bearer sk-ant-oat-fixture"
+        );
+        assert_eq!(request.headers["anthropic-beta"], "oauth-2025-04-20");
+        assert_eq!(request.headers["anthropic-version"], "2023-06-01");
+        let body = &request.body;
+        assert_eq!(body["model"], "claude-sonnet-5");
+        assert_eq!(body["cache_control"], json!({"type": "ephemeral"}));
+        assert_eq!(
+            body["system"][0]["text"],
+            "You are Claude Code, Anthropic's official CLI for Claude."
+        );
+        assert_eq!(
+            body["system"], requests[0].body["system"],
+            "system differed"
+        );
+        assert_eq!(body["tools"], requests[0].body["tools"], "tools differed");
+        assert_eq!(body["tools"][2]["name"], "task");
+        assert!(body["tools"][2]["input_schema"].is_object());
+    }
+
+    let messages = |request: &Req| request.body["messages"].as_array().unwrap().clone();
+    let root = messages(&requests[0]);
+    let child = messages(&requests[1]);
+    let resumed = messages(&requests[2]);
+    assert_eq!(
+        child[..1],
+        root[..],
+        "the child did not start from the root's bytes"
+    );
+    assert_eq!(resumed[..1], root[..]);
+    assert_eq!(
+        child[1], resumed[1],
+        "the child's copy of the `task` turn differs"
+    );
+    assert_eq!(
+        child[1]["content"],
+        json!([
+            {"type": "thinking", "thinking": "Two files, so two agents.", "signature": "sig-fake"},
+            {"type": "text", "text": "Looking first."},
+            {"type": "tool_use", "id": "toolu_0_0", "name": "list_dir", "input": {"path": "."}},
+            {"type": "tool_use", "id": "toolu_0_1", "name": "task",
+             "input": {"agents": [{"name": "north", "task": "report the note"}]}}
+        ])
+    );
+    for (request, task_result) in [
+        (&child, "You are agent `north`."),
+        (&resumed, "Every agent you launched has finished."),
+    ] {
+        let results = request[2]["content"].as_array().unwrap();
+        assert_eq!(request.len(), 3);
+        assert_eq!(request[2]["role"], "user");
+        assert_eq!(
+            results[0],
+            json!({"type": "tool_result", "tool_use_id": "toolu_0_0", "content": "note.txt"})
+        );
+        assert_eq!(results[1]["tool_use_id"], "toolu_0_1");
+        assert!(
+            results[1]["content"]
+                .as_str()
+                .unwrap()
+                .starts_with(task_result)
+        );
+    }
+}
+
+#[test]
+fn an_expired_subscription_token_stops_the_run_before_any_request() {
+    let dir = workspace("claude-expired");
+    let db = opencode_db(&dir, -3_600_000);
+    let fake = Fake::start(&dir, split_rules(json!({})));
+    let out = forks_on_claude(&dir, &fake, &db, &[], "SPLIT the work");
+    assert_ne!(out.code, 0, "{}", out.stdout);
+    assert!(
+        out.stderr.contains("expired") && out.stderr.contains("opencode"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(fake.requests().len(), 0);
+}
+
+/// Anthropic refuses a request whose identity it does not accept with a 429
+/// whose message is "Error". It is not a rate limit, and waiting it out never
+/// works.
+#[test]
+fn an_identity_rejection_is_a_fault_not_a_rate_limit() {
+    let dir = workspace("claude-identity");
+    let db = opencode_db(&dir, 3_600_000);
+    let fake = Fake::start(
+        &dir,
+        json!([{"when": "^SPLIT", "status": 429, "text": "Error"}]),
+    );
+    let out = forks_on_claude(&dir, &fake, &db, &[], "SPLIT the work");
+    assert_ne!(out.code, 0, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("rejected the request identity"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(fake.requests().len(), 1, "the rejection was retried");
 }

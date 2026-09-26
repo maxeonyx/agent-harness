@@ -1,11 +1,86 @@
-//! The provider wire: chat-completions message types and the HTTP client.
+//! The provider wire: the transcript's message types, and the two APIs that
+//! carry them.
 //!
 //! A message is stored exactly as it is sent, so a forked child can clone its
-//! parent's `Vec<Message>` and serialize to the same bytes. Nothing in here
-//! knows about agents.
+//! parent's `Vec<Message>` and serialize to the same bytes. The transcript is
+//! chat-completions shaped; the Claude backend translates it as it is sent,
+//! which is a pure function of the messages and keeps that true. Nothing in
+//! here knows about agents.
 
+use crate::anthropic;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::path::PathBuf;
 use std::time::Duration;
+
+#[derive(Clone, Debug)]
+pub enum Backend {
+    /// OpenRouter's chat-completions API, paid per token from a key.
+    OpenRouter {
+        base_url: String,
+        api_key: Option<String>,
+        /// Pinned routing. Unpinned, OpenRouter sent parallel forks to a
+        /// backend that had never seen the parent's prefix (probe,
+        /// 2026-09-24).
+        provider: Option<String>,
+    },
+    /// Anthropic's Messages API on Max's Claude subscription, with the token
+    /// opencode keeps in `credentials`.
+    Claude {
+        base_url: String,
+        credentials: PathBuf,
+    },
+}
+
+impl Backend {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Backend::OpenRouter { .. } => "openrouter",
+            Backend::Claude { .. } => "claude",
+        }
+    }
+
+    pub fn provider(&self) -> Option<&str> {
+        match self {
+            Backend::OpenRouter { provider, .. } => provider.as_deref(),
+            Backend::Claude { .. } => None,
+        }
+    }
+
+    /// The system messages every agent in a run starts with.
+    pub fn system(&self, prompt: &str) -> Vec<Message> {
+        let mut system = Vec::new();
+        if let Backend::Claude { .. } = self {
+            system.push(Message::new("system", anthropic::IDENTITY));
+        }
+        system.push(Message::new("system", prompt));
+        system
+    }
+
+    /// The request body, exactly as it is sent and recorded.
+    pub fn body(
+        &self,
+        model: &str,
+        messages: &[Message],
+        tools: &[Value],
+        session_id: &str,
+    ) -> Value {
+        match self {
+            Backend::OpenRouter { provider, .. } => serde_json::to_value(ChatRequest {
+                model: model.to_string(),
+                messages: messages.to_vec(),
+                tools: tools.to_vec(),
+                cache_control: serde_json::json!({ "type": "ephemeral" }),
+                provider: provider
+                    .as_ref()
+                    .map(|slug| serde_json::json!({ "order": [slug], "allow_fallbacks": false })),
+                session_id: session_id.to_string(),
+            })
+            .expect("a request of strings and JSON values serializes"),
+            Backend::Claude { .. } => anthropic::body(model, messages, tools),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ToolCallFunction {
@@ -64,20 +139,18 @@ impl Message {
 }
 
 #[derive(Serialize, Debug)]
-pub struct ChatRequest {
-    pub model: String,
-    pub messages: Vec<Message>,
-    pub tools: Vec<serde_json::Value>,
+struct ChatRequest {
+    model: String,
+    messages: Vec<Message>,
+    tools: Vec<Value>,
     /// Anthropic-style prompt caching, switched on for the whole request.
-    pub cache_control: serde_json::Value,
-    /// Pinned routing. Unpinned, OpenRouter sent parallel forks to a backend
-    /// that had never seen the parent's prefix (probe, 2026-09-24).
+    cache_control: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<serde_json::Value>,
+    provider: Option<Value>,
     /// Shared by every agent in one run, for sticky routing. Empty means
     /// the field is not sent at all.
     #[serde(skip_serializing_if = "String::is_empty")]
-    pub session_id: String,
+    session_id: String,
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -101,18 +174,18 @@ pub struct Usage {
     pub prompt_tokens_details: PromptTokensDetails,
 }
 
-#[derive(Deserialize, Debug)]
-pub struct Choice {
-    pub message: Message,
+#[derive(Deserialize)]
+struct Choice {
+    message: Message,
 }
 
-#[derive(Deserialize, Debug)]
-pub struct ChatResponse {
+#[derive(Deserialize)]
+struct ChatResponse {
     #[serde(default)]
-    pub choices: Vec<Choice>,
-    pub usage: Usage,
+    choices: Vec<Choice>,
+    usage: Usage,
     #[serde(default)]
-    pub provider: Option<String>,
+    provider: Option<String>,
 }
 
 /// What one HTTP attempt came back with. Retrying is the caller's decision,
@@ -120,7 +193,7 @@ pub struct ChatResponse {
 /// whether another attempt is still inside the spend cap — both of which must
 /// be checked per attempt, not per logical request.
 pub enum Attempt {
-    Answered(Sent),
+    Answered(Box<Sent>),
     /// Worth another attempt: the network, a 429, a 5xx, a timeout.
     Transient(Retryable),
     /// An out-of-band fault. The harness cannot get past it, so the agent
@@ -138,12 +211,16 @@ pub struct Retryable {
 }
 
 pub struct Sent {
-    pub response: ChatResponse,
+    pub message: Message,
+    pub usage: Usage,
+    /// Who answered: OpenRouter's upstream provider, or which of the
+    /// subscription's limits the request was billed to.
+    pub via: String,
     /// The raw response body, for the wire log.
-    pub body: serde_json::Value,
+    pub body: Value,
 }
 
-/// Seconds, which is what OpenRouter sends. An HTTP-date `Retry-After` is
+/// Seconds, which is what both APIs send. An HTTP-date `Retry-After` is
 /// ignored in favour of the backoff schedule rather than parsed.
 fn retry_after(response: &reqwest::Response) -> Option<Duration> {
     response
@@ -166,18 +243,47 @@ fn retryable_status(code: u16) -> Option<bool> {
     }
 }
 
-pub async fn send_once(
-    client: &reqwest::Client,
-    base_url: &str,
-    api_key: Option<&str>,
-    request: &ChatRequest,
-) -> Attempt {
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let mut builder = client.post(&url).json(request);
-    if let Some(key) = api_key {
-        builder = builder.bearer_auth(key);
+fn classify(code: u16, reason: String, wait: Option<Duration>) -> Attempt {
+    match retryable_status(code) {
+        Some(rate_limited) => Attempt::Transient(Retryable {
+            reason,
+            rate_limited,
+            retry_after: wait,
+        }),
+        None => Attempt::Fatal(reason),
     }
-    let response = match builder.send().await {
+}
+
+pub async fn send_once(client: &reqwest::Client, backend: &Backend, body: &Value) -> Attempt {
+    let request = match backend {
+        Backend::OpenRouter {
+            base_url, api_key, ..
+        } => {
+            let request = client
+                .post(format!(
+                    "{}/chat/completions",
+                    base_url.trim_end_matches('/')
+                ))
+                .json(body);
+            match api_key {
+                Some(key) => request.bearer_auth(key),
+                None => request,
+            }
+        }
+        Backend::Claude {
+            base_url,
+            credentials,
+        } => match anthropic::access_token(credentials) {
+            Ok(token) => client
+                .post(format!("{}/v1/messages", base_url.trim_end_matches('/')))
+                .bearer_auth(token)
+                .header("anthropic-version", anthropic::VERSION)
+                .header("anthropic-beta", anthropic::OAUTH_BETA)
+                .json(body),
+            Err(error) => return Attempt::Fatal(error),
+        },
+    };
+    let response = match request.send().await {
         Ok(response) => response,
         Err(error) => {
             return Attempt::Transient(Retryable {
@@ -189,42 +295,55 @@ pub async fn send_once(
     };
     let status = response.status();
     let wait = retry_after(&response);
+    let claim = response
+        .headers()
+        .get("anthropic-ratelimit-unified-representative-claim")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("?")
+        .to_string();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
         let reason = format!("provider returned {status}: {text}");
-        return match retryable_status(status.as_u16()) {
-            Some(rate_limited) => Attempt::Transient(Retryable {
-                reason,
-                rate_limited,
-                retry_after: wait,
-            }),
-            None => Attempt::Fatal(reason),
-        };
+        if let Backend::Claude { .. } = backend
+            && anthropic::is_identity_rejection(status.as_u16(), &text)
+        {
+            return Attempt::Fatal(format!(
+                "Anthropic rejected the request identity: system[0] was not accepted as Claude Code's. This is a 429 but not a rate limit, so it is not retried. {reason}"
+            ));
+        }
+        return classify(status.as_u16(), reason, wait);
     }
-    let body: serde_json::Value = match serde_json::from_str(&text) {
+    let body: Value = match serde_json::from_str(&text) {
         Ok(body) => body,
         Err(error) => {
             return Attempt::Fatal(format!("response was not JSON: {error}; body: {text}"));
         }
     };
+    match backend {
+        Backend::OpenRouter { .. } => openrouter_reply(body, &text, wait),
+        Backend::Claude { .. } => match anthropic::reply(&body) {
+            Ok((message, usage)) => Attempt::Answered(Box::new(Sent {
+                message,
+                usage,
+                via: format!("claude subscription, billed to {claim}"),
+                body,
+            })),
+            Err(error) => Attempt::Fatal(error),
+        },
+    }
+}
+
+fn openrouter_reply(body: Value, text: &str, wait: Option<Duration>) -> Attempt {
     // OpenRouter reports upstream failures as a 200 carrying an `error`
     // object — including rate limits, which arrive as `"code": 429` with an
     // HTTP 200. Reading only the HTTP status treats a "come back shortly" as
     // permanent, which is how a whole grid of trials died in seconds.
     if let Some(error) = body.get("error") {
-        let reason = format!("provider returned an error: {text}");
         let code = error
             .get("code")
             .and_then(|code| code.as_u64())
             .unwrap_or(0) as u16;
-        return match retryable_status(code) {
-            Some(rate_limited) => Attempt::Transient(Retryable {
-                reason,
-                rate_limited,
-                retry_after: wait,
-            }),
-            None => Attempt::Fatal(reason),
-        };
+        return classify(code, format!("provider returned an error: {text}"), wait);
     }
     let response: ChatResponse = match serde_json::from_value(body.clone()) {
         Ok(response) => response,
@@ -232,8 +351,13 @@ pub async fn send_once(
             return Attempt::Fatal(format!("could not parse response: {error}; body: {text}"));
         }
     };
-    if response.choices.is_empty() {
+    let Some(choice) = response.choices.into_iter().next() else {
         return Attempt::Fatal(format!("provider returned no choices: {text}"));
-    }
-    Attempt::Answered(Sent { response, body })
+    };
+    Attempt::Answered(Box::new(Sent {
+        message: choice.message,
+        usage: response.usage,
+        via: response.provider.unwrap_or_else(|| "?".to_string()),
+        body,
+    }))
 }

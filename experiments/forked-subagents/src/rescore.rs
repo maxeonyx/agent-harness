@@ -193,6 +193,12 @@ fn read_trial(
     )
     .map_err(|e| format!("parse {}/summary.json: {e}", dir.display()))?;
     let text = |key: &str| summary[key].as_str().unwrap_or("").to_string();
+    if text("backend") == "claude" {
+        return Err(format!(
+            "{} was run on the claude backend; rescoring reads OpenRouter's wire format only",
+            dir.display()
+        ));
+    }
 
     let rep = dir
         .file_name()

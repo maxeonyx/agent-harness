@@ -4,7 +4,7 @@ Disposable experiment. Brief: `docs/process/experiments/forked-subagents-brief.m
 
 `forks` runs agents as structured concurrency. A `task` call is a scope: the caller is suspended inside the call while its children run at the same time, possibly opening scopes of their own, and the call returns one tool result holding every child's report. A forked child's context is the parent's messages cloned, so it serializes to the same bytes and the provider serves the prefix from cache; only the child's own tail is new.
 
-Two binaries: `forks`, and `fake-provider` — a separate HTTP server that answers from a script and records every request, which is what the scenario tests assert against.
+Two binaries: `forks`, and `fake-provider` — a separate HTTP server that speaks both backends' APIs, answers from a script and records every request, which is what the scenario tests assert against.
 
 ## Run it
 
@@ -16,7 +16,7 @@ cargo run --release --bin forks -- bench --reps 1
 cargo run --release --bin forks -- --help
 ```
 
-The key comes from `$OPENROUTER_API_KEY` or `keys.ignore.env` beside this README. Runs are recorded under `runs.ignore/<timestamp>-<label>/`: `wire.jsonl` (every request and response body, tagged with the agent's path), `agents/<path>.md` (each agent's final context), `summary.json`. Both directories are gitignored.
+There are two backends. `--backend claude`, the default, is Anthropic's Messages API on Max's Claude subscription, using the token opencode keeps in `~/.local/share/opencode/opencode.db`. `--backend openrouter` is OpenRouter's chat-completions API, with the key from `$OPENROUTER_API_KEY` or `keys.ignore.env` beside this README. Runs are recorded under `runs.ignore/<timestamp>-<label>/`: `wire.jsonl` (every request and response body, tagged with the agent's path), `agents/<path>.md` (each agent's final context), `summary.json`. Both directories are gitignored.
 
 `agents/*.md` render the same way for every agent, so a fork's context can be seen to be its parent's:
 
@@ -24,26 +24,38 @@ The key comes from `$OPENROUTER_API_KEY` or `keys.ignore.env` beside this README
 diff runs.ignore/<run>/agents/root.md runs.ignore/<run>/agents/root.alpha.md
 ```
 
-In `chat`, a line is a message to the root and ends your turn. While a turn is running only `/tree` and `/cancel` are accepted; `/quit` exits. Ctrl-C cancels; a second Ctrl-C stops waiting for in-flight responses and exits with 130.
+In `chat`, a line is a message to the root and ends your turn. While a turn is running only `/tree` and `/cancel` are accepted; `/quit` exits.
+
+Ctrl-C (or `/cancel`) cancels: nothing new starts, the responses already in flight are waited for and kept, and then `forks` closes. Ctrl-C again force-cancels: the responses still in flight are abandoned, and `forks` closes at once with exit code 130. Either way every agent ends with a recorded outcome and `summary.json` is written.
 
 `--panic-in <agent path>` is fault injection: it makes that agent's task panic, which is how the tests watch the harness record a panicked agent. Every agent ends with a recorded outcome — `completed`, `cancelled`, `faulted`, `suspended` or `panicked` — and a `summary.json` is written even when the root itself panicked.
 
 ## Watching it
 
-Every line is prefixed with the agent's path. Anything an agent wrote, and anything a tool answered, is shown under the agent it belongs to, indented rather than re-prefixed, and written in one piece so two agents running at once cannot interleave halfway through:
+Every line is prefixed with the agent's path. There are two kinds of line. An event is something the harness did. A bracketed header is a message entering that agent's context, followed by its exact text, each line behind a `│`. Nothing in a message is trimmed or paraphrased: the `task` call's arguments, each child's own tail, whole tool results, and the tool result the parent is resumed with.
 
 ```
-root                         says:
-    Let me look at the run directory first.
-root                         tool read_file(/home/mclarke/.ssh/id_rsa)
-    Error: path must be relative to the run directory; got /home/mclarke/.ssh/id_rsa
-root › kowhai                report:
-    kowhai: 2673.49
-root                         reply:
-    I could not read your SSH key: my tools are confined to the run directory.
+root                         [2 user]
+    │ Use the task tool to launch two agents at once: one reads face.rs and one reads limb.rs; …
+root                         request sent
+root                         request returned   in 1212 (cached 1210, written 0)  out 212  $0.0000  via claude subscription, billed to five_hour
+root                         [3 assistant thinking] (the provider did not show it)
+root                         [3 assistant tool_use task toolu_01LqrMFkAjmUMVoFXWA6DjcC]
+    │ {"agents":[{"name":"face_reader","task":"Read the file face.rs …","fresh":true},{"name":"limb_reader", …}]}
+root                         scope opened: face_reader, limb_reader — suspended
+root › face_reader           context: root's messages 0–1, then
+root › face_reader           [2 user]
+    │ You are agent `face_reader`.
+    │
+    │ Your assignment:
+    │ Read the file face.rs …
+root › face_reader           [3 assistant tool_use read_file toolu_01NF29qtSHoimTCjxcc5iQ6t]
+    │ {"path":"face.rs"}
+root › face_reader           [4 tool read_file toolu_01NF29qtSHoimTCjxcc5iQ6t]
+    │ //! What you watch while the tree runs: …
 ```
 
-`says:` is text written while still working; `report:` is a child's final message, which is what its parent receives; `reply:` is the root's, which is the answer to whoever asked. A tool's answer is trimmed to its first few lines with a count of the rest, except an error, which is shown whole — an error is usually the entire explanation. A `task` call's result is not repeated, because it is the children's reports and they have already been shown.
+The number in the header is the message's place in that agent's context, the same number as in `agents/<path>.md`. A child's `context:` line says which of its parent's messages it starts with; those were already shown under the parent, and everything after them is shown under the child. A message holds text, reasoning and tool calls, and each is shown as its own block under the same number. The wire format differs from what is shown in one way: on the claude backend, one turn's tool results travel together as one user message. `wire.jsonl` has the bodies exactly as sent.
 
 `/tree` shows an agent that is still going with the time it has been going, not the time it took.
 
@@ -94,9 +106,11 @@ cargo run --bin forks -- rescore runs.ignore/<timestamp>-bench [--json rows.json
 
 Scores a benchmark that has already been paid for, again, offline, and prints the old verdict beside the new one.
 
-Runs made since the harness started recording `fault_kind` say outright why they faulted. Older ones carry only the fault message, which rescoring reads back: `spend cap reached` and `agent ran past N turns` are the model's own doing, while `provider returned …`, `request failed`, `N attempts failed`, `rate limited for longer than …` and `agent task panicked` are not. Every message the harness has produced is covered; anything unrecognised is left unclassified and the trial is kept, because discarding paid evidence on a guess is worse than keeping a doubtful row. Rescoring says how many trials fell into each of the three. It walks the trial directories rather than `trials.json`, because `trials.json` is written once at the end and two benchmarks that started in the same second used to share a directory — the second to finish overwrote the first's index. `wire.jsonl` is the ground truth for what each agent did: a request body carries the previous turn's tool results, which is how a read that failed is told from one that worked. Expected totals come from that benchmark's own `fixture/`, never from today's generator. Nothing is written back.
+Runs made since the harness started recording `fault_kind` say outright why they faulted. Older ones carry only the fault message, which rescoring reads back: `spend cap reached` and `agent ran past N turns` are the model's own doing, while `provider returned …`, `request failed`, `N attempts failed`, `rate limited for longer than …` and `agent task panicked` are not. Every message the harness has produced is covered; anything unrecognised is left unclassified and the trial is kept, because discarding paid evidence on a guess is worse than keeping a doubtful row. Rescoring says how many trials fell into each of the three. It walks the trial directories rather than `trials.json`, because `trials.json` is written once at the end and two benchmarks that started in the same second used to share a directory — the second to finish overwrote the first's index. `wire.jsonl` is the ground truth for what each agent did: a request body carries the previous turn's tool results, which is how a read that failed is told from one that worked. Expected totals come from that benchmark's own `fixture/`, never from today's generator. Nothing is written back. It reads OpenRouter's wire format only, and refuses a benchmark run on the claude backend.
 
 ## Cost
+
+The claude backend is not billed per token: every request costs $0, and `--max-cost` never trips. What it spends is the subscription's usage limits, and `via` names the limit a request was billed to (`five_hour` is the plan). Only the depth and turn limits bound a run there.
 
 `--max-cost` (default $0.50 per run) is checked before each request. A scope puts many requests in the air at once, so the check charges each in-flight request the most any single request has cost so far; without that the cap is overshot by a whole fan-out. It is still a gate, not a hard limit: one already-sent request can always land above the cap, and a wide tree can overshoot by more.
 
@@ -112,7 +126,7 @@ Reaching the cap is an out-of-band fault, and out-of-band faults behave the same
 
 ## What it deliberately does not do
 
-From the brief's out-of-scope list: user-facing children, `/done` and the main-thread pattern; siblings launching siblings into their own scope; re-wiring dependencies after launch; resume; compaction inside a scope; persistence and restart; limbs other than the one local read-only directory; writes and shared-workspace races; attachments and shared seed contexts; two-part launch; and the first-party provider APIs — OpenRouter's chat-completions API only.
+From the brief's out-of-scope list: user-facing children, `/done` and the main-thread pattern; siblings launching siblings into their own scope; re-wiring dependencies after launch; resume; compaction inside a scope; persistence and restart; limbs other than the one local read-only directory; writes and shared-workspace races; attachments and shared seed contexts; two-part launch.
 
 Beyond those: one `task` call per assistant turn (a second in the same turn gets an error result), and no streaming.
 

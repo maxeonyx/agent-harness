@@ -812,7 +812,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
     let default_grid = format!(
         "{}@{}",
         args.one("model", "anthropic/claude-sonnet-5"),
-        args.one("provider", "amazon-bedrock")
+        args.provider()
     );
     let grid = args.list("grid", &default_grid);
     let cuts = args
@@ -835,9 +835,10 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
     let bench_dir = args.runs_dir().join(format!("{stamp}-bench"));
     std::fs::create_dir_all(&bench_dir).map_err(|e| format!("create bench directory: {e}"))?;
     let fixture = write_fixture(&bench_dir.join("fixture"))?;
+    let (first_model, first_provider) = grid[0].split_once('@').unwrap_or((grid[0].as_str(), ""));
     let sample = args.config_with(
-        "",
-        "",
+        first_model,
+        first_provider,
         Framing {
             cut: cuts[0],
             words: words[0],

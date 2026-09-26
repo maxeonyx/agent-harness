@@ -17,11 +17,9 @@ tokio = { version = "1", features = [
     "sync",
     "time",
     "signal",
-    "io-std",
-    "io-util",
-    "fs",
 ] }
 tokio-util = "0.7"
+rusqlite = { version = "0.37", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",

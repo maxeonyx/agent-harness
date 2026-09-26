@@ -1,8 +1,11 @@
-//! A scripted chat-completions server, for the scenario tests.
+//! A scripted provider, for the scenario tests. It speaks OpenRouter's
+//! chat-completions at `/chat/completions` and Anthropic's Messages API at
+//! `/v1/messages`, from the same script.
 //!
 //! Agents run concurrently, so a positional script cannot say which response
 //! belongs to which agent. A rule matches on the content of the request's
 //! last message instead — the tail that distinguishes one agent from another.
+//! On the Messages API that is the last block of the last message.
 //!
 //! A needle beginning with `^` matches only the last message's first line.
 //! Agent identity is always on that first line ("You are agent `x`."), while
@@ -201,15 +204,17 @@ fn converse(stream: TcpStream, fake: &Fake) {
     };
     let mut reader = BufReader::new(read_half);
     let mut stream = stream;
-    while let Some((target, body)) = read_request(&mut reader) {
-        let (status, response, retry_after) = answer(&target, &body, fake);
-        if write_response(&mut stream, status, &response, retry_after).is_err() {
+    while let Some((target, headers, body)) = read_request(&mut reader) {
+        let (status, response, retry_after) = answer(&target, &headers, &body, fake);
+        let claim = target.ends_with("/v1/messages");
+        if write_response(&mut stream, status, &response, retry_after, claim).is_err() {
             return;
         }
     }
 }
 
-fn read_request(reader: &mut BufReader<TcpStream>) -> Option<(String, String)> {
+/// The request line, the headers the tests assert on, and the body.
+fn read_request(reader: &mut BufReader<TcpStream>) -> Option<(String, Value, String)> {
     let mut line = String::new();
     if reader.read_line(&mut line).ok()? == 0 {
         return None;
@@ -217,6 +222,7 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Option<(String, String)> {
     let mut words = line.split_whitespace();
     let target = format!("{} {}", words.next()?, words.next()?);
     let mut length = 0usize;
+    let mut headers = json!({});
     loop {
         let mut header = String::new();
         if reader.read_line(&mut header).ok()? == 0 {
@@ -225,15 +231,20 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Option<(String, String)> {
         if header.trim().is_empty() {
             break;
         }
-        if let Some((name, value)) = header.split_once(':')
-            && name.eq_ignore_ascii_case("content-length")
-        {
+        let Some((name, value)) = header.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        if name == "content-length" {
             length = value.trim().parse().ok()?;
+        }
+        if ["authorization", "anthropic-beta", "anthropic-version"].contains(&name.as_str()) {
+            headers[name] = json!(value.trim());
         }
     }
     let mut body = vec![0u8; length];
     reader.read_exact(&mut body).ok()?;
-    Some((target, String::from_utf8_lossy(&body).to_string()))
+    Some((target, headers, String::from_utf8_lossy(&body).to_string()))
 }
 
 fn write_response(
@@ -241,43 +252,61 @@ fn write_response(
     status: u16,
     body: &str,
     retry_after: Option<u64>,
+    claim: bool,
 ) -> std::io::Result<()> {
-    let retry = match retry_after {
+    let mut extra = match retry_after {
         Some(seconds) => format!("Retry-After: {seconds}\r\n"),
         None => String::new(),
     };
+    if claim {
+        extra.push_str("anthropic-ratelimit-unified-representative-claim: five_hour\r\n");
+    }
     write!(
         stream,
-        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{retry}Connection: keep-alive\r\n\r\n{body}",
+        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}Connection: keep-alive\r\n\r\n{body}",
         body.len()
     )?;
     stream.flush()
 }
 
-fn answer(target: &str, text: &str, fake: &Fake) -> (u16, String, Option<u64>) {
+fn answer(target: &str, headers: &Value, text: &str, fake: &Fake) -> (u16, String, Option<u64>) {
     if target == "POST /release" {
         fake.release();
         return (200, "{}".to_string(), None);
     }
-    if !target.starts_with("POST ") || !target.ends_with("/chat/completions") {
+    let anthropic = target.ends_with("/v1/messages");
+    if !target.starts_with("POST ") || !(anthropic || target.ends_with("/chat/completions")) {
         return (404, "{}".to_string(), None);
     }
 
     let received = millis();
     let sequence = fake.sequence.fetch_add(1, Ordering::SeqCst);
     let body: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-    let last = body["messages"]
+    let last_message = body["messages"]
         .as_array()
         .and_then(|messages| messages.last())
-        .and_then(|message| message["content"].as_str())
-        .unwrap_or("")
-        .to_string();
+        .cloned()
+        .unwrap_or(Value::Null);
+    let last = if anthropic {
+        let block = last_message["content"]
+            .as_array()
+            .and_then(|blocks| blocks.last())
+            .cloned()
+            .unwrap_or(Value::Null);
+        block["text"]
+            .as_str()
+            .or(block["content"].as_str())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        last_message["content"].as_str().unwrap_or("").to_string()
+    };
     let rule = fake.pick(&last);
 
     // Logged on arrival, before any waiting, so a test can see what is in
     // flight.
     fake.record(json!({
-        "kind": "received", "seq": sequence, "at": received, "body": body,
+        "kind": "received", "seq": sequence, "at": received, "headers": headers, "body": body,
     }));
 
     let mut stuck = false;
@@ -289,6 +318,14 @@ fn answer(target: &str, text: &str, fake: &Fake) -> (u16, String, Option<u64>) {
     }
 
     let status = rule["status"].as_u64().unwrap_or(200) as u16;
+    if anthropic {
+        fake.record(json!({ "kind": "answered", "seq": sequence, "at": millis(), "stuck": stuck }));
+        return (
+            status,
+            messages_response(&rule, &body, sequence, status).to_string(),
+            rule["retry_after"].as_u64(),
+        );
+    }
     // OpenRouter answers a rate limit with HTTP 200 and an `error` object
     // whose `code` is 429. `error_code` scripts exactly that shape.
     if let Some(code) = rule["error_code"].as_u64() {
@@ -345,4 +382,41 @@ fn answer(target: &str, text: &str, fake: &Fake) -> (u16, String, Option<u64>) {
         "kind": "answered", "seq": sequence, "at": millis(), "stuck": stuck,
     }));
     (status, response.to_string(), rule["retry_after"].as_u64())
+}
+
+/// A Messages API answer: the rule's text and tool calls as content blocks.
+fn messages_response(rule: &Value, request: &Value, sequence: u64, status: u16) -> Value {
+    if status != 200 {
+        return json!({ "type": "error", "error": {
+            "type": "scripted_error", "message": rule["text"].as_str().unwrap_or("scripted failure"),
+        }});
+    }
+    let mut content = Vec::new();
+    if let Some(thinking) = rule["thinking"].as_str() {
+        content.push(json!({ "type": "thinking", "thinking": thinking, "signature": "sig-fake" }));
+    }
+    if let Some(text) = rule["text"].as_str().filter(|text| !text.is_empty()) {
+        content.push(json!({ "type": "text", "text": text }));
+    }
+    for (index, call) in rule["tool_calls"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        content.push(json!({
+            "type": "tool_use", "id": format!("toolu_{sequence}_{index}"),
+            "name": call["name"], "input": call["arguments"],
+        }));
+    }
+    let calls = content.iter().any(|block| block["type"] == "tool_use");
+    json!({
+        "id": "msg_fake", "type": "message", "role": "assistant", "model": request["model"],
+        "content": content,
+        "stop_reason": if calls { "tool_use" } else { "end_turn" },
+        "usage": rule.get("usage").cloned().unwrap_or(json!({
+            "input_tokens": 0, "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0, "output_tokens": 0,
+        })),
+    })
 }

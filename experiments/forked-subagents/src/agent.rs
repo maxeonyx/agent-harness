@@ -14,7 +14,7 @@ use crate::face::Face;
 use crate::framing::{self, Cut, Framing};
 use crate::limb::Limb;
 use crate::record::Recorder;
-use crate::wire::{self, ChatRequest, Message, ToolCall};
+use crate::wire::{self, Backend, Message, ToolCall};
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -123,9 +123,7 @@ impl Mode {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub model: String,
-    pub provider: Option<String>,
-    pub base_url: String,
-    pub api_key: Option<String>,
+    pub backend: Backend,
     pub framing: Framing,
     pub max_cost: f64,
     pub max_depth: usize,
@@ -305,7 +303,11 @@ pub struct Run {
     pub config: Config,
     pub face: Face,
     pub recorder: Recorder,
+    /// Cancelled: nothing new starts, and the responses already in flight are
+    /// waited for.
     pub cancel: CancellationToken,
+    /// Force-cancelled: the responses in flight are abandoned too.
+    pub force: CancellationToken,
     client: reqwest::Client,
     limb: Limb,
     session_id: String,
@@ -324,13 +326,13 @@ impl Run {
         limb: Limb,
         face: Face,
         recorder: Recorder,
-        cancel: CancellationToken,
         session_id: String,
     ) -> Run {
         Run {
             face,
             recorder,
-            cancel,
+            cancel: CancellationToken::new(),
+            force: CancellationToken::new(),
             client: reqwest::Client::builder()
                 .timeout(config.request_timeout)
                 .build()
@@ -467,20 +469,12 @@ impl Run {
         index: usize,
         messages: &[Message],
     ) -> Result<Message, RequestEnd> {
-        let request = ChatRequest {
-            model: self.config.model.clone(),
-            messages: messages.to_vec(),
-            tools: framing::tool_schemas(),
-            cache_control: serde_json::json!({ "type": "ephemeral" }),
-            provider: self
-                .config
-                .provider
-                .as_ref()
-                .map(|slug| serde_json::json!({ "order": [slug], "allow_fallbacks": false })),
-            session_id: self.session_id.clone(),
-        };
-        let body = serde_json::to_value(&request)
-            .map_err(|e| RequestEnd::Faulted(Fault::provider(e.to_string())))?;
+        let body = self.config.backend.body(
+            &self.config.model,
+            messages,
+            &framing::tool_schemas(),
+            &self.session_id,
+        );
 
         // Two kinds of patience. An ordinary transient failure gets a few
         // quick attempts; a rate limit gets waited out, because the provider
@@ -519,20 +513,22 @@ impl Run {
                     format!("request sent (attempt {attempt})")
                 },
             );
-            let attempted = wire::send_once(
-                &self.client,
-                &self.config.base_url,
-                self.config.api_key.as_deref(),
-                &request,
-            )
-            .await;
+            let attempted = tokio::select! {
+                attempted = wire::send_once(&self.client, &self.config.backend, &body) => attempted,
+                _ = self.force.cancelled() => {
+                    self.state().in_flight -= 1;
+                    self.recorder.wire(path, "abandoned", &serde_json::json!({}));
+                    self.face.line(path, "request abandoned");
+                    return Err(RequestEnd::Cancelled);
+                }
+            };
             self.state().in_flight -= 1;
 
             let again = match attempted {
                 wire::Attempt::Answered(sent) => {
                     self.recorder.wire(path, "response", &sent.body);
                     self.absorb(path, index, &sent);
-                    return Ok(sent.response.choices.into_iter().next().unwrap().message);
+                    return Ok(sent.message);
                 }
                 wire::Attempt::Fatal(reason) => {
                     self.recorder
@@ -597,7 +593,7 @@ impl Run {
 
     /// Book one answered request against the run and the agent.
     fn absorb(&self, path: &str, index: usize, sent: &wire::Sent) {
-        let usage = sent.response.usage.clone();
+        let usage = &sent.usage;
         let uncached = usage
             .prompt_tokens
             .saturating_sub(usage.prompt_tokens_details.cached_tokens);
@@ -626,7 +622,7 @@ impl Run {
                 usage.prompt_tokens_details.cache_write_tokens,
                 usage.completion_tokens,
                 usage.cost,
-                sent.response.provider.as_deref().unwrap_or("?")
+                sent.via
             ),
         );
     }
@@ -725,12 +721,7 @@ pub fn run_agent(
         let mut handoff = String::new();
         let mut turns = 0usize;
 
-        // The root answers whoever asked; a child reports to its parent.
-        let final_label = if depth == 0 { "reply:" } else { "report:" };
         let end = |run: &Arc<Run>, outcome: Outcome, handoff: String, messages: Vec<Message>| {
-            if !handoff.trim().is_empty() {
-                run.face.block(&path, final_label, &handoff);
-            }
             run.note(index, |record| {
                 record.state = AgentState::Ended(outcome.clone());
                 record.millis = started.elapsed().as_millis();
@@ -773,13 +764,13 @@ pub fn run_agent(
             let text = reply.content.clone().unwrap_or_default();
             let calls = reply.tool_calls.clone().unwrap_or_default();
             messages.push(reply);
+            run.face
+                .message(&path, messages.len() - 1, messages.last().unwrap(), None);
 
             if calls.is_empty() {
                 return end(&run, Outcome::Completed, text, messages);
             }
             if !text.trim().is_empty() {
-                // Said while still working, so it is not the report.
-                run.face.block(&path, "says:", &text);
                 handoff = text;
             }
             if run.cancel.is_cancelled() {
@@ -816,24 +807,26 @@ pub fn run_agent(
 
             // The local tools run first, so a forked child's context can
             // carry their results alongside its own assignment and stay a
-            // valid transcript.
+            // valid transcript. Each result is shown as it is made, numbered
+            // with the place it will take in the context.
+            let first_result = messages.len();
             let mut results: Vec<Option<Message>> = vec![None; calls.len()];
             for (i, local) in &locals {
-                let (label, answer) = match local {
-                    Local::ListDir(target) => {
-                        (format!("list_dir({target})"), run.limb.list_dir(target))
-                    }
-                    Local::ReadFile(target) => {
-                        (format!("read_file({target})"), run.limb.read_file(target))
-                    }
+                let answer = match local {
+                    Local::ListDir(target) => run.limb.list_dir(target),
+                    Local::ReadFile(target) => run.limb.read_file(target),
                 };
-                run.face.result(&path, &format!("tool {label}"), &answer);
                 results[*i] = Some(Message::tool_result(&calls[*i].id, &answer));
             }
             for (i, refusal) in &refusals {
-                run.face
-                    .result(&path, &format!("tool {}", calls[*i].function.name), refusal);
                 results[*i] = Some(Message::tool_result(&calls[*i].id, refusal));
+            }
+            for (i, result) in results.iter().enumerate() {
+                if let Some(result) = result {
+                    let tool = &calls[i].function.name;
+                    run.face
+                        .message(&path, first_result + i, result, Some(tool));
+                }
             }
 
             // Recorded with their results: a read that failed is not a read.
@@ -868,7 +861,10 @@ pub fn run_agent(
                                 call.result = Some(text.clone());
                             }
                         });
-                        results[i] = Some(Message::tool_result(&calls[i].id, &text));
+                        let result = Message::tool_result(&calls[i].id, &text);
+                        run.face
+                            .message(&path, first_result + i, &result, Some("task"));
+                        results[i] = Some(result);
                     }
                     Err(outcome) => return end(&run, outcome, handoff, messages),
                 }
@@ -979,6 +975,7 @@ async fn scope(
         let name = spec.name.clone();
         let task = spec.task.clone();
         let raw = spec.raw.clone();
+        let parent_path = parent_path.to_string();
         handles.push(tokio::spawn(async move {
             let mut dependency_reports = Vec::new();
             for (dependency, mut receiver) in dependencies {
@@ -1013,6 +1010,27 @@ async fn scope(
             run.note(child_index, |record| {
                 record.assignment = Some(assignment.clone())
             });
+            // What the child shares with its parent has been shown under the
+            // parent already; the rest is shown here.
+            let shared = messages
+                .iter()
+                .zip(&turn.messages)
+                .take_while(|(child, parent)| child == parent)
+                .count();
+            let inherited = match shared {
+                1 => format!("{parent_path}'s message 0"),
+                n => format!("{parent_path}'s messages 0–{}", n - 1),
+            };
+            run.face
+                .line(&child_path, &format!("context: {inherited}, then"));
+            for (n, message) in messages.iter().enumerate().skip(shared) {
+                let tool = message
+                    .tool_call_id
+                    .as_ref()
+                    .and_then(|id| turn.calls.iter().find(|call| &call.id == id))
+                    .map(|call| call.function.name.as_str());
+                run.face.message(&child_path, n, message, tool);
+            }
             let end = run_agent(run.clone(), child_path, depth + 1, child_index, messages).await;
             let report = Arc::new(ChildReport {
                 outcome: end.outcome,
@@ -1183,7 +1201,14 @@ fn child_context(
     assignment: &str,
 ) -> Vec<Message> {
     if fresh {
-        return vec![turn.messages[0].clone(), Message::new("user", assignment)];
+        let mut messages: Vec<Message> = turn
+            .messages
+            .iter()
+            .take_while(|message| message.role == "system")
+            .cloned()
+            .collect();
+        messages.push(Message::new("user", assignment));
+        return messages;
     }
     let turn_index = turn.messages.len() - 1;
     if cut == Cut::Before {
@@ -1224,8 +1249,8 @@ pub fn render_context(record: &AgentRecord) -> String {
         record.requests,
         record.cost
     );
-    for message in &record.messages {
-        text.push_str(&format!("\n## {}\n\n", message.role));
+    for (n, message) in record.messages.iter().enumerate() {
+        text.push_str(&format!("\n## {n} {}\n\n", message.role));
         if let Some(id) = &message.tool_call_id {
             text.push_str(&format!("(answering {id})\n\n"));
         }

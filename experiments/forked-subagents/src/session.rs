@@ -10,7 +10,6 @@ use crate::wire::Message;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tokio_util::sync::CancellationToken;
 
 pub struct Session {
     pub run: Arc<Run>,
@@ -45,25 +44,34 @@ impl Session {
             Some(given) => given,
             None => format!("forks-{nanos}"),
         };
+        let messages = config.backend.system(framing::SYSTEM_PROMPT);
         let run = Arc::new(Run::new(
             config,
             limb,
             Face::new(verbose),
             recorder,
-            CancellationToken::new(),
             session_id,
         ));
         let root_index = run.register("root", 0, false, None, None);
+        for (n, message) in messages.iter().enumerate() {
+            run.face.message("root", n, message, None);
+        }
         Ok(Session {
             run,
             root_index,
-            messages: vec![Message::new("system", framing::SYSTEM_PROMPT)],
+            messages,
             started: Instant::now(),
         })
     }
 
     pub fn say(&mut self, text: &str) {
         self.messages.push(Message::new("user", text));
+        self.run.face.message(
+            "root",
+            self.messages.len() - 1,
+            self.messages.last().unwrap(),
+            None,
+        );
     }
 
     /// Drive the root until it ends its turn. The messages come back so a
@@ -110,7 +118,8 @@ impl Session {
             "fault": self.run.fault(),
             "fault_kind": self.run.fault_kind().map(|kind| kind.name()),
             "model": self.run.config.model,
-            "provider": self.run.config.provider,
+            "backend": self.run.config.backend.name(),
+            "provider": self.run.config.backend.provider(),
             "cut": self.run.config.framing.cut.name(),
             "words": self.run.config.framing.words.name(),
             "mode": self.run.config.framing.mode.name(),

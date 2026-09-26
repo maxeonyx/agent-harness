@@ -1,4 +1,5 @@
 mod agent;
+mod anthropic;
 mod bench;
 mod face;
 mod framing;
@@ -13,6 +14,7 @@ use framing::{Cut, Framing, Words};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use wire::Backend;
 
 const HELP: &str = "\
 forks — agents as structured concurrency
@@ -41,10 +43,20 @@ Framing (the two knobs the benchmark sweeps):
                                bench defaults to fork)
 
 Provider:
+  --backend claude|openrouter   default claude
+      claude      Anthropic's API on your Claude subscription, with the token
+                  opencode keeps. Not billed per token, so costs show as $0
+                  and --max-cost never trips
+      openrouter  OpenRouter's chat-completions API, paid from a key
   --model <id>        default anthropic/claude-sonnet-5
-  --provider <slug>   default amazon-bedrock; empty string sends no routing
-  --base-url <url>    default https://openrouter.ai/api/v1
-  --keys <file>       default <experiment>/keys.ignore.env; or $OPENROUTER_API_KEY
+  --base-url <url>    default https://api.anthropic.com or
+                      https://openrouter.ai/api/v1
+  --credentials <db>  claude: opencode's database, default
+                      $XDG_DATA_HOME/opencode/opencode.db
+  --provider <slug>   openrouter: default amazon-bedrock; empty string sends
+                      no routing
+  --keys <file>       openrouter: default <experiment>/keys.ignore.env; or
+                      $OPENROUTER_API_KEY
 
 Limits:
   --max-cost <usd>    stop before the request that would exceed it (default 0.50;
@@ -120,7 +132,7 @@ async fn command_run(args: &Args) -> Result<ExitCode, String> {
     let outcome = session.turn().await;
     interrupts.abort();
     session.report(&outcome);
-    Ok(exit_code(&outcome))
+    Ok(exit_code(&run, &outcome))
 }
 
 async fn command_chat(args: &Args) -> Result<ExitCode, String> {
@@ -140,11 +152,12 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
 
     let interrupts = watch_interrupts(run.clone());
     let (lines_tx, mut lines) = tokio::sync::mpsc::channel::<String>(8);
-    let reader = tokio::spawn(async move {
-        use tokio::io::AsyncBufReadExt;
-        let mut reader = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            if lines_tx.send(line).await.is_err() {
+    // A thread of its own, not tokio's stdin: that reads on the runtime's
+    // blocking pool, and the runtime does not shut down until the read
+    // returns, so chat sat after its final report until Enter was pressed.
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lines().map_while(Result::ok) {
+            if lines_tx.blocking_send(line).is_err() {
                 break;
             }
         }
@@ -155,7 +168,15 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
     // forever. Selecting on it again would spin a core for as long as the
     // turn runs.
     let mut stdin_open = true;
-    while let Some(line) = lines.recv().await {
+    loop {
+        let line = tokio::select! {
+            line = lines.recv() => line,
+            _ = run.cancel.cancelled() => {
+                last = Outcome::Cancelled;
+                break;
+            }
+        };
+        let Some(line) = line else { break };
         let line = line.trim().to_string();
         match line.as_str() {
             "" => continue,
@@ -179,7 +200,7 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
                 line = lines.recv(), if stdin_open => match line.as_deref().map(str::trim) {
                     Some("/tree") => run.face.say(&run.snapshot()),
                     Some("/cancel") => {
-                        run.face.say("cancelling: nothing new starts; in-flight responses are kept");
+                        run.face.say(CANCELLING);
                         run.cancel.cancel();
                     }
                     Some(_) => run.face.say("a turn is running; only /tree and /cancel are accepted"),
@@ -197,36 +218,39 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
         }
     }
     interrupts.abort();
-    reader.abort();
     session.report(&last);
-    Ok(exit_code(&last))
+    Ok(exit_code(&run, &last))
 }
 
-/// Ctrl-C cancels; a second Ctrl-C gives up on the drain and leaves. One
-/// watcher for the whole session, so the interrupt is never disarmed — with a
-/// guard on the listener, the second one went nowhere and the run could not
-/// be interrupted at all.
+const CANCELLING: &str = "cancelling: nothing new starts; waiting for the responses already in flight, then closing. Ctrl-C again to force-cancel.";
+
+/// Ctrl-C cancels, and the run closes once what is in flight has come back.
+/// Ctrl-C on a run that is already cancelling force-cancels: the responses
+/// still in flight are abandoned, and the run closes at once, still recording
+/// every agent's outcome. One watcher for the whole session, so the interrupt
+/// is never disarmed — with a guard on the listener, the second one went
+/// nowhere and the run could not be interrupted at all.
 fn watch_interrupts(run: std::sync::Arc<agent::Run>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut seen = 0usize;
         while tokio::signal::ctrl_c().await.is_ok() {
-            seen += 1;
-            if seen == 1 {
-                run.face.say("");
-                run.face.say(
-                    "cancelling: nothing new starts; in-flight responses are kept. Ctrl-C again to exit now.",
-                );
+            run.face.say("");
+            if !run.cancel.is_cancelled() {
+                run.face.say(CANCELLING);
                 run.cancel.cancel();
             } else {
                 run.face
-                    .say("interrupted again: exiting without waiting for in-flight responses");
-                std::process::exit(130);
+                    .say("force-cancelling: abandoning the responses still in flight");
+                run.force.cancel();
             }
         }
     })
 }
 
-fn exit_code(outcome: &Outcome) -> ExitCode {
+/// 130 is what a shell reports for a process ended by Ctrl-C.
+fn exit_code(run: &agent::Run, outcome: &Outcome) -> ExitCode {
+    if run.force.is_cancelled() {
+        return ExitCode::from(130);
+    }
     match outcome {
         Outcome::Completed | Outcome::Cancelled => ExitCode::SUCCESS,
         Outcome::Faulted(_) | Outcome::Suspended | Outcome::Panicked(_) => ExitCode::FAILURE,
@@ -234,6 +258,8 @@ fn exit_code(outcome: &Outcome) -> ExitCode {
 }
 
 const COMMON: &[&str] = &[
+    "backend",
+    "credentials",
     "model",
     "provider",
     "base-url",
@@ -381,10 +407,20 @@ impl Args {
             .next())
     }
 
+    /// OpenRouter routes to a pinned upstream by default; the subscription
+    /// has no routes.
+    pub fn provider(&self) -> String {
+        let default = match self.one("backend", "claude").as_str() {
+            "openrouter" => "amazon-bedrock",
+            _ => "",
+        };
+        self.one("provider", default)
+    }
+
     pub fn config(&self) -> Result<Config, String> {
         self.config_with(
             &self.one("model", "anthropic/claude-sonnet-5"),
-            &self.one("provider", "amazon-bedrock"),
+            &self.provider(),
             Framing {
                 cut: Cut::parse(&self.one("cut", "before"))?,
                 words: Words::parse(&self.one("words", "explained"))?,
@@ -403,18 +439,46 @@ impl Args {
         default_max_depth: usize,
         default_max_cost: f64,
     ) -> Result<Config, String> {
-        let base_url = self.one("base-url", "https://openrouter.ai/api/v1");
-        let api_key = self.api_key()?;
-        if api_key.is_none() && base_url.contains("openrouter.ai") {
-            return Err(
-                "no API key: set OPENROUTER_API_KEY or put it in keys.ignore.env".to_string(),
-            );
-        }
+        let backend = match self.one("backend", "claude").as_str() {
+            "openrouter" => {
+                let base_url = self.one("base-url", "https://openrouter.ai/api/v1");
+                let api_key = self.api_key()?;
+                if api_key.is_none() && base_url.contains("openrouter.ai") {
+                    return Err(
+                        "no API key: set OPENROUTER_API_KEY or put it in keys.ignore.env"
+                            .to_string(),
+                    );
+                }
+                Backend::OpenRouter {
+                    base_url,
+                    api_key,
+                    provider: (!provider.is_empty()).then(|| provider.to_string()),
+                }
+            }
+            "claude" => {
+                if !provider.is_empty() {
+                    return Err(format!(
+                        "provider {provider} is an OpenRouter route, and the claude backend has none"
+                    ));
+                }
+                anthropic::model_id(model)?;
+                let credentials = PathBuf::from(self.one("credentials", &opencode_db()));
+                // Checked now so a run never starts on a token that cannot work.
+                anthropic::access_token(&credentials)?;
+                Backend::Claude {
+                    base_url: self.one("base-url", "https://api.anthropic.com"),
+                    credentials,
+                }
+            }
+            other => {
+                return Err(format!(
+                    "unknown --backend {other}; expected claude or openrouter"
+                ));
+            }
+        };
         Ok(Config {
             model: model.to_string(),
-            provider: (!provider.is_empty()).then(|| provider.to_string()),
-            base_url,
-            api_key,
+            backend,
             framing,
             max_cost: self.number("max-cost", default_max_cost)?,
             max_depth: self.number("max-depth", default_max_depth)?,
@@ -432,4 +496,12 @@ impl Args {
             ),
         })
     }
+}
+
+fn opencode_db() -> String {
+    let data = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|dir| !dir.is_empty())
+        .unwrap_or_else(|| format!("{}/.local/share", std::env::var("HOME").unwrap_or_default()));
+    format!("{data}/opencode/opencode.db")
 }
