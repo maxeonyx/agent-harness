@@ -38,7 +38,9 @@ The same benchmark in fresh mode gives the fork-versus-fresh cost comparison. Ea
 
 ## Deliberately out of scope
 
-User-facing children, `/done` and the main-thread pattern (UX & input is not yet elicited); siblings launching siblings into their own scope; re-wiring dependencies after launch; resume; compaction inside a scope; persistence and restart; limbs other than the one local read-only directory; writes and shared-workspace races; attachments and shared seed contexts; two-part launch; the direct provider APIs (OpenRouter's chat-completions API only — `provider-cache-probe` remains the place for first-party wire facts).
+User-facing children, `/done` and the main-thread pattern (UX & input is not yet elicited); siblings launching siblings into their own scope; re-wiring dependencies after launch; resume; compaction inside a scope; persistence and restart; limbs other than the one local read-only directory; writes and shared-workspace races; attachments and shared seed contexts; two-part launch; first-party wire facts in general (`provider-cache-probe` is the place for them).
+
+Added 2026-09-26, Max: "If we set up this experiment to use my claude then we don't care about the spend limit. Let's do that - see my opencode anthropic plugin." So there are two backends: Anthropic's Messages API on his Claude subscription, the default for `run` and `chat`, and OpenRouter's chat-completions API, which the recorded benchmark ran on.
 
 ## Exit condition
 

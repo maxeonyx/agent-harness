@@ -57,7 +57,7 @@ function docOf(t: Item): string {
 
 const SYSTEMS: [string, string[]][] = [
   ["The run", ["src/agent.rs", "src/framing.rs", "src/session.rs", "src/limb.rs", "src/record.rs", "src/face.rs", "src/main.rs"]],
-  ["The wire", ["src/wire.rs"]],
+  ["The wire", ["src/wire.rs", "src/anthropic.rs"]],
   ["The benchmark", ["src/bench.rs", "src/rescore.rs"]],
   ["The fake provider", ["src/bin/fake_provider.rs"]],
 ]

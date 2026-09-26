@@ -8,7 +8,7 @@ import { h, code, part, cameTo } from "./ui"
 export const DEPS = deps()
 export const SOURCES: Record<string, string> = {
   "src/main.rs": source("src/main.rs"), "src/session.rs": source("src/session.rs"), "src/agent.rs": source("src/agent.rs"),
-  "src/framing.rs": source("src/framing.rs"), "src/wire.rs": source("src/wire.rs"), "src/limb.rs": source("src/limb.rs"),
+  "src/framing.rs": source("src/framing.rs"), "src/wire.rs": source("src/wire.rs"), "src/anthropic.rs": source("src/anthropic.rs"), "src/limb.rs": source("src/limb.rs"),
   "src/record.rs": source("src/record.rs"), "src/face.rs": source("src/face.rs"), "src/bench.rs": source("src/bench.rs"),
   "src/rescore.rs": source("src/rescore.rs"), "src/bin/fake_provider.rs": source("src/bin/fake_provider.rs"), "tests/scenario.rs": source("tests/scenario.rs"),
 }
