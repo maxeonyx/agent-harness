@@ -1,0 +1,8 @@
+{
+  "name": "forked-subagents-page",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "underview": "link:underview"
+  }
+}

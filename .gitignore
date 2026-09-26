@@ -9,3 +9,6 @@ devenv.local.nix
 
 # Direnv
 .direnv
+
+# Local-only files (credentials, scratch)
+*.ignore*

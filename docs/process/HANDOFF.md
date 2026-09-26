@@ -5,6 +5,7 @@ What this is: the entry point for a fresh agent — current position and pointer
 ## Current position
 
 - The walking-skeleton experiment is **done** — accepted at Gate 1, 2026-07-31. The accepted harness lives in `experiments/walking-skeleton/` (the user runs it against real providers); its evidence record is `experiments/walking-skeleton-outcome.md` (under `docs/process/`).
+- The forked-subagents experiment is **built and measured, awaiting Gate 1** — `experiments/forked-subagents/`, outcome `experiments/forked-subagents-outcome.md` (under `docs/process/`). Max still has to run it himself.
 - Current truth: requirements, invariants, and the user's design decisions in `REQUIREMENTS.md`; the experiment pool in `PLAN.md`. Experiments are a pool, not a sequence — the next one is pulled based on what the user wants to work on.
 - Design docs are being **written one at a time, with the user**, per `design/AGENTS.md`. (A first generation was deleted 2026-08-12 — unreviewed agent output; in git history.) Current doc: context-updates. Then briefs, then experiments.
 
