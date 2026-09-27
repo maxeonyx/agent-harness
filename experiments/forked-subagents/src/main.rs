@@ -3,7 +3,9 @@ mod anthropic;
 mod bench;
 mod face;
 mod framing;
+mod ledgers;
 mod limb;
+mod projects;
 mod record;
 mod rescore;
 mod session;
@@ -76,6 +78,11 @@ Limits:
   --panic-in <agent path>  fault injection: make that agent's task panic
 
 Benchmark only:
+  --task ledgers|projects       the fixture and the root's task (default ledgers)
+      ledgers   2 regions of 3 branch ledgers and a policy manual; the root is
+                told the tree to build
+      projects  4 projects of clones, one with 25; the root is asked for one
+                agent per project and nothing about depth
   --grid <model@provider,...>   default <model>@<provider>
   --reps <n>                    trials per combination (default 1)
   --budget <usd>                total for the whole benchmark; the only thing

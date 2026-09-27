@@ -1552,6 +1552,311 @@ fn the_benchmark_runs_on_claude_and_counts_shared_part_cache_hits() {
     assert!(rescored.contains("[unchanged]"), "{rescored}");
 }
 
+// ------------------------------------------------------ projects benchmark
+
+/// Every checkout under a projects fixture's `work/`, read from disk the way
+/// `git` would: project → checkout → the branch its `HEAD` names.
+fn projects_truth(bench_dir: &Path) -> BTreeMap<String, BTreeMap<String, String>> {
+    let dirs = |path: &Path| {
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.is_dir())
+            .collect();
+        dirs.sort();
+        dirs
+    };
+    let name = |path: &Path| path.file_name().unwrap().to_string_lossy().to_string();
+    let mut truth = BTreeMap::new();
+    for project in dirs(&bench_dir.join("fixture/work")) {
+        let mut checkouts = BTreeMap::new();
+        for checkout in dirs(&project) {
+            let git = checkout.join(".git");
+            let head = if git.is_dir() {
+                git.join("HEAD")
+            } else if git.is_file() {
+                let pointer = std::fs::read_to_string(&git).unwrap();
+                checkout
+                    .join(pointer.trim().strip_prefix("gitdir: ").unwrap())
+                    .join("HEAD")
+            } else {
+                continue;
+            };
+            let head = std::fs::read_to_string(head).unwrap();
+            let branch = head.trim().strip_prefix("ref: refs/heads/").unwrap();
+            checkouts.insert(name(&checkout), branch.to_string());
+        }
+        truth.insert(name(&project), checkouts);
+    }
+    truth
+}
+
+fn run_projects_bench(name: &str, rules: Value) -> (String, PathBuf) {
+    let dir = workspace(name);
+    let fake = Fake::start(&dir, rules);
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("bench")
+        .args(["--task", "projects", "--backend", "openrouter"])
+        .arg("--base-url")
+        .arg(fake.base_url())
+        .args(["--grid", "fake@", "--reps", "1"])
+        .arg("--runs-dir")
+        .arg(dir.join("runs"))
+        .output()
+        .expect("run forks bench");
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        output.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bench_dir = text
+        .lines()
+        .find_map(|line| line.strip_prefix("benchmark in "))
+        .map(PathBuf::from)
+        .expect("bench directory line");
+    (text, bench_dir)
+}
+
+/// The fixture is deterministic, so one throwaway run is enough to learn it.
+fn learn_projects(name: &str) -> BTreeMap<String, BTreeMap<String, String>> {
+    let (_, bench_dir) = run_projects_bench(
+        name,
+        json!([{"when": "^My clones are under", "text": "nothing"}]),
+    );
+    projects_truth(&bench_dir)
+}
+
+#[derive(Default)]
+struct ProjectsPlan {
+    /// `datacentral` splits its work again.
+    resplit: bool,
+    /// `ticker` lists `work/gta`.
+    reach: bool,
+    /// `nzxcom` reports a branch for one of `gta`'s clones.
+    claim: bool,
+    /// The root reports a worktree with the branch of the clone it belongs to.
+    worktree_as_clone: bool,
+    /// The root counts one clone too many in `datacentral`.
+    miscount: bool,
+    /// The root lists a look-alike as a clone.
+    look_alike: bool,
+}
+
+fn clone_lines(project: &str, checkouts: &BTreeMap<String, String>) -> Vec<String> {
+    checkouts
+        .iter()
+        .map(|(checkout, branch)| format!("{project}/{checkout}: {branch}"))
+        .collect()
+}
+
+/// A scripted projects run. Each project agent lists its own directory and
+/// reports its clones; the rule that answers that listing matches the first
+/// checkout's name with a trailing `/`, which only a listing contains.
+fn projects_rules(
+    truth: &BTreeMap<String, BTreeMap<String, String>>,
+    plan: &ProjectsPlan,
+) -> Value {
+    let agents: Vec<Value> = truth
+        .keys()
+        .map(|project| json!({"name": project, "task": format!("Survey work/{project}.")}))
+        .collect();
+    let mut rules = vec![
+        json!({"when": "^My clones are under", "tool_calls": [{"name": "task",
+        "arguments": {"shared": "Read each clone's branch from its HEAD.", "agents": agents}}]}),
+    ];
+    for (project, checkouts) in truth {
+        let mut report = clone_lines(project, checkouts);
+        if plan.claim && project == "nzxcom" {
+            report.push("gta-mcp: main".to_string());
+        }
+        let report = report.join("\n");
+        let first = format!("{}/", checkouts.keys().next().unwrap());
+        let me = format!("^You are agent `{project}`");
+        if plan.resplit && project == "datacentral" {
+            rules.push(json!({"when": me, "tool_calls": [{"name": "task", "arguments": {"shared": "", "agents": [
+                {"name": "dc-first", "task": "the first half"},
+                {"name": "dc-second", "task": "the second half"}]}}]}));
+            rules.push(json!({"when": "^You are agent `dc-first`", "text": "first half done"}));
+            rules.push(json!({"when": "^You are agent `dc-second`", "text": "second half done"}));
+            rules.push(json!({"when": "## `dc-first`", "text": report}));
+            continue;
+        }
+        let mut lists =
+            vec![json!({"name": "list_dir", "arguments": {"path": format!("work/{project}")}})];
+        if plan.reach && project == "ticker" {
+            lists.insert(
+                0,
+                json!({"name": "list_dir", "arguments": {"path": "work/gta"}}),
+            );
+        }
+        rules.push(json!({"when": me, "tool_calls": lists}));
+        rules.push(json!({"when": first, "text": report}));
+    }
+    // Summaries share the `<project>:` shape with the counts.
+    let mut block: Vec<String> = truth
+        .keys()
+        .map(|project| format!("{project}: mostly review follow-ups"))
+        .collect();
+    for (project, checkouts) in truth {
+        let mut lines = clone_lines(project, checkouts);
+        if plan.worktree_as_clone && project == "ticker" {
+            let main = checkouts["tk-feed-v2"].clone();
+            for line in lines.iter_mut() {
+                if line.starts_with("ticker/tk-feed-v2-bench:") {
+                    *line = format!("ticker/tk-feed-v2-bench: {main}");
+                }
+            }
+        }
+        if plan.look_alike && project == "datacentral" {
+            lines.push("datacentral/dc-scratch.ignore: MC-scratch".to_string());
+        }
+        block.extend(lines);
+    }
+    for (project, checkouts) in truth {
+        let count = checkouts.len() + usize::from(plan.miscount && project == "datacentral");
+        block.push(format!("{project}: {count}"));
+    }
+    rules.push(json!({"when": "Every agent you launched has finished", "text": block.join("\n")}));
+    Value::Array(rules)
+}
+
+/// Clones with a `.git` directory, worktrees whose `.git` is a file, and
+/// directories that only look like clones. The branch is in `HEAD`: a
+/// clone's `config` also lists `main`.
+#[test]
+fn the_projects_fixture_is_clones_worktrees_and_look_alikes() {
+    let (text, bench_dir) = run_projects_bench(
+        "projects-fixture",
+        json!([{"when": "^My clones are under", "text": "nothing"}]),
+    );
+    assert!(
+        text.contains("fixture: datacentral=25 gta=2 nzxcom=3 ticker=4"),
+        "{text}"
+    );
+    let truth = projects_truth(&bench_dir);
+    let sizes: Vec<(&str, usize)> = truth.iter().map(|(p, c)| (p.as_str(), c.len())).collect();
+    assert_eq!(
+        sizes,
+        [
+            ("datacentral", 25),
+            ("gta", 2),
+            ("nzxcom", 3),
+            ("ticker", 4)
+        ]
+    );
+    let work = bench_dir.join("fixture/work");
+    assert!(work.join("ticker/tk-feed-v2-bench/.git").is_file());
+    assert_eq!(truth["ticker"]["tk-feed-v2-bench"], "MC-tk-95-bench");
+    assert_eq!(truth["datacentral"]["dc-1655-satellite-tls"], "main");
+    let config = std::fs::read_to_string(work.join("ticker/tk-auth/.git/config")).unwrap();
+    assert!(config.contains("[branch \"main\"]") && config.contains("[branch \"MC-tk-91-oauth\"]"));
+    for decoy in [
+        "datacentral/notes",
+        "datacentral/dc-scratch.ignore",
+        "datacentral/dc-1402-archive",
+        "ticker/ticker-docs",
+        "gta/gta-mcp.bak",
+    ] {
+        assert!(work.join(decoy).is_dir(), "{decoy}");
+        assert!(!work.join(decoy).join(".git").exists(), "{decoy}");
+    }
+    assert!(!text.contains("fixture totals"), "{text}");
+}
+
+#[test]
+fn the_projects_benchmark_scores_a_disciplined_tree_clean_and_correct() {
+    let truth = learn_projects("projects-learn-clean");
+    let (text, _) = run_projects_bench(
+        "projects-clean",
+        projects_rules(&truth, &ProjectsPlan::default()),
+    );
+    assert!(
+        text.contains("structure ok  project over-reach 0/4  branches right 34/34  counts right 4/4  answer ok"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| project over-reach | branches right | counts right |"),
+        "{text}"
+    );
+}
+
+/// Each of the three ways out of a project is over-reach: splitting it again,
+/// listing another project's directory, and reporting another project's
+/// clone. `rescore` reaches the same verdict.
+#[test]
+fn a_re_split_a_reach_and_a_claim_are_each_over_reach() {
+    let truth = learn_projects("projects-learn-reach");
+    let plan = ProjectsPlan {
+        resplit: true,
+        reach: true,
+        claim: true,
+        ..ProjectsPlan::default()
+    };
+    let (text, bench_dir) = run_projects_bench("projects-reach", projects_rules(&truth, &plan));
+    assert!(
+        text.contains("structure WRONG  project over-reach 3/4  branches right 34/34  counts right 4/4  answer ok"),
+        "{text}"
+    );
+    let summary: Value =
+        serde_json::from_str(&std::fs::read_to_string(bench_dir.join("trials.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        summary[0]["overreached"],
+        json!(["root › datacentral", "root › nzxcom", "root › ticker"])
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("rescore")
+        .arg(&bench_dir)
+        .output()
+        .expect("run forks rescore");
+    let rescored = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(output.status.success(), "{rescored}");
+    assert!(
+        rescored.contains(
+            "project 3/4 branches 34/34 counts 4/4 structure WRONG answer ok   [unchanged]"
+        ),
+        "{rescored}"
+    );
+}
+
+/// Each is a wrong answer on its own: a worktree reported with its clone's
+/// branch, one clone too many, and a look-alike listed as a clone.
+#[test]
+fn a_worktree_given_its_clones_branch_a_miscount_and_a_look_alike_are_each_wrong() {
+    let truth = learn_projects("projects-learn-wrong");
+    for (name, plan, expected) in [
+        (
+            "projects-worktree",
+            ProjectsPlan {
+                worktree_as_clone: true,
+                ..ProjectsPlan::default()
+            },
+            "branches right 33/34  counts right 4/4  answer WRONG",
+        ),
+        (
+            "projects-miscount",
+            ProjectsPlan {
+                miscount: true,
+                ..ProjectsPlan::default()
+            },
+            "branches right 34/34  counts right 3/4  answer WRONG",
+        ),
+        (
+            "projects-look-alike",
+            ProjectsPlan {
+                look_alike: true,
+                ..ProjectsPlan::default()
+            },
+            "branches right 34/34  counts right 4/4  answer WRONG",
+        ),
+    ] {
+        let (text, _) = run_projects_bench(name, projects_rules(&truth, &plan));
+        assert!(text.contains(expected), "{name}: {text}");
+    }
+}
+
 // ------------------------------------------------- majors and moderates
 
 /// Ctrl-C at the chat prompt, with nothing running, closes at once.

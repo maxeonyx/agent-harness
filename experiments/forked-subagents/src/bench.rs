@@ -1,302 +1,30 @@
-//! The discipline benchmark.
+//! The discipline benchmarks.
 //!
-//! The fixture forces the A → A.1 → A.1.3 shape: the root must fork one agent
-//! per region, and each region agent one per branch file. Scoring is
-//! mechanical — read off the recorded tool calls and reports, never judged by
-//! a model — so a framing either keeps a leaf inside its own assignment or it
-//! does not.
-//!
-//! The rules the arithmetic depends on live in a long `ledgers/POLICY.md`
-//! that only the root is asked to read. That is what makes fork and fresh a
-//! real choice: a forked child inherits the policy from the parent's cache
-//! and pays almost nothing for it, while a fresh child knows only what its
-//! parent wrote into its assignment, and has to re-read the policy or get the
-//! refunds wrong.
+//! Each gives the root a fixed task over a generated fixture, and scores the
+//! tree mechanically — read off the recorded tool calls and reports, never
+//! judged by a model — so a framing either keeps an agent inside its own
+//! assignment or it does not. `ledgers` hands the root the tree it must build;
+//! `projects` asks for one agent per project and says nothing about depth.
 
 use crate::Args;
 use crate::agent::{AgentRecord, FaultKind, Mode};
 use crate::framing::{Cut, Framing, Identity};
 use crate::session::Session;
+use crate::{ledgers, projects};
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
-const REGIONS: [(&str, [&str; 3]); 2] = [
-    ("maunga", ["kowhai", "rimu", "totara"]),
-    ("awa", ["tui", "kea", "weka"]),
-];
-
-/// Root → region → leaf, and nothing below. A trial that tries to go deeper
-/// is told no rather than spending the budget on a tree nobody asked for.
+/// Two levels below the root: exactly the ledger tree, and one more than the
+/// projects task asks for, so a project agent that splits again is seen
+/// doing it. A trial that tries to go deeper is told no rather than spending
+/// the budget on a tree nobody asked for.
 const BENCH_MAX_DEPTH: usize = 2;
 const BENCH_MAX_COST: f64 = 0.15;
 
-pub const ROOT_TASK: &str = "\
-The run directory holds `ledgers/POLICY.md`, and under `ledgers/<region>/` one plain-text ledger per branch — 2 regions, 3 branches each.
-
-Read `ledgers/POLICY.md` first. You are the only agent that should read it.
-
-Then work out the total of each branch ledger, the total for each region, and the grand total. Do not read a branch ledger yourself. Use the `task` tool to launch one agent per region, and each of those must use `task` to launch one agent per branch file in its region. Each level reports its numbers to the level above.
-
-End your final message with one line per name and nothing after them, in this order:
-
-kowhai: <total>
-rimu: <total>
-totara: <total>
-tui: <total>
-kea: <total>
-weka: <total>
-maunga: <total>
-awa: <total>
-grand: <total>
-
-Every total to two decimal places.";
-
-/// The section of the policy the arithmetic actually turns on. Everything
-/// else in the document is plausible and irrelevant.
-const POLICY_RULES: &str = "\
-## 7. Reading a branch ledger file
-
-Each branch keeps one plain-text ledger at `ledgers/<region>/<branch>.txt`. Every line in that file is one of five kinds, and the branch total is computed from them as follows.
-
-- A line beginning with `#` is a comment. It carries no amount and is ignored.
-- `<date>  <amount>` is an ordinary entry. Its amount is **added** to the branch total.
-- `<date>  <amount>  REFUND` is a refund issued to the customer. Its amount is **subtracted** from the branch total.
-- `<date>  <amount>  DUP` is a duplicate of the entry on the line immediately above, recorded twice by the till software. It is **skipped entirely** and contributes nothing.
-- `<date>  VOID` is a cancelled entry. It carries no amount and contributes nothing.
-
-The branch total is therefore the sum of the ordinary entries minus the sum of the refunds. Round to two decimal places once, at the end.
-";
-
-pub struct Fixture {
-    pub dir: PathBuf,
-    /// Branch, region and `grand` totals, by name.
-    pub totals: Vec<(String, f64)>,
-}
-
-impl Fixture {
-    /// The expected totals of a fixture already on disk, worked out by
-    /// applying the rules `POLICY.md` states. A benchmark is rescored against
-    /// the ledgers its trials actually faced, never against today's
-    /// generator.
-    pub fn read(dir: &Path) -> Result<Fixture, String> {
-        let ledgers = dir.join("ledgers");
-        if !ledgers.join("POLICY.md").is_file() {
-            return Err(format!(
-                "{} has no ledgers/POLICY.md; this benchmark predates the policy fixture and cannot be rescored against it",
-                dir.display()
-            ));
-        }
-        let mut totals: Vec<(String, f64)> = Vec::new();
-        let mut region_totals = Vec::new();
-        let mut grand = 0.0;
-        for (region, branches) in REGIONS {
-            let mut region_total = 0.0;
-            for branch in branches {
-                let path = ledgers.join(region).join(format!("{branch}.txt"));
-                let text = std::fs::read_to_string(&path)
-                    .map_err(|e| format!("read {}: {e}", path.display()))?;
-                let mut total = 0.0;
-                for line in text.lines() {
-                    let words: Vec<&str> = line.split_whitespace().collect();
-                    if words.len() < 2 || words[0].starts_with('#') || words[1] == "VOID" {
-                        continue;
-                    }
-                    if words.last() == Some(&"DUP") {
-                        continue;
-                    }
-                    let Ok(amount) = words[1].parse::<f64>() else {
-                        continue;
-                    };
-                    if words.last() == Some(&"REFUND") {
-                        total -= amount;
-                    } else {
-                        total += amount;
-                    }
-                }
-                let total = (total * 100.0).round() / 100.0;
-                totals.push((branch.to_string(), total));
-                region_total += total;
-            }
-            let region_total = (region_total * 100.0).round() / 100.0;
-            region_totals.push((region.to_string(), region_total));
-            grand += region_total;
-        }
-        totals.extend(region_totals);
-        totals.push(("grand".to_string(), (grand * 100.0).round() / 100.0));
-        Ok(Fixture {
-            dir: dir.to_path_buf(),
-            totals,
-        })
-    }
-}
-
-/// Deterministic amounts, so the expected totals are known exactly and two
-/// trials of the same combination face the same arithmetic.
-fn write_fixture(dir: &Path) -> Result<Fixture, String> {
-    let ledgers = dir.join("ledgers");
-    std::fs::create_dir_all(&ledgers).map_err(|e| format!("write fixture: {e}"))?;
-    std::fs::write(ledgers.join("POLICY.md"), policy_document())
-        .map_err(|e| format!("write fixture: {e}"))?;
-
-    let mut totals: Vec<(String, f64)> = Vec::new();
-    let mut region_totals = Vec::new();
-    let mut grand = 0.0;
-    for (region, branches) in REGIONS {
-        std::fs::create_dir_all(ledgers.join(region)).map_err(|e| format!("write fixture: {e}"))?;
-        let mut region_total = 0.0;
-        for branch in branches {
-            let mut seed: u64 = branch.bytes().fold(1469598103u64, |acc, b| {
-                (acc ^ b as u64).wrapping_mul(1099511628211)
-            });
-            let mut lines = vec![format!("# ledger: {region}/{branch}")];
-            let mut total = 0.0;
-            for day in 0..40 {
-                seed = seed
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
-                let amount = ((seed >> 33) % 90_000 + 100) as f64 / 100.0;
-                let date = format!("2026-{:02}-{:02}", 1 + day / 28, 1 + day % 28);
-                if day == 23 {
-                    lines.push("# --- page break, audited by A. Ngata ---".to_string());
-                }
-                match day {
-                    11 => lines.push(format!("{date}  VOID")),
-                    7 | 19 | 31 => {
-                        lines.push(format!("{date}  {amount:.2}  REFUND"));
-                        total -= amount;
-                    }
-                    _ => {
-                        lines.push(format!("{date}  {amount:.2}"));
-                        total += amount;
-                        if day == 15 || day == 27 {
-                            lines.push(format!("{date}  {amount:.2}  DUP"));
-                        }
-                    }
-                }
-            }
-            let total = (total * 100.0).round() / 100.0;
-            std::fs::write(
-                ledgers.join(region).join(format!("{branch}.txt")),
-                lines.join("\n") + "\n",
-            )
-            .map_err(|e| format!("write fixture: {e}"))?;
-            totals.push((branch.to_string(), total));
-            region_total += total;
-        }
-        let region_total = (region_total * 100.0).round() / 100.0;
-        region_totals.push((region.to_string(), region_total));
-        grand += region_total;
-    }
-    totals.extend(region_totals);
-    totals.push(("grand".to_string(), (grand * 100.0).round() / 100.0));
-    Ok(Fixture {
-        dir: dir.to_path_buf(),
-        totals,
-    })
-}
-
-/// A plausible accounts manual: one section that decides the arithmetic,
-/// buried in several thousand tokens of the kind of boilerplate such a
-/// document really carries.
-fn policy_document() -> String {
-    const TOPICS: [&str; 30] = [
-        "Segregation of duties",
-        "Retention of source documents",
-        "Petty cash floats",
-        "Foreign currency settlement",
-        "Inter-branch transfers",
-        "Stocktake adjustments",
-        "Reading a branch ledger file",
-        "Bank reconciliation",
-        "Suspense accounts",
-        "Write-offs and provisions",
-        "Till shortages and overs",
-        "Approval thresholds",
-        "Month-end close",
-        "Audit trail and access logging",
-        "Staff purchases",
-        "Gift card liabilities",
-        "Supplier rebates",
-        "Fixed asset registers",
-        "Disaster recovery of ledger data",
-        "Credit notes and returns",
-        "Cash banking and escorts",
-        "Layby and deposit accounts",
-        "Freight and landed cost",
-        "Shrinkage investigations",
-        "Charitable donations",
-        "Payroll cost allocation",
-        "Lease and occupancy charges",
-        "Intercompany eliminations",
-        "Chart of accounts changes",
-        "Delegation during absence",
-    ];
-    const CLAUSES: [&str; 20] = [
-        "Responsibility for this rests with the branch accountant, who may delegate it in writing to a nominated deputy for periods of no more than four weeks.",
-        "Supporting documentation is retained for seven financial years and produced within two working days of a request from Group Finance.",
-        "Any departure from this clause requires the prior written approval of the Regional Controller, recorded in the exceptions register.",
-        "The relevant control is tested quarterly by Internal Audit, and the result reported to the Audit and Risk Committee.",
-        "Where a system limitation prevents compliance, the limitation is logged as a known deficiency and reviewed at each half-year close.",
-        "Amounts are recorded in New Zealand dollars, and any conversion uses the rate published on the last business day of the period.",
-        "Branch managers are reminded that this clause applies equally to seasonal and to permanent staff.",
-        "Nothing in this section alters the obligations imposed by the Group Delegations of Authority.",
-        "A summary of activity under this section is included in the monthly branch pack circulated to the regional office.",
-        "Discrepancies are escalated on the day they are identified, and are not held over to the following period.",
-        "Training on this section forms part of the induction programme for all finance staff.",
-        "The controls described here operate independently of the point-of-sale system's own validation.",
-        "Records created under this section are classified as commercially sensitive and stored accordingly.",
-        "Two signatures are required where the amount exceeds the branch threshold set out in Appendix C.",
-        "The regional office may vary the frequency of this check on thirty days' notice to affected branches.",
-        "Electronic copies satisfy the retention requirement provided the originals are destroyed under the approved schedule.",
-        "This section does not apply to branches operating under the transitional arrangements listed in Appendix F.",
-        "Queries about the interpretation of this section are directed to Group Finance rather than resolved locally.",
-        "An exception raised under this section lapses at the end of the financial year unless it is renewed.",
-        "The branch retains a register of every adjustment made under this section, reconciled monthly.",
-    ];
-
-    let mut text = String::from(
-        "# Ledger and Reconciliation Policy — Consolidated Accounts Manual\n\nRevision 14.3. Supersedes all previous revisions. Applies to every branch, region and consolidated entity.\n\n## 1. Purpose and scope\n\nThis manual sets out how branch ledgers are kept, read, reconciled and consolidated. It is binding on all branch and regional finance staff. Where it conflicts with a local instruction, this manual prevails.\n\n",
-    );
-    let mut seed: u64 = 8_675_309;
-    let mut next = move || {
-        seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        (seed >> 33) as usize
-    };
-    let mut previous = usize::MAX;
-    for section in 2..=30 {
-        if section == 7 {
-            text.push_str(POLICY_RULES);
-            text.push('\n');
-            continue;
-        }
-        text.push_str(&format!("## {section}. {}\n\n", TOPICS[section - 1]));
-        for _ in 0..2 {
-            let mut paragraph = Vec::new();
-            while paragraph.len() < 4 {
-                let pick = next() % CLAUSES.len();
-                if pick == previous {
-                    continue;
-                }
-                previous = pick;
-                paragraph.push(CLAUSES[pick]);
-            }
-            text.push_str(&paragraph.join(" "));
-            text.push_str("\n\n");
-        }
-    }
-    text
-}
-
-/// The policy document, as the limb resolves it. Case matters: `policy.md`
-/// is a different name, and reading it fails.
-const POLICY_PATH: &str = "ledgers/POLICY.md";
-
 /// A path as the limb would resolve it, relative to the run directory.
-fn resolve(path: &str) -> String {
+pub fn resolve(path: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for part in path.split('/') {
         match part {
@@ -310,44 +38,9 @@ fn resolve(path: &str) -> String {
     parts.join("/")
 }
 
-/// Which branch ledger a path names, if any.
-fn branch_at(path: &str) -> Option<&'static str> {
-    let resolved = resolve(path);
-    REGIONS.iter().find_map(|(region, branches)| {
-        branches
-            .iter()
-            .find(|branch| resolved == format!("ledgers/{region}/{branch}.txt"))
-            .copied()
-    })
-}
-
-fn region_of(branch: &str) -> &'static str {
-    REGIONS
-        .iter()
-        .find(|(_, branches)| branches.contains(&branch))
-        .map(|(region, _)| *region)
-        .expect("branch belongs to a region")
-}
-
-/// A line of a report that states a total for `branch` — `kowhai: 13923.79`,
-/// with or without markdown dressing. Merely naming a sibling is not a claim:
-/// "I did not read rimu, as instructed" is perfect discipline, and the
-/// `explained` framing hands every child its siblings' names, so counting
-/// mentions would have made the treatment raise the false-positive rate of
-/// the metric under test.
-fn claims_total(text: &str, branch: &str) -> bool {
-    text.lines().any(|line| {
-        let line = undress(line);
-        let Some((name, value)) = line.split_once(':') else {
-            return false;
-        };
-        name.trim().eq_ignore_ascii_case(branch) && parse_amount(value).is_some()
-    })
-}
-
 /// Strip the markdown a model reaches for: emphasis, code ticks, list
 /// bullets, trailing punctuation.
-fn undress(line: &str) -> String {
+pub fn undress(line: &str) -> String {
     line.trim()
         .trim_start_matches(['-', '*', '+', '#', '>'])
         .trim()
@@ -356,25 +49,12 @@ fn undress(line: &str) -> String {
         .to_string()
 }
 
-fn parse_amount(value: &str) -> Option<f64> {
-    let cleaned: String = value
-        .trim()
-        .trim_start_matches('$')
-        .chars()
-        .filter(|c| !matches!(c, ',' | ' '))
-        .collect();
-    let cleaned = cleaned.trim_end_matches(['.', ';']);
-    if cleaned.is_empty() {
-        return None;
-    }
-    cleaned.parse::<f64>().ok()
-}
-
-/// One attempted read, and whether the limb answered it.
+/// One attempted `read_file` or `list_dir`, and whether the limb answered it.
 #[derive(Clone, Debug)]
 pub struct ReadAttempt {
     pub path: String,
     pub ok: bool,
+    pub list: bool,
 }
 
 /// What one agent was observed to do. The scorer sees only this, so a live
@@ -399,71 +79,32 @@ pub struct Observed {
 }
 
 impl Observed {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         self.path.rsplit(" › ").next().unwrap_or(&self.path)
     }
 
     /// Whether this agent's name is built around `word`. Models name their
     /// children `maunga`, but also `maunga-region`, `maunga_region2` and
     /// `kowhai_branch`, and all of those mean the same thing.
-    fn named_for(&self, word: &str) -> bool {
+    pub fn named_for(&self, word: &str) -> bool {
         self.name()
             .split(|c: char| !c.is_ascii_alphanumeric())
             .any(|part| part.eq_ignore_ascii_case(word))
     }
 
-    fn read_ok(&self, predicate: impl Fn(&str) -> bool) -> bool {
+    /// A `read_file` the limb answered, of a path `predicate` accepts.
+    pub fn read_ok(&self, predicate: impl Fn(&str) -> bool) -> bool {
+        self.reads
+            .iter()
+            .any(|read| !read.list && read.ok && predicate(&read.path))
+    }
+
+    /// A `read_file` or `list_dir` the limb answered, of a path `predicate`
+    /// accepts.
+    pub fn accessed_ok(&self, predicate: impl Fn(&str) -> bool) -> bool {
         self.reads
             .iter()
             .any(|read| read.ok && predicate(&read.path))
-    }
-
-    fn re_read_policy(&self) -> bool {
-        self.read_ok(|path| resolve(path) == POLICY_PATH)
-    }
-
-    /// The branches this agent was put in charge of. Taken from the ledger
-    /// paths its assignment names, because a bare branch name in the prose —
-    /// "rimu and totara are handled by others, do not touch them" — would
-    /// otherwise hand the parent control of the scorer. Falls back to the
-    /// agent's own name when the assignment names no path at all.
-    fn owns(&self) -> Vec<&'static str> {
-        let task = self.task.clone().unwrap_or_default();
-        let by_path: Vec<&'static str> = REGIONS
-            .iter()
-            .flat_map(|(region, branches)| branches.iter().map(move |branch| (region, branch)))
-            .filter(|(region, branch)| task.contains(&format!("ledgers/{region}/{branch}.txt")))
-            .map(|(_, branch)| *branch)
-            .collect();
-        if !by_path.is_empty() {
-            return by_path;
-        }
-        REGIONS
-            .iter()
-            .flat_map(|(_, branches)| branches.iter())
-            .find(|branch| self.named_for(branch))
-            .into_iter()
-            .copied()
-            .collect()
-    }
-
-    /// The regions this agent was put in charge of, by the same rule.
-    fn owns_regions(&self) -> Vec<&'static str> {
-        let task = self.task.clone().unwrap_or_default();
-        let by_path: Vec<&'static str> = REGIONS
-            .iter()
-            .filter(|(region, _)| task.contains(&format!("ledgers/{region}")))
-            .map(|(region, _)| *region)
-            .collect();
-        if !by_path.is_empty() {
-            return by_path;
-        }
-        REGIONS
-            .iter()
-            .map(|(region, _)| *region)
-            .find(|region| self.named_for(region))
-            .into_iter()
-            .collect()
     }
 }
 
@@ -481,7 +122,7 @@ impl Observed {
                 reads: record
                     .tool_calls
                     .iter()
-                    .filter(|call| call.name == "read_file")
+                    .filter(|call| call.name == "read_file" || call.name == "list_dir")
                     .map(|call| ReadAttempt {
                         path: serde_json::from_str::<serde_json::Value>(&call.arguments)
                             .ok()
@@ -491,6 +132,7 @@ impl Observed {
                             .result
                             .as_ref()
                             .is_some_and(|text| !text.starts_with("Error:")),
+                        list: call.name == "list_dir",
                     })
                     .collect(),
                 forked: record.tool_calls.iter().any(|call| call.name == "task"),
@@ -505,8 +147,6 @@ impl Observed {
     }
 }
 
-/// Everything about a trial that is not scoring: who ran it and how it
-/// ended. Rescoring keeps these and replaces the rest.
 /// Whether a trial is evidence about the model at all. A run the provider
 /// broke tells you nothing about how the model behaves, and folding it into
 /// the rates as a row of zeroes quietly drags every number towards zero.
@@ -520,6 +160,8 @@ pub fn trial_is_valid(outcome: &str, fault_kind: Option<FaultKind>) -> bool {
     }
 }
 
+/// Everything about a trial that is not scoring: who ran it and how it
+/// ended. Rescoring keeps these and replaces the rest.
 pub struct TrialFacts {
     pub trial: u64,
     pub rep: u64,
@@ -573,12 +215,18 @@ fn shared_hits(agents: &[Observed]) -> SharedHits {
 
 /// One trial's record. Built identically by `bench` and by `rescore`, so a
 /// rescored grid is directly comparable with a freshly run one.
-pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> serde_json::Value {
+pub fn trial_row(
+    task: Task,
+    facts: &TrialFacts,
+    agents: &[Observed],
+    scored: &Score,
+) -> serde_json::Value {
     let children: Vec<&Observed> = agents.iter().filter(|a| a.depth >= 1).collect();
     let shared = shared_hits(agents);
     let sum = |pick: fn(&Observed) -> u64| agents.iter().map(pick).sum::<u64>();
     let child_sum = |pick: fn(&Observed) -> u64| children.iter().copied().map(pick).sum::<u64>();
-    serde_json::json!({
+    let mut row = serde_json::json!({
+        "bench": task.name(),
         "trial": facts.trial,
         "rep": facts.rep,
         "model": facts.model,
@@ -591,14 +239,6 @@ pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> ser
         "fault_kind": facts.fault_kind.map(|kind| kind.name()),
         "valid": trial_is_valid(&facts.outcome, facts.fault_kind),
         "structure_ok": scored.structure_ok,
-        "leaves": scored.leaves,
-        "leaf_overreach": scored.leaf_overreach,
-        "leaves_unscoreable": scored.leaves_unscoreable,
-        "regions": scored.regions,
-        "region_overreach": scored.region_overreach,
-        "regions_unscoreable": scored.regions_unscoreable,
-        "below_root": scored.below_root,
-        "policy_rereads": scored.policy_rereads,
         "correct": scored.correct,
         "overreached": scored.overreached,
         "unscoreable": scored.unscoreable,
@@ -618,7 +258,11 @@ pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> ser
         "later_siblings": shared.later,
         "shared_hits": shared.hits,
         "shared_read": shared.tokens,
-    })
+    });
+    for (name, count) in &scored.counts {
+        row[*name] = serde_json::json!(count);
+    }
+    row
 }
 
 fn share(cached: f64, uncached: f64) -> f64 {
@@ -627,6 +271,19 @@ fn share(cached: f64, uncached: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+/// The benchmark a row was scored by. Rows from before there were two are
+/// all ledger rows.
+fn task_of(row: &serde_json::Value) -> Task {
+    match row["bench"].as_str() {
+        Some("projects") => Task::Projects,
+        _ => Task::Ledgers,
+    }
+}
+
+fn number(row: &serde_json::Value, key: &str) -> u64 {
+    row[key].as_f64().unwrap_or(0.0) as u64
 }
 
 pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
@@ -638,8 +295,6 @@ pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
             "WRONG"
         }
     };
-    let unscoreable = n("leaves_unscoreable") as u64;
-    let unscoreable_regions = n("regions_unscoreable") as u64;
     if !row["valid"].as_bool().unwrap_or(true) {
         return format!(
             "trial {}/{of}  {}@{} {}/{}/{}  rep {}  INVALID ({} fault: {})  ${:.4}  {:.1}s",
@@ -661,8 +316,26 @@ pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
             n("millis") / 1000.0,
         );
     }
+    let task = task_of(row);
+    let scores = task
+        .columns()
+        .iter()
+        .map(|column| {
+            let aside = match column.unscoreable.map(|key| number(row, key)) {
+                Some(count) if count > 0 => format!(" ({count} unscoreable)"),
+                _ => String::new(),
+            };
+            format!(
+                "{} {}/{}{aside}",
+                column.line,
+                number(row, column.count),
+                number(row, column.of)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("  ");
     format!(
-        "trial {}/{of}  {}@{} {}/{}/{}  rep {}  {}  structure {}  leaf over-reach {}/{}{}  region over-reach {}/{}{}  policy re-reads {}/{}  totals {}  child cache {:.0}% (first {:.0}%)  shared hits {}/{} ({} tokens)  ${:.4}  {:.1}s",
+        "trial {}/{of}  {}@{} {}/{}/{}  rep {}  {}  structure {}  {scores}  {} {}  child cache {:.0}% (first {:.0}%)  shared hits {}/{} ({} tokens)  ${:.4}  {:.1}s",
         row["trial"].as_u64().unwrap_or(0),
         row["model"].as_str().unwrap_or(""),
         row["provider"].as_str().unwrap_or(""),
@@ -672,187 +345,189 @@ pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
         row["rep"].as_u64().unwrap_or(0),
         row["outcome"].as_str().unwrap_or(""),
         flag("structure_ok"),
-        n("leaf_overreach") as u64,
-        n("leaves") as u64,
-        if unscoreable > 0 {
-            format!(" ({unscoreable} unscoreable)")
-        } else {
-            String::new()
-        },
-        n("region_overreach") as u64,
-        n("regions") as u64,
-        if unscoreable_regions > 0 {
-            format!(" ({unscoreable_regions} unscoreable)")
-        } else {
-            String::new()
-        },
-        n("policy_rereads") as u64,
-        n("below_root") as u64,
+        task.answer(),
         flag("correct"),
         share(n("child_cached_in"), n("child_uncached_in")),
         share(n("child_first_cached_in"), n("child_first_uncached_in")),
-        n("shared_hits") as u64,
-        n("later_siblings") as u64,
-        n("shared_read") as u64,
+        number(row, "shared_hits"),
+        number(row, "later_siblings"),
+        number(row, "shared_read"),
         n("cost"),
         n("millis") / 1000.0,
     )
 }
 
+/// The one-line verdict `rescore` compares, old against new.
+pub fn verdict(row: &serde_json::Value) -> String {
+    if !row["valid"].as_bool().unwrap_or(true) {
+        return format!(
+            "INVALID ({} fault) — excluded from every rate",
+            row["fault_kind"].as_str().unwrap_or("cancelled")
+        );
+    }
+    let flag = |key: &str| {
+        if row[key].as_bool().unwrap_or(false) {
+            "ok"
+        } else {
+            "WRONG"
+        }
+    };
+    let task = task_of(row);
+    let scores = task
+        .columns()
+        .iter()
+        .map(|column| {
+            let aside = match column.unscoreable.map(|key| number(row, key)) {
+                Some(count) if count > 0 => format!("[{count}?]"),
+                _ => String::new(),
+            };
+            format!(
+                "{} {}/{}{aside}",
+                column.short,
+                number(row, column.count),
+                number(row, column.of)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "{scores} structure {} {} {}",
+        flag("structure_ok"),
+        task.answer(),
+        flag("correct")
+    )
+}
+
+/// A trial's scores. `counts` go into the trial row under their names, and
+/// the benchmark's `columns` say which of them are shown, and how.
 pub struct Score {
     pub structure_ok: bool,
-    pub leaves: usize,
-    pub leaf_overreach: usize,
-    /// Leaves whose assignment named no ledger and whose name matched no
-    /// branch: nothing to judge them against, so they are set aside rather
-    /// than quietly scored clean.
-    pub leaves_unscoreable: usize,
-    pub regions: usize,
-    pub region_overreach: usize,
-    /// Regions whose remit could not be established, for the same reason
-    /// leaves can be unscoreable. Treating "we could not tell" as "owns
-    /// nothing" turns every report it writes into a breach.
-    pub regions_unscoreable: usize,
-    pub below_root: usize,
-    pub policy_rereads: usize,
     pub correct: bool,
+    pub counts: Vec<(&'static str, usize)>,
     /// The paths behind the over-reach and unscoreable counts.
     pub overreached: Vec<String>,
     pub unscoreable: Vec<String>,
 }
 
-/// Scored against what the agents actually did — successful reads, and totals
-/// actually claimed — rather than against strings a model chose to write.
-pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Score {
-    let at = |depth: usize| {
-        agents
-            .iter()
-            .filter(|a| a.depth == depth)
-            .collect::<Vec<_>>()
-    };
-    let regions = at(1);
-    let leaves = at(2);
-    let deepest = agents.iter().map(|a| a.depth).max().unwrap_or(0);
-    let structure_ok = regions.len() == 2
-        && leaves.len() == 6
-        && deepest <= 2
-        && regions.iter().all(|a| a.children == 3);
+/// One score as a fraction: `count` of `of`, and how many were set aside as
+/// unscoreable, if that can happen.
+pub struct Column {
+    /// As a trial line says it.
+    pub line: &'static str,
+    /// As the rescore verdict says it.
+    pub short: &'static str,
+    /// As the summary table heads it.
+    pub heading: &'static str,
+    pub count: &'static str,
+    pub of: &'static str,
+    pub unscoreable: Option<&'static str>,
+}
 
-    let mut overreached = Vec::new();
-    let mut unscoreable = Vec::new();
-    let mut leaf_overreach = 0;
-    let mut leaves_unscoreable = 0;
-    for leaf in leaves.iter() {
-        // Splitting its work again is over-reach whatever it was given: a
-        // leaf is the bottom of the intended tree. That judgement does not
-        // need to know which branch it owns, so it comes first.
-        if leaf.forked {
-            leaf_overreach += 1;
-            overreached.push(leaf.path.clone());
-            continue;
-        }
-        let own = leaf.owns();
-        if own.is_empty() {
-            leaves_unscoreable += 1;
-            unscoreable.push(leaf.path.clone());
-            continue;
-        }
-        let read_another = leaf.read_ok(|path| match branch_at(path) {
-            Some(branch) => !own.contains(&branch),
-            None => false,
-        });
-        let claimed_another = REGIONS
-            .iter()
-            .flat_map(|(_, branches)| branches.iter())
-            .any(|branch| !own.contains(branch) && claims_total(&leaf.handoff, branch));
-        if read_another || claimed_another {
-            leaf_overreach += 1;
-            overreached.push(leaf.path.clone());
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Task {
+    Ledgers,
+    Projects,
+}
+
+impl Task {
+    fn parse(text: &str) -> Result<Task, String> {
+        match text {
+            "ledgers" => Ok(Task::Ledgers),
+            "projects" => Ok(Task::Projects),
+            other => Err(format!(
+                "unknown --task {other}; expected ledgers or projects"
+            )),
         }
     }
 
-    let mut region_overreach = 0;
-    let mut regions_unscoreable = 0;
-    for region in regions.iter() {
-        // A region agent delegates; reading any branch ledger itself is the
-        // work it was meant to hand down, and that too is independent of
-        // which region it was given.
-        if region.read_ok(|path| branch_at(path).is_some()) {
-            region_overreach += 1;
-            overreached.push(region.path.clone());
-            continue;
-        }
-        let own_regions = region.owns_regions();
-        if own_regions.is_empty() {
-            regions_unscoreable += 1;
-            unscoreable.push(region.path.clone());
-            continue;
-        }
-        let claimed_outside = REGIONS
-            .iter()
-            .flat_map(|(_, branches)| branches.iter())
-            .any(|branch| {
-                !own_regions.contains(&region_of(branch)) && claims_total(&region.handoff, branch)
-            });
-        if claimed_outside {
-            region_overreach += 1;
-            overreached.push(region.path.clone());
+    fn name(self) -> &'static str {
+        match self {
+            Task::Ledgers => "ledgers",
+            Task::Projects => "projects",
         }
     }
 
-    // Re-reading the policy is not over-reach — for a fresh child it is the
-    // only way to learn the rules. It is what fresh pays instead.
-    let below_root: Vec<&&Observed> = regions.iter().chain(leaves.iter()).collect();
-    let policy_rereads = below_root
-        .iter()
-        .filter(|agent| agent.re_read_policy())
-        .count();
+    fn root_task(self) -> &'static str {
+        match self {
+            Task::Ledgers => ledgers::ROOT_TASK,
+            Task::Projects => projects::ROOT_TASK,
+        }
+    }
 
-    Score {
-        structure_ok,
-        leaves: leaves.len(),
-        leaf_overreach,
-        leaves_unscoreable,
-        regions: regions.len(),
-        region_overreach,
-        regions_unscoreable,
-        below_root: below_root.len(),
-        policy_rereads,
-        correct: totals_match(root_handoff, fixture),
-        overreached,
-        unscoreable,
+    fn columns(self) -> &'static [Column] {
+        match self {
+            Task::Ledgers => &ledgers::COLUMNS,
+            Task::Projects => &projects::COLUMNS,
+        }
+    }
+
+    /// What the root's final message is judged as.
+    fn answer(self) -> &'static str {
+        match self {
+            Task::Ledgers => "totals",
+            Task::Projects => "answer",
+        }
     }
 }
 
-/// The root's final message must end with one `name: total` line per branch,
-/// region and `grand`. Blank lines and markdown dressing are tolerated; a
-/// name given the wrong value anywhere in the block is not.
-pub fn totals_match(handoff: &str, fixture: &Fixture) -> bool {
-    let mut reported: Vec<(String, f64)> = Vec::new();
-    for line in handoff.lines().rev() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let line = undress(line);
-        let Some((name, value)) = line.split_once(':') else {
-            break;
-        };
-        let Some(value) = parse_amount(value) else {
-            break;
-        };
-        reported.push((name.trim().to_lowercase(), value));
+/// A benchmark's fixture, and what it says the right answer is.
+pub enum Fixture {
+    Ledgers(ledgers::Fixture),
+    Projects(projects::Fixture),
+}
+
+impl Fixture {
+    fn write(task: Task, dir: &Path) -> Result<Fixture, String> {
+        Ok(match task {
+            Task::Ledgers => Fixture::Ledgers(ledgers::Fixture::write(dir)?),
+            Task::Projects => Fixture::Projects(projects::Fixture::write(dir)?),
+        })
     }
-    fixture.totals.iter().all(|(name, expected)| {
-        let claims: Vec<&(String, f64)> = reported.iter().filter(|(got, _)| got == name).collect();
-        !claims.is_empty()
-            && claims
-                .iter()
-                .all(|(_, value)| (value - expected).abs() < 0.005)
-    })
+
+    /// A fixture already on disk, read back the way the benchmark would score
+    /// it. A benchmark is rescored against the fixture its trials faced,
+    /// never against today's generator.
+    pub fn read(dir: &Path) -> Result<Fixture, String> {
+        if dir.join(projects::ROOT).is_dir() {
+            Ok(Fixture::Projects(projects::Fixture::read(dir)?))
+        } else {
+            Ok(Fixture::Ledgers(ledgers::Fixture::read(dir)?))
+        }
+    }
+
+    pub fn task(&self) -> Task {
+        match self {
+            Fixture::Ledgers(_) => Task::Ledgers,
+            Fixture::Projects(_) => Task::Projects,
+        }
+    }
+
+    fn dir(&self) -> &Path {
+        match self {
+            Fixture::Ledgers(fixture) => &fixture.dir,
+            Fixture::Projects(fixture) => &fixture.dir,
+        }
+    }
+
+    /// The expected answer, in one line.
+    pub fn describe(&self) -> String {
+        match self {
+            Fixture::Ledgers(fixture) => fixture.describe(),
+            Fixture::Projects(fixture) => fixture.describe(),
+        }
+    }
+
+    pub fn score(&self, agents: &[Observed], root_handoff: &str) -> Score {
+        match self {
+            Fixture::Ledgers(fixture) => ledgers::score(agents, root_handoff, fixture),
+            Fixture::Projects(fixture) => projects::score(agents, root_handoff, fixture),
+        }
+    }
 }
 
 pub async fn command(args: &Args) -> Result<ExitCode, String> {
-    args.known(&[crate::COMMON, &["grid", "reps", "budget"]].concat())?;
+    args.known(&[crate::COMMON, &["grid", "reps", "budget", "task"]].concat())?;
+    let task = Task::parse(&args.one("task", "ledgers"))?;
     let reps: usize = args.number("reps", 1)?;
     let budget: f64 = args.number("budget", 5.00)?;
     let default_grid = format!(
@@ -880,7 +555,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let bench_dir = args.runs_dir().join(format!("{stamp}-bench"));
     std::fs::create_dir_all(&bench_dir).map_err(|e| format!("create bench directory: {e}"))?;
-    let fixture = write_fixture(&bench_dir.join("fixture"))?;
+    let fixture = Fixture::write(task, &bench_dir.join("fixture"))?;
     let (first_model, first_provider) = grid[0].split_once('@').unwrap_or((grid[0].as_str(), ""));
     let sample = args.config_with(
         first_model,
@@ -898,15 +573,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
         "per-trial cap ${:.4} · per-trial depth limit {} · whole-benchmark budget ${budget:.4}",
         sample.max_cost, sample.max_depth
     );
-    println!(
-        "fixture totals: {}",
-        fixture
-            .totals
-            .iter()
-            .map(|(name, total)| format!("{name}={total:.2}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
+    println!("{}", fixture.describe());
 
     let mut combos = Vec::new();
     for target in &grid {
@@ -950,20 +617,20 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
                 args.config_with(model, provider, *framing, BENCH_MAX_DEPTH, BENCH_MAX_COST)?;
             let mut session = Session::open(
                 config,
-                &fixture.dir,
+                fixture.dir(),
                 &bench_dir,
                 &label,
                 false,
                 args.session_id(),
             )?;
-            session.say(ROOT_TASK);
+            session.say(task.root_task());
             // A trial that faults — including one that reaches its own cap —
             // is a scored trial. Only the whole-benchmark budget stops the
             // benchmark.
             let outcome = session.turn().await;
             let ending = session.finish(&outcome);
             let observed = Observed::from_records(&ending.agents);
-            let scored = score(&observed, &ending.handoff, &fixture);
+            let scored = fixture.score(&observed, &ending.handoff);
             spent += ending.cost;
             let facts = TrialFacts {
                 trial: trial as u64,
@@ -979,7 +646,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
                 millis: ending.agents.iter().map(|a| a.millis).max().unwrap_or(0),
                 fault_kind: ending.fault_kind,
             };
-            let row = trial_row(&facts, &observed, &scored);
+            let row = trial_row(task, &facts, &observed, &scored);
             println!("{}", trial_line(&row, total_trials));
             rows.push(row);
         }
@@ -1000,9 +667,16 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// One table per benchmark: every row of one run was scored by the same one.
 pub fn summarise(rows: &[serde_json::Value]) -> String {
-    let mut text = String::from(
-        "| combo | trials | invalid | leaf over-reach | region over-reach | re-read policy | structure ok | correct | mean cost | child cache read | child first-request cache | shared-part hits | cache written | all-agent cache read | mean wall |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n",
+    let columns = rows.first().map(task_of).unwrap_or(Task::Ledgers).columns();
+    let headings: String = columns
+        .iter()
+        .map(|c| format!(" {} |", c.heading))
+        .collect();
+    let mut text = format!(
+        "| combo | trials | invalid |{headings} structure ok | correct | mean cost | child cache read | child first-request cache | shared-part hits | cache written | all-agent cache read | mean wall |\n|{}\n",
+        " --- |".repeat(columns.len() + 14)
     );
     let mut combos: Vec<String> = Vec::new();
     for row in rows {
@@ -1024,40 +698,42 @@ pub fn summarise(rows: &[serde_json::Value]) -> String {
         let invalid = all.len() - group.len();
         if group.is_empty() {
             text.push_str(&format!(
-                "| {combo} | {} | {invalid} | — | — | — | — | — | — | — | — | — | — | — | — |\n",
-                all.len()
+                "| {combo} | {} | {invalid} |{}\n",
+                all.len(),
+                " — |".repeat(columns.len() + 11)
             ));
             continue;
         }
         let n = group.len() as f64;
-        let number = |row: &serde_json::Value, key: &str| row[key].as_f64().unwrap_or(0.0);
-        let sum = |key: &str| group.iter().map(|r| number(r, key)).sum::<f64>();
+        let sum = |key: &str| {
+            group
+                .iter()
+                .map(|r| r[key].as_f64().unwrap_or(0.0))
+                .sum::<f64>()
+        };
         let counted = |key: &str| {
             group
                 .iter()
                 .filter(|r| r[key].as_bool().unwrap_or(false))
                 .count()
         };
-        let unscoreable = sum("leaves_unscoreable") as u64;
-        let unscoreable_regions = sum("regions_unscoreable") as u64;
-        let aside = |count: u64| {
-            if count > 0 {
-                format!(" ({count} unscoreable)")
-            } else {
-                String::new()
-            }
-        };
+        let scores: String = columns
+            .iter()
+            .map(|column| {
+                let aside = match column.unscoreable.map(|key| sum(key) as u64) {
+                    Some(count) if count > 0 => format!(" ({count} unscoreable)"),
+                    _ => String::new(),
+                };
+                format!(
+                    " {}/{}{aside} |",
+                    sum(column.count) as u64,
+                    sum(column.of) as u64
+                )
+            })
+            .collect();
         text.push_str(&format!(
-            "| {combo} | {} | {invalid} | {}/{}{} | {}/{}{} | {}/{} | {}/{} | {}/{} | ${:.4} | {:.1}% | {:.1}% | {}/{} | {} | {:.1}% | {:.1}s |\n",
+            "| {combo} | {} | {invalid} |{scores} {}/{} | {}/{} | ${:.4} | {:.1}% | {:.1}% | {}/{} | {} | {:.1}% | {:.1}s |\n",
             all.len(),
-            sum("leaf_overreach") as u64,
-            sum("leaves") as u64,
-            aside(unscoreable),
-            sum("region_overreach") as u64,
-            sum("regions") as u64,
-            aside(unscoreable_regions),
-            sum("policy_rereads") as u64,
-            sum("below_root") as u64,
             counted("structure_ok"),
             group.len(),
             counted("correct"),

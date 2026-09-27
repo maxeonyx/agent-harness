@@ -16,7 +16,7 @@
 
 use crate::Args;
 use crate::agent::FaultKind;
-use crate::bench::{Fixture, Observed, ReadAttempt, TrialFacts, score, summarise, trial_row};
+use crate::bench::{Fixture, Observed, ReadAttempt, TrialFacts, summarise, trial_row, verdict};
 use crate::wire;
 
 use std::collections::BTreeMap;
@@ -33,15 +33,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
     let fixture = Fixture::read(&dir.join("fixture"))?;
 
     println!("rescoring {}", dir.display());
-    println!(
-        "fixture totals: {}",
-        fixture
-            .totals
-            .iter()
-            .map(|(name, total)| format!("{name}={total:.2}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
+    println!("{}", fixture.describe());
 
     let old = old_scores(&dir);
     let mut trials: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -66,8 +58,8 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
             Provenance::Unknown => unknown += 1,
             Provenance::NoFault => {}
         }
-        let scored = score(&agents, &root_handoff, &fixture);
-        let mut row = trial_row(&facts, &agents, &scored);
+        let scored = fixture.score(&agents, &root_handoff);
+        let mut row = trial_row(fixture.task(), &facts, &agents, &scored);
         row["dir"] = serde_json::json!(trial.to_string_lossy());
         let key = format!(
             "{}|{}|{}|{}|{}",
@@ -132,43 +124,6 @@ fn framing_words(row: &serde_json::Value) -> &str {
         .as_str()
         .or(row["words"].as_str())
         .unwrap_or("")
-}
-
-fn verdict(row: &serde_json::Value) -> String {
-    let n = |key: &str| row[key].as_f64().unwrap_or(0.0) as u64;
-    if !row["valid"].as_bool().unwrap_or(true) {
-        return format!(
-            "INVALID ({} fault) — excluded from every rate",
-            row["fault_kind"].as_str().unwrap_or("cancelled")
-        );
-    }
-    let flag = |key: &str| {
-        if row[key].as_bool().unwrap_or(false) {
-            "ok"
-        } else {
-            "WRONG"
-        }
-    };
-    let aside = |count: u64| {
-        if count > 0 {
-            format!("[{count}?]")
-        } else {
-            String::new()
-        }
-    };
-    format!(
-        "leaf {}/{}{} region {}/{}{} policy {}/{} structure {} totals {}",
-        n("leaf_overreach"),
-        n("leaves"),
-        aside(n("leaves_unscoreable")),
-        n("region_overreach"),
-        n("regions"),
-        aside(n("regions_unscoreable")),
-        n("policy_rereads"),
-        n("below_root"),
-        flag("structure_ok"),
-        flag("correct"),
-    )
 }
 
 fn compare(label: &str, old: Option<&serde_json::Value>, new: &serde_json::Value) -> String {
@@ -420,7 +375,7 @@ fn read_wire(path: &Path, backend: &str) -> Result<BTreeMap<String, Seen>, Strin
             if name == "task" {
                 entry.forked = true;
             }
-            if name != "read_file" {
+            if name != "read_file" && name != "list_dir" {
                 continue;
             }
             let target = serde_json::from_str::<serde_json::Value>(&arguments)
@@ -432,7 +387,11 @@ fn read_wire(path: &Path, backend: &str) -> Result<BTreeMap<String, Seen>, Strin
             let ok = answers
                 .get(&id)
                 .is_some_and(|answer| !answer.starts_with("Error:"));
-            entry.reads.push(ReadAttempt { path: target, ok });
+            entry.reads.push(ReadAttempt {
+                path: target,
+                ok,
+                list: name == "list_dir",
+            });
         }
     }
     if unreadable > 0 {
