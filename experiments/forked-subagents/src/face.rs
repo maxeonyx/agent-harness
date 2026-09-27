@@ -90,6 +90,21 @@ impl Face {
         self.say(&parts.join("\n"));
     }
 
+    /// Messages `from..` of a context, each as it enters it. A tool result
+    /// is shown with the tool it answers, found by its call's id.
+    pub fn context(&self, path: &str, messages: &[Message], from: usize) {
+        for (n, message) in messages.iter().enumerate().skip(from) {
+            let tool = message.tool_call_id.as_ref().and_then(|id| {
+                messages
+                    .iter()
+                    .flat_map(|message| message.tool_calls.iter().flatten())
+                    .find(|call| &call.id == id)
+                    .map(|call| call.function.name.as_str())
+            });
+            self.message(path, n, message, tool);
+        }
+    }
+
     /// Something the user asked for, or must see: a tree snapshot, a fault, a
     /// benchmark trial. Never suppressed.
     pub fn say(&self, text: &str) {

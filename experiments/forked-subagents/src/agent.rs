@@ -12,6 +12,7 @@
 
 use crate::face::Face;
 use crate::framing::{self, Cut, Framing, Identity};
+use crate::handoff::{Attachment, Handoff, Pending};
 use crate::limb::Limb;
 use crate::record::Recorder;
 use crate::wire::{self, Backend, Message, ToolCall};
@@ -80,7 +81,7 @@ pub enum RequestEnd {
     Faulted(Fault),
     Cancelled,
 }
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -138,6 +139,8 @@ pub struct Config {
     /// for as long as it likes. A timed-out request is a transient failure
     /// and is retried.
     pub request_timeout: Duration,
+    /// Past this many tokens in one request, an agent is told to hand over.
+    pub handover_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -224,6 +227,9 @@ pub struct AgentRecord {
     pub path: String,
     pub depth: usize,
     pub fresh: bool,
+    /// Talking with the user: the root in `chat`, and the child that carries
+    /// its conversation on.
+    pub user_facing: bool,
     pub state: AgentState,
     pub requests: usize,
     pub cached_in: u64,
@@ -244,6 +250,8 @@ pub struct AgentRecord {
     /// The `task` text the parent wrote for this agent, before any framing.
     pub task: Option<String>,
     pub handoff: String,
+    /// The contexts it handed over from, oldest first.
+    pub contexts: Vec<Vec<Message>>,
     pub messages: Vec<Message>,
 }
 
@@ -261,6 +269,8 @@ impl AgentRecord {
             "path": self.path,
             "depth": self.depth,
             "fresh": self.fresh,
+            "user_facing": self.user_facing,
+            "handovers": self.contexts.len(),
             "state": self.state.short(),
             "requests": self.requests,
             "cached_in": self.cached_in,
@@ -294,6 +304,16 @@ struct RunState {
     fault_kind: Option<FaultKind>,
     agents: Vec<AgentRecord>,
     index: HashMap<String, usize>,
+    /// The agents talking with the user, innermost last. What the user types
+    /// goes to the innermost.
+    talking: Vec<Talking>,
+}
+
+struct Talking {
+    path: String,
+    inbox: mpsc::UnboundedSender<Said>,
+    /// Its turn has ended and it is waiting for the user.
+    waiting: bool,
 }
 
 pub struct Run {
@@ -305,6 +325,9 @@ pub struct Run {
     pub cancel: CancellationToken,
     /// Force-cancelled: the responses in flight are abandoned too.
     pub force: CancellationToken,
+    /// The user's input has closed, so nobody can talk to an agent waiting
+    /// for them.
+    pub user_left: CancellationToken,
     client: reqwest::Client,
     limb: Limb,
     session_id: String,
@@ -330,6 +353,7 @@ impl Run {
             recorder,
             cancel: CancellationToken::new(),
             force: CancellationToken::new(),
+            user_left: CancellationToken::new(),
             client: reqwest::Client::builder()
                 .timeout(config.request_timeout)
                 .build()
@@ -345,6 +369,7 @@ impl Run {
                 fault_kind: None,
                 agents: Vec::new(),
                 index: HashMap::new(),
+                talking: Vec::new(),
             }),
         }
     }
@@ -356,6 +381,7 @@ impl Run {
         fresh: bool,
         task: Option<String>,
         parent: Option<&str>,
+        user_facing: bool,
     ) -> usize {
         let mut state = self.state();
         let index = state.agents.len();
@@ -363,6 +389,7 @@ impl Run {
             path: path.to_string(),
             depth,
             fresh,
+            user_facing,
             state: AgentState::Waiting,
             requests: 0,
             cached_in: 0,
@@ -378,6 +405,7 @@ impl Run {
             children: Vec::new(),
             task,
             handoff: String::new(),
+            contexts: Vec::new(),
             messages: Vec::new(),
         });
         state.index.insert(path.to_string(), index);
@@ -457,6 +485,114 @@ impl Run {
         self.state().spent
     }
 
+    fn talks_with_user(&self, index: usize) -> bool {
+        self.state().agents[index].user_facing
+    }
+
+    fn open_conversation(&self, path: &str) -> mpsc::UnboundedReceiver<Said> {
+        let (inbox, said) = mpsc::unbounded_channel();
+        self.state().talking.push(Talking {
+            path: path.to_string(),
+            inbox,
+            waiting: false,
+        });
+        said
+    }
+
+    fn close_conversation(&self, path: &str) {
+        self.state().talking.retain(|talking| talking.path != path);
+    }
+
+    /// Wait for the user's next line. `None` if the run was cancelled first.
+    async fn wait_for_user(
+        &self,
+        path: &str,
+        inbox: &mut mpsc::UnboundedReceiver<Said>,
+    ) -> Option<Said> {
+        self.set_waiting(path, true);
+        self.face.line(
+            path,
+            "waiting for you: what you type goes to this agent, /done to finish",
+        );
+        let said = tokio::select! {
+            said = inbox.recv() => said,
+            _ = self.cancel.cancelled() => None,
+            _ = self.user_left.cancelled() => {
+                self.face.line(path, "the user has left, so nobody can talk to this agent: it ends here");
+                None
+            }
+        };
+        self.set_waiting(path, false);
+        said
+    }
+
+    fn set_waiting(&self, path: &str, waiting: bool) {
+        if let Some(talking) = self
+            .state()
+            .talking
+            .iter_mut()
+            .find(|talking| talking.path == path)
+        {
+            talking.waiting = waiting;
+        }
+    }
+
+    /// Give what the user typed to the agent talking with them, if one is
+    /// waiting for it.
+    pub fn say_to_user_facing(&self, line: &str) -> Result<(), String> {
+        let mut state = self.state();
+        let Some(talking) = state.talking.last_mut() else {
+            return Err("a turn is running; only /tree and /cancel are accepted".to_string());
+        };
+        if !talking.waiting {
+            return Err(format!("`{}` is working; wait for its reply", talking.path));
+        }
+        talking.waiting = false;
+        let said = match line {
+            "/done" => Said::Done,
+            line => Said::Line(line.to_string()),
+        };
+        talking
+            .inbox
+            .send(said)
+            .map_err(|_| format!("`{}` has stopped listening", talking.path))
+    }
+
+    /// The agent the user is talking to: the innermost child carrying the
+    /// conversation on, or the root in `chat` when its turn is over.
+    fn talking_to(&self) -> Option<String> {
+        let state = self.state();
+        if let Some(talking) = state.talking.last() {
+            return Some(talking.path.clone());
+        }
+        state
+            .agents
+            .first()
+            .filter(|root| {
+                root.user_facing
+                    && !matches!(root.state, AgentState::Running | AgentState::Suspended)
+            })
+            .map(|root| root.path.clone())
+    }
+
+    /// Keep an agent's old context, and say which one it was.
+    fn hand_over(&self, index: usize, old: Vec<Message>) -> usize {
+        let mut state = self.state();
+        let contexts = &mut state.agents[index].contexts;
+        contexts.push(old);
+        contexts.len()
+    }
+
+    fn read_attachments(&self, paths: &[String]) -> Vec<Attachment> {
+        paths
+            .iter()
+            .map(|path| Attachment {
+                path: path.clone(),
+                content: self.limb.read_file(path),
+            })
+            .collect()
+    }
+
     /// How a request ended. Cancellation is not a fault: nothing went wrong,
     /// the run was stopped.
     async fn request(
@@ -464,7 +600,7 @@ impl Run {
         path: &str,
         index: usize,
         messages: &[Message],
-    ) -> Result<Message, RequestEnd> {
+    ) -> Result<(Message, u64), RequestEnd> {
         let body = self.config.backend.body(
             &self.config.model,
             messages,
@@ -524,7 +660,7 @@ impl Run {
                 wire::Attempt::Answered(sent) => {
                     self.recorder.wire(path, "response", &sent.body);
                     self.absorb(path, index, &sent);
-                    return Ok(sent.message);
+                    return Ok((sent.message, sent.usage.prompt_tokens));
                 }
                 wire::Attempt::Fatal(reason) => {
                     self.recorder
@@ -625,6 +761,7 @@ impl Run {
 
     pub fn snapshot(&self) -> String {
         let agents = self.agents();
+        let talking_to = self.talking_to();
         let mut text = String::from(
             "agent                            state      reqs   cached  written  uncached      out      cost     time\n",
         );
@@ -647,6 +784,9 @@ impl Run {
                 format!("${:.4}", agent.cost),
                 agent.elapsed_millis() as f64 / 1000.0,
             ));
+            if talking_to.as_ref() == Some(&agent.path) {
+                text.insert_str(text.len() - 1, "  ← talking with you");
+            }
             total.add(agent);
         }
         text.push_str(&format!(
@@ -698,28 +838,46 @@ impl Tally {
     }
 }
 
+/// How an agent starts.
+pub struct Start {
+    pub path: String,
+    pub depth: usize,
+    pub index: usize,
+    pub messages: Vec<Message>,
+    /// Signalled, or dropped, once the agent's first request has come back.
+    pub first_reply: Option<watch::Sender<bool>>,
+    /// What the user types, for the child that carries the conversation on.
+    /// It waits on this each time it ends its turn, until `/done`.
+    pub inbox: Option<mpsc::UnboundedReceiver<Said>>,
+}
+
 /// Boxed so the recursion (an agent opens a scope, whose children are
-/// agents) has a type. `first_reply` is signalled, or dropped, once the
-/// agent's first request has come back.
-pub fn run_agent(
-    run: Arc<Run>,
-    path: String,
-    depth: usize,
-    index: usize,
-    messages: Vec<Message>,
-    mut first_reply: Option<watch::Sender<bool>>,
-) -> Pin<Box<dyn Future<Output = AgentEnd> + Send>> {
+/// agents) has a type.
+pub fn run_agent(run: Arc<Run>, start: Start) -> Pin<Box<dyn Future<Output = AgentEnd> + Send>> {
     Box::pin(async move {
+        let Start {
+            path,
+            depth,
+            index,
+            mut messages,
+            mut first_reply,
+            mut inbox,
+        } = start;
         let started = Instant::now();
         run.note(index, |record| record.state = AgentState::Running);
         if run.config.panic_in.as_deref() == Some(path.as_str()) {
             panic!("--panic-in {path}");
         }
-        let mut messages = messages;
         let mut handoff = String::new();
         let mut turns = 0usize;
+        // The size of the last request, and whether this context has been
+        // told it is past the handover point.
+        let mut last_prompt = 0u64;
+        let mut told = false;
+        let mut done = false;
 
         let end = |run: &Arc<Run>, outcome: Outcome, handoff: String, messages: Vec<Message>| {
+            run.close_conversation(&path);
             run.note(index, |record| {
                 record.state = AgentState::Ended(outcome.clone());
                 record.millis = started.elapsed().as_millis();
@@ -748,13 +906,28 @@ pub fn run_agent(
                 run.raise_fault(&path, &fault);
                 return end(&run, Outcome::Faulted(fault.reason), handoff, messages);
             }
+            if let Some(limit) = run.config.handover_at
+                && !told
+                && last_prompt > limit
+            {
+                told = true;
+                messages.push(Message::new(
+                    "user",
+                    &framing::handover_due(last_prompt, limit),
+                ));
+                run.face
+                    .message(&path, messages.len() - 1, messages.last().unwrap(), None);
+            }
 
             let reply = run.request(&path, index, &messages).await;
             if let Some(first_reply) = first_reply.take() {
                 let _ = first_reply.send(true);
             }
             let reply = match reply {
-                Ok(reply) => reply,
+                Ok((reply, prompt)) => {
+                    last_prompt = prompt;
+                    reply
+                }
                 Err(RequestEnd::Cancelled) => {
                     return end(&run, Outcome::Cancelled, handoff, messages);
                 }
@@ -770,6 +943,31 @@ pub fn run_agent(
                 .message(&path, messages.len() - 1, messages.last().unwrap(), None);
 
             if calls.is_empty() {
+                // The child talking with the user ends its turn to wait for
+                // them, and completes only once they have typed `/done` and it
+                // has written its report.
+                if let Some(inbox) = inbox.as_mut()
+                    && !done
+                {
+                    let said = match run.wait_for_user(&path, inbox).await {
+                        Some(said) => said,
+                        None => return end(&run, Outcome::Cancelled, text, messages),
+                    };
+                    // The turn limit bounds what the agent does on its own, so
+                    // it counts from the user's last line.
+                    turns = 0;
+                    let line = match said {
+                        Said::Line(line) => line,
+                        Said::Done => {
+                            done = true;
+                            framing::DONE.to_string()
+                        }
+                    };
+                    messages.push(Message::new("user", &line));
+                    run.face
+                        .message(&path, messages.len() - 1, messages.last().unwrap(), None);
+                    continue;
+                }
                 return end(&run, Outcome::Completed, text, messages);
             }
             if !text.trim().is_empty() {
@@ -779,12 +977,14 @@ pub fn run_agent(
                 return end(&run, Outcome::Cancelled, handoff, messages);
             }
 
-            // Sort the turn's calls once: the locals, and at most one scope.
-            // Everything after this point knows which is which, so no later
-            // step has to ask whether a slot was filled in.
+            // Sort the turn's calls once: the locals, at most one scope, and a
+            // handover only when it is the turn's one call. Everything after
+            // this point knows which is which, so no later step has to ask
+            // whether a slot was filled in.
             let mut locals: Vec<(usize, Local)> = Vec::new();
             let mut refusals: Vec<(usize, String)> = Vec::new();
             let mut scope_at: Option<usize> = None;
+            let mut handover: Option<Handover> = None;
             for (i, call) in calls.iter().enumerate() {
                 let arguments: serde_json::Value = serde_json::from_str(&call.function.arguments)
                     .unwrap_or(serde_json::Value::Null);
@@ -801,6 +1001,13 @@ pub fn run_agent(
                         i,
                         "Error: only one `task` call per turn. This one did not run.".to_string(),
                     )),
+                    "handover" if calls.len() > 1 => {
+                        refusals.push((i, framing::HANDOVER_NOT_ALONE.to_string()))
+                    }
+                    "handover" => match parse_handover(&arguments) {
+                        Ok(parsed) => handover = Some(parsed),
+                        Err(error) => refusals.push((i, format!("Error: {error}"))),
+                    },
                     other => {
                         refusals.push((i, format!("Error: there is no tool called `{other}`.")))
                     }
@@ -844,6 +1051,35 @@ pub fn run_agent(
                 }
             });
 
+            if let Some(handover) = handover {
+                let system: Vec<Message> = messages
+                    .iter()
+                    .take_while(|message| message.role == "system")
+                    .cloned()
+                    .collect();
+                let fresh = Handoff {
+                    shared: framing::handover_shared(&handover.context),
+                    attachments: run.read_attachments(&handover.attachments),
+                    own: Some(framing::handover_own(&handover.task)),
+                    breakpoint: false,
+                }
+                .deliver(system, None);
+                let ended_at = messages.len() - 1;
+                let old = std::mem::replace(&mut messages, fresh);
+                let number = run.hand_over(index, old);
+                run.face.line(
+                    &path,
+                    &format!(
+                        "handed over: context {number} ended at message {ended_at}; context {} is",
+                        number + 1
+                    ),
+                );
+                run.face.context(&path, &messages, 0);
+                last_prompt = 0;
+                told = false;
+                continue;
+            }
+
             if let Some(i) = scope_at {
                 let turn = ParentTurn {
                     messages: messages.clone(),
@@ -852,7 +1088,7 @@ pub fn run_agent(
                     results: results.clone(),
                 };
                 match scope(&run, &path, depth, index, turn).await {
-                    Ok(text) => {
+                    Ok(reports) => {
                         run.note(index, |record| {
                             if let Some(call) = record
                                 .tool_calls
@@ -860,24 +1096,85 @@ pub fn run_agent(
                                 .rev()
                                 .find(|call| call.name == "task" && call.result.is_none())
                             {
-                                call.result = Some(text.clone());
+                                call.result = Some(reports.clone());
                             }
                         });
-                        let result = Message::tool_result(&calls[i].id, &text);
-                        run.face
-                            .message(&path, first_result + i, &result, Some("task"));
-                        results[i] = Some(result);
+                        let up = Handoff {
+                            shared: reports,
+                            attachments: Vec::new(),
+                            own: None,
+                            breakpoint: false,
+                        };
+                        messages = up.deliver(
+                            messages,
+                            Some(Pending {
+                                calls: &calls,
+                                call_index: i,
+                                results: &results,
+                            }),
+                        );
+                        run.face.message(
+                            &path,
+                            first_result + i,
+                            &messages[first_result + i],
+                            Some("task"),
+                        );
+                        continue;
                     }
                     Err(outcome) => return end(&run, outcome, handoff, messages),
                 }
             }
             for result in results {
                 messages.push(result.expect(
-                    "the turn's calls were classified as locals, refusals and at most one scope, and every one of those was answered",
+                    "the turn's calls were classified as locals and refusals, and every one of those was answered",
                 ));
             }
         }
     })
+}
+
+/// What the user typed to the agent talking with them.
+pub enum Said {
+    Line(String),
+    Done,
+}
+
+/// A `handover` call's arguments.
+struct Handover {
+    context: String,
+    task: String,
+    attachments: Vec<String>,
+}
+
+fn parse_handover(arguments: &serde_json::Value) -> Result<Handover, String> {
+    let text = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| format!("`handover` needs `{key}`"))
+    };
+    Ok(Handover {
+        context: text("context")?,
+        task: text("task")?,
+        attachments: strings(arguments.get("attachments"), "`attachments`")?,
+    })
+}
+
+/// A list of strings that may be left out.
+fn strings(value: Option<&serde_json::Value>, what: &str) -> Result<Vec<String>, String> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("{what} must be a list of strings"))
+            })
+            .collect(),
+        Some(_) => Err(format!("{what} must be a list of strings")),
+    }
 }
 
 /// The parent's turn, frozen at the moment it called `task`: its messages
@@ -891,6 +1188,16 @@ struct ParentTurn {
     results: Vec<Option<Message>>,
 }
 
+impl ParentTurn {
+    fn pending(&self) -> Pending<'_> {
+        Pending {
+            calls: &self.calls,
+            call_index: self.call_index,
+            results: &self.results,
+        }
+    }
+}
+
 enum Local {
     ListDir(String),
     ReadFile(String),
@@ -901,6 +1208,16 @@ struct ChildSpec {
     task: String,
     after: Vec<String>,
     fresh: bool,
+    /// The child that carries the conversation with the user on.
+    talks: bool,
+}
+
+/// A `task` call's arguments.
+struct Call {
+    shared: String,
+    attachments: Vec<String>,
+    user_facing: Option<bool>,
+    specs: Vec<ChildSpec>,
 }
 
 struct ChildReport {
@@ -922,7 +1239,12 @@ async fn scope(
             .line(parent_path, "task refused: at the depth limit");
         return Ok(framing::depth_limit_error(run.config.max_depth));
     }
-    let (shared, specs) = match parse_call(&turn.calls[turn.call_index].function.arguments) {
+    let Call {
+        shared,
+        attachments,
+        user_facing,
+        mut specs,
+    } = match parse_call(&turn.calls[turn.call_index].function.arguments) {
         Ok(call) => call,
         Err(error) => {
             run.face
@@ -930,6 +1252,34 @@ async fn scope(
             return Ok(format!("Error: {error}"));
         }
     };
+    // Only the user creates an obligation for the user: an agent that is not
+    // talking with them cannot start one that would be.
+    let talking = run.talks_with_user(parent_index);
+    if user_facing == Some(true) && !talking {
+        run.face.line(
+            parent_path,
+            "task refused: only the user can start an agent that talks with the user",
+        );
+        return Ok(framing::USER_FACING_REFUSED.to_string());
+    }
+    if user_facing.unwrap_or(talking) {
+        let name = format!("{}'", parent_path.rsplit(" › ").next().unwrap());
+        if specs.iter().any(|spec| spec.name == name) {
+            let error = format!("`{name}` is the name of the agent that talks with the user");
+            run.face
+                .line(parent_path, &format!("task rejected: {error}"));
+            return Ok(format!("Error: {error}"));
+        }
+        specs.push(ChildSpec {
+            name,
+            task: String::new(),
+            after: Vec::new(),
+            fresh: false,
+            talks: true,
+        });
+    }
+    // Read once, now, for every child.
+    let attachments = run.read_attachments(&attachments);
 
     let names: Vec<String> = specs.iter().map(|spec| spec.name.clone()).collect();
     run.face.line(
@@ -961,7 +1311,8 @@ async fn scope(
     let mut handles = Vec::new();
     for (n, spec) in specs.iter().enumerate() {
         let child_path = format!("{parent_path} › {}", spec.name);
-        let fresh = run.config.framing.mode.resolve(spec.fresh);
+        // The conversation carries on from the parent's, so it is a fork.
+        let fresh = !spec.talks && run.config.framing.mode.resolve(spec.fresh);
         let (first_reply, mut led) = if n == leader {
             (leader_reply.take(), None)
         } else {
@@ -971,9 +1322,11 @@ async fn scope(
             &child_path,
             depth + 1,
             fresh,
-            Some(spec.task.clone()),
+            (!spec.talks).then(|| spec.task.clone()),
             Some(parent_path),
+            spec.talks,
         );
+        let inbox = spec.talks.then(|| run.open_conversation(&child_path));
         let dependencies: Vec<(String, watch::Receiver<Option<Arc<ChildReport>>>)> = spec
             .after
             .iter()
@@ -985,7 +1338,9 @@ async fn scope(
         let turn = turn.clone();
         let name = spec.name.clone();
         let task = spec.task.clone();
+        let talks = spec.talks;
         let shared = shared.clone();
+        let attachments = attachments.clone();
         let names = names.clone();
         let parent_path = parent_path.to_string();
         handles.push(tokio::spawn(async move {
@@ -1005,65 +1360,65 @@ async fn scope(
                 };
                 dependency_reports.push((dependency, report.handoff.clone()));
             }
-            if run.cancel.is_cancelled() {
+            let report = if run.cancel.is_cancelled() {
+                run.close_conversation(&child_path);
                 run.note(child_index, |record| {
                     record.state = AgentState::Ended(Outcome::Cancelled)
                 });
-                let report = Arc::new(ChildReport {
+                Arc::new(ChildReport {
                     outcome: Outcome::Cancelled,
                     handoff: String::new(),
-                });
-                let _ = sender.send(Some(report.clone()));
-                return report;
-            }
-            // A fresh child has no conversation to carry on, so it is always
-            // a new agent.
-            let identity = if fresh {
-                Identity::Agent
+                })
             } else {
-                run.config.framing.identity
+                // A fresh child has no conversation to carry on, so it is
+                // always a new agent.
+                let identity = if fresh {
+                    Identity::Agent
+                } else {
+                    run.config.framing.identity
+                };
+                let down = Handoff {
+                    shared: framing::shared_part(identity, &names, &shared),
+                    attachments,
+                    own: Some(if talks {
+                        framing::conversation_part(&name)
+                    } else {
+                        framing::own_part(identity, &name, &task, &dependency_reports)
+                    }),
+                    breakpoint: true,
+                };
+                let messages = child_context(run.config.framing.cut, fresh, &turn, &down);
+                // What the child shares with its parent has been shown under
+                // the parent already; the rest is shown here.
+                let in_common = messages
+                    .iter()
+                    .zip(&turn.messages)
+                    .take_while(|(child, parent)| child == parent)
+                    .count();
+                let inherited = match in_common {
+                    1 => format!("{parent_path}'s message 0"),
+                    n => format!("{parent_path}'s messages 0–{}", n - 1),
+                };
+                run.face
+                    .line(&child_path, &format!("context: {inherited}, then"));
+                run.face.context(&child_path, &messages, in_common);
+                let end = run_agent(
+                    run.clone(),
+                    Start {
+                        path: child_path,
+                        depth: depth + 1,
+                        index: child_index,
+                        messages,
+                        first_reply,
+                        inbox,
+                    },
+                )
+                .await;
+                Arc::new(ChildReport {
+                    outcome: end.outcome,
+                    handoff: end.handoff,
+                })
             };
-            let messages = child_context(
-                run.config.framing.cut,
-                fresh,
-                &turn,
-                &framing::shared_part(identity, &names, &shared),
-                &framing::own_part(identity, &name, &task, &dependency_reports),
-            );
-            // What the child shares with its parent has been shown under the
-            // parent already; the rest is shown here.
-            let in_common = messages
-                .iter()
-                .zip(&turn.messages)
-                .take_while(|(child, parent)| child == parent)
-                .count();
-            let inherited = match in_common {
-                1 => format!("{parent_path}'s message 0"),
-                n => format!("{parent_path}'s messages 0–{}", n - 1),
-            };
-            run.face
-                .line(&child_path, &format!("context: {inherited}, then"));
-            for (n, message) in messages.iter().enumerate().skip(in_common) {
-                let tool = message
-                    .tool_call_id
-                    .as_ref()
-                    .and_then(|id| turn.calls.iter().find(|call| &call.id == id))
-                    .map(|call| call.function.name.as_str());
-                run.face.message(&child_path, n, message, tool);
-            }
-            let end = run_agent(
-                run.clone(),
-                child_path,
-                depth + 1,
-                child_index,
-                messages,
-                first_reply,
-            )
-            .await;
-            let report = Arc::new(ChildReport {
-                outcome: end.outcome,
-                handoff: end.handoff,
-            });
             let _ = sender.send(Some(report.clone()));
             report
         }));
@@ -1078,6 +1433,7 @@ async fn scope(
                 // A panicked agent still ends with a recorded outcome.
                 let child_path = format!("{parent_path} › {}", spec.name);
                 let reason = error.to_string();
+                run.close_conversation(&child_path);
                 run.record_panic(&child_path, &reason);
                 Arc::new(ChildReport {
                     outcome: Outcome::Panicked(reason),
@@ -1107,8 +1463,7 @@ async fn scope(
     Ok(framing::scope_result(&reports))
 }
 
-/// A `task` call's `shared` text and its agents.
-fn parse_call(arguments: &str) -> Result<(String, Vec<ChildSpec>), String> {
+fn parse_call(arguments: &str) -> Result<Call, String> {
     let value: serde_json::Value = serde_json::from_str(arguments)
         .map_err(|e| format!("the arguments were not valid JSON: {e}"))?;
     let shared = value
@@ -1118,6 +1473,12 @@ fn parse_call(arguments: &str) -> Result<(String, Vec<ChildSpec>), String> {
             "`shared` is required: write there, once, what every agent needs, or leave it empty",
         )?
         .to_string();
+    let attachments = strings(value.get("attachments"), "`attachments`")?;
+    let user_facing = match value.get("user_facing") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Bool(on)) => Some(*on),
+        Some(_) => return Err("`user_facing` must be true or false".to_string()),
+    };
     let entries = value
         .get("agents")
         .and_then(|v| v.as_array())
@@ -1145,18 +1506,7 @@ fn parse_call(arguments: &str) -> Result<(String, Vec<ChildSpec>), String> {
             .and_then(|v| v.as_str())
             .ok_or_else(|| format!("agent `{name}` needs a `task`"))?
             .to_string();
-        let after = match entry.get("after") {
-            None | Some(serde_json::Value::Null) => Vec::new(),
-            Some(serde_json::Value::Array(items)) => items
-                .iter()
-                .map(|item| {
-                    item.as_str()
-                        .map(|s| s.to_string())
-                        .ok_or_else(|| format!("agent `{name}`: `after` must be a list of names"))
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            Some(_) => return Err(format!("agent `{name}`: `after` must be a list of names")),
-        };
+        let after = strings(entry.get("after"), &format!("agent `{name}`: `after`"))?;
         specs.push(ChildSpec {
             name,
             task,
@@ -1165,6 +1515,7 @@ fn parse_call(arguments: &str) -> Result<(String, Vec<ChildSpec>), String> {
                 .get("fresh")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            talks: false,
         });
     }
     let names: HashSet<&String> = specs.iter().map(|spec| &spec.name).collect();
@@ -1185,7 +1536,12 @@ fn parse_call(arguments: &str) -> Result<(String, Vec<ChildSpec>), String> {
         }
     }
     check_acyclic(&specs)?;
-    Ok((shared, specs))
+    Ok(Call {
+        shared,
+        attachments,
+        user_facing,
+        specs,
+    })
 }
 
 fn check_acyclic(specs: &[ChildSpec]) -> Result<(), String> {
@@ -1224,64 +1580,21 @@ fn check_acyclic(specs: &[ChildSpec]) -> Result<(), String> {
 
 /// The child's context. A fork is its parent's messages, cut after the
 /// `task` turn or before it; a fresh child has the system messages alone.
-/// Then the shared part, ending in the cache breakpoint, and the child's own.
-///
-/// Cut after the turn, the shared part is the answer to the `task` call,
-/// among the turn's other tool results. The breakpoint goes on the last of
-/// them, because everything up to there is the same for every sibling.
-///
-/// Cut at the call, the parent's `task` call already holds the shared part,
-/// so the breakpoint goes on that turn and the answer is the child's own.
-fn child_context(
-    cut: Cut,
-    fresh: bool,
-    turn: &ParentTurn,
-    shared: &str,
-    own: &str,
-) -> Vec<Message> {
-    let turn_index = turn.messages.len() - 1;
-    if !fresh && cut == Cut::Call {
-        let mut messages = turn.messages.clone();
-        messages[turn_index].cache = true;
-        messages.extend(turn_results(turn, own));
-        return messages;
-    }
-    let mut messages: Vec<Message> = if fresh {
-        turn.messages
+/// Cut after the turn, the shared part is the answer to the `task` call.
+fn child_context(cut: Cut, fresh: bool, turn: &ParentTurn, down: &Handoff) -> Vec<Message> {
+    if fresh {
+        let system = turn
+            .messages
             .iter()
             .take_while(|message| message.role == "system")
             .cloned()
-            .collect()
-    } else if cut == Cut::Before {
-        turn.messages[..turn_index].to_vec()
-    } else {
-        turn.messages.clone()
-    };
-    if fresh || cut == Cut::Before {
-        messages.push(Message::new("user", shared));
-    } else {
-        messages.extend(turn_results(turn, shared));
+            .collect();
+        return down.deliver(system, None);
     }
-    messages
-        .last_mut()
-        .expect("the shared part was just added")
-        .cache = true;
-    messages.push(Message::new("user", own));
-    messages
-}
-
-/// The parent's `task` turn answered, in call order, with `answer` in the
-/// scope's own slot.
-fn turn_results<'a>(turn: &'a ParentTurn, answer: &'a str) -> impl Iterator<Item = Message> + 'a {
-    turn.calls.iter().enumerate().map(move |(i, call)| {
-        if i == turn.call_index {
-            Message::tool_result(&call.id, answer)
-        } else {
-            turn.results[i]
-                .clone()
-                .expect("only the scope's own slot is unanswered while the scope runs")
-        }
-    })
+    match cut {
+        Cut::Before => down.deliver(turn.messages[..turn.messages.len() - 1].to_vec(), None),
+        Cut::Result => down.deliver(turn.messages.clone(), Some(turn.pending())),
+    }
 }
 
 /// Each agent's final context, rendered so `diff` between a parent's file and
@@ -1295,7 +1608,21 @@ pub fn render_context(record: &AgentRecord) -> String {
         record.requests,
         record.cost
     );
-    for (n, message) in record.messages.iter().enumerate() {
+    // An agent that handed over has had more than one context: each old one
+    // in full, ending in its `handover` call, then the one it finished in.
+    for (n, context) in record.contexts.iter().enumerate() {
+        text.push_str(&format!("\n# context {}, handed over\n", n + 1));
+        render_messages(&mut text, context);
+    }
+    if !record.contexts.is_empty() {
+        text.push_str(&format!("\n# context {}\n", record.contexts.len() + 1));
+    }
+    render_messages(&mut text, &record.messages);
+    text
+}
+
+fn render_messages(text: &mut String, messages: &[Message]) {
+    for (n, message) in messages.iter().enumerate() {
         text.push_str(&format!("\n## {n} {}\n\n", message.role));
         if let Some(id) = &message.tool_call_id {
             text.push_str(&format!("(answering {id})\n\n"));
@@ -1316,5 +1643,4 @@ pub fn render_context(record: &AgentRecord) -> String {
             ));
         }
     }
-    text
 }

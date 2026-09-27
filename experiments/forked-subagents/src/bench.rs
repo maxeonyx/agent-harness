@@ -621,6 +621,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
                 &bench_dir,
                 &label,
                 false,
+                false,
                 args.session_id(),
             )?;
             session.say(task.root_task());

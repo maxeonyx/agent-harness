@@ -97,6 +97,19 @@ pub struct ToolCall {
     pub function: ToolCallFunction,
 }
 
+impl ToolCall {
+    pub fn read_file(id: &str, path: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            call_type: function_type(),
+            function: ToolCallFunction {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({ "path": path }).to_string(),
+            },
+        }
+    }
+}
+
 fn function_type() -> String {
     "function".to_string()
 }

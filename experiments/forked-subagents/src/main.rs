@@ -3,6 +3,7 @@ mod anthropic;
 mod bench;
 mod face;
 mod framing;
+mod handoff;
 mod ledgers;
 mod limb;
 mod projects;
@@ -30,13 +31,10 @@ forks — agents as structured concurrency
 Framing (the knobs the benchmark sweeps). A child's tail is the `task`
 call's `shared` part, the same bytes for every sibling and ending in a cache
 breakpoint, and then the child's own part.
-  --cut result|before|call  what a forked child inherits (default before)
+  --cut result|before     what a forked child inherits (default before)
       result  the parent's messages through the `task` turn; the shared part
               is the answer to that call, and the child's own part follows
               in the same user message. Claude backend only
-      call    the parent's messages through the `task` turn, which already
-              holds `shared`, with the breakpoint on that turn; the answer to
-              the call is the child's own part. Claude backend only
       before  the parent's messages up to, not including, the `task` turn,
               then the shared part and the child's own part as user text
   --identity agent|task   how the child's own part names it (default agent)
@@ -69,7 +67,10 @@ Limits:
   --max-depth <n>     levels of agents below the root (default 3, which is the
                       most four cache breakpoints allow; bench uses 2, which
                       is exactly the shape its task asks for)
-  --max-turns <n>     requests one agent may make (default 20)
+  --max-turns <n>     requests one agent may make (default 20); for the agent
+                      talking with you, since your last line
+  --handover-at <tokens>  past this many tokens in one request, tell the agent
+                      to call `handover` (default never)
   --request-timeout <seconds>  give up on a silent provider and retry (default 300)
   --rate-limit-patience <seconds>  how long to keep waiting out a 429 before
                       giving up on it (default 120; the first wait is a
@@ -90,8 +91,10 @@ Benchmark only:
                                 reaches its own --max-cost is a scored trial.
   --cut / --identity / --mode   accept comma-separated lists here
 
-In chat: a line is a message to the root; /tree, /cancel, /quit. A line typed
-while a turn is running is refused and discarded, not queued.
+In chat: a line is a message to the root; /tree, /cancel, /quit. When the root
+splits, one more agent carries the conversation on: while the split runs, a line
+goes to it, and /done ends it. /tree marks the agent you are talking to. A line
+typed while no agent is waiting for you is refused and discarded, not queued.
 ";
 
 #[tokio::main]
@@ -135,6 +138,7 @@ async fn command_run(args: &Args) -> Result<ExitCode, String> {
         &args.runs_dir(),
         "run",
         true,
+        false,
         args.session_id(),
     )?;
     session.say(&task);
@@ -154,6 +158,7 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
         &PathBuf::from(&dir),
         &args.runs_dir(),
         "chat",
+        true,
         true,
         args.session_id(),
     )?;
@@ -200,6 +205,12 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
                 run.face.say("nothing is running");
                 continue;
             }
+            "/done" => {
+                run.face.say(
+                    "nothing to finish: /done ends an agent that carries the conversation on, and you are talking to the root",
+                );
+                continue;
+            }
             _ => {}
         }
         session.say(&line);
@@ -214,8 +225,16 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
                         run.face.say(CANCELLING);
                         run.cancel.cancel();
                     }
-                    Some(_) => run.face.say("a turn is running; only /tree and /cancel are accepted"),
-                    None => stdin_open = false,
+                    Some("") => {}
+                    Some(line) => {
+                        if let Err(refused) = run.say_to_user_facing(line) {
+                            run.face.say(&refused);
+                        }
+                    }
+                    None => {
+                        stdin_open = false;
+                        run.user_left.cancel();
+                    }
                 },
             }
         };
@@ -283,6 +302,7 @@ const COMMON: &[&str] = &[
     "max-turns",
     "request-timeout",
     "rate-limit-patience",
+    "handover-at",
     "panic-in",
     "runs-dir",
     "session-id",
@@ -463,10 +483,8 @@ impl Args {
                             .to_string(),
                     );
                 }
-                match framing.cut {
-                    Cut::Result => return Err("--cut result puts the cache breakpoint on a tool result, and OpenRouter documents breakpoints only on the text parts of a message; the likely translation, a text block inside the tool result, is one Anthropic rejects. Use --cut before, or --backend claude".to_string()),
-                    Cut::Call => return Err("--cut call puts the cache breakpoint on the parent's tool call, and OpenRouter documents breakpoints only on the text parts of a message. Use --cut before, or --backend claude".to_string()),
-                    Cut::Before => {}
+                if framing.cut == Cut::Result {
+                    return Err("--cut result puts the cache breakpoint on a tool result, and OpenRouter documents breakpoints only on the text parts of a message; the likely translation, a text block inside the tool result, is one Anthropic rejects. Use --cut before, or --backend claude".to_string());
                 }
                 Backend::OpenRouter {
                     base_url,
@@ -519,6 +537,17 @@ impl Args {
             rate_limit_patience: std::time::Duration::from_secs_f64(
                 self.number("rate-limit-patience", 120.0)?,
             ),
+            handover_at: match self
+                .flags
+                .get("handover-at")
+                .and_then(|values| values.last())
+            {
+                Some(text) => Some(
+                    text.parse()
+                        .map_err(|_| format!("--handover-at {text} is not a number of tokens"))?,
+                ),
+                None => None,
+            },
         })
     }
 }
