@@ -11,7 +11,7 @@
 //! serves the whole prefix from cache; only its own tail is new.
 
 use crate::face::Face;
-use crate::framing::{self, Cut, Framing};
+use crate::framing::{self, Cut, Framing, Identity};
 use crate::limb::Limb;
 use crate::record::Recorder;
 use crate::wire::{self, Backend, Message, ToolCall};
@@ -243,8 +243,6 @@ pub struct AgentRecord {
     pub children: Vec<String>,
     /// The `task` text the parent wrote for this agent, before any framing.
     pub task: Option<String>,
-    /// That text plus the framing under test, as the child actually saw it.
-    pub assignment: Option<String>,
     pub handoff: String,
     pub messages: Vec<Message>,
 }
@@ -278,7 +276,6 @@ impl AgentRecord {
                 "name": c.name, "arguments": c.arguments, "result": c.result
             })).collect::<Vec<_>>(),
             "task": self.task,
-            "assignment": self.assignment,
             "handoff": self.handoff,
         })
     }
@@ -380,7 +377,6 @@ impl Run {
             tool_calls: Vec::new(),
             children: Vec::new(),
             task,
-            assignment: None,
             handoff: String::new(),
             messages: Vec::new(),
         });
@@ -703,13 +699,15 @@ impl Tally {
 }
 
 /// Boxed so the recursion (an agent opens a scope, whose children are
-/// agents) has a type.
+/// agents) has a type. `first_reply` is signalled, or dropped, once the
+/// agent's first request has come back.
 pub fn run_agent(
     run: Arc<Run>,
     path: String,
     depth: usize,
     index: usize,
     messages: Vec<Message>,
+    mut first_reply: Option<watch::Sender<bool>>,
 ) -> Pin<Box<dyn Future<Output = AgentEnd> + Send>> {
     Box::pin(async move {
         let started = Instant::now();
@@ -751,7 +749,11 @@ pub fn run_agent(
                 return end(&run, Outcome::Faulted(fault.reason), handoff, messages);
             }
 
-            let reply = match run.request(&path, index, &messages).await {
+            let reply = run.request(&path, index, &messages).await;
+            if let Some(first_reply) = first_reply.take() {
+                let _ = first_reply.send(true);
+            }
+            let reply = match reply {
                 Ok(reply) => reply,
                 Err(RequestEnd::Cancelled) => {
                     return end(&run, Outcome::Cancelled, handoff, messages);
@@ -899,7 +901,6 @@ struct ChildSpec {
     task: String,
     after: Vec<String>,
     fresh: bool,
-    raw: serde_json::Value,
 }
 
 struct ChildReport {
@@ -921,8 +922,8 @@ async fn scope(
             .line(parent_path, "task refused: at the depth limit");
         return Ok(framing::depth_limit_error(run.config.max_depth));
     }
-    let specs = match parse_children(&turn.calls[turn.call_index].function.arguments) {
-        Ok(specs) => specs,
+    let (shared, specs) = match parse_call(&turn.calls[turn.call_index].function.arguments) {
+        Ok(call) => call,
         Err(error) => {
             run.face
                 .line(parent_path, &format!("task rejected: {error}"));
@@ -947,15 +948,25 @@ async fn scope(
         receivers.insert(spec.name.clone(), rx);
     }
 
+    // The first sibling that waits on no other goes first, and the rest start
+    // once its first request has come back. That request is what writes the
+    // shared part to the cache; one sent before it returns cannot read it.
+    let leader = specs
+        .iter()
+        .position(|spec| spec.after.is_empty())
+        .expect("a call without cycles has a sibling that waits on none");
+    let (leader_reply, led) = watch::channel(false);
+    let mut leader_reply = Some(leader_reply);
+
     let mut handles = Vec::new();
-    for spec in &specs {
+    for (n, spec) in specs.iter().enumerate() {
         let child_path = format!("{parent_path} › {}", spec.name);
         let fresh = run.config.framing.mode.resolve(spec.fresh);
-        let siblings: Vec<String> = names
-            .iter()
-            .filter(|name| *name != &spec.name)
-            .cloned()
-            .collect();
+        let (first_reply, mut led) = if n == leader {
+            (leader_reply.take(), None)
+        } else {
+            (None, Some(led.clone()))
+        };
         let child_index = run.register(
             &child_path,
             depth + 1,
@@ -974,9 +985,15 @@ async fn scope(
         let turn = turn.clone();
         let name = spec.name.clone();
         let task = spec.task.clone();
-        let raw = spec.raw.clone();
+        let shared = shared.clone();
+        let names = names.clone();
         let parent_path = parent_path.to_string();
         handles.push(tokio::spawn(async move {
+            if let Some(led) = led.as_mut() {
+                // An error means the leader ended without sending, which is
+                // just as much a go.
+                let _ = led.wait_for(|replied| *replied).await;
+            }
             let mut dependency_reports = Vec::new();
             for (dependency, mut receiver) in dependencies {
                 let report = match receiver.wait_for(|value| value.is_some()).await {
@@ -999,31 +1016,34 @@ async fn scope(
                 let _ = sender.send(Some(report.clone()));
                 return report;
             }
-            let assignment = framing::assignment(
-                run.config.framing.words,
-                &name,
-                &task,
-                &siblings,
-                &dependency_reports,
+            // A fresh child has no conversation to carry on, so it is always
+            // a new agent.
+            let identity = if fresh {
+                Identity::Agent
+            } else {
+                run.config.framing.identity
+            };
+            let messages = child_context(
+                run.config.framing.cut,
+                fresh,
+                &turn,
+                &framing::shared_part(identity, &names, &shared),
+                &framing::own_part(identity, &name, &task, &dependency_reports),
             );
-            let messages = child_context(run.config.framing.cut, fresh, &turn, &raw, &assignment);
-            run.note(child_index, |record| {
-                record.assignment = Some(assignment.clone())
-            });
             // What the child shares with its parent has been shown under the
             // parent already; the rest is shown here.
-            let shared = messages
+            let in_common = messages
                 .iter()
                 .zip(&turn.messages)
                 .take_while(|(child, parent)| child == parent)
                 .count();
-            let inherited = match shared {
+            let inherited = match in_common {
                 1 => format!("{parent_path}'s message 0"),
                 n => format!("{parent_path}'s messages 0–{}", n - 1),
             };
             run.face
                 .line(&child_path, &format!("context: {inherited}, then"));
-            for (n, message) in messages.iter().enumerate().skip(shared) {
+            for (n, message) in messages.iter().enumerate().skip(in_common) {
                 let tool = message
                     .tool_call_id
                     .as_ref()
@@ -1031,7 +1051,15 @@ async fn scope(
                     .map(|call| call.function.name.as_str());
                 run.face.message(&child_path, n, message, tool);
             }
-            let end = run_agent(run.clone(), child_path, depth + 1, child_index, messages).await;
+            let end = run_agent(
+                run.clone(),
+                child_path,
+                depth + 1,
+                child_index,
+                messages,
+                first_reply,
+            )
+            .await;
             let report = Arc::new(ChildReport {
                 outcome: end.outcome,
                 handoff: end.handoff,
@@ -1079,9 +1107,17 @@ async fn scope(
     Ok(framing::scope_result(&reports))
 }
 
-fn parse_children(arguments: &str) -> Result<Vec<ChildSpec>, String> {
+/// A `task` call's `shared` text and its agents.
+fn parse_call(arguments: &str) -> Result<(String, Vec<ChildSpec>), String> {
     let value: serde_json::Value = serde_json::from_str(arguments)
         .map_err(|e| format!("the arguments were not valid JSON: {e}"))?;
+    let shared = value
+        .get("shared")
+        .and_then(|v| v.as_str())
+        .ok_or(
+            "`shared` is required: write there, once, what every agent needs, or leave it empty",
+        )?
+        .to_string();
     let entries = value
         .get("agents")
         .and_then(|v| v.as_array())
@@ -1129,7 +1165,6 @@ fn parse_children(arguments: &str) -> Result<Vec<ChildSpec>, String> {
                 .get("fresh")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
-            raw: entry.clone(),
         });
     }
     let names: HashSet<&String> = specs.iter().map(|spec| &spec.name).collect();
@@ -1150,7 +1185,7 @@ fn parse_children(arguments: &str) -> Result<Vec<ChildSpec>, String> {
         }
     }
     check_acyclic(&specs)?;
-    Ok(specs)
+    Ok((shared, specs))
 }
 
 fn check_acyclic(specs: &[ChildSpec]) -> Result<(), String> {
@@ -1187,54 +1222,50 @@ fn check_acyclic(specs: &[ChildSpec]) -> Result<(), String> {
     Ok(())
 }
 
-/// The child's context. `full` and `own` are the fork: the parent's messages
-/// byte for byte, through the assistant turn that called `task`, then the
-/// tool results for that turn with this child's assignment in the `task`
-/// slot. `own` differs only in that the child's copy of the `task` arguments
-/// holds its own entry alone — which costs no extra cache, because every
-/// child writes that turn afresh anyway.
+/// The child's context. A fork is its parent's messages, cut after the
+/// `task` turn or before it; a fresh child has the system messages alone.
+/// Then the shared part, ending in the cache breakpoint, and the child's own.
+///
+/// Cut after the turn, the shared part is the answer to the `task` call,
+/// among the turn's other tool results. The breakpoint goes on the last of
+/// them, because everything up to there is the same for every sibling.
 fn child_context(
     cut: Cut,
     fresh: bool,
     turn: &ParentTurn,
-    raw_entry: &serde_json::Value,
-    assignment: &str,
+    shared: &str,
+    own: &str,
 ) -> Vec<Message> {
-    if fresh {
-        let mut messages: Vec<Message> = turn
-            .messages
+    let turn_index = turn.messages.len() - 1;
+    let mut messages: Vec<Message> = if fresh {
+        turn.messages
             .iter()
             .take_while(|message| message.role == "system")
             .cloned()
-            .collect();
-        messages.push(Message::new("user", assignment));
-        return messages;
-    }
-    let turn_index = turn.messages.len() - 1;
-    if cut == Cut::Before {
-        let mut messages = turn.messages[..turn_index].to_vec();
-        messages.push(Message::new("user", assignment));
-        return messages;
-    }
-    let mut messages = turn.messages.clone();
-    if cut == Cut::Own {
-        let assistant = &mut messages[turn_index];
-        if let Some(tool_calls) = assistant.tool_calls.as_mut() {
-            tool_calls[turn.call_index].function.arguments =
-                serde_json::json!({ "agents": [raw_entry] }).to_string();
-        }
-    }
-    for (i, call) in turn.calls.iter().enumerate() {
-        if i == turn.call_index {
-            messages.push(Message::tool_result(&call.id, assignment));
-        } else {
-            messages.push(
+            .collect()
+    } else if cut == Cut::Before {
+        turn.messages[..turn_index].to_vec()
+    } else {
+        turn.messages.clone()
+    };
+    if fresh || cut == Cut::Before {
+        messages.push(Message::new("user", shared));
+    } else {
+        for (i, call) in turn.calls.iter().enumerate() {
+            messages.push(if i == turn.call_index {
+                Message::tool_result(&call.id, shared)
+            } else {
                 turn.results[i]
                     .clone()
-                    .expect("only the scope's own slot is unanswered while the scope runs"),
-            );
+                    .expect("only the scope's own slot is unanswered while the scope runs")
+            });
         }
     }
+    messages
+        .last_mut()
+        .expect("the shared part was just added")
+        .cache = true;
+    messages.push(Message::new("user", own));
     messages
 }
 
@@ -1253,6 +1284,9 @@ pub fn render_context(record: &AgentRecord) -> String {
         text.push_str(&format!("\n## {n} {}\n\n", message.role));
         if let Some(id) = &message.tool_call_id {
             text.push_str(&format!("(answering {id})\n\n"));
+        }
+        if message.cache {
+            text.push_str("(cache breakpoint)\n\n");
         }
         if let Some(content) = &message.content
             && !content.is_empty()

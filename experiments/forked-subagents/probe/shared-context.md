@@ -9,3 +9,16 @@
 | one `tool_result` holding both, automatic caching only | 0 / 14,380 | **0 / 14,380** | 14,380 / 0 |
 
 So on Anthropic the shared explanation can be the tool result and be cached for every sibling, but only if the specific explanation is not inside that same tool result. Automatic caching alone caches only where a request ends, so without an explicit breakpoint each sibling pays for the shared part in full.
+
+## How many breakpoints — 2026-09-28
+
+`breakpoints.py`: one user message of explicit `cache_control` blocks, with and without the top-level (automatic) `cache_control`.
+
+| explicit | automatic | answer |
+| --- | --- | --- |
+| 3 | no | 200 |
+| 3 | yes | 200 |
+| 4 | no | 200 |
+| 4 | yes | 400: "A maximum of 4 blocks with cache_control may be provided. Found 5." |
+
+The automatic breakpoint takes one of the four. Every level of forking leaves one explicit breakpoint in its descendants' contexts, so with the automatic one an agent can be at most three levels below the root.

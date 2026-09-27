@@ -59,7 +59,13 @@ impl Face {
             parts.push(if words.is_empty() {
                 format!("{path:<28} [{n} {role} thinking] (the provider did not show it)")
             } else {
-                block(path, n, &format!("{role} thinking"), &words.join("\n"))
+                block(
+                    path,
+                    n,
+                    &format!("{role} thinking"),
+                    &words.join("\n"),
+                    false,
+                )
             });
         }
         if !text.is_empty() || calls.is_empty() {
@@ -68,11 +74,11 @@ impl Face {
                 (Some(id), None) => format!("{role} {id}"),
                 (None, _) => role.to_string(),
             };
-            parts.push(block(path, n, &header, text));
+            parts.push(block(path, n, &header, text, message.cache));
         }
         for call in calls {
             let header = format!("{role} tool_use {} {}", call.function.name, call.id);
-            parts.push(block(path, n, &header, &call.function.arguments));
+            parts.push(block(path, n, &header, &call.function.arguments, false));
         }
         self.say(&parts.join("\n"));
     }
@@ -86,8 +92,12 @@ impl Face {
     }
 }
 
-fn block(path: &str, n: usize, header: &str, text: &str) -> String {
+/// `cached` marks the block that carries the message's cache breakpoint.
+fn block(path: &str, n: usize, header: &str, text: &str, cached: bool) -> String {
     let mut block = format!("{path:<28} [{n} {header}]");
+    if cached {
+        block.push_str(" ← cache breakpoint");
+    }
     if text.is_empty() {
         block.push_str(" (empty)");
     }

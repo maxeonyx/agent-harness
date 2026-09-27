@@ -33,10 +33,12 @@ pub fn model_id(model: &str) -> Result<&str, String> {
 }
 
 /// The request body for a chat-completions transcript. Every system message
-/// becomes a system block, in order, and a run of tool results becomes one
-/// user message, which is where Anthropic wants the answers to one turn's
-/// calls. Caching is switched on for the whole request, as it is on
-/// OpenRouter.
+/// becomes a system block, in order, and a run of tool results and user text
+/// becomes one user message, which is where Anthropic wants the answers to
+/// one turn's calls and what it makes of consecutive user turns anyway.
+/// Caching is switched on for the whole request, as it is on OpenRouter; a
+/// message marked as a cache breakpoint also carries `cache_control` on its
+/// block.
 pub fn body(model: &str, transcript: &[Message], tools: &[Value]) -> Value {
     let system: Vec<Value> = transcript
         .iter()
@@ -45,8 +47,13 @@ pub fn body(model: &str, transcript: &[Message], tools: &[Value]) -> Value {
         .collect();
     let mut messages: Vec<Value> = Vec::new();
     for message in transcript.iter().filter(|message| message.role != "system") {
-        match message.role.as_str() {
-            "user" => messages.push(json!({ "role": "user", "content": [text_block(message)] })),
+        let mut block = match message.role.as_str() {
+            "user" => text_block(message),
+            "tool" => json!({
+                "type": "tool_result",
+                "tool_use_id": message.tool_call_id,
+                "content": message.content.as_deref().unwrap_or(""),
+            }),
             "assistant" => {
                 let mut content: Vec<Value> = message
                     .reasoning_details
@@ -68,21 +75,18 @@ pub fn body(model: &str, transcript: &[Message], tools: &[Value]) -> Value {
                     }));
                 }
                 messages.push(json!({ "role": "assistant", "content": content }));
-            }
-            "tool" => {
-                let result = json!({
-                    "type": "tool_result",
-                    "tool_use_id": message.tool_call_id,
-                    "content": message.content.as_deref().unwrap_or(""),
-                });
-                match messages.last_mut() {
-                    Some(last) if is_tool_results(last) => {
-                        last["content"].as_array_mut().unwrap().push(result)
-                    }
-                    _ => messages.push(json!({ "role": "user", "content": [result] })),
-                }
+                continue;
             }
             other => panic!("a transcript message has role {other}"),
+        };
+        if message.cache {
+            block["cache_control"] = json!({ "type": "ephemeral" });
+        }
+        match messages.last_mut() {
+            Some(last) if last["role"] == "user" => {
+                last["content"].as_array_mut().unwrap().push(block)
+            }
+            _ => messages.push(json!({ "role": "user", "content": [block] })),
         }
     }
     json!({
@@ -97,13 +101,6 @@ pub fn body(model: &str, transcript: &[Message], tools: &[Value]) -> Value {
 
 fn text_block(message: &Message) -> Value {
     json!({ "type": "text", "text": message.content.as_deref().unwrap_or("") })
-}
-
-fn is_tool_results(message: &Value) -> bool {
-    message["role"] == "user"
-        && message["content"]
-            .as_array()
-            .is_some_and(|blocks| blocks.iter().all(|b| b["type"] == "tool_result"))
 }
 
 fn tool(schema: &Value) -> Value {
@@ -169,6 +166,7 @@ pub fn reply(body: &Value) -> Result<(Message, Usage), String> {
         tool_calls: (!calls.is_empty()).then_some(calls),
         tool_call_id: None,
         reasoning_details: (!thinking.is_empty()).then_some(Value::Array(thinking)),
+        cache: false,
     };
     Ok((
         message,

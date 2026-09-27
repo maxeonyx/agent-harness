@@ -87,6 +87,7 @@ impl Session {
             0,
             self.root_index,
             messages,
+            None,
         ));
         match root.await {
             Ok(end) => {
@@ -121,7 +122,7 @@ impl Session {
             "backend": self.run.config.backend.name(),
             "provider": self.run.config.backend.provider(),
             "cut": self.run.config.framing.cut.name(),
-            "words": self.run.config.framing.words.name(),
+            "identity": self.run.config.framing.identity.name(),
             "mode": self.run.config.framing.mode.name(),
             "max_depth": self.run.config.max_depth,
             "max_cost": self.run.config.max_cost,

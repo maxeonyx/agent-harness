@@ -7,8 +7,9 @@
 //! place in the tree. Framing that *is* per-agent lives in a tool result or a
 //! user message, at the tail.
 //!
-//! The two `--words` texts are the experimental treatment: they are what the
-//! benchmark is comparing.
+//! A child's tail is two parts: the shared part, the same bytes for every
+//! sibling, and then its own. The two `--identity` wordings of them are the
+//! experimental treatment.
 
 use serde_json::{Value, json};
 
@@ -57,10 +58,11 @@ pub fn tool_schemas() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "task",
-                "description": "Split your work across agents that run at the same time. You are suspended until all of them finish; the call then returns every agent's report, in the order you declared them. Each agent may split its own work the same way. A forked agent starts from your context as it stands right now and pays for it out of the cache, so fork when the work is a continuation of yours; a fresh agent starts from its assignment alone, so choose fresh when your context would only be noise to it.",
+                "description": "Split your work across agents that run at the same time. You are suspended until all of them finish; the call then returns every agent's report, in the order you declared them. Each agent may split its own work the same way. Write what every agent needs once, in `shared`, and keep each agent's own `task` short: only what is its alone. A forked agent starts from your context as it stands right now and pays for it out of the cache, so fork when the work is a continuation of yours; a fresh agent starts from `shared` and its `task` alone, so choose fresh when your context would only be noise to it.",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "shared": { "type": "string", "description": "Written once, and given to every agent before its own `task`: the goal, the rules, and whatever else they all need." },
                         "agents": {
                             "type": "array",
                             "description": "The agents to launch, in the order you want their reports back.",
@@ -68,11 +70,11 @@ pub fn tool_schemas() -> Vec<Value> {
                                 "type": "object",
                                 "properties": {
                                     "name": { "type": "string", "description": "Short unique name, used to label this agent's report and to refer to it in `after`." },
-                                    "task": { "type": "string", "description": "This agent's assignment. It sees nothing you do not put here or in your shared context." },
+                                    "task": { "type": "string", "description": "This agent's own part, given after `shared`: what it alone must do. Keep it short, and do not repeat `shared`." },
                                     "after": {
                                         "type": "array",
                                         "items": { "type": "string" },
-                                        "description": "Names of agents in this same call that must finish first. Their reports are included in this agent's assignment."
+                                        "description": "Names of agents in this same call that must finish first. Their reports are given to this agent after its `task`."
                                     },
                                     "fresh": { "type": "boolean", "description": "Start this agent from its assignment alone instead of forking your context. Default false." }
                                 },
@@ -80,122 +82,132 @@ pub fn tool_schemas() -> Vec<Value> {
                             }
                         }
                     },
-                    "required": ["agents"]
+                    "required": ["shared", "agents"]
                 }
             }
         }),
     ]
 }
 
-/// The framing under test: what a forked child inherits, what its assignment
-/// says, and whether it is forked at all. One point in the space the
+/// The framing under test: what a forked child inherits, how its own part
+/// names it, and whether it is forked at all. One point in the space the
 /// benchmark sweeps.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Framing {
     pub cut: Cut,
-    pub words: Words,
+    pub identity: Identity,
     pub mode: crate::agent::Mode,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Words {
-    Stop,
-    Explained,
-}
-
-impl Words {
-    pub fn parse(text: &str) -> Result<Words, String> {
-        match text {
-            "stop" => Ok(Words::Stop),
-            "explained" => Ok(Words::Explained),
-            other => Err(format!(
-                "unknown --words {other}; expected stop or explained"
-            )),
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Words::Stop => "stop",
-            Words::Explained => "explained",
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cut {
-    Full,
-    Own,
+    /// The parent's messages through its `task` call, and the shared part as
+    /// the answer to that call.
+    Result,
+    /// The parent's messages before its `task` call, and the shared part as a
+    /// user message.
     Before,
 }
 
 impl Cut {
     pub fn parse(text: &str) -> Result<Cut, String> {
         match text {
-            "full" => Ok(Cut::Full),
-            "own" => Ok(Cut::Own),
+            "result" => Ok(Cut::Result),
             "before" => Ok(Cut::Before),
+            other => Err(format!("unknown --cut {other}; expected result or before")),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Cut::Result => "result",
+            Cut::Before => "before",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Identity {
+    /// The split launched new agents, and the child is one of them.
+    Agent,
+    /// No new agent: the conversation carries on with one of the tasks it
+    /// split its work into.
+    Task,
+}
+
+impl Identity {
+    pub fn parse(text: &str) -> Result<Identity, String> {
+        match text {
+            "agent" => Ok(Identity::Agent),
+            "task" => Ok(Identity::Task),
             other => Err(format!(
-                "unknown --cut {other}; expected full, own or before"
+                "unknown --identity {other}; expected agent or task"
             )),
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
-            Cut::Full => "full",
-            Cut::Own => "own",
-            Cut::Before => "before",
+            Identity::Agent => "agent",
+            Identity::Task => "task",
         }
     }
 }
 
-/// The naive framing, the one that failed in the probe: the assignment, and
-/// an instruction to stop.
-fn stop_words() -> String {
-    "Do only this, then stop.".to_string()
-}
+const AGENT_SPLIT: &str = "This work was handed to these agents, running at the same time:";
+const AGENT_SHARED: &str =
+    "Each is given what follows, written once for all of them, and then an assignment of its own.";
+const AGENT_OWN: &str = "Your assignment:";
+const AGENT_STOP: &str = "The other agents are doing their assignments right now, so anything you do towards them is done twice and thrown away. Your final message is exactly what the agent that launched you receives. It is the whole of your report, so put the answer in it rather than pointing at work you did earlier. When your assignment is done, write that message and end your turn without calling a tool. Do not carry on into the work that comes after it.";
+const AGENT_AFTER: &str = "Reports from the agents you were told to start after:";
 
-/// The treatment: say what the split is, that siblings hold the rest of it,
-/// and what the final message is for.
-fn explained_words(name: &str, siblings: &[String]) -> String {
-    let mut text = String::new();
-    if siblings.is_empty() {
-        text.push_str(&format!(
-            "You are one branch of a split, launched as `{name}` with this one assignment and no other."
-        ));
-    } else {
-        let others = siblings
-            .iter()
-            .map(|s| format!("`{s}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        text.push_str(&format!(
-            "You are one branch of a split. Several agents were launched at once and given one assignment each; you are `{name}`, and the other assignments belong to {others}. Those agents are working on them right now, so anything you do towards their assignments is work done twice and is thrown away. Do your own assignment and none of theirs."
-        ));
+const TASK_SPLIT: &str = "This work was split into these tasks, running at the same time, each as its own continuation of this conversation:";
+const TASK_SHARED: &str =
+    "Each continuation is given what follows, written once for all of them, and then its own task.";
+const TASK_OWN: &str = "Your next task, and only this one, is";
+const TASK_STOP: &str = "The other tasks are being done right now, so anything you do towards them is done twice and thrown away. When this task is done, write its report as your final message and end your turn without calling a tool. That message is all that comes back as this task's result, so put the answer in it rather than pointing at work you did earlier. Do not carry on into the work that comes after it.";
+const TASK_AFTER: &str = "Reports from the tasks this one was told to start after:";
+
+/// The part every sibling is given, byte for byte: who the work went to, and
+/// what the parent wrote once for all of them.
+pub fn shared_part(identity: Identity, names: &[String], shared: &str) -> String {
+    let names = names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (split, given) = match identity {
+        Identity::Agent => (AGENT_SPLIT, AGENT_SHARED),
+        Identity::Task => (TASK_SPLIT, TASK_SHARED),
+    };
+    let mut text = format!("{split} {names}. {given}");
+    if !shared.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(shared);
     }
-    text.push_str(
-        "\n\nYour final message is exactly what the agent that launched you receives. It is the whole of your report — nothing else you write is passed on, so put the answer in it rather than pointing at work you did earlier. When your own assignment is done, write that message and end your turn without calling a tool. Do not carry on into the work that comes after it.",
-    );
     text
 }
 
-/// The tail a child is given: its assignment, the framing under test, and the
-/// reports of any agents it was declared to start after.
-pub fn assignment(
-    words: Words,
+/// This child's own part: its name, its task, the instruction to stop, and
+/// the reports of any siblings it was declared to start after.
+pub fn own_part(
+    identity: Identity,
     name: &str,
     task: &str,
-    siblings: &[String],
     dependencies: &[(String, String)],
 ) -> String {
-    let mut text = format!("You are agent `{name}`.\n\nYour assignment:\n{task}\n\n");
-    text.push_str(&match words {
-        Words::Stop => stop_words(),
-        Words::Explained => explained_words(name, siblings),
-    });
+    let (mut text, after) = match identity {
+        Identity::Agent => (
+            format!("You are agent `{name}`.\n\n{AGENT_OWN}\n{task}\n\n{AGENT_STOP}"),
+            AGENT_AFTER,
+        ),
+        Identity::Task => (
+            format!("{TASK_OWN} `{name}`:\n{task}\n\n{TASK_STOP}"),
+            TASK_AFTER,
+        ),
+    };
     if !dependencies.is_empty() {
-        text.push_str("\n\nReports from the agents you were told to start after:\n");
+        text.push_str(&format!("\n\n{after}\n"));
         for (dependency, handoff) in dependencies {
             text.push_str(&format!("\n## `{dependency}`\n{handoff}\n"));
         }

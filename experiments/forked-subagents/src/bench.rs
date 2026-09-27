@@ -15,9 +15,10 @@
 
 use crate::Args;
 use crate::agent::{AgentRecord, FaultKind, Mode};
-use crate::framing::{Cut, Framing, Words};
+use crate::framing::{Cut, Framing, Identity};
 use crate::session::Session;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -389,6 +390,7 @@ pub struct Observed {
     pub reads: Vec<ReadAttempt>,
     /// Whether this agent called `task` itself.
     pub forked: bool,
+    pub requests: usize,
     pub cached_in: u64,
     pub uncached_in: u64,
     pub written_in: u64,
@@ -492,6 +494,7 @@ impl Observed {
                     })
                     .collect(),
                 forked: record.tool_calls.iter().any(|call| call.name == "task"),
+                requests: record.requests,
                 cached_in: record.cached_in,
                 uncached_in: record.uncached_in,
                 written_in: record.written_in,
@@ -523,7 +526,7 @@ pub struct TrialFacts {
     pub model: String,
     pub provider: String,
     pub cut: String,
-    pub words: String,
+    pub identity: String,
     pub mode: String,
     pub outcome: String,
     pub detail: String,
@@ -532,10 +535,47 @@ pub struct TrialFacts {
     pub fault_kind: Option<FaultKind>,
 }
 
+/// How often the shared part was read from the cache: of the siblings after
+/// the first in each scope, how many read it, and how many tokens they read
+/// beyond what the first did. The first sibling writes the shared part. A
+/// later one read it when its first request read more from the cache than
+/// the sibling that read least.
+struct SharedHits {
+    later: usize,
+    hits: usize,
+    tokens: u64,
+}
+
+fn shared_hits(agents: &[Observed]) -> SharedHits {
+    let mut scopes: BTreeMap<&str, Vec<&Observed>> = BTreeMap::new();
+    for agent in agents.iter().filter(|a| a.depth >= 1 && a.requests > 0) {
+        let (parent, _) = agent
+            .path
+            .rsplit_once(" › ")
+            .expect("an agent below the root has a parent");
+        scopes.entry(parent).or_default().push(agent);
+    }
+    let mut counted = SharedHits {
+        later: 0,
+        hits: 0,
+        tokens: 0,
+    };
+    for siblings in scopes.values().filter(|siblings| siblings.len() >= 2) {
+        let least = siblings.iter().map(|a| a.first_cached_in).min().unwrap();
+        counted.later += siblings.len() - 1;
+        for sibling in siblings.iter().filter(|a| a.first_cached_in > least) {
+            counted.hits += 1;
+            counted.tokens += sibling.first_cached_in - least;
+        }
+    }
+    counted
+}
+
 /// One trial's record. Built identically by `bench` and by `rescore`, so a
 /// rescored grid is directly comparable with a freshly run one.
 pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> serde_json::Value {
     let children: Vec<&Observed> = agents.iter().filter(|a| a.depth >= 1).collect();
+    let shared = shared_hits(agents);
     let sum = |pick: fn(&Observed) -> u64| agents.iter().map(pick).sum::<u64>();
     let child_sum = |pick: fn(&Observed) -> u64| children.iter().copied().map(pick).sum::<u64>();
     serde_json::json!({
@@ -544,7 +584,7 @@ pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> ser
         "model": facts.model,
         "provider": facts.provider,
         "cut": facts.cut,
-        "words": facts.words,
+        "identity": facts.identity,
         "mode": facts.mode,
         "outcome": facts.outcome,
         "detail": facts.detail,
@@ -575,6 +615,9 @@ pub fn trial_row(facts: &TrialFacts, agents: &[Observed], scored: &Score) -> ser
         "child_written_in": child_sum(|a| a.written_in),
         "child_first_cached_in": child_sum(|a| a.first_cached_in),
         "child_first_uncached_in": child_sum(|a| a.first_uncached_in),
+        "later_siblings": shared.later,
+        "shared_hits": shared.hits,
+        "shared_read": shared.tokens,
     })
 }
 
@@ -604,7 +647,7 @@ pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
             row["model"].as_str().unwrap_or(""),
             row["provider"].as_str().unwrap_or(""),
             row["cut"].as_str().unwrap_or(""),
-            row["words"].as_str().unwrap_or(""),
+            row["identity"].as_str().unwrap_or(""),
             row["mode"].as_str().unwrap_or(""),
             row["rep"].as_u64().unwrap_or(0),
             row["fault_kind"].as_str().unwrap_or("cancelled"),
@@ -619,12 +662,12 @@ pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
         );
     }
     format!(
-        "trial {}/{of}  {}@{} {}/{}/{}  rep {}  {}  structure {}  leaf over-reach {}/{}{}  region over-reach {}/{}{}  policy re-reads {}/{}  totals {}  child cache {:.0}% (first {:.0}%)  ${:.4}  {:.1}s",
+        "trial {}/{of}  {}@{} {}/{}/{}  rep {}  {}  structure {}  leaf over-reach {}/{}{}  region over-reach {}/{}{}  policy re-reads {}/{}  totals {}  child cache {:.0}% (first {:.0}%)  shared hits {}/{} ({} tokens)  ${:.4}  {:.1}s",
         row["trial"].as_u64().unwrap_or(0),
         row["model"].as_str().unwrap_or(""),
         row["provider"].as_str().unwrap_or(""),
         row["cut"].as_str().unwrap_or(""),
-        row["words"].as_str().unwrap_or(""),
+        row["identity"].as_str().unwrap_or(""),
         row["mode"].as_str().unwrap_or(""),
         row["rep"].as_u64().unwrap_or(0),
         row["outcome"].as_str().unwrap_or(""),
@@ -648,6 +691,9 @@ pub fn trial_line(row: &serde_json::Value, of: usize) -> String {
         flag("correct"),
         share(n("child_cached_in"), n("child_uncached_in")),
         share(n("child_first_cached_in"), n("child_first_uncached_in")),
+        n("shared_hits") as u64,
+        n("later_siblings") as u64,
+        n("shared_read") as u64,
         n("cost"),
         n("millis") / 1000.0,
     )
@@ -820,10 +866,10 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
         .iter()
         .map(|c| Cut::parse(c))
         .collect::<Result<Vec<_>, _>>()?;
-    let words = args
-        .list("words", "explained")
+    let identities = args
+        .list("identity", "agent")
         .iter()
-        .map(|w| Words::parse(w))
+        .map(|i| Identity::parse(i))
         .collect::<Result<Vec<_>, _>>()?;
     let modes = args
         .list("mode", "fork")
@@ -841,7 +887,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
         first_provider,
         Framing {
             cut: cuts[0],
-            words: words[0],
+            identity: identities[0],
             mode: modes[0],
         },
         BENCH_MAX_DEPTH,
@@ -866,14 +912,14 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
     for target in &grid {
         let (model, provider) = target.split_once('@').unwrap_or((target.as_str(), ""));
         for &cut in &cuts {
-            for &word in &words {
+            for &identity in &identities {
                 for &mode in &modes {
                     combos.push((
                         model.to_string(),
                         provider.to_string(),
                         Framing {
                             cut,
-                            words: word,
+                            identity,
                             mode,
                         },
                     ));
@@ -897,7 +943,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
             let label = format!(
                 "trial{trial:03}-{}-{}-{}-rep{rep}",
                 framing.cut.name(),
-                framing.words.name(),
+                framing.identity.name(),
                 framing.mode.name()
             );
             let config =
@@ -925,7 +971,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
                 model: model.clone(),
                 provider: provider.clone(),
                 cut: framing.cut.name().to_string(),
-                words: framing.words.name().to_string(),
+                identity: framing.identity.name().to_string(),
                 mode: framing.mode.name().to_string(),
                 outcome: outcome.short().to_string(),
                 detail: outcome.label(),
@@ -956,7 +1002,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
 
 pub fn summarise(rows: &[serde_json::Value]) -> String {
     let mut text = String::from(
-        "| combo | trials | invalid | leaf over-reach | region over-reach | re-read policy | structure ok | correct | mean cost | child cache read | child first-request cache | cache written | all-agent cache read | mean wall |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n",
+        "| combo | trials | invalid | leaf over-reach | region over-reach | re-read policy | structure ok | correct | mean cost | child cache read | child first-request cache | shared-part hits | cache written | all-agent cache read | mean wall |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n",
     );
     let mut combos: Vec<String> = Vec::new();
     for row in rows {
@@ -978,7 +1024,7 @@ pub fn summarise(rows: &[serde_json::Value]) -> String {
         let invalid = all.len() - group.len();
         if group.is_empty() {
             text.push_str(&format!(
-                "| {combo} | {} | {invalid} | — | — | — | — | — | — | — | — | — | — | — |\n",
+                "| {combo} | {} | {invalid} | — | — | — | — | — | — | — | — | — | — | — | — |\n",
                 all.len()
             ));
             continue;
@@ -1002,7 +1048,7 @@ pub fn summarise(rows: &[serde_json::Value]) -> String {
             }
         };
         text.push_str(&format!(
-            "| {combo} | {} | {invalid} | {}/{}{} | {}/{}{} | {}/{} | {}/{} | {}/{} | ${:.4} | {:.1}% | {:.1}% | {} | {:.1}% | {:.1}s |\n",
+            "| {combo} | {} | {invalid} | {}/{}{} | {}/{}{} | {}/{} | {}/{} | {}/{} | ${:.4} | {:.1}% | {:.1}% | {}/{} | {} | {:.1}% | {:.1}s |\n",
             all.len(),
             sum("leaf_overreach") as u64,
             sum("leaves") as u64,
@@ -1019,6 +1065,8 @@ pub fn summarise(rows: &[serde_json::Value]) -> String {
             sum("cost") / n,
             share(sum("child_cached_in"), sum("child_uncached_in")),
             share(sum("child_first_cached_in"), sum("child_first_uncached_in")),
+            sum("shared_hits") as u64,
+            sum("later_siblings") as u64,
             sum("written_in") as u64,
             share(sum("cached_in"), sum("uncached_in")),
             sum("millis") / n / 1000.0,
@@ -1033,7 +1081,7 @@ fn combo_of(row: &serde_json::Value) -> String {
         row["model"].as_str().unwrap_or(""),
         row["provider"].as_str().unwrap_or(""),
         row["cut"].as_str().unwrap_or(""),
-        row["words"].as_str().unwrap_or(""),
+        row["identity"].as_str().unwrap_or(""),
         row["mode"].as_str().unwrap_or(""),
     )
 }
