@@ -2821,6 +2821,34 @@ fn past_the_handover_point_the_agent_is_told_to_hand_over() {
     assert!(out.stdout.contains("note.txt is there"));
 }
 
+/// A context that a handover started past the handover point is not told to
+/// hand over again: it could only hand over to one as big, forever.
+#[test]
+fn a_context_born_past_the_handover_point_is_not_told_again() {
+    let dir = workspace("handover-born-big");
+    let big = json!({"prompt_tokens": 5000, "completion_tokens": 10, "cost": 0.0,
+                     "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}});
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "tool_calls": [{"name": "handover",
+                "arguments": {"context": "c", "task": "list the directory"}}]},
+            {"when": "^Carry on from where you left off", "usage": big,
+             "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+            {"when": "note.txt", "text": "listed"},
+            {"when": "handover point", "text": "told again"}
+        ]),
+    );
+    let out = forks(&dir, &fake, &["--handover-at", "1000"], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("[5 assistant]\n    │ listed"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("told again"), "{}", out.stdout);
+}
+
 /// A child that hands over inside a scope is still one child: its parent
 /// gets one report, from the context it finished in.
 #[test]

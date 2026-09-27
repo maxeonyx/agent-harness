@@ -871,9 +871,13 @@ pub fn run_agent(run: Arc<Run>, start: Start) -> Pin<Box<dyn Future<Output = Age
         let mut handoff = String::new();
         let mut turns = 0usize;
         // The size of the last request, and whether this context has been
-        // told it is past the handover point.
+        // told it is past the handover point. A context a handover started,
+        // until its first request, is `born`: if that request is already past
+        // the point, handing over again could only make one as big, so it is
+        // never told.
         let mut last_prompt = 0u64;
         let mut told = false;
+        let mut born = false;
         let mut done = false;
 
         let end = |run: &Arc<Run>, outcome: Outcome, handoff: String, messages: Vec<Message>| {
@@ -925,6 +929,10 @@ pub fn run_agent(run: Arc<Run>, start: Start) -> Pin<Box<dyn Future<Output = Age
             }
             let reply = match reply {
                 Ok((reply, prompt)) => {
+                    if born && run.config.handover_at.is_some_and(|limit| prompt > limit) {
+                        told = true;
+                    }
+                    born = false;
                     last_prompt = prompt;
                     reply
                 }
@@ -1077,6 +1085,7 @@ pub fn run_agent(run: Arc<Run>, start: Start) -> Pin<Box<dyn Future<Output = Age
                 run.face.context(&path, &messages, 0);
                 last_prompt = 0;
                 told = false;
+                born = true;
                 continue;
             }
 
