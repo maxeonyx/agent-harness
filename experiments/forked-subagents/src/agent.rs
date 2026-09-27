@@ -1229,6 +1229,9 @@ fn check_acyclic(specs: &[ChildSpec]) -> Result<(), String> {
 /// Cut after the turn, the shared part is the answer to the `task` call,
 /// among the turn's other tool results. The breakpoint goes on the last of
 /// them, because everything up to there is the same for every sibling.
+///
+/// Cut at the call, the parent's `task` call already holds the shared part,
+/// so the breakpoint goes on that turn and the answer is the child's own.
 fn child_context(
     cut: Cut,
     fresh: bool,
@@ -1237,6 +1240,12 @@ fn child_context(
     own: &str,
 ) -> Vec<Message> {
     let turn_index = turn.messages.len() - 1;
+    if !fresh && cut == Cut::Call {
+        let mut messages = turn.messages.clone();
+        messages[turn_index].cache = true;
+        messages.extend(turn_results(turn, own));
+        return messages;
+    }
     let mut messages: Vec<Message> = if fresh {
         turn.messages
             .iter()
@@ -1251,15 +1260,7 @@ fn child_context(
     if fresh || cut == Cut::Before {
         messages.push(Message::new("user", shared));
     } else {
-        for (i, call) in turn.calls.iter().enumerate() {
-            messages.push(if i == turn.call_index {
-                Message::tool_result(&call.id, shared)
-            } else {
-                turn.results[i]
-                    .clone()
-                    .expect("only the scope's own slot is unanswered while the scope runs")
-            });
-        }
+        messages.extend(turn_results(turn, shared));
     }
     messages
         .last_mut()
@@ -1267,6 +1268,20 @@ fn child_context(
         .cache = true;
     messages.push(Message::new("user", own));
     messages
+}
+
+/// The parent's `task` turn answered, in call order, with `answer` in the
+/// scope's own slot.
+fn turn_results<'a>(turn: &'a ParentTurn, answer: &'a str) -> impl Iterator<Item = Message> + 'a {
+    turn.calls.iter().enumerate().map(move |(i, call)| {
+        if i == turn.call_index {
+            Message::tool_result(&call.id, answer)
+        } else {
+            turn.results[i]
+                .clone()
+                .expect("only the scope's own slot is unanswered while the scope runs")
+        }
+    })
 }
 
 /// Each agent's final context, rendered so `diff` between a parent's file and

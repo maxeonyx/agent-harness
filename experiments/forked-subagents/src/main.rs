@@ -28,10 +28,13 @@ forks — agents as structured concurrency
 Framing (the knobs the benchmark sweeps). A child's tail is the `task`
 call's `shared` part, the same bytes for every sibling and ending in a cache
 breakpoint, and then the child's own part.
-  --cut result|before     what a forked child inherits (default before)
+  --cut result|before|call  what a forked child inherits (default before)
       result  the parent's messages through the `task` turn; the shared part
               is the answer to that call, and the child's own part follows
               in the same user message. Claude backend only
+      call    the parent's messages through the `task` turn, which already
+              holds `shared`, with the breakpoint on that turn; the answer to
+              the call is the child's own part. Claude backend only
       before  the parent's messages up to, not including, the `task` turn,
               then the shared part and the child's own part as user text
   --identity agent|task   how the child's own part names it (default agent)
@@ -453,8 +456,10 @@ impl Args {
                             .to_string(),
                     );
                 }
-                if framing.cut == Cut::Result {
-                    return Err("--cut result puts the cache breakpoint on a tool result, and OpenRouter documents breakpoints only on the text parts of a message; the likely translation, a text block inside the tool result, is one Anthropic rejects. Use --cut before, or --backend claude".to_string());
+                match framing.cut {
+                    Cut::Result => return Err("--cut result puts the cache breakpoint on a tool result, and OpenRouter documents breakpoints only on the text parts of a message; the likely translation, a text block inside the tool result, is one Anthropic rejects. Use --cut before, or --backend claude".to_string()),
+                    Cut::Call => return Err("--cut call puts the cache breakpoint on the parent's tool call, and OpenRouter documents breakpoints only on the text parts of a message. Use --cut before, or --backend claude".to_string()),
+                    Cut::Before => {}
                 }
                 Backend::OpenRouter {
                     base_url,

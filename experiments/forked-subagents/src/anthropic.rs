@@ -38,7 +38,7 @@ pub fn model_id(model: &str) -> Result<&str, String> {
 /// one turn's calls and what it makes of consecutive user turns anyway.
 /// Caching is switched on for the whole request, as it is on OpenRouter; a
 /// message marked as a cache breakpoint also carries `cache_control` on its
-/// block.
+/// last block.
 pub fn body(model: &str, transcript: &[Message], tools: &[Value]) -> Value {
     let system: Vec<Value> = transcript
         .iter()
@@ -73,6 +73,10 @@ pub fn body(model: &str, transcript: &[Message], tools: &[Value]) -> Value {
                     content.push(json!({
                         "type": "tool_use", "id": call.id, "name": call.function.name, "input": input,
                     }));
+                }
+                if message.cache {
+                    content.last_mut().expect("an assistant turn has a block")["cache_control"] =
+                        json!({ "type": "ephemeral" });
                 }
                 messages.push(json!({ "role": "assistant", "content": content }));
                 continue;

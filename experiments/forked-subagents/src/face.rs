@@ -74,11 +74,18 @@ impl Face {
                 (Some(id), None) => format!("{role} {id}"),
                 (None, _) => role.to_string(),
             };
-            parts.push(block(path, n, &header, text, message.cache));
+            parts.push(block(
+                path,
+                n,
+                &header,
+                text,
+                message.cache && calls.is_empty(),
+            ));
         }
-        for call in calls {
+        for (i, call) in calls.iter().enumerate() {
             let header = format!("{role} tool_use {} {}", call.function.name, call.id);
-            parts.push(block(path, n, &header, &call.function.arguments, false));
+            let cached = message.cache && i == calls.len() - 1;
+            parts.push(block(path, n, &header, &call.function.arguments, cached));
         }
         self.say(&parts.join("\n"));
     }

@@ -22,3 +22,14 @@ So on Anthropic the shared explanation can be the tool result and be cached for 
 | 4 | yes | 400: "A maximum of 4 blocks with cache_control may be provided. Found 5." |
 
 The automatic breakpoint takes one of the four. Every level of forking leaves one explicit breakpoint in its descendants' contexts, so with the automatic one an agent can be at most three levels below the root.
+
+## The shared part only in the parent's call — 2026-09-28
+
+`tool-use-breakpoint.py`: the shared explanation (~7k tokens) sits only in the parent's `task` call, as its `shared` argument. The tool result is the child's own line alone. Child `a`, then `b` twice.
+
+| breakpoint | a: read / written | b: read / written | b again |
+| --- | --- | --- | --- |
+| `cache_control` on the `tool_use` block | 0 / 14,398 | **14,381 / 17** | 14,398 / 0 |
+| none, automatic caching only | 0 / 14,398 | **0 / 14,398** | 14,398 / 0 |
+
+Anthropic accepts `cache_control` on a `tool_use` block, and a sibling reads through it. Without it the sibling reads nothing.

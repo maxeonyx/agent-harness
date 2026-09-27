@@ -107,6 +107,9 @@ pub enum Cut {
     /// The parent's messages before its `task` call, and the shared part as a
     /// user message.
     Before,
+    /// The parent's messages through its `task` call, which already holds
+    /// the shared part; the answer to that call is the child's own part.
+    Call,
 }
 
 impl Cut {
@@ -114,7 +117,10 @@ impl Cut {
         match text {
             "result" => Ok(Cut::Result),
             "before" => Ok(Cut::Before),
-            other => Err(format!("unknown --cut {other}; expected result or before")),
+            "call" => Ok(Cut::Call),
+            other => Err(format!(
+                "unknown --cut {other}; expected result, before or call"
+            )),
         }
     }
 
@@ -122,6 +128,7 @@ impl Cut {
         match self {
             Cut::Result => "result",
             Cut::Before => "before",
+            Cut::Call => "call",
         }
     }
 }
