@@ -506,7 +506,8 @@ fn checkout_named(name: &str) -> &str {
 
 /// Scored against what the agents did: a project agent that split its work
 /// again, touched another project's directory, or reported a branch for
-/// another project's checkout, reached outside its own project.
+/// another project's checkout, reached outside its own project. A `task`
+/// call that launched no agent split nothing.
 pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Score {
     let project_agents: Vec<&Observed> = agents.iter().filter(|a| a.depth == 1).collect();
     let deepest = agents.iter().map(|a| a.depth).max().unwrap_or(0);
@@ -517,7 +518,7 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
     for agent in &project_agents {
         let own = fixture.owns(agent);
         owned.extend(&own);
-        if agent.forked {
+        if agent.children > 0 {
             overreached.push(agent.path.clone());
             continue;
         }
@@ -575,15 +576,9 @@ pub fn score(agents: &[Observed], root_handoff: &str, fixture: &Fixture) -> Scor
             !said.is_empty() && said.iter().all(|count| *count == listed.len())
         })
         .count();
-    // A clone line for something that is not a checkout — a look-alike — is
-    // a wrong answer even when every real one is right.
-    let invented = reported.iter().any(|(name, _)| {
-        name.contains('/') && fixture.project_of_checkout(checkout_named(name)).is_none()
-    });
-
     Score {
         structure_ok,
-        correct: branches_right == checkouts && counts_right == fixture.projects.len() && !invented,
+        correct: branches_right == checkouts && counts_right == fixture.projects.len(),
         counts: vec![
             ("projects", project_agents.len()),
             ("project_overreach", overreached.len()),

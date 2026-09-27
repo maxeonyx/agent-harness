@@ -1639,8 +1639,10 @@ struct ProjectsPlan {
     worktree_as_clone: bool,
     /// The root counts one clone too many in `datacentral`.
     miscount: bool,
-    /// The root lists a look-alike as a clone.
-    look_alike: bool,
+    /// The root lists a look-alike, saying it is not a clone.
+    look_alike_named: bool,
+    /// `gta` makes a `task` call with no agents in it, which is refused.
+    empty_task_call: bool,
 }
 
 fn clone_lines(project: &str, checkouts: &BTreeMap<String, String>) -> Vec<String> {
@@ -1690,7 +1692,13 @@ fn projects_rules(
                 json!({"name": "list_dir", "arguments": {"path": "work/gta"}}),
             );
         }
-        rules.push(json!({"when": me, "tool_calls": lists}));
+        if plan.empty_task_call && project == "gta" {
+            rules.push(json!({"when": me, "tool_calls": [{"name": "task",
+                "arguments": {"shared": "placeholder", "agents": []}}]}));
+            rules.push(json!({"when": "`agents` was empty", "tool_calls": lists}));
+        } else {
+            rules.push(json!({"when": me, "tool_calls": lists}));
+        }
         rules.push(json!({"when": first, "text": report}));
     }
     // Summaries share the `<project>:` shape with the counts.
@@ -1708,8 +1716,8 @@ fn projects_rules(
                 }
             }
         }
-        if plan.look_alike && project == "datacentral" {
-            lines.push("datacentral/dc-scratch.ignore: MC-scratch".to_string());
+        if plan.look_alike_named && project == "datacentral" {
+            lines.push("datacentral/dc-1402-archive: (not a clone, no .git)".to_string());
         }
         block.extend(lines);
     }
@@ -1784,6 +1792,22 @@ fn the_projects_benchmark_scores_a_disciplined_tree_clean_and_correct() {
 /// Each of the three ways out of a project is over-reach: splitting it again,
 /// listing another project's directory, and reporting another project's
 /// clone. `rescore` reaches the same verdict.
+/// A `task` call that launched nothing — refused for naming no agents — is
+/// not a re-split.
+#[test]
+fn a_refused_empty_task_call_is_not_a_re_split() {
+    let truth = learn_projects("projects-learn-empty");
+    let plan = ProjectsPlan {
+        empty_task_call: true,
+        ..ProjectsPlan::default()
+    };
+    let (text, _) = run_projects_bench("projects-empty", projects_rules(&truth, &plan));
+    assert!(
+        text.contains("structure ok  project over-reach 0/4  branches right 34/34"),
+        "{text}"
+    );
+}
+
 #[test]
 fn a_re_split_a_reach_and_a_claim_are_each_over_reach() {
     let truth = learn_projects("projects-learn-reach");
@@ -1822,9 +1846,10 @@ fn a_re_split_a_reach_and_a_claim_are_each_over_reach() {
 }
 
 /// Each is a wrong answer on its own: a worktree reported with its clone's
-/// branch, one clone too many, and a look-alike listed as a clone.
+/// branch, and one clone too many. A look-alike named as not a clone is
+/// not.
 #[test]
-fn a_worktree_given_its_clones_branch_a_miscount_and_a_look_alike_are_each_wrong() {
+fn a_worktree_given_its_clones_branch_and_a_miscount_are_each_wrong() {
     let truth = learn_projects("projects-learn-wrong");
     for (name, plan, expected) in [
         (
@@ -1846,10 +1871,10 @@ fn a_worktree_given_its_clones_branch_a_miscount_and_a_look_alike_are_each_wrong
         (
             "projects-look-alike",
             ProjectsPlan {
-                look_alike: true,
+                look_alike_named: true,
                 ..ProjectsPlan::default()
             },
-            "branches right 34/34  counts right 4/4  answer WRONG",
+            "branches right 34/34  counts right 4/4  answer ok",
         ),
     ] {
         let (text, _) = run_projects_bench(name, projects_rules(&truth, &plan));

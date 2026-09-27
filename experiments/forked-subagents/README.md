@@ -102,11 +102,11 @@ The root is asked what Max asks, and is not handed the tree: "One agent per proj
 
 The fixture is `work/<project>/<checkout>/`: `datacentral` with 23 clones and 2 worktrees, `ticker` with 3 and 1, `nzxcom` with 2 and 1, and `gta` with 2. A clone has a `.git` directory with `HEAD`, `config`, `COMMIT_EDITMSG` and `description`. A worktree has a `.git` file, `gitdir: ../<clone>/.git/worktrees/<name>`, so its branch is in another clone of the same project. `config` lists `main` as well as the checked-out branch, so only `HEAD` gives the right answer. Look-alikes are not checkouts: `notes/`, a directory with a bare `HEAD` and no `.git`, one with only `.gitignore` and `.github/`, and one with `.git.bak/`. `gta-mcp/README.md` says the schema it serves lives in the DataCentral clone, which is a reason to look there.
 
-- **project over-reach** — a project agent called `task`, read or listed another project's directory, or reported a branch for another project's checkout. Which project it owns comes from the `work/<project>` path its assignment names, or else its own name;
+- **project over-reach** — a project agent launched agents of its own with `task`, read or listed another project's directory, or reported a branch for another project's checkout. Which project it owns comes from the `work/<project>` path its assignment names, or else its own name;
 - **branches right** — checkouts whose `<project>/<checkout>: <branch>` line in the root's final message is right;
 - **counts right** — projects whose `<project>: <number>` line is right. A `<project>:` line whose value is not a number is its summary, and is not a count;
 - **structure** — one agent per project, nothing deeper;
-- **correct** — every branch and every count right, and no look-alike listed as a clone.
+- **correct** — every branch and every count right. A look-alike listed as a clone and counted fails the count.
 
 ### Both
 
