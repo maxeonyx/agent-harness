@@ -676,7 +676,7 @@ pub fn summarise(rows: &[serde_json::Value]) -> String {
         .collect();
     let mut text = format!(
         "| combo | trials | invalid |{headings} structure ok | correct | mean cost | child cache read | child first-request cache | shared-part hits | cache written | all-agent cache read | mean wall |\n|{}\n",
-        " --- |".repeat(columns.len() + 14)
+        " --- |".repeat(columns.len() + 12)
     );
     let mut combos: Vec<String> = Vec::new();
     for row in rows {
@@ -700,7 +700,7 @@ pub fn summarise(rows: &[serde_json::Value]) -> String {
             text.push_str(&format!(
                 "| {combo} | {} | {invalid} |{}\n",
                 all.len(),
-                " — |".repeat(columns.len() + 11)
+                " — |".repeat(columns.len() + 9)
             ));
             continue;
         }

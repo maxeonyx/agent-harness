@@ -2182,7 +2182,7 @@ fn a_provider_fault_invalidates_a_trial_while_a_spend_cap_does_not() {
     );
     // Every rate is withheld rather than reported as a row of zeroes.
     assert!(
-        text.contains("| 1 | 1 | — | — | — | — | — | — | — | — | — | — |"),
+        text.contains(&format!("| 1 | 1 |{}\n", " — |".repeat(12))),
         "an invalid trial was folded into the rates:\n{text}"
     );
 
