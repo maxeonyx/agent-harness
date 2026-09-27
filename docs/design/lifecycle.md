@@ -402,6 +402,18 @@ Max, 2026-09-08:
 
 > As before, parent sees one tool call only
 
+### Who starts the user-facing child in the main-thread pattern
+
+Question, 2026-09-26: when a parent splits and one child continues the conversation with the user, who starts that child — the parent asking and the user confirming (L4), a command the user types, or both?
+
+Max, 2026-09-26, raising the pattern:
+
+> I want to see a unified model for compactions / tasks / responses, and the "continuing user-facing subagent"
+
+Max, 2026-09-28:
+
+> if the parent is user-facing, it should be opt-out
+
 ## Open questions
 
 1. **Does one child failing abort the whole scope, or does it just propagate an error result to the parent?** Max: `"Failure counts as completion with an error result. Whether one child failing aborts the scope or just propagates an error to the parent needs experimenting."` (`source-notes/agent-hierarchy.md`). Toward error-return: `"Failure counts as completion"`, and the parent resumes with `{ A: result, B: result, C: result }`. Toward abort: nothing in the notes. `PLAN.md` records it as `(open experiment: abort-scope vs error-return semantics)`.

@@ -200,6 +200,22 @@ Both Max, both imported 2026-07-30, no ordering recoverable from the files. He e
 
 — decision 2026-08-12 (hedges his). Later than the source note. An attachment is content the harness injects, framed as a tool call the child never made.
 
+## Answers
+
+### How a split agent is framed — questions 1, 4 and 5
+
+Question, 2026-09-26, after the `forked-subagents` benchmark: is a split child a new agent or a task; does the child see a different result for the `task` call than the parent; does the parent write one shared explanation and then N short specific ones, with the cache point after the shared one; and is each of those a system part, a user part or a tool result? The example put to him was a child's context ending `[5 ?] shared: "Splitting into three: datacentral, ticker, nzxcom-apis. …"`, then a cache point, then `[6 ?] yours: "ticker."`.
+
+Max, 2026-09-26, raising it:
+
+> I also want to bikeshed the exact framing of an agent that gets split up... is it a "new agent"? Maybe? Maybe it's a "task"? Maybe the subagent tool with fork type shows a *different* tool call result to the child and the parent? Maybe the parent must produce a shared explanation, then N shorter specific explanations? And the cache point is after the shared one. Also see if it can be system part or user part or what.
+
+Max, 2026-09-28:
+
+> 5 & 6 should be separate parts of the parent's single tool call, I think.
+>
+> I feel like it's elegant if 5 & 6 are tool result - we can try it. I'm not sure that an agent will sufficiently trust a tool result to narrow its task, but it might.
+
 ## Open questions
 
 1. **How is the subtask boundary expressed to the child so that it stops at A.1.3 and does not run on to A.1.4?** Max states the requirement — `"It must end its turn after A.1.3 - this must be reliable for forked agents to work well"` — and immediately says it is untested: `"highly forked agent threads are not empirically tested and will likely need careful model-facing framing."` Mechanisms visible in the notes: the `task` parameter (`"the prompt / instructions for the subagent"`); the shared `context` parameter (`"generic across all started sub-agents"`); the agent persona (`agent_type`); the two-part launch; and the pre-step temp fork (`"whose only job is to write a good task prompt"`). The notes name all five and choose none.
