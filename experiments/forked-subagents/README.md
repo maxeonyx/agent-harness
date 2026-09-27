@@ -4,6 +4,8 @@ Disposable experiment. Brief: `docs/process/experiments/forked-subagents-brief.m
 
 `forks` runs agents as structured concurrency. A `task` call is a scope: the caller is suspended inside the call while its children run at the same time, possibly opening scopes of their own, and the call returns one tool result holding every child's report. A forked child's context is the parent's messages cloned, so it serializes to the same bytes and the provider serves the prefix from cache; only the child's own tail is new.
 
+The parent writes one `task` call: a `shared` part, written once for every child, and each child's own short `task`. So a child's tail is two parts. The shared part is the same bytes for every sibling and ends in an explicit cache breakpoint; then comes the child's own part. The first sibling that waits on no other starts first, and the rest start when its first request has come back: that request is what writes the shared part to the cache, and a request sent before it returns cannot read it.
+
 Two binaries: `forks`, and `fake-provider` — a separate HTTP server that speaks both backends' APIs, answers from a script and records every request, which is what the scenario tests assert against.
 
 ## Run it
@@ -36,26 +38,29 @@ Every line is prefixed with the agent's path. There are two kinds of line. An ev
 
 ```
 root                         [2 user]
-    │ Use the task tool to launch two agents at once: one reads face.rs and one reads limb.rs; …
+    │ Use the task tool to launch two agents at once: one reads face.rs and one reads limb.rs, … Put what they both need to know in shared.
 root                         request sent
-root                         request returned   in 1212 (cached 1210, written 0)  out 212  $0.0000  via claude subscription, billed to five_hour
-root                         [3 assistant thinking] (the provider did not show it)
-root                         [3 assistant tool_use task toolu_01LqrMFkAjmUMVoFXWA6DjcC]
-    │ {"agents":[{"name":"face_reader","task":"Read the file face.rs …","fresh":true},{"name":"limb_reader", …}]}
+root                         request returned   in 1330 (cached 0, written 1328)  out 239  $0.0000  via claude subscription, billed to seven_day
+root                         [3 assistant tool_use task toolu_01GvaPGaRz9E2LZVMpcgVMzm]
+    │ {"shared":"You are helping inspect a Rust codebase. …","agents":[{"name":"face_reader","task":"Read the file face.rs …"},{"name":"limb_reader", …}]}
 root                         scope opened: face_reader, limb_reader — suspended
-root › face_reader           context: root's messages 0–1, then
-root › face_reader           [2 user]
+root › face_reader           context: root's messages 0–3, then
+root › face_reader           [4 tool task toolu_01GvaPGaRz9E2LZVMpcgVMzm] ← cache breakpoint
+    │ This work was handed to these agents, running at the same time: `face_reader`, `limb_reader`. Each is given what follows, written once for all of them, and then an assignment of its own.
+    │
+    │ You are helping inspect a Rust codebase. …
+root › face_reader           [5 user]
     │ You are agent `face_reader`.
     │
     │ Your assignment:
-    │ Read the file face.rs …
-root › face_reader           [3 assistant tool_use read_file toolu_01NF29qtSHoimTCjxcc5iQ6t]
-    │ {"path":"face.rs"}
-root › face_reader           [4 tool read_file toolu_01NF29qtSHoimTCjxcc5iQ6t]
-    │ //! What you watch while the tree runs: …
+    │ Read the file face.rs and report the first sentence of its module doc comment.
+    │
+    │ The other agents are doing their assignments right now, …
+root › face_reader           request sent
+root › face_reader           request returned   in 1873 (cached 1328, written 543)  out 69  $0.0000  via claude subscription, billed to seven_day
 ```
 
-The number in the header is the message's place in that agent's context, the same number as in `agents/<path>.md`. A child's `context:` line says which of its parent's messages it starts with; those were already shown under the parent, and everything after them is shown under the child. A message holds text, reasoning and tool calls, and each is shown as its own block under the same number. The wire format differs from what is shown in one way: on the claude backend, one turn's tool results travel together as one user message. `wire.jsonl` has the bodies exactly as sent.
+The number in the header is the message's place in that agent's context, the same number as in `agents/<path>.md`. A child's `context:` line says which of its parent's messages it starts with; those were already shown under the parent, and everything after them is shown under the child. A message holds text, reasoning and tool calls, and each is shown as its own block under the same number. `← cache breakpoint` marks the block that carries an explicit cache breakpoint; `agents/<path>.md` marks the same message `(cache breakpoint)`. The wire format differs from what is shown in one way: on the claude backend, a run of tool results and user text travels as one user message, so above, blocks 4 and 5 are one user message. `wire.jsonl` has the bodies exactly as sent.
 
 `/tree` shows an agent that is still going with the time it has been going, not the time it took.
 
@@ -63,11 +68,13 @@ The number in the header is the message's place in that agent's context, the sam
 
 Every agent in a run gets the identical system prompt and the identical tool list — Anthropic caches tools, then system, then messages, so any difference between parent and child breaks the child's inherited prefix. The depth limit is therefore enforced by answering an over-deep `task` call with an error tool result, never by taking the tool away. All per-agent framing lives in the tail.
 
-- `--cut full|own|before` — what a forked child inherits. `full`: the parent's messages through the assistant turn that called `task`, then a tool result addressed to this child. `own`: the same, except this child's copy of the `task` arguments holds only its own entry. `before`: the parent's messages up to, not including, that assistant turn, then a user message with the assignment.
-- `--words stop|explained` — what the assignment says. `stop` is the probe's naive framing. `explained` also says it is one branch of a split, names the siblings holding the other assignments, and says its final message is exactly what its parent receives. These two texts are the experimental treatment; they are constants in `src/framing.rs`.
-- `--mode fork|fresh|declared` — `declared` honours each `task` entry's own `fresh` flag, which is how the model routes; `fork` and `fresh` force every child.
+- `--cut result|before` — where a forked child's tail starts. `result`: the parent's messages through the assistant turn that called `task`; the answer to that call is the shared part, with the breakpoint on it (on the last of that turn's tool results, when it made other calls too), and the child's own part is a text block after it in the same user message. `before`: the parent's messages up to, not including, that assistant turn, then the shared part, with the breakpoint, and the child's own part as user text. OpenRouter refuses `result`: it documents breakpoints only on the text parts of a message, and the likely translation of one on a tool result is a text block inside it, which Anthropic rejects (`probe/shared-context.md`).
+- `--identity agent|task` — how the child's own part names it. `agent`: "You are agent `x`", a new agent launched by the split. `task`: "Your next task, and only this one, is `x`", the same conversation carrying on with one of the tasks it split into. A fresh child has no conversation to carry on, so it is always an agent. The texts are constants in `src/framing.rs`.
+- `--mode fork|fresh|declared` — `declared` honours each `task` entry's own `fresh` flag, which is how the model routes; `fork` and `fresh` force every child. A fresh child's context is the system prompt, then the shared part, with the breakpoint, and its own part, so fresh siblings share a cached prefix too.
 
-The default cut is `before`, the one the benchmark found keeps Sonnet's children in their lane (`docs/process/experiments/forked-subagents-outcome.md`). The other defaults (`explained`, `declared`) are a choice about what is pleasant to watch, not a finding.
+The defaults (`before`, `agent`, `declared`) are a choice about what is pleasant to watch, not a finding.
+
+Every level of forking leaves one breakpoint in its descendants' contexts, and Anthropic accepts four per request, one of them the automatic one at the end (`probe/breakpoints.py`). So `--max-depth` is at most 3.
 
 ## The benchmark
 
@@ -75,7 +82,7 @@ The default cut is `before`, the one the benchmark found keeps Sonnet's children
 
 The fixture is `ledgers/<region>/<branch>.txt` — 2 regions, 3 branches each, ~40 dated amounts per file — plus `ledgers/POLICY.md`, a ~7,000-token accounts manual. The manual is mostly genuine-sounding boilerplate, and one section of it decides the arithmetic: comments and `VOID` lines carry no amount, a `REFUND` line is subtracted rather than added, and a `DUP` line is skipped. The root task says to read the manual and that the root is the only agent that should.
 
-That is what makes fork and fresh a real choice rather than a cost difference on nothing. A forked child inherits the manual from the parent's cache and pays almost nothing for it. A fresh child knows only what its parent wrote into its assignment, so it either re-reads the manual or gets the refunds wrong. Without it the tree's contexts were around 1,200 tokens — the size at which forked children were observed not to read the parent's prefix from cache at all, so the comparison would have been run in the regime where forks cannot win.
+That is what makes fork and fresh a real choice rather than a cost difference on nothing. A forked child inherits the manual from the parent's cache and pays almost nothing for it. A fresh child knows only what its parent wrote into `shared` and its `task`, so it either re-reads the manual or gets the refunds wrong. Without it the tree's contexts were around 1,200 tokens — the size at which forked children were observed not to read the parent's prefix from cache at all, so the comparison would have been run in the regime where forks cannot win.
 
 Scoring is mechanical, read from the recorded tool calls and reports:
 
@@ -88,15 +95,15 @@ Scoring is mechanical, read from the recorded tool calls and reports:
 
 A trial is invalid when the run ended in something the model had no part in: a provider or transport fault, a panic in the harness, or a cancellation. A trial that hit its own spend cap or its turn limit is *not* invalid — a tree that spends its budget is exactly what the benchmark is there to catch. Without that split, three luna trials that were rate-limited to death two seconds in showed up as `0/0` everything at `$0.0001`, dragging a combo's rates towards zero while saying nothing.
 
-Over-reach is scored against the parent's raw `task` text, not the framed assignment: under `--words explained` the assignment names the siblings, and scoring on that would make every leaf look like it owned every branch.
+Over-reach is scored against the parent's raw `task` text, not the framed tail: the shared part names every sibling, and scoring on that would make every leaf look like it owned every branch.
 
 A trial gets `--max-depth 2` — exactly the shape the task asks for — and `--max-cost 0.15`; both are printed when the benchmark starts, along with the whole-benchmark `--budget`. A trial that reaches its own cap is a scored trial, faulted and almost certainly wrong. Only `--budget` stops the benchmark.
 
-`--grid model@provider,...`, `--reps N`, and `--cut`/`--words`/`--mode` taking comma-separated lists, sweep the cross product. `bench` defaults to `--mode fork`, unlike `run` and `chat`, which default to `declared`. `--budget` caps the whole benchmark and stops it cleanly.
+`--grid model@provider,...`, `--reps N`, and `--cut`/`--identity`/`--mode` taking comma-separated lists, sweep the cross product. `bench` defaults to `--mode fork`, unlike `run` and `chat`, which default to `declared`. `--budget` caps the whole benchmark and stops it cleanly.
 
-Over-reach is judged on what an agent did, not on what it wrote: a read counts only if the limb answered it, and a report counts only if it *claims a total* for a branch that is not this agent's — naming a sibling to say you left it alone is discipline, not a breach, and `--words explained` hands every child its siblings' names. Which branches an agent owns comes from the ledger paths its assignment names, so a parent cannot widen its child's licence by mentioning other branches in prose. A leaf whose assignment names no ledger and whose own name matches no branch is reported as unscoreable rather than quietly scored clean.
+Over-reach is judged on what an agent did, not on what it wrote: a read counts only if the limb answered it, and a report counts only if it *claims a total* for a branch that is not this agent's — naming a sibling to say you left it alone is discipline, not a breach, and the shared part hands every child its siblings' names. Which branches an agent owns comes from the ledger paths its assignment names, so a parent cannot widen its child's licence by mentioning other branches in prose. A leaf whose assignment names no ledger and whose own name matches no branch is reported as unscoreable rather than quietly scored clean.
 
-The cache columns separate the question the brief asks. `child cache read` and `child first-request cache` cover agents below the root only — the first request of a forked child is the direct measure of whether it inherited the parent's prefix — while `all-agent cache read` includes the root's own re-reads, which dilute the comparison. `cache written` is the tokens paid to fill the cache.
+The cache columns separate the question the brief asks. `child cache read` and `child first-request cache` cover agents below the root only — the first request of a forked child is the direct measure of whether it inherited the parent's prefix — while `all-agent cache read` includes the root's own re-reads, which dilute the comparison. `cache written` is the tokens paid to fill the cache. `shared-part hits` counts, in every scope, the siblings after the first whose first request read the shared part from the cache, out of all siblings after the first. The first sibling writes it; a later one read it when its first request read more from the cache than the sibling that read least. The trial line also gives the tokens they read beyond it.
 
 ## Rescoring
 
@@ -106,7 +113,7 @@ cargo run --bin forks -- rescore runs.ignore/<timestamp>-bench [--json rows.json
 
 Scores a benchmark that has already been paid for, again, offline, and prints the old verdict beside the new one.
 
-Runs made since the harness started recording `fault_kind` say outright why they faulted. Older ones carry only the fault message, which rescoring reads back: `spend cap reached` and `agent ran past N turns` are the model's own doing, while `provider returned …`, `request failed`, `N attempts failed`, `rate limited for longer than …` and `agent task panicked` are not. Every message the harness has produced is covered; anything unrecognised is left unclassified and the trial is kept, because discarding paid evidence on a guess is worse than keeping a doubtful row. Rescoring says how many trials fell into each of the three. It walks the trial directories rather than `trials.json`, because `trials.json` is written once at the end and two benchmarks that started in the same second used to share a directory — the second to finish overwrote the first's index. `wire.jsonl` is the ground truth for what each agent did: a request body carries the previous turn's tool results, which is how a read that failed is told from one that worked. Expected totals come from that benchmark's own `fixture/`, never from today's generator. Nothing is written back. It reads OpenRouter's wire format only, and refuses a benchmark run on the claude backend.
+Runs made since the harness started recording `fault_kind` say outright why they faulted. Older ones carry only the fault message, which rescoring reads back: `spend cap reached` and `agent ran past N turns` are the model's own doing, while `provider returned …`, `request failed`, `N attempts failed`, `rate limited for longer than …` and `agent task panicked` are not. Every message the harness has produced is covered; anything unrecognised is left unclassified and the trial is kept, because discarding paid evidence on a guess is worse than keeping a doubtful row. Rescoring says how many trials fell into each of the three. It walks the trial directories rather than `trials.json`, because `trials.json` is written once at the end and two benchmarks that started in the same second used to share a directory — the second to finish overwrote the first's index. `wire.jsonl` is the ground truth for what each agent did: a request body carries the previous turn's tool results, which is how a read that failed is told from one that worked. Expected totals come from that benchmark's own `fixture/`, never from today's generator. Nothing is written back. It reads both backends' wire formats. An older trial recorded `words` where a newer one records `identity`, and is shown with it.
 
 ## Cost
 
@@ -138,7 +145,7 @@ cargo test
 
 Under two seconds. One test waits on wall-clock time — `a_silent_provider_times_out_and_the_retry_succeeds`, which spends 0.2s on the timeout it is testing plus 0.5s of retry backoff — and `chat_does_not_spin_after_stdin_closes` samples CPU over a fixed window, because a rate needs one. Nothing else does: no test passes because an interval elapsed.
 
-`tests/scenario.rs` drives the `forks` binary against the fake provider and asserts on what it printed and on what the provider received. Concurrency is proved by a barrier: the children's requests are not answered until both are in flight together, which a harness that ran them one after another could never satisfy. Ordering is proved by content — the dependent child's request contains its dependency's report, so it cannot have been built before it. Cancellation and the spend cap hold requests open at the provider and release them when the test is ready. Every test also asserts the system prompt and tool list are byte-identical across every agent in the run.
+`tests/scenario.rs` drives the `forks` binary against the fake provider and asserts on what it printed and on what the provider received. Concurrency is proved by a barrier: once the first child's first request is answered, its next request and its sibling's first are not answered until both are in flight together, which a harness that ran them one after another could never satisfy. Ordering is proved by content — the dependent child's request contains its dependency's report, so it cannot have been built before it. Cancellation and the spend cap hold requests open at the provider and release them when the test is ready. Every test also asserts the system prompt and tool list are byte-identical across every agent in the run.
 
 The fake provider speaks HTTP/1.1 itself, on a thread per connection. An off-the-shelf server with a connection thread pool stalled under CPU contention: it stopped reading sockets it had accepted, requests sat unread in the kernel, and the suite took three minutes instead of one second while still passing.
 
