@@ -1,4 +1,4 @@
-// Part 5: every type the experiment introduced, nested in its file. An arrow from A to B means A holds a B.
+// Part 7: every type the experiment introduced, nested in its file. An arrow from A to B means A holds a B.
 
 import { graph, type Node, type Edge } from "underview/graph"
 import { h, code, part, cameTo } from "./ui"
@@ -14,15 +14,16 @@ const FOR: Record<string, string> = {
   Outcome: "how an agent ended; Faulted, Suspended and Panicked keep its parent suspended",
   Fault: "an out-of-band failure, and why",
   RequestEnd: "why a request produced no reply",
-  ParentTurn: "",
   ChildSpec: "one entry of a task call, after validation: names unique, after-names present, no cycles",
   ChildReport: "what a child hands back: its outcome and its last message",
   AgentEnd: "an agent's outcome, report and final messages",
   Config: "everything fixed for a run",
   Mode: "fork, fresh, or whatever each task entry declared",
-  Framing: "",
-  Cut: "what a forked child inherits: full, own, or before",
-  Words: "what its assignment says: stop, or explained",
+  Cut: "where a forked child's context is cut: result or before",
+  Identity: "how a child's own part names it: agent or task",
+  Handoff: "what one context hands the next: down to a child, up to its parent, across to a fresh context",
+  Attachment: "a file read when the handoff was made",
+  Talking: "the agent talking with the user, and where its lines go",
   Local: "the two tools the limb runs",
   Tally: "a row of the tree snapshot",
   ToolCallRecord: "one call and its result, for summary.json",
@@ -37,7 +38,8 @@ const FOR: Record<string, string> = {
   Face: "the append-only lines on stdout",
   Limb: "one directory, read-only",
   Args: "the command line",
-  Fixture: "the benchmark's directory and its expected totals",
+  Fixture: "a benchmark's directory and the right answer",
+  Project: "one project's clones and worktrees, as the generator writes them",
   TrialFacts: "one trial's configuration and outcome",
   Score: "what the scorer concluded about one trial",
   Seen: "what rescoring reads off one agent's wire",
@@ -56,9 +58,9 @@ function docOf(t: Item): string {
 }
 
 const SYSTEMS: [string, string[]][] = [
-  ["The run", ["src/agent.rs", "src/framing.rs", "src/session.rs", "src/limb.rs", "src/record.rs", "src/face.rs", "src/main.rs"]],
+  ["The run", ["src/agent.rs", "src/handoff.rs", "src/framing.rs", "src/session.rs", "src/limb.rs", "src/record.rs", "src/face.rs", "src/main.rs"]],
   ["The wire", ["src/wire.rs", "src/anthropic.rs"]],
-  ["The benchmark", ["src/bench.rs", "src/rescore.rs"]],
+  ["The benchmark", ["src/bench.rs", "src/ledgers.rs", "src/projects.rs", "src/rescore.rs"]],
   ["The fake provider", ["src/bin/fake_provider.rs"]],
 ]
 const systemOf = (file: string) => SYSTEMS.find(([, fs]) => fs.includes(file))![0]
@@ -97,8 +99,8 @@ function system(files: string[]): HTMLElement {
 }
 
 export function typesPart(): HTMLElement {
-  return part(5, "types", "The abstractions",
+  return part(7, "types", "The abstractions",
     `The ${types.length} types the experiment introduced, in four groups: the run, the wire, the benchmark and the fake provider. Each sits in the file that defines it, with its fields or variants as written and what it is for. An arrow from A to B means A holds a B. Click a type for its source.`,
-    SYSTEMS.map(([title, files], i) => [h("h3", {}, `5.${i + 1} ${title}`), system(files)]),
-    cameTo(h("code", {}, "Run"), " is the only thing agents share, and all its mutable state sits behind one mutex. A scope is nothing more than ", h("code", {}, "ParentTurn"), " in, ", h("code", {}, "ChildSpec"), "s across, ", h("code", {}, "ChildReport"), "s back. Everything a model is shown is a ", h("code", {}, "Message"), ", kept byte-exact so a fork is a clone. The benchmark adds its own small world — ", h("code", {}, "Fixture"), ", ", h("code", {}, "Observed"), ", ", h("code", {}, "Score"), " — which reads the run's records and nothing else."))
+    SYSTEMS.map(([title, files], i) => [h("h3", {}, `7.${i + 1} ${title}`), system(files)]),
+    cameTo(h("code", {}, "Run"), " is the only thing agents share, and all its mutable state sits behind one mutex. A scope is ", h("code", {}, "ParentTurn"), " in, ", h("code", {}, "ChildSpec"), "s across, ", h("code", {}, "ChildReport"), "s back. Every context after an agent's first is a ", h("code", {}, "Handoff"), " delivered onto messages. Everything a model is shown is a ", h("code", {}, "Message"), ", kept byte-exact so a fork is a clone. The benchmark adds its own small world — ", h("code", {}, "Fixture"), ", ", h("code", {}, "Observed"), ", ", h("code", {}, "Score"), " — which reads the run's records and nothing else."))
 }

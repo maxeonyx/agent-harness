@@ -1,4 +1,4 @@
-// Part 4: how data moves through one run, and through the benchmark. An arrow means data moves that way.
+// Part 6: how data moves through one run, and through the benchmark. An arrow means data moves that way.
 
 import { graph, type Node, type Edge } from "underview/graph"
 import { excerpt } from "underview/excerpt" with { type: "macro" }
@@ -9,8 +9,8 @@ type Datum = { id: string; t: string; s?: string; ext?: boolean; at?: ReturnType
 // A loop drawn as a loop makes the layout reverse an edge, so an agent's messages appear twice: before a turn, and after it.
 const RUN: Datum[] = [
   { id: "argv", t: "the task, and flags", s: "forks run --dir … \"…\"", ext: true },
-  { id: "config", t: "Config", s: "model, provider, cut, words, mode, caps", at: excerpt("../src/agent.rs:/pub struct Config {/") },
-  { id: "root", t: "the root's first messages", s: "[system ×2 on Claude, user: the task]", at: excerpt("../src/wire.rs:/pub fn system(&self, prompt: &str)/") },
+  { id: "config", t: "Config", s: "model, backend, cut, identity, mode, caps, handover point", at: excerpt("../src/agent.rs:/pub struct Config {/") },
+  { id: "root", t: "the root's first messages", s: "system ×2 on Claude, then user: the task", at: excerpt("../src/wire.rs:/pub fn system(&self, prompt: &str)/") },
   { id: "before", t: "an agent's messages, turn n", s: "Vec<Message>, only ever appended to", at: excerpt("../src/wire.rs:/pub struct Message {/") },
   { id: "request", t: "request body", s: "envelope + messages + 3 tools, per backend", at: excerpt("../src/wire.rs:/pub fn body(/") },
   { id: "provider", t: "Anthropic on your subscription, or OpenRouter", s: "cache read, then generation", ext: true },
@@ -21,12 +21,13 @@ const RUN: Datum[] = [
   { id: "results", t: "tool results", s: "one message per local call", at: excerpt("../src/agent.rs:/The local tools run first/") },
   { id: "spec", t: "ChildSpec per child", s: "from the task call's arguments", at: excerpt("../src/agent.rs:/struct ChildSpec {/") },
   { id: "turn", t: "ParentTurn", s: "turn n's messages + the task call", at: excerpt("../src/agent.rs:/struct ParentTurn {/") },
-  { id: "assign", t: "the assignment", s: "task + words + after-reports", at: excerpt("../src/framing.rs:/pub fn assignment(/") },
-  { id: "child", t: "the child's first messages", s: "cut from ParentTurn, + assignment", at: excerpt("../src/agent.rs:/fn child_context(/") },
+  { id: "down", t: "the down handoff", s: "shared part, attachments, own part", at: excerpt("../src/agent.rs:/let down = Handoff {/") },
+  { id: "child", t: "the child's first messages", s: "the down handoff, delivered onto the cut", at: excerpt("../src/agent.rs:/fn child_context(/") },
   { id: "turns", t: "the child's own turns", s: "this same flow, one level down", ext: true },
   { id: "report", t: "ChildReport", s: "outcome + its last message", at: excerpt("../src/agent.rs:/struct ChildReport {/") },
-  { id: "scope", t: "the scope result", s: "every report, one tool message", at: excerpt("../src/framing.rs:/pub fn scope_result(/") },
-  { id: "after", t: "an agent's messages, turn n + 1", s: "+ reply + every result; round again", at: excerpt("../src/agent.rs:/for result in results {/") },
+  { id: "up", t: "the up handoff", s: "every report, as the task call's answer", at: excerpt("../src/agent.rs:/let up = Handoff {/") },
+  { id: "across", t: "the across handoff", s: "what it wrote for itself, onto the system prompt", at: excerpt("../src/agent.rs:/let fresh = Handoff {/") },
+  { id: "after", t: "an agent's messages, turn n + 1", s: "+ reply + every result, or a fresh context", at: excerpt("../src/agent.rs:/for result in results {/") },
   { id: "summary", t: "summary.json, agents/*.md", s: "each agent's record and final context", at: excerpt("../src/session.rs:/let file = format!(\"agents/{}.md\"/") },
 ]
 
@@ -34,17 +35,17 @@ const RUN_EDGES: [string, string][] = [
   ["argv", "config"], ["argv", "root"], ["root", "before"], ["before", "request"], ["config", "request"], ["request", "provider"], ["provider", "reply"],
   ["request", "wire"], ["reply", "wire"], ["reply", "spent"],
   ["reply", "results"], ["files", "results"], ["reply", "spec"], ["before", "turn"], ["reply", "turn"],
-  ["spec", "assign"], ["turn", "child"], ["assign", "child"], ["child", "turns"], ["turns", "report"], ["report", "scope"],
-  ["reply", "after"], ["results", "after"], ["scope", "after"], ["after", "summary"],
+  ["spec", "down"], ["turn", "child"], ["down", "child"], ["child", "turns"], ["turns", "report"], ["report", "up"],
+  ["reply", "after"], ["results", "after"], ["up", "after"], ["reply", "across"], ["across", "after"], ["after", "summary"],
 ]
 
 const BENCH: Datum[] = [
-  { id: "gen", t: "the fixture generator", s: "seeded amounts, REFUND / DUP / VOID lines", at: excerpt("../src/bench.rs:/fn write_fixture(/") },
-  { id: "fixture", t: "fixture/", s: "POLICY.md + 6 ledgers, expected totals", ext: true },
-  { id: "run", t: "one run per trial", s: "the flow above, with ROOT_TASK", ext: true },
+  { id: "gen", t: "the fixture generators", s: "ledgers.rs or projects.rs, by --task", at: excerpt("../src/bench.rs:/fn write(task: Task/") },
+  { id: "fixture", t: "fixture/", s: "ledgers/ or work/, and the right answer", ext: true },
+  { id: "run", t: "one run per trial", s: "the flow above, with that task's ROOT_TASK", ext: true },
   { id: "dir", t: "the trial's run directory", s: "wire.jsonl, summary.json", ext: true },
   { id: "observed", t: "Observed per agent", s: "answered reads, task calls, report", at: excerpt("../src/bench.rs:/pub struct Observed {/") },
-  { id: "score", t: "Score", s: "over-reach, shape, totals", at: excerpt("../src/bench.rs:/pub fn score(/") },
+  { id: "score", t: "Score", s: "over-reach, shape, answer, per task", at: excerpt("../src/bench.rs:/pub fn score(&self/") },
   { id: "row", t: "one row per trial", s: "trials.json, summary.md", at: excerpt("../src/bench.rs:/pub fn trial_row(/") },
 ]
 const BENCH_EDGES: [string, string][] = [["gen", "fixture"], ["fixture", "run"], ["run", "dir"], ["dir", "observed"], ["fixture", "score"], ["observed", "score"], ["score", "row"]]
@@ -71,12 +72,12 @@ function flowGraph(data: Datum[], edges: [string, string][]): HTMLElement {
 }
 
 export function dataflow(): HTMLElement {
-  return part(4, "dataflow", "How data moves",
+  return part(6, "dataflow", "How data moves",
     "First through one run, then through the benchmark around it. An arrow only ever means data moves that way; dashed boxes are outside the code. Click a box for the lines that make that data.",
-    h("h3", {}, "4.1 One run"),
-    h("p", {}, "The loop is the cycle through ", h("i", {}, "an agent's messages"), ": request, reply, results, appended, again. A task call leaves that cycle through ", h("code", {}, "ChildSpec"), " and ", h("code", {}, "ParentTurn"), ", becomes each child's own messages — which run this same flow — and comes back as one scope result."),
+    h("h3", {}, "6.1 One run"),
+    h("p", {}, "The loop is the cycle through ", h("i", {}, "an agent's messages"), ": request, reply, results, appended, again. A task call leaves that cycle through ", h("code", {}, "ChildSpec"), " and ", h("code", {}, "ParentTurn"), ", becomes each child's messages through the down handoff — which run this same flow — and comes back through the up handoff. A handover call leaves it through the across handoff, and the agent's messages start again."),
     flowGraph(RUN, RUN_EDGES),
-    h("h3", {}, "4.2 The benchmark"),
+    h("h3", {}, "6.2 The benchmark"),
     flowGraph(BENCH, BENCH_EDGES),
-    cameTo("Everything an agent sees is built in three places: ", h("code", {}, "session.rs"), " for the root, ", h("code", {}, "child_context"), " for every child, and ", h("code", {}, "framing.rs"), " for every word the harness itself says. Everything the evidence says is read back from what was recorded on the wire, by the same scorer whether live or rescored."))
+    cameTo("Everything an agent sees is built in three places: ", h("code", {}, "session.rs"), " for the root's first messages, ", h("code", {}, "Handoff::deliver"), " for every context after that, and ", h("code", {}, "framing.rs"), " for every word the harness itself says. Everything the evidence says is read back from what was recorded on the wire, by the same scorer whether live or rescored."))
 }
