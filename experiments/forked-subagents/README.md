@@ -180,7 +180,7 @@ The fake provider speaks HTTP/1.1 itself, on a thread per connection. An off-the
 
 ## The page
 
-`page/` is an [underview](https://github.com/maxeonyx/underview) page about this experiment: what was run, down to every request as sent; what it claims and what each claim rests on; the code as nested boxes, where an arrow means "delete that and this breaks"; how data moves; every type; and the cross-cutting concerns. Everything in it is read from the recorded runs and the source when it is built:
+`page/` is an [underview](https://github.com/maxeonyx/underview) page about this experiment: the handoff model, shown as the exact context each receiver got; the framing experiment and its results; what was run, down to every request as sent; what it claims and what each claim rests on; the code as nested boxes, where an arrow means "delete that and this breaks"; how data moves; every type; and the cross-cutting concerns. Everything in it is read from the recorded runs and the source when it is built:
 
 ```bash
 cd page && bun install && bun build --compile --target=browser ./index.html --outdir out
