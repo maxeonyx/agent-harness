@@ -20,7 +20,7 @@ const HANDLED: Handled[] = [
   { concern: "Evidence", how: "every body sent and received is written as it happens; each agent's record and every context it had at the end", at: excerpt("../src/record.rs:/let wire = std::fs::File::create/"), tests: ["rescoring_a_recorded_benchmark_reproduces_its_scores", "the_face_shows_every_message_exactly_as_it_enters_a_context"] },
   { concern: "The limb's boundary", how: "paths are canonicalised and must stay under --dir", at: excerpt("../src/limb.rs:/fn resolve(&self, path: &str)/"), tests: [] },
   { concern: "Credentials", how: "on the Claude backend, the subscription token opencode keeps in its database, re-read before every request and never refreshed here — refreshing would rotate opencode's own token; on OpenRouter, a key from the environment or keys.ignore.env. Either goes only into a request header", at: excerpt("../src/anthropic.rs:/pub fn access_token(/"), tests: ["an_expired_subscription_token_stops_the_run_before_any_request"] },
-  { concern: "Tests that can't flake", how: "the fake provider holds requests at barriers and releases them on command; nothing waits on a clock but the one timeout test", at: excerpt("../src/bin/fake_provider.rs:/fn barrier(/"), tests: ["scope_suspends_the_parent_while_its_children_run_at_the_same_time"] },
+  { concern: "Tests that can't flake", how: "the fake provider holds requests at barriers and releases them on command; no test passes because an interval elapsed", at: excerpt("../src/bin/fake_provider.rs:/fn barrier(/"), tests: ["scope_suspends_the_parent_while_its_children_run_at_the_same_time"] },
 ]
 
 const missing = HANDLED.flatMap((c) => c.tests).filter((t) => !SOURCES["tests/scenario.rs"].includes(`fn ${t}(`))

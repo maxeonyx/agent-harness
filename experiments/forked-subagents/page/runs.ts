@@ -6,7 +6,7 @@ import { TRIALS } from "./trials"
 
 const CLEAN = flow("20260928-105142-bench/20260928-105901-trial012-before-agent-fork-rep2")
 
-// Every benchmark as launched. `forks` is target/release/forks; `first` is the first harness, built from 16072b6^.
+// Every benchmark as launched.
 type Launch = [dir: string, command: string]
 
 const OPENROUTER: Launch[] = [
@@ -61,7 +61,7 @@ function kinds() {
   const row = (what: string, how: HTMLElement, where: string) => h("tr", {}, h("td", {}, what), how, h("td", {}, where))
   return [
     h("h3", {}, "3.1 Every run"),
-    h("p", {}, "Newest first. The two harnesses differ: ", h("i", {}, "the first harness"), " (PR #13) gave a child one assignment and said ", h("code", {}, "--words stop|explained"), "; this branch gives it a shared part and an own part and says ", h("code", {}, "--identity agent|task"), ". Every command below is what was run."),
+    h("p", {}, "Newest first. The two harnesses differ: ", h("i", {}, "the first harness"), " (PR #13) gave a child one assignment and said ", h("code", {}, "--words stop|explained"), "; this branch gives it a shared part and an own part and says ", h("code", {}, "--identity agent|task"), ". Every command below is what was run. ", h("code", {}, "first"), " is the first harness's ", h("code", {}, "forks"), ", built again from commit 16072b6^."),
     h("table", { class: "grid runs" },
       h("tr", {}, ["what", "exactly", "on"].map((c) => h("th", {}, c))),
       row("plain runs and a chat", launches(RUNS), "your subscription"),
@@ -115,7 +115,7 @@ function exactFlow() {
   })
   return [
     h("h3", {}, "3.2 One run, request by request"),
-    h("p", {}, `The ledgers trial part 1 quotes: `, h("code", {}, "before · agent"), `, a tree built as asked with every total right. ${CLEAN.requests.length} requests. Every request has this envelope; only `, h("code", {}, "messages"), ` changes:`),
+    h("p", {}, `The ledgers trial 1.2 and 1.3 quote: `, h("code", {}, "before · agent"), `, a tree built as asked with every total right. ${CLEAN.requests.length} requests. Every request has this envelope; only `, h("code", {}, "messages"), ` changes:`),
     json(CLEAN.envelope),
     h("p", {}, toggle("the tool schemas, exactly as sent", () => json(CLEAN.tools)), " — byte-identical in every request of every agent, like the system prompt, because the provider caches tools, then system, then messages, and one difference moves the start of the cache. These benchmarks ran before ", h("code", {}, "handover"), " was added, so they have three tools; the runs in 1.4 and 1.5 have four."),
     h("p", {}, "Each row is one request. Each numbered box is one message, and the same number is the same bytes wherever it appears. So a child's row starting with its parent's numbers ", h("i", {}, "is"), " the fork. A box with a dark outline is sent for the first time in that row. Click any box for its JSON; the dashed box is the reply, which comes back as a message in that agent's next request."),

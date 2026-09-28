@@ -83,13 +83,13 @@ function table() {
 const reads = (r: Request) => `read ${int(r.usage!.cached)} from the cache and wrote ${int(r.usage!.written)}`
 
 function downward() {
-  const pair = (cut: string, child: Request, sibling: Request, parent: Request, how: string) => {
-    return h("div", { class: "cut" },
+  // `first` is the sibling that started first, which wrote the shared part to the cache.
+  const pair = (cut: string, child: Request, first: Request, parent: Request, how: string) =>
+    h("div", { class: "cut" },
       h("div", { class: "name" }, h("code", {}, `--cut ${cut}`)),
       h("div", { class: "how" }, how),
       context(child, { against: parent, as: `${parent.agent}'s context` }),
-      h("p", { class: "s" }, `${sibling.agent.split(" › ").pop()} started first: its first request ${reads(sibling)}. ${child.agent.split(" › ").pop()} started when that request came back: its first ${reads(child)}.`))
-  }
+      h("p", { class: "s" }, `${first.agent.split(" › ").pop()} started first: its first request ${reads(first)}. ${child.agent.split(" › ").pop()} started when that request came back: its first ${reads(child)}.`))
   return [
     h("h3", {}, "1.2 Down: a task call hands each child its part"),
     h("p", {}, "A ledgers benchmark trial on your subscription. The root read the policy, listed the two regions, and called ", h("code", {}, "task"), " for one agent per region. Below is the first request the ", h("code", {}, "maunga"), " region agent sent, under each cut. Messages it shares with the root are folded; what is new is shown whole. Click any line for its JSON as sent."),
@@ -111,7 +111,9 @@ function upward() {
 function acrossward() {
   return [
     h("h3", {}, "1.4 Across: a handover starts a fresh context"),
-    h("p", {}, "The ledgers task as a plain run: ", h("code", {}, "forks run --dir <a ledgers fixture> --handover-at 4000 --mode fork \"<the ledgers task>\""), ". The root's third request carried 10,013 tokens, so the harness appended a line telling it to hand over, and the root called ", h("code", {}, "handover"), ". Its first context ends like this:"),
+    h("p", {}, "The ledgers task as a plain run, on the same fixture:"),
+    h("pre", { class: "text" }, "forks run --dir <a ledgers fixture> --handover-at 4000 --mode fork \"<the ledgers task>\""),
+    h("p", {}, "The root's second request carried 10,013 tokens. So the harness appended a line to its third, telling it to hand over, and the root called ", h("code", {}, "handover"), ". Its first context ends like this:"),
     context(R.handoverLast, { from: 4 }),
     h("p", {}, "Its second context is the system prompt, what it wrote for itself as user text, and its next step as user text. It started with no attachments, because the root asked for none. Every earlier breakpoint ended inside the first context, so this request read nothing from the cache."),
     context(R.handoverNext),
@@ -120,12 +122,12 @@ function acrossward() {
 }
 
 function talking() {
-  const shared = R.talkingFirst.messages[2].content[1].text as string
+  if (R.talkingFirst.messages[2].content[1].text !== R.talkingSibling.messages[0].content[0].text) throw new Error("root' and face-reader were not given the same shared part")
   return [
     h("h3", {}, "1.5 The child that carries on talking with you"),
     h("p", {}, "A ", h("code", {}, "forks chat"), " over this crate's ", h("code", {}, "src/"), ", driven by a script standing in for you. It typed: ", h("q", {}, R.talkingResumed.messages[0].content[0].text), " The root called ", h("code", {}, "task"), " for two fresh readers. Because the root was talking with you, the harness also started ", h("code", {}, "root'"), ": a fork, with the same shared part as its siblings and its own part saying it carries the conversation on."),
     context(R.talkingFirst, { against: R.talkingResumed, as: "the root's context" }),
-    h("p", {}, "The fresh readers got the same shared part straight after the system prompt. ", toggle("face-reader's first request", () => context(R.talkingSibling)), " — its shared text is byte-identical to root''s: ", h("code", {}, JSON.stringify(shared.slice(0, 60)) + "…"), "."),
+    h("p", {}, "The fresh readers got the same shared part, byte for byte, straight after the system prompt: ", toggle("face-reader's first request", () => context(R.talkingSibling)), "."),
     h("p", {}, "The script asked ", h("code", {}, "root'"), " one question while the readers worked, then typed ", h("code", {}, "/done"), ". The harness asked it for its report:"),
     context(R.talkingDone, { from: 3 }),
     h("p", {}, "The root was resumed once all three had ended, with all three reports in one tool result:"),
@@ -142,7 +144,7 @@ export function handoffs(): HTMLElement {
     h("h3", {}, "1.1 One type"),
     h("p", {}, "A handoff has four fields. ", h("code", {}, "shared"), " is the same bytes for every receiver. ", h("code", {}, "attachments"), " are files, shown after the shared part as ", h("code", {}, "read_file"), " calls the receiver did not make. ", h("code", {}, "own"), " is this receiver's part, always user text. ", h("code", {}, "breakpoint"), " puts a cache breakpoint after everything the receivers share."),
     code(HANDOFF),
-    h("p", {}, h("code", {}, "deliver"), " appends a handoff to a context. When a tool call is waiting for its answer, the shared part is that answer. Otherwise it is user text. ", toggle("deliver", () => code(DELIVER))),
+    h("p", {}, h("code", {}, "deliver"), " appends a handoff to a context. When a tool call is waiting for its answer, the shared part is that answer. Otherwise it is user text. ", toggle("Its lines.", () => code(DELIVER))),
     h("p", {}, "Each row is one place the harness makes a handoff. Click a row for the lines that make it."),
     table(),
     downward(), upward(), acrossward(), talking(),

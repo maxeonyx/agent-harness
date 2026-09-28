@@ -13,7 +13,7 @@ type Leaf = { id: string; title: string; note?: string; caveat?: boolean; open?:
 
 const now = VALID.filter((t) => onClaude(t) && !firstHarness(t))
 const claude = VALID.filter(onClaude)
-const sum = (list: any[], key: string) => list.reduce((a, t) => a + t[key], 0)
+const sum = (list: any[], key: string) => list.reduce((a, t) => a + (t[key] ?? 0), 0)
 const of = (list: any[], part: string, whole: string) => `${sum(list, part)} of ${sum(list, whole)}`
 const userText = claude.filter((t) => !firstHarness(t) && t.cut !== "call")
 const toolResult = claude.filter((t) => t.cut === "full" || t.cut === "call")
@@ -86,7 +86,7 @@ export function claims(): HTMLElement {
   }
   queueMicrotask(() => graph(host, nodes, edges, { direction: "RIGHT", gap: 14, elk: { "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES" } }))
   return part(4, "claims", "What it claims",
-    "The thesis from the brief, the four things that would falsify it, and what each rests on. Solid boxes are evidence; dashed boxes are caveats that weaken it. Click a box with more behind it.",
+    "The thesis from the brief, the four claims under it, and what each rests on. Solid boxes are evidence; dashed boxes are caveats that weaken it. Click a box with more behind it.",
     h("div", { class: "legend" }, h("span", {}, h("i", { class: "sw" }), "evidence"), h("span", {}, h("i", { class: "sw", style: { borderStyle: "dashed" } }), "caveat"), h("span", {}, "an arrow means “rests on”")),
     host,
     cameTo("Forking is cheap: a forked child's first request comes mostly from the cache, and so does the shared part for every sibling after the first. A child stops at its own part when that part is user text, on Sonnet 5, on both benchmarks. The handoff model is built and ran end to end. Whether the model is understandable is for you to say."))

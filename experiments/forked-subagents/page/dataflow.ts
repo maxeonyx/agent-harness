@@ -12,7 +12,7 @@ const RUN: Datum[] = [
   { id: "config", t: "Config", s: "model, backend, cut, identity, mode, caps, handover point", at: excerpt("../src/agent.rs:/pub struct Config {/") },
   { id: "root", t: "the root's first messages", s: "system ×2 on Claude, then user: the task", at: excerpt("../src/wire.rs:/pub fn system(&self, prompt: &str)/") },
   { id: "before", t: "an agent's messages, turn n", s: "Vec<Message>, only ever appended to", at: excerpt("../src/wire.rs:/pub struct Message {/") },
-  { id: "request", t: "request body", s: "envelope + messages + 3 tools, per backend", at: excerpt("../src/wire.rs:/pub fn body(/") },
+  { id: "request", t: "request body", s: "envelope + messages + 4 tools, per backend", at: excerpt("../src/wire.rs:/pub fn body(/") },
   { id: "provider", t: "Anthropic on your subscription, or OpenRouter", s: "cache read, then generation", ext: true },
   { id: "reply", t: "reply + usage", s: "assistant message, tokens, cost", at: excerpt("../src/anthropic.rs:/pub fn reply(/") },
   { id: "spent", t: "spent, in flight", s: "checked before every attempt", at: excerpt("../src/agent.rs:/let committed = state.spent/") },
@@ -26,7 +26,7 @@ const RUN: Datum[] = [
   { id: "turns", t: "the child's own turns", s: "this same flow, one level down", ext: true },
   { id: "report", t: "ChildReport", s: "outcome + its last message", at: excerpt("../src/agent.rs:/struct ChildReport {/") },
   { id: "up", t: "the up handoff", s: "every report, as the task call's answer", at: excerpt("../src/agent.rs:/let up = Handoff {/") },
-  { id: "across", t: "the across handoff", s: "what it wrote for itself, onto the system prompt", at: excerpt("../src/agent.rs:/let fresh = Handoff {/") },
+  { id: "across", t: "the across handoff", s: "onto the system prompt alone", at: excerpt("../src/agent.rs:/let fresh = Handoff {/") },
   { id: "after", t: "an agent's messages, turn n + 1", s: "+ reply + every result, or a fresh context", at: excerpt("../src/agent.rs:/for result in results {/") },
   { id: "summary", t: "summary.json, agents/*.md", s: "each agent's record and final context", at: excerpt("../src/session.rs:/let file = format!(\"agents/{}.md\"/") },
 ]

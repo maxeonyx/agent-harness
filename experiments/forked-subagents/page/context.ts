@@ -20,7 +20,7 @@ function sharedPrefix(req: Request, against: Request): number {
 function text(b: Block): string {
   switch (b.type) {
     case "text": return b.text
-    case "tool_use": return `${b.name} ${JSON.stringify(b.input, null, 1)}`
+    case "tool_use": return Object.entries(b.input).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v, null, 2)}`).join("\n\n")
     case "tool_result": return typeof b.content === "string" ? b.content : JSON.stringify(b.content)
     case "thinking": return b.thinking === "" ? "(empty, with a signature)" : b.thinking
     default: return JSON.stringify(b)
@@ -28,7 +28,10 @@ function text(b: Block): string {
 }
 
 const tag = (b: Block) => (b.type === "tool_use" ? `tool_use ${b.name}` : b.type === "tool_result" ? `tool_result ${b.tool_use_id.slice(-6)}` : b.type)
-const oneLine = (s: string) => (s.length > 110 ? s.slice(0, 110).replace(/\s+/g, " ") + "…" : s.replace(/\s+/g, " "))
+function oneLine(s: string): string {
+  const flat = s.replace(/\s+/g, " ")
+  return flat.length > 110 ? flat.slice(0, 110) + "…" : flat
+}
 
 /** A row that shows `detail` under itself when clicked, and hides it again. */
 function opens(row: HTMLElement, detail: () => HTMLElement): HTMLElement {
@@ -46,9 +49,8 @@ function opens(row: HTMLElement, detail: () => HTMLElement): HTMLElement {
 function block(b: Block, full: boolean): HTMLElement {
   const body = text(b)
   const row = h("div", { class: `ctx-block ${b.type}${full ? "" : " old"}` },
-    h("span", { class: "ctx-tag" }, tag(b)),
-    full ? h("pre", { class: "ctx-text" }, body) : h("span", { class: "ctx-line" }, oneLine(body)),
-    b.cache_control !== undefined && h("span", { class: "bp" }, "◆ cache breakpoint"))
+    h("span", { class: "ctx-tag" }, tag(b), b.cache_control !== undefined && h("span", { class: "bp" }, "◆ cache breakpoint")),
+    full ? h("pre", { class: "ctx-text" }, body) : h("span", { class: "ctx-line" }, oneLine(body)))
   return opens(row, () => json(b))
 }
 
@@ -61,36 +63,39 @@ export type Options = {
   from?: number
 }
 
-export function context(req: Request, options: Options = {}): HTMLElement {
-  const shared = options.against === undefined ? 0 : sharedPrefix(req, options.against)
-  const as = options.as ?? (options.against && `${options.against.agent}'s request ${options.against.n + 1}`)
-  const from = options.from ?? 0
-  let seen = 0
-  const rows: HTMLElement[] = []
-  let folded: number[] = []
-  const fold = () => {
-    if (folded.length === 0) return
-    const [a, b] = [folded[0], folded[folded.length - 1]]
-    const msgs = req.messages.slice(a, b + 1)
-    rows.push(opens(h("div", { class: "ctx-fold" }, h("span", { class: "ctx-n" }, a === b ? a : `${a}–${b}`), `${a === b ? "a message" : `${b - a + 1} messages`}, the same bytes as in ${as}`), () => h("div", {}, msgs.map((m: any, i: number) => message(m, a + i, 0)))))
-    folded = []
-  }
-  const message = (m: any, i: number, oldBlocks: number) =>
-    h("div", { class: "ctx-msg" },
-      opens(h("div", { class: "ctx-head" }, h("span", { class: "ctx-n" }, i), h("span", { class: `role ${m.role}` }, m.role)), () => json(m)),
-      blocks(m).map((b, j) => block(b, j >= oldBlocks)))
+function message(m: any, i: number, oldBlocks: number): HTMLElement {
+  return h("div", { class: "ctx-msg" },
+    opens(h("div", { class: "ctx-head" }, h("span", { class: "ctx-n" }, i), h("span", { class: `role ${m.role}` }, m.role)), () => json(m)),
+    blocks(m).map((b, j) => block(b, j >= oldBlocks)))
+}
 
-  if (from > 0) rows.push(h("div", { class: "ctx-fold" }, h("span", { class: "ctx-n" }, from === 1 ? 0 : `0–${from - 1}`), "earlier messages, not shown"))
-  req.messages.forEach((m: any, i: number) => {
-    const n = blocks(m).length
-    const old = Math.max(0, Math.min(n, shared - seen))
-    seen += n
-    if (i < from) return
-    if (old === n && options.against !== undefined) return void folded.push(i)
-    fold()
-    rows.push(message(m, i, old))
+const span = (a: number, b: number) => (a === b ? `${a}` : `${a}–${b}`)
+
+export function context(req: Request, options: Options = {}): HTMLElement {
+  const { against, from = 0 } = options
+  const as = options.as ?? (against && `${against.agent}'s request ${against.n + 1}`)
+  // How many of each message's leading blocks `against` sent too.
+  let left = against === undefined ? 0 : sharedPrefix(req, against)
+  const old = req.messages.map((m: any) => {
+    const n = Math.min(blocks(m).length, left)
+    left -= n
+    return n
   })
-  fold()
+  const whole = (i: number) => against !== undefined && old[i] === blocks(req.messages[i]).length
+
+  const rows: HTMLElement[] = []
+  if (from > 0) rows.push(h("div", { class: "ctx-fold" }, h("span", { class: "ctx-n" }, span(0, from - 1)), "earlier messages, not shown"))
+  for (let i = from; i < req.messages.length; i++) {
+    if (!whole(i)) {
+      rows.push(message(req.messages[i], i, old[i]))
+      continue
+    }
+    const a = i
+    while (i + 1 < req.messages.length && whole(i + 1)) i++
+    const count = i - a + 1
+    rows.push(opens(h("div", { class: "ctx-fold" }, h("span", { class: "ctx-n" }, span(a, i)), `${count === 1 ? "a message" : `${count} messages`}, the same bytes as in ${as}`),
+      () => h("div", {}, req.messages.slice(a, a + count).map((m: any, k: number) => message(m, a + k, 0)))))
+  }
 
   const u = req.usage
   return h("div", { class: "ctx" },

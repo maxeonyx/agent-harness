@@ -169,15 +169,15 @@ details > summary { cursor: pointer; }
 .ctx-n { font: 600 11px var(--mono); color: var(--faint); min-width: 28px; }
 .ctx-msg { border-top: 1px solid var(--hair); padding: 3px 0; }
 .ctx-head { display: flex; gap: 8px; align-items: center; padding: 2px 4px; border-radius: 4px; }
-.ctx-block { display: grid; grid-template-columns: 150px 1fr auto; gap: 8px; align-items: baseline; padding: 2px 4px 2px 40px; border-radius: 4px; }
+.ctx-block { display: grid; grid-template-columns: 130px 1fr; gap: 8px; align-items: baseline; padding: 2px 4px 2px 28px; border-radius: 4px; }
 .ctx-block.old { color: var(--faint); }
-.ctx-tag { font: 600 10.5px var(--mono); color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctx-tag { font: 600 10.5px var(--mono); color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; flex-direction: column; }
 .ctx-block.tool_result .ctx-tag { color: var(--tool); }
 .ctx-block.text .ctx-tag { color: var(--user); }
 .ctx-line { font-family: var(--mono); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 pre.ctx-text { font: 11.5px/1.5 var(--mono); margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow: auto; }
 .bp { font: 600 10.5px var(--mono); color: var(--new); white-space: nowrap; }
-.ctx-json { padding: 0 0 4px 40px; }
+.ctx-json { padding: 0 0 4px 28px; }
 .ctx-reply { display: flex; flex-direction: column; gap: 2px; border: 1.5px dashed var(--faint); border-radius: 6px; padding: 4px 8px; margin-top: 6px; color: var(--mute); }
 .ctx-reply .ctx-line { white-space: normal; }
 .cut .ctx { margin-top: 4px; }
@@ -193,3 +193,5 @@ table.grid.results tr.split td { border-top: 2px solid #cfccc3; }
 table.grid.runs .launch { margin: 2px 0; }
 table.grid.runs code { white-space: pre-wrap; }
 table.grid.handoffs td { font-size: 13px; max-width: 260px; }
+table.grid.results td.none { text-align: center; color: var(--faint); font-size: 12.5px; }
+table.grid td.num, table.grid.results td:first-child { white-space: nowrap; }

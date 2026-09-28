@@ -13,10 +13,10 @@ const PROJECTS = projects("20260928-112920-bench")
 const R = requests({
   ledgersTask: ["20260928-105142-bench/20260928-105901-trial012-before-agent-fork-rep2", "root", 0],
   projectsTask: ["20260928-112920-bench/20260928-112920-trial001-before-agent-fork-rep1", "root", 0],
-  result: ["20260928-105142-bench/20260928-105337-trial004-result-agent-fork-rep4", "root › maunga", 0],
-  resultParent: ["20260928-105142-bench/20260928-105337-trial004-result-agent-fork-rep4", "root", 2],
-  before: ["20260928-105142-bench/20260928-105901-trial012-before-agent-fork-rep2", "root › maunga_region", 0],
-  beforeParent: ["20260928-105142-bench/20260928-105901-trial012-before-agent-fork-rep2", "root", 2],
+  result: ["20260928-105142-bench/20260928-105458-trial006-result-task-fork-rep1", "root › maunga_region", 0],
+  resultParent: ["20260928-105142-bench/20260928-105458-trial006-result-task-fork-rep1", "root", 2],
+  before: ["20260928-105142-bench/20260928-110201-trial016-before-task-fork-rep1", "root › maunga", 0],
+  beforeParent: ["20260928-105142-bench/20260928-110201-trial016-before-task-fork-rep1", "root", 2],
   call: ["20260928-112923-bench/20260928-112923-trial001-call-agent-fork-rep1", "root › datacentral", 0],
   callParent: ["20260928-112923-bench/20260928-112923-trial001-call-agent-fork-rep1", "root", 2],
   fresh: ["20260928-105145-bench/20260928-105145-trial001-before-agent-fresh-rep1", "root › maunga_region", 0],
@@ -45,12 +45,12 @@ const is = (v: string, first: boolean) => claude((t) => variant(t) === v && firs
 
 const THIS: Variant[] = [
   {
-    name: "result", how: "The parent's task turn, then the shared part as that call's answer, with the breakpoint, then the own part as text.",
+    name: "result · task", how: "The parent's task turn, then the shared part as that call's answer, with the breakpoint, then the own part as text.",
     child: R.result, parent: R.resultParent,
     task: "ledgers", rows: claude((t) => t.cut === "result" && t.mode === "fork"),
   },
   {
-    name: "before", how: "The parent's messages before its task turn, then the shared part as user text, with the breakpoint, then the own part.",
+    name: "before · task", how: "The parent's messages before its task turn, then the shared part as user text, with the breakpoint, then the own part.",
     child: R.before, parent: R.beforeParent,
     task: "ledgers", rows: claude((t) => t.cut === "before" && t.mode === "fork" && !firstHarness(t)),
   },
@@ -110,7 +110,7 @@ function variants() {
     h("p", {}, "The first request a child sent, in a real trial of each. Messages it shares with its parent are folded. ◆ marks a cache breakpoint. Click any line for its JSON as sent."),
     h("h4", {}, "This branch: a shared part, then an own part"),
     h("div", { class: "cuts" }, THIS.map(card)),
-    h("p", { class: "s" }, h("code", {}, "call"), " ran on the projects benchmark only, and was deleted from the harness after it; its trials are on disk. Each fork variant ran with both identities; the tails above are ", h("code", {}, "agent"), ". A fresh child is always an agent."),
+    h("p", { class: "s" }, "1.2 showed result and before with ", h("code", {}, "--identity agent"), "; here they are with ", h("code", {}, "task"), ". ", h("code", {}, "call"), " ran on the projects benchmark only, and was deleted from the harness after it; its trials are on disk. A fresh child is always an agent."),
     h("h4", {}, "The first harness (PR #13): no shared part, run again on your subscription"),
     h("div", { class: "cuts" }, FIRST.map(card)),
     h("p", { class: "s" }, "The first harness's ", h("code", {}, "--words stop|explained"), " varied only the stop instruction. Its ", h("code", {}, "own"), " cut, like ", h("code", {}, "full"), " but with the child's copy of the task call listing only itself, ran on OpenRouter only (2.6)."),
@@ -152,7 +152,7 @@ function benchmarks() {
 function cells(list: any[], task: "ledgers" | "projects"): HTMLElement[] {
   const mine = list.filter((t) => t.bench === task)
   const valid = mine.filter((t) => t.valid)
-  if (mine.length === 0) return [h("td", { class: "num", colspan: 6, style: { color: "var(--faint)" } }, "not run")]
+  if (mine.length === 0) return [h("td", { class: "none", colspan: 6 }, "not run")]
   const [over, of] = task === "ledgers" ? ["leaf_overreach", "leaves"] : ["project_overreach", "projects"]
   const bad = valid.reduce((a, t) => a + t[over], 0) > 0
   const share = firstShare(valid)
@@ -184,7 +184,7 @@ function results() {
   const heads = ["trials", "over-reached", "trees as asked", "correct", "first-request cache", "shared-part hits"]
   return [
     h("h3", {}, "2.4 What the trials found"),
-    h("p", {}, `Claude Sonnet 5 on your subscription, 28 September: ${TRIALS.filter(onClaude).length} trials, ${mine.length} valid. Each fork variant was run five times per benchmark.`),
+    h("p", {}, `Claude Sonnet 5 on your subscription, 28 September: ${TRIALS.filter(onClaude).length} trials, ${mine.length} valid. Most cells are five trials; the trials column says where not.`),
     h("ol", { class: "findings" },
       h("li", {}, h("b", {}, "An own part in a tool result fails."), ` Under full, ${leaves((t) => t.cut === "full")} branch agents over-reached. Under call · agent, ${projs(is("call · agent", false))} project agents did. The child reads the tool result as its own task call coming back broken, and redoes the split (2.5).`),
       h("li", {}, h("b", {}, "An own part in user text holds."), ` Under result, before and fresh, ${leaves(userText)} branch agents over-reached, and ${projs((t) => userText(t) && t.mode === "fork")} forked project agents. Fresh project agents over-reached ${projs((t) => t.mode === "fresh")}: in three trials the datacentral agent split its 25 checkouts across four agents of its own. The first harness's before, also user text, had ${leaves((t) => firstHarness(t) && t.cut === "before")}.`),
@@ -226,7 +226,7 @@ function firstRound() {
   }
   return [
     h("h3", {}, "2.6 The first round, on OpenRouter"),
-    h("p", {}, `The first harness, on your OpenRouter key, 24–25 September, ledgers only, Sonnet 5 pinned to Bedrock or Vertex and Luna pinned to Azure: ${openrouter.length} valid trials, both word variants together. The first grid's $0.15 cap stopped most Sonnet trees before they finished, which is why few have correct totals. On Sonnet, before had fewer leaves over-reach than full and own; that is what led to this branch's rule that the own part is user text.`),
+    h("p", {}, `The first harness, on your OpenRouter key, 24–25 September, ledgers only, Sonnet 5 pinned to Bedrock or Vertex and Luna pinned to Azure: ${openrouter.length} valid trials, both word variants together. The first grid's $0.15 cap stopped most Sonnet trees before they finished, which is why few have correct totals. On Sonnet, before had fewer leaves over-reach than full and own.`),
     h("table", { class: "grid" },
       h("tr", {}, ["cut", "model", "trials", "leaves over-reached", "trees as asked", "correct", "first-request cache"].map((c) => h("th", {}, c))),
       ["full", "own", "before", "fresh"].flatMap((cut) => ["sonnet", "luna"].map((m) => h("tr", {}, h("td", {}, h("code", {}, cut)), h("td", {}, m), cell(openrouter.filter((t) => row(t) === cut && model(t) === m)))))),
