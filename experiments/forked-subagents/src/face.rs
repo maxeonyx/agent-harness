@@ -59,7 +59,13 @@ impl Face {
             parts.push(if words.is_empty() {
                 format!("{path:<28} [{n} {role} thinking] (the provider did not show it)")
             } else {
-                block(path, n, &format!("{role} thinking"), &words.join("\n"))
+                block(
+                    path,
+                    n,
+                    &format!("{role} thinking"),
+                    &words.join("\n"),
+                    false,
+                )
             });
         }
         if !text.is_empty() || calls.is_empty() {
@@ -68,13 +74,35 @@ impl Face {
                 (Some(id), None) => format!("{role} {id}"),
                 (None, _) => role.to_string(),
             };
-            parts.push(block(path, n, &header, text));
+            parts.push(block(
+                path,
+                n,
+                &header,
+                text,
+                message.cache && calls.is_empty(),
+            ));
         }
-        for call in calls {
+        for (i, call) in calls.iter().enumerate() {
             let header = format!("{role} tool_use {} {}", call.function.name, call.id);
-            parts.push(block(path, n, &header, &call.function.arguments));
+            let cached = message.cache && i == calls.len() - 1;
+            parts.push(block(path, n, &header, &call.function.arguments, cached));
         }
         self.say(&parts.join("\n"));
+    }
+
+    /// Messages `from..` of a context, each as it enters it. A tool result
+    /// is shown with the tool it answers, found by its call's id.
+    pub fn context(&self, path: &str, messages: &[Message], from: usize) {
+        for (n, message) in messages.iter().enumerate().skip(from) {
+            let tool = message.tool_call_id.as_ref().and_then(|id| {
+                messages
+                    .iter()
+                    .flat_map(|message| message.tool_calls.iter().flatten())
+                    .find(|call| &call.id == id)
+                    .map(|call| call.function.name.as_str())
+            });
+            self.message(path, n, message, tool);
+        }
     }
 
     /// Something the user asked for, or must see: a tree snapshot, a fault, a
@@ -86,8 +114,12 @@ impl Face {
     }
 }
 
-fn block(path: &str, n: usize, header: &str, text: &str) -> String {
+/// `cached` marks the block that carries the message's cache breakpoint.
+fn block(path: &str, n: usize, header: &str, text: &str, cached: bool) -> String {
     let mut block = format!("{path:<28} [{n} {header}]");
+    if cached {
+        block.push_str(" ← cache breakpoint");
+    }
     if text.is_empty() {
         block.push_str(" (empty)");
     }

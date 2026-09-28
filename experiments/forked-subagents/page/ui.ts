@@ -20,7 +20,6 @@ function flat(kids: Kid[]): (Node | string)[] {
   return kids.flatMap((k) => (Array.isArray(k) ? flat(k) : k == null || k === false ? [] : [k instanceof Node ? k : String(k)]))
 }
 
-export const usd = (x: number) => "$" + (x < 0.01 ? x.toFixed(4) : x.toFixed(3))
 export const pct = (x: number) => Math.round(x * 100) + "%"
 export const int = (n: number) => n.toLocaleString("en-NZ")
 

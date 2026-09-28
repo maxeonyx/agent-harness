@@ -3,14 +3,17 @@ mod anthropic;
 mod bench;
 mod face;
 mod framing;
+mod handoff;
+mod ledgers;
 mod limb;
+mod projects;
 mod record;
 mod rescore;
 mod session;
 mod wire;
 
 use agent::{Config, Mode, Outcome};
-use framing::{Cut, Framing, Words};
+use framing::{Cut, Framing, Identity};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -25,19 +28,19 @@ forks — agents as structured concurrency
   forks rescore <bench-dir> [--json <file>]  score a recorded benchmark again, offline;
                                      --json also writes every trial row as JSON
 
-Framing (the two knobs the benchmark sweeps):
-  --cut full|own|before   what a forked child inherits (default before)
-      full    the parent's messages through the `task` turn, then a tool
-              result addressed to this child
-      own     the same, but this child's copy of the `task` arguments holds
-              only its own entry
+Framing (the knobs the benchmark sweeps). A child's tail is the `task`
+call's `shared` part, the same bytes for every sibling and ending in a cache
+breakpoint, and then the child's own part.
+  --cut result|before     what a forked child inherits (default before)
+      result  the parent's messages through the `task` turn; the shared part
+              is the answer to that call, and the child's own part follows
+              in the same user message. Claude backend only
       before  the parent's messages up to, not including, the `task` turn,
-              then a user message with the assignment
-  --words stop|explained  what the assignment says (default explained)
-      stop       the assignment, and \"do only this, then stop\"
-      explained  also: that it is one branch of a split, that its siblings
-                 hold the other assignments, and that its final message is
-                 exactly what its parent receives
+              then the shared part and the child's own part as user text
+  --identity agent|task   how the child's own part names it (default agent)
+      agent   a new agent: \"You are agent `x`\"
+      task    the same conversation, carrying on: \"Your next task, and only
+              this one\". A fresh child is always a new agent
   --mode fork|fresh|declared   force every child's mode (run and chat default
                                to declared: honour each `task` entry's `fresh`.
                                bench defaults to fork)
@@ -61,9 +64,13 @@ Provider:
 Limits:
   --max-cost <usd>    stop before the request that would exceed it (default 0.50;
                       bench uses 0.15 per trial)
-  --max-depth <n>     levels of agents below the root (default 3; bench uses 2,
-                      which is exactly the shape its task asks for)
-  --max-turns <n>     requests one agent may make (default 20)
+  --max-depth <n>     levels of agents below the root (default 3, which is the
+                      most four cache breakpoints allow; bench uses 2, which
+                      is exactly the shape its task asks for)
+  --max-turns <n>     requests one agent may make (default 20); for the agent
+                      talking with you, since your last line
+  --handover-at <tokens>  past this many tokens in one request, tell the agent
+                      to call `handover` (default never)
   --request-timeout <seconds>  give up on a silent provider and retry (default 300)
   --rate-limit-patience <seconds>  how long to keep waiting out a 429 before
                       giving up on it (default 120; the first wait is a
@@ -72,15 +79,22 @@ Limits:
   --panic-in <agent path>  fault injection: make that agent's task panic
 
 Benchmark only:
+  --task ledgers|projects       the fixture and the root's task (default ledgers)
+      ledgers   2 regions of 3 branch ledgers and a policy manual; the root is
+                told the tree to build
+      projects  4 projects of clones, one with 25; the root is asked for one
+                agent per project and nothing about depth
   --grid <model@provider,...>   default <model>@<provider>
   --reps <n>                    trials per combination (default 1)
   --budget <usd>                total for the whole benchmark; the only thing
                                 that stops it early (default 5.00). A trial that
                                 reaches its own --max-cost is a scored trial.
-  --cut / --words / --mode      accept comma-separated lists here
+  --cut / --identity / --mode   accept comma-separated lists here
 
-In chat: a line is a message to the root; /tree, /cancel, /quit. A line typed
-while a turn is running is refused and discarded, not queued.
+In chat: a line is a message to the root; /tree, /cancel, /quit. When the root
+splits, one more agent carries the conversation on: while the split runs, a line
+goes to it, and /done ends it. /tree marks the agent you are talking to. A line
+typed while no agent is waiting for you is refused and discarded, not queued.
 ";
 
 #[tokio::main]
@@ -124,6 +138,7 @@ async fn command_run(args: &Args) -> Result<ExitCode, String> {
         &args.runs_dir(),
         "run",
         true,
+        false,
         args.session_id(),
     )?;
     session.say(&task);
@@ -143,6 +158,7 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
         &PathBuf::from(&dir),
         &args.runs_dir(),
         "chat",
+        true,
         true,
         args.session_id(),
     )?;
@@ -189,6 +205,12 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
                 run.face.say("nothing is running");
                 continue;
             }
+            "/done" => {
+                run.face.say(
+                    "nothing to finish: /done ends an agent that carries the conversation on, and you are talking to the root",
+                );
+                continue;
+            }
             _ => {}
         }
         session.say(&line);
@@ -203,8 +225,16 @@ async fn command_chat(args: &Args) -> Result<ExitCode, String> {
                         run.face.say(CANCELLING);
                         run.cancel.cancel();
                     }
-                    Some(_) => run.face.say("a turn is running; only /tree and /cancel are accepted"),
-                    None => stdin_open = false,
+                    Some("") => {}
+                    Some(line) => {
+                        if let Err(refused) = run.say_to_user_facing(line) {
+                            run.face.say(&refused);
+                        }
+                    }
+                    None => {
+                        stdin_open = false;
+                        run.user_left.cancel();
+                    }
                 },
             }
         };
@@ -265,17 +295,21 @@ const COMMON: &[&str] = &[
     "base-url",
     "keys",
     "cut",
-    "words",
+    "identity",
     "mode",
     "max-cost",
     "max-depth",
     "max-turns",
     "request-timeout",
     "rate-limit-patience",
+    "handover-at",
     "panic-in",
     "runs-dir",
     "session-id",
 ];
+
+/// Measured on the subscription: `probe/breakpoints.py`.
+const MAX_DEPTH: usize = 3;
 
 /// The experiment's own directory, known at build time. The binary is always
 /// built from this tree, so it can find its key file and its run directory
@@ -423,7 +457,7 @@ impl Args {
             &self.provider(),
             Framing {
                 cut: Cut::parse(&self.one("cut", "before"))?,
-                words: Words::parse(&self.one("words", "explained"))?,
+                identity: Identity::parse(&self.one("identity", "agent"))?,
                 mode: Mode::parse(&self.one("mode", "declared"))?,
             },
             3,
@@ -448,6 +482,9 @@ impl Args {
                         "no API key: set OPENROUTER_API_KEY or put it in keys.ignore.env"
                             .to_string(),
                     );
+                }
+                if framing.cut == Cut::Result {
+                    return Err("--cut result puts the cache breakpoint on a tool result, and OpenRouter documents breakpoints only on the text parts of a message; the likely translation, a text block inside the tool result, is one Anthropic rejects. Use --cut before, or --backend claude".to_string());
                 }
                 Backend::OpenRouter {
                     base_url,
@@ -476,12 +513,18 @@ impl Args {
                 ));
             }
         };
+        let max_depth = self.number("max-depth", default_max_depth)?;
+        if max_depth > MAX_DEPTH {
+            return Err(format!(
+                "--max-depth {max_depth}: every level of forking leaves one cache breakpoint in its descendants' contexts, and Anthropic accepts four cache breakpoints per request, one of which is the automatic one at the end, so agents can go at most {MAX_DEPTH} levels below the root"
+            ));
+        }
         Ok(Config {
             model: model.to_string(),
             backend,
             framing,
             max_cost: self.number("max-cost", default_max_cost)?,
-            max_depth: self.number("max-depth", default_max_depth)?,
+            max_depth,
             max_turns: self.number("max-turns", 20usize)?,
             panic_in: self
                 .flags
@@ -494,6 +537,17 @@ impl Args {
             rate_limit_patience: std::time::Duration::from_secs_f64(
                 self.number("rate-limit-patience", 120.0)?,
             ),
+            handover_at: match self
+                .flags
+                .get("handover-at")
+                .and_then(|values| values.last())
+            {
+                Some(text) => Some(
+                    text.parse()
+                        .map_err(|_| format!("--handover-at {text} is not a number of tokens"))?,
+                ),
+                None => None,
+            },
         })
     }
 }

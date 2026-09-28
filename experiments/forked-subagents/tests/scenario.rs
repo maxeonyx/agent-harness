@@ -231,7 +231,9 @@ fn forks(dir: &Path, fake: &Fake, extra: &[&str], task: &str) -> Forks {
     }
 }
 
-/// `forks` driven live, so the test can act while a turn is running.
+/// `forks` driven live, so the test can act while a turn is running. It is
+/// killed if the test fails before it exits, so a failure never leaves one
+/// running.
 struct Live {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -342,6 +344,13 @@ impl Live {
     }
 }
 
+impl Drop for Live {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 /// Every agent in a run must see the same system prompt and the same tools,
 /// or a forked child's inherited prefix is not the parent's bytes.
 fn prefix_is_identical(fake: &Fake) {
@@ -355,21 +364,27 @@ fn prefix_is_identical(fake: &Fake) {
     }
 }
 
-/// Two children, launched together. `hold` says how each child's request is
-/// held: at a barrier that only genuine concurrency can clear, or until the
-/// test releases it.
+/// Two children, launched together. `north` is declared first, so it goes
+/// first: its first request is answered at once, and then `south` starts.
+/// `hold` says how the two requests then in flight together — north's second
+/// and south's first — are held: at a barrier that only genuine concurrency
+/// can clear, or until the test releases it.
 fn split_rules(hold: Value) -> Value {
-    let mut north = json!({"when": "^You are agent `north`", "text": "north says kowhai"});
+    let mut north = json!({"when": "note.txt", "text": "north says kowhai"});
     let mut south = json!({"when": "^You are agent `south`", "text": "south says tui"});
     for (key, value) in hold.as_object().into_iter().flatten() {
         north[key] = value.clone();
         south[key] = value.clone();
     }
     json!([
-        {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"agents": [
-            {"name": "north", "task": "report the note"},
-            {"name": "south", "task": "list the directory"}
-        ]}}]},
+        {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {
+            "shared": "Both of you work in the run directory.",
+            "user_facing": false,
+            "agents": [
+                {"name": "north", "task": "report the note"},
+                {"name": "south", "task": "list the directory"}
+            ]}}]},
+        {"when": "^You are agent `north`", "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
         north,
         south,
         {"when": "Every agent you launched has finished", "text": "both reported"}
@@ -379,18 +394,26 @@ fn split_rules(hold: Value) -> Value {
 #[test]
 fn scope_suspends_the_parent_while_its_children_run_at_the_same_time() {
     let dir = workspace("scope");
-    // Neither child is answered until both are in flight: a harness that ran
-    // them one after another would never get past the first.
+    // North's second request and south's first are not answered until both
+    // are in flight: a harness that ran the children one after another would
+    // never get past the first.
     let fake = Fake::start(&dir, split_rules(json!({ "barrier": 2 })));
     let out = forks(&dir, &fake, &[], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
     fake.none_stuck();
 
     let requests = fake.requests();
-    assert_eq!(requests.len(), 4, "root, two children, root again");
+    assert_eq!(requests.len(), 5, "root, north twice, south, root again");
 
-    let north = fake.find("agent `north`");
+    let north_first = fake.find("agent `north`");
+    let north = fake.find("note.txt");
     let south = fake.find("agent `south`");
+    // The first sibling's first request writes the shared part to the cache;
+    // a request sent before it has returned cannot read it.
+    assert!(
+        south.received >= north_first.answered.unwrap(),
+        "south started before north's first request had returned"
+    );
     let resumed = fake.find("Every agent you launched has finished");
     assert!(
         resumed.received >= north.answered.unwrap() && resumed.received >= south.answered.unwrap(),
@@ -418,10 +441,12 @@ fn after_makes_a_sibling_wait_and_hands_it_the_report() {
     let fake = Fake::start(
         &dir,
         json!([
-            {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"agents": [
-                {"name": "first", "task": "go first"},
-                {"name": "second", "task": "go second", "after": ["first"]}
-            ]}}]},
+            {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {
+                "shared": "Take turns.",
+                "agents": [
+                    {"name": "first", "task": "go first"},
+                    {"name": "second", "task": "go second", "after": ["first"]}
+                ]}}]},
             {"when": "^You are agent `first`", "text": "first says rimu"},
             {"when": "^You are agent `second`", "text": "second says weka"},
             {"when": "Every agent you launched has finished", "text": "both reported"}
@@ -440,6 +465,12 @@ fn after_makes_a_sibling_wait_and_hands_it_the_report() {
         second.last()
     );
     assert!(second.received >= first.answered.unwrap());
+    // The report is the dependent child's own; the shared part is still the
+    // same bytes as its sibling's.
+    let shared = |request: &Req| request.messages()[request.messages().len() - 2].clone();
+    assert_eq!(shared(&second), shared(&first));
+    assert!(shared(&second).to_string().contains("Take turns."));
+    assert!(!shared(&second).to_string().contains("first says rimu"));
     prefix_is_identical(&fake);
 }
 
@@ -449,10 +480,10 @@ fn nested_scopes_resume_bottom_up() {
     let fake = Fake::start(
         &dir,
         json!([
-            {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"shared": "", "agents": [
                 {"name": "middle", "task": "split again"}
             ]}}]},
-            {"when": "^You are agent `middle`", "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"when": "^You are agent `middle`", "tool_calls": [{"name": "task", "arguments": {"shared": "", "agents": [
                 {"name": "leaf", "task": "do the actual work"}
             ]}}]},
             {"when": "^You are agent `leaf`", "text": "leaf says totara"},
@@ -479,102 +510,253 @@ fn nested_scopes_resume_bottom_up() {
     prefix_is_identical(&fake);
 }
 
+/// On OpenRouter the `before` tail is two user messages after the parent's
+/// messages before its `task` call: the shared part, as a content part with
+/// the cache breakpoint on it, and then the child's own part.
 #[test]
-fn cut_full_gives_the_child_the_parents_bytes_then_one_tool_result() {
-    let dir = workspace("cut-full");
-    let fake = Fake::start(&dir, split_rules(json!({})));
-    let out = forks(&dir, &fake, &["--cut", "full"], "SPLIT the work");
-    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
-
-    let parent = fake.find("SPLIT the work");
-    let child = fake.find("agent `north`");
-    let parent_messages = parent.messages();
-    let child_messages = child.messages();
-    assert_eq!(child_messages.len(), parent_messages.len() + 2);
-    assert_eq!(
-        &child_messages[..parent_messages.len()],
-        &parent_messages[..],
-        "the child's prefix was not the parent's bytes"
-    );
-    let turn = &child_messages[parent_messages.len()];
-    assert_eq!(turn["role"], "assistant");
-    let arguments = turn["tool_calls"][0]["function"]["arguments"]
-        .as_str()
-        .unwrap();
-    assert!(arguments.contains("north") && arguments.contains("south"));
-    let tail = child_messages.last().unwrap();
-    assert_eq!(tail["role"], "tool");
-    assert_eq!(tail["tool_call_id"], turn["tool_calls"][0]["id"]);
-    assert!(tail["content"].as_str().unwrap().contains("agent `north`"));
-    prefix_is_identical(&fake);
-}
-
-#[test]
-fn cut_own_rewrites_the_childs_copy_of_the_task_call() {
-    let dir = workspace("cut-own");
-    let fake = Fake::start(&dir, split_rules(json!({})));
-    let out = forks(&dir, &fake, &["--cut", "own"], "SPLIT the work");
-    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
-
-    let parent = fake.find("SPLIT the work");
-    let child = fake.find("agent `north`");
-    let parent_messages = parent.messages();
-    let child_messages = child.messages();
-    assert_eq!(child_messages.len(), parent_messages.len() + 2);
-    assert_eq!(
-        &child_messages[..parent_messages.len()],
-        &parent_messages[..]
-    );
-    let arguments = child_messages[parent_messages.len()]["tool_calls"][0]["function"]["arguments"]
-        .as_str()
-        .unwrap();
-    assert!(arguments.contains("north"), "{arguments}");
-    assert!(
-        !arguments.contains("south"),
-        "the child saw its sibling's assignment: {arguments}"
-    );
-    prefix_is_identical(&fake);
-}
-
-#[test]
-fn cut_before_ends_at_the_message_before_the_task_call() {
+fn cut_before_ends_at_the_message_before_the_task_call_then_the_cached_shared_part() {
     let dir = workspace("cut-before");
     let fake = Fake::start(&dir, split_rules(json!({})));
     let out = forks(&dir, &fake, &["--cut", "before"], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
 
     let parent = fake.find("SPLIT the work");
-    let child = fake.find("agent `north`");
+    let north = fake.find("agent `north`");
+    let south = fake.find("agent `south`");
     let parent_messages = parent.messages();
-    let child_messages = child.messages();
-    assert_eq!(child_messages.len(), parent_messages.len() + 1);
+    for child in [&north, &south] {
+        let messages = child.messages();
+        assert_eq!(messages.len(), parent_messages.len() + 2);
+        assert_eq!(&messages[..parent_messages.len()], &parent_messages[..]);
+        assert!(
+            messages
+                .iter()
+                .all(|message| message["tool_calls"].is_null()),
+            "the child saw the parent's task call"
+        );
+        let shared = &messages[parent_messages.len()];
+        assert_eq!(shared["role"], "user");
+        let parts = shared["content"]
+            .as_array()
+            .expect("the shared part is content parts");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["cache_control"], json!({"type": "ephemeral"}));
+        assert!(
+            parts[0]["text"]
+                .as_str()
+                .unwrap()
+                .ends_with("`north`, `south`. Each is given what follows, written once for all of them, and then an assignment of its own.\n\nBoth of you work in the run directory."),
+            "{}",
+            parts[0]["text"]
+        );
+        assert_eq!(messages.last().unwrap()["role"], "user");
+        assert_eq!(
+            child.body["messages"]
+                .to_string()
+                .matches("cache_control")
+                .count(),
+            1,
+            "one breakpoint, after the shared part"
+        );
+    }
     assert_eq!(
-        &child_messages[..parent_messages.len()],
-        &parent_messages[..]
+        north.messages()[parent_messages.len()],
+        south.messages()[parent_messages.len()],
+        "the shared part differed between siblings"
     );
-    let tail = child_messages.last().unwrap();
-    assert_eq!(tail["role"], "user");
-    assert!(tail["content"].as_str().unwrap().contains("agent `north`"));
     assert!(
-        child_messages
-            .iter()
-            .all(|message| message["tool_calls"].is_null()),
-        "the child saw the parent's task call"
+        north
+            .last()
+            .starts_with("You are agent `north`.\n\nYour assignment:\nreport the note")
+    );
+    assert!(
+        south
+            .last()
+            .starts_with("You are agent `south`.\n\nYour assignment:\nlist the directory")
     );
     prefix_is_identical(&fake);
 }
 
+/// OpenRouter documents a cache breakpoint on a text part of a message, not on
+/// a tool result, and the `result` tail needs one on a tool result.
 #[test]
-fn fresh_children_get_the_system_prompt_and_their_assignment_only() {
-    let dir = workspace("fresh");
+fn openrouter_refuses_the_result_tail() {
+    let dir = workspace("cut-result-openrouter");
     let fake = Fake::start(&dir, split_rules(json!({})));
-    let out = forks(&dir, &fake, &["--mode", "fresh"], "SPLIT the work");
+    let out = forks(&dir, &fake, &["--cut", "result"], "SPLIT the work");
+    assert_ne!(out.code, 0, "{}", out.stdout);
+    assert!(
+        out.stderr.contains("--cut result") && out.stderr.contains("--backend claude"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(fake.requests().len(), 0);
+}
+
+/// `--cut call` put the child's own part in a tool result, and the child
+/// read it as a broken call. It is gone.
+#[test]
+fn there_is_no_call_tail() {
+    let dir = workspace("cut-call");
+    let fake = Fake::start(&dir, split_rules(json!({})));
+    let out = forks(&dir, &fake, &["--cut", "call"], "SPLIT the work");
+    assert_ne!(out.code, 0, "{}", out.stdout);
+    assert!(
+        out.stderr
+            .contains("unknown --cut call; expected result or before"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Claude backend, `before` tail: the parent's messages before its `task`
+/// call, and the shared part and the child's own part as two text blocks in
+/// the same user message as the parent's last one, the breakpoint on the
+/// shared block.
+#[test]
+fn on_claude_the_before_tail_is_two_blocks_after_the_parents_last_one() {
+    let dir = workspace("claude-before");
+    let db = opencode_db(&dir, 3_600_000);
+    let fake = Fake::start(&dir, split_rules(json!({})));
+    let out = forks_on_claude(&dir, &fake, &db, &["--cut", "before"], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
 
-    let child = fake.find("agent `north`");
-    assert_eq!(child.messages().len(), 2);
-    assert_eq!(child.messages()[1]["role"], "user");
-    prefix_is_identical(&fake);
+    let requests = fake.requests();
+    let parent = &requests[0].body["messages"];
+    let child = |name: &str| {
+        requests
+            .iter()
+            .find(|r| last_block_text(r).starts_with(&format!("You are agent `{name}`")))
+            .unwrap_or_else(|| panic!("no first request from {name}"))
+    };
+    let (north, south) = (child("north"), child("south"));
+    for request in [north, south] {
+        let messages = request.body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        let blocks = messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0], parent[0]["content"][0], "the parent's own block");
+        assert_eq!(blocks[1]["type"], "text");
+        assert_eq!(blocks[1]["cache_control"], json!({"type": "ephemeral"}));
+        assert!(blocks[2]["cache_control"].is_null());
+        assert_eq!(
+            request.body["messages"]
+                .to_string()
+                .matches("cache_control")
+                .count(),
+            1
+        );
+    }
+    assert_eq!(
+        north.body["messages"][0]["content"][1], south.body["messages"][0]["content"][1],
+        "the shared part differed between siblings"
+    );
+}
+
+/// Every level of forking leaves one cache breakpoint in its descendants'
+/// contexts, and Anthropic takes four per request, one of them the automatic
+/// one at the end. So no agent may be more than three levels down.
+#[test]
+fn a_depth_limit_past_three_is_refused() {
+    let dir = workspace("depth-four");
+    let fake = Fake::start(&dir, split_rules(json!({})));
+    let out = forks(&dir, &fake, &["--max-depth", "4"], "SPLIT the work");
+    assert_ne!(out.code, 0, "{}", out.stdout);
+    assert!(out.stderr.contains("--max-depth 4"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("four cache breakpoints"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(fake.requests().len(), 0);
+}
+
+/// Identity `task`: no new agent. The same conversation carries on with the
+/// next task, and only that one.
+#[test]
+fn identity_task_continues_as_the_same_agent() {
+    let dir = workspace("identity-task");
+    let mut rules = split_rules(json!({}));
+    rules[1]["when"] = json!("^Your next task, and only this one, is `north`");
+    rules[3]["when"] = json!("^Your next task, and only this one, is `south`");
+    let fake = Fake::start(&dir, rules);
+    let out = forks(&dir, &fake, &["--identity", "task"], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+
+    let north = fake.find("is `north`");
+    let messages = north.messages();
+    let shared = messages[messages.len() - 2]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        shared.contains("each as its own continuation of this conversation: `north`, `south`."),
+        "{shared}"
+    );
+    assert!(
+        north
+            .last()
+            .starts_with("Your next task, and only this one, is `north`:\nreport the note"),
+        "{}",
+        north.last()
+    );
+    assert!(!north.body["messages"].to_string().contains("You are agent"));
+}
+
+/// A fresh child has no parent context: the system prompt, then the shared
+/// part (cached, so fresh siblings share it too) and its own.
+#[test]
+fn fresh_children_get_the_system_prompt_the_shared_part_and_their_own() {
+    let dir = workspace("fresh");
+    let db = opencode_db(&dir, 3_600_000);
+    let fake = Fake::start(&dir, split_rules(json!({})));
+    let out = forks_on_claude(&dir, &fake, &db, &["--mode", "fresh"], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+
+    let requests = fake.requests();
+    let firsts: Vec<&Req> = requests
+        .iter()
+        .filter(|r| last_block_text(r).starts_with("You are agent `"))
+        .collect();
+    assert_eq!(firsts.len(), 2);
+    for request in &firsts {
+        let messages = request.body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        let blocks = messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["cache_control"], json!({"type": "ephemeral"}));
+        assert!(
+            blocks[0]["text"]
+                .as_str()
+                .unwrap()
+                .ends_with("Both of you work in the run directory.")
+        );
+    }
+    assert_eq!(
+        firsts[0].body["messages"][0]["content"][0],
+        firsts[1].body["messages"][0]["content"][0]
+    );
+}
+
+/// A `task` call must carry `shared`, even when it is empty.
+#[test]
+fn a_task_call_without_shared_is_answered_with_an_error_result() {
+    let dir = workspace("no-shared");
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"agents": [
+                {"name": "a", "task": "one"}
+            ]}}]},
+            {"when": "`shared`", "text": "root gave up on splitting"}
+        ]),
+    );
+    let out = forks(&dir, &fake, &[], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("task rejected"), "{}", out.stdout);
+    assert_eq!(
+        fake.find("`shared`").messages().last().unwrap()["role"],
+        "tool"
+    );
 }
 
 #[test]
@@ -633,31 +815,27 @@ fn the_spend_cap_is_a_fault_before_the_request_that_would_break_it() {
 fn the_cap_counts_the_requests_already_in_flight() {
     let dir = workspace("cap-in-flight");
     let mut rules = split_rules(json!({ "hold": true }));
-    let usage = json!({
+    rules.as_array_mut().unwrap()[0]["usage"] = json!({
         "prompt_tokens": 100, "completion_tokens": 10, "cost": 0.02,
         "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 100}
     });
-    rules.as_array_mut().unwrap()[0]["usage"] = usage.clone();
-    rules.as_array_mut().unwrap()[1]["usage"] = usage;
     let fake = Fake::start(&dir, rules);
 
     let mut live = Live::start(&dir, &fake, "run", &["--max-cost", "0.04"], Some("SPLIT"));
-    // The root's request cost $0.02 and one child's is in flight, unanswered.
-    // The second child must be refused on what that one might cost.
-    fake.await_requests(2);
-    live.wait_for("spend cap reached");
+    // The root's request cost $0.02, and north's first cost nothing. Then
+    // north's second and south's first go out together: whichever is sent
+    // first is held unanswered, and the other must be refused on what that
+    // one might cost.
+    fake.await_requests(3);
+    live.wait_for("1 request(s) in flight at up to $0.0200 each");
     fake.release();
     let (transcript, code) = live.finish();
 
-    assert_ne!(code, 0);
-    assert!(
-        transcript.contains("in flight at up to"),
-        "the cap did not account for work in flight:\n{transcript}"
-    );
+    assert_ne!(code, 0, "{transcript}");
     assert_eq!(
         fake.requests().len(),
-        2,
-        "the second child was sent while the first child's cost was still unknown"
+        3,
+        "a child was sent while its sibling's cost was still unknown"
     );
 }
 
@@ -690,10 +868,10 @@ fn an_over_deep_task_call_is_an_error_result_not_a_missing_tool() {
     let fake = Fake::start(
         &dir,
         json!([
-            {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"shared": "", "agents": [
                 {"name": "middle", "task": "split again"}
             ]}}]},
-            {"when": "^You are agent `middle`", "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"when": "^You are agent `middle`", "tool_calls": [{"name": "task", "arguments": {"shared": "", "agents": [
                 {"name": "leaf", "task": "one level too deep"}
             ]}}]},
             {"when": "levels below the root", "text": "middle did it itself"},
@@ -721,7 +899,7 @@ fn an_invalid_task_call_is_answered_with_an_error_result() {
     let fake = Fake::start(
         &dir,
         json!([
-            {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"agents": [
+            {"when": "SPLIT", "tool_calls": [{"name": "task", "arguments": {"shared": "", "agents": [
                 {"name": "a", "task": "one", "after": ["b"]},
                 {"name": "b", "task": "two", "after": ["a"]}
             ]}}]},
@@ -745,7 +923,7 @@ fn cancel_waits_for_what_is_in_flight_then_closes() {
     let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
     let mut live = Live::start(&dir, &fake, "chat", &[], None);
     live.send("SPLIT the work");
-    fake.await_requests(3);
+    fake.await_requests(4);
     live.interrupt();
     live.wait_for("cancelling");
     // The responses the provider was holding come back, and are kept.
@@ -756,7 +934,7 @@ fn cancel_waits_for_what_is_in_flight_then_closes() {
 
     assert_eq!(
         fake.requests().len(),
-        3,
+        4,
         "a request started after the cancel"
     );
     let summary: Value = serde_json::from_str(
@@ -874,16 +1052,16 @@ fn bench_rules(tree: &Tree) -> Value {
         json!({"when": "Read `ledgers/POLICY.md` first",
                "tool_calls": [{"name": "read_file", "arguments": {"path": "ledgers/POLICY.md"}}]}),
         json!({"when": "Ledger and Reconciliation Policy", "times": 1,
-               "tool_calls": [{"name": "task", "arguments": {"agents": [
+               "tool_calls": [{"name": "task", "arguments": {"shared": "The ledgers are under ledgers/.", "agents": [
             {"name": "maunga", "task": "total the maunga branches"},
             {"name": "awa", "task": "total the awa branches"}
         ]}}]}),
-        json!({"when": "^You are agent `maunga`", "tool_calls": [{"name": "task", "arguments": {"agents": [
+        json!({"when": "^You are agent `maunga`", "tool_calls": [{"name": "task", "arguments": {"shared": "The ledgers are under ledgers/.", "agents": [
             {"name": "kowhai", "task": leaf_task("maunga", "kowhai", tree)},
             {"name": "rimu", "task": leaf_task("maunga", "rimu", tree)},
             {"name": "totara", "task": leaf_task("maunga", "totara", tree)}
         ]}}]}),
-        json!({"when": "^You are agent `awa`", "tool_calls": [{"name": "task", "arguments": {"agents": [
+        json!({"when": "^You are agent `awa`", "tool_calls": [{"name": "task", "arguments": {"shared": "The ledgers are under ledgers/.", "agents": [
             {"name": "tui", "task": leaf_task("awa", "tui", tree)},
             {"name": "kea", "task": leaf_task("awa", "kea", tree)},
             weka_entry(tree)
@@ -898,7 +1076,7 @@ fn bench_rules(tree: &Tree) -> Value {
         rules.insert(
             3,
             json!({"when": "Error: ledgers/policy.md", "times": 1,
-                   "tool_calls": [{"name": "task", "arguments": {"agents": [
+                   "tool_calls": [{"name": "task", "arguments": {"shared": "The ledgers are under ledgers/.", "agents": [
                 {"name": "kowhai", "task": leaf_task("maunga", "kowhai", tree)},
                 {"name": "rimu", "task": leaf_task("maunga", "rimu", tree)},
                 {"name": "totara", "task": leaf_task("maunga", "totara", tree)}
@@ -916,7 +1094,7 @@ fn bench_rules(tree: &Tree) -> Value {
         rules.insert(
             3,
             json!({"when": "Ledger and Reconciliation Policy", "times": 1,
-                   "tool_calls": [{"name": "task", "arguments": {"agents": [
+                   "tool_calls": [{"name": "task", "arguments": {"shared": "The ledgers are under ledgers/.", "agents": [
                 {"name": "kowhai", "task": "total ledgers/maunga/kowhai.txt"},
                 {"name": "rimu", "task": "total ledgers/maunga/rimu.txt"},
                 {"name": "totara", "task": "total ledgers/maunga/totara.txt"}
@@ -952,7 +1130,7 @@ fn bench_rules(tree: &Tree) -> Value {
     }
     if tree.leaf_forks_anonymously {
         rules.push(json!({"when": "^You are agent `extra`",
-                          "tool_calls": [{"name": "task", "arguments": {"agents": [
+                          "tool_calls": [{"name": "task", "arguments": {"shared": "The ledgers are under ledgers/.", "agents": [
             {"name": "helper", "task": "look at the ledgers for me"}
         ]}}]}));
         rules.push(json!({"when": "levels below the root", "text": "extra: 0.00"}));
@@ -1314,6 +1492,420 @@ fn rescoring_a_recorded_benchmark_reproduces_its_scores() {
     assert!(rescored.contains("[unchanged]"), "{rescored}");
 }
 
+/// The benchmark runs on the Claude subscription end to end, and `rescore`
+/// reads the Messages API's wire format. Both count the later siblings that
+/// read the shared part from the cache: one did when its first request read
+/// more from the cache than its sibling that read the least, which is the one
+/// that went first and wrote it.
+#[test]
+fn the_benchmark_runs_on_claude_and_counts_shared_part_cache_hits() {
+    let (correct, _) = learn_fixture("bench-learn-claude");
+    let mut plan = tree(correct);
+    plan.over_reach = true;
+    plan.re_reads_policy = true;
+    let mut rules = bench_rules(&plan);
+    let first_read = [
+        ("maunga", 1000),
+        ("awa", 1500),
+        ("kowhai", 2000),
+        ("rimu", 2600),
+        ("totara", 2600),
+        ("tui", 2000),
+        ("kea", 2600),
+        ("weka", 2600),
+    ];
+    for rule in rules.as_array_mut().unwrap() {
+        let when = rule["when"].as_str().unwrap_or("").to_string();
+        if let Some((_, read)) = first_read
+            .iter()
+            .find(|(name, _)| when == format!("^You are agent `{name}`"))
+        {
+            rule["usage"] = json!({"input_tokens": 3, "cache_creation_input_tokens": 400,
+                                   "cache_read_input_tokens": read, "output_tokens": 20});
+        }
+    }
+    let dir = workspace("bench-claude");
+    let db = opencode_db(&dir, 3_600_000);
+    let fake = Fake::start(&dir, rules);
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("bench")
+        .args(["--backend", "claude"])
+        .arg("--base-url")
+        .arg(format!("http://{}", fake.addr))
+        .arg("--credentials")
+        .arg(&db)
+        .args(["--reps", "1"])
+        .arg("--runs-dir")
+        .arg(dir.join("runs"))
+        .output()
+        .expect("run forks bench");
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        output.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains("leaf over-reach 2/6  region over-reach 0/2  policy re-reads 2/8  totals ok"),
+        "{text}"
+    );
+    assert!(text.contains("shared hits 5/5 (2900 tokens)"), "{text}");
+
+    let bench_dir = text
+        .lines()
+        .find_map(|line| line.strip_prefix("benchmark in "))
+        .map(PathBuf::from)
+        .expect("bench directory line");
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("rescore")
+        .arg(&bench_dir)
+        .output()
+        .expect("run forks rescore");
+    let rescored = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        output.status.success(),
+        "{rescored}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        rescored.contains(
+            "leaf 2/6 region 0/2 policy 2/8 structure ok totals ok   [unchanged]   shared hits 5/5"
+        ),
+        "rescore disagreed with the run it replayed:\n{rescored}"
+    );
+    assert!(rescored.contains("[unchanged]"), "{rescored}");
+}
+
+// ------------------------------------------------------ projects benchmark
+
+/// Every checkout under a projects fixture's `work/`, read from disk the way
+/// `git` would: project → checkout → the branch its `HEAD` names.
+fn projects_truth(bench_dir: &Path) -> BTreeMap<String, BTreeMap<String, String>> {
+    let dirs = |path: &Path| {
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.is_dir())
+            .collect();
+        dirs.sort();
+        dirs
+    };
+    let name = |path: &Path| path.file_name().unwrap().to_string_lossy().to_string();
+    let mut truth = BTreeMap::new();
+    for project in dirs(&bench_dir.join("fixture/work")) {
+        let mut checkouts = BTreeMap::new();
+        for checkout in dirs(&project) {
+            let git = checkout.join(".git");
+            let head = if git.is_dir() {
+                git.join("HEAD")
+            } else if git.is_file() {
+                let pointer = std::fs::read_to_string(&git).unwrap();
+                checkout
+                    .join(pointer.trim().strip_prefix("gitdir: ").unwrap())
+                    .join("HEAD")
+            } else {
+                continue;
+            };
+            let head = std::fs::read_to_string(head).unwrap();
+            let branch = head.trim().strip_prefix("ref: refs/heads/").unwrap();
+            checkouts.insert(name(&checkout), branch.to_string());
+        }
+        truth.insert(name(&project), checkouts);
+    }
+    truth
+}
+
+fn run_projects_bench(name: &str, rules: Value) -> (String, PathBuf) {
+    let dir = workspace(name);
+    let fake = Fake::start(&dir, rules);
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("bench")
+        .args(["--task", "projects", "--backend", "openrouter"])
+        .arg("--base-url")
+        .arg(fake.base_url())
+        .args(["--grid", "fake@", "--reps", "1"])
+        .arg("--runs-dir")
+        .arg(dir.join("runs"))
+        .output()
+        .expect("run forks bench");
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        output.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bench_dir = text
+        .lines()
+        .find_map(|line| line.strip_prefix("benchmark in "))
+        .map(PathBuf::from)
+        .expect("bench directory line");
+    (text, bench_dir)
+}
+
+/// The fixture is deterministic, so one throwaway run is enough to learn it.
+fn learn_projects(name: &str) -> BTreeMap<String, BTreeMap<String, String>> {
+    let (_, bench_dir) = run_projects_bench(
+        name,
+        json!([{"when": "^My clones are under", "text": "nothing"}]),
+    );
+    projects_truth(&bench_dir)
+}
+
+#[derive(Default)]
+struct ProjectsPlan {
+    /// `datacentral` splits its work again.
+    resplit: bool,
+    /// `ticker` lists `work/gta`.
+    reach: bool,
+    /// `nzxcom` reports a branch for one of `gta`'s clones.
+    claim: bool,
+    /// The root reports a worktree with the branch of the clone it belongs to.
+    worktree_as_clone: bool,
+    /// The root counts one clone too many in `datacentral`.
+    miscount: bool,
+    /// The root lists a look-alike, saying it is not a clone.
+    look_alike_named: bool,
+    /// `gta` makes a `task` call with no agents in it, which is refused.
+    empty_task_call: bool,
+}
+
+fn clone_lines(project: &str, checkouts: &BTreeMap<String, String>) -> Vec<String> {
+    checkouts
+        .iter()
+        .map(|(checkout, branch)| format!("{project}/{checkout}: {branch}"))
+        .collect()
+}
+
+/// A scripted projects run. Each project agent lists its own directory and
+/// reports its clones; the rule that answers that listing matches the first
+/// checkout's name with a trailing `/`, which only a listing contains.
+fn projects_rules(
+    truth: &BTreeMap<String, BTreeMap<String, String>>,
+    plan: &ProjectsPlan,
+) -> Value {
+    let agents: Vec<Value> = truth
+        .keys()
+        .map(|project| json!({"name": project, "task": format!("Survey work/{project}.")}))
+        .collect();
+    let mut rules = vec![
+        json!({"when": "^My clones are under", "tool_calls": [{"name": "task",
+        "arguments": {"shared": "Read each clone's branch from its HEAD.", "agents": agents}}]}),
+    ];
+    for (project, checkouts) in truth {
+        let mut report = clone_lines(project, checkouts);
+        if plan.claim && project == "nzxcom" {
+            report.push("gta-mcp: main".to_string());
+        }
+        let report = report.join("\n");
+        let first = format!("{}/", checkouts.keys().next().unwrap());
+        let me = format!("^You are agent `{project}`");
+        if plan.resplit && project == "datacentral" {
+            rules.push(json!({"when": me, "tool_calls": [{"name": "task", "arguments": {"shared": "", "agents": [
+                {"name": "dc-first", "task": "the first half"},
+                {"name": "dc-second", "task": "the second half"}]}}]}));
+            rules.push(json!({"when": "^You are agent `dc-first`", "text": "first half done"}));
+            rules.push(json!({"when": "^You are agent `dc-second`", "text": "second half done"}));
+            rules.push(json!({"when": "## `dc-first`", "text": report}));
+            continue;
+        }
+        let mut lists =
+            vec![json!({"name": "list_dir", "arguments": {"path": format!("work/{project}")}})];
+        if plan.reach && project == "ticker" {
+            lists.insert(
+                0,
+                json!({"name": "list_dir", "arguments": {"path": "work/gta"}}),
+            );
+        }
+        if plan.empty_task_call && project == "gta" {
+            rules.push(json!({"when": me, "tool_calls": [{"name": "task",
+                "arguments": {"shared": "placeholder", "agents": []}}]}));
+            rules.push(json!({"when": "`agents` was empty", "tool_calls": lists}));
+        } else {
+            rules.push(json!({"when": me, "tool_calls": lists}));
+        }
+        rules.push(json!({"when": first, "text": report}));
+    }
+    // Summaries share the `<project>:` shape with the counts.
+    let mut block: Vec<String> = truth
+        .keys()
+        .map(|project| format!("{project}: mostly review follow-ups"))
+        .collect();
+    for (project, checkouts) in truth {
+        let mut lines = clone_lines(project, checkouts);
+        if plan.worktree_as_clone && project == "ticker" {
+            let main = checkouts["tk-feed-v2"].clone();
+            for line in lines.iter_mut() {
+                if line.starts_with("ticker/tk-feed-v2-bench:") {
+                    *line = format!("ticker/tk-feed-v2-bench: {main}");
+                }
+            }
+        }
+        if plan.look_alike_named && project == "datacentral" {
+            lines.push("datacentral/dc-1402-archive: (not a clone, no .git)".to_string());
+        }
+        block.extend(lines);
+    }
+    for (project, checkouts) in truth {
+        let count = checkouts.len() + usize::from(plan.miscount && project == "datacentral");
+        block.push(format!("{project}: {count}"));
+    }
+    rules.push(json!({"when": "Every agent you launched has finished", "text": block.join("\n")}));
+    Value::Array(rules)
+}
+
+/// Clones with a `.git` directory, worktrees whose `.git` is a file, and
+/// directories that only look like clones. The branch is in `HEAD`: a
+/// clone's `config` also lists `main`.
+#[test]
+fn the_projects_fixture_is_clones_worktrees_and_look_alikes() {
+    let (text, bench_dir) = run_projects_bench(
+        "projects-fixture",
+        json!([{"when": "^My clones are under", "text": "nothing"}]),
+    );
+    assert!(
+        text.contains("fixture: datacentral=25 gta=2 nzxcom=3 ticker=4"),
+        "{text}"
+    );
+    let truth = projects_truth(&bench_dir);
+    let sizes: Vec<(&str, usize)> = truth.iter().map(|(p, c)| (p.as_str(), c.len())).collect();
+    assert_eq!(
+        sizes,
+        [
+            ("datacentral", 25),
+            ("gta", 2),
+            ("nzxcom", 3),
+            ("ticker", 4)
+        ]
+    );
+    let work = bench_dir.join("fixture/work");
+    assert!(work.join("ticker/tk-feed-v2-bench/.git").is_file());
+    assert_eq!(truth["ticker"]["tk-feed-v2-bench"], "MC-tk-95-bench");
+    assert_eq!(truth["datacentral"]["dc-1655-satellite-tls"], "main");
+    let config = std::fs::read_to_string(work.join("ticker/tk-auth/.git/config")).unwrap();
+    assert!(config.contains("[branch \"main\"]") && config.contains("[branch \"MC-tk-91-oauth\"]"));
+    for decoy in [
+        "datacentral/notes",
+        "datacentral/dc-scratch.ignore",
+        "datacentral/dc-1402-archive",
+        "ticker/ticker-docs",
+        "gta/gta-mcp.bak",
+    ] {
+        assert!(work.join(decoy).is_dir(), "{decoy}");
+        assert!(!work.join(decoy).join(".git").exists(), "{decoy}");
+    }
+    assert!(!text.contains("fixture totals"), "{text}");
+}
+
+#[test]
+fn the_projects_benchmark_scores_a_disciplined_tree_clean_and_correct() {
+    let truth = learn_projects("projects-learn-clean");
+    let (text, _) = run_projects_bench(
+        "projects-clean",
+        projects_rules(&truth, &ProjectsPlan::default()),
+    );
+    assert!(
+        text.contains("structure ok  project over-reach 0/4  branches right 34/34  counts right 4/4  answer ok"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| project over-reach | branches right | counts right |"),
+        "{text}"
+    );
+}
+
+/// Each of the three ways out of a project is over-reach: splitting it again,
+/// listing another project's directory, and reporting another project's
+/// clone. `rescore` reaches the same verdict.
+/// A `task` call that launched nothing — refused for naming no agents — is
+/// not a re-split.
+#[test]
+fn a_refused_empty_task_call_is_not_a_re_split() {
+    let truth = learn_projects("projects-learn-empty");
+    let plan = ProjectsPlan {
+        empty_task_call: true,
+        ..ProjectsPlan::default()
+    };
+    let (text, _) = run_projects_bench("projects-empty", projects_rules(&truth, &plan));
+    assert!(
+        text.contains("structure ok  project over-reach 0/4  branches right 34/34"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_re_split_a_reach_and_a_claim_are_each_over_reach() {
+    let truth = learn_projects("projects-learn-reach");
+    let plan = ProjectsPlan {
+        resplit: true,
+        reach: true,
+        claim: true,
+        ..ProjectsPlan::default()
+    };
+    let (text, bench_dir) = run_projects_bench("projects-reach", projects_rules(&truth, &plan));
+    assert!(
+        text.contains("structure WRONG  project over-reach 3/4  branches right 34/34  counts right 4/4  answer ok"),
+        "{text}"
+    );
+    let summary: Value =
+        serde_json::from_str(&std::fs::read_to_string(bench_dir.join("trials.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        summary[0]["overreached"],
+        json!(["root › datacentral", "root › nzxcom", "root › ticker"])
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_forks"))
+        .arg("rescore")
+        .arg(&bench_dir)
+        .output()
+        .expect("run forks rescore");
+    let rescored = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(output.status.success(), "{rescored}");
+    assert!(
+        rescored.contains(
+            "project 3/4 branches 34/34 counts 4/4 structure WRONG answer ok   [unchanged]"
+        ),
+        "{rescored}"
+    );
+}
+
+/// Each is a wrong answer on its own: a worktree reported with its clone's
+/// branch, and one clone too many. A look-alike named as not a clone is
+/// not.
+#[test]
+fn a_worktree_given_its_clones_branch_and_a_miscount_are_each_wrong() {
+    let truth = learn_projects("projects-learn-wrong");
+    for (name, plan, expected) in [
+        (
+            "projects-worktree",
+            ProjectsPlan {
+                worktree_as_clone: true,
+                ..ProjectsPlan::default()
+            },
+            "branches right 33/34  counts right 4/4  answer WRONG",
+        ),
+        (
+            "projects-miscount",
+            ProjectsPlan {
+                miscount: true,
+                ..ProjectsPlan::default()
+            },
+            "branches right 34/34  counts right 3/4  answer WRONG",
+        ),
+        (
+            "projects-look-alike",
+            ProjectsPlan {
+                look_alike_named: true,
+                ..ProjectsPlan::default()
+            },
+            "branches right 34/34  counts right 4/4  answer ok",
+        ),
+    ] {
+        let (text, _) = run_projects_bench(name, projects_rules(&truth, &plan));
+        assert!(text.contains(expected), "{name}: {text}");
+    }
+}
+
 // ------------------------------------------------- majors and moderates
 
 /// Ctrl-C at the chat prompt, with nothing running, closes at once.
@@ -1365,7 +1957,7 @@ fn a_second_interrupt_force_cancels() {
     let dir = workspace("second-interrupt");
     let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
     let mut live = Live::start(&dir, &fake, "run", &[], Some("SPLIT the work"));
-    fake.await_requests(3);
+    fake.await_requests(4);
     live.interrupt();
     live.wait_for("Ctrl-C again to force-cancel");
     live.interrupt();
@@ -1459,7 +2051,7 @@ fn chat_does_not_spin_after_stdin_closes() {
     let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
     let mut live = Live::start(&dir, &fake, "chat", &[], None);
     live.send("SPLIT the work");
-    fake.await_requests(3);
+    fake.await_requests(4);
     live.close_stdin();
 
     let pid = live.pid();
@@ -1639,7 +2231,7 @@ fn a_provider_fault_invalidates_a_trial_while_a_spend_cap_does_not() {
     );
     // Every rate is withheld rather than reported as a row of zeroes.
     assert!(
-        text.contains("| 1 | 1 | — | — | — | — | — | — | — | — | — | — |"),
+        text.contains(&format!("| 1 | 1 |{}\n", " — |".repeat(12))),
         "an invalid trial was folded into the rates:\n{text}"
     );
 
@@ -1684,7 +2276,7 @@ fn the_face_shows_every_message_exactly_as_it_enters_a_context() {
         json!([
             {"when": "^SPLIT", "text": "Looking first.",
              "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}},
-                            {"name": "task", "arguments": {"agents": [
+                            {"name": "task", "arguments": {"shared": "The ledgers are under ledgers/.", "agents": [
                 {"name": "north", "task": "report the note"}
              ]}}]},
             {"when": "^You are agent `north`", "text": "north line one\nnorth line two"},
@@ -1699,10 +2291,10 @@ fn the_face_shows_every_message_exactly_as_it_enters_a_context() {
         "root                         [1 user]\n    │ SPLIT the work",
         "root                         [2 assistant]\n    │ Looking first.",
         "root                         [2 assistant tool_use list_dir call_0_0]\n    │ {\"path\":\".\"}",
-        "root                         [2 assistant tool_use task call_0_1]\n    │ {\"agents\":[{\"name\":\"north\",\"task\":\"report the note\"}]}",
+        "root                         [2 assistant tool_use task call_0_1]\n    │ {\"shared\":\"The ledgers are under ledgers/.\",\"agents\":[{\"name\":\"north\",\"task\":\"report the note\"}]}",
         "root                         [3 tool list_dir call_0_0]\n    │ note.txt",
-        "root › north                 context: root's messages 0–1, then\nroot › north                 [2 user]\n    │ You are agent `north`.\n    │\n    │ Your assignment:\n    │ report the note",
-        "root › north                 [3 assistant]\n    │ north line one\n    │ north line two",
+        "root › north                 context: root's messages 0–1, then\nroot › north                 [2 user] ← cache breakpoint\n    │ This work was handed to these agents, running at the same time: `north`. Each is given what follows, written once for all of them, and then an assignment of its own.\n    │\n    │ The ledgers are under ledgers/.\nroot › north                 [3 user]\n    │ You are agent `north`.\n    │\n    │ Your assignment:\n    │ report the note",
+        "root › north                 [4 assistant]\n    │ north line one\n    │ north line two",
         "root                         [4 tool task call_0_1]\n    │ Every agent you launched has finished.",
         "\n    │ ## `north` — completed\n    │ north line one\n    │ north line two",
         "root                         [5 assistant]\n    │ First paragraph of the answer.\n    │\n    │ Second paragraph of the answer.",
@@ -1713,6 +2305,13 @@ fn the_face_shows_every_message_exactly_as_it_enters_a_context() {
             out.stdout
         );
     }
+    let context =
+        std::fs::read_to_string(newest(&dir.join("runs")).join("agents/root.north.md")).unwrap();
+    assert!(
+        context
+            .contains("\n## 2 user\n\n(cache breakpoint)\n\nThis work was handed to these agents"),
+        "{context}"
+    );
 }
 
 #[test]
@@ -1764,7 +2363,7 @@ fn tree_shows_how_long_a_running_agent_has_been_going() {
     let fake = Fake::start(&dir, split_rules(json!({ "hold": true })));
     let mut live = Live::start(&dir, &fake, "chat", &[], None);
     live.send("SPLIT the work");
-    fake.await_requests(3);
+    fake.await_requests(4);
     // Testing elapsed time needs time to elapse; a quarter of a second is
     // enough to tell 0.0s from a number.
     std::thread::sleep(Duration::from_millis(250));
@@ -1844,13 +2443,32 @@ fn forks_on_claude(dir: &Path, fake: &Fake, db: &Path, extra: &[&str], task: &st
     }
 }
 
+/// The text of the last block of a Messages API request's last message: a
+/// text block's text, or a tool result's content.
+fn last_block_text(request: &Req) -> String {
+    let block = &request.messages().last().unwrap()["content"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    block["text"]
+        .as_str()
+        .or(block["content"].as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 /// Max's Claude subscription, with the two things Anthropic needs to accept
-/// its token: the OAuth beta, and Claude Code's identity as `system[0]`. A
-/// fork is still its parent's bytes: on this API one turn's tool results
-/// travel together in one user message, and the child's copy of that
-/// message differs from its parent's only in the `task` slot.
+/// its token: the OAuth beta, and Claude Code's identity as `system[0]`.
+///
+/// The `result` tail: a fork is its parent's bytes through the `task` call,
+/// and then one user message answering that turn. The `task` call's answer is
+/// the shared part, with the cache breakpoint on it — the last of the turn's
+/// tool results, so everything up to it is the same for every sibling — and
+/// the child's own part follows as a text block.
 #[test]
-fn the_claude_backend_sends_the_subscription_token_and_forks_share_bytes() {
+fn the_claude_backend_sends_the_subscription_token_and_the_result_tail() {
     let dir = workspace("claude-backend");
     let db = opencode_db(&dir, 3_600_000);
     let fake = Fake::start(
@@ -1860,14 +2478,16 @@ fn the_claude_backend_sends_the_subscription_token_and_forks_share_bytes() {
              "usage": {"input_tokens": 10, "cache_creation_input_tokens": 200,
                        "cache_read_input_tokens": 3000, "output_tokens": 7},
              "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}},
-                            {"name": "task", "arguments": {"agents": [
-                {"name": "north", "task": "report the note"}
+                            {"name": "task", "arguments": {"shared": "SHARED RULES", "agents": [
+                {"name": "north", "task": "report the note"},
+                {"name": "south", "task": "list the directory"}
              ]}}]},
             {"when": "^You are agent `north`", "text": "north says kowhai"},
+            {"when": "^You are agent `south`", "text": "south says tui"},
             {"when": "Every agent you launched has finished", "text": "done"}
         ]),
     );
-    let out = forks_on_claude(&dir, &fake, &db, &["--cut", "full"], "SPLIT the work");
+    let out = forks_on_claude(&dir, &fake, &db, &["--cut", "result"], "SPLIT the work");
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
     assert!(
         out.stdout.contains(
@@ -1884,7 +2504,7 @@ fn the_claude_backend_sends_the_subscription_token_and_forks_share_bytes() {
     );
 
     let requests = fake.requests();
-    assert_eq!(requests.len(), 3, "{}", out.stdout);
+    assert_eq!(requests.len(), 4, "{}", out.stdout);
     for request in &requests {
         assert_eq!(
             request.headers["authorization"],
@@ -1904,53 +2524,545 @@ fn the_claude_backend_sends_the_subscription_token_and_forks_share_bytes() {
             "system differed"
         );
         assert_eq!(body["tools"], requests[0].body["tools"], "tools differed");
-        assert_eq!(body["tools"][2]["name"], "task");
-        assert!(body["tools"][2]["input_schema"].is_object());
+        let task = &body["tools"][2];
+        assert_eq!(task["name"], "task");
+        assert_eq!(
+            task["input_schema"]["required"],
+            json!(["shared", "agents"])
+        );
+        assert!(task["input_schema"]["properties"]["shared"].is_object());
+        assert!(task["description"].as_str().unwrap().contains("`shared`"));
     }
 
     let messages = |request: &Req| request.body["messages"].as_array().unwrap().clone();
     let root = messages(&requests[0]);
-    let child = messages(&requests[1]);
-    let resumed = messages(&requests[2]);
+    let child = |name: &str| {
+        messages(
+            requests
+                .iter()
+                .find(|r| last_block_text(r).starts_with(&format!("You are agent `{name}`")))
+                .unwrap(),
+        )
+    };
+    let (north, south) = (child("north"), child("south"));
+    let resumed = messages(requests.last().unwrap());
+    for request in [&north, &south, &resumed] {
+        assert_eq!(request.len(), 3);
+        assert_eq!(
+            request[..1],
+            root[..],
+            "did not start from the root's bytes"
+        );
+        assert_eq!(
+            request[1], resumed[1],
+            "the copy of the `task` turn differs"
+        );
+        assert_eq!(request[2]["role"], "user");
+    }
     assert_eq!(
-        child[..1],
-        root[..],
-        "the child did not start from the root's bytes"
-    );
-    assert_eq!(resumed[..1], root[..]);
-    assert_eq!(
-        child[1], resumed[1],
-        "the child's copy of the `task` turn differs"
-    );
-    assert_eq!(
-        child[1]["content"],
+        north[1]["content"],
         json!([
             {"type": "thinking", "thinking": "Two files, so two agents.", "signature": "sig-fake"},
             {"type": "text", "text": "Looking first."},
             {"type": "tool_use", "id": "toolu_0_0", "name": "list_dir", "input": {"path": "."}},
             {"type": "tool_use", "id": "toolu_0_1", "name": "task",
-             "input": {"agents": [{"name": "north", "task": "report the note"}]}}
+             "input": {"shared": "SHARED RULES", "agents": [
+                 {"name": "north", "task": "report the note"},
+                 {"name": "south", "task": "list the directory"}]}}
         ])
     );
-    for (request, task_result) in [
-        (&child, "You are agent `north`."),
-        (&resumed, "Every agent you launched has finished."),
-    ] {
-        let results = request[2]["content"].as_array().unwrap();
-        assert_eq!(request.len(), 3);
-        assert_eq!(request[2]["role"], "user");
+
+    let tail = north[2]["content"].as_array().unwrap();
+    assert_eq!(tail.len(), 3, "{tail:?}");
+    assert_eq!(
+        tail[0],
+        json!({"type": "tool_result", "tool_use_id": "toolu_0_0", "content": "note.txt"})
+    );
+    assert_eq!(tail[1]["type"], "tool_result");
+    assert_eq!(tail[1]["tool_use_id"], "toolu_0_1");
+    assert_eq!(tail[1]["cache_control"], json!({"type": "ephemeral"}));
+    assert!(
+        tail[1]["content"]
+            .as_str()
+            .unwrap()
+            .ends_with("`north`, `south`. Each is given what follows, written once for all of them, and then an assignment of its own.\n\nSHARED RULES"),
+        "{}",
+        tail[1]["content"]
+    );
+    assert_eq!(tail[2]["type"], "text");
+    assert!(tail[2]["cache_control"].is_null());
+    assert!(
+        tail[2]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("You are agent `north`.\n\nYour assignment:\nreport the note")
+    );
+    let south_tail = south[2]["content"].as_array().unwrap();
+    assert_eq!(
+        south_tail[..2],
+        tail[..2],
+        "the shared part differed between siblings"
+    );
+    assert_ne!(south_tail[2], tail[2]);
+    for request in [&north, &south] {
         assert_eq!(
-            results[0],
-            json!({"type": "tool_result", "tool_use_id": "toolu_0_0", "content": "note.txt"})
-        );
-        assert_eq!(results[1]["tool_use_id"], "toolu_0_1");
-        assert!(
-            results[1]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with(task_result)
+            Value::Array(request.clone())
+                .to_string()
+                .matches("cache_control")
+                .count(),
+            1
         );
     }
+
+    // The parent is answered differently: every report, and no breakpoint.
+    let results = resumed[2]["content"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0], tail[0]);
+    assert!(
+        results[1]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("Every agent you launched has finished.")
+    );
+    assert!(
+        !Value::Array(resumed.clone())
+            .to_string()
+            .contains("cache_control")
+    );
+
+    // The face shows the tail as the child's messages, and which one the
+    // breakpoint is on.
+    assert!(
+        out.stdout.contains(
+            "root › north                 context: root's messages 0–3, then\nroot › north                 [4 tool list_dir toolu_0_0]\n    │ note.txt\nroot › north                 [5 tool task toolu_0_1] ← cache breakpoint\n    │ This work was handed"
+        ),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("\n    │ SHARED RULES\nroot › north                 [6 user]\n    │ You are agent `north`."), "{}", out.stdout);
+}
+
+// --------------------------------------------------------------- handoffs
+
+/// Attachments are read once, when the `task` call is made, and every child
+/// is shown them as `read_file` calls it did not make, after the shared part
+/// and before its own. They are shared bytes, so the breakpoint moves to the
+/// last of them.
+#[test]
+fn attachments_are_read_once_and_shown_to_every_child_as_calls_it_did_not_make() {
+    let dir = workspace("attachments");
+    let db = opencode_db(&dir, 3_600_000);
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "tool_calls": [{"name": "task", "arguments": {
+                "shared": "SHARED RULES", "attachments": ["note.txt"], "agents": [
+                {"name": "north", "task": "report the note"},
+                {"name": "south", "task": "list the directory"}]}}]},
+            {"when": "^You are agent `north`", "text": "north says kowhai"},
+            {"when": "^You are agent `south`", "text": "south says tui"},
+            {"when": "Every agent you launched has finished", "text": "done"}
+        ]),
+    );
+    let out = forks_on_claude(&dir, &fake, &db, &["--cut", "before"], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+
+    let requests = fake.requests();
+    let child = |name: &str| {
+        requests
+            .iter()
+            .find(|r| last_block_text(r).starts_with(&format!("You are agent `{name}`")))
+            .unwrap()
+            .body["messages"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let (north, south) = (child("north"), child("south"));
+    for messages in [&north, &south] {
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        assert!(
+            messages[0]["content"][1]["text"]
+                .as_str()
+                .unwrap()
+                .ends_with("SHARED RULES")
+        );
+        let call = &messages[1]["content"][0];
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"].as_array().unwrap().len(), 1);
+        assert_eq!(call["type"], "tool_use");
+        assert_eq!(call["name"], "read_file");
+        assert_eq!(call["input"], json!({"path": "note.txt"}));
+        let tail = messages[2]["content"].as_array().unwrap();
+        assert_eq!(
+            tail[0],
+            json!({"type": "tool_result", "tool_use_id": call["id"], "content": "a note\n",
+                   "cache_control": {"type": "ephemeral"}})
+        );
+        assert_eq!(tail[1]["type"], "text");
+        assert_eq!(
+            Value::Array(messages.clone())
+                .to_string()
+                .matches("cache_control")
+                .count(),
+            1
+        );
+    }
+    assert_eq!(north[..2], south[..2]);
+    assert_eq!(north[2]["content"][0], south[2]["content"][0]);
+    let resumed = &requests.last().unwrap().body["messages"];
+    assert!(!resumed.to_string().contains("a note\\n"), "{resumed}");
+
+    // The child did not make the call, so it is not scored as its read.
+    let summary: Value = serde_json::from_str(
+        &std::fs::read_to_string(newest(&dir.join("runs")).join("summary.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(summary["agents"][1]["tool_calls"], json!([]));
+    assert!(
+        out.stdout
+            .contains("root › north                 [4 assistant tool_use read_file "),
+        "{}",
+        out.stdout
+    );
+}
+
+/// A handover clears the agent's context. It starts again from the system
+/// prompt and its handoff: what it wrote for itself as user text, the files
+/// it attached as calls it did not make, and its next step as user text.
+/// The face and `agents/*.md` show both contexts and the seam.
+#[test]
+fn a_handover_starts_the_agent_again_from_the_system_prompt_and_its_handoff() {
+    let dir = workspace("handover");
+    let db = opencode_db(&dir, 3_600_000);
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "tool_calls": [{"name": "handover", "arguments": {
+                "context": "CONTEXT TEXT", "task": "NEXT STEP", "attachments": ["note.txt"]}}]},
+            {"when": "^Carry on from where you left off", "text": "done after the handover"}
+        ]),
+    );
+    let out = forks_on_claude(&dir, &fake, &db, &[], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+
+    let requests = fake.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].body["system"], requests[0].body["system"]);
+    let messages = requests[1].body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "{messages:?}");
+    assert_eq!(
+        messages[0],
+        json!({"role": "user", "content": [{"type": "text", "text":
+            "You are carrying on work from an earlier context of yours, which has been cleared. Before it was cleared, you wrote this handover for yourself:\n\nCONTEXT TEXT"}]})
+    );
+    assert_eq!(
+        messages[1]["content"][0]["input"],
+        json!({"path": "note.txt"})
+    );
+    let tail = messages[2]["content"].as_array().unwrap();
+    assert_eq!(tail[0]["content"], "a note\n");
+    assert_eq!(
+        tail[1],
+        json!({"type": "text", "text": "Carry on from where you left off. Your next step:\nNEXT STEP"})
+    );
+    assert!(
+        !requests[1].body["messages"]
+            .to_string()
+            .contains("cache_control")
+    );
+
+    assert!(
+        out.stdout.contains("root                         handed over: context 1 ended at message 3; context 2 is\nroot                         [0 system]"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("root                         [2 user]\n    │ You are carrying on work"),
+        "{}",
+        out.stdout
+    );
+    let context =
+        std::fs::read_to_string(newest(&dir.join("runs")).join("agents/root.md")).unwrap();
+    let old = context.find("# context 1, handed over").expect(&context);
+    let seam = context.find("-> toolu_0_0 handover").expect(&context);
+    let new = context.find("# context 2").expect(&context);
+    assert!(old < seam && seam < new, "{context}");
+    assert!(context[new..].contains("CONTEXT TEXT") && context[..new].contains("SPLIT the work"));
+}
+
+/// Past `--handover-at`, the harness tells the agent to hand over, once, as
+/// user text before its next request.
+#[test]
+fn past_the_handover_point_the_agent_is_told_to_hand_over() {
+    let dir = workspace("handover-at");
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}],
+             "usage": {"prompt_tokens": 5000, "completion_tokens": 10, "cost": 0.0,
+                       "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}},
+            {"when": "^Your context is 5000 tokens", "tool_calls": [{"name": "handover",
+                "arguments": {"context": "listed the directory", "task": "report it"}}]},
+            {"when": "^Carry on from where you left off", "text": "note.txt is there"}
+        ]),
+    );
+    let out = forks(&dir, &fake, &["--handover-at", "1000"], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    let requests = fake.requests();
+    assert_eq!(requests.len(), 3, "{}", out.stdout);
+    assert_eq!(
+        requests[1].last(),
+        "Your context is 5000 tokens, past this run's handover point of 1000. Call `handover` now, alone in your turn: it clears your context, and starts you again from the system prompt and what you write in it."
+    );
+    assert_eq!(requests[1].messages()[3]["role"], "tool");
+    assert_eq!(requests[2].messages().len(), 3);
+    assert!(out.stdout.contains("note.txt is there"));
+}
+
+/// A context that a handover started past the handover point is not told to
+/// hand over again: it could only hand over to one as big, forever.
+#[test]
+fn a_context_born_past_the_handover_point_is_not_told_again() {
+    let dir = workspace("handover-born-big");
+    let big = json!({"prompt_tokens": 5000, "completion_tokens": 10, "cost": 0.0,
+                     "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}});
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "tool_calls": [{"name": "handover",
+                "arguments": {"context": "c", "task": "list the directory"}}]},
+            {"when": "^Carry on from where you left off", "usage": big,
+             "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+            {"when": "note.txt", "text": "listed"},
+            {"when": "handover point", "text": "told again"}
+        ]),
+    );
+    let out = forks(&dir, &fake, &["--handover-at", "1000"], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("[5 assistant]\n    │ listed"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("told again"), "{}", out.stdout);
+}
+
+/// A child that hands over inside a scope is still one child: its parent
+/// gets one report, from the context it finished in.
+#[test]
+fn a_child_that_hands_over_is_still_one_child_to_its_parent() {
+    let dir = workspace("handover-child");
+    let mut rules = split_rules(json!({}));
+    rules[1] = json!({"when": "^You are agent `north`", "tool_calls": [{"name": "handover",
+        "arguments": {"context": "I am north; I report the note", "task": "report it"}}]});
+    rules.as_array_mut().unwrap().insert(
+        2,
+        json!({"when": "^Carry on from where you left off", "text": "north says kowhai"}),
+    );
+    let fake = Fake::start(&dir, rules);
+    let out = forks(&dir, &fake, &[], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    let resumed = fake.find("Every agent you launched has finished");
+    assert_eq!(
+        resumed.last().matches("## `north`").count(),
+        1,
+        "{}",
+        resumed.last()
+    );
+    assert!(
+        resumed
+            .last()
+            .contains("## `north` — completed\nnorth says kowhai"),
+        "{}",
+        resumed.last()
+    );
+    let states = agent_states(&dir);
+    assert_eq!(
+        states.keys().collect::<Vec<_>>(),
+        ["root", "root › north", "root › south"]
+    );
+}
+
+#[test]
+fn a_handover_with_other_calls_in_its_turn_is_refused() {
+    let dir = workspace("handover-not-alone");
+    let fake = Fake::start(
+        &dir,
+        json!([
+            {"when": "^SPLIT", "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}},
+                {"name": "handover", "arguments": {"context": "c", "task": "t"}}]},
+            {"when": "only call in its turn", "text": "fine, no handover"}
+        ]),
+    );
+    let out = forks(&dir, &fake, &[], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    let refused = fake.find("only call in its turn");
+    assert_eq!(
+        refused.last(),
+        "Error: `handover` must be the only call in its turn. It did not run."
+    );
+    assert_eq!(refused.messages()[3]["content"], "note.txt");
+}
+
+/// Max's rules for the chat below: `root` splits into `north` and `south`,
+/// and the harness also starts `root'`, which carries on the conversation.
+fn conversation_rules(split: Value) -> Value {
+    json!([
+        {"when": "^SPLIT", "tool_calls": [{"name": "task", "arguments": split}]},
+        {"when": "^You are agent `north`", "text": "north says kowhai"},
+        {"when": "^You are agent `south`", "text": "south says tui"},
+        {"when": "^You are `root'`", "text": "Hello Max, north and south are working."},
+        {"when": "how is it going", "text": "Both are still going."},
+        {"when": "^The user typed /done", "text": "Max asked how it was going."},
+        {"when": "Every agent you launched has finished", "text": "All three reported."},
+        {"when": "only the user can start", "text": "no conversation, then"}
+    ])
+}
+
+fn two_agents(extra: Value) -> Value {
+    let mut split = json!({"shared": "SHARED RULES", "agents": [
+        {"name": "north", "task": "report the note"},
+        {"name": "south", "task": "list the directory"}]});
+    for (key, value) in extra.as_object().unwrap() {
+        split[key] = value.clone();
+    }
+    split
+}
+
+/// In chat the root is talking with Max, so a split also starts `root'`,
+/// forked with the same shared part, which carries the conversation on. What
+/// Max types goes to it; `/done` ends it with a report, and the root resumes
+/// once every sibling has finished too.
+#[test]
+fn in_chat_a_split_also_starts_a_child_that_talks_with_the_user_until_done() {
+    let dir = workspace("conversation");
+    let fake = Fake::start(&dir, conversation_rules(two_agents(json!({}))));
+    let mut live = Live::start(&dir, &fake, "chat", &[], None);
+    live.send("SPLIT the work");
+    live.wait_for("root › root'                 waiting for you");
+    live.send("/tree");
+    live.wait_for("TOTAL");
+    live.send("how is it going");
+    live.wait_for("Both are still going.");
+    live.wait_for("root › root'                 waiting for you");
+    live.send("/done");
+    live.wait_for("All three reported.");
+    live.send("/quit");
+    let (transcript, code) = live.finish();
+    assert_eq!(code, 0, "{transcript}");
+
+    // `/tree` during the split marks `root'`; the tree printed as chat
+    // closes, with the split over, marks the root again.
+    let marked: Vec<&str> = transcript
+        .lines()
+        .filter(|l| l.contains("← talking with you"))
+        .collect();
+    assert_eq!(marked.len(), 2, "{transcript}");
+    assert!(marked[0].trim_start().starts_with("root'"), "{}", marked[0]);
+    assert!(marked[1].starts_with("root "), "{}", marked[1]);
+
+    let first = |needle: &str| fake.find(needle);
+    let north = first("You are agent `north`");
+    let conversation = first("You are `root'`");
+    let shared = |request: &Req| request.messages()[request.messages().len() - 2].clone();
+    assert_eq!(
+        shared(&conversation),
+        shared(&north),
+        "the shared part differed"
+    );
+    assert!(
+        shared(&north)
+            .to_string()
+            .contains("`north`, `south`, `root'`")
+    );
+    assert!(
+        conversation
+            .last()
+            .starts_with("You are `root'`: you carry on this conversation with the user")
+    );
+    assert_eq!(first("how is it going").last(), "how is it going");
+    assert!(
+        first("The user typed /done")
+            .last()
+            .starts_with("The user typed /done: this conversation is over.")
+    );
+
+    let resumed = first("Every agent you launched has finished")
+        .last()
+        .to_string();
+    let at = |needle: &str| {
+        resumed
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} not in {resumed}"))
+    };
+    assert!(
+        at("## `north` — completed\nnorth says kowhai")
+            < at("## `south` — completed\nsouth says tui")
+    );
+    assert!(at("## `south`") < at("## `root'` — completed\nMax asked how it was going."));
+}
+
+/// A user who has closed the chat's input cannot finish a conversation, so
+/// the agent waiting for them ends there, and the rest of the tree carries on
+/// without it.
+#[test]
+fn when_the_user_leaves_the_agent_waiting_for_them_ends() {
+    let dir = workspace("conversation-left");
+    let fake = Fake::start(&dir, conversation_rules(two_agents(json!({}))));
+    let mut live = Live::start(&dir, &fake, "chat", &[], None);
+    live.send("SPLIT the work");
+    live.wait_for("root › root'                 waiting for you");
+    live.close_stdin();
+    let (transcript, code) = live.exits_by_itself();
+    assert_eq!(code, 0, "{transcript}");
+    assert!(
+        transcript.contains("root › root'                 the user has left"),
+        "{transcript}"
+    );
+    let resumed = fake
+        .find("Every agent you launched has finished")
+        .last()
+        .to_string();
+    assert!(resumed.contains("## `root'` — cancelled"), "{resumed}");
+    assert!(resumed.contains("## `north` — completed"), "{resumed}");
+}
+
+/// `user_facing: false` splits without a conversation.
+#[test]
+fn a_split_can_opt_out_of_the_user_facing_child() {
+    let dir = workspace("conversation-opt-out");
+    let fake = Fake::start(
+        &dir,
+        conversation_rules(two_agents(json!({"user_facing": false}))),
+    );
+    let mut live = Live::start(&dir, &fake, "chat", &[], None);
+    live.send("SPLIT the work");
+    live.wait_for("All three reported.");
+    live.send("/quit");
+    let (transcript, _) = live.finish();
+    assert!(!transcript.contains("root › root'"), "{transcript}");
+    assert_eq!(fake.requests().len(), 4, "{transcript}");
+}
+
+/// Only the user can create an obligation for the user: an agent that is
+/// not talking with Max cannot start one that would be.
+#[test]
+fn an_autonomous_agent_cannot_start_a_user_facing_child() {
+    let dir = workspace("conversation-refused");
+    let fake = Fake::start(
+        &dir,
+        conversation_rules(two_agents(json!({"user_facing": true}))),
+    );
+    let out = forks(&dir, &fake, &[], "SPLIT the work");
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    let refused = fake.find("only the user can start");
+    assert_eq!(
+        refused.last(),
+        "Error: only the user can start an agent that talks with the user, and you are not talking with the user. Leave out `user_facing`. This call did not run."
+    );
+    assert_eq!(fake.requests().len(), 2, "no child was started");
 }
 
 #[test]

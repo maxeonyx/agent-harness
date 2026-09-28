@@ -1,6 +1,6 @@
 //! One run: a root agent, its tree, and the run directory that records them.
 
-use crate::agent::{AgentRecord, Config, Outcome, Run, render_context, run_agent};
+use crate::agent::{AgentRecord, Config, Outcome, Run, Start, render_context, run_agent};
 use crate::face::Face;
 use crate::framing;
 use crate::limb::Limb;
@@ -32,6 +32,7 @@ impl Session {
         runs_dir: &Path,
         label: &str,
         verbose: bool,
+        user_facing: bool,
         session_id: Option<String>,
     ) -> Result<Session, String> {
         let limb = Limb::new(dir)?;
@@ -52,7 +53,7 @@ impl Session {
             recorder,
             session_id,
         ));
-        let root_index = run.register("root", 0, false, None, None);
+        let root_index = run.register("root", 0, false, None, None, user_facing);
         for (n, message) in messages.iter().enumerate() {
             run.face.message("root", n, message, None);
         }
@@ -83,10 +84,14 @@ impl Session {
         let messages = std::mem::take(&mut self.messages);
         let root = tokio::spawn(run_agent(
             self.run.clone(),
-            "root".to_string(),
-            0,
-            self.root_index,
-            messages,
+            Start {
+                path: "root".to_string(),
+                depth: 0,
+                index: self.root_index,
+                messages,
+                first_reply: None,
+                inbox: None,
+            },
         ));
         match root.await {
             Ok(end) => {
@@ -121,7 +126,7 @@ impl Session {
             "backend": self.run.config.backend.name(),
             "provider": self.run.config.backend.provider(),
             "cut": self.run.config.framing.cut.name(),
-            "words": self.run.config.framing.words.name(),
+            "identity": self.run.config.framing.identity.name(),
             "mode": self.run.config.framing.mode.name(),
             "max_depth": self.run.config.max_depth,
             "max_cost": self.run.config.max_cost,

@@ -68,7 +68,7 @@ impl Backend {
         match self {
             Backend::OpenRouter { provider, .. } => serde_json::to_value(ChatRequest {
                 model: model.to_string(),
-                messages: messages.to_vec(),
+                messages: messages.iter().map(chat_message).collect(),
                 tools: tools.to_vec(),
                 cache_control: serde_json::json!({ "type": "ephemeral" }),
                 provider: provider
@@ -97,6 +97,19 @@ pub struct ToolCall {
     pub function: ToolCallFunction,
 }
 
+impl ToolCall {
+    pub fn read_file(id: &str, path: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            call_type: function_type(),
+            function: ToolCallFunction {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({ "path": path }).to_string(),
+            },
+        }
+    }
+}
+
 fn function_type() -> String {
     "function".to_string()
 }
@@ -114,6 +127,11 @@ pub struct Message {
     /// later request whose assistant turn dropped its reasoning blocks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_details: Option<serde_json::Value>,
+    /// An explicit cache breakpoint after this message: the end of the part
+    /// of a child's tail that every sibling shares. Each backend writes it
+    /// in its own format.
+    #[serde(skip)]
+    pub cache: bool,
 }
 
 impl Message {
@@ -124,6 +142,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             reasoning_details: None,
+            cache: false,
         }
     }
 
@@ -134,14 +153,36 @@ impl Message {
             tool_calls: None,
             tool_call_id: Some(tool_call_id.to_string()),
             reasoning_details: None,
+            cache: false,
         }
     }
+}
+
+/// OpenRouter documents a breakpoint on a text part of a message, so a cached
+/// message is sent as one text part carrying `cache_control`. It documents
+/// none on a tool result, and `--cut result` is refused there before any
+/// request is built.
+fn chat_message(message: &Message) -> Value {
+    let mut value = serde_json::to_value(message).expect("a message serializes");
+    if message.cache {
+        assert_eq!(
+            message.role, "user",
+            "OpenRouter has no cache breakpoint for a {} message",
+            message.role
+        );
+        value["content"] = serde_json::json!([{
+            "type": "text",
+            "text": message.content.as_deref().unwrap_or(""),
+            "cache_control": { "type": "ephemeral" },
+        }]);
+    }
+    value
 }
 
 #[derive(Serialize, Debug)]
 struct ChatRequest {
     model: String,
-    messages: Vec<Message>,
+    messages: Vec<Value>,
     tools: Vec<Value>,
     /// Anthropic-style prompt caching, switched on for the whole request.
     cache_control: Value,
@@ -345,19 +386,38 @@ fn openrouter_reply(body: Value, text: &str, wait: Option<Duration>) -> Attempt 
             .unwrap_or(0) as u16;
         return classify(code, format!("provider returned an error: {text}"), wait);
     }
-    let response: ChatResponse = match serde_json::from_value(body.clone()) {
-        Ok(response) => response,
-        Err(error) => {
-            return Attempt::Fatal(format!("could not parse response: {error}; body: {text}"));
-        }
-    };
-    let Some(choice) = response.choices.into_iter().next() else {
-        return Attempt::Fatal(format!("provider returned no choices: {text}"));
-    };
-    Attempt::Answered(Box::new(Sent {
-        message: choice.message,
-        usage: response.usage,
-        via: response.provider.unwrap_or_else(|| "?".to_string()),
-        body,
-    }))
+    match chat_reply(&body) {
+        Ok((message, usage, via)) => Attempt::Answered(Box::new(Sent {
+            message,
+            usage,
+            via,
+            body,
+        })),
+        Err(error) => Attempt::Fatal(error),
+    }
+}
+
+/// A chat-completions answer: the message, its usage, and who served it.
+fn chat_reply(body: &Value) -> Result<(Message, Usage, String), String> {
+    let response: ChatResponse = serde_json::from_value(body.clone())
+        .map_err(|error| format!("could not parse response: {error}; body: {body}"))?;
+    let choice = response
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("provider returned no choices: {body}"))?;
+    Ok((
+        choice.message,
+        response.usage,
+        response.provider.unwrap_or_else(|| "?".to_string()),
+    ))
+}
+
+/// A recorded response body, read back the way it was read when it arrived.
+pub fn recorded_reply(backend: &str, body: &Value) -> Result<(Message, Usage), String> {
+    match backend {
+        "claude" => anthropic::reply(body),
+        "openrouter" => chat_reply(body).map(|(message, usage, _)| (message, usage)),
+        other => Err(format!("unknown backend {other}")),
+    }
 }

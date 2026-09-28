@@ -1,4 +1,4 @@
-// Part 3: the code as nested boxes. An arrow from A to B means: delete B, and A no longer compiles —
+// Part 5: the code as nested boxes. An arrow from A to B means: delete B, and A no longer compiles —
 // measured by deleting every item in turn and asking the compiler.
 
 import { graph, type Node, type Edge } from "underview/graph"
@@ -8,9 +8,10 @@ import { h, code, part, cameTo } from "./ui"
 export const DEPS = deps()
 export const SOURCES: Record<string, string> = {
   "src/main.rs": source("src/main.rs"), "src/session.rs": source("src/session.rs"), "src/agent.rs": source("src/agent.rs"),
-  "src/framing.rs": source("src/framing.rs"), "src/wire.rs": source("src/wire.rs"), "src/anthropic.rs": source("src/anthropic.rs"), "src/limb.rs": source("src/limb.rs"),
-  "src/record.rs": source("src/record.rs"), "src/face.rs": source("src/face.rs"), "src/bench.rs": source("src/bench.rs"),
-  "src/rescore.rs": source("src/rescore.rs"), "src/bin/fake_provider.rs": source("src/bin/fake_provider.rs"), "tests/scenario.rs": source("tests/scenario.rs"),
+  "src/handoff.rs": source("src/handoff.rs"), "src/framing.rs": source("src/framing.rs"), "src/wire.rs": source("src/wire.rs"),
+  "src/anthropic.rs": source("src/anthropic.rs"), "src/limb.rs": source("src/limb.rs"), "src/record.rs": source("src/record.rs"),
+  "src/face.rs": source("src/face.rs"), "src/bench.rs": source("src/bench.rs"), "src/ledgers.rs": source("src/ledgers.rs"),
+  "src/projects.rs": source("src/projects.rs"), "src/rescore.rs": source("src/rescore.rs"), "src/bin/fake_provider.rs": source("src/bin/fake_provider.rs"), "tests/scenario.rs": source("tests/scenario.rs"),
 }
 
 type Item = (typeof DEPS.items)[number]
@@ -45,7 +46,7 @@ function fileMap(onOpen: (file: string) => void): HTMLElement {
   const root: Node = {
     id: "dir:root",
     el: h("div", { class: "node group" }, h("div", { class: "gh" }, "agent-harness/experiments/forked-subagents/")),
-    children: [...FOLDERS.map(([n, f]) => folder(n, f)), { id: "probe", el: h("div", { class: "node file" }, "probe/probe.py", h("span", { class: "lines" }, "Python, no deps")) }],
+    children: [...FOLDERS.map(([n, f]) => folder(n, f)), { id: "probe", el: h("div", { class: "node file" }, "probe/*.py", h("span", { class: "lines" }, "Python, no deps")) }],
   }
   const external: Node[] = [
     { id: "ext:skeleton", el: h("div", { class: "node ext" }, h("div", { class: "t" }, "experiments/walking-skeleton/"), h("div", { class: "s" }, "before: patterns borrowed, no code shared")) },
@@ -136,7 +137,7 @@ export function codeMap(): HTMLElement {
 
 export function codePart(): HTMLElement {
   const attributed = DEPS.edges.length
-  return part(3, "code", "The code",
+  return part(5, "code", "The code",
     "Every file of the experiment as a box inside its folder, with the work before and after it outside. Open a file to see its types — each holding its methods — and its functions; open one of those for its lines.",
     h("p", {}, "An arrow from A to B means ", h("b", {}, "if B were deleted, A would stop working"), `. That was measured, not read: each of the ${DEPS.items.length} items in turn was blanked out of a copy of the crate and `, h("code", {}, "cargo check --all-targets"), ` asked what broke; every error became an arrow from the item it landed in to the item deleted — ${attributed} arrows in all. An arrow a longer path already implies is left out of the picture; open an item to see every one of its own. The tests drive the `, h("code", {}, "forks"), " binary and the fake provider as processes rather than importing them, so those arrows are dashed."),
     h("div", { class: "legend" },

@@ -16,7 +16,8 @@
 
 use crate::Args;
 use crate::agent::FaultKind;
-use crate::bench::{Fixture, Observed, ReadAttempt, TrialFacts, score, summarise, trial_row};
+use crate::bench::{Fixture, Observed, ReadAttempt, TrialFacts, summarise, trial_row, verdict};
+use crate::wire;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,15 +33,7 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
     let fixture = Fixture::read(&dir.join("fixture"))?;
 
     println!("rescoring {}", dir.display());
-    println!(
-        "fixture totals: {}",
-        fixture
-            .totals
-            .iter()
-            .map(|(name, total)| format!("{name}={total:.2}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
+    println!("{}", fixture.describe());
 
     let old = old_scores(&dir);
     let mut trials: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -65,12 +58,12 @@ pub async fn command(args: &Args) -> Result<ExitCode, String> {
             Provenance::Unknown => unknown += 1,
             Provenance::NoFault => {}
         }
-        let scored = score(&agents, &root_handoff, &fixture);
-        let mut row = trial_row(&facts, &agents, &scored);
+        let scored = fixture.score(&agents, &root_handoff);
+        let mut row = trial_row(fixture.task(), &facts, &agents, &scored);
         row["dir"] = serde_json::json!(trial.to_string_lossy());
         let key = format!(
             "{}|{}|{}|{}|{}",
-            facts.model, facts.cut, facts.words, facts.mode, facts.rep
+            facts.model, facts.cut, facts.identity, facts.mode, facts.rep
         );
         changes.push(compare(
             trial.file_name().unwrap().to_string_lossy().as_ref(),
@@ -116,7 +109,7 @@ fn old_scores(dir: &Path) -> BTreeMap<String, serde_json::Value> {
                 "{}|{}|{}|{}|{}",
                 row["model"].as_str().unwrap_or(""),
                 row["cut"].as_str().unwrap_or(""),
-                row["words"].as_str().unwrap_or(""),
+                framing_words(&row),
                 row["mode"].as_str().unwrap_or(""),
                 row["rep"].as_u64().unwrap_or(0),
             );
@@ -125,41 +118,12 @@ fn old_scores(dir: &Path) -> BTreeMap<String, serde_json::Value> {
         .collect()
 }
 
-fn verdict(row: &serde_json::Value) -> String {
-    let n = |key: &str| row[key].as_f64().unwrap_or(0.0) as u64;
-    if !row["valid"].as_bool().unwrap_or(true) {
-        return format!(
-            "INVALID ({} fault) — excluded from every rate",
-            row["fault_kind"].as_str().unwrap_or("cancelled")
-        );
-    }
-    let flag = |key: &str| {
-        if row[key].as_bool().unwrap_or(false) {
-            "ok"
-        } else {
-            "WRONG"
-        }
-    };
-    let aside = |count: u64| {
-        if count > 0 {
-            format!("[{count}?]")
-        } else {
-            String::new()
-        }
-    };
-    format!(
-        "leaf {}/{}{} region {}/{}{} policy {}/{} structure {} totals {}",
-        n("leaf_overreach"),
-        n("leaves"),
-        aside(n("leaves_unscoreable")),
-        n("region_overreach"),
-        n("regions"),
-        aside(n("regions_unscoreable")),
-        n("policy_rereads"),
-        n("below_root"),
-        flag("structure_ok"),
-        flag("correct"),
-    )
+/// `identity`, or `words` in a trial recorded before `identity` replaced it.
+fn framing_words(row: &serde_json::Value) -> &str {
+    row["identity"]
+        .as_str()
+        .or(row["words"].as_str())
+        .unwrap_or("")
 }
 
 fn compare(label: &str, old: Option<&serde_json::Value>, new: &serde_json::Value) -> String {
@@ -168,16 +132,25 @@ fn compare(label: &str, old: Option<&serde_json::Value>, new: &serde_json::Value
         new["model"].as_str().unwrap_or(""),
         new["provider"].as_str().unwrap_or(""),
         new["cut"].as_str().unwrap_or(""),
-        new["words"].as_str().unwrap_or(""),
+        framing_words(new),
         new["mode"].as_str().unwrap_or(""),
     );
     let fresh = verdict(new);
+    // Not a score, and not in trials from before it was counted, so it is
+    // shown beside the verdict rather than compared.
+    let shared = format!(
+        "shared hits {}/{}",
+        new["shared_hits"].as_u64().unwrap_or(0),
+        new["later_siblings"].as_u64().unwrap_or(0)
+    );
     match old {
-        None => format!("{label}\n  {combo}\n  old  (not in trials.json)\n  new  {fresh}"),
+        None => {
+            format!("{label}\n  {combo}\n  old  (not in trials.json)\n  new  {fresh}   {shared}")
+        }
         Some(old) => {
             let was = verdict(old);
             let mark = if was == fresh { "unchanged" } else { "CHANGED" };
-            format!("{label}\n  {combo}\n  old  {was}\n  new  {fresh}   [{mark}]")
+            format!("{label}\n  {combo}\n  old  {was}\n  new  {fresh}   [{mark}]   {shared}")
         }
     }
 }
@@ -193,12 +166,8 @@ fn read_trial(
     )
     .map_err(|e| format!("parse {}/summary.json: {e}", dir.display()))?;
     let text = |key: &str| summary[key].as_str().unwrap_or("").to_string();
-    if text("backend") == "claude" {
-        return Err(format!(
-            "{} was run on the claude backend; rescoring reads OpenRouter's wire format only",
-            dir.display()
-        ));
-    }
+    // Every run from before the backend was recorded was on OpenRouter.
+    let backend = summary["backend"].as_str().unwrap_or("openrouter");
 
     let rep = dir
         .file_name()
@@ -213,7 +182,7 @@ fn read_trial(
         model: text("model"),
         provider: text("provider"),
         cut: text("cut"),
-        words: text("words"),
+        identity: framing_words(&summary).to_string(),
         mode: text("mode"),
         outcome: text("outcome"),
         detail: text("detail"),
@@ -222,7 +191,7 @@ fn read_trial(
         fault_kind: kind,
     };
 
-    let wire = read_wire(&dir.join("wire.jsonl"))?;
+    let wire = read_wire(&dir.join("wire.jsonl"), backend)?;
     let empty = Vec::new();
     let agents = summary["agents"].as_array().unwrap_or(&empty);
     if agents.is_empty() {
@@ -240,6 +209,7 @@ fn read_trial(
                 handoff: agent["handoff"].as_str().unwrap_or("").to_string(),
                 reads: seen.reads,
                 forked: seen.forked,
+                requests: seen.usages.len(),
                 cached_in: seen.usages.iter().map(|u| u.0).sum(),
                 uncached_in: seen.usages.iter().map(|u| u.1).sum(),
                 written_in: seen.usages.iter().map(|u| u.2).sum(),
@@ -323,8 +293,35 @@ struct Seen {
     usages: Vec<(u64, u64, u64)>,
 }
 
+/// The tool results a request body carries, by call id: OpenRouter's `tool`
+/// messages, or the Messages API's `tool_result` blocks.
+fn tool_results(body: &serde_json::Value) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+    for message in body["messages"].as_array().into_iter().flatten() {
+        if message["role"] == "tool"
+            && let Some(id) = message["tool_call_id"].as_str()
+        {
+            results.push((
+                id.to_string(),
+                message["content"].as_str().unwrap_or("").to_string(),
+            ));
+        }
+        for block in message["content"].as_array().into_iter().flatten() {
+            if block["type"] == "tool_result"
+                && let Some(id) = block["tool_use_id"].as_str()
+            {
+                results.push((
+                    id.to_string(),
+                    block["content"].as_str().unwrap_or("").to_string(),
+                ));
+            }
+        }
+    }
+    results
+}
+
 /// Replay one trial's wire log into what each agent did.
-fn read_wire(path: &Path) -> Result<BTreeMap<String, Seen>, String> {
+fn read_wire(path: &Path, backend: &str) -> Result<BTreeMap<String, Seen>, String> {
     let text =
         std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     // Per agent: every tool call it made, and every tool result that came
@@ -345,43 +342,25 @@ fn read_wire(path: &Path) -> Result<BTreeMap<String, Seen>, String> {
         let body = &entry["body"];
         match entry["kind"].as_str() {
             Some("request") => {
-                for message in body["messages"].as_array().into_iter().flatten() {
-                    if message["role"] == "tool"
-                        && let Some(id) = message["tool_call_id"].as_str()
-                    {
-                        results.entry(agent.clone()).or_default().insert(
-                            id.to_string(),
-                            message["content"].as_str().unwrap_or("").to_string(),
-                        );
-                    }
-                }
+                results
+                    .entry(agent.clone())
+                    .or_default()
+                    .extend(tool_results(body));
             }
             Some("response") => {
-                let usage = &body["usage"];
-                let prompt = usage["prompt_tokens"].as_u64().unwrap_or(0);
-                let cached = usage["prompt_tokens_details"]["cached_tokens"]
-                    .as_u64()
-                    .unwrap_or(0);
-                let written = usage["prompt_tokens_details"]["cache_write_tokens"]
-                    .as_u64()
-                    .unwrap_or(0);
+                let (message, usage) = wire::recorded_reply(backend, body)
+                    .map_err(|e| format!("{}: a recorded response: {e}", path.display()))?;
+                let cached = usage.prompt_tokens_details.cached_tokens;
                 seen.entry(agent.clone()).or_default().usages.push((
                     cached,
-                    prompt.saturating_sub(cached),
-                    written,
+                    usage.prompt_tokens.saturating_sub(cached),
+                    usage.prompt_tokens_details.cache_write_tokens,
                 ));
-                for call in body["choices"][0]["message"]["tool_calls"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                {
+                for call in message.tool_calls.into_iter().flatten() {
                     calls.entry(agent.clone()).or_default().push((
-                        call["id"].as_str().unwrap_or("").to_string(),
-                        call["function"]["name"].as_str().unwrap_or("").to_string(),
-                        call["function"]["arguments"]
-                            .as_str()
-                            .unwrap_or("")
-                            .to_string(),
+                        call.id,
+                        call.function.name,
+                        call.function.arguments,
                     ));
                 }
             }
@@ -396,7 +375,7 @@ fn read_wire(path: &Path) -> Result<BTreeMap<String, Seen>, String> {
             if name == "task" {
                 entry.forked = true;
             }
-            if name != "read_file" {
+            if name != "read_file" && name != "list_dir" {
                 continue;
             }
             let target = serde_json::from_str::<serde_json::Value>(&arguments)
@@ -408,7 +387,11 @@ fn read_wire(path: &Path) -> Result<BTreeMap<String, Seen>, String> {
             let ok = answers
                 .get(&id)
                 .is_some_and(|answer| !answer.starts_with("Error:"));
-            entry.reads.push(ReadAttempt { path: target, ok });
+            entry.reads.push(ReadAttempt {
+                path: target,
+                ok,
+                list: name == "list_dir",
+            });
         }
     }
     if unreadable > 0 {
