@@ -4,7 +4,17 @@ Disposable experiment. Brief: `docs/process/experiments/forked-subagents-brief.m
 
 `forks` runs agents as structured concurrency. A `task` call is a scope: the caller is suspended inside the call while its children run at the same time, possibly opening scopes of their own, and the call returns one tool result holding every child's report. A forked child's context is the parent's messages cloned, so it serializes to the same bytes and the provider serves the prefix from cache; only the child's own tail is new.
 
-The parent writes one `task` call: a `shared` part, written once for every child, and each child's own short `task`. So a child's tail is two parts. The shared part is the same bytes for every sibling and ends in an explicit cache breakpoint; then comes the child's own part. The first sibling that waits on no other starts first, and the rest start when its first request has come back: that request is what writes the shared part to the cache, and a request sent before it returns cannot read it.
+The parent writes one `task` call: a `shared` part, written once for every child, files to attach, and each child's own short `task`. So a child's tail is a handoff in two parts. The shared part is the same bytes for every sibling: the shared text, then the attachments, shown as `read_file` calls the child did not make, ending in an explicit cache breakpoint. Then comes the child's own part, always as user text: a child reads an own part in a tool result as a broken call and redoes the split (the benchmark below). The first sibling that waits on no other starts first, and the rest start when its first request has come back: that request is what writes the shared part to the cache, and a request sent before it returns cannot read it.
+
+## Handoffs
+
+A handoff is what one context hands the next, and there are three (`src/handoff.rs`, one type and one `deliver`):
+
+- **down** — a `task` call hands each child the shared part and its own part, as above;
+- **up** — the children's reports are the answer to the parent's `task` call: one tool result, in the order the children were declared;
+- **across** — an agent that calls `handover` starts again in a fresh context: the system prompt, what it wrote for itself as user text, the files it attached, and its next step as user text. `--handover-at <tokens>` makes the harness tell an agent past that size to call it, once per context; a context that a handover started already past the point is not told again. A child that hands over inside a scope is still one child to its parent, which gets the report from the context it finished in.
+
+`agents/<path>.md` shows every context an agent had, `# context 1, handed over` ending in its `handover` call, then the one it finished in. The face shows the seam, `handed over: context 1 ended at message 10; context 2 is`, and the new context whole, system prompt included.
 
 Two binaries: `forks`, and `fake-provider` — a separate HTTP server that speaks both backends' APIs, answers from a script and records every request, which is what the scenario tests assert against.
 
@@ -26,7 +36,7 @@ There are two backends. `--backend claude`, the default, is Anthropic's Messages
 diff runs.ignore/<run>/agents/root.md runs.ignore/<run>/agents/root.alpha.md
 ```
 
-In `chat`, a line is a message to the root and ends your turn. While a turn is running only `/tree` and `/cancel` are accepted; `/quit` exits.
+In `chat`, a line is a message to the root and ends your turn; `/quit` exits. The root in `chat` is talking with you, so when it calls `task` the harness also starts one more child, `root'` — a fork given the same shared part as its siblings and an own part saying it carries the conversation on. While the split runs, what you type goes to it whenever it is `waiting for you`. `/done` ends it: it is asked for its report, and the root resumes once every sibling has finished too, with all their reports. The parent can set `user_facing: false` to split without one. An agent that is not talking with you is refused one: only the user creates an obligation for the user. If your input closes, the child waiting for you ends there, cancelled. While no agent is waiting for you, only `/tree` and `/cancel` are accepted; `/tree` marks the agent you are talking to with `← talking with you`.
 
 Ctrl-C (or `/cancel`) cancels: nothing new starts, the responses already in flight are waited for and kept, and then `forks` closes. Ctrl-C again force-cancels: the responses still in flight are abandoned, and `forks` closes at once with exit code 130. Either way every agent ends with a recorded outcome and `summary.json` is written.
 
@@ -68,7 +78,7 @@ The number in the header is the message's place in that agent's context, the sam
 
 Every agent in a run gets the identical system prompt and the identical tool list — Anthropic caches tools, then system, then messages, so any difference between parent and child breaks the child's inherited prefix. The depth limit is therefore enforced by answering an over-deep `task` call with an error tool result, never by taking the tool away. All per-agent framing lives in the tail.
 
-- `--cut result|before|call` — where a forked child's tail starts. `result`: the parent's messages through the assistant turn that called `task`; the answer to that call is the shared part, with the breakpoint on it (on the last of that turn's tool results, when it made other calls too), and the child's own part is a text block after it in the same user message. `before`: the parent's messages up to, not including, that assistant turn, then the shared part, with the breakpoint, and the child's own part as user text. `call`: the parent's messages through the assistant turn that called `task`, which already holds the `shared` argument, with the breakpoint on that turn's last block; the answer to the call is the child's own part alone, so the shared text is in the child's context once rather than twice. OpenRouter refuses `result` and `call`: it documents breakpoints only on the text parts of a message. The likely translation of one on a tool result is a text block inside it, which Anthropic rejects (`probe/shared-context.md`).
+- `--cut result|before` — where a forked child's tail starts. `result`: the parent's messages through the assistant turn that called `task`; the answer to that call is the shared part, with the breakpoint on it (on the last of that turn's tool results, when it made other calls too), and the child's own part is a text block after it in the same user message. `before`: the parent's messages up to, not including, that assistant turn, then the shared part, with the breakpoint, and the child's own part as user text. OpenRouter refuses `result`: it documents breakpoints only on the text parts of a message. The likely translation of one on a tool result is a text block inside it, which Anthropic rejects (`probe/shared-context.md`).
 - `--identity agent|task` — how the child's own part names it. `agent`: "You are agent `x`", a new agent launched by the split. `task`: "Your next task, and only this one, is `x`", the same conversation carrying on with one of the tasks it split into. A fresh child has no conversation to carry on, so it is always an agent. The texts are constants in `src/framing.rs`.
 - `--mode fork|fresh|declared` — `declared` honours each `task` entry's own `fresh` flag, which is how the model routes; `fork` and `fresh` force every child. A fresh child's context is the system prompt, then the shared part, with the breakpoint, and its own part, so fresh siblings share a cached prefix too.
 
@@ -152,7 +162,7 @@ Reaching the cap is an out-of-band fault, and out-of-band faults behave the same
 
 ## What it deliberately does not do
 
-From the brief's out-of-scope list: user-facing children, `/done` and the main-thread pattern; siblings launching siblings into their own scope; re-wiring dependencies after launch; resume; compaction inside a scope; persistence and restart; limbs other than the one local read-only directory; writes and shared-workspace races; attachments and shared seed contexts; two-part launch.
+From the brief's out-of-scope list: siblings launching siblings into their own scope; re-wiring dependencies after launch; resume; persistence and restart; limbs other than the one local read-only directory; writes and shared-workspace races; two-part launch, for `task` and for `handover`. A suspended parent is never told to hand over, and nothing hands over when the cache expires.
 
 Beyond those: one `task` call per assistant turn (a second in the same turn gets an error result), and no streaming.
 
