@@ -47,7 +47,6 @@
   #pill { border-color: transparent; background: rgba(250, 249, 245, .85); backdrop-filter: blur(6px); }
   #pill.owed { background: var(--maroon); color: var(--paper); border-color: var(--maroon); }
   #pill.owed .n { font-weight: 700; }
-  #lock { color: var(--maroon); font-size: 12.5px; }
   #usage { display: inline-flex; gap: 1.1em; align-items: center; }
   .gauge { display: inline-flex; gap: .4em; align-items: center; }
   .gauge i { display: inline-block; width: 3.4em; height: .32em; border-radius: 1em; background: var(--line); overflow: hidden; }
@@ -113,6 +112,14 @@
     background: var(--maroon); color: var(--paper); font: 700 10.5px/17px var(--sans);
   }
   .node .more { margin-top: 3px; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; padding: 0 .5em; background: var(--paper); }
+  /* A finished project, folded: a small card on the archive shelf. */
+  .node.archived { align-items: flex-start; text-align: left; justify-content: center; height: 40px; padding: 0 1.6em 0 .7em; border: 1px solid var(--line); border-radius: 10px; background: rgba(250, 249, 245, .7); }
+  .node.archived:hover { background: var(--paper); }
+  .node.archived .dot { display: none; }
+  .node.archived .name { margin: 0; font: 500 13px/1.2 var(--serif); color: var(--muted); }
+  .node.archived .status { font-size: 11px; color: var(--faint); }
+  .node.archived .more { position: absolute; right: .3em; top: 50%; transform: translateY(-50%); margin: 0; border: 0; background: none; }
+  .node.archived.selected { border-color: var(--ink); }
   .node.selected .dot { box-shadow: 0 0 0 4px var(--paper), 0 0 0 5.5px var(--ink); }
   .node.scope { pointer-events: none; }
   .node.scope .dot { --d: 9px; background: var(--ink); border: 0; }
@@ -163,7 +170,18 @@
   .crumbs .role { font-size: 12px; color: var(--muted); margin-left: .3em; }
   .bar .state { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
   .bar .state.max { color: var(--maroon); font-weight: 600; }
-  .bar .ctx { display: inline-flex; align-items: center; gap: .4em; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .bar .ctx { display: inline-flex; align-items: center; gap: .4em; font-size: 12px; color: var(--muted); white-space: nowrap; border-radius: 8px; padding: .15em .4em; }
+  .bar .ctx:hover { background: var(--hover); }
+  #panel > .mix { border-bottom: 1px solid var(--line); padding: .7em 1.1em .8em; font-size: 12.5px; color: var(--muted); }
+  .mix .stack { display: flex; height: .55em; border-radius: 1em; overflow: hidden; background: var(--line); margin: .45em 0 .6em; max-width: 40em; }
+  .mix .stack b { display: block; height: 100%; }
+  .mix table { border-collapse: collapse; }
+  .mix td { padding: .05em 1.2em .05em 0; }
+  .mix td.n { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .mix i { display: inline-block; width: .7em; height: .7em; border-radius: 2px; margin-right: .45em; vertical-align: -.05em; }
+  .node .fill { display: block; width: 3.2em; height: 3px; border-radius: 2px; background: var(--line); margin-top: 3px; overflow: hidden; }
+  .node .fill b { display: block; height: 100%; background: var(--muted); }
+  .node .fill.high b { background: var(--maroon); }
   .bar .controls { display: flex; gap: .35em; align-items: center; }
   .bar .controls .btn, .bar > .btn { font-size: 12.5px; padding: .2em .65em; }
   .bar .answer { font-size: 12.5px; color: var(--muted); }
@@ -259,11 +277,17 @@
   .exact-entry .who { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }
 
-  /* What Max writes: kept until sent, sent with two actions. */
+  /* What Max writes: a staging area, kept until he sends it one of two ways. */
   .compose { padding: .2em 1.2em 1em; }
   .compose .box { max-width: 48rem; margin: 0 auto; background: var(--white); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 2px 10px rgba(40, 30, 20, .06); padding: .55em .7em .5em .9em; }
   .compose .box:focus-within { border-color: #c9c4b4; box-shadow: 0 2px 14px rgba(40, 30, 20, .1); }
-  .compose.armed .box { border-color: var(--maroon); box-shadow: 0 0 0 3px var(--maroon-soft); }
+  .compose .box.drop { border-color: var(--ink); }
+  .compose .tray { display: flex; flex-wrap: wrap; gap: .4em; margin: .1em 0 .35em; }
+  .compose .tray:empty { display: none; }
+  .compose .att { display: inline-flex; align-items: center; gap: .35em; font-size: 12px; border: 1px solid var(--line); border-radius: 8px; padding: .15em .25em .15em .4em; background: var(--paper); max-width: 16em; }
+  .compose .att img { height: 2.2em; border-radius: 4px; }
+  .compose .att span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compose .att button { color: var(--muted); padding: 0 .3em; }
   .compose .to { font-size: 11.5px; color: var(--muted); margin-bottom: .15em; }
   .compose .to.answering { color: var(--maroon); font-weight: 600; }
   .compose textarea { display: block; width: 100%; border: 0; outline: 0; resize: none; background: transparent; font: 15px/1.5 var(--sans); color: var(--ink); min-height: 2.6em; max-height: 40vh; padding: 0; }
@@ -313,7 +337,6 @@
   <span class="mark">harness</span>
   <span id="link" class="down" title="connecting"></span>
   <span class="spacer"></span>
-  <span id="lock" hidden></span>
   <button id="pill" class="btn" type="button"></button>
 </header>
 <div id="drawer" hidden></div>
@@ -326,11 +349,12 @@
     <button class="back" type="button" aria-label="back to the map">‹</button>
     <nav class="crumbs"></nav>
     <span class="state"></span>
-    <span class="ctx"></span>
+    <button class="ctx" type="button"></button>
     <span class="controls"></span>
     <button class="btn exact-toggle" type="button" title="Show the context exactly as it was sent">Exact</button>
     <button class="x" type="button" aria-label="close" title="Back to the map (Esc)">×</button>
   </div>
+  <div class="mix" hidden></div>
   <div class="body"><div class="scroll"><div class="log"></div><button class="btn jump" type="button" hidden>↓ Latest</button></div><aside class="viewer" hidden></aside></div>
   <div class="compose"></div>
 </section>
@@ -412,9 +436,6 @@ function kept(input, key) {
   addEventListener("storage", (e) => { if (e.key === `draft:${key}` && document.activeElement !== input) input.value = e.newValue || ""; });
 }
 
-// This tab may act only inside one subtree; it can still look anywhere.
-let lock = sessionStorage.getItem("lock") || null;
-
 // Max's facts, with the text of each value they name, in one batch. A post
 // the connection dropped is sent again: what the page creates carries an id
 // it minted, so the core refuses a second copy, which means the first landed.
@@ -490,15 +511,14 @@ const isDone = (t) => t.waiting?.kind === "done";
 // in Max's own scope continues.
 const parentOf = (t) => t.owner || (t.from && byId[t.from] ? t.from : null);
 const ancestry = (t) => { const out = []; for (let p = parentOf(t); p && byId[p] && out.length < 50; p = parentOf(byId[p])) out.unshift(byId[p]); return out; };
-const within = (id, root) => id === root || ancestry(byId[id] || {}).some((a) => a.id === root);
-const mayAct = (id) => can.act && (!lock || within(id, lock));
 // The calls a task is waiting on right now.
 function awaited(t) {
   const w = t.waiting || {};
   return new Set([...(w.calls || []).map((c) => c.id), ...(w.ask ? [w.ask.id] : [])]);
 }
 
-// Finished projects fold to their root once they have been finished a while.
+// A finished project folds to its root once it has been finished a while:
+// a small card on the archive shelf, below everything live.
 const FOLD_AFTER = 30 * 60 * 1000;
 const unfolded = new Set();
 
@@ -541,7 +561,7 @@ function derive() {
     const root = c.tasks.find((t) => !parentOf(t)) || c.tasks[0];
     const live = c.tasks.some((t) => !isDone(t));
     const last = Math.max(...c.tasks.map((t) => t.waiting?.since || 0));
-    const folded = !live && now - last > FOLD_AFTER && !unfolded.has(root.id) && !c.tasks.some((t) => t.id === openId);
+    const folded = !live && now - last > FOLD_AFTER && !unfolded.has(root.id) && !c.tasks.some((t) => t.id === openId && t.id !== root.id);
     return { root, live, last, folded, nodes: c.nodes, tasks: c.tasks };
   });
   list.sort((a, b) => (b.live - a.live) || order(a.root, b.root));
@@ -556,12 +576,15 @@ let positions = new Map();   // id -> {x, y, w, h}: laid out
 let shown = new Map();       // id -> {x, y}: drawn now (tweened)
 let shape = "";
 
+const CARD_H = 40;
+const cardStatus = (c) => `finished ${ago(c.last)} ago · ${c.tasks.length} task${c.tasks.length > 1 ? "s" : ""}`;
 function sizeOf(n, comp) {
+  if (comp.folded) return { w: Math.min(230, Math.max(150, measure(shortName(n.t), "600 13px Georgia") + 28, measure(cardStatus(comp), "11px sans-serif") + 28)), h: CARD_H };
   if (n.kind === "scope") return { w: 12, h: 12 };
   if (n.kind === "sat") return { w: Math.min(160, Math.max(90, measure(satLabel(n), "12px sans-serif") + 10)), h: SAT_DOT + 22 };
   const root = comp.root.id === n.id;
   const w = Math.min(210, Math.max(118, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
-  return { w, h: (root ? ROOT_DOT : DOT) + 44 + (root ? 18 : 0) };
+  return { w, h: (root ? ROOT_DOT : DOT) + 44 + (root ? 18 : 0) + (n.t.tokens && !isDone(n.t) ? 6 : 0) };
 }
 const satLabel = (n) => n.call.limb === "max" ? "asks you" : `${n.call.tool} ${gist(n.call.input)}`.trim();
 
@@ -580,6 +603,7 @@ const ELK_OPTIONS = {
 const GAP = 90;
 async function layout() {
   const parts = graph.comps.map((c) => {
+    if (c.folded) { const z = sizeOf(graph.nodes.get(c.root.id), c); return { archived: c.last, children: [{ id: c.root.id, width: z.w, height: z.h }], edges: [] }; }
     const ns = c.folded ? [graph.nodes.get(c.root.id)] : depthFirst(c);
     const ids = new Set(ns.map((n) => n.id));
     const children = ns.map((n) => { const z = sizeOf(n, c); return { id: n.id, width: z.w, height: z.h }; });
@@ -591,19 +615,29 @@ async function layout() {
   const sig = JSON.stringify([parts.map((p) => [p.children.map((c) => [c.id, Math.round(c.width), c.height]), p.edges.map((e) => [e.sources[0], e.targets[0]])]), Math.round(innerWidth / 200)]);
   if (sig === shape) return false;
   shape = sig;
-  const laid = await Promise.all(parts.map(async (p) => {
+  const live = parts.filter((p) => p.archived == null);
+  const archive = parts.filter((p) => p.archived != null).sort((a, b) => b.archived - a.archived);
+  const laid = await Promise.all(live.map(async (p) => {
     if (!elk) { let x = 0; return { w: 0, h: 0, nodes: p.children.map((c) => { const n = { ...c, x, y: 0 }; x += c.width + 30; return n; }) }; }
     const out = await elk.layout({ id: "p", layoutOptions: ELK_OPTIONS, children: p.children, edges: p.edges });
     return { w: out.width, h: out.height, nodes: out.children };
   }));
-  // Shelves as wide as the screen at an easy reading zoom.
+  const cards = archive.map((p) => { const c = p.children[0]; return { w: c.width, h: c.height, nodes: [{ ...c, x: 0, y: 0 }] }; });
+  // Shelves as wide as the screen at an easy reading zoom; the archive's
+  // cards, most recently finished first, on shelves of their own below.
   const row = Math.max((innerWidth - 80) / (phone() ? .75 : 1), ...laid.map((l) => l.w));
   const shelves = [];
-  for (const l of laid) {
-    const last = shelves[shelves.length - 1];
-    if (last && last.w + GAP + l.w <= row) { last.items.push(l); last.w += GAP + l.w; last.h = Math.max(last.h, l.h); }
-    else shelves.push({ items: [l], w: l.w, h: l.h });
-  }
+  const shelve = (items, gap) => {
+    const first = shelves.length;
+    for (const l of items) {
+      const last = shelves.length > first ? shelves[shelves.length - 1] : null;
+      if (last && last.w + gap + l.w <= row) { last.items.push(l); last.w += gap + l.w; last.h = Math.max(last.h, l.h); }
+      else shelves.push({ items: [l], w: l.w, h: l.h, gap });
+    }
+  };
+  shelve(laid, GAP);
+  if (cards.length && laid.length) shelves.push({ items: [], w: 0, h: GAP / 2, gap: 0 });
+  shelve(cards, 14);
   // Each shelf centred under the widest.
   const widest = Math.max(0, ...shelves.map((r) => r.w));
   positions = new Map();
@@ -612,9 +646,9 @@ async function layout() {
     let x = (widest - r.w) / 2;
     for (const l of r.items) {
       for (const c of l.nodes) positions.set(c.id, { x: x + c.x, y: y + c.y, w: c.width, h: c.height });
-      x += l.w + GAP;
+      x += l.w + r.gap;
     }
-    y += r.h + GAP;
+    y += r.h + (r.gap === GAP ? GAP : 14);
   }
   return true;
 }
@@ -651,7 +685,8 @@ function bounds(ids) {
   return x0 === Infinity ? null : { x0, y0, x1, y1 };
 }
 function fit(fly = true) {
-  const b = bounds();
+  const live = new Set(graph.comps.filter((c) => !c.folded).flatMap((c) => c.nodes.map((n) => n.id)));
+  const b = bounds(live.size ? live : null);
   if (!b) return;
   const top = 64, bottom = 56, side = 40;
   const w = innerWidth - side * 2, h = innerHeight - top - bottom;
@@ -770,7 +805,8 @@ function drawMap() {
     a.style.width = `${p.w}px`;
     if (n.kind === "task") {
       const t = n.t, l = look(t), root = roots.has(id);
-      a.className = `node ${l.cls}${root ? " root" : ""}${id === openId ? " selected" : ""}`;
+      const fc = folded.get(id);
+      a.className = fc ? `node archived${id === openId ? " selected" : ""}` : `node ${l.cls}${root ? " root" : ""}${id === openId ? " selected" : ""}`;
       a.style.setProperty("--d", `${root ? ROOT_DOT : DOT}px`);
       const dot = $(".dot", a);
       dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = glyph(t)) : dot.prepend(document.createTextNode(glyph(t)));
@@ -779,18 +815,25 @@ function drawMap() {
       $(".name", a).textContent = shortName(t);
       const st = $(".status", a);
       const bad = trouble(t);
-      st.textContent = bad || l.text;
+      st.textContent = fc ? cardStatus(fc) : bad || l.text;
+      let fill = $(".fill", a);
+      if (t.tokens && !isDone(t)) {
+        if (!fill) { a.insertBefore(fill = el("span", "fill"), st.nextSibling); fill.append(el("b")); }
+        const f = fullness(t);
+        fill.classList.toggle("high", f > .8);
+        fill.firstChild.style.width = `${Math.max(2, Math.round(f * 100))}%`;
+        fill.title = `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`;
+      } else fill?.remove();
       st.classList.toggle("trouble", !!bad);
       a.title = `${t.name} · ${t.environment || ""} · ${t.mode}\n\n${(t.mandate || "").slice(0, 400)}`;
       let where = $(".where", a);
       const place = Object.values(t.places || {})[0];
       if (root && place) { if (!where) a.append(where = el("span", "where")); where.textContent = place.split("/").filter(Boolean).pop(); where.title = place; } else where?.remove();
       let more = $(".more", a);
-      const fc = folded.get(id);
-      if (fc) {
-        if (!more) { a.append(more = el("button", "more")); more.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); unfolded.add(id); refresh(); }); }
-        more.textContent = `+${fc.tasks.length - 1} more · finished`;
+      if (fc && fc.tasks.length > 1) {
+        if (!more) { a.append(more = el("button", "more", "⌄")); more.title = "Unfold the project"; more.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); unfolded.add(id); refresh(); }); }
       } else more?.remove();
+      if (fc) where?.remove();
     } else if (n.kind === "scope") {
       a.className = `node scope${n.scope.background ? " background" : ""}${n.scope.settled ? " settled" : ""}`;
       $(".name", a).textContent = ""; $(".status", a).textContent = "";
@@ -897,8 +940,6 @@ function render() {
   renderPill();
   renderUsage();
   $("#build").textContent = `${view.build || ""} · seq ${view.seq}`;
-  $("#lock").hidden = !lock;
-  if (lock) { $("#lock").replaceChildren(`this tab acts only in ${byId[lock]?.name || "?"} `, Object.assign(el("button", "btn", "unlock"), { onclick: () => setLock(null) })); }
   if (openId) renderPanel();
   if (!$("#drawer").hidden) renderDrawer();
 }
@@ -1004,7 +1045,7 @@ async function transition(to) {
     if (!view || !byId[to]) { pendingOpen = to; return; }
     // Unfold a finished project to reach a node in it.
     const comp = graph.comps.find((c) => c.tasks.some((t) => t.id === to));
-    if (comp?.folded) { unfolded.add(comp.root.id); await refreshNow(); }
+    if (comp?.folded && comp.root.id !== to) { unfolded.add(comp.root.id); await refreshNow(); }
     if (!saved) saved = { ...cam };
     const k = Math.max(cam.k, phone() ? 1.1 : 1.3);
     centreOn(to, k, true);
@@ -1076,7 +1117,6 @@ addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (!$("#drawer").hidden) { $("#drawer").hidden = true; return; }
     if (!$("#sheet").hidden) { $("#sheet").hidden = true; return; }
-    if (sendArmed) { disarm(); return; }
     if (!$(".viewer", panel).hidden) { $(".viewer", panel).hidden = true; return; }
     if (openId) closeNode();
   }
@@ -1101,28 +1141,78 @@ function renderPanel() {
   st.className = `state${l.cls.includes("open") ? " max" : ""}`;
   const ctx = $(".ctx", panel);
   ctx.replaceChildren();
+  ctx.hidden = !t.tokens;
   if (t.tokens) {
-    const g = el("span", `gauge${t.tokens.context > 160000 ? " high" : ""}`);
-    const bar = el("i"); const fill = el("b"); fill.style.width = `${Math.min(100, t.tokens.context / 2000)}%`; bar.append(fill);
-    g.append(bar, `${kTokens(t.tokens.context)} context`);
-    g.title = "tokens in its context at its last request, of a 200k window";
+    const f = fullness(t);
+    const g = el("span", `gauge${f > .8 ? " high" : ""}`);
+    const bar = el("i"); const fill = el("b"); fill.style.width = `${Math.round(f * 100)}%`; bar.append(fill);
+    g.append(bar, `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`);
+    ctx.title = "What its context holds";
     ctx.append(g);
   }
+  if (!$(".mix", panel).hidden) renderMix(t);
   renderControls(t);
   renderLog(t);
   renderComposeState(t);
 }
 
+// How full a task's context was at its last request, of its model's window.
+const fullness = (t) => t.tokens && t.window ? Math.min(1, t.tokens.context / t.window) : 0;
+
+// What a context holds: its last request's token count, split by what each
+// part of the context is, in proportion to its size (an estimate: the
+// provider counts only the whole).
+const MIX = [
+  ["system", "System prompt", "#141413"], ["tools", "Tool definitions", "#6b6a64"],
+  ["mandate", "Mandate and brief", "#a19f96"], ["max", "Your words", "#7a1f22"],
+  ["notes", "Harness notes", "#c9c4b4"], ["said", "Its words", "#4f6d8a"],
+  ["calls", "Its tool calls", "#8aa1b8"], ["results", "Tool results", "#6c8f5e"],
+];
+function mixOf(chain) {
+  const m = Object.fromEntries(MIX.map(([k]) => [k, 0]));
+  const size = (b) => b.type === "image" ? 6000 : JSON.stringify(b).length;
+  for (const e of chain) {
+    if (e.role === "root") { m.system += (e.system || "").length; m.tools += (e.tools || "").length; continue; }
+    blocksOf(e).forEach((b, k) => {
+      const who = e.role === "user" ? (e.by || [])[k]?.by || "harness" : null;
+      const into = b.type === "tool_result" ? "results" : b.type === "tool_use" ? "calls"
+        : b.type === "thinking" || b.type === "redacted_thinking" ? null
+        : e.role === "assistant" ? "said" : who === "max" || who === "answer" ? "max"
+        : who === "mandate" || who === "brief" ? "mandate" : "notes";
+      if (into) m[into] += size(b);
+    });
+  }
+  return m;
+}
+async function renderMix(t) {
+  const box = $(".mix", panel);
+  const key = `${t.id}:${t.head}:${t.tokens?.context}`;
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  const chain = t.head ? await contextOf(t.head) : null;
+  if (!chain || box.dataset.key !== key) return;
+  const m = mixOf(chain), total = Object.values(m).reduce((a, b) => a + b, 0) || 1, tokens = t.tokens?.context || 0;
+  const stack = el("div", "stack"), table = el("table");
+  for (const [k, label, colour] of MIX) {
+    if (!m[k]) continue;
+    const b = el("b"); b.style.width = `${(m[k] / total) * 100}%`; b.style.background = colour; b.title = label; stack.append(b);
+    const sw = el("i"); sw.style.background = colour;
+    const tr = el("tr"), name = el("td"); name.append(sw, label);
+    tr.append(name, el("td", "n", `≈${kTokens(Math.round(tokens * m[k] / total))}`), el("td", "n", `${Math.round(m[k] / total * 100)}%`));
+    table.append(tr);
+  }
+  const head = el("div", null, `${kTokens(tokens)} tokens of a ${kTokens(t.window)} window (${Math.round(fullness(t) * 100)}%) at its last request · ${t.tokens?.output ?? "?"} out · split by size`);
+  box.replaceChildren(head, stack, table);
+}
+$(".ctx", panel).onclick = () => { const m = $(".mix", panel); m.hidden = !m.hidden; m.dataset.key = ""; if (!m.hidden && byId[openId]) renderMix(byId[openId]); };
+
 function renderControls(t) {
   const box = $(".controls", panel);
-  const key = `${t.id}:${t.waiting?.kind}:${t.held}:${t.mode}:${mayAct(t.id)}:${lock}`;
+  const key = `${t.id}:${t.waiting?.kind}:${t.held}:${t.mode}:${can.act}`;
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.replaceChildren();
-  if (!mayAct(t.id) || isDone(t)) {
-    if (can.act && !isDone(t)) box.append(el("span", "answer", "this tab acts elsewhere"));
-    return;
-  }
+  if (!can.act || isDone(t)) return;
   const answer = el("span", "answer");
   const button = (label, title, fact, done, confirm) => {
     const b = el("button", "btn", label);
@@ -1143,15 +1233,7 @@ function renderControls(t) {
   button(t.held ? "Release" : "Hold", "No new requests under it until released", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), t.held ? "released" : "held");
   if (t.mode === "user-facing") button("Done", "It writes its result and finishes", () => ({ Delivery: { id: mint(), to: t.id, content: { Prompt: "Done" } } }), "done: its last turn writes the result", true);
   button("Stop", "Cancel it and everything it started", () => ({ Task: [t.id, { Drain: { Stop: "Max" } }] }), "stopping", true);
-  const lockB = el("button", "btn", lock === t.id ? "Unlock tab" : "Act only here");
-  lockB.title = "This tab acts only in this task and what it started; it can still show anything";
-  lockB.onclick = () => setLock(lock === t.id ? null : t.id);
-  box.append(lockB, answer);
-}
-function setLock(id) {
-  lock = id;
-  if (id) sessionStorage.setItem("lock", id); else sessionStorage.removeItem("lock");
-  render();
+  box.append(answer);
 }
 
 // An aside: a chat with a fork of a task waiting on agents it started, as
@@ -1305,7 +1387,7 @@ const isLast = (s, e, t) => e.id === t.head || (t.outcome && e.id === t.head);
 function said(text, caption, cls = "") {
   const d = el("div", `entry said ${cls}`);
   const words = parse(text);
-  const body = Array.isArray(words) ? words.map((w) => w.text || "").join("\n") : text;
+  const body = Array.isArray(words) ? words.map((w) => w.type === "image" ? "[image]" : w.text || "").join("\n") : text;
   d.append(el("div", "caption", caption), el("div", "bubble", body));
   return d;
 }
@@ -1459,7 +1541,7 @@ function renderTail(s, t) {
   const parts = [];
   if (t.waiting?.kind === "model") parts.push(followModel(t.waiting.call));
   else stopModel();
-  for (const p of t.pending || []) parts.push(said(p.content, `you, ${clock(p.at)} · not read yet`, "queued-words"));
+  for (const p of t.pending || []) parts.push(said(p.content, `you, ${clock(p.at)} · ${p.read === "TurnEnd" ? "it reads this when its turn ends" : "not read yet"}`, "queued-words"));
   const ask = askOf(t);
   if (ask) {
     const card = el("div", "entry card ask");
@@ -1549,95 +1631,149 @@ function screen(raw) {
 }
 
 // ─── What Max writes ───────────────────────────────────────────────────────
-// One box per open node, its text kept per task. Sending takes two actions:
-// Ctrl+Enter (or Send) arms it, the same again sends; any edit disarms.
+// One box per open node: a staging area, its text and attachments kept per
+// task across tabs and reloads. Enter is a new line; nothing reaches the
+// model until Max sends it, one of two ways: now (Ctrl+Enter), read with the
+// task's next request even mid-turn, or at the end of its turn
+// (Ctrl+Shift+Enter), so it does not cut across the work. Either way the
+// harness tells the model how far into its work he wrote.
 // Dictation streams into the box as edits to a live region, which Max can
 // edit too: an edit inside it pins the text up to the end of his edit, and
 // the words still coming go after it.
 const compose = $(".compose", panel);
-let box = null, sendArmed = false, dictation = null;
+let box = null, dictation = null;
+
+// Attachments: content blocks kept beside the draft text.
+const attached = {
+  get: (key) => parse(localStorage.getItem(`attach:${key}`) || "[]") || [],
+  set: (key, list) => {
+    try { list.length ? localStorage.setItem(`attach:${key}`, JSON.stringify(list)) : localStorage.removeItem(`attach:${key}`); return null; }
+    catch { return "too large to keep in this browser"; }
+  },
+};
+const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+async function attach(key, files) {
+  const list = attached.get(key);
+  for (const f of files) {
+    if (IMAGES.includes(f.type)) {
+      const data = await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.readAsDataURL(f); });
+      list.push({ name: f.name || "pasted image", block: { type: "image", source: { type: "base64", media_type: f.type, data } } });
+    } else {
+      list.push({ name: f.name, block: { type: "text", text: `[${f.name}]\n\n${await f.text()}` } });
+    }
+  }
+  const why = attached.set(key, list);
+  if (why) say(`not attached: ${why}`, true);
+  renderTray();
+}
+function renderTray() {
+  const tray = $(".tray", compose);
+  if (!tray || !box) return;
+  const key = box.dataset.key;
+  tray.replaceChildren(...attached.get(key).map((a, i) => {
+    const chip = el("span", "att");
+    if (a.block.type === "image") { const img = el("img"); img.src = `data:${a.block.source.media_type};base64,${a.block.source.data}`; chip.append(img); }
+    const x = el("button", null, "×"); x.type = "button"; x.title = "Remove";
+    x.onclick = () => { const list = attached.get(key); list.splice(i, 1); attached.set(key, list); renderTray(); };
+    chip.append(el("span", null, a.name), x);
+    return chip;
+  }));
+}
+addEventListener("storage", (e) => { if (box && e.key === `attach:${box.dataset.key}`) renderTray(); });
 
 function buildCompose(id) {
   compose.replaceChildren();
   box = null;
-  disarm();
   const t = byId[id];
   if (!t || isDone(t)) { compose.append(el("div", "closed", t && isDone(t) ? "Finished. Its log is read-only." : "")); return; }
-  if (!mayAct(id)) { compose.append(el("div", "closed", can.act ? `This tab acts only in ${byId[lock]?.name}.` : "This face only watches.")); return; }
+  if (!can.act) { compose.append(el("div", "closed", "This face only watches.")); return; }
   const wrap = el("div", "box");
   const to = el("div", "to");
+  const tray = el("div", "tray");
   box = el("textarea");
   box.rows = 2;
   box.dataset.key = id;
   box.spellcheck = true;
   box.value = drafts.get(id);
-  box.placeholder = "Write, paste or dictate. Ctrl+Enter twice sends.";
+  box.placeholder = "Write, paste, drop or dictate. Nothing is sent until you send it.";
   const row = el("div", "row2");
+  const file = Object.assign(el("input"), { type: "file", multiple: true, hidden: true });
+  const clip = el("button", "btn", "Attach"); clip.type = "button";
   const mic = el("button", "btn mic", "Dictate"); mic.type = "button"; mic.hidden = !can.dictation;
   const sample = el("button", "btn", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
   const status = el("span", "status");
-  const send = el("button", "btn primary send", "Send"); send.type = "button";
-  row.append(mic, sample, status, send);
-  wrap.append(to, box, row);
+  const later = el("button", "btn later", "At turn end"); later.type = "button";
+  later.title = "It reads this once its turn ends, without cutting across its work (Ctrl+Shift+Enter)";
+  const send = el("button", "btn primary send", "Send now"); send.type = "button";
+  row.append(clip, file, mic, sample, status, later, send);
+  wrap.append(to, tray, box, row);
   compose.append(wrap);
+  clip.onclick = () => file.click();
+  file.onchange = () => { attach(id, [...file.files]); file.value = ""; };
+  box.addEventListener("paste", (e) => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); attach(id, fs); } });
+  wrap.addEventListener("dragover", (e) => { e.preventDefault(); wrap.classList.add("drop"); });
+  wrap.addEventListener("dragleave", () => wrap.classList.remove("drop"));
+  wrap.addEventListener("drop", (e) => { e.preventDefault(); wrap.classList.remove("drop"); attach(id, [...e.dataTransfer.files]); });
   mic.onclick = () => dictate(false);
   sample.onclick = () => dictate(true);
-  send.onclick = () => submit();
-  box.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); } });
+  send.onclick = () => submit("Next");
+  later.onclick = () => submit("TurnEnd");
+  box.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    if (dictation) return stopDictation();
+    submit(e.shiftKey && !later.hidden ? "TurnEnd" : "Next");
+  });
   box.addEventListener("input", onInput);
   autosize();
+  renderTray();
   renderComposeState(t);
 }
+// Mid-turn, a message can go now or wait for the turn's end; between turns,
+// or as an answer to its question, there is only now.
+const midTurn = (t) => ["model", "calls", "harness", "held", "limited"].includes(t.waiting?.kind);
 function renderComposeState(t) {
   if (!box || box.dataset.key !== t.id) return;
-  const to = $(".to", compose), ask = askOf(t);
+  const to = $(".to", compose), ask = askOf(t), mid = midTurn(t) && !ask;
   to.className = `to${ask ? " answering" : ""}`;
-  to.textContent = ask ? `Answering: ${(parse(ask.input)?.question || "").split("\n")[0].slice(0, 120)}` : t.waiting?.kind === "max" ? `To ${t.name} · your turn` : `To ${t.name} · it reads this with its next request`;
+  to.textContent = ask ? `Answering: ${(parse(ask.input)?.question || "").split("\n")[0].slice(0, 120)}`
+    : !mid ? `To ${t.name} · its turn has ended`
+    : `To ${t.name} · working: send now to reach it mid-turn, or at its turn's end`;
+  $(".later", compose).hidden = !mid;
+  $(".send", compose).textContent = ask ? "Answer" : mid ? "Send now" : "Send";
+  $(".send", compose).title = "Ctrl+Enter";
 }
 const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = text; s.className = `status${bad ? " bad" : ""}`; } };
 function autosize() { if (!box) return; box.style.height = "auto"; box.style.height = `${Math.min(box.scrollHeight, innerHeight * .4)}px`; }
 addEventListener("storage", (e) => { if (box && e.key === `draft:${box.dataset.key}` && document.activeElement !== box && !dictation) { box.value = e.newValue || ""; prev = box.value; autosize(); } });
 
-function arm() {
-  sendArmed = true;
-  compose.classList.add("armed");
-  const b = $(".send", compose); if (b) { b.classList.add("armed"); b.textContent = "Send now"; }
-  say(phone() ? "Tap again to send" : "Ctrl+Enter again to send · Esc or any edit cancels");
-}
-function disarm() {
-  if (!sendArmed) return;
-  sendArmed = false;
-  compose.classList.remove("armed");
-  const b = $(".send", compose); if (b) { b.classList.remove("armed"); b.textContent = "Send"; }
-  say("");
-}
-async function submit() {
+async function submit(read) {
   if (!box) return;
-  if (dictation) { dictation.thenArm = true; return stopDictation(); }
-  if (!box.value.trim()) return;
-  if (!sendArmed) return arm();
-  disarm();
   const t = byId[box.dataset.key];
-  const text = box.value;
+  const text = box.value, files = attached.get(t.id);
+  if (!text.trim() && !files.length) return;
+  if (dictation) return stopDictation();
   say("sending");
   const ask = askOf(t);
-  const words = JSON.stringify([{ type: "text", text }]);
+  const blocks = [...files.map((a) => a.block), ...(text.trim() ? [{ type: "text", text }] : [])];
+  const words = JSON.stringify(blocks);
   let why;
   try {
     const id = await digest(words);
-    // An answer settles the question; anything else is words for its next turn.
+    // An answer settles the question; anything else is a delivery.
     why = ask
       ? await act({ Call: [ask.id, { Settled: { Completed: { model: id, full: null, observes: [] } } }] }, [words])
-      : await act({ Delivery: { id: mint(), to: t.id, content: { Words: id } } }, [words]);
+      : await act({ Delivery: { id: mint(), to: t.id, content: { Words: id }, read } }, [words]);
   } catch (e) { why = String(e); }
   if (why) return say(`not sent: ${why}`, true);
   if (box.value === text) { box.value = prev = ""; drafts.set(t.id, ""); autosize(); }
-  say(ask ? "answered" : `sent to ${t.name}`);
+  attached.set(t.id, []);
+  renderTray();
+  say(ask ? "answered" : read === "TurnEnd" ? `${t.name} reads it when its turn ends` : `sent to ${t.name}`);
 }
 
 let prev = "";
 function onInput() {
-  disarm();
   const now = box.value;
   if (dictation && dictation.key === box.dataset.key) {
     let x = 0;
@@ -1672,7 +1808,7 @@ function applyEdits(edits) {
   }
   if (following) target.setSelectionRange(end(), end());
   drafts.set(l.key, target.value);
-  if (shown) { prev = box.value; autosize(); disarm(); }
+  if (shown) { prev = box.value; autosize(); }
 }
 
 // The microphone as 16-bit PCM, in chunks of a tenth of a second.
@@ -1714,7 +1850,7 @@ async function dictate(sample) {
   if (at > 0 && !/\s/.test(box.value[at - 1])) { box.setRangeText(" ", at, at, "end"); at += 1; prev = box.value; }
   const ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
   ws.binaryType = "arraybuffer";
-  dictation = { ws, mic, key: box.dataset.key, T: "", P: 0, start: at, thenArm: false };
+  dictation = { ws, mic, key: box.dataset.key, T: "", P: 0, start: at };
   if (mic) mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); };
   const b = $(".mic", compose); if (b) { b.classList.add("on"); b.textContent = "Stop"; }
   say("connecting");
@@ -1748,7 +1884,6 @@ function finishDictation(l) {
   l.ws.close();
   const b = $(".mic", compose); if (b) { b.classList.remove("on"); b.textContent = "Dictate"; }
   if (!$(".status", compose)?.classList.contains("bad")) say("");
-  if (l.thenArm && box?.dataset.key === l.key && box.value.trim()) arm();
 }
 
 // ─── A new task, in Max's own scope ───────────────────────────────────────
@@ -1825,8 +1960,8 @@ function drawMapText() {
   for (const [id, a] of nodeEls) {
     const n = graph.nodes.get(id);
     if (n?.kind !== "task") continue;
-    const st = $(".status", a);
-    st.textContent = trouble(n.t) || look(n.t).text;
+    const st = $(".status", a), fc = graph.comps.find((c) => c.folded && c.root.id === id);
+    st.textContent = fc ? cardStatus(fc) : trouble(n.t) || look(n.t).text;
   }
 }
 </script>

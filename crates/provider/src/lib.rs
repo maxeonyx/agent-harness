@@ -43,6 +43,16 @@ pub use client::{Client, Finished, Progress};
 pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};
 
+/// How many tokens a model's context holds: 1M for the current Opus and
+/// Sonnet models without a beta, 200k for Haiku.
+pub fn context_window(model: &str) -> u64 {
+    if model.contains("haiku") {
+        200_000
+    } else {
+        1_000_000
+    }
+}
+
 /// Why a request was not sent.
 #[derive(Debug)]
 pub enum Error {
