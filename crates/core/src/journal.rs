@@ -277,7 +277,9 @@ pub enum Error<E> {
 impl<E: std::fmt::Display> std::fmt::Display for Error<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Refused { index, why } => write!(f, "fact {index} of the batch refused: {why:?}"),
+            Error::Refused { index, why } => {
+                write!(f, "fact {index} of the batch refused: {why:?}")
+            }
             Error::Store(error) => write!(f, "journal store: {error}"),
             Error::Unreadable { seq, why } => {
                 write!(f, "journal record {} does not fold: {why:?}", seq.0)
