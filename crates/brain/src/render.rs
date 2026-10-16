@@ -156,11 +156,21 @@ pub fn turn(
         .filter(|s| !observed_now(state, &turn.renders, s))
         .collect();
     if !stale.is_empty() {
-        let names: Vec<_> = stale.iter().map(|s| s.resource.name.as_str()).collect();
-        texts.push(text(&format!(
-            "[harness] Changed since you last saw them: {}. Read them again before relying on what you saw.",
-            names.join(", ")
-        )));
+        let (roles, names): (Vec<_>, Vec<_>) =
+            stale.iter().partition(|s| s.resource.kind == "role");
+        if !roles.is_empty() {
+            texts.push(text(
+                "[harness] Your role's definition changed. Your request parameters follow it now; \
+its prompt and tools take effect from your next `handover`.",
+            ));
+        }
+        if !names.is_empty() {
+            let names: Vec<_> = names.iter().map(|s| s.resource.name.as_str()).collect();
+            texts.push(text(&format!(
+                "[harness] Changed since you last saw them: {}. Read them again before relying on what you saw.",
+                names.join(", ")
+            )));
+        }
         let told = stale
             .iter()
             .map(|s| Observation {

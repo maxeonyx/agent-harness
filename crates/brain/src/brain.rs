@@ -21,7 +21,7 @@ use harness_core::id::{
 };
 use harness_core::journal::{self, Author, Batch, Fact, Launched, Record};
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose};
-use harness_core::resource::{Observation, ResourceKey};
+use harness_core::resource::{Change, Observation, ResourceKey};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
     Context, Created, Drain, Giver, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome,
@@ -42,6 +42,8 @@ use crate::{policy, render, roles};
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
 const TICK: Duration = Duration::from_millis(250);
+/// How often the role files are read again.
+const ROLES_EVERY: Duration = Duration::from_secs(2);
 
 /// What reaches the loop from the threads it started, and from faces.
 pub struct Event(What);
@@ -127,6 +129,13 @@ pub struct Brain {
     meta: LimbId,
     /// Max's limb: his answers to `ask`.
     max: LimbId,
+    /// The user limb: `~/.claude`.
+    user: LimbId,
+    /// Where the role files are, and when they were last read.
+    roles: PathBuf,
+    roles_read: Instant,
+    /// Why the role files last could not be read, said once.
+    roles_error: Option<String>,
     /// The plugin limbs this brain has started, by id.
     limbs: HashMap<LimbId, Workspace>,
     /// Those it is starting: a clone being made.
@@ -185,6 +194,10 @@ impl Brain {
             feed,
             meta: meta.unwrap_or_else(LimbId::generate),
             max: max.unwrap_or_else(LimbId::generate),
+            user: LimbId::generate(),
+            roles: roles.to_path_buf(),
+            roles_read: Instant::now(),
+            roles_error: None,
             limbs: HashMap::new(),
             connecting: HashSet::new(),
             state_dir,
@@ -212,21 +225,12 @@ impl Brain {
             let config = PathBuf::from(home).join(".claude");
             facts.push(Fact::Limb(Settings::user(user_id, config)));
         }
-        let current: Vec<Environment> = brain.state().environments().cloned().collect();
-        let (meta_id, max_id) = (brain.meta, brain.max);
-        let (defined, values) =
-            roles::environments(&roles::read(roles)?, &current, &|name| match name {
-                "meta" => Some(meta_id),
-                "max" => Some(max_id),
-                "user" => Some(user_id),
-                _ => None,
-            })?;
-        for env in defined {
-            if brain.state().environment(env.id) != Some(&env) {
-                facts.push(Fact::Environment(env));
-            }
-        }
-        brain.append(Batch { values, facts });
+        brain.user = user_id;
+        brain.append(Batch {
+            values: Vec::new(),
+            facts,
+        });
+        brain.define()?;
         brain.root = match start {
             Some(start) => Some(brain.start(start)?),
             None => brain
@@ -338,6 +342,16 @@ impl Brain {
     /// face keeps serving.
     pub fn run(&mut self) {
         loop {
+            if self.roles_read.elapsed() > ROLES_EVERY {
+                let error = self.define().err();
+                if error.is_some() && error != self.roles_error {
+                    eprintln!(
+                        "the roles are unchanged: {}",
+                        error.as_deref().unwrap_or("")
+                    );
+                }
+                self.roles_error = error;
+            }
             self.work();
             self.report();
             match self.inbox.recv_timeout(TICK) {
@@ -353,6 +367,48 @@ impl Brain {
 
     fn state(&self) -> &State {
         self.journal.state()
+    }
+
+    /// Read the role files, and commit each role whose file changed as a
+    /// new version of its environment, with the change to the file, so a
+    /// task whose context embodies the old version is told.
+    fn define(&mut self) -> Result<(), String> {
+        self.roles_read = Instant::now();
+        let (meta, max, user) = (self.meta, self.max, self.user);
+        let current: Vec<Environment> = self.state().environments().cloned().collect();
+        let (defined, values) = roles::environments(
+            &roles::read(&self.roles)?,
+            &current,
+            &|name| match name {
+                "meta" => Some(meta),
+                "max" => Some(max),
+                "user" => Some(user),
+                _ => None,
+            },
+            meta,
+        )?;
+        let mut facts = Vec::new();
+        for env in defined {
+            if self.state().environment(env.id) == Some(&env) {
+                continue;
+            }
+            if let Some(source) = &env.source
+                && self.state().resource(&source.resource).map(|c| c.version)
+                    != Some(source.version)
+            {
+                facts.push(Fact::Change(Change {
+                    resource: source.resource.clone(),
+                    version: source.version,
+                    by: None,
+                    content: None,
+                }));
+            }
+            facts.push(Fact::Environment(env));
+        }
+        if !facts.is_empty() {
+            self.append(Batch { values, facts });
+        }
+        Ok(())
     }
 
     fn work(&mut self) {

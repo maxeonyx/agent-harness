@@ -22,16 +22,25 @@
 //! is given its own of, each a place of the same plugin kind (`workspace`: a
 //! clone); `starts` names the roles it can start fresh tasks in. Claude Code
 //! ignores the keys it does not know.
+//!
+//! A role file is a resource of the meta limb, the brain's own: each
+//! version of an environment records the file's version it was read from
+//! ([`Environment::source`]), and the brain states each new version as a
+//! change, so a task whose root embodies the old one is told.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use harness_core::environment::{Environment, Place};
-use harness_core::id::{EnvironmentId, LimbId};
+use harness_core::id::{Digest, EnvironmentId, LimbId};
+use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
 
 /// One role file, parsed.
 pub struct Role {
+    /// The file it was read from, and its version.
+    pub path: String,
+    pub version: Version,
     pub name: String,
     pub model: String,
     /// The request parameters, as the exact JSON object every turn sends.
@@ -54,7 +63,10 @@ pub fn read(dir: &Path) -> Result<Vec<Role>, String> {
         .iter()
         .map(|p| {
             let text = std::fs::read_to_string(p).map_err(|e| format!("{p:?}: {e}"))?;
-            parse(&text).map_err(|e| format!("{p:?}: {e}"))
+            let mut role = parse(&text).map_err(|e| format!("{p:?}: {e}"))?;
+            role.path = p.display().to_string();
+            role.version = Version::Is(Digest::of(text.as_bytes()));
+            Ok(role)
         })
         .collect()
 }
@@ -82,6 +94,8 @@ fn parse(text: &str) -> Result<Role, String> {
     let model = one("model").ok_or("no `model`")?;
     let effort = one("effort").unwrap_or_else(|| "medium".into());
     Ok(Role {
+        path: String::new(),
+        version: Version::Gone,
         name: one("name").ok_or("no `name`")?,
         model: model_id(&model),
         params: serde_json::json!({
@@ -109,11 +123,12 @@ fn model_id(alias: &str) -> String {
 
 /// Each role as an environment version, with the bytes it names: ids reused
 /// by name from `current`, so a role's id outlives edits to it. `limb`
-/// resolves a shared limb's name.
+/// resolves a shared limb's name; `meta` owns the role files.
 pub fn environments(
     roles: &[Role],
     current: &[Environment],
     limb: &dyn Fn(&str) -> Option<LimbId>,
+    meta: LimbId,
 ) -> Result<(Vec<Environment>, Vec<Bytes>), String> {
     let ids: BTreeMap<&str, EnvironmentId> = roles
         .iter()
@@ -158,7 +173,14 @@ pub fn environments(
                         .ok_or(format!("{}: no role `{s}` to start", r.name))
                 })
                 .collect::<Result<_, _>>()?,
-            source: None,
+            source: Some(Observation {
+                resource: ResourceKey {
+                    limb: meta,
+                    kind: "role".into(),
+                    name: r.path.clone(),
+                },
+                version: r.version,
+            }),
         };
         values.extend([role, params]);
         out.push(env);
