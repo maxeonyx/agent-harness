@@ -10,10 +10,10 @@ The root starts by reading the repo and, because `mandate.md` says what the repo
 
 What to click:
 
-1. **`chat`** in the tree. You focus on it, its context opens root first, and the compose box says "To chat".
-2. Type, and press **Ctrl+Enter** to send. Enter on its own is a new line. Your words are a delivery in the journal; the task's next request carries them, and its answer streams in under its context.
+1. **`chat`** on the map. Its node opens into its log, and you focus on it; the compose box says "To chat". Drag or scroll the map, or press Esc, to close it.
+2. Type, and press **Ctrl+Enter** twice: the first arms the message, the second sends it. Enter on its own is a new line. Your words are a delivery in the journal; the task's next request carries them, and its answer streams in at the foot of its log. Agents it starts appear on the map under it.
 3. **Dictate**, allow the microphone, and talk: the words arrive in the box as you speak, and stay editable. **Stop** ends it. On a machine with no microphone, **Dictate the sample** streams `sample.wav` (13 s of Piper speech) to the dictation endpoint at real time instead. `speak.sh` regenerates it from `sample.txt`.
-4. While anything runs: **Interrupt**, **Stop** and **Hold/Release** above a task's details; **Waiting on you** lists your queue, ↑ ↓ reorder it, **Next** opens the top item. `demos/face-controls` drives each of these from a script.
+4. While anything runs: **Interrupt**, **Hold/Release**, **Done** and **Stop** in an open node's header. The **needs you** pill at the top right lists your queue: ↑ ↓ reorder it, **Next** opens the top item. `demos/face-controls` drives each of these from a script.
 5. Kill the brain and run it again at any point. A request in flight is lost and sent again, a tool call in flight ends unknown, and the page reconnects and loses nothing.
 
 The model and dictation use the claude.ai login in `~/.claude/.credentials.json`. Nothing here refreshes the token, so if it has expired, use Claude Code once.
