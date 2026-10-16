@@ -116,5 +116,5 @@ fn tool(name: &str, description: &str, properties: serde_json::Value, required: 
 /// whole content, which completes as a no-op once it has landed. A command
 /// or an edit may not be.
 pub fn rerun(tool: &str) -> bool {
-    matches!(tool, "read" | "grep" | "write")
+    matches!(tool, "read" | "grep" | "write" | "skill")
 }

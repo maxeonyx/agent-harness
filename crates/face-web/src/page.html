@@ -86,6 +86,9 @@
   button:disabled { color: var(--muted); cursor: default; background: var(--paper); }
   .controls-row { display: flex; gap: .5em; align-items: center; flex-wrap: wrap; margin: .2em 0 .8em; }
   .answer { color: var(--muted); }
+  #start { display: flex; flex-wrap: wrap; gap: .4em .8em; padding: .3em 1em .6em; border-bottom: 1px solid var(--line); }
+  #start textarea { flex-basis: 100%; font: inherit; padding: .4em .5em; background: var(--ground); border: 1px solid var(--line); border-radius: 6px; }
+  #start input, #start select { font: inherit; }
   .answer.bad { color: var(--maroon); font-weight: 600; }
   section > h2 button { text-transform: none; letter-spacing: 0; font-size: 1.1em; margin-left: .8em; }
   .queued .move { float: right; display: flex; gap: .3em; }
@@ -119,7 +122,17 @@
 </header>
 <main>
   <section id="queue"><h2>Waiting on you<button id="next" hidden>Next</button></h2><ul></ul></section>
-  <section id="tree"><h2>Tasks</h2><ul></ul></section>
+  <section id="tree"><h2>Tasks<button id="new">New task</button></h2>
+    <form id="start" hidden>
+      <label>Role <select id="role"></select></label>
+      <label>Name <input id="tname" placeholder="the role's name"></label>
+      <label>Directory <input id="dir" list="dirs" placeholder="/path/to/your/clone" size="34"></label>
+      <datalist id="dirs"></datalist>
+      <label><input type="checkbox" id="chat"> a chat with you</label>
+      <textarea id="mandate" placeholder="The mandate: what to do, and what to report." rows="4"></textarea>
+      <div class="controls-row"><button id="go" type="submit">Start</button><span class="answer" id="started"></span></div>
+    </form>
+    <ul></ul></section>
   <section id="facts"><h2>Journal</h2><ul></ul></section>
   <section id="detail"><h2>Task</h2><div class="body"><p class="empty">Select a task.</p></div></section>
   <section id="compose">
@@ -172,6 +185,7 @@ function throbber(t) {
       return { cls: "tool", spin: true, text: `tool: ${tools}${since}` };
     }
     case "max": return { cls: "max", spin: "●", text: (w.ask ? "asked you" : "your turn") + since };
+    case "starting": return { cls: "harness", spin: true, text: (w.limbs.length ? `making ${w.limbs.join(", ")}…` : "starting") + since };
     case "harness": return { cls: "harness", spin: true, text: "harness: preparing the next request" };
     case "held": return { cls: "held", spin: "‖", text: "held" };
     case "limited": return { cls: "limited", spin: "⧗", text: `usage limit until ${clock(w.until)}` };
@@ -287,7 +301,7 @@ function row(t, depth) {
   li.style.setProperty("--depth", depth);
   if (t.id === selected) li.classList.add("selected");
   if (t.waiting && t.waiting.kind === "done") li.classList.add("done");
-  li.append(el("span", "name", t.name), el("span", "tag", t.agent));
+  li.append(el("span", "name", t.name), el("span", "tag", t.environment || ""));
   if (t.origin !== "fresh") li.append(el("span", "tag", `${t.origin} of ${byId[t.from] ? byId[t.from].name : t.from}`));
   if (t.held) li.append(el("span", "tag", "held"));
   if (t.draining) li.append(el("span", "tag", `draining: ${t.draining}`));
@@ -322,10 +336,10 @@ const mint = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.
 const FACE = localStorage.getItem("face") || mint();
 localStorage.setItem("face", FACE);
 
-// One of Max's facts, with the bytes it names (each a Uint8Array).
-async function act(fact, values = []) {
+// Max's facts, with the text of each value they name, in one batch.
+async function act(facts, values = []) {
   if (!can.act) return "this face is not wired to a brain";
-  const batch = { values: values.map((v) => [...v]), facts: [fact] };
+  const batch = { values, facts: Array.isArray(facts) ? facts : [facts] };
   const body = JSON.stringify({ face: FACE, seen: view.seq, batch });
   for (let attempt = 0; ; attempt++) {
     let res;
@@ -516,7 +530,7 @@ async function send() {
   if (!box.value.trim()) return;
   const text = box.value;
   say("sending");
-  const words = new TextEncoder().encode(JSON.stringify([{ type: "text", text }]));
+  const words = JSON.stringify([{ type: "text", text }]);
   let why;
   try {
     const id = await (await fetch("/digest", { method: "POST", body: words })).text();
@@ -533,6 +547,44 @@ box.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
 });
 $("#send").onclick = send;
+
+// Starting a task in Max's own scope: a role, a directory for each of its
+// places (the workspace limb already there, or a new one), and a mandate.
+$("#new").onclick = () => {
+  const form = $("#start");
+  form.hidden = !form.hidden;
+  if (form.hidden) return;
+  $("#role").replaceChildren(...view.environments.map((e) => { const o = el("option", null, e.name); o.value = e.id; return o; }));
+  $("#dirs").replaceChildren(...view.workspaces.map((w) => { const o = el("option"); o.value = w.dir; return o; }));
+};
+$("#start").onsubmit = async (e) => {
+  e.preventDefault();
+  const env = view.environments.find((x) => x.id === $("#role").value);
+  const mandate = $("#mandate").value.trim();
+  const answer = $("#started");
+  if (!env || !mandate) { answer.textContent = "a role and a mandate"; return; }
+  const dir = $("#dir").value.trim();
+  const facts = [], places = {};
+  for (const place of env.places) {
+    if (!dir) { answer.textContent = `a directory for its ${place.name}`; return; }
+    const known = view.workspaces.find((w) => w.dir === dir);
+    const id = known ? known.id : mint();
+    if (!known) facts.push({ Limb: { id, name: dir.split("/").pop(), fork: "Share",
+      kind: { Plugin: { kind: place.kind, config: JSON.stringify({ dir }), host: { Process: "Local" } } } } });
+    places[place.name] = id;
+  }
+  const text = await (await fetch("/digest", { method: "POST", body: mandate })).text();
+  facts.push({ Task: [mint(), { Created: {
+    name: $("#tname").value.trim() || env.name, by: null, scope: "Max",
+    origin: { Fresh: { environment: env.id, places } },
+    mode: $("#chat").checked ? "UserFacing" : "Autonomous",
+    mandate: { text, brief: null, quotes: [], from: "Max" },
+  } }] });
+  const why = await act(facts, [mandate]);
+  answer.className = why ? "answer bad" : "answer";
+  answer.textContent = why ? `refused: ${why}` : "started";
+  if (!why) { $("#mandate").value = ""; $("#start").hidden = true; }
+};
 $("#mic").onclick = () => dictate(false);
 $("#sample").onclick = () => dictate(true);
 

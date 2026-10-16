@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use harness_core::call::{Caller, Outcome as CallOutcome};
 use harness_core::delivery::Content;
+use harness_core::environment::LimbKind;
 use harness_core::id::{CallId, TaskId, Timestamp, ValueId};
 use harness_core::journal::{Fact, Record};
 use harness_core::model_call::{Ending, ModelCallEvent, Purpose};
@@ -55,8 +56,36 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
             })
         })
         .collect();
+    // The workspaces tasks work in, by directory: what a new task can be
+    // given, or a new limb made for.
+    let mut workspaces: Vec<Value> = Vec::new();
+    for limb in state.tasks().flat_map(|t| t.places.values()) {
+        let Some(LimbKind::Plugin { kind, config, .. }) = state.limb(*limb).map(|l| &l.kind) else {
+            continue;
+        };
+        let dir = serde_json::from_str::<Value>(config)
+            .ok()
+            .and_then(|c| c["dir"].as_str().map(str::to_owned));
+        let id = limb.to_string();
+        if kind == "workspace" && workspaces.iter().all(|w| w["id"] != id.as_str()) {
+            workspaces.push(json!({"id": id, "dir": dir}));
+        }
+    }
+    let environments: Vec<Value> = state
+        .environments()
+        .map(|e| {
+            json!({
+                "id": e.id.to_string(),
+                "name": e.name,
+                "model": e.model,
+                "places": e.places.iter().map(|p| json!({"name": p.name, "kind": p.kind})).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     json!({
         "seq": state.last().map_or(0, |s| s.0),
+        "environments": environments,
+        "workspaces": workspaces,
         "build": state.launch().map(|(_, l)| l.build.clone()),
         "limited": state.limited(now).map(|t| t.0),
         "usage": quota.map(usage),

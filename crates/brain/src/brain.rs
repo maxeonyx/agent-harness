@@ -28,7 +28,7 @@ use harness_core::task::{
 };
 use harness_core::value::Bytes;
 use harness_face_web::{Act, Feed, Running};
-use harness_limb_workspace::{Clone, Config, Settings, Workspace};
+use harness_limb_workspace::{Clone, Config, Settings, Workspace, user};
 use harness_provider::{Client, Finished, Progress};
 use harness_store::Store;
 use serde_json::Value;
@@ -157,17 +157,17 @@ impl Brain {
     ) -> Result<Brain, String> {
         let journal =
             journal::Journal::open(store).map_err(|e| format!("the journal folds: {e}"))?;
-        let meta = journal
-            .state()
-            .environments()
-            .flat_map(|e| e.limbs.iter())
-            .copied()
-            .find(|l| {
-                journal
-                    .state()
-                    .limb(*l)
-                    .is_some_and(|l| l.kind == LimbKind::Meta)
-            });
+        let shared = |is: &dyn Fn(&LimbKind) -> bool| {
+            let state = journal.state();
+            state
+                .environments()
+                .flat_map(|e| e.limbs.iter())
+                .copied()
+                .find(|l| state.limb(*l).is_some_and(|l| is(&l.kind)))
+        };
+        let meta = shared(&|k| *k == LimbKind::Meta);
+        let user_limb =
+            shared(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let mut brain = Brain {
             journal,
             reader,
@@ -194,11 +194,20 @@ impl Brain {
         if meta.is_none() {
             facts.push(Fact::Limb(meta::definition(brain.meta)));
         }
+        let user_id = user_limb.unwrap_or_else(LimbId::generate);
+        if user_limb.is_none() {
+            let home = std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?;
+            let config = PathBuf::from(home).join(".claude");
+            facts.push(Fact::Limb(Settings::user(user_id, config)));
+        }
         let current: Vec<Environment> = brain.state().environments().cloned().collect();
         let meta_id = brain.meta;
-        let (defined, values) = roles::environments(&roles::read(roles)?, &current, &|name| {
-            (name == "meta").then_some(meta_id)
-        })?;
+        let (defined, values) =
+            roles::environments(&roles::read(roles)?, &current, &|name| match name {
+                "meta" => Some(meta_id),
+                "user" => Some(user_id),
+                _ => None,
+            })?;
         for env in defined {
             if brain.state().environment(env.id) != Some(&env) {
                 facts.push(Fact::Environment(env));
@@ -382,8 +391,10 @@ impl Brain {
             let why = format!("the harness cannot run the limb `{}`", definition.name);
             return self.unreachable(limb, why);
         };
+        let user = matches!(&definition.kind, LimbKind::Plugin { kind, .. } if kind == user::KIND);
         let config = Config {
             limb,
+            user,
             settings,
             state: self.state_dir.join(limb.to_string()),
         };

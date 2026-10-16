@@ -53,6 +53,7 @@ mod record;
 mod shell;
 pub mod tools;
 pub mod trunc;
+pub mod user;
 
 use std::collections::HashMap;
 use std::io;
@@ -108,20 +109,29 @@ impl Settings {
     /// The settings a limb definition holds.
     pub fn of(limb: &Limb) -> Option<Settings> {
         match &limb.kind {
-            LimbKind::Plugin { kind, config, .. } if kind == KIND => {
+            LimbKind::Plugin { kind, config, .. } if kind == KIND || kind == user::KIND => {
                 serde_json::from_str(config).ok()
             }
             _ => None,
         }
     }
 
-    /// The limb's definition, as the fact that declares it.
+    /// The definition of a workspace limb, as the fact that declares it.
     pub fn definition(&self, id: LimbId, name: &str) -> Limb {
+        self.limb(id, name, KIND)
+    }
+
+    /// The definition of a user limb over Max's config directory `dir`.
+    pub fn user(id: LimbId, dir: PathBuf) -> Limb {
+        Settings { dir, clone: None }.limb(id, "user", user::KIND)
+    }
+
+    fn limb(&self, id: LimbId, name: &str, kind: &str) -> Limb {
         Limb {
             id,
             name: name.into(),
             kind: LimbKind::Plugin {
-                kind: KIND.into(),
+                kind: kind.into(),
                 config: serde_json::to_string(self).expect("settings are JSON"),
                 host: Host::Process(Machine::Local),
             },
@@ -133,6 +143,8 @@ impl Settings {
 /// Where a workspace runs and keeps its records.
 pub struct Config {
     pub limb: LimbId,
+    /// A user limb rather than a workspace ([`user`]).
+    pub user: bool,
     pub settings: Settings,
     /// Where the limb keeps its record of calls. Outside the directory, so
     /// the agents' files stay theirs.
@@ -155,6 +167,7 @@ struct Inner {
     /// The clone it was made as, which its instructions say is the agent's
     /// own.
     clone: Option<Clone>,
+    user: bool,
     calls: Calls,
     out: Sender<FromLimb>,
     running: Mutex<HashMap<CallId, Running>>,
@@ -184,6 +197,7 @@ impl Workspace {
             instance: InstanceId::generate(),
             root: dir.canonicalize()?,
             clone,
+            user: config.user,
             calls: Calls::open(config.state.join("calls"))?,
             out,
             running: Mutex::default(),
@@ -408,6 +422,9 @@ impl Inner {
     }
 
     fn describe(&self) -> Description {
+        if self.user {
+            return self.describe_user();
+        }
         let text = tools::instructions(&self.root, self.clone.as_ref());
         let version = Version::Is(Digest::of(text.as_bytes()));
         let mut instructions = vec![Instruction {
@@ -432,6 +449,40 @@ impl Inner {
         }
     }
 
+    fn describe_user(&self) -> Description {
+        let mut instructions = Vec::new();
+        if let Ok(own) = std::fs::read_to_string(self.root.join(user::INSTRUCTIONS)) {
+            instructions.push(Instruction {
+                observes: Observation {
+                    resource: self.key(INSTRUCTIONS, user::INSTRUCTIONS),
+                    version: Version::Is(Digest::of(own.as_bytes())),
+                },
+                text: format!("Max's own instructions, for every agent:\n\n{own}"),
+            });
+        }
+        let index = user::index(&self.root);
+        instructions.push(Instruction {
+            observes: Observation {
+                resource: self.key(INSTRUCTIONS, user::INDEX),
+                version: Version::Is(Digest::of(index.as_bytes())),
+            },
+            text: index,
+        });
+        Description {
+            instructions,
+            tools: user::tools(),
+        }
+    }
+
+    /// The file whose contents are among the limb's instructions.
+    fn instruction_file(&self) -> &'static str {
+        if self.user {
+            user::INSTRUCTIONS
+        } else {
+            "AGENTS.md"
+        }
+    }
+
     fn key(&self, kind: &str, name: &str) -> ResourceKey {
         ResourceKey {
             limb: self.limb,
@@ -444,7 +495,7 @@ impl Inner {
     /// it is the root's `AGENTS.md`.
     fn keys(&self, name: &str) -> Vec<ResourceKey> {
         let mut keys = vec![self.key(FILE, name)];
-        if name == "AGENTS.md" {
+        if name == self.instruction_file() {
             keys.push(self.key(INSTRUCTIONS, name));
         }
         keys
@@ -452,6 +503,9 @@ impl Inner {
 
     fn version_of(&self, resource: &ResourceKey) -> Option<Version> {
         match resource.kind.as_str() {
+            INSTRUCTIONS if self.user && resource.name == user::INDEX => {
+                Some(Version::Is(Digest::of(user::index(&self.root).as_bytes())))
+            }
             FILE | INSTRUCTIONS if !resource.name.is_empty() => {
                 files::version(&self.root.join(&resource.name)).ok()
             }

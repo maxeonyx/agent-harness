@@ -232,6 +232,7 @@ impl Brain {
         let (tx, rx) = mpsc::channel();
         let config = Config {
             limb: LIMB,
+            user: false,
             settings: Settings {
                 dir: scratch.join("work"),
                 clone: None,
