@@ -91,8 +91,15 @@ fn waiting(state: &State, w: &Waiting) -> Value {
         Waiting::Held => json!({"kind": "held"}),
         Waiting::Limited { until } => json!({"kind": "limited", "until": until.0}),
         Waiting::Model {
-            since, streaming, ..
-        } => json!({"kind": "model", "since": since.0, "streaming": streaming}),
+            call,
+            since,
+            streaming,
+        } => json!({
+            "kind": "model",
+            "call": call.to_string(),
+            "since": since.0,
+            "streaming": streaming,
+        }),
         Waiting::Calls { calls } => json!({
             "kind": "calls",
             "since": calls.iter().filter_map(|c| state.call(*c)).map(|c| c.made.0).min(),

@@ -18,18 +18,31 @@
 //! (`/context/<entry>`) and never changes, so the browser caches it forever
 //! and refetches only when the task's head moves.
 //!
-//! **Max's words.** Under the selected task is a compose box: a plain text
-//! box, where Enter is a new line and Ctrl+Enter sends. What it sends goes to
-//! [`Deliver`], which the brain implements; the face itself still writes
-//! nothing. The box takes dictation too ([`Dictation`]): the page's
-//! microphone, relayed to Anthropic's speech-to-text endpoint, the
-//! transcript arriving in the box as editable text.
+//! **Max's facts.** Everything Max does from the page is one of his facts in
+//! the core's own encoding, posted to `/act` and passed to [`Act`], which the
+//! brain implements: his words (a delivery from the compose box, where Enter
+//! is a new line and Ctrl+Enter sends), his controls over a task (interrupt,
+//! stop, hold), a new order for his queue, and the task he is focused on.
+//! The face itself still writes nothing, and passes on only facts that are
+//! Max's to author ([`is_maxs`]). The brain folds each one before it appends
+//! it, so a refusal comes back with the core's reason. Each page is its own
+//! face, with an id it keeps, and mints the ids of what it creates, so a post
+//! retried after a dropped connection cannot deliver twice.
+//!
+//! **Live text.** A running request's streamed events are not facts; the
+//! brain puts them in a [`Feed`], and `/live?model=<id>` streams them with
+//! their count as the event id, so a reconnect resumes where it left off.
+//!
+//! The box takes dictation too ([`Dictation`]): the page's microphone,
+//! relayed to Anthropic's speech-to-text endpoint, the transcript arriving in
+//! the box as editable text.
 //!
 //! Transport is std's TCP, rustls and one static page with no build step;
 //! the dictation socket is a WebSocket (tungstenite, without its TLS).
 
 mod dictation;
 mod http;
+mod live;
 mod view;
 
 use std::io::{self, Write};
@@ -39,13 +52,16 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use harness_core::context::{Entry, EntryId, Role, Wire};
-use harness_core::id::{Seq, TaskId, Timestamp};
-use harness_core::journal::{Author, Record};
+use harness_core::context::{Entry, EntryId, Role};
+use harness_core::delivery::Content;
+use harness_core::id::{CallId, FaceId, ModelCallId, Seq, Timestamp};
+use harness_core::journal::{Author, Fact, Record};
 use harness_core::state::State;
+use harness_core::task::{Drain, Stopper, TaskEvent};
 use serde_json::json;
 
 pub use dictation::{Dictation, Edit, Socket, edits};
+pub use live::{Feed, Running};
 pub use view::describe;
 
 /// What a face reads: the journal, and the context entries it names.
@@ -60,28 +76,42 @@ pub trait Source: Send + Sync + 'static {
     fn entry(&self, id: EntryId) -> Option<Entry>;
 }
 
-/// Where the words Max sends from this face go: the brain.
-///
-/// The brain makes them a [`harness_core::delivery::Content::Words`]
-/// delivery to `to`, authored [`harness_core::journal::Author::Max`] with
-/// this face's id and `seen`, the journal position the page had shown him.
-pub trait Deliver: Send + Sync + 'static {
-    /// Max's words to `to`: user content blocks, as the provider takes them.
-    /// An `Err` is shown to Max, and the box keeps his text.
-    fn words(&self, to: TaskId, seen: Seq, words: Wire) -> Result<(), String>;
+/// Where Max's facts go: the brain, the journal's only writer.
+pub trait Act: Send + Sync + 'static {
+    /// Append `fact` authored [`Author::Max`] by `face`, which had shown him
+    /// the journal up to `seen`. An `Err` is why it was not appended (the
+    /// core's [`harness_core::journal::Rejected`], by name), shown to Max.
+    fn act(&self, face: FaceId, seen: Seq, fact: Fact) -> Result<(), String>;
 }
 
-/// What the compose box can do. With neither, it is a box that cannot send.
+/// Whether Max may author `fact` from `face`: his words, his controls over
+/// a task, his queue's order, and this face's focus.
+pub fn is_maxs(face: FaceId, fact: &Fact) -> bool {
+    match fact {
+        Fact::Delivery(d) => matches!(d.content, Content::Words(_)),
+        Fact::Task(_, event) => matches!(
+            event,
+            TaskEvent::Drain(Drain::ToMax | Drain::Stop(Stopper::Max)) | TaskEvent::Held(_)
+        ),
+        Fact::Ranking(_) => true,
+        Fact::Focus(focus) => focus.face == face,
+        _ => false,
+    }
+}
+
+/// What a face is wired to. With nothing, it only watches.
 #[derive(Default)]
-pub struct Compose {
-    pub deliver: Option<Box<dyn Deliver>>,
+pub struct Wiring {
+    pub act: Option<Box<dyn Act>>,
     pub dictation: Option<Dictation>,
+    /// Live progress, from whoever runs things.
+    pub feed: Feed,
 }
 
 /// A face over one journal: folds it as it grows and serves the page.
 pub struct Face<S> {
     source: S,
-    compose: Compose,
+    wiring: Wiring,
     folded: Mutex<Folded>,
     grew: Condvar,
 }
@@ -102,16 +132,16 @@ const HEARTBEAT: Duration = Duration::from_secs(15);
 
 impl<S: Source> Face<S> {
     pub fn new(source: S) -> Arc<Face<S>> {
-        Face::with(source, Compose::default())
+        Face::with(source, Wiring::default())
     }
 
-    /// A face whose compose box sends and dictates as `compose` allows.
-    pub fn with(source: S, compose: Compose) -> Arc<Face<S>> {
+    /// A face that acts, dictates and shows live progress as `wiring` allows.
+    pub fn with(source: S, wiring: Wiring) -> Arc<Face<S>> {
         let state = State::default();
         let view = Arc::new(render(&state, None));
         Arc::new(Face {
             source,
-            compose,
+            wiring,
             folded: Mutex::new(Folded {
                 state,
                 view,
@@ -159,10 +189,10 @@ impl<S: Source> Face<S> {
                 false,
             ),
             ("GET", "/events") => self.events(&mut stream, request.last_event_id),
-            ("GET", "/compose") => {
-                let dictation = self.compose.dictation.as_ref();
+            ("GET", "/wiring") => {
+                let dictation = self.wiring.dictation.as_ref();
                 let can = json!({
-                    "send": self.compose.deliver.is_some(),
+                    "act": self.wiring.act.is_some(),
                     "dictation": dictation.is_some(),
                     "sample": dictation.is_some_and(Dictation::has_sample),
                 });
@@ -173,8 +203,9 @@ impl<S: Source> Face<S> {
                     false,
                 )
             }
-            ("POST", "/send") => self.send(&mut stream, &request.body),
+            ("POST", "/act") => self.act(&mut stream, &request.body),
             ("GET", "/dictation") => self.dictate(stream, &request),
+            ("GET", "/live") => self.live(&mut stream, &request),
             ("GET", path) => match path.strip_prefix("/context/").and_then(view::parse_entry) {
                 Some(head) => self.context(&mut stream, head),
                 None => http::not_found(&mut stream),
@@ -183,31 +214,50 @@ impl<S: Source> Face<S> {
         }
     }
 
-    /// Max's words from the compose box: `{"to", "seen", "text"}`.
-    fn send(&self, stream: &mut impl Write, body: &[u8]) -> io::Result<()> {
-        let Some(deliver) = &self.compose.deliver else {
-            return http::refuse(
-                stream,
-                "501 Not Implemented",
-                "sending is not wired to a brain",
-            );
+    /// One of Max's facts: `{"face", "seen", "fact"}`, the fact in the
+    /// journal's own encoding.
+    fn act(&self, stream: &mut impl Write, body: &[u8]) -> io::Result<()> {
+        let Some(act) = &self.wiring.act else {
+            return http::refuse(stream, "501 Not Implemented", "not wired to a brain");
         };
-        let said: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
-        let to = serde_json::from_value::<TaskId>(said["to"].clone());
-        let (Ok(to), Some(seen), Some(text)) = (to, said["seen"].as_u64(), said["text"].as_str())
-        else {
-            return http::refuse(stream, "400 Bad Request", "expected {to, seen, text}");
+        let mut said: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+        let face = serde_json::from_value::<FaceId>(said["face"].take());
+        let fact = serde_json::from_value::<Fact>(said["fact"].take());
+        let (Ok(face), Some(seen), Ok(fact)) = (face, said["seen"].as_u64(), fact) else {
+            return http::refuse(stream, "400 Bad Request", "expected {face, seen, fact}");
         };
-        let words = Wire(json!([{"type": "text", "text": text}]).to_string());
-        match deliver.words(to, Seq(seen), words) {
+        if !is_maxs(face, &fact) {
+            return http::refuse(stream, "403 Forbidden", "not a fact Max authors");
+        }
+        match act.act(face, Seq(seen), fact) {
             Ok(()) => http::respond(stream, "text/plain", b"", false),
             Err(why) => http::refuse(stream, "409 Conflict", &why),
         }
     }
 
+    /// A running thing's live progress: `?model=<id>` or `?call=<id>`.
+    fn live(&self, stream: &mut impl Write, request: &http::Request) -> io::Result<()> {
+        let id = |name| {
+            request
+                .query(name)
+                .map(|v| serde_json::Value::from(v.to_string()))
+        };
+        let running = match (id("model"), id("call")) {
+            (Some(v), _) => serde_json::from_value::<ModelCallId>(v).map(Running::Model),
+            (_, Some(v)) => serde_json::from_value::<CallId>(v).map(Running::Call),
+            _ => return http::refuse(stream, "400 Bad Request", "expected ?model= or ?call="),
+        };
+        let Ok(running) = running else {
+            return http::refuse(stream, "400 Bad Request", "a bad id");
+        };
+        http::start_events(stream)?;
+        let after = request.last_event_id.map_or(0, |s| s.0 as usize);
+        self.wiring.feed.stream(stream, running, after, HEARTBEAT)
+    }
+
     /// The dictation socket: `?rate=<Hz>` of the page's PCM, or `?sample`.
     fn dictate(&self, mut stream: impl Socket, request: &http::Request) -> io::Result<()> {
-        let (Some(dictation), Some(key)) = (&self.compose.dictation, &request.websocket_key) else {
+        let (Some(dictation), Some(key)) = (&self.wiring.dictation, &request.websocket_key) else {
             return http::not_found(&mut stream);
         };
         let rate = request.query("rate").and_then(|r| r.parse().ok());
