@@ -819,14 +819,21 @@ impl Brain {
     }
 
     /// Commit what the workspace says about its calls and files. A repeat
-    /// after a reconnection is refused by the journal and dropped; a report
-    /// of a version the journal already has is not a change.
+    /// after a reconnection is refused by the journal and dropped. A report
+    /// of the version the journal already has, or a watch's report of one no
+    /// live context knows otherwise, is not a change.
     fn limb_facts(&mut self, mut batch: Batch) {
         let state = self.state();
         batch.facts.retain(|fact| match fact {
-            Fact::Change(change) => {
-                state.resource(&change.resource).map(|c| c.version) != Some(change.version)
-            }
+            Fact::Change(change) => match state.resource(&change.resource) {
+                Some(current) => current.version != change.version,
+                None if change.by.is_some() => true,
+                None => state.tasks().filter(|t| !t.is_done()).any(|t| {
+                    t.knows
+                        .get(&change.resource)
+                        .is_some_and(|k| k.has != change.version)
+                }),
+            },
             _ => true,
         });
         if batch.facts.is_empty() {
@@ -896,7 +903,7 @@ impl Brain {
         {
             let input = String::from_utf8_lossy(&self.value(call.input))
                 .chars()
-                .take(110)
+                .take(200)
                 .collect::<String>();
             line = format!("{line} {input}");
         }

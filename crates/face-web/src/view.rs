@@ -181,12 +181,12 @@ pub fn describe(state: &State, record: &Record) -> String {
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {
                 let how = match &c.origin {
-                    Origin::Fresh { agent, .. } => format!(", {agent}"),
-                    Origin::Fork { from } => format!(", forked from {}", name(*from)),
-                    Origin::Resume { from } => format!(", resuming {}", name(*from)),
-                    Origin::Aside { from } => format!(", an aside of {}", name(*from)),
+                    Origin::Fresh { agent, .. } => agent.clone(),
+                    Origin::Fork { from } => format!("forked from {}", name(*from)),
+                    Origin::Resume { from } => format!("resuming {}", name(*from)),
+                    Origin::Aside { from } => format!("an aside of {}", name(*from)),
                 };
-                format!("{} created{how}", c.name)
+                format!("{} created ({how})", c.name)
             }
             TaskEvent::ModeSet(mode) => format!("{} is now {mode:?}", name(*id)),
             TaskEvent::Renamed(new) => format!("{} renamed to {new}", name(*id)),
