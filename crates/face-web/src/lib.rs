@@ -12,7 +12,8 @@
 //! resends the last id it got when it reconnects, so a dropped connection
 //! resumes with every record after it: the facts in between are read from
 //! the [`Source`] again, and the views are whole at every position, so
-//! nothing is lost and nothing is applied twice.
+//! nothing is lost and nothing is applied twice. `/view` is the latest view
+//! alone, for a client that only looks.
 //!
 //! **A context is a value.** It is fetched by its head entry
 //! (`/context/<entry>`) and never changes, so the browser caches it forever
@@ -189,6 +190,10 @@ impl<S: Source> Face<S> {
                 false,
             ),
             ("GET", "/events") => self.events(&mut stream, request.last_event_id),
+            ("GET", "/view") => {
+                let view = Arc::clone(&self.lock().view);
+                http::respond(&mut stream, "application/json", view.as_bytes(), false)
+            }
             ("GET", "/wiring") => {
                 let dictation = self.wiring.dictation.as_ref();
                 let can = json!({
@@ -425,7 +430,11 @@ pub fn serve<S: Source>(
                 return;
             };
             // A closed tab or a failed handshake ends only this connection.
-            let _ = face.handle(rustls::StreamOwned::new(connection, tcp));
+            let mut stream = rustls::StreamOwned::new(connection, tcp);
+            if face.handle(&mut stream).is_ok() {
+                stream.conn.send_close_notify();
+                let _ = stream.flush();
+            }
         });
     }
 }
