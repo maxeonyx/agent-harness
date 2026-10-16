@@ -136,6 +136,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-face-web"
+version = "0.0.0"
+dependencies = [
+ "harness-core",
+ "harness-store",
+ "rustls",
+ "serde_json",
+]
+
+[[package]]
 name = "harness-limb-workspace"
 version = "0.0.0"
 dependencies = [

@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness</title>
+<style>
+  :root {
+    --ground: #f0eee6; --paper: #faf9f5; --line: #e0dccf; --ink: #141413;
+    --muted: #6b6a64; --maroon: #7a1f22; --hover: #e8e4d8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; gap: 1.5em; align-items: baseline; padding: .7em 1.2em;
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { font: 600 1.15em ui-serif, Georgia, serif; margin: 0; }
+  header .meta { color: var(--muted); }
+  #link.down { color: var(--maroon); font-weight: 600; }
+  #refused { color: var(--maroon); font-weight: 600; }
+  main {
+    display: grid; gap: 1em; padding: 1em 1.2em;
+    grid-template-columns: minmax(22em, 1fr) minmax(26em, 1.4fr);
+    grid-template-areas: "queue detail" "tree detail" "facts detail";
+    grid-template-rows: auto 1fr auto;
+    height: calc(100vh - 3em);
+  }
+  section { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; overflow: auto; }
+  section > h2 {
+    font: 600 .8em ui-sans-serif, system-ui, sans-serif; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--muted); margin: 0; padding: .7em 1em .3em;
+  }
+  #queue { grid-area: queue; } #tree { grid-area: tree; }
+  #facts { grid-area: facts; max-height: 14em; } #detail { grid-area: detail; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  .task { padding: .25em 1em .25em calc(1em + var(--depth) * 1.3em); cursor: pointer; }
+  .task:hover { background: var(--hover); }
+  .task.selected { background: var(--hover); box-shadow: inset 3px 0 var(--maroon); }
+  .name { font-weight: 600; }
+  .tag { color: var(--muted); font-size: .85em; margin-left: .4em; }
+  .throb { display: block; color: var(--muted); font-size: .9em; }
+  .throb.max, .throb.failed { color: var(--maroon); font-weight: 600; }
+  .throb .spin { display: inline-block; width: 1.1em; }
+  .done .name { color: var(--muted); font-weight: 500; }
+  .queued { padding: .4em 1em; cursor: pointer; border-top: 1px solid var(--line); }
+  .queued:first-of-type { border-top: 0; }
+  .queued:hover { background: var(--hover); }
+  .queued .name { color: var(--maroon); }
+  .queued .why, .queued .ask { display: block; color: var(--ink); font-size: .9em; }
+  .empty { color: var(--muted); padding: .2em 1em .8em; }
+  #facts li { padding: .05em 1em; font: 12px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; }
+  #facts .seq, #facts .at { color: var(--muted); }
+  #facts .Max { color: var(--maroon); }
+  #detail .body { padding: 0 1em 1em; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .2em 1em; margin: .3em 0 1em; }
+  dt { color: var(--muted); } dd { margin: 0; }
+  .mandate { white-space: pre-wrap; }
+  .entry { border-top: 1px solid var(--line); padding: .6em 0; }
+  .entry .role { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .entry.assistant .role { color: var(--maroon); }
+  .entry.head { box-shadow: inset 3px 0 var(--maroon); padding-left: .7em; }
+  .block { white-space: pre-wrap; margin: .25em 0; }
+  .block.tool { font: 12px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; background: var(--ground); padding: .3em .5em; border-radius: 4px; }
+  details summary { cursor: pointer; color: var(--muted); }
+  pre { white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; margin: .3em 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>harness</h1>
+  <span class="meta" id="build"></span>
+  <span class="meta" id="seq"></span>
+  <span class="meta" id="link">connecting</span>
+  <span id="refused"></span>
+</header>
+<main>
+  <section id="queue"><h2>Waiting on you</h2><ul></ul></section>
+  <section id="tree"><h2>Tasks</h2><ul></ul></section>
+  <section id="facts"><h2>Journal</h2><ul></ul></section>
+  <section id="detail"><h2>Task</h2><div class="body"><p class="empty">Select a task.</p></div></section>
+</main>
+<script>
+"use strict";
+const $ = (sel) => document.querySelector(sel);
+const el = (tag, cls, text) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+};
+const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour12: false });
+const ago = (ms) => {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m`;
+};
+const FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+
+let view = null;
+let selected = location.hash.slice(1) || null;
+let shownHead = null;
+const facts = [];
+
+// What the task waits on: a glyph, words, and since when.
+function throbber(t) {
+  const w = t.waiting;
+  if (!w) return { cls: "", spin: "", text: "" };
+  const since = w.since != null ? ` · ${ago(w.since)}` : "";
+  switch (w.kind) {
+    case "model":
+      return { cls: "model", spin: true, text: (w.streaming ? "model streaming" : "model, before the first byte") + since };
+    case "calls": {
+      const kids = w.calls.flatMap((c) => c.children);
+      if (kids.length) {
+        const live = kids.filter((k) => byId[k] && byId[k].waiting && byId[k].waiting.kind !== "done").length;
+        return { cls: "children", spin: true, text: `${live} of ${kids.length} children running${since}` };
+      }
+      const tools = w.calls.map((c) => `${c.tool}${c.status === "made" ? " (queued)" : ""}`).join(", ");
+      return { cls: "tool", spin: true, text: `tool: ${tools}${since}` };
+    }
+    case "max": return { cls: "max", spin: "●", text: (w.ask ? "asked you" : "your turn") + since };
+    case "harness": return { cls: "harness", spin: true, text: "harness: preparing the next request" };
+    case "held": return { cls: "held", spin: "‖", text: "held" };
+    case "limited": return { cls: "limited", spin: "⧗", text: `usage limit until ${clock(w.until)}` };
+    case "listening": return { cls: "listening", spin: "◦", text: w.calls.length ? `listening, ${w.calls.length} background` : "listening" };
+    case "done": {
+      const o = t.outcome || {};
+      if (o.kind === "failed") return { cls: "failed", spin: "✗", text: `failed: ${o.reason}` };
+      if (o.kind === "cancelled") return { cls: "done", spin: "■", text: `cancelled by ${o.by}` };
+      return { cls: "done", spin: "✓", text: "done" };
+    }
+  }
+  return { cls: "", spin: "", text: w.kind };
+}
+
+let byId = {};
+
+function render() {
+  if (!view) return;
+  byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
+  $("#build").textContent = view.build ? `build ${view.build}` : "";
+  $("#seq").textContent = `seq ${view.seq}`;
+  $("#refused").textContent = view.refused || "";
+
+  // Max's queue, in the order the core derives.
+  const queue = $("#queue ul");
+  queue.replaceChildren();
+  for (const q of view.queue) {
+    const t = byId[q.task];
+    const li = el("li", "queued");
+    li.append(el("span", "name", t.name), el("span", "tag", `waiting ${ago(q.since)}`));
+    if (q.ask) li.append(el("span", "ask", `asks: ${preview(q.ask.input)}`));
+    li.append(el("span", "why", q.why ? q.why : "unranked"));
+    li.onclick = () => select(q.task);
+    queue.append(li);
+  }
+  if (!view.queue.length) queue.append(el("li", "empty", "Nothing needs you."));
+
+  // The tree: Max's scope at the top, each task under the task that owns it,
+  // an aside under the task it was opened on.
+  const parent = (t) => t.owner || (t.origin === "aside" ? t.from : null);
+  const kids = {};
+  for (const t of view.tasks) (kids[parent(t)] ||= []).push(t);
+  const tree = $("#tree ul");
+  tree.replaceChildren();
+  const walk = (id, depth) => {
+    for (const t of kids[id] || []) {
+      tree.append(row(t, depth));
+      walk(t.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  if (!view.tasks.length) tree.append(el("li", "empty", "No tasks yet."));
+
+  renderDetail();
+}
+
+function row(t, depth) {
+  const li = el("li", "task");
+  li.style.setProperty("--depth", depth);
+  if (t.id === selected) li.classList.add("selected");
+  if (t.waiting && t.waiting.kind === "done") li.classList.add("done");
+  li.append(el("span", "name", t.name), el("span", "tag", t.agent));
+  if (t.origin !== "fresh") li.append(el("span", "tag", `${t.origin} of ${byId[t.from] ? byId[t.from].name : t.from}`));
+  if (t.held) li.append(el("span", "tag", "held"));
+  if (t.draining) li.append(el("span", "tag", `draining: ${t.draining}`));
+  const th = throbber(t);
+  const line = el("span", `throb ${th.cls}`);
+  const spin = el("span", "spin", th.spin === true ? "" : th.spin);
+  if (th.spin === true) spin.dataset.spin = "1";
+  line.append(spin, document.createTextNode(th.text));
+  li.append(line);
+  li.onclick = () => select(t.id);
+  return li;
+}
+
+function select(id) {
+  selected = id;
+  history.replaceState(null, "", `#${id}`);
+  render();
+}
+
+function renderDetail() {
+  const body = $("#detail .body");
+  const t = selected && byId[selected];
+  if (!t) return;
+  if (body.dataset.task !== t.id) {
+    body.dataset.task = t.id;
+    shownHead = null;
+    body.replaceChildren(el("dl"), el("div", "context"));
+  }
+  const dl = body.querySelector("dl");
+  dl.replaceChildren();
+  const th = throbber(t);
+  const fields = [
+    ["task", t.name], ["agent", t.agent], ["mode", t.mode], ["environment", t.environment],
+    ["waiting on", th.text], ["pending inputs", t.pending], ["failures in a row", t.failures],
+  ];
+  for (const [k, v] of fields) dl.append(el("dt", null, k), el("dd", null, String(v ?? "")));
+  dl.append(el("dt", null, "mandate"), el("dd", "mandate", t.mandate));
+  if (t.head !== shownHead) {
+    shownHead = t.head;
+    loadContext(t.head, body.querySelector(".context"));
+  }
+}
+
+// A context is a value named by its head, so it is fetched once per head.
+async function loadContext(head, into) {
+  const res = await fetch(`/context/${head}`);
+  if (!res.ok || shownHead !== head) return;
+  const chain = await res.json();
+  into.replaceChildren();
+  for (const e of chain) into.append(entry(e, e.id === head));
+}
+
+function entry(e, isHead) {
+  const div = el("div", `entry ${e.role}${isHead ? " head" : ""}`);
+  div.append(el("div", "role", e.missing ? "entry not stored" : e.role));
+  if (e.role === "root") {
+    div.append(el("div", "block", e.model));
+    const sys = el("details");
+    sys.append(el("summary", null, "system prompt and tools"), el("pre", null, json(e.system)), el("pre", null, json(e.tools)));
+    div.append(sys);
+    return div;
+  }
+  if (e.content == null) return div;
+  let content;
+  try { content = JSON.parse(e.content); } catch { content = e.content; }
+  if (typeof content === "string") content = [{ type: "text", text: content }];
+  for (const b of content) {
+    if (b.type === "text") div.append(el("div", "block", b.text));
+    else if (b.type === "tool_use") div.append(el("div", "block tool", `→ ${b.name} ${JSON.stringify(b.input)}`));
+    else if (b.type === "tool_result") {
+      const c = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.text || "").join("\n");
+      div.append(el("div", "block tool", `← ${c}`));
+    } else div.append(el("div", "block tool", JSON.stringify(b)));
+  }
+  return div;
+}
+
+const json = (s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } };
+const preview = (s) => { try { const v = JSON.parse(s); return v.question || s; } catch { return s; } };
+
+function addFacts(list) {
+  const ul = $("#facts ul");
+  for (const f of list) {
+    const li = el("li");
+    li.append(el("span", "seq", `${f.seq} `), el("span", "at", `${clock(f.at)} `), el("span", f.by, f.text));
+    ul.prepend(li);
+  }
+  while (ul.children.length > 300) ul.lastChild.remove();
+}
+
+// The stream's event id is the journal position: the browser resends it on
+// reconnect and gets every record after it.
+const source = new EventSource("/events");
+source.onopen = () => { $("#link").textContent = "live"; $("#link").className = "meta"; };
+source.onerror = () => { $("#link").textContent = "reconnecting"; $("#link").className = "meta down"; };
+source.onmessage = (m) => {
+  const data = JSON.parse(m.data);
+  view = data.view;
+  addFacts(data.facts);
+  render();
+};
+
+// Throbbers move and waits grow between events.
+let frame = 0;
+setInterval(() => {
+  frame = (frame + 1) % FRAMES.length;
+  for (const s of document.querySelectorAll("[data-spin]")) s.textContent = FRAMES[frame];
+}, 100);
+setInterval(render, 1000);
+</script>
+</body>
+</html>
