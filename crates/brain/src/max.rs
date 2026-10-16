@@ -5,7 +5,7 @@
 //! waits for him; asked through `background`, it carries on with what it
 //! thinks best and his answer arrives as a message when he gives it.
 
-use harness_core::environment::{Audience, Description, Fork, Instruction, Limb, LimbKind, Tool};
+use harness_core::environment::{Audience, Description, Instruction, Limb, LimbKind, Tool};
 use harness_core::id::{Digest, LimbId};
 use harness_core::resource::{Observation, ResourceKey, Version};
 use serde_json::json;
@@ -17,7 +17,6 @@ pub fn definition(id: LimbId) -> Limb {
         id,
         name: "max".into(),
         kind: LimbKind::Max,
-        fork: Fork::Share,
     }
 }
 

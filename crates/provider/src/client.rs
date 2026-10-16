@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use harness_core::context::{Entry, EntryId};
 use harness_core::id::{ModelCallId, Timestamp, ValueId};
 use harness_core::live::Live;
-use harness_core::model_call::{Ending, ModelCall, Quota, Usage};
+use harness_core::model_call::{Ending, ModelCall, Quota, Usage, Window};
 
 use crate::login::Login;
 use crate::response::Assembly;
@@ -29,8 +29,11 @@ pub enum Progress {
     /// caller records [`Sent`](harness_core::model_call::ModelCallEvent::Sent) before sending, and the end
     /// is [`Client::send`]'s return value.
     FirstByte,
-    /// Each streamed event, as its raw data.
+    /// Visible text as it streams.
     Live(Live),
+    /// An event with no visible text (thinking, a tool's input): nothing to
+    /// show, and a chance to stop reading.
+    Streaming,
 }
 
 /// How a request ended: the fields of its [`ModelCallEvent::Ended`], and
@@ -60,12 +63,12 @@ impl Client {
     ///
     /// `Err` means nothing was sent: the context or the login is unusable.
     /// Otherwise `on` sees [`Progress::FirstByte`] when `message_start`
-    /// arrives, and every event as [`Live`]. `on`
-    /// returning `Break` stops reading, and the request ends
-    /// [`Ending::Abandoned`] with the visible text so far.
+    /// arrives, then every event: its visible text as [`Live`], or
+    /// [`Progress::Streaming`]. `on` returning `Break` stops reading, and the
+    /// request ends [`Ending::Abandoned`] with the visible text so far.
     ///
-    /// A billing claim other than the plan's window is a failure: the
-    /// response is not read.
+    /// A billing claim other than the plan's window is reported as
+    /// [`Quota::on_plan`] `false`, and is a failure: the response is not read.
     pub fn send(
         &self,
         id: ModelCallId,
@@ -109,12 +112,18 @@ impl Client {
                 .and_then(|v| v.parse::<i64>().ok())
                 .map(|s| Timestamp(s * 1000))
         };
+        let window = |name: &str| {
+            ratio(&format!("{name}-utilization")).map(|used| Window {
+                used,
+                resets: reset(name),
+            })
+        };
+        let claim = header(&format!("{UNIFIED}representative-claim"));
+        let on_plan = on_plan(claim.as_deref());
         let quota = Some(Quota {
-            claim: header(&format!("{UNIFIED}representative-claim")),
-            five_hour: ratio("5h-utilization"),
-            seven_day: ratio("7d-utilization"),
-            five_hour_reset: reset("5h"),
-            seven_day_reset: reset("7d"),
+            on_plan,
+            five_hour: window("5h"),
+            seven_day: window("7d"),
         });
         let retry = header("retry-after")
             .and_then(|s| s.parse::<f64>().ok())
@@ -139,8 +148,7 @@ impl Client {
             };
             return Ok(end(ending, None, quota));
         }
-        let claim = quota.as_ref().and_then(|q| q.claim.as_deref());
-        if !on_plan(claim) {
+        if !on_plan {
             let message =
                 format!("billed as {claim:?}, not to the plan; the response was not read");
             return Ok(end(failed(Some(status), message, None), None, quota));
@@ -168,11 +176,14 @@ impl Client {
             if name == "message_start" && on(Progress::FirstByte).is_break() {
                 break Ending::Abandoned { partial: None };
             }
-            let live = Live::Model {
-                call: id,
-                event: data,
+            let progress = match text_delta(&name, &parsed) {
+                Some(chunk) => Progress::Live(Live::Model {
+                    call: id,
+                    chunk: chunk.to_owned(),
+                }),
+                None => Progress::Streaming,
             };
-            if on(Progress::Live(live)).is_break() {
+            if on(progress).is_break() {
                 let partial = assembly.visible();
                 return Ok(Finished {
                     ending: Ending::Abandoned {
@@ -208,8 +219,16 @@ impl Client {
 
 /// A plan window (`five_hour`, `seven_day`, ...). Anything else, including
 /// no claim at all, is billing gone wrong.
-pub fn on_plan(claim: Option<&str>) -> bool {
+fn on_plan(claim: Option<&str>) -> bool {
     claim.is_some_and(|c| c == "five_hour" || c.starts_with("seven_day"))
+}
+
+/// The visible text an event adds, if it adds any.
+fn text_delta<'a>(name: &str, data: &'a serde_json::Value) -> Option<&'a str> {
+    let delta = &data["delta"];
+    (name == "content_block_delta" && delta["type"] == "text_delta")
+        .then(|| delta["text"].as_str())
+        .flatten()
 }
 
 fn failed(status: Option<u16>, message: String, retry: Option<Timestamp>) -> Ending {

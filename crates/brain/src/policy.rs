@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use harness_core::context::EntryId;
-use harness_core::model_call::{Breakpoint, Ttl};
 
 /// Requests that may fail in a row before the task fails.
 pub const GIVE_UP: u32 = 5;
@@ -26,19 +25,14 @@ pub fn backoff_ms(failures: u32) -> i64 {
 /// siblings append the same brief to the same root, so the first request of
 /// the first sibling writes that prefix and the others read it ([`hold`]).
 /// The same mark on an ordinary turn re-reads the previous request's prefix.
-pub fn breakpoints(root: EntryId, shared: &[EntryId], tail: EntryId) -> Vec<Breakpoint> {
+pub fn breakpoints(root: EntryId, shared: &[EntryId], tail: EntryId) -> Vec<EntryId> {
     let mut at = vec![root];
     for &id in shared.iter().chain([&tail]) {
         if !at.contains(&id) {
             at.push(id);
         }
     }
-    at.into_iter()
-        .map(|at| Breakpoint {
-            at,
-            ttl: Ttl::Short,
-        })
-        .collect()
+    at
 }
 
 /// Fan-out gating: hold a task's request while another task's request whose

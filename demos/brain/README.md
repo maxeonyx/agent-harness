@@ -14,7 +14,7 @@ What it does:
 4. Launch 2 is started on the same journal, with no other arguments. It folds the journal and carries on:
    - the request that was in flight is said to be lost and sent again;
    - the workspace is asked how the running `bash` call ended. That instance died with the brain, so the outcome is unknown. `bash` does not allow reruns, so the call settles as unknown and the agent is told so. The agent decides what to do; here it ran `./check.sh` again.
-5. The orchestrator gets both results when the scope closes, runs `./check.sh`, commits, and reports. The script prints its result and the repository's log.
+5. The orchestrator gets both results when the scope closes, runs `./check.sh`, commits, reports, and waits on you: like every task you start, it is a chat with you. `done.sh` presses **Done** for you, the way the page does, and the orchestrator's last turn writes its result. The script prints that result and the repository's log.
 
 To serve a finished run again: `target/release/harness-brain --journal target/brain-demo/journal.sqlite --port 4321`. A journal whose root is done does nothing but serve.
 

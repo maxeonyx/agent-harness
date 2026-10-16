@@ -9,5 +9,5 @@ dir=${DIR:-target/chat}
 mkdir -p "$dir"
 [ -e "$dir/journal.sqlite" ] || demos/brain/scratch.sh "$dir/repo"
 exec target/release/harness-brain --roles roles --journal "$dir/journal.sqlite" --port "${PORT:-4320}" \
-  --workspace "$dir/repo" --mandate demos/chat/mandate.md --name chat --chat \
+  --workspace "$dir/repo" --mandate demos/chat/mandate.md --name chat \
   --sample demos/chat/sample.wav

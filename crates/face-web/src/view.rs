@@ -10,7 +10,7 @@ use harness_core::id::{CallId, TaskId, Timestamp, ValueId};
 use harness_core::journal::{Fact, Record};
 use harness_core::model_call::{Ending, ModelCallEvent};
 use harness_core::state::{Ended, State, Waiting};
-use harness_core::task::{Drain, Mode, Move, Origin, Outcome, Scope, Task, TaskEvent, TaskState};
+use harness_core::task::{Drain, Mode, Move, Origin, Outcome, Phase, Scope, Task, TaskEvent};
 use serde_json::{Value, json};
 
 /// A stored value as text, for the page: a mandate, a call's input.
@@ -40,21 +40,13 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
             })
         })
         .collect();
-    // The workspaces tasks work in, by directory: what a new task can be
-    // given, or a new limb made for.
-    let mut workspaces: Vec<Value> = Vec::new();
-    for limb in state.tasks().flat_map(|t| t.places.values()) {
-        let Some(LimbKind::Plugin { kind, config, .. }) = state.limb(*limb).map(|l| &l.kind) else {
-            continue;
-        };
-        let dir = serde_json::from_str::<Value>(config)
-            .ok()
-            .and_then(|c| c["dir"].as_str().map(str::to_owned));
-        let id = limb.to_string();
-        if kind == "workspace" && workspaces.iter().all(|w| w["id"] != id.as_str()) {
-            workspaces.push(json!({"id": id, "dir": dir}));
-        }
-    }
+    // The workspaces, by directory, which is a workspace limb's name: what a
+    // new task can be given, or a new limb made for.
+    let workspaces: Vec<Value> = state
+        .limbs()
+        .filter(|l| matches!(&l.kind, LimbKind::Plugin { kind, .. } if kind == "workspace"))
+        .map(|l| json!({"id": l.id.to_string(), "dir": l.name}))
+        .collect();
     let environments: Vec<Value> = state
         .environments()
         .map(|e| {
@@ -62,7 +54,7 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
                 "id": e.id.to_string(),
                 "name": e.name,
                 "model": e.model,
-                "places": e.places.iter().map(|p| json!({"name": p.name, "kind": p.kind})).collect::<Vec<_>>(),
+                "places": e.places,
             })
         })
         .collect();
@@ -81,14 +73,14 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
 /// The subscription as the latest response reported it.
 fn usage(ended: &Ended) -> Value {
     let quota = ended.quota.as_ref();
+    let window = |w: Option<&harness_core::model_call::Window>| {
+        w.map(|w| json!({"used": w.used, "resets": w.resets.map(|t| t.0)}))
+    };
     json!({
         "at": ended.at.at.0,
-        "five_hour": quota.and_then(|q| q.five_hour),
-        "seven_day": quota.and_then(|q| q.seven_day),
-        "five_hour_reset": quota.and_then(|q| q.five_hour_reset),
-        "seven_day_reset": quota.and_then(|q| q.seven_day_reset),
-        "claim": quota.and_then(|q| q.claim.clone()),
-        "on_plan": quota.is_none_or(|q| harness_provider::on_plan(q.claim.as_deref())),
+        "five_hour": window(quota.and_then(|q| q.five_hour.as_ref())),
+        "seven_day": window(quota.and_then(|q| q.seven_day.as_ref())),
+        "on_plan": quota.is_none_or(|q| q.on_plan),
     })
 }
 
@@ -116,13 +108,23 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         Origin::Resume { from } => ("resume", Some(from)),
         Origin::Aside { from } => ("aside", Some(from)),
     };
-    let outcome = match &t.state {
-        TaskState::Done(Outcome::Result { .. }) => json!({"kind": "result"}),
-        TaskState::Done(Outcome::Failed { reason }) => json!({"kind": "failed", "reason": reason}),
-        TaskState::Done(Outcome::Cancelled { by }) => {
+    let outcome = match t.outcome() {
+        Some(Outcome::Result { .. }) => json!({"kind": "result"}),
+        Some(Outcome::Failed { reason }) => json!({"kind": "failed", "reason": reason}),
+        Some(Outcome::Cancelled { by }) => {
             json!({"kind": "cancelled", "by": format!("{by:?}")})
         }
-        _ => Value::Null,
+        None => Value::Null,
+    };
+    // The spawn whose scope Max can open an aside in: the one its round
+    // waits on while members of it run.
+    let scoped = match t.phase() {
+        Some(Phase::Acting(step)) if state.scoped(t) => step
+            .outstanding
+            .iter()
+            .find(|c| state.members(Scope::Spawn(**c)).any(|m| !m.is_done()))
+            .map(|c| c.to_string()),
+        _ => None,
     };
     json!({
         "id": t.id.to_string(),
@@ -144,12 +146,13 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
         "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
         "held": t.held,
-        "draining": t.draining.as_ref().map(|d| match d {
+        "scoped": scoped,
+        "draining": t.drain().map(|d| match d {
             Drain::ToMax => "to Max".to_string(),
             Drain::Stop(by) => format!("stop ({by:?})"),
             Drain::Fail(reason) => format!("fail: {reason}"),
         }),
-        "failures": t.failures,
+        "failures": t.live().map_or(0, |l| l.failures),
         "trouble": last.map_or(Value::Null, trouble),
         "pending": t.pending.len(),
         "outcome": outcome,
@@ -325,7 +328,6 @@ pub fn describe(state: &State, record: &Record) -> String {
             let what = match &d.content {
                 Content::Words(_) => "words".to_string(),
                 Content::Prompt(p) => format!("{p:?} prompt"),
-                Content::Aside(t) => format!("the result of aside {}", name(*t)),
             };
             format!("{what} delivered to {}", name(d.to))
         }
@@ -340,6 +342,10 @@ pub fn describe(state: &State, record: &Record) -> String {
         },
         Fact::Environment(e) => format!("environment {} defined", e.name),
         Fact::Limb(l) => format!("limb {} defined", l.name),
+        Fact::Described { limb, description } => {
+            let limb = state.limb(*limb).map_or("?".into(), |l| l.name.clone());
+            format!("{limb} described: {} tools", description.tools.len())
+        }
         Fact::Reach { limb, reach } => {
             let limb = state.limb(*limb).map_or("?".into(), |l| l.name.clone());
             match reach {

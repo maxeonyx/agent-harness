@@ -11,13 +11,13 @@ use std::time::Duration;
 use std::{env, fs, thread};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
-use harness_core::environment::{FromLimb, ToLimb};
+use harness_core::environment::{Description, FromLimb, ToLimb};
 use harness_core::id::{CallId, LimbId, TaskId, ValueId};
 use harness_core::journal::{Batch, Fact};
 use harness_core::live::Live;
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
-use harness_limb_workspace::{Config, Settings, Workspace};
+use harness_limb_workspace::{Config, Kind, Settings, Workspace};
 use serde_json::{Value, json};
 
 const LIMB: LimbId = LimbId(1);
@@ -34,10 +34,7 @@ fn main() {
     let mut brain = Brain::open(&scratch);
 
     title("The tools, as a context's root declares them");
-    brain.ws.handle(ToLimb::Describe);
-    let Some(FromLimb::Described(description)) = brain.next() else {
-        panic!("expected a description");
-    };
+    let description = brain.description.clone();
     for tool in &description.tools {
         let definition: Value = serde_json::from_str(&tool.definition).unwrap();
         let required = &definition["input_schema"]["required"];
@@ -225,6 +222,8 @@ struct Brain {
     values: HashMap<ValueId, Vec<u8>>,
     /// Every call sent, to send again after the crash.
     sent: HashMap<CallId, ToLimb>,
+    /// What the limb said about itself after its hello.
+    description: Description,
 }
 
 impl Brain {
@@ -232,7 +231,7 @@ impl Brain {
         let (tx, rx) = mpsc::channel();
         let config = Config {
             limb: LIMB,
-            user: false,
+            kind: Kind::Workspace,
             settings: Settings {
                 dir: scratch.join("work"),
                 clone: None,
@@ -244,8 +243,16 @@ impl Brain {
             panic!("expected Hello first");
         };
         println!("  [limb instance {:08x}]", instance.0 as u32);
+        let description = match rx.recv() {
+            Ok(FromLimb::Facts(Batch { facts, .. })) => match facts.as_slice() {
+                [Fact::Described { description, .. }] => description.clone(),
+                _ => panic!("expected its description after Hello"),
+            },
+            _ => panic!("expected its description after Hello"),
+        };
         Brain {
             ws,
+            description,
             rx,
             next_call: 1,
             values: HashMap::new(),

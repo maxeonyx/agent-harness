@@ -13,7 +13,7 @@ use std::thread;
 
 use harness_core::environment::{Limb, LimbKind, ToLimb};
 
-use crate::{Config, Settings, Workspace, user};
+use crate::{Config, Kind, Settings, Workspace};
 
 /// Run as the limb of `kind` until stdin closes.
 pub fn main(kind: &str) -> ExitCode {
@@ -35,13 +35,17 @@ fn serve(kind: &str) -> Result<(), String> {
     let first = lines.next().ok_or("no definition on stdin")?;
     let limb: Limb = serde_json::from_str(&first.map_err(|e| e.to_string())?)
         .map_err(|e| format!("the definition: {e}"))?;
-    if !matches!(&limb.kind, LimbKind::Plugin { kind: k, .. } if k == kind) {
+    let of_kind = match &limb.kind {
+        LimbKind::Plugin { kind: k, .. } if k == kind => Kind::of(k),
+        _ => None,
+    };
+    let Some(of_kind) = of_kind else {
         return Err(format!("the definition is not of a `{kind}` limb"));
-    }
+    };
     let settings = Settings::of(&limb).ok_or("the definition's settings do not parse")?;
     let config = Config {
         limb: limb.id,
-        user: kind == user::KIND,
+        kind: of_kind,
         settings,
         state: PathBuf::from(state),
     };

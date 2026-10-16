@@ -26,8 +26,10 @@ use crate::id::{CallId, ModelCallId};
 /// item. Here only completed things are history.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Live {
-    /// Response content of a request as it streams: the raw event.
-    Model { call: ModelCallId, event: String },
+    /// Visible text of a response as it streams: what Max watches, and what
+    /// is kept if he interrupts it. The provider's event stream stays in the
+    /// provider.
+    Model { call: ModelCallId, chunk: String },
     /// Output of a running call so far.
     Call { call: CallId, chunk: String },
 }

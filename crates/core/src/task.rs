@@ -3,18 +3,19 @@
 
 use std::collections::BTreeMap;
 
+use imbl::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome};
 use crate::context::{EntryId, Message, Note, Rendered, Role, Root};
-use crate::delivery::{Content, Delivery};
+use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::Binding;
 use crate::id::{
     CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, TaskId, Timestamp, ValueId,
 };
 use crate::journal::{Author, Fact, Record, Rejected};
-use crate::model_call::{Ending, ModelCallEvent, Purpose, Stop};
-use crate::resource::{Observation, ResourceKey, Version};
+use crate::model_call::{Ending, ModelCallEvent, Stop};
+use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::state::State;
 
 /// The fold of the facts about one task: everything the brain, a face or
@@ -25,40 +26,37 @@ use crate::state::State;
 /// a [`Scope`] that owns it, a [`Mode`] that says what the end of a turn
 /// means, an [environment](crate::environment::Environment) that is its role
 /// for life, the limbs that fill that environment's places (its own clone),
-/// and once it has started, a [`Context`]: the entry its context currently
-/// ends at, and which limb runs each tool there. A task is an identity; its
-/// context is a value. The head moves through the context tree (a fork
-/// starts a task on its parent's response, a handover moves a task to a new
-/// root, a resume starts a task on another's last entry, a rewind moves it
-/// back), and none of that copies or edits a context.
+/// and a [`Life`]: starting, live in a [`Context`], or done. A task is an
+/// identity; its context is a value. The head moves through the context tree
+/// (a fork starts a task on its parent's response, a handover moves a task
+/// to a new root, a resume starts a task on another's last entry, a rewind
+/// moves it back), and none of that copies or edits a context.
 ///
 /// Creation and the first root are separate facts. A spawn creates its
 /// members in the batch that dispatches it, so a scope's membership is
 /// atomic with the call that owns it; a fresh member is then
-/// [`TaskState::Starting`] until every limb it can reach has connected and
+/// [`Life::Starting`] until every limb it can reach has connected and
 /// described itself (a clone made, a process started), when the brain gives
-/// it its first root ([`Move::Root`]). A member whose limbs are all reached
-/// already is rooted in the same batch.
+/// it its first root ([`Move::Root`]).
 ///
-/// Its [`TaskState`] says whose move it is, and is folded from the facts
-/// that concern it (`Task::apply`, run only by [`State::apply`]): its own
-/// events, its model calls, the settlements of the calls it waits on,
-/// deliveries to it, and changes to what it embodies. The whole fold is here, including what its context
-/// embodies ([`Context::knows`]); it reads the rest of the journal's state
-/// (call outcomes, the context tree, current versions) but keeps none of it.
-/// The state is never written down as a fact, so it cannot disagree with its
-/// history; "what is it waiting on" and "is it waiting on Max" are read off
-/// it.
+/// Its life is folded from the facts that concern it (`Task::apply`, run
+/// only by [`State::apply`]): its own events, its model calls, the
+/// settlements of the calls it waits on, deliveries to it, and changes to
+/// what it embodies. The life is never written down as a fact, so it cannot
+/// disagree with its history; "what is it waiting on" and "is it waiting on
+/// Max" are read off it. What only a live task has (a context, a phase, a
+/// pending drain, Max owing it a word, its run of failed requests) lives in
+/// [`Live`], so no reader re-proves that a running task has a context.
 ///
 /// **Vision.** Structured concurrency (a parent waiting on children is
-/// [`TaskState::Acting`] on its spawn call, like waiting on any tool, and a
-/// task is done only when nothing it started is still running and nothing
-/// sent to it is unread); the A.1.3 problem (the mandate is data, so the
-/// harness can state it at the fork, after each tool round and after a
-/// handover); user-facing, autonomous and standing tasks, which differ only
-/// in [`Mode`]; the throbber; restart (the state says what to redo); and
-/// Max's words never lost (a pending delivery stops a turn from completing
-/// the task, and survives a handover).
+/// [`Phase::Acting`] on its spawn call, like waiting on any tool, and a task
+/// is done only when nothing it started is still running and nothing sent
+/// to it is unread); the A.1.3 problem (the mandate is data, so the harness
+/// can state it at the fork, after each tool round and after a handover);
+/// user-facing, autonomous and standing tasks, which differ only in
+/// [`Mode`]; the throbber; restart (the life says what to redo); and Max's
+/// words never lost (a pending delivery stops a turn from completing the
+/// task, and survives a handover).
 ///
 /// **Existing harnesses.** OpenCode, Codex and Oh My Pi each keep a session
 /// or thread with a status the agent loop keeps current as it runs, and
@@ -80,32 +78,63 @@ pub struct Task {
     /// it at its next root.
     pub environment: EnvironmentId,
     /// The limb filling each of its environment's
-    /// [places](crate::environment::Place), by place name. Fixed for life,
-    /// and shared by its forks.
+    /// [places](crate::environment::Environment::places), by plugin kind.
+    /// Fixed for life, and shared by its forks.
     pub places: BTreeMap<String, LimbId>,
     pub scope: Scope,
     pub origin: Origin,
+    /// The meta call that created it; `None` when Max did. Whoever made
+    /// that call gave the mandate ([`State::call_owner`]).
+    pub by: Option<CallId>,
     pub mode: Mode,
     pub mandate: Mandate,
-    /// The context it works in; `None` while it is starting, or for a task
-    /// stopped before it started.
-    pub context: Option<Context>,
-    pub state: TaskState,
-    /// When it entered its current state: how long the throbber has shown
-    /// what it shows.
-    pub since: Timestamp,
-    /// Inputs no request has rendered yet. A turn cannot complete over one
-    /// that wakes.
-    pub pending: Vec<Pending>,
-    /// Calls outside the current round whose settlement will be an input:
-    /// background work the task started, and Max's actions in its chat.
-    pub watching: Vec<Watched>,
-    /// Set when the task must stop doing what it is doing. No request is
-    /// sent while it is set; it takes effect once nothing is outstanding.
-    pub draining: Option<Drain>,
     /// No new requests under this task until released; running work carries
     /// on. Max pausing a subtree, or the brain after a long outage.
     pub held: bool,
+    /// When its life or phase last changed: how long the throbber has shown
+    /// what it shows.
+    pub since: Timestamp,
+    /// Inputs no request has rendered yet. A turn cannot complete over one
+    /// that [wakes](Input::wakes). They are for the task, not its context, so
+    /// they survive a new root and ride into a resume.
+    pub pending: Vec<Input>,
+    /// Calls it started in the background that have not settled. It cannot
+    /// finish while one runs, and each one's settlement wakes it.
+    pub background: Vec<CallId>,
+    /// Max's actions in its chat that have not settled. Each settlement
+    /// rides into its next request without waking it.
+    pub max_actions: Vec<CallId>,
+    pub life: Life,
+}
+
+/// Where a task is in its life. Exactly one holds.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Life {
+    /// Created, with no context yet: some limb it can reach has not
+    /// connected or described itself (its clone is being made). The brain
+    /// gives it its first root once every one has
+    /// ([`crate::state::Todo::Root`]). Max can stop it; it cannot be
+    /// interrupted, forked, resumed or rewound, and makes no calls.
+    Starting,
+    Live(Live),
+    /// Finished. Its context is kept for a resume and for Max to read; a task
+    /// stopped while starting never had one.
+    Done {
+        outcome: Outcome,
+        context: Option<Context>,
+    },
+}
+
+/// What a live task has, and only a live task.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Live {
+    pub context: Context,
+    pub phase: Phase,
+    /// Set when the task must stop doing what it is doing. No request is
+    /// sent while it is set. It is pending only while something is
+    /// outstanding (a request, a round, background work after a stop);
+    /// otherwise it takes effect as it arrives.
+    pub drain: Option<Drain>,
     /// Since when Max has owed this task a word: set when a user-facing turn
     /// ends or Max interrupts, cleared by his words or by a change of mode.
     /// It survives the harness's own turns (a handover before the cache
@@ -114,6 +143,38 @@ pub struct Task {
     /// Requests that failed in a row; the brain's policy gives up at some
     /// count ([`Drain::Fail`]). The account's limit is not a failure.
     pub failures: u32,
+}
+
+impl Live {
+    fn new(context: Context) -> Live {
+        Live {
+            context,
+            phase: Phase::Ready,
+            drain: None,
+            owed_since: None,
+            failures: 0,
+        }
+    }
+}
+
+/// Whose move it is in a live task.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Phase {
+    /// The task's move: the brain builds and sends its next request, unless
+    /// it is held or the account is limited (derived, not stored here).
+    Ready,
+    /// A request is in flight. The calls of its tool uses are made with its
+    /// response and recorded on the request.
+    Thinking(ModelCallId),
+    /// The calls of one round are outstanding: a response's tool uses, or a
+    /// fresh context's attachments. A spawn is one of them, so is an ask of
+    /// Max.
+    Acting(Step),
+    /// Max's move: a user-facing turn ended, or he interrupted.
+    AwaitingMax,
+    /// The turn ended and the task waits for something that wakes it: a
+    /// change to what a standing task embodies, or background work.
+    Listening,
 }
 
 /// The context a task is working in, and everything that belongs to it
@@ -132,11 +193,12 @@ pub struct Context {
     /// next root, never under it.
     pub binding: Binding,
     /// The version of each resource it embodies, and what it has been told
-    /// since.
-    pub knows: BTreeMap<ResourceKey, Known>,
+    /// since. Persistent, so a fork's copy shares it until either changes.
+    pub knows: OrdMap<ResourceKey, Known>,
     /// What each request since `start` changed in `knows`, so a rewind
-    /// restores what the earlier context embodied.
-    learned: Vec<Learned>,
+    /// restores what the earlier context embodied. Persistent, so folding a
+    /// fact into a long-lived task does not copy its history.
+    learned: Vector<Learned>,
 }
 
 impl Context {
@@ -157,7 +219,7 @@ impl Context {
                     (o.resource.clone(), known)
                 })
                 .collect(),
-            learned: Vec::new(),
+            learned: Vector::new(),
         }
     }
 
@@ -169,8 +231,16 @@ impl Context {
             head: self.head,
             binding: self.binding.clone(),
             knows: self.knows.clone(),
-            learned: Vec::new(),
+            learned: Vector::new(),
         }
+    }
+
+    /// Whether `change` moves something this context embodies that it has
+    /// not been told of.
+    fn moved_by(&self, change: &Change) -> bool {
+        self.knows
+            .get(&change.resource)
+            .is_some_and(|known| known.has != change.version && known.told != Some(change.version))
     }
 
     /// The context now embodies these versions.
@@ -206,6 +276,27 @@ impl Context {
                 if !before.iter().any(|(k, _)| *k == o.resource) {
                     before.push((o.resource.clone(), Some(old)));
                 }
+            }
+        }
+    }
+
+    /// Move the head back to `to`, and embody again only what the context
+    /// embodied there.
+    fn rewind(&mut self, to: EntryId, world: &State) {
+        self.head = to;
+        while self
+            .learned
+            .last()
+            .is_some_and(|l| !world.descends(to, l.head))
+        {
+            let Some(learned) = self.learned.pop_back() else {
+                break;
+            };
+            for (resource, before) in learned.before.into_iter().rev() {
+                match before {
+                    Some(known) => self.knows.insert(resource, known),
+                    None => self.knows.remove(&resource),
+                };
             }
         }
     }
@@ -252,10 +343,11 @@ struct Learned {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Scope {
     /// Max's own scope. It never closes: the tasks he starts live in it, and
-    /// so do asides, resumes and standing tasks such as the attention
-    /// scheduler.
+    /// so do resumes and standing tasks such as the attention scheduler.
     Max,
-    /// The scope the spawn call opened.
+    /// The scope the spawn call opened. Its members are the tasks the call
+    /// created, the siblings they added, and any aside Max opened on the
+    /// task waiting on it.
     Spawn(CallId),
 }
 
@@ -270,6 +362,7 @@ pub enum Origin {
     /// environment its own [starts](crate::environment::Environment::starts).
     Fresh {
         environment: EnvironmentId,
+        /// By plugin kind, one for each of the environment's places.
         places: BTreeMap<String, LimbId>,
     },
     /// The parent's spawning response, the source's head when the fork is
@@ -286,8 +379,12 @@ pub enum Origin {
     /// a task of a scope it owned, so an orchestrator can ask its designer a
     /// follow-up with the designer's context intact.
     Resume { from: TaskId },
-    /// A busy task's head, opened by Max as a user-facing fork so he can talk
-    /// to it while it waits; its result is delivered back to `from`.
+    /// The head of a task waiting on its children, opened by Max as a
+    /// user-facing fork so he can talk to it meanwhile. It joins the scope
+    /// the task waits on, as the one member Max talks to: it is told when
+    /// every other member is done ([`Prompt::Unblocked`]), it is done when
+    /// he marks it done, and its result reaches the task with theirs, so the
+    /// task carries on with everything, the talk included.
     Aside { from: TaskId },
 }
 
@@ -347,65 +444,76 @@ pub enum Mode {
     Standing,
 }
 
-/// What a task was asked to do, and by whom.
+/// What a task was asked to do.
 ///
 /// The chain of mandates up the owner chain is the task's place in the
 /// overall work: "A, then A.1, then A.1.3". Rendering that chain at a fork,
 /// as a reminder after each tool round, and at the top of a handover is how
 /// a deeply forked agent knows to stop after A.1.3.
 ///
+/// A mandate Max gives is his words: the journal counts its text among the
+/// words he has said, heard by the task he gave it to, so the task can quote
+/// it on ([`State::heard`]). Who gave any other mandate is the caller of the
+/// meta call that created the task ([`Task::by`]).
+///
 /// A fresh task's mandate also carries what every member of its spawn
 /// shares, rendered before its own text and identical for each of them, so
 /// N siblings are one cache prefix: the parent's brief, and Max's words the
-/// parent quotes. A quote is his delivery itself, so a brief carries his
-/// words verbatim by construction, and the child can tell them from its
+/// parent quotes. A quote is the value of his words itself, so a brief
+/// carries them verbatim by construction, the same words have the same
+/// label wherever they are quoted, and the child can tell them from its
 /// parent's paraphrase.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mandate {
     pub text: ValueId,
     /// What every member of the spawn is told first.
     pub brief: Option<ValueId>,
-    /// Max's words, each delivered to the creating task or quoted to it in
-    /// turn.
-    pub quotes: Vec<DeliveryId>,
-    pub from: Giver,
+    /// Max's words, each one the creating task has heard: words he sent it,
+    /// the mandate he gave it, his answer to its question, or a quote in its
+    /// own mandate.
+    pub quotes: Vec<ValueId>,
 }
 
-/// Who gave a mandate: Max, or a task (the parent, or a sibling that added
-/// this task to its own scope, which then says why).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Giver {
-    Max,
-    Task(TaskId),
+/// An input waiting for a request to render it. Whether it ends a wait is
+/// what it is, never a flag beside it: only a few things drive a request
+/// (`context-and-agent-loop.md`): the agent's own tool loop, Max's words, a
+/// harness prompt, work the agent asked to hear back from, and for a
+/// standing task a change to what it embodies. A round's results and Max's
+/// actions in the chat ride on the next request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Input {
+    /// A settled call of the last round. The next request must render every
+    /// one, since each tool use needs its result first.
+    Result(CallId),
+    /// A background call the task started has settled. Wakes it.
+    Background(CallId),
+    /// The real outcome of a call first settled as unknown. Wakes it.
+    Late(CallId),
+    /// One of Max's actions in its chat has settled. Rides along.
+    MaxAction(CallId),
+    /// Max's words, or a turn the harness asks for. Wakes it.
+    Delivery(DeliveryId),
 }
 
-/// Whose move it is. Exactly one holds at a time. Every state but
-/// [`TaskState::Starting`] has a [`Context`], and so may a done task.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TaskState {
-    /// Created, with no context yet: some limb it can reach has not
-    /// connected or described itself (its clone is being made). The brain
-    /// gives it its first root once every one has
-    /// ([`crate::state::Todo::Root`]). Max can stop it; it cannot be
-    /// interrupted, forked or rewound.
-    Starting,
-    /// The task's move: the brain builds and sends its next request, unless
-    /// it is held or the account is limited (derived, not stored here).
-    Ready,
-    /// A request is in flight. The calls of its tool uses are made with its
-    /// response and recorded on the request.
-    Thinking(ModelCallId),
-    /// The calls of one round are outstanding: a response's tool uses, or a
-    /// fresh context's attachments. A spawn is one of them, so is an ask of
-    /// Max.
-    Acting(Step),
-    /// Max's move: a user-facing turn ended, or he interrupted.
-    AwaitingMax,
-    /// The turn ended and the task waits for something that wakes it: a
-    /// change to what a standing task embodies, or an autonomous task's
-    /// background work.
-    Listening,
-    Done(Outcome),
+impl Input {
+    /// Whether it ends a wait, and keeps a turn from completing the task.
+    pub fn wakes(&self) -> bool {
+        match self {
+            Input::Background(_) | Input::Late(_) | Input::Delivery(_) => true,
+            Input::Result(_) | Input::MaxAction(_) => false,
+        }
+    }
+
+    fn is(&self, rendered: &Rendered) -> bool {
+        match (self, rendered) {
+            (
+                Input::Result(a) | Input::Background(a) | Input::Late(a) | Input::MaxAction(a),
+                Rendered::Call(b),
+            ) => a == b,
+            (Input::Delivery(a), Rendered::Delivery(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// The outstanding calls of one round.
@@ -417,61 +525,20 @@ pub struct Step {
     pub outstanding: Vec<CallId>,
 }
 
-/// An input waiting for a request to render it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Pending {
-    pub input: Input,
-    /// Whether it ends a wait. Only a few things drive a request
-    /// (`context-and-agent-loop.md`): the agent's own tool loop, Max's
-    /// words, a harness prompt, work the agent asked to hear back from, and
-    /// for a standing task a change to what it embodies. A round's results
-    /// and Max's actions in the chat ride on the next request.
-    pub wakes: bool,
-}
-
-/// What a pending input is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Input {
-    /// A settled call of the last round. The next request must render every
-    /// one, since each tool use needs its result first.
-    Result(CallId),
-    /// A settled call outside the round: background work, Max's action in
-    /// the chat, a late outcome.
-    Activity(CallId),
-    Delivery(DeliveryId),
-}
-
-impl Input {
-    fn is(&self, rendered: &Rendered) -> bool {
-        match (self, rendered) {
-            (Input::Result(a) | Input::Activity(a), Rendered::Call(b)) => a == b,
-            (Input::Delivery(a), Rendered::Delivery(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-/// A call outside the round that the task is told about when it settles.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Watched {
-    pub call: CallId,
-    /// Background work wakes the task; Max's actions in its chat do not.
-    pub wakes: bool,
-}
-
 /// What a task does once nothing is outstanding, instead of carrying on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Drain {
     /// Max interrupted: the move becomes his, whatever the mode. It never
     /// passes through a spawn call (that would stop the scope), so it is
     /// refused while the task's round waits on a scope with members still
-    /// running ([`Rejected::Scoped`]); to talk to it then, Max opens an
-    /// aside.
+    /// running ([`Rejected::Scoped`], and [`State::scoped`] beforehand); to
+    /// talk to it then, Max opens an aside.
     ToMax,
     /// The task is cancelled, and everything it owns with it.
     Stop(Stopper),
     /// The brain cannot carry the task on: the provider rejects its context,
-    /// a limb it needs cannot be made, retries are exhausted.
+    /// the model refused, a limb it needs cannot be made, retries are
+    /// exhausted.
     Fail(String),
 }
 
@@ -528,11 +595,11 @@ impl TaskEvent {
                 let Mandate {
                     text,
                     brief,
-                    quotes: _,
-                    from: _,
+                    quotes,
                 } = mandate;
                 out.push(*text);
                 out.extend(*brief);
+                out.extend(quotes);
             }
             TaskEvent::Moved(Move::Handover { call: _, start } | Move::Root(start)) => {
                 start.values(out);
@@ -550,11 +617,12 @@ impl TaskEvent {
 /// aside its context, follow from its origin.
 ///
 /// Who may create one is checked by the journal. Max creates in his own
-/// scope, with `by` empty. The brain creates only as the effect of an
-/// agent's meta call, `by`: in the scope that call opens, or as a sibling in
-/// its caller's own spawn scope, and only what the caller's environment can
-/// start. So the tree records who started each task, and the brain cannot
-/// put a task in Max's scope that he did not start.
+/// scope, with `by` empty, and his mandate is his words. The brain creates
+/// only as the effect of an agent's meta call, `by`: in the scope that call
+/// opens, or as a sibling in its caller's own spawn scope, and only what the
+/// caller's environment can start. So the tree records who started each
+/// task, and the brain cannot put a task in Max's scope that he did not
+/// start.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Created {
     pub name: String,
@@ -599,90 +667,126 @@ impl Task {
         at: Timestamp,
         world: &State,
     ) -> Result<Task, Rejected> {
-        let mut task = Task {
-            id,
-            name: created.name.clone(),
-            environment: EnvironmentId(0),
-            places: BTreeMap::new(),
-            scope: created.scope,
-            origin: created.origin.clone(),
-            mode: created.mode,
-            mandate: created.mandate.clone(),
-            context: None,
-            state: TaskState::Starting,
-            since: at,
-            pending: Vec::new(),
-            watching: Vec::new(),
-            draining: None,
-            held: false,
-            owed_since: None,
-            failures: 0,
-        };
-        match &created.origin {
+        let mut pending = Vec::new();
+        let mut max_actions = Vec::new();
+        let (environment, places, life) = match &created.origin {
             Origin::Fresh {
                 environment,
                 places,
-            } => {
-                task.environment = *environment;
-                task.places = places.clone();
-            }
+            } => (*environment, places.clone(), Life::Starting),
             Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from } => {
                 let source = world.task(*from).ok_or(Rejected::Unknown)?;
                 let resume = matches!(created.origin, Origin::Resume { .. });
                 match (resume, source.is_done()) {
-                    (true, false) => return Err(Rejected::Busy),
+                    (true, false) => return Err(Rejected::NotFinished),
                     (false, true) => return Err(Rejected::Finished),
                     _ => {}
                 }
-                let context = source.context.as_ref().ok_or(Rejected::Detached)?;
-                task.environment = source.environment;
-                task.places = source.places.clone();
-                task.context = Some(context.continued());
-                task.state = TaskState::Ready;
+                let context = source.context().ok_or(Rejected::Starting)?;
                 if resume {
-                    task.pending = source.pending.clone();
-                    task.watching = source.watching.clone();
+                    pending = source.pending.clone();
+                    max_actions = source.max_actions.clone();
                 }
+                let life = Life::Live(Live::new(context.continued()));
+                (source.environment, source.places.clone(), life)
             }
+        };
+        Ok(Task {
+            id,
+            name: created.name.clone(),
+            environment,
+            places,
+            scope: created.scope,
+            origin: created.origin.clone(),
+            by: created.by,
+            mode: created.mode,
+            mandate: created.mandate.clone(),
+            held: false,
+            since: at,
+            pending,
+            background: Vec::new(),
+            max_actions,
+            life,
+        })
+    }
+
+    /// Its live part, once it has started and until it is done.
+    pub fn live(&self) -> Option<&Live> {
+        match &self.life {
+            Life::Live(live) => Some(live),
+            Life::Starting | Life::Done { .. } => None,
         }
-        Ok(task)
+    }
+
+    /// Its phase, while it is live.
+    pub fn phase(&self) -> Option<&Phase> {
+        self.live().map(|l| &l.phase)
+    }
+
+    /// The context it works in, or finished in.
+    pub fn context(&self) -> Option<&Context> {
+        match &self.life {
+            Life::Live(live) => Some(&live.context),
+            Life::Done { context, .. } => context.as_ref(),
+            Life::Starting => None,
+        }
     }
 
     /// Where its context ends now, once it has one.
     pub fn head(&self) -> Option<EntryId> {
-        self.context.as_ref().map(|c| c.head)
+        self.context().map(|c| c.head)
     }
 
     pub fn is_done(&self) -> bool {
-        matches!(self.state, TaskState::Done(_))
+        matches!(self.life, Life::Done { .. })
     }
 
-    /// Whether background work it started is still running. An autonomous
-    /// task cannot finish until it is not.
-    pub fn has_background(&self) -> bool {
-        self.watching.iter().any(|w| w.wakes)
+    pub fn outcome(&self) -> Option<&Outcome> {
+        match &self.life {
+            Life::Done { outcome, .. } => Some(outcome),
+            Life::Starting | Life::Live(_) => None,
+        }
     }
 
-    /// The calls whose settlement its fold reads: its round's, and those it
-    /// watches. This is the whole of "who reads a call", derived rather than
-    /// indexed.
+    /// The drain pending on it, if any.
+    pub fn drain(&self) -> Option<&Drain> {
+        self.live().and_then(|l| l.drain.as_ref())
+    }
+
+    /// Since when Max has owed it a word, if he does.
+    pub fn owed_since(&self) -> Option<Timestamp> {
+        self.live().and_then(|l| l.owed_since)
+    }
+
+    /// The calls whose settlement its fold reads: its round's, its
+    /// background work, and Max's actions in its chat. This is the whole of
+    /// "who reads a call", derived rather than indexed.
     pub fn awaited(&self) -> impl Iterator<Item = CallId> + '_ {
-        let round = match &self.state {
-            TaskState::Acting(step) => step.outstanding.as_slice(),
+        let round = match self.phase() {
+            Some(Phase::Acting(step)) => step.outstanding.as_slice(),
             _ => &[],
         };
         round
             .iter()
+            .chain(&self.background)
+            .chain(&self.max_actions)
             .copied()
-            .chain(self.watching.iter().map(|w| w.call))
     }
 
     pub fn awaits(&self, call: CallId) -> bool {
         self.awaited().any(|c| c == call)
     }
 
-    /// Fold one fact that concerns this task, or refuse it and change
-    /// nothing.
+    fn live_mut(&mut self) -> Result<&mut Live, Rejected> {
+        match &mut self.life {
+            Life::Live(live) => Ok(live),
+            Life::Starting => Err(Rejected::Starting),
+            Life::Done { .. } => Err(Rejected::Finished),
+        }
+    }
+
+    /// Fold one fact that concerns this task, or refuse it. The caller folds
+    /// into a copy and keeps it only on success.
     ///
     /// This is the whole agent loop. Three properties hold by construction:
     /// no request is sent while a drain is pending or a tool use of the last
@@ -705,19 +809,14 @@ impl Task {
             Fact::Change(change) => {
                 // Read off the change itself, so the fold of a change never
                 // depends on whether the world has recorded it yet.
-                let moved = self
-                    .context
-                    .as_ref()
-                    .and_then(|c| c.knows.get(&change.resource))
-                    .is_some_and(|known| {
-                        known.has != change.version && known.told != Some(change.version)
+                let wakes = self.mode == Mode::Standing
+                    && self.live().is_some_and(|l| {
+                        l.phase == Phase::Listening
+                            && l.drain.is_none()
+                            && l.context.moved_by(change)
                     });
-                if moved
-                    && self.mode == Mode::Standing
-                    && self.state == TaskState::Listening
-                    && self.draining.is_none()
-                {
-                    self.enter(TaskState::Ready, at);
+                if wakes {
+                    self.enter(Phase::Ready, at);
                 }
                 Ok(())
             }
@@ -732,23 +831,17 @@ impl Task {
         match &record.fact {
             Fact::Call(id, CallEvent::Made(call)) if matches!(call.caller, Caller::Max { chat: Some(t), .. } if t == self.id) =>
             {
-                self.watching.push(Watched {
-                    call: *id,
-                    wakes: false,
-                });
+                self.max_actions.push(*id);
                 Ok(())
             }
             Fact::Call(id, CallEvent::Settled(_)) => {
                 let i = self
-                    .watching
+                    .max_actions
                     .iter()
-                    .position(|w| w.call == *id)
+                    .position(|c| c == id)
                     .ok_or(Rejected::Finished)?;
-                self.watching.remove(i);
-                self.pending.push(Pending {
-                    input: Input::Activity(*id),
-                    wakes: false,
-                });
+                self.max_actions.remove(i);
+                self.pending.push(Input::MaxAction(*id));
                 Ok(())
             }
             _ => Err(Rejected::Finished),
@@ -756,8 +849,6 @@ impl Task {
     }
 
     fn event(&mut self, event: &TaskEvent, at: Timestamp, world: &State) -> Result<(), Rejected> {
-        use TaskState as S;
-        let waiting = matches!(self.state, S::Ready | S::AwaitingMax | S::Listening);
         match event {
             TaskEvent::Created(_) => return Err(Rejected::Exists),
             TaskEvent::ModeSet(mode) => {
@@ -765,70 +856,83 @@ impl Task {
                     return Err(Rejected::WrongScope);
                 }
                 self.mode = *mode;
-                if *mode != Mode::UserFacing {
-                    self.owed_since = None;
-                }
-                // A waiting task waits for what its new mode waits for. It
-                // never completes here: the model has not seen the change.
-                if matches!(self.state, S::AwaitingMax | S::Listening) && self.draining.is_none() {
-                    self.wait(at, world);
+                if let Life::Live(live) = &mut self.life {
+                    if *mode != Mode::UserFacing {
+                        live.owed_since = None;
+                    }
+                    // A waiting task waits for what its new mode waits for.
+                    // It never completes here: the model has not seen the
+                    // change.
+                    if matches!(live.phase, Phase::AwaitingMax | Phase::Listening)
+                        && live.drain.is_none()
+                    {
+                        self.wait(at, world);
+                        // An autonomous task left waiting on nothing would
+                        // never move again: mark it done instead, or say
+                        // something with the change.
+                        if *mode == Mode::Autonomous
+                            && self.phase() == Some(&Phase::Listening)
+                            && self.background.is_empty()
+                        {
+                            return Err(Rejected::Idle);
+                        }
+                    }
                 }
             }
             TaskEvent::Renamed(name) => self.name = name.clone(),
             TaskEvent::Moved(Move::Handover { call, start }) => {
-                if self.draining.is_some() {
+                let live = self.live_mut()?;
+                if live.drain.is_some() {
                     return Err(Rejected::Draining);
                 }
-                let result = Input::Result(*call);
-                if self.state != S::Ready || !self.pending.iter().any(|p| p.input == result) {
+                if live.phase != Phase::Ready || !self.pending.contains(&Input::Result(*call)) {
                     return Err(Rejected::Busy);
                 }
                 self.root(start, at, world)?;
             }
             TaskEvent::Moved(Move::Root(start)) => {
-                if self.draining.is_some() {
-                    return Err(Rejected::Draining);
-                }
-                if !waiting && self.state != S::Starting {
-                    return Err(Rejected::Busy);
+                if let Life::Live(live) = &self.life {
+                    if live.drain.is_some() {
+                        return Err(Rejected::Draining);
+                    }
+                    if !waiting(&live.phase) {
+                        return Err(Rejected::Busy);
+                    }
                 }
                 self.root(start, at, world)?;
             }
             TaskEvent::Moved(Move::Rewind { to }) => {
-                if !waiting {
+                let live = self.live_mut()?;
+                if !waiting(&live.phase) {
                     return Err(Rejected::Busy);
                 }
+                live.context.rewind(*to, world);
                 self.drop_results();
-                let context = self.context.as_mut().ok_or(Rejected::Busy)?;
-                context.head = *to;
-                while context
-                    .learned
-                    .last()
-                    .is_some_and(|l| !world.descends(*to, l.head))
-                {
-                    let Some(learned) = context.learned.pop() else {
-                        break;
-                    };
-                    for (resource, before) in learned.before.into_iter().rev() {
-                        match before {
-                            Some(known) => context.knows.insert(resource, known),
-                            None => context.knows.remove(&resource),
-                        };
+                // The head is a response that ended a turn: the next word is Max's.
+                self.await_max(at);
+            }
+            TaskEvent::Drain(drain) => match &mut self.life {
+                Life::Starting => match drain {
+                    Drain::ToMax => return Err(Rejected::Starting),
+                    Drain::Stop(by) => self.finish(Outcome::Cancelled { by: *by }, at),
+                    Drain::Fail(reason) => self.finish(
+                        Outcome::Failed {
+                            reason: reason.clone(),
+                        },
+                        at,
+                    ),
+                },
+                Life::Live(live) => {
+                    // An ending outranks an interrupt; the first ending stands.
+                    if !ends(live.drain.as_ref()) {
+                        live.drain = Some(drain.clone());
+                    }
+                    if !matches!(live.phase, Phase::Thinking(_) | Phase::Acting(_)) {
+                        self.drained(at);
                     }
                 }
-            }
-            TaskEvent::Drain(Drain::ToMax) if self.state == S::Starting => {
-                return Err(Rejected::Busy);
-            }
-            TaskEvent::Drain(drain) => {
-                // An ending outranks an interrupt; the first ending stands.
-                if !matches!(self.draining, Some(Drain::Stop(_) | Drain::Fail(_))) {
-                    self.draining = Some(drain.clone());
-                }
-                if !matches!(self.state, S::Thinking(_) | S::Acting(_)) {
-                    self.drained(at);
-                }
-            }
+                Life::Done { .. } => return Err(Rejected::Finished),
+            },
             TaskEvent::Held(held) => self.held = *held,
         }
         Ok(())
@@ -839,24 +943,33 @@ impl Task {
     /// are for the task, not the context. A task waiting on Max still waits
     /// on him unless the new context has attachments to run.
     fn root(&mut self, start: &Start, at: Timestamp, world: &State) -> Result<(), Rejected> {
-        self.context = Some(Context::rooted(start));
+        let context = Context::rooted(start);
         self.drop_results();
-        if start.awaits.is_empty() {
-            if self.state == TaskState::Ready {
-                return Ok(());
+        let mut live = match std::mem::replace(&mut self.life, Life::Starting) {
+            Life::Live(mut live) => {
+                live.context = context;
+                live
             }
-            if !matches!(self.state, TaskState::AwaitingMax | TaskState::Listening) {
-                self.enter(TaskState::Ready, at);
+            Life::Starting | Life::Done { .. } => {
+                self.since = at;
+                Live::new(context)
             }
-            return Ok(());
-        }
-        self.enter(
-            TaskState::Acting(Step {
+        };
+        let phase = if !start.awaits.is_empty() {
+            Phase::Acting(Step {
                 response: None,
                 outstanding: start.awaits.clone(),
-            }),
-            at,
-        );
+            })
+        } else if matches!(live.phase, Phase::AwaitingMax | Phase::Listening) {
+            live.phase.clone()
+        } else {
+            Phase::Ready
+        };
+        if live.phase != phase {
+            live.phase = phase;
+            self.since = at;
+        }
+        self.life = Life::Live(live);
         for call in &start.awaits {
             if world
                 .call(*call)
@@ -882,71 +995,70 @@ impl Task {
                 if call.task != self.id {
                     return Err(Rejected::NotForTask);
                 }
-                if call.purpose == Purpose::KeepAlive {
-                    return Ok(());
-                }
-                if self.draining.is_some() {
+                let Task { pending, life, .. } = self;
+                let Life::Live(live) = life else {
+                    return Err(Rejected::Starting);
+                };
+                if live.drain.is_some() {
                     return Err(Rejected::Draining);
                 }
-                if self.state != TaskState::Ready {
+                if live.phase != Phase::Ready {
                     return Err(Rejected::Busy);
                 }
-                if self.head() != Some(call.base) {
+                if live.context.head != call.base {
                     return Err(Rejected::Detached);
                 }
-                let rendered = |p: &Pending| call.renders.iter().any(|r| p.input.is(r));
-                if self
-                    .pending
+                let rendered = |p: &Input| call.renders.iter().any(|r| p.is(r));
+                if pending
                     .iter()
-                    .any(|p| matches!(p.input, Input::Result(_)) && !rendered(p))
+                    .any(|p| matches!(p, Input::Result(_)) && !rendered(p))
                 {
                     return Err(Rejected::Unanswered);
                 }
                 let head = call.head();
-                self.learn(&call.renders, head, world)?;
-                self.pending.retain(|p| !rendered(p));
-                if let Some(context) = &mut self.context {
-                    context.head = head;
-                }
-                self.enter(TaskState::Thinking(id), at);
+                learn(&mut live.context, pending, &call.renders, head, world)?;
+                pending.retain(|p| !rendered(p));
+                live.context.head = head;
+                self.enter(Phase::Thinking(id), at);
             }
             ModelCallEvent::FirstByte => {}
             ModelCallEvent::Ended { ending, .. } => {
-                if self.state != TaskState::Thinking(id) {
+                let live = self.live_mut()?;
+                if live.phase != Phase::Thinking(id) {
                     return Err(Rejected::Busy);
                 }
-                let context = self.context.as_mut().ok_or(Rejected::Busy)?;
                 match ending {
                     Ending::Responded { content, stop } => {
                         let entry = Message {
                             role: Role::Assistant,
                             content: *content,
                         }
-                        .id_after(context.head);
-                        context.head = entry;
+                        .id_after(live.context.head);
+                        live.context.head = entry;
+                        live.failures = 0;
                         let calls = world
                             .model_call(id)
                             .map(|m| m.calls.clone())
                             .unwrap_or_default();
-                        self.failures = 0;
                         if !calls.is_empty() {
                             self.enter(
-                                TaskState::Acting(Step {
+                                Phase::Acting(Step {
                                     response: Some(entry),
                                     outstanding: calls,
                                 }),
                                 at,
                             );
-                        } else if matches!(stop, Stop::EndTurn | Stop::Refusal) {
+                        } else if *stop == Stop::EndTurn {
                             self.turn_ended(entry, at, world);
                         } else {
-                            // Stopped short: the brain carries on with a
-                            // continue note, or roots a context too long anew.
+                            // Stopped short of ending its turn: the brain
+                            // carries on with a continue note, roots a
+                            // context too long anew, or fails a refusal.
                             self.drained(at);
                         }
                     }
                     Ending::Failed { .. } => {
-                        self.failures += 1;
+                        live.failures += 1;
                         self.drained(at);
                     }
                     Ending::Limited { .. } | Ending::Abandoned { .. } | Ending::Lost => {
@@ -954,58 +1066,6 @@ impl Task {
                     }
                 }
             }
-        }
-        Ok(())
-    }
-
-    /// Update what the context embodies from what a request newly included,
-    /// remembering what it was before.
-    fn learn(
-        &mut self,
-        renders: &[Rendered],
-        head: EntryId,
-        world: &State,
-    ) -> Result<(), Rejected> {
-        let context = self.context.as_mut().ok_or(Rejected::Busy)?;
-        let mut before = Vec::new();
-        for rendered in renders {
-            match rendered {
-                Rendered::Call(call) => {
-                    let outcome = world
-                        .call(*call)
-                        .ok_or(Rejected::Unknown)?
-                        .outcome()
-                        .ok_or(Rejected::Busy)?;
-                    match outcome {
-                        CallOutcome::Refused { current } => context.tell(current, &mut before),
-                        outcome => {
-                            if let Some(output) = outcome.output() {
-                                context.observe(&output.observes, &mut before);
-                            }
-                        }
-                    }
-                }
-                Rendered::Delivery(delivery) => {
-                    let pending = Input::Delivery(*delivery);
-                    if !self.pending.iter().any(|p| p.input == pending) {
-                        return Err(Rejected::NotForTask);
-                    }
-                }
-                Rendered::Note(Note::Stale { told, shown }) => {
-                    context.tell(told, &mut before);
-                    context.observe(shown, &mut before);
-                }
-                Rendered::Note(Note::Boundary { from: Some(from) }) => {
-                    world.entry(*from).ok_or(Rejected::Unknown)?;
-                }
-                Rendered::Note(Note::Interrupted { call }) => {
-                    world.model_call(*call).ok_or(Rejected::Unknown)?;
-                }
-                Rendered::Note(_) => {}
-            }
-        }
-        if !before.is_empty() {
-            context.learned.push(Learned { head, before });
         }
         Ok(())
     }
@@ -1018,32 +1078,28 @@ impl Task {
         world: &State,
     ) -> Result<(), Rejected> {
         match event {
-            CallEvent::Made(call) => {
-                let wakes = match &call.caller {
-                    Caller::Agent {
-                        task,
-                        tool_use: None,
-                    } if *task == self.id => {
-                        if self.draining.is_some() {
-                            return Err(Rejected::Draining);
-                        }
-                        true
+            CallEvent::Made(call) => match &call.caller {
+                Caller::Agent {
+                    task,
+                    tool_use: None,
+                } if *task == self.id => {
+                    if self.live_mut()?.drain.is_some() {
+                        return Err(Rejected::Draining);
                     }
-                    Caller::Max {
-                        chat: Some(task), ..
-                    } if *task == self.id => false,
-                    _ => return Err(Rejected::NotForTask),
-                };
-                self.watching.push(Watched { call: id, wakes });
-                Ok(())
-            }
+                    self.background.push(id);
+                    Ok(())
+                }
+                Caller::Max {
+                    chat: Some(task), ..
+                } if *task == self.id => {
+                    self.max_actions.push(id);
+                    Ok(())
+                }
+                _ => Err(Rejected::NotForTask),
+            },
             CallEvent::Settled(_) if world.call(id).is_some_and(|c| c.settled.is_some()) => {
-                // The real outcome of a call it was told is unknown.
-                self.pending.push(Pending {
-                    input: Input::Activity(id),
-                    wakes: true,
-                });
-                if self.draining.is_none() {
+                self.pending.push(Input::Late(id));
+                if self.drain().is_none() {
                     self.woken(at);
                 }
                 Ok(())
@@ -1053,53 +1109,61 @@ impl Task {
         }
     }
 
-    /// A call this task waits on has settled: one of its round, or one it
-    /// watches.
+    /// A call this task waits on has settled: one of its round, its
+    /// background work, or one of Max's actions in its chat.
     fn settled(&mut self, call: CallId, at: Timestamp) -> Result<(), Rejected> {
-        if let TaskState::Acting(step) = &mut self.state
+        if let Life::Live(live) = &mut self.life
+            && let Phase::Acting(step) = &mut live.phase
             && let Some(i) = step.outstanding.iter().position(|c| *c == call)
         {
             step.outstanding.remove(i);
             let done = step.outstanding.is_empty();
-            self.pending.push(Pending {
-                input: Input::Result(call),
-                wakes: false,
-            });
+            self.pending.push(Input::Result(call));
             if done {
                 self.drained(at);
             }
             return Ok(());
         }
-        let i = self
-            .watching
-            .iter()
-            .position(|w| w.call == call)
-            .ok_or(Rejected::NotForTask)?;
-        let watched = self.watching.remove(i);
-        self.pending.push(Pending {
-            input: Input::Activity(call),
-            wakes: watched.wakes,
-        });
-        if self.draining.is_some() {
-            // Stopping: the last background call to settle lets it finish.
-            if self.state == TaskState::Listening && !self.has_background() {
-                self.drained(at);
+        if let Some(i) = self.background.iter().position(|c| *c == call) {
+            self.background.remove(i);
+            self.pending.push(Input::Background(call));
+            if self.drain().is_some() {
+                // Stopping: the last background call to settle lets it finish.
+                if self.phase() == Some(&Phase::Listening) && self.background.is_empty() {
+                    self.drained(at);
+                }
+            } else {
+                self.woken(at);
             }
-        } else if watched.wakes {
-            self.woken(at);
+            return Ok(());
         }
+        let i = self
+            .max_actions
+            .iter()
+            .position(|c| *c == call)
+            .ok_or(Rejected::NotForTask)?;
+        self.max_actions.remove(i);
+        self.pending.push(Input::MaxAction(call));
         Ok(())
     }
 
     fn deliver(&mut self, delivery: &Delivery, by: &Author, at: Timestamp) {
-        self.pending.push(Pending {
-            input: Input::Delivery(delivery.id),
-            wakes: true,
-        });
-        if matches!(delivery.content, Content::Words(_)) && matches!(by, Author::Max { .. }) {
-            self.owed_since = None;
+        self.pending.push(Input::Delivery(delivery.id));
+        // Marking a task done hands it its last turn: it finishes when that
+        // turn ends.
+        if delivery.content == Content::Prompt(Prompt::Done) {
+            self.mode = Mode::Autonomous;
+            if let Life::Live(live) = &mut self.life {
+                live.owed_since = None;
+            }
         }
-        if self.draining.is_none() {
+        if matches!(delivery.content, Content::Words(_))
+            && matches!(by, Author::Max { .. })
+            && let Life::Live(live) = &mut self.life
+        {
+            live.owed_since = None;
+        }
+        if self.drain().is_none() {
             self.woken(at);
         }
     }
@@ -1107,22 +1171,26 @@ impl Task {
     /// Something that wakes arrived: if the task is waiting, it is its move
     /// again.
     fn woken(&mut self, at: Timestamp) {
-        if matches!(self.state, TaskState::AwaitingMax | TaskState::Listening) {
-            self.enter(TaskState::Ready, at);
+        if matches!(self.phase(), Some(Phase::AwaitingMax | Phase::Listening)) {
+            self.enter(Phase::Ready, at);
         }
+    }
+
+    fn wakes(&self) -> bool {
+        self.pending.iter().any(Input::wakes)
     }
 
     /// The model ended its turn at `entry`: complete, wait, or carry on.
     fn turn_ended(&mut self, entry: EntryId, at: Timestamp, world: &State) {
-        if self.draining.is_some() {
+        if self.drain().is_some() {
             return self.drained(at);
         }
-        if self.pending.iter().any(|p| p.wakes) {
+        if self.wakes() {
             // Max's words, or a prompt, arrived during the turn.
-            return self.enter(TaskState::Ready, at);
+            return self.enter(Phase::Ready, at);
         }
-        if self.mode == Mode::Autonomous && !self.has_background() {
-            return self.enter(TaskState::Done(Outcome::Result { entry }), at);
+        if self.mode == Mode::Autonomous && self.background.is_empty() {
+            return self.finish(Outcome::Result { entry }, at);
         }
         self.wait(at, world);
     }
@@ -1132,56 +1200,123 @@ impl Task {
         if self.mode == Mode::UserFacing {
             return self.await_max(at);
         }
-        let woken = self.pending.iter().any(|p| p.wakes)
-            || (self.mode == Mode::Standing && !world.stale(self).is_empty());
-        let state = if woken {
-            TaskState::Ready
+        let woken = self.wakes() || (self.mode == Mode::Standing && !world.stale(self).is_empty());
+        let phase = if woken {
+            Phase::Ready
         } else {
-            TaskState::Listening
+            Phase::Listening
         };
-        self.enter(state, at);
+        self.enter(phase, at);
     }
 
     fn await_max(&mut self, at: Timestamp) {
-        if self.pending.iter().any(|p| p.wakes) {
-            return self.enter(TaskState::Ready, at);
+        if self.wakes() {
+            return self.enter(Phase::Ready, at);
         }
-        self.owed_since.get_or_insert(at);
-        self.enter(TaskState::AwaitingMax, at);
+        if let Life::Live(live) = &mut self.life {
+            live.owed_since.get_or_insert(at);
+        }
+        self.enter(Phase::AwaitingMax, at);
     }
 
     /// Nothing in the round is outstanding: carry on, or do what the drain
     /// says.
     fn drained(&mut self, at: Timestamp) {
-        match self.draining.clone() {
-            None => self.enter(TaskState::Ready, at),
+        let Life::Live(live) = &mut self.life else {
+            return;
+        };
+        match live.drain.clone() {
+            None => self.enter(Phase::Ready, at),
             Some(Drain::ToMax) => {
-                self.draining = None;
+                live.drain = None;
                 self.await_max(at);
             }
-            Some(Drain::Stop(_) | Drain::Fail(_)) if self.has_background() => {
-                self.enter(TaskState::Listening, at);
+            Some(Drain::Stop(_) | Drain::Fail(_)) if !self.background.is_empty() => {
+                self.enter(Phase::Listening, at);
             }
-            Some(Drain::Stop(by)) => {
-                self.draining = None;
-                self.enter(TaskState::Done(Outcome::Cancelled { by }), at);
-            }
-            Some(Drain::Fail(reason)) => {
-                self.draining = None;
-                self.enter(TaskState::Done(Outcome::Failed { reason }), at);
-            }
+            Some(Drain::Stop(by)) => self.finish(Outcome::Cancelled { by }, at),
+            Some(Drain::Fail(reason)) => self.finish(Outcome::Failed { reason }, at),
         }
     }
 
-    fn enter(&mut self, state: TaskState, at: Timestamp) {
-        if self.state != state {
-            self.state = state;
+    fn finish(&mut self, outcome: Outcome, at: Timestamp) {
+        let context = match std::mem::replace(&mut self.life, Life::Starting) {
+            Life::Live(live) => Some(live.context),
+            Life::Starting => None,
+            Life::Done { context, .. } => context,
+        };
+        self.life = Life::Done { outcome, context };
+        self.since = at;
+    }
+
+    fn enter(&mut self, phase: Phase, at: Timestamp) {
+        if let Life::Live(live) = &mut self.life
+            && live.phase != phase
+        {
+            live.phase = phase;
             self.since = at;
         }
     }
 
     fn drop_results(&mut self) {
-        self.pending
-            .retain(|p| !matches!(p.input, Input::Result(_)));
+        self.pending.retain(|p| !matches!(p, Input::Result(_)));
     }
+}
+
+/// Whether a live task is waiting for a move rather than running one.
+fn waiting(phase: &Phase) -> bool {
+    matches!(phase, Phase::Ready | Phase::AwaitingMax | Phase::Listening)
+}
+
+/// Whether a drain ends the task, rather than handing the move to Max.
+pub(crate) fn ends(drain: Option<&Drain>) -> bool {
+    matches!(drain, Some(Drain::Stop(_) | Drain::Fail(_)))
+}
+
+/// Update what a context embodies from what a request newly included,
+/// remembering what it was before.
+fn learn(
+    context: &mut Context,
+    pending: &[Input],
+    renders: &[Rendered],
+    head: EntryId,
+    world: &State,
+) -> Result<(), Rejected> {
+    let mut before = Vec::new();
+    for rendered in renders {
+        match rendered {
+            Rendered::Call(call) => {
+                let outcome = world
+                    .call(*call)
+                    .ok_or(Rejected::Unknown)?
+                    .outcome()
+                    .ok_or(Rejected::Busy)?;
+                match outcome {
+                    CallOutcome::Refused { current } => context.tell(current, &mut before),
+                    outcome => {
+                        if let Some(output) = outcome.output() {
+                            context.observe(&output.observes, &mut before);
+                        }
+                    }
+                }
+            }
+            Rendered::Delivery(delivery) => {
+                if !pending.contains(&Input::Delivery(*delivery)) {
+                    return Err(Rejected::NotForTask);
+                }
+            }
+            Rendered::Note(Note::Stale { told, shown }) => {
+                context.tell(told, &mut before);
+                context.observe(shown, &mut before);
+            }
+            Rendered::Note(Note::Boundary { from: Some(from) }) => {
+                world.entry(*from).ok_or(Rejected::Unknown)?;
+            }
+            Rendered::Note(_) => {}
+        }
+    }
+    if !before.is_empty() {
+        context.learned.push_back(Learned { head, before });
+    }
+    Ok(())
 }

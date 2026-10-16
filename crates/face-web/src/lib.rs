@@ -1,18 +1,18 @@
 //! The harness's web face: the task tree Max watches, live from the journal.
 //!
-//! A face is a reader of the journal and nothing else. It folds the records
-//! it is given with [`State::apply`], the same fold the brain runs, and
-//! shows the views the core derives: the tree of tasks and their states,
+//! A face is a reader of the journal and nothing else. The brain hands it
+//! each [`Commit`]: the state as of that commit, a persistent value it holds
+//! while the brain moves on, and the records it added. It shows the views
+//! the core derives: the tree of tasks and their states,
 //! what each waits on ([`State::waiting_on`], the throbber), Max's queue
 //! ([`State::queue`]) and a selected task's context. It keeps no state of
 //! its own that could disagree with the journal.
 //!
 //! **The cursor is the journal position.** The page's event stream is one
-//! event per fold, with the [`Seq`] it reached as the event id. The browser
-//! resends the last id it got when it reconnects, so a dropped connection
-//! resumes with every record after it: the facts in between are read from
-//! the [`Source`] again, and the views are whole at every position, so
-//! nothing is lost and nothing is applied twice. `/view` is the latest view
+//! event per commit, with the [`Seq`] it reached as the event id. The
+//! browser resends the last id it got when it reconnects, so a dropped
+//! connection resumes with the recent records after it, and the views are
+//! whole at every position, so nothing is applied twice. `/view` is the latest view
 //! alone, for a client that only looks.
 //!
 //! **A context is a value.** It is fetched by its head entry
@@ -54,9 +54,11 @@ mod http;
 mod live;
 mod view;
 
+use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::Path;
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -71,16 +73,19 @@ pub use dictation::{Dictation, Edit, Socket, edits};
 pub use live::{Feed, Running};
 pub use view::describe;
 
-/// What a face reads: the journal, and the values its facts name.
-///
-/// The store implements this. A face never writes.
+/// Where a face reads the values the journal's facts name. A face never
+/// writes.
 pub trait Source: Send + Sync + 'static {
-    /// The records after `after`, in order, waiting up to `wait` for at
-    /// least one. Empty if none came.
-    fn read(&self, after: Seq, wait: Duration) -> Vec<Record>;
-
     /// A value's bytes, if stored.
     fn value(&self, id: ValueId) -> Option<Vec<u8>>;
+}
+
+/// What the brain hands its face after each commit: the state as of it, and
+/// the records it added. A face given the journal at launch gets the state
+/// and the recent records.
+pub struct Commit {
+    pub state: State,
+    pub records: Vec<Record>,
 }
 
 /// Where Max's facts go: the brain, the journal's only writer.
@@ -101,11 +106,11 @@ pub struct Wiring {
     pub feed: Feed,
 }
 
-/// A face over one journal: folds it as it grows and serves the page.
+/// A face over one journal: follows its commits and serves the page.
 ///
-/// Only the follower writes `folded`, and holds it only while folding in
-/// memory; viewers read it alongside one another. Nothing reads the store
-/// while holding either lock.
+/// Only the follower writes `folded`, and holds it only to swap the state
+/// in; viewers read it alongside one another. Nothing reads the store while
+/// holding either lock.
 pub struct Face<S> {
     source: S,
     wiring: Wiring,
@@ -116,11 +121,8 @@ pub struct Face<S> {
 
 struct Folded {
     state: State,
-    /// Each record as the page's journal shows it, by position.
-    lines: Vec<Arc<str>>,
-    /// A record the fold refused: this face's build disagrees with the
-    /// brain's, and the views stop at the record before it.
-    refused: Option<String>,
+    /// The recent records as the page's journal shows them, in order.
+    lines: VecDeque<(Seq, Arc<str>)>,
 }
 
 /// What every viewer is sent: the page's view, rendered once per fold, and
@@ -132,6 +134,8 @@ struct Shown {
 
 /// How many recent facts a page that has seen nothing is sent.
 const RECENT: u64 = 200;
+/// How many recent facts a face keeps for pages that reconnect.
+const KEPT: usize = 2000;
 /// How often an idle event stream is written to, so a dead one is noticed.
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
@@ -143,51 +147,46 @@ impl<S: Source> Face<S> {
     /// A face that acts, dictates and shows live progress as `wiring` allows.
     pub fn with(source: S, wiring: Wiring) -> Arc<Face<S>> {
         let state = State::default();
-        let view = Arc::new(render(&state, &|_| None, None));
+        let view = Arc::new(render(&state, &|_| None));
         Arc::new(Face {
             source,
             wiring,
             folded: RwLock::new(Folded {
                 state,
-                lines: Vec::new(),
-                refused: None,
+                lines: VecDeque::new(),
             }),
             shown: Mutex::new(Shown { view, seq: Seq(0) }),
             grew: Condvar::new(),
         })
     }
 
-    /// Fold the journal as it grows. Runs until a record is refused.
-    pub fn follow(&self) {
-        let mut last = Seq(0);
-        loop {
-            let records = self.source.read(last, HEARTBEAT);
-            if records.is_empty() {
-                continue;
+    /// Follow the brain's commits until it stops sending them. Commits that
+    /// queue while a view renders are shown together.
+    pub fn follow(&self, commits: Receiver<Commit>) {
+        while let Ok(Commit {
+            mut state,
+            mut records,
+        }) = commits.recv()
+        {
+            for more in commits.try_iter() {
+                state = more.state;
+                records.extend(more.records);
             }
+            let lines: Vec<(Seq, Arc<str>)> = records
+                .iter()
+                .map(|r| (r.seq, fact(&state, r).into()))
+                .collect();
+            let view = Arc::new(render(&state, &|id| self.source.value(id)));
+            let last = state.last().unwrap_or(Seq(0));
             {
                 let mut folded = self.folded.write().unwrap_or_else(|e| e.into_inner());
-                for record in &records {
-                    if let Err(rejected) = folded.state.apply(record) {
-                        let refused = format!("record {} refused: {rejected:?}", record.seq.0);
-                        folded.refused = Some(refused);
-                        break;
-                    }
-                    let line = fact(&folded.state, record).into();
-                    folded.lines.push(line);
-                }
+                folded.state = state;
+                folded.lines.extend(lines);
+                let over = folded.lines.len().saturating_sub(KEPT);
+                folded.lines.drain(..over);
             }
-            let folded = self.read();
-            let value = |id| self.source.value(id);
-            let view = Arc::new(render(&folded.state, &value, folded.refused.as_deref()));
-            last = folded.state.last().unwrap_or(Seq(0));
-            let stop = folded.refused.is_some();
-            drop(folded);
             *self.show() = Shown { view, seq: last };
             self.grew.notify_all();
-            if stop {
-                return;
-            }
         }
     }
 
@@ -317,9 +316,10 @@ impl<S: Source> Face<S> {
             let facts: Vec<Arc<str>> = self
                 .read()
                 .lines
-                .get(from.0 as usize..seq.0 as usize)
-                .unwrap_or_default()
-                .to_vec();
+                .iter()
+                .filter(|(at, _)| *at > from && *at <= seq)
+                .map(|(_, line)| Arc::clone(line))
+                .collect();
             let data = format!(r#"{{"view":{view},"facts":[{}]}}"#, facts.join(","));
             write!(stream, "id: {}\ndata: {data}\n\n", seq.0)?;
             stream.flush()?;
@@ -383,14 +383,8 @@ fn fact(state: &State, record: &Record) -> String {
     line.to_string()
 }
 
-fn render(
-    state: &State,
-    value: &dyn Fn(ValueId) -> Option<Vec<u8>>,
-    refused: Option<&str>,
-) -> String {
-    let mut view = view::view(state, value, now());
-    view["refused"] = json!(refused);
-    view.to_string()
+fn render(state: &State, value: &dyn Fn(ValueId) -> Option<Vec<u8>>) -> String {
+    view::view(state, value, now()).to_string()
 }
 
 fn now() -> Timestamp {

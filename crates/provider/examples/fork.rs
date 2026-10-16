@@ -1,6 +1,6 @@
 //! A root, a two-turn conversation, then two forks of its last response,
 //! the second sent at the first's FirstByte. Prints each request's facts,
-//! its text as it streams, its cache reads and writes and its billing claim.
+//! its text as it streams, its cache reads and writes and whether it was billed to the plan.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use harness_core::context::{Entry, EntryId, Message, Role, Root};
 use harness_core::id::{ModelCallId, TaskId, ValueId};
 use harness_core::live::Live;
-use harness_core::model_call::{Breakpoint, Ending, ModelCall, Purpose, Ttl};
+use harness_core::model_call::{Ending, ModelCall};
 use harness_provider::{Client, Finished, IDENTITY, Login, Progress};
 use serde_json::json;
 
@@ -80,17 +80,9 @@ fn main() {
             content: store.value(content.into_bytes()),
         };
         let head = message.id_after(base);
-        let breakpoints = marks
-            .iter()
-            .chain([&head])
-            .map(|&at| Breakpoint {
-                at,
-                ttl: Ttl::Short,
-            })
-            .collect();
+        let breakpoints = marks.iter().chain([&head]).copied().collect();
         ModelCall {
             task: TaskId::generate(),
-            purpose: Purpose::Turn,
             base,
             appends: vec![message],
             renders: vec![],
@@ -172,17 +164,14 @@ fn turn(
                             let _ = tx.send(());
                         }
                     }
-                    Progress::Live(Live::Model { event, .. }) => {
-                        let event: serde_json::Value = serde_json::from_str(&event).unwrap();
-                        if let Some(text) = event["delta"]["text"].as_str() {
-                            line.push_str(text);
-                            while let Some(n) = line.find('\n') {
-                                println!("[{:6.2}s] {label} > {}", secs(start), &line[..n]);
-                                line.drain(..=n);
-                            }
+                    Progress::Live(Live::Model { chunk, .. }) => {
+                        line.push_str(&chunk);
+                        while let Some(n) = line.find('\n') {
+                            println!("[{:6.2}s] {label} > {}", secs(start), &line[..n]);
+                            line.drain(..=n);
                         }
                     }
-                    Progress::Live(_) => {}
+                    Progress::Live(_) | Progress::Streaming => {}
                 }
                 let _ = std::io::stdout().flush();
                 ControlFlow::Continue(())
@@ -195,15 +184,15 @@ fn turn(
     let quota = finished.quota.clone().unwrap_or_else(|| fail("no quota"));
     let usage = finished.usage.unwrap_or_default();
     println!(
-        "[{:6.2}s] {label}: Ended  cache_read={} cache_write={} input={} output={}  claim={} 5h={:?} 7d={:?}",
+        "[{:6.2}s] {label}: Ended  cache_read={} cache_write={} input={} output={}  on_plan={} 5h={:?} 7d={:?}",
         secs(start),
         usage.cache_read,
         usage.cache_write_short + usage.cache_write_long,
         usage.input,
         usage.output,
-        quota.claim.as_deref().unwrap_or("none"),
-        quota.five_hour,
-        quota.seven_day,
+        quota.on_plan,
+        quota.five_hour.map(|w| w.used),
+        quota.seven_day.map(|w| w.used),
     );
     match &finished.ending {
         Ending::Responded { stop, .. } => println!("[{:6.2}s] {label}: stop={stop:?}", secs(start)),

@@ -50,31 +50,10 @@ until c -s -o /dev/null "$url/" 2>/dev/null; do sleep 0.2; done
 root=$(q '.tasks[] | select(.owner == null) | .id')
 say "the root task is $(name "$root")"
 
-say "== live text: a request of the root's as it streams, from /live"
-# Read 2 s of a streaming request, then reconnect the way a browser does,
-# with the last event id it got, and read on until the request ends. Try
-# again on the next request if this one ended inside the 2 s.
-while :; do
-  call=$(q ".tasks[] | select(.id == \"$root\" and .waiting.streaming == true) | .waiting.call")
-  [ -n "$call" ] || { sleep 0.2; continue; }
-  { c -m 2 -N "$url/live?model=$call" 2>/dev/null || true; } > "$dir/live1.txt"
-  n=$(grep -c '^id:' "$dir/live1.txt" || true)
-  [ "$n" -gt 0 ] && ! grep -q '^event: end' "$dir/live1.txt" && break
-done
-say "first connection to /live?model=$call, cut after 2 s: events 1 to $n"
-c -N -H "Last-Event-ID: $n" "$url/live?model=$call" 2>/dev/null > "$dir/live2.txt" || true
-ids=$(grep '^id:' "$dir/live2.txt" | cut -c5- | tr '\n' ' ')
-say "reconnected with Last-Event-ID: $n: events $(echo $ids | cut -d' ' -f1) to $(echo $ids | awk '{print $NF}'), then: $(grep -o '^event: end' "$dir/live2.txt")"
-say "the streamed text, from both connections:"
-cat "$dir/live1.txt" "$dir/live2.txt" | grep '^data:' | cut -c7- |
-  jq -rj 'fromjson | select(.type == "content_block_delta") | .delta | (.text // .thinking // .partial_json // "")' |
-  fold -w 100 | head -12 | sed 's/^/          /' || true
-echo
-
 say "== hold the root: nothing under it sends a request until it is released"
 act "{\"Task\": [\"$root\", {\"Held\": true}]}"
 until [ -n "$(q '.tasks[] | select(.waiting.kind == "held") | .id')" ]; do sleep 0.5; done
-sent=$(grep -c 'request sent' "$dir/brain.log")
+sent=$(grep -c 'request sent' "$dir/brain.log" || true)
 say "held now: $(q '[.tasks[] | select(.waiting.kind == "held") | .name] | join(", ")')"
 sleep 5
 say "5 s later: $(( $(grep -c 'request sent' "$dir/brain.log") - sent )) requests sent meanwhile; release it"
@@ -84,6 +63,8 @@ say "== interrupt both children as soon as they exist"
 until [ "$(q '[.tasks[] | select(.owner != null)] | length')" = 2 ]; do sleep 0.2; done
 mapfile -t kids < <(q '[.tasks[] | select(.owner != null)] | sort_by(.name) | .[].id')
 for kid in "${kids[@]}"; do
+  # A task whose limbs are still connecting has nothing to interrupt yet.
+  while [ "$(waiting "$kid")" = starting ]; do sleep 0.2; done
   say "interrupt $(name "$kid") while it is on '$(waiting "$kid")'"
   act "{\"Task\": [\"$kid\", {\"Drain\": \"ToMax\"}]}"
 done
@@ -122,7 +103,34 @@ act "{\"Delivery\": {\"id\": \"$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' 
 say "a fact that is not Max's to author (failing a task):"
 act "{\"Task\": [\"$top\", {\"Drain\": {\"Fail\": \"because\"}}]}"
 
-say "== wait for the root's result"
+say "== live text: the root's report as it streams, from /live"
+# Read 2 s of a streaming request, then reconnect the way a browser does,
+# with the last event id it got, and read on until the request ends. Try
+# again on the next request if this one ended inside the 2 s. A root that
+# has already reported is marked done, and its last turn streams instead.
+pressed=""
+while :; do
+  if [ -z "$pressed" ] && [ "$(waiting "$root")" = max ]; then
+    demos/brain/done.sh "$port" >/dev/null
+    pressed=1
+  fi
+  call=$(q '[.tasks[] | select(.waiting.streaming == true) | .waiting.call][0] // empty')
+  [ -n "$call" ] || { sleep 0.2; continue; }
+  { c -m 2 -N "$url/live?model=$call" 2>/dev/null || true; } > "$dir/live1.txt"
+  n=$(grep -c '^id:' "$dir/live1.txt" || true)
+  [ "$n" -gt 0 ] && ! grep -q '^event: end' "$dir/live1.txt" && break
+done
+say "first connection to /live?model=$call, cut after 2 s: events 1 to $n"
+c -N -H "Last-Event-ID: $n" "$url/live?model=$call" 2>/dev/null > "$dir/live2.txt" || true
+ids=$(grep '^id:' "$dir/live2.txt" | cut -c5- | tr '\n' ' ' || true)
+say "reconnected with Last-Event-ID: $n: ${ids:+events $(echo $ids | cut -d' ' -f1) to $(echo $ids | awk '{print $NF}'), }then: $(grep -o '^event: end' "$dir/live2.txt")"
+say "the streamed text, from both connections:"
+cat "$dir/live1.txt" "$dir/live2.txt" | grep '^data: "' | cut -c7- | jq -rj . |
+  fold -w 100 | head -12 | sed 's/^/          /' || true
+echo
+
+say "== wait for the root to end its turn, and mark it done"
+[ -n "$pressed" ] || demos/brain/done.sh "$port" >/dev/null
 until grep -q 'the task is done' "$dir/brain.log"; do sleep 0.5; done
 sleep 0.5
 say "done; the brain's own log:"

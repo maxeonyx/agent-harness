@@ -32,6 +32,7 @@ echo
 echo "== launch 2: the same journal, nothing else"
 "$brain" "${args[@]}" > "$dir/launch2.log" 2>&1 &
 pid=$!
+demos/brain/done.sh "${PORT:-4321}"
 until grep -q 'the task is done' "$dir/launch2.log"; do sleep 0.5; done
 sleep 0.5
 kill "$pid"

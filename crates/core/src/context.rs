@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CallId, DeliveryId, Digest, ModelCallId, ParseError, TaskId, Timestamp, ValueId};
+use crate::id::{CallId, DeliveryId, Digest, ParseError, ValueId};
 use crate::resource::Observation;
 
 /// The identity of an entry, and so of the context that ends at it: the
@@ -268,7 +268,10 @@ pub enum Rendered {
 
 /// What the harness says to a model, and why. Each kind is rendered from
 /// data the harness holds; the wording is policy, and the fork-framing spike
-/// decided it for forks.
+/// decided it for forks. Only notes the brain renders are here: a mandate
+/// reminder after a tool round (the A.1.3 problem), a clock note, the
+/// siblings' status and a quote of an interrupted response are each a new
+/// variant when the brain first renders one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Note {
     /// What every member of a fresh task's spawn shares, verbatim: its
@@ -280,9 +283,6 @@ pub enum Note {
     /// forked response's tool uses; at a fresh start, after the shared brief;
     /// after a handover, at the top.
     Mandate,
-    /// A restatement of the mandate after a tool round, so a deep fork
-    /// remembers it is A.1.3 and stops.
-    Reminder,
     /// The neutral answer, in a fork's first message, to a tool use in the
     /// forked response: the spawn that started the fork, the parent's other
     /// calls, or for an aside the call its source is waiting on. Their real
@@ -298,22 +298,11 @@ pub enum Note {
         told: Vec<Observation>,
         shown: Vec<Observation>,
     },
-    /// How long since the context last heard anything, when that is long
-    /// enough to matter ("more than 1h", `context-updates.md`).
-    Clock { since: Timestamp },
-    /// Siblings in the task's scope as this context last heard of them; the
-    /// next request announces only the difference.
-    Siblings {
-        running: Vec<TaskId>,
-        done: Vec<TaskId>,
-    },
     /// This context begins where another ended (a handover, a resume, a
     /// rebuild), and what is and is not carried over.
     Boundary { from: Option<EntryId> },
-    /// The visible text of a response Max interrupted, quoted so that his
-    /// correction has something to refer to.
-    Interrupted { call: ModelCallId },
     /// The last response stopped short of ending its turn (its output limit,
-    /// a provider pause): carry on.
+    /// a provider pause): carry on. A response Max interrupted is quoted
+    /// here too, from [`crate::model_call::Ending::Abandoned`].
     Continue,
 }

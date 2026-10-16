@@ -9,12 +9,13 @@
 //! a write or edit whose caller has not seen the current version is
 //! [refused](Outcome::Refused) before it touches anything. A caller who has
 //! never seen an existing file is treated as having seen it absent, so
-//! nothing is overwritten blind. Forks [share](Fork::Share) the workspace;
-//! the notices and refusals are how siblings coordinate in it.
+//! nothing is overwritten blind. Forks share their source's workspace; the
+//! notices and refusals are how siblings coordinate in it.
 //!
-//! Everything it says is journal facts about its own calls and files
-//! ([`FromLimb::Facts`]): a settlement, with the bytes of its output, and a
-//! [`Change`] naming the call for each file the call wrote, in one batch.
+//! Everything it says is journal facts about itself, its own calls and its
+//! files ([`FromLimb::Facts`]): its [`Description`] right after its hello; a
+//! settlement, with the bytes of its output, and a [`Change`] naming the
+//! call for each file the call wrote, in one batch.
 //!
 //! Access control is the definition and nothing else: the limb has no
 //! prompts and no checks on what a command may touch. An environment either
@@ -67,9 +68,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 use harness_core::call::{Call, CallEvent, Outcome, Output};
-use harness_core::environment::{
-    Description, Fork, FromLimb, Host, Instruction, Limb, LimbKind, Machine, ToLimb,
-};
+use harness_core::environment::{Description, FromLimb, Instruction, Limb, LimbKind, ToLimb};
 use harness_core::id::{CallId, Digest, InstanceId, LimbId, ValueId};
 use harness_core::journal::{Batch, Fact};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
@@ -113,7 +112,7 @@ impl Settings {
     /// The settings a limb definition holds.
     pub fn of(limb: &Limb) -> Option<Settings> {
         match &limb.kind {
-            LimbKind::Plugin { kind, config, .. } if kind == KIND || kind == user::KIND => {
+            LimbKind::Plugin { kind, config } if Kind::of(kind).is_some() => {
                 serde_json::from_str(config).ok()
             }
             _ => None,
@@ -122,24 +121,49 @@ impl Settings {
 
     /// The definition of a workspace limb, as the fact that declares it.
     pub fn definition(&self, id: LimbId, name: &str) -> Limb {
-        self.limb(id, name, KIND)
+        self.limb(id, name, Kind::Workspace)
     }
 
     /// The definition of a user limb over Max's config directory `dir`.
     pub fn user(id: LimbId, dir: PathBuf) -> Limb {
-        Settings { dir, clone: None }.limb(id, "user", user::KIND)
+        Settings { dir, clone: None }.limb(id, "user", Kind::User)
     }
 
-    fn limb(&self, id: LimbId, name: &str, kind: &str) -> Limb {
+    fn limb(&self, id: LimbId, name: &str, kind: Kind) -> Limb {
         Limb {
             id,
             name: name.into(),
             kind: LimbKind::Plugin {
-                kind: kind.into(),
+                kind: kind.name().into(),
                 config: serde_json::to_string(self).expect("settings are JSON"),
-                host: Host::Process(Machine::Local),
             },
-            fork: Fork::Share,
+        }
+    }
+}
+
+/// The two plugin kinds this crate runs: one implementation over a
+/// directory, with different tools and instructions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// An agent's working directory, with the coding tools.
+    Workspace,
+    /// Max's own agent configuration ([`user`]).
+    User,
+}
+
+impl Kind {
+    pub fn of(name: &str) -> Option<Kind> {
+        match name {
+            KIND => Some(Kind::Workspace),
+            user::KIND => Some(Kind::User),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Workspace => KIND,
+            Kind::User => user::KIND,
         }
     }
 }
@@ -147,8 +171,7 @@ impl Settings {
 /// Where a workspace runs and keeps its records.
 pub struct Config {
     pub limb: LimbId,
-    /// A user limb rather than a workspace ([`user`]).
-    pub user: bool,
+    pub kind: Kind,
     pub settings: Settings,
     /// Where the limb keeps its record of calls. Outside the directory, so
     /// the agents' files stay theirs.
@@ -171,7 +194,7 @@ struct Inner {
     /// The clone it was made as, which its instructions say is the agent's
     /// own.
     clone: Option<Clone>,
-    user: bool,
+    kind: Kind,
     calls: Calls,
     out: Sender<FromLimb>,
     running: Mutex<HashMap<CallId, Running>>,
@@ -190,7 +213,8 @@ struct Running {
 
 impl Workspace {
     /// Start an instance: make its clone if it has one to make, end what an
-    /// earlier instance left running, and say hello. Blocks while it clones.
+    /// earlier instance left running, say hello, and describe itself. Blocks
+    /// while it clones.
     pub fn open(config: Config, out: Sender<FromLimb>) -> io::Result<Workspace> {
         let Settings { dir, clone } = config.settings;
         if let Some(clone) = &clone {
@@ -201,7 +225,7 @@ impl Workspace {
             instance: InstanceId::generate(),
             root: dir.canonicalize()?,
             clone,
-            user: config.user,
+            kind: config.kind,
             calls: Calls::open(config.state.join("calls"))?,
             out,
             running: Mutex::default(),
@@ -215,6 +239,13 @@ impl Workspace {
         inner.send(FromLimb::Hello {
             instance: inner.instance,
         });
+        inner.send(FromLimb::Facts(Batch {
+            values: Vec::new(),
+            facts: vec![Fact::Described {
+                limb: inner.limb,
+                description: inner.describe(),
+            }],
+        }));
         Ok(Workspace {
             inner: Arc::new(inner),
         })
@@ -229,7 +260,6 @@ impl Workspace {
     pub fn handle(&self, message: ToLimb) {
         let inner = &self.inner;
         match message {
-            ToLimb::Describe => inner.send(FromLimb::Described(inner.describe())),
             ToLimb::Run { id, call, input } => self.run(id, call, input),
             ToLimb::Stop { call } => inner.stop(call),
             ToLimb::Watch { known } => {
@@ -426,7 +456,7 @@ impl Inner {
     }
 
     fn describe(&self) -> Description {
-        if self.user {
+        if self.kind == Kind::User {
             return self.describe_user();
         }
         let text = tools::instructions(&self.root, self.clone.as_ref());
@@ -480,7 +510,7 @@ impl Inner {
 
     /// The file whose contents are among the limb's instructions.
     fn instruction_file(&self) -> &'static str {
-        if self.user {
+        if self.kind == Kind::User {
             user::INSTRUCTIONS
         } else {
             "AGENTS.md"
@@ -507,7 +537,7 @@ impl Inner {
 
     fn version_of(&self, resource: &ResourceKey) -> Option<Version> {
         match resource.kind.as_str() {
-            INSTRUCTIONS if self.user && resource.name == user::INDEX => {
+            INSTRUCTIONS if self.kind == Kind::User && resource.name == user::INDEX => {
                 Some(Version::Is(Digest::of(user::index(&self.root).as_bytes())))
             }
             FILE | INSTRUCTIONS if !resource.name.is_empty() => {

@@ -12,7 +12,7 @@
 //! `Dispatched`, so a crash leaves both or neither, and a restart never
 //! spawns twice.
 
-use harness_core::environment::{Audience, Description, Fork, Instruction, Limb, LimbKind, Tool};
+use harness_core::environment::{Audience, Description, Instruction, Limb, LimbKind, Tool};
 use harness_core::id::{Digest, LimbId};
 use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
@@ -30,7 +30,6 @@ pub fn definition(id: LimbId) -> Limb {
         id,
         name: "meta".into(),
         kind: LimbKind::Meta,
-        fork: Fork::Share,
     }
 }
 
@@ -46,7 +45,7 @@ A fork continues from this exact point of your context: it knows everything you 
 and it shares your cache, so it is cheap. It works in your directory with you. \
 A resume continues that agent's own context with a new mandate, so a follow-up question keeps everything it learned. \
 A fresh agent starts from nothing but its role, the shared `brief`, the `quotes` and its mandate, so say everything it needs. \
-Each message of Max's is labelled `max-…`: name it in `quotes` to give his words to every fresh agent verbatim, rather than retelling them.",
+Each of Max's messages, mandates and answers is labelled `max-…`: name it in `quotes` to give his words to every fresh agent verbatim, rather than retelling them.",
     );
     if roles.is_empty() {
         said.push_str("\n\nYou cannot start fresh agents, only forks of yourself.");

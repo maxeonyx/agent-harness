@@ -6,7 +6,7 @@ demos/chat/run.sh
 
 Then open https://mx-hv-mj.local:4320 (another port: `PORT=4400`). It runs a real brain whose root task, `chat`, talks to you, in the brain demo's scratch repo under `target/chat/repo`. The journal persists: run it again and the chat carries on where it was; delete `target/chat` for a new one.
 
-The root starts by reading the repo and, because `mandate.md` says what the repo should become, usually starts agents for it. Then it ends its turn and waits on you.
+The root starts by reading the repo and, because `mandate.md` says what the repo should become, usually starts agents for it. Then it ends its turn and waits on you. It is done only when you press **Done**.
 
 What to click:
 
