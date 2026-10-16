@@ -25,7 +25,7 @@
   main {
     display: grid; gap: 1em; padding: 1em 1.2em;
     grid-template-columns: minmax(22em, 1fr) minmax(26em, 1.4fr);
-    grid-template-areas: "queue detail" "tree detail" "facts detail";
+    grid-template-areas: "queue detail" "tree detail" "facts compose";
     grid-template-rows: auto 1fr auto;
     height: calc(100vh - 3em);
   }
@@ -36,6 +36,24 @@
   }
   #queue { grid-area: queue; } #tree { grid-area: tree; }
   #facts { grid-area: facts; max-height: 14em; } #detail { grid-area: detail; }
+  #compose { grid-area: compose; display: flex; flex-direction: column; overflow: hidden; }
+  #compose h2 .to { text-transform: none; letter-spacing: 0; color: var(--ink); }
+  #box {
+    flex: 1; min-height: 6em; margin: 0 1em; padding: .5em .6em; resize: none;
+    font: inherit; color: var(--ink); background: var(--ground);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  #box:focus { outline: 2px solid var(--maroon); outline-offset: -1px; }
+  #compose .controls { display: flex; gap: .6em; align-items: center; padding: .5em 1em .7em; }
+  #compose button {
+    font: inherit; padding: .25em .8em; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--paper); color: var(--ink); cursor: pointer;
+  }
+  #compose button:hover { background: var(--hover); }
+  #compose button:disabled { color: var(--muted); cursor: default; background: var(--paper); }
+  #mic.on { background: var(--maroon); color: var(--paper); border-color: var(--maroon); }
+  #status { color: var(--muted); flex: 1; }
+  #status.bad { color: var(--maroon); font-weight: 600; }
   ul { list-style: none; margin: 0; padding: 0; }
   .task { padding: .25em 1em .25em calc(1em + var(--depth) * 1.3em); cursor: pointer; }
   .task:hover { background: var(--hover); }
@@ -82,6 +100,16 @@
   <section id="tree"><h2>Tasks</h2><ul></ul></section>
   <section id="facts"><h2>Journal</h2><ul></ul></section>
   <section id="detail"><h2>Task</h2><div class="body"><p class="empty">Select a task.</p></div></section>
+  <section id="compose">
+    <h2>To <span class="to" id="to">no task selected</span></h2>
+    <textarea id="box" placeholder="Write, paste or dictate. Enter is a new line; Ctrl+Enter sends." spellcheck="true"></textarea>
+    <div class="controls">
+      <button id="mic" hidden>Dictate</button>
+      <button id="sample" hidden>Dictate the sample</button>
+      <span id="status"></span>
+      <button id="send">Send</button>
+    </div>
+  </section>
 </main>
 <script>
 "use strict";
@@ -176,6 +204,7 @@ function render() {
   if (!view.tasks.length) tree.append(el("li", "empty", "No tasks yet."));
 
   renderDetail();
+  renderTo();
 }
 
 function row(t, depth) {
@@ -202,6 +231,185 @@ function select(id) {
   history.replaceState(null, "", `#${id}`);
   render();
 }
+
+// The compose box. Its text is Max's until he sends it, kept across
+// reloads. Dictation streams into it as edits to a live region, which he can
+// edit too: an edit inside the region pins the text up to the end of his
+// edit, and the words still coming go after it.
+
+const box = $("#box");
+let can = { send: false, dictation: false, sample: false };
+let prev = box.value = localStorage.getItem("draft") || "";
+let live = null;
+
+const say = (text, bad) => { $("#status").textContent = text; $("#status").className = bad ? "bad" : ""; };
+
+fetch("/compose").then((r) => r.json()).then((c) => {
+  can = c;
+  $("#mic").hidden = !c.dictation;
+  $("#sample").hidden = !c.sample;
+});
+
+function renderTo() {
+  const t = selected && byId[selected];
+  $("#to").textContent = t ? t.name : "no task selected";
+}
+
+// One input from Max: one contiguous change, found by trimming what is the
+// same at both ends.
+box.addEventListener("input", () => {
+  const now = box.value;
+  let x = 0;
+  while (x < prev.length && x < now.length && prev[x] === now[x]) x++;
+  let tail = 0;
+  while (tail < prev.length - x && tail < now.length - x && prev[prev.length - 1 - tail] === now[now.length - 1 - tail]) tail++;
+  const removed = prev.length - x - tail, inserted = now.length - x - tail;
+  if (live) {
+    const end = live.start + live.T.length - live.P;
+    if (x + removed <= live.start && !(x === live.start && removed === 0 && live.T.length === live.P)) {
+      live.start += inserted - removed;
+    } else if (x <= end) {
+      live.P = Math.min(live.T.length, live.P + Math.max(0, x + removed - live.start));
+      live.start = x + inserted;
+    }
+  }
+  prev = now;
+  localStorage.setItem("draft", now);
+});
+
+// The endpoint's edits, in the transcript's own offsets, last first so the
+// earlier offsets still hold.
+function applyEdits(edits) {
+  const l = live;
+  const end = () => l.start + l.T.length - l.P;
+  const following = box.selectionStart === box.selectionEnd && box.selectionEnd === end();
+  for (const e of [...edits].reverse()) {
+    if (e.at >= l.P) {
+      const from = l.start + e.at - l.P;
+      box.setRangeText(e.put, from, from + e.cut, "preserve");
+    } else if (e.at + e.cut <= l.P) {
+      l.P += e.put.length - e.cut;
+    } else {
+      box.setRangeText(e.put, l.start, l.start + e.at + e.cut - l.P, "preserve");
+      l.P = e.at;
+    }
+    l.T = l.T.slice(0, e.at) + e.put + l.T.slice(e.at + e.cut);
+  }
+  // A caret at the end of the words keeps following them.
+  if (following) box.setSelectionRange(end(), end());
+  prev = box.value;
+  localStorage.setItem("draft", prev);
+}
+
+// The microphone as 16-bit PCM, in chunks of a tenth of a second.
+const WORKLET = URL.createObjectURL(new Blob([`
+registerProcessor("pcm", class extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(sampleRate / 10); this.n = 0; }
+  process([input]) {
+    const ch = input[0];
+    if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (this.n === this.buf.length) {
+        this.port.postMessage(this.buf.buffer, [this.buf.buffer]);
+        this.buf = new Int16Array(sampleRate / 10); this.n = 0;
+      }
+    }
+    return true;
+  }
+});`], { type: "application/javascript" }));
+
+async function dictate(sample) {
+  if (live) return stopDictation();
+  let rate = 16000, mic = null;
+  try {
+    if (!sample) {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      const ctx = new AudioContext();
+      await ctx.audioWorklet.addModule(WORKLET);
+      const node = new AudioWorkletNode(ctx, "pcm");
+      ctx.createMediaStreamSource(stream).connect(node);
+      rate = ctx.sampleRate;
+      mic = { stream, ctx, node };
+    }
+  } catch (e) {
+    return say(`no microphone: ${e.message}`, true);
+  }
+  // Dictation goes in at the caret, a space from the word before it.
+  let at = box.selectionEnd;
+  if (at > 0 && !/\s/.test(box.value[at - 1])) {
+    box.setRangeText(" ", at, at, "end");
+    at += 1;
+    prev = box.value;
+  }
+  const ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
+  ws.binaryType = "arraybuffer";
+  live = { ws, mic, T: "", P: 0, start: at, thenSend: false };
+  if (mic) mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); };
+  $("#mic").classList.add("on");
+  $("#mic").textContent = "Stop";
+  $("#sample").disabled = true;
+  say("connecting");
+  const l = live;
+  ws.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.listening) say(sample ? "dictating the sample" : "listening");
+    if (d.edits && live === l) applyEdits(d.edits);
+    if (d.error) say(d.error, true);
+    if (d.final) finishDictation(l);
+  };
+  ws.onclose = () => finishDictation(l);
+  box.focus();
+}
+
+function releaseMic(l) {
+  if (!l.mic) return;
+  l.mic.stream.getTracks().forEach((t) => t.stop());
+  l.mic.ctx.close();
+  l.mic = null;
+}
+
+function stopDictation() {
+  if (!live) return;
+  releaseMic(live);
+  if (live.ws.readyState === 1) live.ws.send(JSON.stringify({ type: "stop" }));
+  say("finishing");
+  box.focus();
+}
+
+function finishDictation(l) {
+  if (live !== l) return;
+  releaseMic(l);
+  live = null;
+  l.ws.close();
+  $("#mic").classList.remove("on");
+  $("#mic").textContent = "Dictate";
+  $("#sample").disabled = false;
+  if ($("#status").className !== "bad") say("");
+  if (l.thenSend) send();
+}
+
+async function send() {
+  if (live) { live.thenSend = true; return stopDictation(); }
+  const t = selected && byId[selected];
+  if (!t) return say("select a task to send to", true);
+  if (!box.value.trim()) return;
+  if (!can.send) return say("sending is not wired to a brain yet", true);
+  const text = box.value;
+  say("sending");
+  const res = await fetch("/send", { method: "POST", body: JSON.stringify({ to: t.id, seen: view.seq, text }) });
+  if (!res.ok) return say(`not sent: ${await res.text()}`, true);
+  if (box.value === text) { box.value = prev = ""; localStorage.removeItem("draft"); }
+  say(`sent to ${t.name}`);
+}
+
+box.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
+});
+$("#send").onclick = send;
+$("#mic").onclick = () => dictate(false);
+$("#sample").onclick = () => dictate(true);
 
 function renderDetail() {
   const body = $("#detail .body");
