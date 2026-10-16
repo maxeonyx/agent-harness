@@ -11,4 +11,4 @@ harness-face-web = { path = "../face-web" }
 harness-limb-workspace = { path = "../limb-workspace" }
 harness-provider = { path = "../provider" }
 harness-store = { path = "../store" }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }

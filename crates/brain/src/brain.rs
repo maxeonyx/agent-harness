@@ -908,17 +908,24 @@ impl Brain {
             .context
             .as_ref()
             .expect("a responding task has a context");
-        let blocks: Vec<Value> = serde_json::from_slice(content).unwrap_or_default();
+        // Each block's fields, with a tool's input kept exactly as written.
+        type Block<'a> = BTreeMap<String, &'a serde_json::value::RawValue>;
+        let blocks: Vec<Block> = serde_json::from_slice(content).unwrap_or_default();
+        let field = |b: &Block, key: &str| {
+            b.get(key)
+                .and_then(|v| serde_json::from_str::<String>(v.get()).ok())
+                .unwrap_or_default()
+        };
         blocks
             .iter()
-            .filter(|b| b["type"] == "tool_use")
+            .filter(|b| field(b, "type") == "tool_use")
             .map(|b| {
-                let tool = b["name"].as_str().unwrap_or_default().to_owned();
-                let input = Bytes::from(b["input"].to_string());
+                let tool = field(b, "name");
+                let input = Bytes::from(b.get("input").map_or("{}", |i| i.get()));
                 let call = Call {
                     caller: Caller::Agent {
                         task: task.id,
-                        tool_use: Some(ToolUseId(b["id"].as_str().unwrap_or_default().into())),
+                        tool_use: Some(ToolUseId(field(b, "id"))),
                     },
                     expects: expects(context, context.binding.limb(&tool)),
                     tool,
@@ -939,7 +946,7 @@ impl Brain {
             return self.spawn(id, &call);
         }
         let Some(workspace) = self.limbs.get(&limb) else {
-            return;
+            return eprintln!("call {id}: its limb {limb} is not running here; not dispatched");
         };
         let input = Bytes(self.value(call.input));
         workspace.handle(ToLimb::Run { id, call, input });
