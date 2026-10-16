@@ -101,6 +101,8 @@ fn usage(ended: &Ended) -> Value {
         "at": ended.at.at.0,
         "five_hour": quota.and_then(|q| q.five_hour),
         "seven_day": quota.and_then(|q| q.seven_day),
+        "five_hour_reset": quota.and_then(|q| q.five_hour_reset),
+        "seven_day_reset": quota.and_then(|q| q.seven_day_reset),
         "claim": quota.and_then(|q| q.claim.clone()),
     })
 }

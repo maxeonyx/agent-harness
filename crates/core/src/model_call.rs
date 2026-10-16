@@ -267,4 +267,8 @@ pub struct Quota {
     pub five_hour: Option<f64>,
     /// Fraction of the 7-day window used, 0 to 1.
     pub seven_day: Option<f64>,
+    /// When the 5-hour window resets.
+    pub five_hour_reset: Option<Timestamp>,
+    /// When the 7-day window resets.
+    pub seven_day_reset: Option<Timestamp>,
 }
