@@ -52,7 +52,7 @@ use crate::task::{
 /// its entry tree on resume, Codex reconstructs a thread from its rollout,
 /// OpenCode's session status lives in memory only, so a restart forgets
 /// which subagents were running.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
     last: Option<Seq>,
     build: Option<Launched>,
@@ -73,7 +73,7 @@ pub struct State {
 }
 
 /// A call and where it is in its life.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CallRecord {
     pub call: Call,
     pub made: Timestamp,
@@ -83,7 +83,7 @@ pub struct CallRecord {
 }
 
 /// A request and what came of it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ModelCallRecord {
     pub call: ModelCall,
     pub sent: Timestamp,
@@ -92,7 +92,7 @@ pub struct ModelCallRecord {
 }
 
 /// How a request ended, and when.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Ended {
     pub at: Timestamp,
     pub ending: Ending,
@@ -101,7 +101,7 @@ pub struct Ended {
 }
 
 /// A delivery, when, and by whom.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Delivered {
     pub delivery: Delivery,
     pub at: Timestamp,
@@ -109,7 +109,7 @@ pub struct Delivered {
 }
 
 /// A resource's current version, and who moved it there.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Current {
     pub version: Version,
     pub by: Option<Writer>,
