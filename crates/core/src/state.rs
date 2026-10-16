@@ -298,6 +298,9 @@ pub enum Todo {
     /// Every member of this spawn's scope is done: settle it with their
     /// outcomes.
     Settle(CallId),
+    /// An aside is done and the task it was opened on is not: deliver its
+    /// result there ([`Content::Aside`]).
+    Return(TaskId),
 }
 
 impl State {
@@ -1380,6 +1383,15 @@ impl State {
                 scopes.entry(call).or_default().push(task);
             }
             if task.is_done() {
+                if let Origin::Aside { from } = task.origin
+                    && self.tasks.get(&from).is_some_and(|f| !f.is_done())
+                    && !self
+                        .deliveries
+                        .values()
+                        .any(|d| d.delivery.content == Content::Aside(task.id))
+                {
+                    todo.push(Todo::Return(task.id));
+                }
                 continue;
             }
             for call in task.awaited() {

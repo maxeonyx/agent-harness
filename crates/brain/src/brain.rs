@@ -397,6 +397,17 @@ impl Brain {
                 TaskEvent::Drain(Drain::Stop(Stopper::Owner)),
             )),
             Todo::Settle(call) => self.settle_scope(call),
+            Todo::Return(aside) => {
+                let Origin::Aside { from } = self.state().task(aside).expect("an aside").origin
+                else {
+                    unreachable!("only an aside returns")
+                };
+                self.fact(Fact::Delivery(Delivery {
+                    id: DeliveryId::generate(),
+                    to: from,
+                    content: Content::Aside(aside),
+                }));
+            }
         }
     }
 
@@ -639,7 +650,7 @@ impl Brain {
             renders.push(Rendered::Note(Note::Brief));
         }
         let forked = match task.origin {
-            Origin::Fork { .. } if first => self.response_calls(head),
+            Origin::Fork { .. } | Origin::Aside { .. } if first => self.response_calls(head),
             _ => Vec::new(),
         };
         let turn = render::turn(

@@ -404,6 +404,32 @@ async function control(fact, answer, done) {
   const why = await act(fact);
   answer.className = why ? "answer bad" : "answer";
   answer.textContent = why ? `refused: ${why}` : done;
+  // A task waiting on its children is not interrupted: Max talks to a fork
+  // of it instead.
+  if (why && why.includes("through an aside")) {
+    const b = el("button", null, "Open an aside");
+    b.onclick = () => aside(answer);
+    answer.append(" ", b);
+  }
+}
+
+// An aside: a chat with a fork of the selected task, opened on its current
+// context, whose result goes back to it when Max marks the aside done. What
+// is in the compose box is its first message.
+async function aside(answer) {
+  const t = byId[selected];
+  const said = box.value.trim() || "I want to talk while your work runs.";
+  const text = await (await fetch("/digest", { method: "POST", body: said })).text();
+  const id = mint();
+  const why = await act({ Task: [id, { Created: {
+    name: `${t.name}-aside`, by: null, scope: "Max", origin: { Aside: { from: t.id } },
+    mode: "UserFacing", mandate: { text, brief: null, quotes: [], from: "Max" },
+  } }] }, [said]);
+  answer.className = why ? "answer bad" : "answer";
+  answer.textContent = why ? `aside refused: ${why}` : "aside opened";
+  if (why) return;
+  if (box.value.trim()) { box.value = prev = ""; localStorage.removeItem("draft"); }
+  select(id);
 }
 
 // The compose box. Its text is Max's until he sends it, kept across
@@ -650,11 +676,16 @@ function renderDetail() {
     button("interrupt", "Interrupt", () => ({ Task: [t.id, { Drain: "ToMax" }] }), () => "interrupted: your move once it stops");
     button("stop", "Stop", () => ({ Task: [t.id, { Drain: { Stop: "Max" } }] }), () => "stopping");
     button("hold", "Hold", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), () => byId[t.id].held ? "released" : "held");
+    button("done", "Done", () => [
+      { Task: [t.id, { ModeSet: "Autonomous" }] },
+      { Delivery: { id: mint(), to: t.id, content: { Prompt: "Done" } } },
+    ], () => "done: its last turn writes the result");
     controls.append(answer);
     body.replaceChildren(controls, el("dl"), el("div", "context"), el("div", "live"));
   }
   for (const b of body.querySelectorAll(".controls-row button")) b.disabled = !can.act || t.waiting?.kind === "done";
   body.querySelector("button[name=hold]").textContent = t.held ? "Release" : "Hold";
+  body.querySelector("button[name=done]").hidden = t.mode !== "user-facing";
   const dl = body.querySelector("dl");
   dl.replaceChildren();
   const th = throbber(t);

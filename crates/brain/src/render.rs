@@ -9,7 +9,7 @@ use harness_core::environment::{Binding, Description};
 use harness_core::id::{CallId, DeliveryId, LimbId, ValueId};
 use harness_core::resource::Observation;
 use harness_core::state::{Stale, State};
-use harness_core::task::{Giver, Input, Origin, Scope, Task};
+use harness_core::task::{Giver, Input, Origin, Outcome as TaskOutcome, Scope, Task, TaskState};
 use harness_core::value::Bytes;
 use harness_provider::IDENTITY;
 use serde_json::{Value, json};
@@ -144,7 +144,7 @@ pub fn turn(
                             label(id)
                         )));
                     }
-                    texts.extend(delivery(values, content));
+                    texts.extend(delivery(state, values, content));
                 }
             }
         }
@@ -177,6 +177,11 @@ pub fn turn(
     if first {
         turn.renders.push(Rendered::Note(Note::Mandate));
         texts.push(text(&match task.scope {
+            Scope::Max if matches!(task.origin, Origin::Aside { .. }) => format!(
+                "[harness] This is an aside: Max forked you to talk while your own work waits. When he marks it \
+done, your last message here goes back to the context you were forked from.\n\n{}",
+                said(values, task.mandate.text)
+            ),
             Scope::Max => said(values, task.mandate.text),
             Scope::Spawn(_) => mandate(state, values, task),
         }));
@@ -307,7 +312,7 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
     text(&format!("[harness] {what}:\n{}", said.join("\n")))
 }
 
-fn delivery(values: Values, content: &Content) -> Vec<String> {
+fn delivery(state: &State, values: Values, content: &Content) -> Vec<String> {
     match content {
         Content::Words(words) => serde_json::from_slice::<Vec<Value>>(&values(*words))
             .unwrap_or_default()
@@ -315,7 +320,22 @@ fn delivery(values: Values, content: &Content) -> Vec<String> {
             .map(Value::to_string)
             .collect(),
         Content::Prompt(prompt) => vec![text(&format!("[harness] {prompt:?}"))],
-        Content::Aside(_) => vec![text("[harness] Max talked to a fork of you meanwhile.")],
+        Content::Aside(aside) => {
+            let ended = state
+                .task(*aside)
+                .and_then(|t| match t.state {
+                    TaskState::Done(TaskOutcome::Result { entry }) => state.entry(entry),
+                    _ => None,
+                })
+                .and_then(|e| match e {
+                    Entry::Message { message, .. } => Some(visible(&values(message.content))),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            vec![text(&format!(
+                "[harness] Max talked to a fork of you meanwhile. It ended with:\n\n{ended}"
+            ))]
+        }
     }
 }
 
