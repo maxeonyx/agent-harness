@@ -133,7 +133,7 @@ impl Fact {
                 content,
             }) => match content {
                 Content::Words(words) => values.push(*words),
-                Content::Prompt(_) | Content::Aside { .. } => {}
+                Content::Prompt(_) => {}
             },
             Fact::Change(Change {
                 resource: _,
@@ -212,9 +212,7 @@ pub struct Batch {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rejected {
     /// Not the next position.
-    OutOfOrder {
-        expected: Seq,
-    },
+    OutOfOrder { expected: Seq },
     /// Names an identity the journal has never seen.
     Unknown,
     /// Creates an identity that already exists, a second environment or
@@ -236,7 +234,8 @@ pub enum Rejected {
     /// A request that leaves a tool use of the previous response unanswered.
     Unanswered,
     /// A standing task outside Max's scope, a task joining a scope its
-    /// creator's call cannot add to, or an aside in a spawn's scope.
+    /// creator's call cannot add to, or an aside outside the scope its
+    /// source is waiting on.
     WrongScope,
     /// A task created by something other than a running agent's meta call,
     /// or something its creator cannot start: a fresh task in an environment
@@ -263,8 +262,7 @@ pub enum Rejected {
     Ambiguous,
     /// A new version of a limb that changes what kind of limb it is.
     Redefined,
-    /// A head, breakpoint, rewind or aside return that is not on the task's
-    /// chain.
+    /// A head, breakpoint or rewind that is not on the task's chain.
     Detached,
     /// Routed to a task or limb it does not concern.
     NotForTask,
@@ -276,13 +274,13 @@ pub enum Rejected {
     Missing(ValueId),
     /// Names a value in its batch larger than [`Bytes::LIMIT`].
     TooLarge(ValueId),
-    /// An interrupt to a task whose round waits on a scope with members
-    /// still running: the move cannot be Max's until the scope closes, so
-    /// his face offers an aside instead ([`State::scoped`] says so first).
     /// The change would leave an autonomous task waiting on nothing, so it
     /// would never move again: mark it done ([`crate::delivery::Prompt::Done`]),
     /// or say something with the change.
     Idle,
+    /// An interrupt to a task whose round waits on a scope with members
+    /// still running: the move cannot be Max's until the scope closes, so
+    /// his face offers an aside instead ([`State::scoped`] says so first).
     Scoped,
 }
 

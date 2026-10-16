@@ -43,9 +43,9 @@
 //!   same entries, so a shared seed is one cache prefix with no bookkeeping;
 //!   a handover or a rebuild moves the head to a new root; a resume starts on a
 //!   finished task's last entry; a rewind moves back and restores what the
-//!   context embodied there; an aside is Max's fork of a busy task, and what
-//!   it says at the end of each turn is returned to the task it was opened
-//!   on ([`state::Todo::Return`]). A request's head is computed from its base
+//!   context embodied there; an aside is Max's fork of a task waiting on
+//!   its children, a member of the scope it waits on, so its result reaches
+//!   the task with theirs. A request's head is computed from its base
 //!   and its messages, so it cannot claim a context its task does not have.
 //!   Nothing is re-rendered, so nothing drifts when the harness changes its
 //!   own code, and the entry id is the cache key.
@@ -159,12 +159,11 @@
 //! - A limb may state only its own description, how its own dispatched
 //!   calls ended and how its own resources changed.
 //! - Talking to a parent waiting on its children: an aside
-//!   ([`task::Origin::Aside`]), with background scopes as the other path.
-//!   An interrupt meanwhile is refused ([`journal::Rejected::Scoped`],
+//!   ([`task::Origin::Aside`]), the user-facing member of the scope it
+//!   waits on, with background scopes as the other path. An interrupt
+//!   meanwhile is refused ([`journal::Rejected::Scoped`],
 //!   [`state::State::scoped`]) so the face can offer the aside; under
 //!   background scopes it would not arise.
-//! - An aside returns what it said at the end of each turn, not only when
-//!   Max marks it done ([`delivery::Content::Aside`]).
 //! - A provisional choice is an ask of Max made in the background, which
 //!   queues him without blocking the asker ([`state::State::queue`]); the
 //!   other path is a hold that waits for him.

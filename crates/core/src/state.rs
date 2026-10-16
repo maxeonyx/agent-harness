@@ -17,8 +17,7 @@ use crate::journal::{Author, Fact, Launched, Record, Rejected};
 use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
 use crate::resource::{Change, ResourceKey, Version};
 use crate::task::{
-    Created, Drain, Life, Mode, Move, Origin, Outcome as TaskOutcome, Phase, Scope, Start, Stopper,
-    Task, TaskEvent, ends,
+    Created, Drain, Life, Mode, Move, Origin, Phase, Scope, Start, Stopper, Task, TaskEvent, ends,
 };
 
 /// Everything the journal says is true now.
@@ -54,8 +53,8 @@ use crate::task::{
 /// through its own meta call; a place is filled only by a limb of its kind,
 /// and a root routes only to its task's environment and places, and only
 /// tools those limbs offer; a call by an agent goes only along its binding;
-/// a standing task lives only in Max's scope; a fork starts where its source
-/// is; a settled call moves again only from unknown to its real outcome; a
+/// a standing task lives only in Max's scope; an aside joins only the scope
+/// its source waits on; a fork starts where its source is; a settled call moves again only from unknown to its real outcome; a
 /// meta call is never run twice; a limb never changes kind; a limb states
 /// only its own description, its own calls' outcomes and its own resources'
 /// changes, and the brain only what is its to say; a quote is Max's words,
@@ -123,14 +122,14 @@ struct Open {
     model_calls: OrdSet<ModelCallId>,
     /// Every task of each scope, in order of creation.
     scopes: OrdMap<Scope, Vec<TaskId>>,
-    /// Asides not yet done and returned, each with the entry last returned.
-    asides: OrdMap<TaskId, Option<EntryId>>,
     /// The model call each response came from.
     responses: OrdMap<EntryId, ModelCallId>,
     /// Each task's last model call to end.
     last_turn: OrdMap<TaskId, ModelCallId>,
     /// Tasks told they are lingering ([`Prompt::Lingering`]).
     lingered: OrdSet<TaskId>,
+    /// Asides told the rest of their scope is done ([`Prompt::Unblocked`]).
+    unblocked: OrdSet<TaskId>,
     /// The last model call to report the quota.
     quota: Option<ModelCallId>,
 }
@@ -364,10 +363,9 @@ pub enum Todo {
     /// Every member of this spawn's scope is done: settle it with their
     /// outcomes.
     Settle(CallId),
-    /// An aside has ended a turn (or finished) since it last returned, and
-    /// the task it was opened on is live: deliver `entry` there
-    /// ([`Content::Aside`]).
-    Return { aside: TaskId, entry: EntryId },
+    /// Every member of an aside's scope but the asides is done, and it has
+    /// not been told: deliver [`Prompt::Unblocked`].
+    Unblock(TaskId),
     /// An autonomous task ended its turn with background work running (an
     /// unanswered ask of Max included) and has not been told what that
     /// means: deliver [`Prompt::Lingering`].
@@ -379,25 +377,6 @@ impl State {
     fn put(&mut self, task: Task) {
         if task.is_done() {
             self.open.tasks.remove(&task.id);
-            // An aside closes when it ends without a result to return, or
-            // when the task it was opened on is done.
-            if !matches!(task.outcome(), Some(TaskOutcome::Result { .. })) {
-                self.open.asides.remove(&task.id);
-            }
-            let orphans: Vec<TaskId> = self
-                .open
-                .asides
-                .keys()
-                .filter(|a| {
-                    self.tasks
-                        .get(a)
-                        .is_some_and(|a| a.origin == (Origin::Aside { from: task.id }))
-                })
-                .copied()
-                .collect();
-            for aside in orphans {
-                self.open.asides.remove(&aside);
-            }
         } else {
             self.open.tasks.insert(task.id);
         }
@@ -581,7 +560,9 @@ impl State {
                     && match fact {
                         Fact::Task(_, event) => match event {
                             TaskEvent::Created(created) => {
-                                created.by.is_none() && created.scope == Scope::Max
+                                created.by.is_none()
+                                    && (created.scope == Scope::Max
+                                        || matches!(created.origin, Origin::Aside { .. }))
                             }
                             TaskEvent::Drain(drain) => {
                                 matches!(drain, Drain::ToMax | Drain::Stop(Stopper::Max))
@@ -652,12 +633,13 @@ impl State {
             Some(by) => Some(self.creator(by, created)?),
             None => None,
         };
-        if let Origin::Fresh {
-            environment,
-            places,
-        } = &created.origin
-        {
-            self.check_places(*environment, places)?;
+        match &created.origin {
+            Origin::Fresh {
+                environment,
+                places,
+            } => self.check_places(*environment, places)?,
+            Origin::Aside { from } => self.check_aside(*from, created)?,
+            Origin::Fork { .. } | Origin::Resume { .. } => {}
         }
         for quote in &created.mandate.quotes {
             let heard = match creator {
@@ -685,9 +667,6 @@ impl State {
             self.heard.entry(id).or_default().insert(*quote);
         }
         self.open.scopes.entry(task.scope).or_default().push(id);
-        if let Origin::Aside { .. } = task.origin {
-            self.open.asides.insert(id, None);
-        }
         self.put(task);
         Ok(())
     }
@@ -732,6 +711,26 @@ impl State {
             return Err(Rejected::CannotStart);
         }
         Ok(caller)
+    }
+
+    /// An aside joins the scope its source's round waits on while members
+    /// of it still run, and is a chat with Max.
+    fn check_aside(&self, from: TaskId, created: &Created) -> Result<(), Rejected> {
+        let source = self.tasks.get(&from).ok_or(Rejected::Unknown)?;
+        let waits = match (created.scope, source.phase()) {
+            (Scope::Spawn(call), Some(Phase::Acting(step))) => {
+                step.outstanding.contains(&call)
+                    && self.members(created.scope).any(|m| !m.is_done())
+            }
+            _ => false,
+        };
+        if !waits {
+            return Err(Rejected::WrongScope);
+        }
+        if created.mode != Mode::UserFacing {
+            return Err(Rejected::CannotStart);
+        }
+        Ok(())
     }
 
     /// Every place of the environment is filled, by a limb of its kind.
@@ -1193,15 +1192,6 @@ impl State {
         if self.deliveries.contains_key(&delivery.id) {
             return Err(Rejected::Exists);
         }
-        if let Content::Aside { aside, entry } = &delivery.content {
-            let opened = self.tasks.get(aside).ok_or(Rejected::Unknown)?;
-            if opened.origin != (Origin::Aside { from: delivery.to }) {
-                return Err(Rejected::NotForTask);
-            }
-            if !opened.head().is_some_and(|h| self.descends(h, *entry)) {
-                return Err(Rejected::Detached);
-            }
-        }
         let mut task = self
             .tasks
             .get(&delivery.to)
@@ -1211,19 +1201,12 @@ impl State {
         self.put(task);
         let mark = Mark::of(record);
         match &delivery.content {
-            Content::Aside { aside, entry } => {
-                let last = self.tasks.get(aside).is_some_and(
-                    |t| matches!(t.outcome(), Some(TaskOutcome::Result { entry: e }) if e == entry),
-                );
-                if last {
-                    self.open.asides.remove(aside);
-                } else {
-                    self.open.asides.insert(*aside, Some(*entry));
-                }
-            }
             Content::Words(words) => self.say(*words, delivery.to, mark),
             Content::Prompt(Prompt::Lingering) => {
                 self.open.lingered.insert(delivery.to);
+            }
+            Content::Prompt(Prompt::Unblocked) => {
+                self.open.unblocked.insert(delivery.to);
             }
             Content::Prompt(Prompt::Done) => {}
         }
@@ -1561,33 +1544,6 @@ impl State {
         }
     }
 
-    /// What an aside last said that its source has not been given: the
-    /// response that ended its latest turn, or its result. `None` while it
-    /// is thinking or acting, or once its source is done.
-    fn aside_return(&self, aside: TaskId, returned: Option<EntryId>) -> Option<EntryId> {
-        let task = self.tasks.get(&aside)?;
-        let Origin::Aside { from } = task.origin else {
-            return None;
-        };
-        if !self.open.tasks.contains(&from) {
-            return None;
-        }
-        let entry = match &task.life {
-            Life::Done {
-                outcome: TaskOutcome::Result { entry },
-                ..
-            } => *entry,
-            Life::Live(live) if live.phase == Phase::AwaitingMax => {
-                if !self.ended_turn(live.context.head) {
-                    return None;
-                }
-                live.context.head
-            }
-            _ => return None,
-        };
-        (returned != Some(entry)).then_some(entry)
-    }
-
     /// What a task is waiting on now.
     pub fn waiting_on(&self, task: TaskId, now: Timestamp) -> Option<Waiting> {
         let t = self.tasks.get(&task)?;
@@ -1703,14 +1659,6 @@ impl State {
             .filter(|id| self.model_calls.get(id).is_some_and(lost))
             .map(|id| Todo::Lost(*id))
             .collect();
-        for (aside, returned) in &self.open.asides {
-            if let Some(entry) = self.aside_return(*aside, *returned) {
-                todo.push(Todo::Return {
-                    aside: *aside,
-                    entry,
-                });
-            }
-        }
         let mut readers: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
         let mut needed: BTreeSet<LimbId> = BTreeSet::new();
         let mut starting = Vec::new();
@@ -1756,11 +1704,15 @@ impl State {
                     .members(Scope::Spawn(*id))
                     .filter(|m| !m.is_done())
                     .collect();
+                let aside = |m: &&Task| matches!(m.origin, Origin::Aside { .. });
                 if live.is_empty() {
                     todo.push(Todo::Settle(*id));
                 } else if stopping {
                     let stop = live.iter().filter(|m| !ends(m.drain()));
                     todo.extend(stop.map(|m| Todo::Stop(m.id)));
+                } else if live.iter().all(aside) {
+                    let unblock = live.iter().filter(|m| !self.open.unblocked.contains(&m.id));
+                    todo.extend(unblock.map(|m| Todo::Unblock(m.id)));
                 }
                 continue;
             }

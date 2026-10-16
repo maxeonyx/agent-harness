@@ -2,11 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::EntryId;
 use crate::id::{DeliveryId, TaskId, ValueId};
 
-/// Something addressed to a task: Max's words, a turn the harness asks for,
-/// or what an aside of it last said.
+/// Something addressed to a task: Max's words, or a turn the harness asks
+/// for.
 ///
 /// **Concept.** A delivery is part of its task's fold from the moment it is
 /// made (the task's pending inputs) until a request renders it, and every
@@ -56,12 +55,6 @@ pub enum Content {
     Words(ValueId),
     /// A turn the harness asks for.
     Prompt(Prompt),
-    /// What an aside Max is holding with a fork of this task last said:
-    /// `entry`, the response that ended one of its turns. Returned each time
-    /// the aside's turn ends, and once more when it is done, so what Max
-    /// said there reaches the task itself even if he leaves the aside open.
-    /// Provisional: the other path returns only when he marks it done.
-    Aside { aside: TaskId, entry: EntryId },
 }
 
 /// Why the harness asks for a turn the model did not otherwise have.
@@ -71,8 +64,9 @@ pub enum Content {
 /// asks for one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Prompt {
-    /// Max marked a task done: write the result for the owner. It makes the
-    /// task autonomous, so the turn it asks for is its last.
+    /// Max marked a task done: write the result for the owner (for an
+    /// aside, what came of the talk since it was opened). It makes the task
+    /// autonomous, so the turn it asks for is its last.
     Done,
     /// An autonomous turn ended with background work still running (an ask
     /// of Max included): it will wake the task when it ends, and the task
@@ -81,4 +75,8 @@ pub enum Prompt {
     /// provisional choice Max has not answered decides whether to wait for
     /// him.
     Lingering,
+    /// Every other member of the scope this aside is in is done: the task
+    /// it was opened on is waiting only on it, and carries on once Max marks
+    /// it done. Said once per aside ([`crate::state::Todo::Unblock`]).
+    Unblocked,
 }

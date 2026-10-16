@@ -155,6 +155,14 @@ pub struct Duplicate {
     pub tool: String,
 }
 
+impl std::fmt::Display for Duplicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "two limbs offer the tool `{}`", self.tool)
+    }
+}
+
+impl std::error::Error for Duplicate {}
+
 impl Binding {
     /// The binding of a new root and the root's exact `tools` array, from
     /// the descriptions of the limbs it holds, in order. Tools only Max may

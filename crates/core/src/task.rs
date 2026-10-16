@@ -343,10 +343,11 @@ struct Learned {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Scope {
     /// Max's own scope. It never closes: the tasks he starts live in it, and
-    /// so do asides, resumes and standing tasks such as the attention
-    /// scheduler.
+    /// so do resumes and standing tasks such as the attention scheduler.
     Max,
-    /// The scope the spawn call opened.
+    /// The scope the spawn call opened. Its members are the tasks the call
+    /// created, the siblings they added, and any aside Max opened on the
+    /// task waiting on it.
     Spawn(CallId),
 }
 
@@ -378,10 +379,12 @@ pub enum Origin {
     /// a task of a scope it owned, so an orchestrator can ask its designer a
     /// follow-up with the designer's context intact.
     Resume { from: TaskId },
-    /// A busy task's head, opened by Max as a user-facing fork so he can talk
-    /// to it while it waits. Each time its turn ends, what it last said is
-    /// delivered back to `from` ([`Content::Aside`]), so what Max said there
-    /// reaches the task even if he never marks the aside done.
+    /// The head of a task waiting on its children, opened by Max as a
+    /// user-facing fork so he can talk to it meanwhile. It joins the scope
+    /// the task waits on, as the one member Max talks to: it is told when
+    /// every other member is done ([`Prompt::Unblocked`]), it is done when
+    /// he marks it done, and its result reaches the task with theirs, so the
+    /// task carries on with everything, the talk included.
     Aside { from: TaskId },
 }
 
@@ -488,8 +491,7 @@ pub enum Input {
     Late(CallId),
     /// One of Max's actions in its chat has settled. Rides along.
     MaxAction(CallId),
-    /// Max's words, a turn the harness asks for, or an aside's return.
-    /// Wakes it.
+    /// Max's words, or a turn the harness asks for. Wakes it.
     Delivery(DeliveryId),
 }
 
