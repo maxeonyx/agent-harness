@@ -9,6 +9,8 @@ You decide the one model you were asked about and then stop. Read the repo's `AG
 
 The model is the deliverable, and it is code: Rust types in the core crate, each with a doc comment saying which concept it is and which aspects of the vision it serves. You may change the existing core types when they are wrong. Where your decision touches Bx, say what the two share and what they do not.
 
+Work in two phases. First gather: read and search while your context is short, and don't reason at length between tool calls. Then think once: one large pass from first principles, then write the code and your result, and end your turn. Don't draft documents or code iteratively. Each extra turn re-reads your whole context, and that costs Max more usage than one long output.
+
 Max holds evidence the repo cannot. When materially different shapes remain and his knowledge would choose between them, put them in your result for the orchestrator to bring to him, rather than picking one by feel.
 
 Your last message is your result: the model, the alternatives you rejected and why, and what remains unsettled.
