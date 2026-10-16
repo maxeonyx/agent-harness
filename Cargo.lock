@@ -192,6 +192,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-brain"
+version = "0.0.0"
+dependencies = [
+ "harness-core",
+ "harness-face-web",
+ "harness-limb-workspace",
+ "harness-provider",
+ "harness-store",
+ "serde_json",
+]
+
+[[package]]
 name = "harness-core"
 version = "0.0.0"
 dependencies = [

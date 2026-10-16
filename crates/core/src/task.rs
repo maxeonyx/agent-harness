@@ -143,8 +143,11 @@ pub enum Origin {
     /// then its own mandate.
     Fresh,
     /// The parent's spawning response. The first request answers every tool
-    /// use in it: the spawn with the mandate, every other with a note that it
-    /// belongs elsewhere, so no fork waits on its parent's other work.
+    /// use in it with the same neutral result, its own spawn included, so no
+    /// fork waits on its parent's other work; the fork's mandate follows as
+    /// user text in that message. The fork-framing spike measured this: a
+    /// mandate put in a tool result does not override the identity Sonnet
+    /// has from its parent's context, and user text does.
     Fork { from: TaskId },
     /// A finished task's last entry, continued with a new mandate.
     Resume { from: TaskId },
