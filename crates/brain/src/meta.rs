@@ -5,7 +5,9 @@
 //! finished children, and which settles with every member's result once
 //! the last is done. `add_sibling` adds one task to the caller's own scope
 //! and returns at once. `handover` moves the caller to a new root once its
-//! round is over, carrying only its note. Their effects (the members' `Created` facts, with a
+//! round is over, carrying only its note. `background` makes a call to
+//! one of the caller's other tools that no round waits on: its result
+//! arrives as a message, and the caller cannot finish until it has. Their effects (the members' `Created` facts, with a
 //! limb for each new clone) are appended in the same batch as the
 //! `Dispatched`, so a crash leaves both or neither, and a restart never
 //! spawns twice.
@@ -21,6 +23,7 @@ use crate::render::{blocks, text};
 pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
 pub const HANDOVER: &str = "handover";
+pub const BACKGROUND: &str = "background";
 
 pub fn definition(id: LimbId) -> Limb {
     Limb {
@@ -42,7 +45,8 @@ Each task is a fork of you, a fresh agent, or a resume of an agent you started b
 A fork continues from this exact point of your context: it knows everything you know, so its mandate can be short, \
 and it shares your cache, so it is cheap. It works in your directory with you. \
 A resume continues that agent's own context with a new mandate, so a follow-up question keeps everything it learned. \
-A fresh agent starts from nothing but its role, the shared `brief` and its mandate, so say everything it needs.",
+A fresh agent starts from nothing but its role, the shared `brief`, the `quotes` and its mandate, so say everything it needs. \
+Each message of Max's is labelled `max-…`: name it in `quotes` to give his words to every fresh agent verbatim, rather than retelling them.",
     );
     if roles.is_empty() {
         said.push_str("\n\nYou cannot start fresh agents, only forks of yourself.");
@@ -57,6 +61,10 @@ A fresh agent starts from nothing but its role, the shared `brief` and its manda
         "\n\n`handover` replaces your context with a fresh one that starts from your role, your mandate and the note \
 you write: use it when your context has grown long, or before a new phase of the work. The note is all you keep, so \
 write what the next context needs: where the work stands, what you decided and why, what is next, and Max's words verbatim.",
+    );
+    said.push_str(
+        "\n\n`background` runs one of your other tools without waiting for it: it returns at once, the tool's result \
+reaches you as a message when it settles, and you cannot finish until it has.",
     );
     if member {
         said.push_str(
@@ -76,6 +84,11 @@ and returns at once: the agent that started you gets its result with yours.",
         },
         "required": ["name", "mandate"]
     });
+    let quotes = json!({
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Labels of Max's words (`max-…`) to give every fresh agent verbatim, after the brief."
+    });
     let spawn = json!({
         "name": SPAWN,
         "description": "Start agents to do parts of your work in parallel, and wait for all of their results.",
@@ -83,7 +96,8 @@ and returns at once: the agent that started you gets its result with yours.",
             "type": "object",
             "properties": {
                 "tasks": { "type": "array", "minItems": 1, "items": task },
-                "brief": { "type": "string", "description": "What every fresh agent in this call is given before its own mandate." }
+                "brief": { "type": "string", "description": "What every fresh agent in this call is given before its own mandate." },
+                "quotes": quotes
             },
             "required": ["tasks"]
         }
@@ -99,7 +113,23 @@ and returns at once: the agent that started you gets its result with yours.",
             "required": ["note"]
         }
     });
-    let mut tools = vec![tool(SPAWN, spawn), tool(HANDOVER, handover)];
+    let background = json!({
+        "name": BACKGROUND,
+        "description": "Run one of your other tools without waiting for its result, which comes to you as a message.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tool": { "type": "string", "description": "The tool's name." },
+                "input": { "type": "object", "description": "The tool's input, as you would give it directly." }
+            },
+            "required": ["tool", "input"]
+        }
+    });
+    let mut tools = vec![
+        tool(SPAWN, spawn),
+        tool(HANDOVER, handover),
+        tool(BACKGROUND, background),
+    ];
     if member {
         let sibling = json!({
             "name": ADD_SIBLING,
@@ -108,7 +138,8 @@ and returns at once: the agent that started you gets its result with yours.",
                 "type": "object",
                 "properties": {
                     "task": task,
-                    "brief": { "type": "string", "description": "What a fresh agent is given before its mandate." }
+                    "brief": { "type": "string", "description": "What a fresh agent is given before its mandate." },
+                    "quotes": quotes
                 },
                 "required": ["task"]
             }
@@ -147,10 +178,22 @@ pub fn note(input: &[u8]) -> String {
         .unwrap_or_default()
 }
 
+/// A background call's tool and its input.
+pub fn background(input: &[u8]) -> Result<(String, Bytes), String> {
+    let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
+    let tool = value["tool"].as_str().ok_or("`tool` must name a tool")?;
+    if !value["input"].is_object() {
+        return Err("`input` must be the tool's input object".into());
+    }
+    Ok((tool.to_owned(), Bytes::from(value["input"].to_string())))
+}
+
 /// A spawn or add_sibling call's input.
 pub struct Spawn {
     pub members: Vec<Member>,
     pub brief: Option<String>,
+    /// Labels of Max's words to quote.
+    pub quotes: Vec<String>,
 }
 
 pub struct Member {
@@ -205,7 +248,20 @@ pub fn parse(tool: &str, input: &[u8]) -> Result<Spawn, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
     let brief = value["brief"].as_str().map(str::to_owned);
-    Ok(Spawn { members, brief })
+    let quotes = match &value["quotes"] {
+        Value::Null => Vec::new(),
+        Value::Array(labels) => labels
+            .iter()
+            .map(|l| l.as_str().map(str::to_owned))
+            .collect::<Option<_>>()
+            .ok_or("`quotes` must be a list of labels")?,
+        _ => return Err("`quotes` must be a list of labels".into()),
+    };
+    Ok(Spawn {
+        members,
+        brief,
+        quotes,
+    })
 }
 
 /// The task names a spawn's input gives, for the neutral answer a fork sees.

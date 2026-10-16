@@ -94,6 +94,8 @@
   section > h2 button { text-transform: none; letter-spacing: 0; font-size: 1.1em; margin-left: .8em; }
   .queued .move { float: right; display: flex; gap: .3em; }
   .queued .move button { padding: 0 .45em; }
+  .queued .reply { display: flex; gap: .3em; margin-top: .3em; }
+  .queued .reply input { flex: 1; min-width: 0; }
   .stream { border-top: 1px solid var(--line); padding: .6em 0; }
   .stream .role { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; color: var(--maroon); }
   .block.thinking { color: var(--muted); font-style: italic; }
@@ -207,10 +209,16 @@ let byId = {};
 // whether the account is stopped.
 const PLAN = (claim) => claim == null || claim === "five_hour" || claim.startsWith("seven_day");
 const pct = (f) => f == null ? "?" : `${Math.round(f * 100)}%`;
+// When a window resets: the time today, else the weekday and time.
+const resets = (ms) => {
+  if (ms == null) return "";
+  const d = new Date(ms), hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  return d.toDateString() === new Date().toDateString() ? ` (resets ${hm})` : ` (resets ${d.toLocaleDateString([], { weekday: "short" })} ${hm})`;
+};
 function renderUsage() {
   const u = view.usage, span = $("#usage");
   span.replaceChildren();
-  if (u) span.append(`used: 5h ${pct(u.five_hour)} · 7d ${pct(u.seven_day)} · as of ${clock(u.at)}`);
+  if (u) span.append(`used: 5h ${pct(u.five_hour)}${resets(u.five_hour_reset)} · 7d ${pct(u.seven_day)}${resets(u.seven_day_reset)} · as of ${clock(u.at)}`);
   if (u && !PLAN(u.claim)) span.append(" ", el("span", "alarm", `billed as ${u.claim}, not the plan: nothing more is sent`));
   if (view.limited) span.append(" ", el("span", "alarm", `account limited until ${clock(view.limited)}`));
 }
@@ -243,6 +251,7 @@ function render() {
 
   // Max's queue, in the order the core derives.
   const queue = $("#queue ul");
+  const typing = document.activeElement?.dataset?.ask;
   queue.replaceChildren();
   view.queue.forEach((q, i) => {
     const t = byId[q.task];
@@ -255,7 +264,10 @@ function render() {
       move.append(b);
     }
     li.append(move, el("span", "name", t.name), el("span", "tag", `waiting ${ago(q.since)}`));
-    if (q.ask) li.append(el("span", "ask", `asks: ${preview(q.ask.input)}`));
+    if (q.ask) {
+      li.append(el("span", "ask", `asks: ${preview(q.ask.input)}`));
+      if (can.act) li.append(reply(q.ask, typing === q.ask.id));
+    }
     li.append(el("span", "why", q.why ? q.why : "unranked"));
     li.onclick = () => select(q.task);
     queue.append(li);
@@ -283,6 +295,33 @@ function render() {
 
   renderDetail();
   renderTo();
+}
+
+// Max's answer to an ask: the call's settlement, which he authors. What he
+// types survives the queue being drawn again.
+const replies = {};
+function reply(ask, focus) {
+  const form = el("form", "reply");
+  const input = el("input");
+  input.dataset.ask = ask.id;
+  input.placeholder = "your answer";
+  input.value = replies[ask.id] || "";
+  input.oninput = () => { replies[ask.id] = input.value; };
+  const answer = el("span", "answer");
+  form.append(input, el("button", null, "Answer"), answer);
+  form.onclick = (e) => e.stopPropagation();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const said = input.value.trim();
+    if (!said) return;
+    const content = JSON.stringify([{ type: "text", text: said }]);
+    const model = await (await fetch("/digest", { method: "POST", body: content })).text();
+    const why = await act({ Call: [ask.id, { Settled: { Completed: { model, full: null, observes: [] } } }] }, [content]);
+    if (why) { answer.className = "answer bad"; answer.textContent = `refused: ${why}`; return; }
+    delete replies[ask.id];
+  };
+  if (focus) queueMicrotask(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+  return form;
 }
 
 // Max's own order for his queue: the whole order, as the scheduler would
@@ -365,6 +404,32 @@ async function control(fact, answer, done) {
   const why = await act(fact);
   answer.className = why ? "answer bad" : "answer";
   answer.textContent = why ? `refused: ${why}` : done;
+  // A task waiting on its children is not interrupted: Max talks to a fork
+  // of it instead.
+  if (why && why.includes("through an aside")) {
+    const b = el("button", null, "Open an aside");
+    b.onclick = () => aside(answer);
+    answer.append(" ", b);
+  }
+}
+
+// An aside: a chat with a fork of the selected task, opened on its current
+// context, whose result goes back to it when Max marks the aside done. What
+// is in the compose box is its first message.
+async function aside(answer) {
+  const t = byId[selected];
+  const said = box.value.trim() || "I want to talk while your work runs.";
+  const text = await (await fetch("/digest", { method: "POST", body: said })).text();
+  const id = mint();
+  const why = await act({ Task: [id, { Created: {
+    name: `${t.name}-aside`, by: null, scope: "Max", origin: { Aside: { from: t.id } },
+    mode: "UserFacing", mandate: { text, brief: null, quotes: [], from: "Max" },
+  } }] }, [said]);
+  answer.className = why ? "answer bad" : "answer";
+  answer.textContent = why ? `aside refused: ${why}` : "aside opened";
+  if (why) return;
+  if (box.value.trim()) { box.value = prev = ""; localStorage.removeItem("draft"); }
+  select(id);
 }
 
 // The compose box. Its text is Max's until he sends it, kept across
@@ -611,11 +676,16 @@ function renderDetail() {
     button("interrupt", "Interrupt", () => ({ Task: [t.id, { Drain: "ToMax" }] }), () => "interrupted: your move once it stops");
     button("stop", "Stop", () => ({ Task: [t.id, { Drain: { Stop: "Max" } }] }), () => "stopping");
     button("hold", "Hold", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), () => byId[t.id].held ? "released" : "held");
+    button("done", "Done", () => [
+      { Task: [t.id, { ModeSet: "Autonomous" }] },
+      { Delivery: { id: mint(), to: t.id, content: { Prompt: "Done" } } },
+    ], () => "done: its last turn writes the result");
     controls.append(answer);
     body.replaceChildren(controls, el("dl"), el("div", "context"), el("div", "live"));
   }
   for (const b of body.querySelectorAll(".controls-row button")) b.disabled = !can.act || t.waiting?.kind === "done";
   body.querySelector("button[name=hold]").textContent = t.held ? "Release" : "Hold";
+  body.querySelector("button[name=done]").hidden = t.mode !== "user-facing";
   const dl = body.querySelector("dl");
   dl.replaceChildren();
   const th = throbber(t);

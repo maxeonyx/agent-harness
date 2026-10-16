@@ -6,10 +6,10 @@ use harness_core::call::{Caller, Outcome};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root};
 use harness_core::delivery::Content;
 use harness_core::environment::{Binding, Description};
-use harness_core::id::{CallId, LimbId, ValueId};
+use harness_core::id::{CallId, DeliveryId, LimbId, ValueId};
 use harness_core::resource::Observation;
 use harness_core::state::{Stale, State};
-use harness_core::task::{Giver, Input, Origin, Scope, Task};
+use harness_core::task::{Giver, Input, Origin, Outcome as TaskOutcome, Scope, Task, TaskState};
 use harness_core::value::Bytes;
 use harness_provider::IDENTITY;
 use serde_json::{Value, json};
@@ -54,11 +54,28 @@ pub fn root(model: &str, role: &str, limbs: &[(LimbId, &Description)]) -> Result
 }
 
 /// What every fresh member of a spawn shares, as its first message: the
-/// same bytes, so the same entry and one cache prefix.
-pub fn brief(said: &str) -> Bytes {
-    blocks(&[text(&format!(
-        "[harness] The brief every agent started with you was given:\n\n{said}"
-    ))])
+/// brief, then Max's quoted words verbatim, each under its label. The same
+/// bytes for every member, so the same entry and one cache prefix.
+pub fn brief(said: Option<&str>, quotes: &[(DeliveryId, Vec<Value>)]) -> Bytes {
+    let mut out = Vec::new();
+    if let Some(said) = said {
+        out.push(text(&format!(
+            "[harness] The brief every agent started with you was given:\n\n{said}"
+        )));
+    }
+    for (id, words) in quotes {
+        out.push(text(&format!(
+            "[harness] Max's own words, quoted verbatim (`{}`):",
+            label(*id)
+        )));
+        out.extend(words.iter().map(Value::to_string));
+    }
+    blocks(&out)
+}
+
+/// How an agent names Max's words to quote them in a brief.
+pub fn label(id: DeliveryId) -> String {
+    format!("max-{}", &id.to_string()[..8])
 }
 
 /// The next request's new content: what it renders, and the blocks of the
@@ -113,12 +130,21 @@ pub fn turn(
                 turn.renders.push(Rendered::Delivery(id));
                 if let Some(delivered) = state.delivery(id) {
                     let content = &delivered.delivery.content;
-                    // Words that arrive with a tool round would read as part
-                    // of it; say whose they are.
-                    if matches!(content, Content::Words(_)) && !turn.blocks.is_empty() {
-                        texts.push(text("[harness] Max wrote this while you were working:"));
+                    // Max's words are labelled, so a brief can quote them;
+                    // words that arrive with a tool round would read as part
+                    // of it, so they say whose they are.
+                    if matches!(content, Content::Words(_)) {
+                        let when = if turn.blocks.is_empty() {
+                            ""
+                        } else {
+                            " while you were working"
+                        };
+                        texts.push(text(&format!(
+                            "[harness] Max wrote this{when} (`{}` quotes it in a brief):",
+                            label(id)
+                        )));
                     }
-                    texts.extend(delivery(values, content));
+                    texts.extend(delivery(state, values, content));
                 }
             }
         }
@@ -130,11 +156,21 @@ pub fn turn(
         .filter(|s| !observed_now(state, &turn.renders, s))
         .collect();
     if !stale.is_empty() {
-        let names: Vec<_> = stale.iter().map(|s| s.resource.name.as_str()).collect();
-        texts.push(text(&format!(
-            "[harness] Changed since you last saw them: {}. Read them again before relying on what you saw.",
-            names.join(", ")
-        )));
+        let (roles, names): (Vec<_>, Vec<_>) =
+            stale.iter().partition(|s| s.resource.kind == "role");
+        if !roles.is_empty() {
+            texts.push(text(
+                "[harness] Your role's definition changed. Your request parameters follow it now; \
+its prompt and tools take effect from your next `handover`.",
+            ));
+        }
+        if !names.is_empty() {
+            let names: Vec<_> = names.iter().map(|s| s.resource.name.as_str()).collect();
+            texts.push(text(&format!(
+                "[harness] Changed since you last saw them: {}. Read them again before relying on what you saw.",
+                names.join(", ")
+            )));
+        }
         let told = stale
             .iter()
             .map(|s| Observation {
@@ -151,6 +187,11 @@ pub fn turn(
     if first {
         turn.renders.push(Rendered::Note(Note::Mandate));
         texts.push(text(&match task.scope {
+            Scope::Max if matches!(task.origin, Origin::Aside { .. }) => format!(
+                "[harness] This is an aside: Max forked you to talk while your own work waits. When he marks it \
+done, your last message here goes back to the context you were forked from.\n\n{}",
+                said(values, task.mandate.text)
+            ),
             Scope::Max => said(values, task.mandate.text),
             Scope::Spawn(_) => mandate(state, values, task),
         }));
@@ -267,6 +308,12 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
         .collect();
     let what = match record.call.caller {
         Caller::Max { .. } => format!("Max ran `{}` here", record.call.tool),
+        Caller::Agent { tool_use: None, .. } if record.call.tool == crate::max::ASK => {
+            "Max answered the question you asked in the background".to_string()
+        }
+        Caller::Agent { tool_use: None, .. } => {
+            format!("Your background `{}` call has settled", record.call.tool)
+        }
         _ => format!(
             "Your earlier `{}` call, whose outcome was unknown, did finish",
             record.call.tool
@@ -275,7 +322,7 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
     text(&format!("[harness] {what}:\n{}", said.join("\n")))
 }
 
-fn delivery(values: Values, content: &Content) -> Vec<String> {
+fn delivery(state: &State, values: Values, content: &Content) -> Vec<String> {
     match content {
         Content::Words(words) => serde_json::from_slice::<Vec<Value>>(&values(*words))
             .unwrap_or_default()
@@ -283,7 +330,22 @@ fn delivery(values: Values, content: &Content) -> Vec<String> {
             .map(Value::to_string)
             .collect(),
         Content::Prompt(prompt) => vec![text(&format!("[harness] {prompt:?}"))],
-        Content::Aside(_) => vec![text("[harness] Max talked to a fork of you meanwhile.")],
+        Content::Aside(aside) => {
+            let ended = state
+                .task(*aside)
+                .and_then(|t| match t.state {
+                    TaskState::Done(TaskOutcome::Result { entry }) => state.entry(entry),
+                    _ => None,
+                })
+                .and_then(|e| match e {
+                    Entry::Message { message, .. } => Some(visible(&values(message.content))),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            vec![text(&format!(
+                "[harness] Max talked to a fork of you meanwhile. It ended with:\n\n{ended}"
+            ))]
+        }
     }
 }
 

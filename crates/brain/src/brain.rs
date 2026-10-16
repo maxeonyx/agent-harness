@@ -12,19 +12,20 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role};
+use harness_core::delivery::{Content, Delivery};
 use harness_core::environment::{
     Description, Environment, FromLimb, Limb, LimbKind, Reach, ToLimb,
 };
 use harness_core::id::{
-    CallId, FaceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ToolUseId, ValueId,
+    CallId, DeliveryId, FaceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ToolUseId, ValueId,
 };
 use harness_core::journal::{self, Author, Batch, Fact, Launched, Record};
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose};
-use harness_core::resource::{Observation, ResourceKey};
+use harness_core::resource::{Change, Observation, ResourceKey};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
-    Created, Drain, Giver, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome, Scope,
-    Start as TaskStart, Stopper, Task, TaskEvent, TaskState,
+    Context, Created, Drain, Giver, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome,
+    Scope, Start as TaskStart, Stopper, Task, TaskEvent, TaskState,
 };
 use harness_core::value::Bytes;
 use harness_face_web::{Act, Feed, Running};
@@ -33,6 +34,7 @@ use harness_provider::{Client, Finished, Progress};
 use harness_store::Store;
 use serde_json::Value;
 
+use crate::max;
 use crate::meta::{self, How};
 use crate::reader::Reader;
 use crate::{policy, render, roles};
@@ -40,6 +42,8 @@ use crate::{policy, render, roles};
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
 const TICK: Duration = Duration::from_millis(250);
+/// How often the role files are read again.
+const ROLES_EVERY: Duration = Duration::from_secs(2);
 
 /// What reaches the loop from the threads it started, and from faces.
 pub struct Event(What);
@@ -106,6 +110,8 @@ pub struct Start {
     /// Autonomous, or a chat with Max.
     pub mode: Mode,
     pub mandate: String,
+    /// Max's words to it as well, delivered with it, so they can be quoted.
+    pub words: Option<String>,
 }
 
 type Refused = journal::Error<harness_store::Error>;
@@ -121,6 +127,15 @@ pub struct Brain {
     /// Each request's streamed events, for the face.
     feed: Feed,
     meta: LimbId,
+    /// Max's limb: his answers to `ask`.
+    max: LimbId,
+    /// The user limb: `~/.claude`.
+    user: LimbId,
+    /// Where the role files are, and when they were last read.
+    roles: PathBuf,
+    roles_read: Instant,
+    /// Why the role files last could not be read, said once.
+    roles_error: Option<String>,
     /// The plugin limbs this brain has started, by id.
     limbs: HashMap<LimbId, Workspace>,
     /// Those it is starting: a clone being made.
@@ -167,6 +182,7 @@ impl Brain {
                 .find(|l| state.limb(*l).is_some_and(|l| is(&l.kind)))
         };
         let meta = shared(&|k| *k == LimbKind::Meta);
+        let max = shared(&|k| *k == LimbKind::Max);
         let user_limb =
             shared(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let mut brain = Brain {
@@ -177,6 +193,11 @@ impl Brain {
             inbox,
             feed,
             meta: meta.unwrap_or_else(LimbId::generate),
+            max: max.unwrap_or_else(LimbId::generate),
+            user: LimbId::generate(),
+            roles: roles.to_path_buf(),
+            roles_read: Instant::now(),
+            roles_error: None,
             limbs: HashMap::new(),
             connecting: HashSet::new(),
             state_dir,
@@ -195,26 +216,21 @@ impl Brain {
         if meta.is_none() {
             facts.push(Fact::Limb(meta::definition(brain.meta)));
         }
+        if max.is_none() {
+            facts.push(Fact::Limb(max::definition(brain.max)));
+        }
         let user_id = user_limb.unwrap_or_else(LimbId::generate);
         if user_limb.is_none() {
             let home = std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?;
             let config = PathBuf::from(home).join(".claude");
             facts.push(Fact::Limb(Settings::user(user_id, config)));
         }
-        let current: Vec<Environment> = brain.state().environments().cloned().collect();
-        let meta_id = brain.meta;
-        let (defined, values) =
-            roles::environments(&roles::read(roles)?, &current, &|name| match name {
-                "meta" => Some(meta_id),
-                "user" => Some(user_id),
-                _ => None,
-            })?;
-        for env in defined {
-            if brain.state().environment(env.id) != Some(&env) {
-                facts.push(Fact::Environment(env));
-            }
-        }
-        brain.append(Batch { values, facts });
+        brain.user = user_id;
+        brain.append(Batch {
+            values: Vec::new(),
+            facts,
+        });
+        brain.define()?;
         brain.root = match start {
             Some(start) => Some(brain.start(start)?),
             None => brain
@@ -266,18 +282,22 @@ impl Brain {
                 },
             })),
         ));
+        let mut values = vec![mandate];
+        if let Some(words) = start.words {
+            let words = render::blocks(&[render::text(&words)]);
+            facts.push(Fact::Delivery(Delivery {
+                id: DeliveryId::generate(),
+                to: id,
+                content: Content::Words(words.id()),
+            }));
+            values.push(words);
+        }
         let max = Author::Max {
             face: FaceId(0),
             seen: self.state().last().unwrap_or(Seq(0)),
         };
-        self.commit(
-            max,
-            Batch {
-                values: vec![mandate],
-                facts,
-            },
-        )
-        .map_err(|e| format!("the task is refused: {e}"))?;
+        self.commit(max, Batch { values, facts })
+            .map_err(|e| format!("the task is refused: {e}"))?;
         Ok(id)
     }
 
@@ -322,6 +342,16 @@ impl Brain {
     /// face keeps serving.
     pub fn run(&mut self) {
         loop {
+            if self.roles_read.elapsed() > ROLES_EVERY {
+                let error = self.define().err();
+                if error.is_some() && error != self.roles_error {
+                    eprintln!(
+                        "the roles are unchanged: {}",
+                        error.as_deref().unwrap_or("")
+                    );
+                }
+                self.roles_error = error;
+            }
             self.work();
             self.report();
             match self.inbox.recv_timeout(TICK) {
@@ -337,6 +367,48 @@ impl Brain {
 
     fn state(&self) -> &State {
         self.journal.state()
+    }
+
+    /// Read the role files, and commit each role whose file changed as a
+    /// new version of its environment, with the change to the file, so a
+    /// task whose context embodies the old version is told.
+    fn define(&mut self) -> Result<(), String> {
+        self.roles_read = Instant::now();
+        let (meta, max, user) = (self.meta, self.max, self.user);
+        let current: Vec<Environment> = self.state().environments().cloned().collect();
+        let (defined, values) = roles::environments(
+            &roles::read(&self.roles)?,
+            &current,
+            &|name| match name {
+                "meta" => Some(meta),
+                "max" => Some(max),
+                "user" => Some(user),
+                _ => None,
+            },
+            meta,
+        )?;
+        let mut facts = Vec::new();
+        for env in defined {
+            if self.state().environment(env.id) == Some(&env) {
+                continue;
+            }
+            if let Some(source) = &env.source
+                && self.state().resource(&source.resource).map(|c| c.version)
+                    != Some(source.version)
+            {
+                facts.push(Fact::Change(Change {
+                    resource: source.resource.clone(),
+                    version: source.version,
+                    by: None,
+                    content: None,
+                }));
+            }
+            facts.push(Fact::Environment(env));
+        }
+        if !facts.is_empty() {
+            self.append(Batch { values, facts });
+        }
+        Ok(())
     }
 
     fn work(&mut self) {
@@ -381,6 +453,17 @@ impl Brain {
                 TaskEvent::Drain(Drain::Stop(Stopper::Owner)),
             )),
             Todo::Settle(call) => self.settle_scope(call),
+            Todo::Return(aside) => {
+                let Origin::Aside { from } = self.state().task(aside).expect("an aside").origin
+                else {
+                    unreachable!("only an aside returns")
+                };
+                self.fact(Fact::Delivery(Delivery {
+                    id: DeliveryId::generate(),
+                    to: from,
+                    content: Content::Aside(aside),
+                }));
+            }
         }
     }
 
@@ -466,6 +549,9 @@ impl Brain {
     /// What a limb tells a root of `task`: the meta limb is described per
     /// environment, a plugin as it last said.
     fn description(&self, task: &Task, limb: LimbId) -> Option<Description> {
+        if limb == self.max {
+            return Some(max::description(limb));
+        }
         if limb != self.meta {
             return self.descriptions.get(&limb).cloned();
         }
@@ -598,14 +684,29 @@ impl Brain {
         let mut renders = Vec::new();
         if first
             && matches!(task.origin, Origin::Fresh { .. })
-            && let Some(brief) = task.mandate.brief
+            && (task.mandate.brief.is_some() || !task.mandate.quotes.is_empty())
         {
-            let said = String::from_utf8_lossy(&self.value(brief)).into_owned();
-            appends.push(user(render::brief(&said), &mut values));
+            let said = task
+                .mandate
+                .brief
+                .map(|b| String::from_utf8_lossy(&self.value(b)).into_owned());
+            let quotes: Vec<_> = task
+                .mandate
+                .quotes
+                .iter()
+                .filter_map(|q| match self.state().delivery(*q)?.delivery.content {
+                    Content::Words(words) => Some((
+                        *q,
+                        serde_json::from_slice(&self.value(words)).unwrap_or_default(),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            appends.push(user(render::brief(said.as_deref(), &quotes), &mut values));
             renders.push(Rendered::Note(Note::Brief));
         }
         let forked = match task.origin {
-            Origin::Fork { .. } if first => self.response_calls(head),
+            Origin::Fork { .. } | Origin::Aside { .. } if first => self.response_calls(head),
             _ => Vec::new(),
         };
         let turn = render::turn(
@@ -813,22 +914,13 @@ impl Brain {
             .filter(|b| b["type"] == "tool_use")
             .map(|b| {
                 let tool = b["name"].as_str().unwrap_or_default().to_owned();
-                let limb = context.binding.limb(&tool);
                 let input = Bytes::from(b["input"].to_string());
                 let call = Call {
                     caller: Caller::Agent {
                         task: task.id,
                         tool_use: Some(ToolUseId(b["id"].as_str().unwrap_or_default().into())),
                     },
-                    expects: context
-                        .knows
-                        .iter()
-                        .filter(|(r, _)| Some(r.limb) == limb)
-                        .map(|(resource, known)| Observation {
-                            resource: resource.clone(),
-                            version: known.has,
-                        })
-                        .collect(),
+                    expects: expects(context, context.binding.limb(&tool)),
                     tool,
                     input: input.id(),
                 };
@@ -887,6 +979,34 @@ impl Brain {
             ));
             return self.append(batch);
         }
+        if call.tool == meta::BACKGROUND {
+            match background(&parent, self.meta, &input) {
+                Ok((started, input)) => {
+                    let said = render::blocks(&[render::text(&format!(
+                        "Started `{}` in the background: its result comes to you as a message when it settles, \
+and you cannot finish until it has.",
+                        started.tool
+                    ))]);
+                    let output = Output {
+                        model: said.id(),
+                        full: None,
+                        observes: Vec::new(),
+                    };
+                    batch.values.extend([said, input]);
+                    batch.facts.extend([
+                        Fact::Call(CallId::generate(), CallEvent::Made(started)),
+                        Fact::Call(id, CallEvent::Settled(Outcome::Completed(output))),
+                    ]);
+                    return self.append(batch);
+                }
+                Err(message) => {
+                    let (model, failed) = failed(&message);
+                    batch.values.push(model);
+                    batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
+                    return self.append(batch);
+                }
+            }
+        }
         match self.members(id, &call.tool, &parent, &input, &mut batch) {
             Ok(names) if call.tool == meta::ADD_SIBLING => {
                 let said = render::blocks(&[render::text(&format!(
@@ -939,6 +1059,11 @@ impl Brain {
         };
         let state = self.state();
         let brief = spawn.brief.map(Bytes::from);
+        let quotes = spawn
+            .quotes
+            .iter()
+            .map(|label| quoted(state, parent, label))
+            .collect::<Result<Vec<_>, String>>()?;
         let mut names = Vec::new();
         for member in spawn.members {
             let origin = match member.how {
@@ -995,7 +1120,7 @@ impl Brain {
                 mandate: Mandate {
                     text: text.id(),
                     brief: brief.as_ref().filter(|_| fresh).map(Bytes::id),
-                    quotes: Vec::new(),
+                    quotes: if fresh { quotes.clone() } else { Vec::new() },
                     from: Giver::Task(parent.id),
                 },
             };
@@ -1316,4 +1441,55 @@ fn now() -> Timestamp {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64),
     )
+}
+
+/// What a call to `limb` expects: the versions the context knows of its
+/// resources.
+fn expects(context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
+    context
+        .knows
+        .iter()
+        .filter(|(r, _)| Some(r.limb) == limb)
+        .map(|(resource, known)| Observation {
+            resource: resource.clone(),
+            version: known.has,
+        })
+        .collect()
+}
+
+/// A `background` call's input as the call it starts, with its input's
+/// bytes: routed by the caller's binding, never to the meta limb.
+fn background(parent: &Task, meta: LimbId, input: &[u8]) -> Result<(Call, Bytes), String> {
+    let (tool, input) = meta::background(input)?;
+    let context = parent.context.as_ref().ok_or("you have no context")?;
+    let limb = context
+        .binding
+        .limb(&tool)
+        .ok_or(format!("you have no tool `{tool}`"))?;
+    if limb == meta {
+        return Err(format!("`{tool}` cannot run in the background"));
+    }
+    let call = Call {
+        caller: Caller::Agent {
+            task: parent.id,
+            tool_use: None,
+        },
+        expects: expects(context, Some(limb)),
+        tool,
+        input: input.id(),
+    };
+    Ok((call, input))
+}
+
+/// The delivery of Max's words a label names: one to `parent`, or one its
+/// own brief quoted.
+fn quoted(state: &State, parent: &Task, label: &str) -> Result<DeliveryId, String> {
+    state
+        .deliveries()
+        .map(|d| &d.delivery)
+        .filter(|d| matches!(d.content, Content::Words(_)))
+        .filter(|d| d.to == parent.id || parent.mandate.quotes.contains(&d.id))
+        .find(|d| render::label(d.id) == label)
+        .map(|d| d.id)
+        .ok_or(format!("no words of Max's to you are labelled `{label}`"))
 }

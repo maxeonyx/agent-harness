@@ -106,10 +106,17 @@ impl Client {
                 .map(str::to_owned)
         };
         let ratio = |name: &str| header(&format!("{UNIFIED}{name}")).and_then(|v| v.parse().ok());
+        let reset = |name: &str| {
+            header(&format!("{UNIFIED}{name}-reset"))
+                .and_then(|v| v.parse::<i64>().ok())
+                .map(|s| Timestamp(s * 1000))
+        };
         let quota = Some(Quota {
             claim: header(&format!("{UNIFIED}representative-claim")),
             five_hour: ratio("5h-utilization"),
             seven_day: ratio("7d-utilization"),
+            five_hour_reset: reset("5h"),
+            seven_day_reset: reset("7d"),
         });
         let retry = header("retry-after")
             .and_then(|s| s.parse::<f64>().ok())
