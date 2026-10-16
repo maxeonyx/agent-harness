@@ -37,7 +37,7 @@ The brain commits the batch as Max's: the core decides what he may author, and a
 
 ## Real output
 
-A run at 12:05 NZT on 2026-10-17. The demo's own lines:
+A run at 11:50 NZT on 2026-10-17. The demo's own lines:
 
 ```
    0.2s  the root task is orchestrator
