@@ -50,12 +50,12 @@ until c -s -o /dev/null "$url/" 2>/dev/null; do sleep 0.2; done
 root=$(q '.tasks[] | select(.owner == null) | .id')
 say "the root task is $(name "$root")"
 
-say "== live text: a request of the root's as it streams, from /live"
+say "== live text: a request as it streams, from /live"
 # Read 2 s of a streaming request, then reconnect the way a browser does,
 # with the last event id it got, and read on until the request ends. Try
 # again on the next request if this one ended inside the 2 s.
 while :; do
-  call=$(q ".tasks[] | select(.id == \"$root\" and .waiting.streaming == true) | .waiting.call")
+  call=$(q '[.tasks[] | select(.waiting.streaming == true) | .waiting.call][0] // empty')
   [ -n "$call" ] || { sleep 0.2; continue; }
   { c -m 2 -N "$url/live?model=$call" 2>/dev/null || true; } > "$dir/live1.txt"
   n=$(grep -c '^id:' "$dir/live1.txt" || true)
@@ -66,8 +66,7 @@ c -N -H "Last-Event-ID: $n" "$url/live?model=$call" 2>/dev/null > "$dir/live2.tx
 ids=$(grep '^id:' "$dir/live2.txt" | cut -c5- | tr '\n' ' ')
 say "reconnected with Last-Event-ID: $n: events $(echo $ids | cut -d' ' -f1) to $(echo $ids | awk '{print $NF}'), then: $(grep -o '^event: end' "$dir/live2.txt")"
 say "the streamed text, from both connections:"
-cat "$dir/live1.txt" "$dir/live2.txt" | grep '^data:' | cut -c7- |
-  jq -rj 'fromjson | select(.type == "content_block_delta") | .delta | (.text // .thinking // .partial_json // "")' |
+cat "$dir/live1.txt" "$dir/live2.txt" | grep '^data: "' | cut -c7- | jq -rj . |
   fold -w 100 | head -12 | sed 's/^/          /' || true
 echo
 
@@ -122,7 +121,8 @@ act "{\"Delivery\": {\"id\": \"$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' 
 say "a fact that is not Max's to author (failing a task):"
 act "{\"Task\": [\"$top\", {\"Drain\": {\"Fail\": \"because\"}}]}"
 
-say "== wait for the root's result"
+say "== wait for the root to end its turn, and mark it done"
+demos/brain/done.sh "$port"
 until grep -q 'the task is done' "$dir/brain.log"; do sleep 0.5; done
 sleep 0.5
 say "done; the brain's own log:"

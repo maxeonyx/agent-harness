@@ -739,30 +739,16 @@ function follow(kind, id, into, call) {
     stream.ended = true;
     head.textContent = kind === "model" ? "streamed" : head.textContent.replace(/^running/, "ran");
   });
-  if (kind === "call") {
-    let raw = "";
-    const out = el("pre", "output");
-    div.append(out);
-    source.onmessage = (m) => {
-      raw += JSON.parse(m.data);
-      stick(() => { out.textContent = screen(raw); out.scrollTop = out.scrollHeight; });
-    };
-    return;
-  }
-  const blocks = [];
+  // A command's output is shown as a terminal would; a response's visible
+  // text as it arrives.
+  let raw = "";
+  const out = el(kind === "call" ? "pre" : "div", kind === "call" ? "output" : "block");
+  div.append(out);
   source.onmessage = (m) => {
-    const e = JSON.parse(JSON.parse(m.data));
+    raw += JSON.parse(m.data);
     stick(() => {
-      if (e.type === "content_block_start") {
-        const b = e.content_block;
-        const block = el("div", `block ${b.type === "text" ? "" : b.type === "thinking" ? "thinking" : "tool"}`);
-        block.textContent = b.type === "tool_use" ? `→ ${b.name} ` : "";
-        blocks[e.index] = block;
-        div.append(block);
-      } else if (e.type === "content_block_delta" && blocks[e.index]) {
-        const d = e.delta;
-        blocks[e.index].textContent += d.text ?? d.thinking ?? d.partial_json ?? "";
-      }
+      out.textContent = kind === "call" ? screen(raw) : raw;
+      if (kind === "call") out.scrollTop = out.scrollHeight;
     });
   };
 }
