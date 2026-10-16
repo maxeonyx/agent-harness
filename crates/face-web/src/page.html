@@ -86,6 +86,7 @@
   button:disabled { color: var(--muted); cursor: default; background: var(--paper); }
   .controls-row { display: flex; gap: .5em; align-items: center; flex-wrap: wrap; margin: .2em 0 .8em; }
   .answer { color: var(--muted); }
+  #start[hidden] { display: none; }
   #start { display: flex; flex-wrap: wrap; gap: .4em .8em; padding: .3em 1em .6em; border-bottom: 1px solid var(--line); }
   #start textarea { flex-basis: 100%; font: inherit; padding: .4em .5em; background: var(--ground); border: 1px solid var(--line); border-radius: 6px; }
   #start input, #start select { font: inherit; }
@@ -302,6 +303,7 @@ function row(t, depth) {
   if (t.id === selected) li.classList.add("selected");
   if (t.waiting && t.waiting.kind === "done") li.classList.add("done");
   li.append(el("span", "name", t.name), el("span", "tag", t.environment || ""));
+  for (const limb of Object.values(t.places || {})) li.append(el("span", "tag", `in ${limb}`));
   if (t.origin !== "fresh") li.append(el("span", "tag", `${t.origin} of ${byId[t.from] ? byId[t.from].name : t.from}`));
   if (t.held) li.append(el("span", "tag", "held"));
   if (t.draining) li.append(el("span", "tag", `draining: ${t.draining}`));

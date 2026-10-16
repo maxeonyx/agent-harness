@@ -9,7 +9,7 @@ brain=target/release/harness-brain
 rm -rf "$dir"
 mkdir -p "$dir"
 demos/brain/scratch.sh "$dir/repo"
-args=(--journal "$dir/journal.sqlite" --port "${PORT:-4321}")
+args=(--roles roles --journal "$dir/journal.sqlite" --port "${PORT:-4321}")
 
 echo "== launch 1: the orchestrator starts on demos/brain/mandate.md"
 "$brain" "${args[@]}" --workspace "$dir/repo" --mandate demos/brain/mandate.md > "$dir/launch1.log" 2>&1 &
@@ -27,7 +27,7 @@ echo
 echo "== launch 2: the same journal, nothing else"
 "$brain" "${args[@]}" > "$dir/launch2.log" 2>&1 &
 pid=$!
-until grep -q 'the root is done' "$dir/launch2.log"; do sleep 0.5; done
+until grep -q 'the task is done' "$dir/launch2.log"; do sleep 0.5; done
 sleep 0.5
 kill "$pid"
 wait "$pid" 2>/dev/null || true

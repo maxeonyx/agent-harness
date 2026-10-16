@@ -8,6 +8,6 @@ cargo build -q --release -p harness-brain
 dir=${DIR:-target/chat}
 mkdir -p "$dir"
 [ -e "$dir/journal.sqlite" ] || demos/brain/scratch.sh "$dir/repo"
-exec target/release/harness-brain --journal "$dir/journal.sqlite" --port "${PORT:-4320}" \
+exec target/release/harness-brain --roles roles --journal "$dir/journal.sqlite" --port "${PORT:-4320}" \
   --workspace "$dir/repo" --mandate demos/chat/mandate.md --name chat --chat \
   --sample demos/chat/sample.wav

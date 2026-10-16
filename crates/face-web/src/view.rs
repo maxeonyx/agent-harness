@@ -12,7 +12,7 @@ use harness_core::id::{CallId, TaskId, Timestamp, ValueId};
 use harness_core::journal::{Fact, Record};
 use harness_core::model_call::{Ending, ModelCallEvent, Purpose};
 use harness_core::state::{Ended, State, Waiting};
-use harness_core::task::{Drain, Mode, Origin, Outcome, Scope, Task, TaskEvent, TaskState};
+use harness_core::task::{Drain, Mode, Move, Origin, Outcome, Scope, Task, TaskEvent, TaskState};
 use serde_json::{Value, json};
 
 /// A stored value as text, for the page: a mandate, a call's input.
@@ -277,10 +277,17 @@ pub fn describe(state: &State, record: &Record) -> String {
             }
             TaskEvent::ModeSet(mode) => format!("{} is now {mode:?}", name(*id)),
             TaskEvent::Renamed(new) => format!("{} renamed to {new}", name(*id)),
-            TaskEvent::Moved(m) => format!("{} moved: {m:?}", name(*id))
-                .chars()
-                .take(120)
-                .collect(),
+            TaskEvent::Moved(Move::Root(start)) => {
+                format!("{} has a new root, on {}", name(*id), start.root.model)
+            }
+            TaskEvent::Moved(Move::Handover { start, .. }) => {
+                format!(
+                    "{} handed over to a new root, on {}",
+                    name(*id),
+                    start.root.model
+                )
+            }
+            TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
             TaskEvent::Drain(Drain::ToMax) => format!("{} interrupted", name(*id)),
             TaskEvent::Drain(Drain::Stop(by)) => format!("{} stopped by {by:?}", name(*id)),
             TaskEvent::Drain(Drain::Fail(why)) => format!("{} failing: {why}", name(*id)),

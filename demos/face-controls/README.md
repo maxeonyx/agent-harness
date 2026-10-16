@@ -4,7 +4,7 @@
 demos/face-controls/run.sh
 ```
 
-It starts a real brain run (Sonnet) on the brain demo's scratch repo and mandate, then drives it only through the face's HTTP endpoints, the way the page does. Watch it at https://mx-hv-mj.local:4323 while it runs (another port: `PORT=4400`). It takes a few minutes and ends when the root has its result.
+It starts a real brain run on the brain demo's scratch repo and mandate, then drives it only through the face's HTTP endpoints, the way the page does. Watch it at https://mx-hv-mj.local:4323 while it runs (another port: `PORT=4400`). It takes a few minutes and ends when the root has its result.
 
 What it does, in order:
 

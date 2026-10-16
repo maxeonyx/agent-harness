@@ -132,7 +132,8 @@ pub struct Brain {
     /// The context of each request without a first byte yet: fan-out gating.
     cold: HashMap<ModelCallId, HashSet<EntryId>>,
     abort: HashMap<ModelCallId, Arc<AtomicBool>>,
-    /// The task this launch started, whose result it prints.
+    /// The task this launch started, or else the first of Max's it found
+    /// unfinished: the one whose result it prints.
     root: Option<TaskId>,
     started: Instant,
     reported: bool,
@@ -214,9 +215,14 @@ impl Brain {
             }
         }
         brain.append(Batch { values, facts });
-        if let Some(start) = start {
-            brain.root = Some(brain.start(start)?);
-        }
+        brain.root = match start {
+            Some(start) => Some(brain.start(start)?),
+            None => brain
+                .state()
+                .tasks()
+                .find(|t| t.scope == Scope::Max && !t.is_done())
+                .map(|t| t.id),
+        };
         Ok(brain)
     }
 
