@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
@@ -145,7 +145,9 @@ pub struct Brain {
     descriptions: BTreeMap<LimbId, Description>,
     /// The context of each request without a first byte yet: fan-out gating.
     cold: HashMap<ModelCallId, HashSet<EntryId>>,
-    abort: HashMap<ModelCallId, Arc<AtomicBool>>,
+    /// Each request in flight: the thread that sends it, joined when it
+    /// reports how it ended, and the flag that abandons it.
+    requests: HashMap<ModelCallId, (Arc<AtomicBool>, JoinHandle<()>)>,
     /// The task this launch started, or else the first of Max's it found
     /// unfinished: the one whose result it prints.
     root: Option<TaskId>,
@@ -202,7 +204,7 @@ impl Brain {
             state_dir,
             descriptions: BTreeMap::new(),
             cold: HashMap::new(),
-            abort: HashMap::new(),
+            requests: HashMap::new(),
             root: None,
             started: Instant::now(),
             reported: false,
@@ -443,7 +445,7 @@ impl Brain {
             }
             Todo::Interrupt(call) => self.interrupt(call),
             Todo::Abandon(request) => {
-                if let Some(abort) = self.abort.get(&request) {
+                if let Some((abort, _)) = self.requests.get(&request) {
                     abort.store(true, Ordering::Relaxed);
                 }
             }
@@ -758,12 +760,11 @@ impl Brain {
             base.iter().map(|(id, _)| *id).chain(appended).collect(),
         );
         let abort = Arc::new(AtomicBool::new(false));
-        self.abort.insert(request, abort.clone());
-
         let client = self.client.clone();
         let events = self.events.clone();
         let feed = self.feed.clone();
-        thread::spawn(move || {
+        let flag = abort.clone();
+        let thread = thread::spawn(move || {
             let base: Vec<(EntryId, &Entry)> = base.iter().map(|(id, e)| (*id, e)).collect();
             let finished = client.send(
                 request,
@@ -777,7 +778,7 @@ impl Brain {
                         }
                         Progress::Live(live) => feed.push(live),
                     }
-                    if abort.load(Ordering::Relaxed) {
+                    if flag.load(Ordering::Relaxed) {
                         ControlFlow::Break(())
                     } else {
                         ControlFlow::Continue(())
@@ -786,6 +787,7 @@ impl Brain {
             );
             let _ = events.send(Event(What::Finished(request, finished)));
         });
+        self.requests.insert(request, (abort, thread));
     }
 
     /// The note of the task's last handover, and the entry its old context
@@ -825,7 +827,10 @@ impl Brain {
         finished: Result<Finished, harness_provider::Error>,
     ) {
         self.cold.remove(&request);
-        self.abort.remove(&request);
+        if let Some((_, thread)) = self.requests.remove(&request) {
+            // Its last act was to send this event.
+            thread.join().expect("a request's thread does not panic");
+        }
         let task = self
             .state()
             .model_call(request)
