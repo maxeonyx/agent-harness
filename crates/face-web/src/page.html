@@ -15,13 +15,13 @@
     font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   header {
-    display: flex; gap: 1.5em; align-items: baseline; padding: .7em 1.2em;
+    display: flex; flex-wrap: wrap; gap: .3em 1.5em; align-items: baseline; padding: .7em 1.2em;
     border-bottom: 1px solid var(--line);
   }
   header h1 { font: 600 1.15em ui-serif, Georgia, serif; margin: 0; }
   header .meta { color: var(--muted); }
   #link.down { color: var(--maroon); font-weight: 600; }
-  #refused { color: var(--maroon); font-weight: 600; }
+  #refused, .alarm { color: var(--maroon); font-weight: 600; }
   main {
     display: grid; gap: 1em; padding: 1em 1.2em;
     grid-template-columns: minmax(22em, 1fr) minmax(26em, 1.4fr);
@@ -90,10 +90,22 @@
   section > h2 button { text-transform: none; letter-spacing: 0; font-size: 1.1em; margin-left: .8em; }
   .queued .move { float: right; display: flex; gap: .3em; }
   .queued .move button { padding: 0 .45em; }
-  .live { border-top: 1px solid var(--line); padding: .6em 0; }
-  .live .role { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; color: var(--maroon); }
+  .stream { border-top: 1px solid var(--line); padding: .6em 0; }
+  .stream .role { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; color: var(--maroon); }
   .block.thinking { color: var(--muted); font-style: italic; }
-  pre { white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; margin: .3em 0; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, monospace; margin: .3em 0; }
+  .block { overflow-wrap: anywhere; }
+  .stream .command { font: 12px/1.5 ui-monospace, monospace; color: var(--maroon); }
+  .trouble { display: block; color: var(--maroon); font-size: .9em; }
+  .output { background: var(--ground); padding: .3em .5em; border-radius: 4px; max-height: 30em; overflow: auto; }
+  @media (max-width: 800px) {
+    main {
+      grid-template-columns: 1fr; grid-template-rows: none; height: auto;
+      grid-template-areas: "queue" "tree" "detail" "compose" "facts";
+    }
+    #tree { max-height: 45vh; } #detail { max-height: 75vh; }
+    #compose { min-height: 12em; }
+  }
 </style>
 </head>
 <body>
@@ -101,6 +113,7 @@
   <h1>harness</h1>
   <span class="meta" id="build"></span>
   <span class="meta" id="seq"></span>
+  <span class="meta" id="usage"></span>
   <span class="meta" id="link">connecting</span>
   <span id="refused"></span>
 </header>
@@ -155,7 +168,7 @@ function throbber(t) {
         const live = kids.filter((k) => byId[k] && byId[k].waiting && byId[k].waiting.kind !== "done").length;
         return { cls: "children", spin: true, text: `${live} of ${kids.length} children running${since}` };
       }
-      const tools = w.calls.map((c) => `${c.tool}${c.status === "made" ? " (queued)" : ""}`).join(", ");
+      const tools = w.calls.map((c) => `${c.tool}${c.status === "made" ? " (queued)" : ""}${gist(c.input)}`).join(", ");
       return { cls: "tool", spin: true, text: `tool: ${tools}${since}` };
     }
     case "max": return { cls: "max", spin: "●", text: (w.ask ? "asked you" : "your turn") + since };
@@ -175,12 +188,43 @@ function throbber(t) {
 
 let byId = {};
 
+// What the subscription has used, as the latest response reported it, and
+// whether the account is stopped.
+const PLAN = (claim) => claim == null || claim === "five_hour" || claim.startsWith("seven_day");
+const pct = (f) => f == null ? "?" : `${Math.round(f * 100)}%`;
+function renderUsage() {
+  const u = view.usage, span = $("#usage");
+  span.replaceChildren();
+  if (u) span.append(`used: 5h ${pct(u.five_hour)} · 7d ${pct(u.seven_day)} · as of ${clock(u.at)}`);
+  if (u && !PLAN(u.claim)) span.append(" ", el("span", "alarm", `billed as ${u.claim}, not the plan: nothing more is sent`));
+  if (view.limited) span.append(" ", el("span", "alarm", `account limited until ${clock(view.limited)}`));
+}
+
+// Why a task's last turn did not respond, while it matters.
+function trouble(t) {
+  const x = t.trouble;
+  if (!x || t.waiting?.kind === "done") return null;
+  if (x.until != null) return x.until > Date.now() ? `limited until ${clock(x.until)}` : null;
+  return t.failures ? `failed ${t.failures}× in a row, last ${ago(x.at)} ago: ${x.text}` : null;
+}
+
+// The gist of a call's input: its command, or the path or pattern it names.
+function gist(input) {
+  let v;
+  try { v = JSON.parse(input); } catch { return ""; }
+  const s = v && (v.command ?? v.path ?? v.pattern ?? v.name);
+  if (typeof s !== "string") return "";
+  const line = s.split("\n")[0];
+  return `: ${line.length > 70 ? line.slice(0, 70) + "…" : line}`;
+}
+
 function render() {
   if (!view) return;
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
   $("#build").textContent = view.build ? `build ${view.build}` : "";
   $("#seq").textContent = `seq ${view.seq}`;
   $("#refused").textContent = view.refused || "";
+  renderUsage();
 
   // Max's queue, in the order the core derives.
   const queue = $("#queue ul");
@@ -253,6 +297,8 @@ function row(t, depth) {
   if (th.spin === true) spin.dataset.spin = "1";
   line.append(spin, document.createTextNode(th.text));
   li.append(line);
+  const bad = trouble(t);
+  if (bad) li.append(el("span", "trouble", bad));
   li.onclick = () => select(t.id);
   return li;
 }
@@ -497,6 +543,9 @@ function renderDetail() {
   if (body.dataset.task !== t.id) {
     body.dataset.task = t.id;
     shownHead = null;
+    for (const s of streams.values()) s.source.close();
+    streams.clear();
+    toBottom = true;
     const controls = el("div", "controls-row");
     const answer = el("span", "answer");
     const button = (name, label, fact, done) => {
@@ -518,46 +567,85 @@ function renderDetail() {
   const th = throbber(t);
   const fields = [
     ["task", t.name], ["agent", t.agent], ["mode", t.mode], ["environment", t.environment],
-    ["waiting on", th.text], ["pending inputs", t.pending], ["failures in a row", t.failures],
+    ["waiting on", th.text], ["pending inputs", t.pending], ["trouble", trouble(t)],
   ];
-  for (const [k, v] of fields) dl.append(el("dt", null, k), el("dd", null, String(v ?? "")));
+  for (const [k, v] of fields) if (v != null) dl.append(el("dt", null, k), el("dd", null, String(v ?? "")));
   dl.append(el("dt", null, "mandate"), el("dd", "mandate", t.mandate));
   if (t.head !== shownHead) {
     shownHead = t.head;
     loadContext(t.head, body.querySelector(".context"));
   }
-  follow(t.waiting?.kind === "model" ? t.waiting.call : null, body.querySelector(".live"));
+  const w = t.waiting;
+  const into = body.querySelector(".live");
+  if (w?.kind === "model") follow("model", w.call, into, null);
+  for (const c of w?.calls || []) if (c.status === "running" && !c.children.length) follow("call", c.id, into, c);
 }
 
-// The selected task's running request, as it streams: never a fact, so it
-// is read from /live, which resumes from the last event on a reconnect and
-// says "end" when the request is over. The text stays until the head moves
-// past it and the context shows the stored response.
-let streaming = null;
-function follow(call, into) {
-  if (streaming && streaming.call === call) return;
-  if (streaming) streaming.source.close();
-  streaming = null;
-  into.replaceChildren();
-  if (!call) return;
+// The detail pane keeps to its bottom while Max is there, so live text
+// scrolls into view; once he scrolls up, it stays where he is.
+let toBottom = false;
+function stick(change) {
+  const pane = $("#detail");
+  const atBottom = toBottom || pane.scrollHeight - pane.scrollTop - pane.clientHeight < 60;
+  change();
+  if (atBottom) pane.scrollTop = pane.scrollHeight;
+}
+
+// A command's output as a terminal would leave it: a carriage return starts
+// its line again. Only the last lines are shown.
+const SHOWN = 400;
+function screen(raw) {
+  const lines = raw.replace(/\r\n/g, "\n").split("\n").map((l) => l.slice(l.lastIndexOf("\r") + 1));
+  return (lines.length > SHOWN ? [`[${lines.length - SHOWN} earlier lines]`, ...lines.slice(-SHOWN)] : lines).join("\n");
+}
+
+
+// What the selected task is running, as it streams: a request's text, or
+// a command's output as it prints. Neither is a fact, so each is read from
+// /live, which resumes from the last event on a reconnect and says "end" when
+// it is over. What has ended stays until the head moves past it and the
+// context shows what was kept.
+const streams = new Map();
+function follow(kind, id, into, call) {
+  const key = `${kind}:${id}`;
+  if (streams.has(key)) return;
+  const source = new EventSource(`/live?${kind}=${id}`);
+  const div = el("div", "stream");
+  const head = kind === "model" ? el("div", "role", "streaming") : el("div", "command", `running ${call.tool}${gist(call.input)}`);
+  div.append(head);
+  const stream = { source, div, ended: false };
+  streams.set(key, stream);
+  stick(() => into.append(div));
+  source.addEventListener("end", () => {
+    source.close();
+    stream.ended = true;
+    head.textContent = kind === "model" ? "streamed" : head.textContent.replace(/^running/, "ran");
+  });
+  if (kind === "call") {
+    let raw = "";
+    const out = el("pre", "output");
+    div.append(out);
+    source.onmessage = (m) => {
+      raw += JSON.parse(m.data);
+      stick(() => { out.textContent = screen(raw); out.scrollTop = out.scrollHeight; });
+    };
+    return;
+  }
   const blocks = [];
-  const source = new EventSource(`/live?model=${call}`);
-  streaming = { call, source };
-  const head = el("div", "role", "streaming");
-  into.append(head);
-  source.addEventListener("end", () => { source.close(); head.textContent = "streamed"; });
   source.onmessage = (m) => {
-    const e = JSON.parse(m.data);
-    if (e.type === "content_block_start") {
-      const b = e.content_block;
-      const div = el("div", `block ${b.type === "text" ? "" : b.type === "thinking" ? "thinking" : "tool"}`);
-      div.textContent = b.type === "tool_use" ? `→ ${b.name} ` : "";
-      blocks[e.index] = div;
-      into.append(div);
-    } else if (e.type === "content_block_delta" && blocks[e.index]) {
-      const d = e.delta;
-      blocks[e.index].textContent += d.text ?? d.thinking ?? d.partial_json ?? "";
-    }
+    const e = JSON.parse(JSON.parse(m.data));
+    stick(() => {
+      if (e.type === "content_block_start") {
+        const b = e.content_block;
+        const block = el("div", `block ${b.type === "text" ? "" : b.type === "thinking" ? "thinking" : "tool"}`);
+        block.textContent = b.type === "tool_use" ? `→ ${b.name} ` : "";
+        blocks[e.index] = block;
+        div.append(block);
+      } else if (e.type === "content_block_delta" && blocks[e.index]) {
+        const d = e.delta;
+        blocks[e.index].textContent += d.text ?? d.thinking ?? d.partial_json ?? "";
+      }
+    });
   };
 }
 
@@ -566,8 +654,12 @@ async function loadContext(head, into) {
   const res = await fetch(`/context/${head}`);
   if (!res.ok || shownHead !== head) return;
   const chain = await res.json();
-  into.replaceChildren();
-  for (const e of chain) into.append(entry(e, e.id === head));
+  stick(() => {
+    into.replaceChildren();
+    for (const e of chain) into.append(entry(e, e.id === head));
+    for (const [key, s] of streams) if (s.ended) { s.div.remove(); streams.delete(key); }
+  });
+  toBottom = false;
 }
 
 function entry(e, isHead) {
@@ -587,7 +679,12 @@ function entry(e, isHead) {
   for (const b of content) {
     if (b.type === "text") div.append(el("div", "block", b.text));
     else if (b.type === "thinking") div.append(el("div", "block thinking", b.thinking));
-    else if (b.type === "tool_use") div.append(el("div", "block tool", `→ ${b.name} ${JSON.stringify(b.input)}`));
+    else if (b.type === "tool_use") {
+      const input = JSON.stringify(b.input);
+      const use = el("details", "block tool");
+      use.append(el("summary", null, `→ ${b.name}${gist(input)}`), el("pre", null, fields(b.input)));
+      div.append(use);
+    }
     else if (b.type === "tool_result") {
       const c = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.text || "").join("\n");
       div.append(el("div", "block tool", `← ${c}`));
@@ -596,6 +693,8 @@ function entry(e, isHead) {
   return div;
 }
 
+// A tool's input as its fields, each string as it reads.
+const fields = (input) => Object.entries(input || {}).map(([k, v]) => `${k}: ${typeof v === "string" && v.includes("\n") ? "\n" + v : JSON.stringify(v)}`).join("\n");
 const json = (s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } };
 const preview = (s) => { try { const v = JSON.parse(s); return v.question || s; } catch { return s; } };
 

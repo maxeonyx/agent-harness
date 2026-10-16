@@ -3,12 +3,14 @@
 //!
 //! Ids are sent as hex strings: JSON numbers cannot hold a u128.
 
+use std::collections::HashMap;
+
 use harness_core::call::{Caller, Outcome as CallOutcome};
 use harness_core::delivery::Content;
 use harness_core::id::{CallId, TaskId, Timestamp, ValueId};
 use harness_core::journal::{Fact, Record};
-use harness_core::model_call::{Ending, ModelCallEvent};
-use harness_core::state::{State, Waiting};
+use harness_core::model_call::{Ending, ModelCallEvent, Purpose};
+use harness_core::state::{Ended, State, Waiting};
 use harness_core::task::{Drain, Mode, Origin, Outcome, Scope, Task, TaskEvent, TaskState};
 use serde_json::{Value, json};
 
@@ -19,9 +21,28 @@ fn text(value: Text, id: ValueId) -> Option<String> {
     value(id).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The tree, what each task waits on, and Max's queue, as of the last fold.
+/// The tree, what each task waits on, Max's queue and his subscription, as
+/// of the last fold.
 pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
-    let tasks: Vec<Value> = state.tasks().map(|t| task(state, value, t, now)).collect();
+    // Each task's last turn to end, and the last report of the quota.
+    let mut last: HashMap<TaskId, &Ended> = HashMap::new();
+    let mut quota: Option<&Ended> = None;
+    for (_, m) in state.model_calls() {
+        let Some(ended) = &m.ended else { continue };
+        if m.call.purpose == Purpose::Turn {
+            let slot = last.entry(m.call.task).or_insert(ended);
+            if ended.at.seq > slot.at.seq {
+                *slot = ended;
+            }
+        }
+        if ended.quota.is_some() && quota.is_none_or(|q| ended.at.seq > q.at.seq) {
+            quota = Some(ended);
+        }
+    }
+    let tasks: Vec<Value> = state
+        .tasks()
+        .map(|t| task(state, value, t, last.get(&t.id).copied(), now))
+        .collect();
     let queue: Vec<Value> = state
         .queue()
         .iter()
@@ -38,12 +59,41 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
         "seq": state.last().map_or(0, |s| s.0),
         "build": state.launch().map(|(_, l)| l.build.clone()),
         "limited": state.limited(now).map(|t| t.0),
+        "usage": quota.map(usage),
         "tasks": tasks,
         "queue": queue,
     })
 }
 
-fn task(state: &State, value: Text, t: &Task, now: Timestamp) -> Value {
+/// The subscription as the latest response reported it.
+fn usage(ended: &Ended) -> Value {
+    let quota = ended.quota.as_ref();
+    json!({
+        "at": ended.at.at.0,
+        "five_hour": quota.and_then(|q| q.five_hour),
+        "seven_day": quota.and_then(|q| q.seven_day),
+        "claim": quota.and_then(|q| q.claim.clone()),
+    })
+}
+
+/// Why a task's last turn did not respond, if it did not.
+fn trouble(ended: &Ended) -> Value {
+    match &ended.ending {
+        Ending::Failed {
+            status, message, ..
+        } => json!({
+            "at": ended.at.at.0,
+            "text": match status {
+                Some(s) => format!("{s}: {message}"),
+                None => message.clone(),
+            },
+        }),
+        Ending::Limited { until } => json!({"at": ended.at.at.0, "until": until.0}),
+        Ending::Responded { .. } | Ending::Abandoned { .. } | Ending::Lost => Value::Null,
+    }
+}
+
+fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timestamp) -> Value {
     let (origin, from) = match t.origin {
         Origin::Fresh { .. } => ("fresh", None),
         Origin::Fork { from } => ("fork", Some(from)),
@@ -84,6 +134,7 @@ fn task(state: &State, value: Text, t: &Task, now: Timestamp) -> Value {
             Drain::Fail(reason) => format!("fail: {reason}"),
         }),
         "failures": t.failures,
+        "trouble": last.map_or(Value::Null, trouble),
         "pending": t.pending.len(),
         "outcome": outcome,
         "waiting": state.waiting_on(t.id, now).map(|w| waiting(state, value, &w)),

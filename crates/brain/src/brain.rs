@@ -443,7 +443,6 @@ impl Brain {
         call.breakpoints = policy::breakpoints(root, &shared, call.head());
 
         let request = ModelCallId::generate();
-        self.feed.start(Running::Model(request));
         self.append(Batch {
             values,
             facts: vec![Fact::ModelCall(request, ModelCallEvent::Sent(call.clone()))],
@@ -577,7 +576,6 @@ impl Brain {
             },
         ));
         self.append(batch);
-        self.feed.end(Running::Model(request));
     }
 
     /// A call for each tool use of a response, with its input's bytes. Its
@@ -814,7 +812,7 @@ impl Brain {
                 self.descriptions.insert(self.workspace_limb, description);
             }
             What::Limb(FromLimb::Facts(batch)) => self.limb_facts(batch),
-            What::Limb(FromLimb::Live(_)) => {}
+            What::Limb(FromLimb::Live(live)) => self.feed.push(live),
         }
     }
 
@@ -885,10 +883,28 @@ impl Brain {
         }
     }
 
+    /// Commit a batch. What it starts running gets a place in the live
+    /// feed before a face can see it start; what it ends leaves the feed
+    /// once the journal holds how it ended.
     fn commit(&mut self, by: Author, batch: Batch) -> Result<(), Refused> {
-        let records = self.journal.commit(by, batch, now())?;
+        let started: Vec<Running> = batch.facts.iter().filter_map(starts).collect();
+        for running in &started {
+            self.feed.start(*running);
+        }
+        let records = match self.journal.commit(by, batch, now()) {
+            Ok(records) => records,
+            Err(e) => {
+                for running in started {
+                    self.feed.end(running);
+                }
+                return Err(e);
+            }
+        };
         for record in &records {
             self.log(record);
+            if let Some(running) = ends(&record.fact) {
+                self.feed.end(running);
+            }
         }
         if let Some(last) = self.state().last() {
             self.reader.grew(last);
@@ -961,6 +977,24 @@ impl Brain {
 }
 
 /// A failed outcome saying why, and its output's bytes.
+/// What a fact starts running, with live progress to show.
+fn starts(fact: &Fact) -> Option<Running> {
+    match fact {
+        Fact::ModelCall(id, ModelCallEvent::Sent(_)) => Some(Running::Model(*id)),
+        Fact::Call(id, CallEvent::Dispatched) => Some(Running::Call(*id)),
+        _ => None,
+    }
+}
+
+/// What a fact ends.
+fn ends(fact: &Fact) -> Option<Running> {
+    match fact {
+        Fact::ModelCall(id, ModelCallEvent::Ended { .. }) => Some(Running::Model(*id)),
+        Fact::Call(id, CallEvent::Settled(_)) => Some(Running::Call(*id)),
+        _ => None,
+    }
+}
+
 fn failed(said: &str) -> (Vec<u8>, Outcome) {
     let model = render::blocks(&[render::text(said)]);
     let output = Output {
