@@ -1,6 +1,6 @@
 //! Identifiers, positions and time.
 //!
-//! Three kinds of name. Things that change over time (a task, a call, a
+//! Three kinds of name. Things that change over time (an agent, a call, a
 //! request, a delivery, an environment, a limb) get generated ids, unique
 //! across brains, so federated brains can hold each other's records without
 //! renaming anything. Immutable bytes are named by their digest, a
@@ -83,9 +83,9 @@ macro_rules! id {
 }
 
 id!(
-    /// A [`crate::task::Task`]: one agent's mandate over its whole life,
+    /// A [`crate::agent::Agent`]: one agent's mandate over its whole life,
     /// across every context it works in.
-    TaskId
+    AgentId
 );
 id!(
     /// A [`crate::call::Call`]. Shared with the limb that runs it, which runs

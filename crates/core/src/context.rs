@@ -45,16 +45,16 @@ impl FromStr for EntryId {
 /// An entry is small structure; its bytes are [values](ValueId). So the
 /// tree is a Merkle tree over the value store, and it lives in the journal:
 /// each entry arrives inside the fact that first sends or receives it (a
-/// root in [`crate::task::Start`], a request's messages in
+/// root in [`crate::agent::Start`], a request's messages in
 /// [`crate::model_call::ModelCall::appends`], a response in
 /// [`crate::model_call::Ending::Responded`]), so the fold holds the whole
 /// tree and refuses a head that does not grow along it. Nothing else
 /// stores entries.
 ///
 /// Fork, fresh start, shared seed, handover, resume, rewind and aside are
-/// all a task's head moving to an entry ([`crate::task`]): to the parent's
+/// all an agent's head moving to an entry ([`crate::agent`]): to the parent's
 /// response (a fork), to a new root (a fresh start or a handover), to a
-/// finished task's last entry (a resume), back along its own chain (a
+/// finished agent's last entry (a resume), back along its own chain (a
 /// rewind). Fresh siblings given the same shared brief and attachments
 /// append the same messages to the same root, so the shared seed Max
 /// describes in `handoff-improvements.md` is one set of nodes and one cache
@@ -119,7 +119,7 @@ pub enum Entry {
 /// instructions changed in place cannot be expressed. The first block of
 /// `system` is the provider identity string the subscription requires.
 ///
-/// Which limb runs each tool is not here: it is the task's
+/// Which limb runs each tool is not here: it is the agent's
 /// [`crate::environment::Binding`], made from the same descriptions as
 /// `tools` by [`crate::environment::Binding::new`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,9 +255,9 @@ fn digest(fields: &[&[u8]]) -> EntryId {
 /// file open" or "this was attached at the handover".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Rendered {
-    /// A call's settlement: a tool result for one of the task's own tool uses
+    /// A call's settlement: a tool result for one of the agent's own tool uses
     /// (a spawn's result is its children's), an attachment shown as a tool
-    /// call the task made, a background call's result, or one of Max's
+    /// call the agent made, a background call's result, or one of Max's
     /// actions in the chat.
     Call(CallId),
     /// Max's words, or a turn the harness asked for.
@@ -274,12 +274,12 @@ pub enum Rendered {
 /// variant when the brain first renders one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Note {
-    /// What every member of a fresh task's spawn shares, verbatim: its
+    /// What every member of a fresh agent's spawn shares, verbatim: its
     /// mandate's brief, then Max's quoted words, each marked as his
-    /// ([`crate::task::Mandate::quotes`]). After the attachments and before
-    /// the task's own mandate, so siblings share one prefix.
+    /// ([`crate::agent::Mandate::quotes`]). After the attachments and before
+    /// the agent's own mandate, so siblings share one prefix.
     Brief,
-    /// The task's mandate: at a fork, as user text after the answers to the
+    /// The agent's mandate: at a fork, as user text after the answers to the
     /// forked response's tool uses; at a fresh start, after the shared brief;
     /// after a handover, at the top.
     Mandate,

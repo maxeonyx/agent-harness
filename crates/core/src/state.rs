@@ -10,15 +10,17 @@ use crate::context::{Entry, EntryId};
 use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::{Audience, Description, Environment, Limb, LimbKind, Reach};
 use crate::id::{
-    CallId, DeliveryId, EnvironmentId, FaceId, InstanceId, LimbId, ModelCallId, Seq, TaskId,
+    CallId, DeliveryId, EnvironmentId, FaceId, InstanceId, LimbId, ModelCallId, Seq, AgentId,
     Timestamp, ValueId,
 };
-use crate::journal::{Author, Fact, Launched, Record, Rejected};
+use crate::agent::{
+    Agent, AgentEvent, Cancel, Canceller, Created, Drain, Life, Mode, Move, Origin, Phase, Scope,
+    Start, leaving,
+};
+use crate::journal::{Author, Fact, Launched, Record, Refusal, Rejected};
 use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
 use crate::resource::{Change, ResourceKey, Version};
-use crate::task::{
-    Created, Drain, Life, Mode, Move, Origin, Phase, Scope, Start, Stopper, Task, TaskEvent, ends,
-};
+use crate::task::{Exit, Owner, Status, Task};
 
 /// Everything the journal says is true now.
 ///
@@ -29,7 +31,7 @@ use crate::task::{
 /// a store. Every view a face, the scheduler or the brain's loop needs is a
 /// method here, computed from the folded identities rather than kept beside
 /// them, so none can disagree with another: who reads a call is read off the
-/// tasks ([`Task::awaited`]), what a task is waiting on is read off its life,
+/// agents ([`Agent::awaited`]), what an agent is waiting on is read off its life,
 /// and the brain's whole to-do list is [`State::todo`].
 ///
 /// It is persistent: every map shares structure with the state it was
@@ -44,21 +46,21 @@ use crate::task::{
 /// breakpoint and a rewind are checked against the tree, and a face renders
 /// any context from the fold and the value store alone.
 ///
-/// What it guarantees, by refusing every record that would break it: a task
+/// What it guarantees, by refusing every record that would break it: an agent
 /// is in exactly one [`Life`], and a live one has a context; no request
-/// leaves a tool use unanswered, is sent while its task drains, or grows a
-/// context other than its task's; a scope's call settles only when every
-/// member is done, and nothing joins a closed scope; only Max starts tasks
+/// leaves a tool use unanswered, is sent while its agent drains, or grows a
+/// context other than its agent's; a scope's call settles only when every
+/// member is done, and nothing joins a closed scope; only Max starts agents
 /// in his scope, and an agent starts only what its environment lists,
 /// through its own meta call; a place is filled only by a limb of its kind,
-/// and a root routes only to its task's environment and places, and only
+/// and a root routes only to its agent's environment and places, and only
 /// tools those limbs offer; a call by an agent goes only along its binding;
-/// a standing task lives only in Max's scope; an aside joins only the scope
+/// a standing agent lives only in Max's scope; an aside joins only the scope
 /// its source waits on; a fork starts where its source is; a settled call moves again only from unknown to its real outcome; a
 /// meta call is never run twice; a limb never changes kind; a limb states
 /// only its own description, its own calls' outcomes and its own resources'
 /// changes, and the brain only what is its to say; a quote is Max's words,
-/// heard by the task that quotes them; and Max's facts say what he had
+/// heard by the agent that quotes them; and Max's facts say what he had
 /// seen, through the face he used.
 ///
 /// What it leaves to the brain, as policy over these views: what to render
@@ -88,7 +90,7 @@ pub struct State {
     last: Option<Seq>,
     launch: Option<(Mark, Launched)>,
     entries: OrdMap<EntryId, Entry>,
-    tasks: OrdMap<TaskId, Task>,
+    agents: OrdMap<AgentId, Agent>,
     calls: OrdMap<CallId, CallRecord>,
     model_calls: OrdMap<ModelCallId, ModelCallRecord>,
     deliveries: OrdMap<DeliveryId, Delivered>,
@@ -99,11 +101,11 @@ pub struct State {
     resources: OrdMap<ResourceKey, Current>,
     /// Max's words, each with when he first said them.
     said: OrdMap<ValueId, Mark>,
-    /// Which of Max's words each task has heard. A task continuing another's
+    /// Which of Max's words each agent has heard. An agent continuing another's
     /// context (a fork, resume or aside) starts with its source's set, shared.
-    heard: OrdMap<TaskId, OrdSet<ValueId>>,
+    heard: OrdMap<AgentId, OrdSet<ValueId>>,
     ranking: Ranking,
-    focus: OrdMap<FaceId, TaskId>,
+    focus: OrdMap<FaceId, AgentId>,
     limited_until: Option<Timestamp>,
     open: Open,
 }
@@ -114,22 +116,22 @@ pub struct State {
 /// facts in [`State::apply`], never stated beside them.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Open {
-    /// Tasks not done.
-    tasks: OrdSet<TaskId>,
+    /// Agents not done.
+    agents: OrdSet<AgentId>,
     /// Calls not settled.
     calls: OrdSet<CallId>,
     /// Model calls not ended.
     model_calls: OrdSet<ModelCallId>,
-    /// Every task of each scope, in order of creation.
-    scopes: OrdMap<Scope, Vec<TaskId>>,
+    /// Every agent of each scope, in order of creation.
+    scopes: OrdMap<Scope, Vec<AgentId>>,
     /// The model call each response came from.
     responses: OrdMap<EntryId, ModelCallId>,
-    /// Each task's last model call to end.
-    last_turn: OrdMap<TaskId, ModelCallId>,
-    /// Tasks told they are lingering ([`Prompt::Lingering`]).
-    lingered: OrdSet<TaskId>,
+    /// Each agent's last model call to end.
+    last_turn: OrdMap<AgentId, ModelCallId>,
+    /// Agents told they are lingering ([`Prompt::Lingering`]).
+    lingered: OrdSet<AgentId>,
     /// Asides told the rest of their scope is done ([`Prompt::Unblocked`]).
-    unblocked: OrdSet<TaskId>,
+    unblocked: OrdSet<AgentId>,
     /// The last model call to report the quota.
     quota: Option<ModelCallId>,
 }
@@ -156,13 +158,19 @@ impl Mark {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CallRecord {
     pub call: Call,
-    /// The limb that runs it: its caller's, or for an agent, its task's
+    /// Who owns it now: its caller, or for the harness's call the owner of
+    /// the call it runs for, until an agent hands it up
+    /// ([`CallEvent::Handed`]).
+    pub owner: Owner,
+    /// The limb that runs it: its caller's, or for an agent, its agent's
     /// binding's route for the tool. `None` when the binding has no such
     /// tool, which the brain answers as a failed call
     /// ([`Todo::Unroutable`]).
     pub limb: Option<LimbId>,
     pub made: Mark,
     pub dispatched: Option<Dispatch>,
+    /// When its owner asked for it to be stopped ([`CallEvent::Cancel`]).
+    pub cancelled: Option<Mark>,
     /// When its limb was last asked to stop it.
     pub stopping: Option<Mark>,
     pub settled: Option<Settlement>,
@@ -252,7 +260,7 @@ pub struct Reached {
     pub at: Mark,
 }
 
-/// Something a task's context embodies that has moved since, and that it
+/// Something an agent's context embodies that has moved since, and that it
 /// has not been told of: one line of its next request's notice.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stale {
@@ -265,7 +273,7 @@ pub struct Stale {
     pub content: Option<ValueId>,
 }
 
-/// What a task is waiting on, and since when: the throbber, and the answer
+/// What an agent is waiting on, and since when: the throbber, and the answer
 /// to "why is nothing happening?".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Waiting {
@@ -309,7 +317,14 @@ pub enum Waiting {
         since: Timestamp,
         ask: Option<CallId>,
     },
-    /// On a change to what it embodies, or the background work it started.
+    /// Leaving, on what it owns to exit: its calls, and through a spawn
+    /// the members of its scope. Empty when everything has, and the brain is
+    /// telling it to tidy up.
+    Exiting {
+        owned: Vec<Task>,
+        since: Timestamp,
+    },
+    /// On a change to what it embodies, or the background work it owns.
     Listening {
         background: Vec<CallId>,
         since: Timestamp,
@@ -327,65 +342,71 @@ pub enum Waiting {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Todo {
     /// Connect to this plugin limb, starting its process if need be: a live
-    /// task can reach it, or a call to it is unsettled, and it is not
+    /// agent can reach it, or a call to it is unsettled, and it is not
     /// connected. A limb nobody needs is never on the list, so its process
     /// can be let go.
     Connect(LimbId),
-    /// The task is starting and every limb it can reach has connected and
+    /// The agent is starting and every limb it can reach has connected and
     /// described itself: render its first root from their descriptions and
     /// commit [`Move::Root`].
-    Root(TaskId),
-    /// Build and send the task's next request, rendering every pending
+    Root(AgentId),
+    /// Build and send the agent's next request, rendering every pending
     /// input that the policy includes (every result, always). If its last
     /// turn stopped short ([`Stop`]), the policy decides how to go on.
-    Send(TaskId),
+    Send(AgentId),
     /// A request an earlier brain sent and never saw end: end it as
-    /// [`Ending::Lost`], after which its task sends again.
+    /// [`Ending::Lost`], after which its agent sends again.
     Lost(ModelCallId),
     /// Send the call to its limb (`ToLimb::Run`), or for a limb the brain
     /// runs, run it and commit its effects with the dispatch. A plugin's
     /// call is due again whenever its limb has connected since it was last
     /// sent.
     Dispatch(CallId),
-    /// The call's tool is not in its task's binding: settle it as failed,
+    /// The call's tool is not in its agent's binding: settle it as failed,
     /// saying so.
     Unroutable(CallId),
-    /// Stop the call. If it was dispatched and its limb is connected, ask
-    /// it (`ToLimb::Stop`) and commit [`CallEvent::Stopping`]; if its limb
-    /// is unreached, settle it as unknown, so a dead limb never holds a
-    /// task (its real outcome is still taken if it comes back); if it was
-    /// never dispatched, settle it as interrupted.
-    Interrupt(CallId),
-    /// Stop reading the task's response.
-    Abandon(ModelCallId),
-    /// Stop a member of a scope whose owner is stopping.
-    Stop(TaskId),
+    /// Cancel a task whose owner is draining: the cascade step of the
+    /// [cancel protocol](crate::task::Task), one item for every kind.
+    ///
+    /// - A request: stop reading it, which ends it as abandoned.
+    /// - A call: if it was dispatched and its limb is connected, ask it
+    ///   (`ToLimb::Stop`) and commit [`CallEvent::Stopping`]; if its limb is
+    ///   unreached, settle it as unknown, so a dead limb never holds an agent
+    ///   (its real outcome is still taken if it comes back); if it was never
+    ///   dispatched, settle it as interrupted.
+    /// - An agent, a member of a scope whose owner is leaving: commit its
+    ///   [`AgentEvent::Cancel`] by [`Canceller::Owner`], with its owner's
+    ///   choice of a tidy-up turn ([`State::cancel_for`]).
+    Cancel(Task),
+    /// A leaving agent's tidy-up turn is due: everything it owned has
+    /// exited. Deliver [`Prompt::TidyUp`].
+    Tidy(AgentId),
     /// Every member of this spawn's scope is done: settle it with their
     /// outcomes.
     Settle(CallId),
     /// Every member of an aside's scope but the asides is done, and it has
     /// not been told: deliver [`Prompt::Unblocked`].
-    Unblock(TaskId),
-    /// An autonomous task ended its turn with background work running (an
+    Unblock(AgentId),
+    /// An autonomous agent ended its turn with background work running (an
     /// unanswered ask of Max included) and has not been told what that
     /// means: deliver [`Prompt::Lingering`].
-    Linger(TaskId),
+    Linger(AgentId),
 }
 
 impl State {
-    /// Store a task's new state, and whether it is still open.
-    fn put(&mut self, task: Task) {
-        if task.is_done() {
-            self.open.tasks.remove(&task.id);
+    /// Store an agent's new state, and whether it is still open.
+    fn put(&mut self, agent: Agent) {
+        if agent.is_done() {
+            self.open.agents.remove(&agent.id);
         } else {
-            self.open.tasks.insert(task.id);
+            self.open.agents.insert(agent.id);
         }
-        self.tasks.insert(task.id, task);
+        self.agents.insert(agent.id, agent);
     }
 
-    /// The tasks not done.
-    fn live(&self) -> impl Iterator<Item = &Task> {
-        self.open.tasks.iter().filter_map(|id| self.tasks.get(id))
+    /// The agents not done.
+    fn live(&self) -> impl Iterator<Item = &Agent> {
+        self.open.agents.iter().filter_map(|id| self.agents.get(id))
     }
 
     /// Fold `records` into a copy of this state, or refuse the first that
@@ -422,8 +443,8 @@ impl State {
                 // A connection belongs to the brain that made it.
                 self.reach.clear();
             }
-            Fact::Task(id, TaskEvent::Created(created)) => self.create(*id, created, record)?,
-            Fact::Task(id, event) => self.task_event(*id, event, record)?,
+            Fact::Agent(id, AgentEvent::Created(created)) => self.create(*id, created, record)?,
+            Fact::Agent(id, event) => self.agent_event(*id, event, record)?,
             Fact::ModelCall(id, event) => self.fold_model_call(*id, event, record)?,
             Fact::Call(id, event) => self.fold_call(*id, event, record)?,
             Fact::Delivery(delivery) => self.deliver(delivery, record)?,
@@ -447,7 +468,7 @@ impl State {
             Fact::Described { limb, description } => {
                 let defined = self.limbs.get(limb).ok_or(Rejected::Unknown)?;
                 if defined.kind.is_brains() {
-                    return Err(Rejected::NotForTask);
+                    return Err(Rejected::NotForAgent);
                 }
                 if self.connected(*limb).is_none() {
                     return Err(Rejected::Unreached);
@@ -463,7 +484,7 @@ impl State {
             Fact::Reach { limb, reach } => {
                 let defined = self.limbs.get(limb).ok_or(Rejected::Unknown)?;
                 if defined.kind.is_brains() {
-                    return Err(Rejected::NotForTask);
+                    return Err(Rejected::NotForAgent);
                 }
                 self.reach.insert(
                     *limb,
@@ -474,14 +495,15 @@ impl State {
                 );
             }
             Fact::Ranking(ranking) => self.ranking = ranking.clone(),
-            Fact::Focus(focus) => match focus.task {
-                Some(task) => {
-                    self.focus.insert(focus.face, task);
+            Fact::Focus(focus) => match focus.agent {
+                Some(agent) => {
+                    self.focus.insert(focus.face, agent);
                 }
                 None => {
                     self.focus.remove(&focus.face);
                 }
             },
+            Fact::Refused(refusal) => self.refused(refusal, record)?,
         }
         self.last = Some(record.seq);
         Ok(())
@@ -490,13 +512,13 @@ impl State {
     /// Whether `by` may state `fact`.
     ///
     /// The brain states what it decides and observes, but never Max's words,
-    /// his marking a task done, his stop, what his face shows, a task no agent's call created, a
+    /// his marking an agent done, his stop, what his face shows, an agent no agent's call created, a
     /// limb's description, how a call a limb was sent ended, or a change to
     /// a resource it does not own (its own limbs' resources, such as the
     /// role files the meta limb reads, are its to state). A limb states only
     /// its own description, how its own dispatched calls ended and how its
     /// own resources changed. Max states his words, his calls and his
-    /// answers, his controls over the tree, the tasks of his own scope, what
+    /// answers, his controls over the tree, the agents of his own scope, what
     /// his own face shows, his presence, and the definitions of
     /// environments and limbs; never what a model or a limb did.
     fn authorised(&self, by: &Author, fact: &Fact) -> bool {
@@ -511,10 +533,16 @@ impl State {
                     content: Content::Words(_) | Content::Prompt(Prompt::Done),
                     ..
                 })
-                | Fact::Task(_, TaskEvent::Drain(Drain::Stop(Stopper::Max)))
+                | Fact::Agent(
+                    _,
+                    AgentEvent::Cancel(Cancel {
+                        by: Canceller::Max,
+                        ..
+                    }),
+                )
                 | Fact::Focus(_)
                 | Fact::Described { .. } => false,
-                Fact::Task(_, TaskEvent::Created(created)) => created.by.is_some(),
+                Fact::Agent(_, AgentEvent::Created(created)) => created.by.is_some(),
                 Fact::Call(_, CallEvent::Made(call)) => !matches!(call.caller, Caller::Max { .. }),
                 Fact::Call(id, CallEvent::Settled(outcome)) => {
                     self.calls.get(id).is_some_and(|c| {
@@ -539,6 +567,10 @@ impl State {
                     })
                 }
                 Fact::Change(change) => brains(change.resource.limb),
+                Fact::Call(id, CallEvent::Cancel) => self
+                    .calls
+                    .get(id)
+                    .is_some_and(|c| matches!(c.owner, Owner::Agent(_))),
                 _ => true,
             },
             Author::Limb(limb) => match fact {
@@ -558,17 +590,16 @@ impl State {
             Author::Max { face, seen } => {
                 *seen < self.next()
                     && match fact {
-                        Fact::Task(_, event) => match event {
-                            TaskEvent::Created(created) => {
+                        Fact::Agent(_, event) => match event {
+                            AgentEvent::Created(created) => {
                                 created.by.is_none()
                                     && (created.scope == Scope::Max
                                         || matches!(created.origin, Origin::Aside { .. }))
                             }
-                            TaskEvent::Drain(drain) => {
-                                matches!(drain, Drain::ToMax | Drain::Stop(Stopper::Max))
-                            }
-                            TaskEvent::Moved(movement) => matches!(movement, Move::Rewind { .. }),
-                            TaskEvent::ModeSet(_) | TaskEvent::Renamed(_) | TaskEvent::Held(_) => {
+                            AgentEvent::Interrupt => true,
+                            AgentEvent::Cancel(cancel) => cancel.by == Canceller::Max,
+                            AgentEvent::Moved(movement) => matches!(movement, Move::Rewind { .. }),
+                            AgentEvent::ModeSet(_) | AgentEvent::Renamed(_) | AgentEvent::Held(_) => {
                                 true
                             }
                         },
@@ -578,6 +609,9 @@ impl State {
                         ),
                         Fact::Call(_, CallEvent::Made(call)) => {
                             matches!(call.caller, Caller::Max { .. })
+                        }
+                        Fact::Call(id, CallEvent::Cancel) => {
+                            self.calls.get(id).is_some_and(|c| c.owner == Owner::Max)
                         }
                         Fact::Call(id, CallEvent::Settled(_)) => self
                             .calls
@@ -591,7 +625,8 @@ impl State {
                         | Fact::ModelCall(..)
                         | Fact::Call(..)
                         | Fact::Described { .. }
-                        | Fact::Reach { .. } => false,
+                        | Fact::Reach { .. }
+                        | Fact::Refused(_) => false,
                     }
             }
         }
@@ -618,15 +653,15 @@ impl State {
     }
 
     /// Max said `words` to `to`.
-    fn say(&mut self, words: ValueId, to: TaskId, at: Mark) {
+    fn say(&mut self, words: ValueId, to: AgentId, at: Mark) {
         if !self.said.contains_key(&words) {
             self.said.insert(words, at);
         }
         self.heard.entry(to).or_default().insert(words);
     }
 
-    fn create(&mut self, id: TaskId, created: &Created, record: &Record) -> Result<(), Rejected> {
-        if self.tasks.contains_key(&id) {
+    fn create(&mut self, id: AgentId, created: &Created, record: &Record) -> Result<(), Rejected> {
+        if self.agents.contains_key(&id) {
             return Err(Rejected::Exists);
         }
         let creator = match created.by {
@@ -650,7 +685,7 @@ impl State {
                 return Err(Rejected::Unheard);
             }
         }
-        let task = Task::new(id, created, record.at, self)?;
+        let agent = Agent::new(id, created, record.at, self)?;
         let mark = Mark::of(record);
         // What its context holds, it has heard.
         if let Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from } =
@@ -666,18 +701,18 @@ impl State {
         for quote in &created.mandate.quotes {
             self.heard.entry(id).or_default().insert(*quote);
         }
-        self.open.scopes.entry(task.scope).or_default().push(id);
-        self.put(task);
+        self.open.scopes.entry(agent.scope).or_default().push(id);
+        self.put(agent);
         Ok(())
     }
 
-    /// The task whose meta call `by` creates a task, if that call may: it
+    /// The agent whose meta call `by` creates an agent, if that call may: it
     /// is still running, it is an agent's call to the meta limb, the new
-    /// task joins the scope the call opens or, as a sibling, its caller's
-    /// own spawn scope, and it is a fork of the caller, a resume of a task
+    /// agent joins the scope the call opens or, as a sibling, its caller's
+    /// own spawn scope, and it is a fork of the caller, a resume of an agent
     /// the caller owned, or fresh in an environment the caller's own
     /// environment starts.
-    fn creator(&self, by: CallId, created: &Created) -> Result<TaskId, Rejected> {
+    fn creator(&self, by: CallId, created: &Created) -> Result<AgentId, Rejected> {
         let call = self.calls.get(&by).ok_or(Rejected::Unknown)?;
         if call.settled.is_some() {
             return Err(Rejected::Finished);
@@ -686,22 +721,25 @@ impl State {
             .limb
             .and_then(|l| self.limbs.get(&l))
             .is_some_and(|l| l.kind == LimbKind::Meta);
-        let Caller::Agent { task: caller, .. } = call.call.caller else {
+        let Caller::Agent { agent: caller, .. } = call.call.caller else {
             return Err(Rejected::CannotStart);
         };
         if !meta {
             return Err(Rejected::CannotStart);
         }
-        let task = self.tasks.get(&caller).ok_or(Rejected::Unknown)?;
+        let agent = self.agents.get(&caller).ok_or(Rejected::Unknown)?;
+        if agent.drain().is_some() {
+            return Err(Rejected::Draining);
+        }
         let scope = created.scope == Scope::Spawn(by)
-            || (created.scope == task.scope && task.scope != Scope::Max);
+            || (created.scope == agent.scope && agent.scope != Scope::Max);
         if !scope {
             return Err(Rejected::WrongScope);
         }
         let origin = match &created.origin {
             Origin::Fresh { environment, .. } => self
                 .environments
-                .get(&task.environment)
+                .get(&agent.environment)
                 .is_some_and(|e| e.starts.contains(environment)),
             Origin::Fork { from } => *from == caller,
             Origin::Resume { from } => self.owner(*from) == Some(caller),
@@ -715,8 +753,8 @@ impl State {
 
     /// An aside joins the scope its source's round waits on while members
     /// of it still run, and is a chat with Max.
-    fn check_aside(&self, from: TaskId, created: &Created) -> Result<(), Rejected> {
-        let source = self.tasks.get(&from).ok_or(Rejected::Unknown)?;
+    fn check_aside(&self, from: AgentId, created: &Created) -> Result<(), Rejected> {
+        let source = self.agents.get(&from).ok_or(Rejected::Unknown)?;
         let waits = match (created.scope, source.phase()) {
             (Scope::Spawn(call), Some(Phase::Acting(step))) => {
                 step.outstanding.contains(&call)
@@ -773,18 +811,18 @@ impl State {
         })
     }
 
-    /// A task's new root must route only to its environment's limbs and its
+    /// An agent's new root must route only to its environment's limbs and its
     /// places, only tools those limbs offer agents, each tool once, and
     /// attach only the harness's calls along the binding.
-    fn check_start(&self, task: &Task, start: &Start) -> Result<(), Rejected> {
+    fn check_start(&self, agent: &Agent, start: &Start) -> Result<(), Rejected> {
         let environment = self
             .environments
-            .get(&task.environment)
+            .get(&agent.environment)
             .ok_or(Rejected::Unknown)?;
         let mut tools = BTreeSet::new();
         for route in &start.binding.routes {
             let reachable = environment.limbs.contains(&route.limb)
-                || task.places.values().any(|l| *l == route.limb);
+                || agent.places.values().any(|l| *l == route.limb);
             if !reachable {
                 return Err(Rejected::WrongEnvironment);
             }
@@ -799,7 +837,7 @@ impl State {
         for id in &start.awaits {
             let call = self.calls.get(id).ok_or(Rejected::Unknown)?;
             let Caller::Meta { limb, .. } = call.call.caller else {
-                return Err(Rejected::NotForTask);
+                return Err(Rejected::NotForAgent);
             };
             if start.binding.limb(&call.call.tool) != Some(limb) {
                 return Err(Rejected::WrongEnvironment);
@@ -808,55 +846,58 @@ impl State {
         Ok(())
     }
 
-    fn task_event(
+    fn agent_event(
         &mut self,
-        id: TaskId,
-        event: &TaskEvent,
+        id: AgentId,
+        event: &AgentEvent,
         record: &Record,
     ) -> Result<(), Rejected> {
-        let task = self.tasks.get(&id).ok_or(Rejected::Unknown)?;
+        let agent = self.agents.get(&id).ok_or(Rejected::Unknown)?;
         let mut root = None;
         match event {
-            TaskEvent::Moved(Move::Handover { call, start }) => {
+            AgentEvent::Moved(Move::Handover { call, start }) => {
                 let made = self.calls.get(call).ok_or(Rejected::Unknown)?;
-                if !matches!(made.call.caller, Caller::Agent { task, .. } if task == id) {
-                    return Err(Rejected::NotForTask);
+                if !matches!(made.call.caller, Caller::Agent { agent, .. } if agent == id) {
+                    return Err(Rejected::NotForAgent);
                 }
-                self.check_start(task, start)?;
+                self.check_start(agent, start)?;
                 root = Some(&start.root);
             }
-            TaskEvent::Moved(Move::Root(start)) => {
-                self.check_start(task, start)?;
+            AgentEvent::Moved(Move::Root(start)) => {
+                self.check_start(agent, start)?;
                 root = Some(&start.root);
             }
-            TaskEvent::Moved(Move::Rewind { to }) => {
-                let on_chain = task
+            AgentEvent::Moved(Move::Rewind { to }) => {
+                let on_chain = agent
                     .context()
                     .is_some_and(|c| self.descends(c.head, *to) && self.descends(*to, c.start));
                 if !on_chain || !self.ended_turn(*to) {
                     return Err(Rejected::Detached);
                 }
             }
-            TaskEvent::Drain(Drain::ToMax) if self.scoped(task) => {
+            AgentEvent::Interrupt if self.scoped(agent) => {
                 return Err(Rejected::Scoped);
             }
-            TaskEvent::Drain(Drain::Stop(Stopper::Owner)) => {
-                let ending = self
+            AgentEvent::Cancel(Cancel {
+                by: Canceller::Owner,
+                ..
+            }) => {
+                let owner_leaving = self
                     .owner(id)
-                    .and_then(|o| self.tasks.get(&o))
-                    .is_some_and(|o| ends(o.drain()));
-                if !ending {
-                    return Err(Rejected::NotForTask);
+                    .and_then(|o| self.agents.get(&o))
+                    .is_some_and(|o| leaving(o.drain()).is_some());
+                if !owner_leaving {
+                    return Err(Rejected::NotForAgent);
                 }
             }
             _ => {}
         }
-        let mut task = task.clone();
-        task.apply(record, self)?;
+        let mut agent = agent.clone();
+        agent.apply(record, self)?;
         if let Some(root) = root {
             self.entries.insert(root.id(), Entry::Root(root.clone()));
         }
-        self.put(task);
+        self.put(agent);
         Ok(())
     }
 
@@ -893,7 +934,7 @@ impl State {
                 if self.model_calls.contains_key(&id) {
                     return Err(Rejected::Exists);
                 }
-                let task = self.tasks.get(&call.task).ok_or(Rejected::Unknown)?;
+                let agent = self.agents.get(&call.agent).ok_or(Rejected::Unknown)?;
                 if !self.entries.contains_key(&call.base) {
                     return Err(Rejected::Detached);
                 }
@@ -904,9 +945,9 @@ impl State {
                 if !call.breakpoints.iter().all(|b| on_chain(*b)) {
                     return Err(Rejected::Detached);
                 }
-                let mut task = task.clone();
-                task.apply(record, self)?;
-                self.put(task);
+                let mut agent = agent.clone();
+                agent.apply(record, self)?;
+                self.put(agent);
                 for (entry_id, entry) in entries {
                     self.entries.insert(entry_id, entry);
                 }
@@ -943,14 +984,14 @@ impl State {
                 if !sent.calls.is_empty() && !matches!(ending, Ending::Responded { .. }) {
                     return Err(Rejected::Busy);
                 }
-                let owner = sent.call.task;
+                let owner = sent.call.agent;
                 let response = match ending {
                     Ending::Responded { content, .. } => Some(sent.call.response(*content)),
                     _ => None,
                 };
-                let mut task = self.tasks.get(&owner).ok_or(Rejected::Unknown)?.clone();
-                task.apply(record, self)?;
-                self.put(task);
+                let mut agent = self.agents.get(&owner).ok_or(Rejected::Unknown)?.clone();
+                agent.apply(record, self)?;
+                self.put(agent);
                 if let Ending::Limited { until } = ending {
                     self.limited_until = self.limited_until.max(Some(*until));
                 }
@@ -988,6 +1029,15 @@ impl State {
         let mark = Mark::of(record);
         match event {
             CallEvent::Made(call) => self.make(id, call, record),
+            CallEvent::Cancel => {
+                let made = self.calls.get_mut(&id).ok_or(Rejected::Unknown)?;
+                if made.settled.is_some() {
+                    return Err(Rejected::Finished);
+                }
+                made.cancelled.get_or_insert(mark);
+                Ok(())
+            }
+            CallEvent::Handed { to } => self.hand(id, *to, record),
             CallEvent::Dispatched => {
                 let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
                 if made.settled.is_some() {
@@ -1009,8 +1059,7 @@ impl State {
                 if !self.acting_on(id, &made.call) {
                     return Err(Rejected::Busy);
                 }
-                let readers: Vec<&Task> = self.live().filter(|t| t.awaits(id)).collect();
-                if interrupts(id, &made.call, &readers) {
+                if self.cancels(id, made) {
                     return Err(Rejected::Draining);
                 }
                 let first = made.dispatched.map_or(mark, |d| d.first);
@@ -1045,21 +1094,21 @@ impl State {
         let mut thinking = None;
         let mut reader = None;
         let limb = match &call.caller {
-            Caller::Agent { task, tool_use } => {
-                let task = self.tasks.get(task).ok_or(Rejected::Unknown)?;
-                if task.is_done() {
+            Caller::Agent { agent, tool_use } => {
+                let agent = self.agents.get(agent).ok_or(Rejected::Unknown)?;
+                if agent.is_done() {
                     return Err(Rejected::Finished);
                 }
-                let context = task.context().ok_or(Rejected::Starting)?;
+                let context = agent.context().ok_or(Rejected::Starting)?;
                 let limb = context.binding.limb(&call.tool);
-                match (tool_use, task.phase()) {
+                match (tool_use, agent.phase()) {
                     (Some(_), Some(Phase::Thinking(request))) => thinking = Some(*request),
                     (Some(_), _) => return Err(Rejected::Busy),
                     (None, _) if limb.is_none() => return Err(Rejected::Unroutable),
                     (None, _) => {
-                        let mut task = task.clone();
-                        task.apply(record, self)?;
-                        reader = Some(task);
+                        let mut agent = agent.clone();
+                        agent.apply(record, self)?;
+                        reader = Some(agent);
                     }
                 }
                 limb
@@ -1070,16 +1119,16 @@ impl State {
                     return Err(Rejected::Unoffered);
                 }
                 if let Some(chat) = chat {
-                    let task = self.tasks.get(chat).ok_or(Rejected::Unknown)?;
-                    let routed = task
+                    let agent = self.agents.get(chat).ok_or(Rejected::Unknown)?;
+                    let routed = agent
                         .context()
                         .is_some_and(|c| c.binding.routes.iter().any(|r| r.limb == *limb));
                     if !routed {
                         return Err(Rejected::WrongEnvironment);
                     }
-                    let mut task = task.clone();
-                    task.apply(record, self)?;
-                    reader = Some(task);
+                    let mut agent = agent.clone();
+                    agent.apply(record, self)?;
+                    reader = Some(agent);
                 }
                 Some(*limb)
             }
@@ -1094,22 +1143,29 @@ impl State {
                 Some(*limb)
             }
         };
+        let owner = match &call.caller {
+            Caller::Agent { agent, .. } => Owner::Agent(*agent),
+            Caller::Max { .. } => Owner::Max,
+            Caller::Meta { call: by, .. } => self.calls.get(by).map_or(Owner::Max, |c| c.owner),
+        };
         if let Some(request) = thinking
             && let Some(sent) = self.model_calls.get_mut(&request)
         {
             sent.calls.push(id);
         }
-        if let Some(task) = reader {
-            self.put(task);
+        if let Some(agent) = reader {
+            self.put(agent);
         }
         self.open.calls.insert(id);
         self.calls.insert(
             id,
             CallRecord {
                 call: call.clone(),
+                owner,
                 limb,
                 made: Mark::of(record),
                 dispatched: None,
+                cancelled: None,
                 stopping: None,
                 settled: None,
                 late: None,
@@ -1135,35 +1191,35 @@ impl State {
         }
         // Who reads it: whoever awaits it now, or for a late outcome, the
         // context its first outcome reached, if it is still live.
-        let readers: Vec<&Task> = if late {
+        let readers: Vec<&Agent> = if late {
             match made.call.caller {
-                Caller::Agent { task, .. }
+                Caller::Agent { agent, .. }
                 | Caller::Max {
-                    chat: Some(task), ..
+                    chat: Some(agent), ..
                 } => self
-                    .tasks
-                    .get(&task)
+                    .agents
+                    .get(&agent)
                     .filter(|t| !t.is_done())
                     .into_iter()
                     .collect(),
                 Caller::Max { chat: None, .. } | Caller::Meta { .. } => Vec::new(),
             }
         } else {
-            // A finished task still reads Max's actions in its chat.
+            // A finished agent still reads Max's actions in its chat.
             let chat = match made.call.caller {
-                Caller::Max { chat: Some(t), .. } => self.tasks.get(&t).filter(|t| t.is_done()),
+                Caller::Max { chat: Some(t), .. } => self.agents.get(&t).filter(|t| t.is_done()),
                 _ => None,
             };
             self.live().chain(chat).filter(|t| t.awaits(id)).collect()
         };
         let mut touched = Vec::with_capacity(readers.len());
         for reader in readers {
-            let mut task = reader.clone();
-            task.apply(record, self)?;
-            touched.push(task);
+            let mut agent = reader.clone();
+            agent.apply(record, self)?;
+            touched.push(agent);
         }
-        for task in touched {
-            self.put(task);
+        for agent in touched {
+            self.put(agent);
         }
         let mark = Mark::of(record);
         // Max's answer to a question is his words, heard by whoever asked.
@@ -1188,17 +1244,79 @@ impl State {
         Ok(())
     }
 
+    /// An agent hands one of its background calls up to its own owner.
+    fn hand(&mut self, id: CallId, to: Owner, record: &Record) -> Result<(), Rejected> {
+        let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
+        if made.settled.is_some() {
+            return Err(Rejected::Finished);
+        }
+        let Owner::Agent(from) = made.owner else {
+            return Err(Rejected::NotForAgent);
+        };
+        let up = self.owner(from).map_or(Owner::Max, Owner::Agent);
+        if to != up {
+            return Err(Rejected::NotForAgent);
+        }
+        let mut giver = self.agents.get(&from).ok_or(Rejected::Unknown)?.clone();
+        giver.apply(record, self)?;
+        let taker = match to {
+            Owner::Agent(parent) => {
+                let mut taker = self.agents.get(&parent).ok_or(Rejected::Unknown)?.clone();
+                taker.apply(record, self)?;
+                Some(taker)
+            }
+            Owner::Max => None,
+        };
+        self.put(giver);
+        if let Some(taker) = taker {
+            self.put(taker);
+        }
+        if let Some(made) = self.calls.get_mut(&id) {
+            made.owner = to;
+        }
+        Ok(())
+    }
+
+    /// A refusal of the brain's own batch is a bug in the brain: the agent
+    /// it concerns is cancelled by the harness, with no tidy-up turn, so the
+    /// brain does not try the same thing forever and everything else carries
+    /// on. A refusal of anyone else's changes nothing.
+    fn refused(&mut self, refusal: &Refusal, record: &Record) -> Result<(), Rejected> {
+        if refusal.by != Author::Brain {
+            return Ok(());
+        }
+        let Some(agent) = refusal
+            .facts
+            .get(refusal.index)
+            .and_then(|f| self.concerns(f))
+            .and_then(|a| self.agents.get(&a))
+            .filter(|a| !a.is_done())
+        else {
+            return Ok(());
+        };
+        let mut agent = agent.clone();
+        let cancel = Cancel {
+            by: Canceller::Harness {
+                reason: format!("the harness refused its own fact: {}", refusal.why),
+            },
+            tidy: false,
+        };
+        agent.cancel(&cancel, record.at)?;
+        self.put(agent);
+        Ok(())
+    }
+
     fn deliver(&mut self, delivery: &Delivery, record: &Record) -> Result<(), Rejected> {
         if self.deliveries.contains_key(&delivery.id) {
             return Err(Rejected::Exists);
         }
-        let mut task = self
-            .tasks
+        let mut agent = self
+            .agents
             .get(&delivery.to)
             .ok_or(Rejected::Unknown)?
             .clone();
-        task.apply(record, self)?;
-        self.put(task);
+        agent.apply(record, self)?;
+        self.put(agent);
         let mark = Mark::of(record);
         match &delivery.content {
             Content::Words(words) => self.say(*words, delivery.to, mark),
@@ -1231,15 +1349,15 @@ impl State {
             return Err(Rejected::Unknown);
         }
         let mut woken = Vec::new();
-        for task in self.live() {
-            if task.mode == Mode::Standing && task.phase() == Some(&Phase::Listening) {
-                let mut task = task.clone();
-                task.apply(record, self)?;
-                woken.push(task);
+        for agent in self.live() {
+            if agent.mode == Mode::Standing && agent.phase() == Some(&Phase::Listening) {
+                let mut agent = agent.clone();
+                agent.apply(record, self)?;
+                woken.push(agent);
             }
         }
-        for task in woken {
-            self.put(task);
+        for agent in woken {
+            self.put(agent);
         }
         self.resources.insert(
             change.resource.clone(),
@@ -1305,17 +1423,17 @@ impl State {
         false
     }
 
-    pub fn task(&self, id: TaskId) -> Option<&Task> {
-        self.tasks.get(&id)
+    pub fn agent(&self, id: AgentId) -> Option<&Agent> {
+        self.agents.get(&id)
     }
 
-    /// Every task, done ones included, in id order.
-    pub fn tasks(&self) -> impl Iterator<Item = &Task> {
-        self.tasks.values()
+    /// Every agent, done ones included, in id order.
+    pub fn agents(&self) -> impl Iterator<Item = &Agent> {
+        self.agents.values()
     }
 
-    /// The tasks not done.
-    pub fn live_tasks(&self) -> impl Iterator<Item = &Task> {
+    /// The agents not done.
+    pub fn live_agents(&self) -> impl Iterator<Item = &Agent> {
         self.live()
     }
 
@@ -1351,11 +1469,11 @@ impl State {
         self.said.get(&words).copied()
     }
 
-    /// Whether `task` has heard Max say `words`: sent to it, given to it as
+    /// Whether `agent` has heard Max say `words`: sent to it, given to it as
     /// its mandate, answered to its question, or quoted in its mandate. What
     /// it may quote on.
-    pub fn heard(&self, task: TaskId, words: ValueId) -> bool {
-        self.heard.get(&task).is_some_and(|w| w.contains(&words))
+    pub fn heard(&self, agent: AgentId, words: ValueId) -> bool {
+        self.heard.get(&agent).is_some_and(|w| w.contains(&words))
     }
 
     pub fn environment(&self, id: EnvironmentId) -> Option<&Environment> {
@@ -1410,8 +1528,8 @@ impl State {
         &self.ranking
     }
 
-    /// The task a face shows Max.
-    pub fn focus(&self, face: FaceId) -> Option<TaskId> {
+    /// The agent a face shows Max.
+    pub fn focus(&self, face: FaceId) -> Option<AgentId> {
         self.focus.get(&face).copied()
     }
 
@@ -1420,28 +1538,28 @@ impl State {
         self.limited_until.filter(|until| *until > now)
     }
 
-    /// The task that owns this one: the caller of its scope's spawn. `None`
+    /// The agent that owns this one: the caller of its scope's spawn. `None`
     /// in Max's scope.
-    pub fn owner(&self, task: TaskId) -> Option<TaskId> {
-        match self.tasks.get(&task)?.scope {
+    pub fn owner(&self, agent: AgentId) -> Option<AgentId> {
+        match self.agents.get(&agent)?.scope {
             Scope::Max => None,
             Scope::Spawn(call) => self.call_owner(call),
         }
     }
 
-    /// The task a call belongs to: its agent, or for the harness's call, the
-    /// task whose call it runs for. Max's calls are his own.
-    pub fn call_owner(&self, call: CallId) -> Option<TaskId> {
+    /// The agent a call belongs to: its agent, or for the harness's call, the
+    /// agent whose call it runs for. Max's calls are his own.
+    pub fn call_owner(&self, call: CallId) -> Option<AgentId> {
         match &self.calls.get(&call)?.call.caller {
-            Caller::Agent { task, .. } => Some(*task),
+            Caller::Agent { agent, .. } => Some(*agent),
             Caller::Max { .. } => None,
             Caller::Meta { call, .. } => self.call_owner(*call),
         }
     }
 
-    /// How the task's last model call to end, ended.
-    pub fn last_turn(&self, task: TaskId) -> Option<&Ended> {
-        let id = self.open.last_turn.get(&task)?;
+    /// How the agent's last model call to end, ended.
+    pub fn last_turn(&self, agent: AgentId) -> Option<&Ended> {
+        let id = self.open.last_turn.get(&agent)?;
         self.model_calls.get(id)?.ended.as_ref()
     }
 
@@ -1453,17 +1571,17 @@ impl State {
             .as_ref()
     }
 
-    /// The tasks in a scope, in order of creation.
-    pub fn members(&self, scope: Scope) -> impl Iterator<Item = &Task> {
+    /// The agents in a scope, in order of creation.
+    pub fn members(&self, scope: Scope) -> impl Iterator<Item = &Agent> {
         let ids = self.open.scopes.get(&scope).map_or(&[][..], Vec::as_slice);
-        ids.iter().filter_map(|id| self.tasks.get(id))
+        ids.iter().filter_map(|id| self.agents.get(id))
     }
 
-    /// Whether the task or any ancestor is held.
-    pub fn held(&self, task: TaskId) -> bool {
-        let mut next = Some(task);
+    /// Whether the agent or any ancestor is held.
+    pub fn held(&self, agent: AgentId) -> bool {
+        let mut next = Some(agent);
         while let Some(id) = next {
-            if self.tasks.get(&id).is_some_and(|t| t.held) {
+            if self.agents.get(&id).is_some_and(|t| t.held) {
                 return true;
             }
             next = self.owner(id);
@@ -1471,15 +1589,15 @@ impl State {
         false
     }
 
-    /// The limbs a task can reach now: its environment's, as currently
+    /// The limbs an agent can reach now: its environment's, as currently
     /// defined, and its places. A new root is made from these.
-    pub fn limbs_of(&self, task: &Task) -> Vec<LimbId> {
+    pub fn limbs_of(&self, agent: &Agent) -> Vec<LimbId> {
         let mut limbs: Vec<LimbId> = self
             .environments
-            .get(&task.environment)
+            .get(&agent.environment)
             .map(|e| e.limbs.clone())
             .unwrap_or_default();
-        limbs.extend(task.places.values().copied());
+        limbs.extend(agent.places.values().copied());
         limbs
     }
 
@@ -1496,11 +1614,11 @@ impl State {
         }
     }
 
-    /// Whether the task's round waits on a scope with members still running,
+    /// Whether the agent's round waits on a scope with members still running,
     /// so the move cannot become Max's until it closes: a face offers an
     /// aside instead of an interrupt.
-    pub fn scoped(&self, task: &Task) -> bool {
-        match task.phase() {
+    pub fn scoped(&self, agent: &Agent) -> bool {
+        match agent.phase() {
             Some(Phase::Acting(step)) => step
                 .outstanding
                 .iter()
@@ -1523,30 +1641,30 @@ impl State {
             .is_some_and(|l| l.kind == LimbKind::Max)
     }
 
-    /// The task's outstanding question to Max: one its round waits on, or
+    /// The agent's outstanding question to Max: one its round waits on, or
     /// one it asked in the background and carried on (a provisional choice
     /// he may overturn).
-    fn ask(&self, task: &Task) -> Option<CallId> {
-        task.awaited().find(|c| self.is_ask(*c))
+    fn ask(&self, agent: &Agent) -> Option<CallId> {
+        agent.awaited().find(|c| self.is_ask(*c))
     }
 
     /// A tool use is acted on only once its response is complete and its
-    /// task is acting on it.
+    /// agent is acting on it.
     fn acting_on(&self, id: CallId, call: &Call) -> bool {
         match call.caller {
             Caller::Agent {
-                task,
+                agent,
                 tool_use: Some(_),
-            } => self.tasks.get(&task).is_some_and(|t| {
+            } => self.agents.get(&agent).is_some_and(|t| {
                 matches!(t.phase(), Some(Phase::Acting(step)) if step.outstanding.contains(&id))
             }),
             _ => true,
         }
     }
 
-    /// What a task is waiting on now.
-    pub fn waiting_on(&self, task: TaskId, now: Timestamp) -> Option<Waiting> {
-        let t = self.tasks.get(&task)?;
+    /// What an agent is waiting on now.
+    pub fn waiting_on(&self, agent: AgentId, now: Timestamp) -> Option<Waiting> {
+        let t = self.agents.get(&agent)?;
         let since = t.since;
         let live = match &t.life {
             Life::Starting => {
@@ -1563,7 +1681,7 @@ impl State {
             Life::Live(live) => live,
         };
         Some(match &live.phase {
-            Phase::Ready if self.held(task) => Waiting::Held { since },
+            Phase::Ready if self.held(agent) => Waiting::Held { since },
             Phase::Ready => match self.limited(now) {
                 Some(until) => Waiting::Limited { until, since },
                 None => Waiting::Brain { since },
@@ -1600,7 +1718,7 @@ impl State {
         })
     }
 
-    /// Max's queue, in order: every live task he owes a word or that has
+    /// Max's queue, in order: every live agent he owes a word or that has
     /// asked him something, mid-turn or in the background.
     pub fn queue(&self) -> Vec<Queued> {
         let queued = self
@@ -1609,7 +1727,7 @@ impl State {
                 let ask = self.ask(t);
                 let asked = ask.and_then(|a| self.calls.get(&a)).map(|c| c.made.at);
                 Some(Queued {
-                    task: t.id,
+                    agent: t.id,
                     since: t.owed_since().or(asked)?,
                     ask,
                     why: None,
@@ -1619,10 +1737,10 @@ impl State {
         self.ranking.order(queued)
     }
 
-    /// What a task's context embodies that has moved since, and that it has
+    /// What an agent's context embodies that has moved since, and that it has
     /// not been told of: the next request's notice.
-    pub fn stale(&self, task: &Task) -> Vec<Stale> {
-        task.context()
+    pub fn stale(&self, agent: &Agent) -> Vec<Stale> {
+        agent.context()
             .into_iter()
             .flat_map(|c| c.knows.iter())
             .filter_map(|(resource, known)| {
@@ -1659,29 +1777,29 @@ impl State {
             .filter(|id| self.model_calls.get(id).is_some_and(lost))
             .map(|id| Todo::Lost(*id))
             .collect();
-        let mut readers: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
+        let mut readers: BTreeMap<CallId, Vec<&Agent>> = BTreeMap::new();
         let mut needed: BTreeSet<LimbId> = BTreeSet::new();
         let mut starting = Vec::new();
-        for task in self.live() {
-            for call in task.awaited() {
-                readers.entry(call).or_default().push(task);
+        for agent in self.live() {
+            for call in agent.awaited() {
+                readers.entry(call).or_default().push(agent);
             }
-            let limbs = self.limbs_of(task);
-            if task.life == Life::Starting && limbs.iter().all(|l| self.reached(*l)) {
-                starting.push(Todo::Root(task.id));
+            let limbs = self.limbs_of(agent);
+            if agent.life == Life::Starting && limbs.iter().all(|l| self.reached(*l)) {
+                starting.push(Todo::Root(agent.id));
             }
             needed.extend(limbs);
-            let lingering = task.mode == Mode::Autonomous
-                && !task.background.is_empty()
-                && !self.open.lingered.contains(&task.id);
-            match (task.phase(), task.drain()) {
+            let lingering = agent.mode == Mode::Autonomous
+                && !agent.background.is_empty()
+                && !self.open.lingered.contains(&agent.id);
+            match (agent.phase(), agent.drain()) {
                 (Some(Phase::Listening), None) if lingering => {
-                    todo.push(Todo::Linger(task.id));
+                    todo.push(Todo::Linger(agent.id));
                 }
                 (Some(Phase::Ready), None)
-                    if !self.held(task.id) && self.limited(now).is_none() =>
+                    if !self.held(agent.id) && self.limited(now).is_none() =>
                 {
-                    todo.push(Todo::Send(task.id));
+                    todo.push(Todo::Send(agent.id));
                 }
                 (Some(Phase::Thinking(call)), Some(_))
                     if !self.model_calls.get(call).is_some_and(lost) =>
@@ -1698,13 +1816,13 @@ impl State {
             if self.open.scopes.contains_key(&Scope::Spawn(*id)) {
                 let stopping = self
                     .call_owner(*id)
-                    .and_then(|o| self.tasks.get(&o))
+                    .and_then(|o| self.agents.get(&o))
                     .is_some_and(|o| ends(o.drain()));
-                let live: Vec<&Task> = self
+                let live: Vec<&Agent> = self
                     .members(Scope::Spawn(*id))
                     .filter(|m| !m.is_done())
                     .collect();
-                let aside = |m: &&Task| matches!(m.origin, Origin::Aside { .. });
+                let aside = |m: &&Agent| matches!(m.origin, Origin::Aside { .. });
                 if live.is_empty() {
                     todo.push(Todo::Settle(*id));
                 } else if stopping {
@@ -1758,11 +1876,11 @@ impl State {
     }
 }
 
-/// Whether every live task reading this call is draining in a way that
+/// Whether every live agent reading this call is draining in a way that
 /// stops it. An interrupt stops the round, not background work; a stop
 /// stops both. A shared attachment runs on while any sibling still wants
 /// it. Max's own calls are never stopped for an agent.
-fn interrupts(id: CallId, call: &Call, readers: &[&Task]) -> bool {
+fn interrupts(id: CallId, call: &Call, readers: &[&Agent]) -> bool {
     if matches!(call.caller, Caller::Max { .. }) || readers.is_empty() {
         return false;
     }

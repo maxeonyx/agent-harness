@@ -21,7 +21,7 @@ use crate::value::Bytes;
 /// the kind shares ([`Environment::limbs`]), the limbs each agent of the
 /// kind is given its own of ([`Environment::places`]), and the kinds it can start fresh
 /// ([`Environment::starts`]). "Orchestrator", "designer", "engineer" and
-/// "attention scheduler" are environments; a [`crate::task::Task`] is in
+/// "attention scheduler" are environments; a [`crate::agent::Agent`] is in
 /// exactly one, for life.
 ///
 /// Each limb [describes](Description) its tools and the instructions for
@@ -37,9 +37,9 @@ use crate::value::Bytes;
 /// What an agent cannot do is what its environment does not contain. The
 /// attention scheduler's environment holds only the [`LimbKind::Attention`]
 /// limb, so it can reorder the queue and cannot spawn, read files or speak
-/// to Max: there is no permission check to get wrong. What a task can start
+/// to Max: there is no permission check to get wrong. What an agent can start
 /// fresh is its own environment's `starts`, checked by the journal against
-/// the task whose meta call creates it: an orchestrator's lists designers
+/// the agent whose meta call creates it: an orchestrator's lists designers
 /// and engineers, a designer's and an engineer's list none, so "only the
 /// orchestrator launches designers" is the shape of each one's world, and a
 /// member adding a sibling to its scope is held to its own list, not its
@@ -50,9 +50,9 @@ use crate::value::Bytes;
 /// file in a repository, edited and reviewed like code, so "another agent
 /// changing the definition" is an engineer's pull request, and the version
 /// records the file it came from ([`Environment::source`]). A new version
-/// takes effect for a task at its next request for `params` (they are not
+/// takes effect for an agent at its next request for `params` (they are not
 /// part of the cached prefix), and at its next root for everything else,
-/// never under a running context; a task whose root observed the old
+/// never under a running context; an agent whose root observed the old
 /// source is told it changed, at its next request, like any file it read.
 ///
 /// **Vision.** "An environment is not just a set of available tools, it is
@@ -70,7 +70,7 @@ use crate::value::Bytes;
 /// effort, and Oh My Pi's add which kinds it may spawn and a thinking level
 /// (`ref-oh-my-pi/packages/coding-agent/src/task/agents.ts:20`); both filter
 /// one session's tool list per kind, and the spawn list is checked in the
-/// task tool's own code. Oh My Pi isolates a spawn by copying the repository
+/// agent tool's own code. Oh My Pi isolates a spawn by copying the repository
 /// and merging back (`ref-oh-my-pi/packages/coding-agent/src/task/isolation-runner.ts:140`).
 /// OpenCode, Codex and Goose gate tool calls with permission prompts
 /// (OpenCode suspends the call until Max answers,
@@ -80,7 +80,7 @@ use crate::value::Bytes;
 ///
 /// **Different here.** The definition is a versioned fact, so what an agent
 /// could reach at any moment is in the journal; its reach is checked by the
-/// fold against the task that creates another, not by a filter in a tool; a
+/// fold against the agent that creates another, not by a filter in a tool; a
 /// clone of its own is a limb its environment names as a place, so the
 /// clone's instructions and file versions are its context; and a change
 /// reaches running agents as a dated notice and takes effect at their next
@@ -88,7 +88,7 @@ use crate::value::Bytes;
 ///
 /// **Bx.** Shared: a definition that exists before anything is built from
 /// it, and a build record that pins the resolved inputs. A root is that
-/// record here: its [`crate::task::Start::observes`] are the versions of the
+/// record here: its [`crate::agent::Start::observes`] are the versions of the
 /// role file, the instructions and the tool schemas it was made from, and
 /// the context grown from it is the artifact. Not shared: a changed input
 /// does not rebuild anything, because a context cannot be rebuilt without
@@ -108,15 +108,15 @@ pub struct Environment {
     pub model: String,
     /// The request parameters every turn here sends, as the exact JSON
     /// object: effort, thinking, the output limit. Not part of the cached
-    /// prefix, so a new version applies from each task's next request.
+    /// prefix, so a new version applies from each agent's next request.
     pub params: ValueId,
-    /// The limbs every task here holds: the same ones for all of them, such
+    /// The limbs every agent here holds: the same ones for all of them, such
     /// as the meta limb, Max, or a shared read-only checkout.
     pub limbs: Vec<LimbId>,
-    /// The limbs each task here is given its own of, by plugin kind: an
-    /// engineer's `workspace`, its clone. Filled when the task is created
-    /// ([`crate::task::Origin::Fresh`]) with a limb of that kind, and fixed
-    /// for the task's life; its forks share it. Usually a limb created in
+    /// The limbs each agent here is given its own of, by plugin kind: an
+    /// engineer's `workspace`, its clone. Filled when the agent is created
+    /// ([`crate::agent::Origin::Fresh`]) with a limb of that kind, and fixed
+    /// for the agent's life; its forks share it. Usually a limb created in
     /// the same batch, and sometimes an existing one, such as the clone a
     /// designer pushed that its engineer now builds on. The kind is checked,
     /// so a parent filling a place cannot hand its child a limb the child's
@@ -124,23 +124,23 @@ pub struct Environment {
     /// places of one kind wait for an environment that needs them; they
     /// would each need a name.
     pub places: Vec<String>,
-    /// The environments a task here can start fresh tasks in. A fork of
+    /// The environments an agent here can start fresh agents in. A fork of
     /// itself can always be started: it cannot reach anything its source
     /// cannot.
     pub starts: Vec<EnvironmentId>,
     /// The definition this version was read from: a role file at a version.
-    /// Roots made here observe it, so an edit to it is a notice to every task
+    /// Roots made here observe it, so an edit to it is a notice to every agent
     /// working under the old one. `None` for a version Max stated directly.
     pub source: Option<Observation>,
 }
 
-/// Which limb runs each tool of a task's context.
+/// Which limb runs each tool of an agent's context.
 ///
 /// Made with the root's `tools` array by [`Binding::new`], from the same
 /// descriptions, so a root cannot declare a tool its binding does not route
 /// or route one it does not declare. Carried to every fork of the root, so
 /// the same bytes (the root's tool names) mean the same limbs. Every route
-/// goes to a limb of the task's environment or one of its places, which the
+/// goes to a limb of the agent's environment or one of its places, which the
 /// journal checks, and only to a tool that limb's journaled description
 /// offers agents. An agent's call names only its tool and is routed here,
 /// which is the whole of the harness's access control.
@@ -228,11 +228,11 @@ pub struct Limb {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LimbKind {
     /// Lifecycle tools that act on their caller: spawn a scope (forks of
-    /// itself, fresh tasks in the environments its own environment
+    /// itself, fresh agents in the environments its own environment
     /// [starts](Environment::starts), or resumes of its finished children),
     /// add a sibling to its own scope, hand itself over, run a call in the
     /// background. One meta limb serves every environment: what a call may
-    /// create is read off its caller's environment when the task is created,
+    /// create is read off its caller's environment when the agent is created,
     /// and the brain describes the limb to each root with that
     /// environment's list.
     ///
@@ -243,13 +243,13 @@ pub enum LimbKind {
     /// in his queue until he does. Its calls are never dispatched; his face
     /// shows them, and his answer is the settlement he authors. Only agents
     /// in an environment holding this limb can interrupt him mid-turn; any
-    /// user-facing task gets his attention by ending its turn. Provisional:
+    /// user-facing agent gets his attention by ending its turn. Provisional:
     /// whether every environment holds it by default is Max's call.
     ///
     /// Max's controls over the tree (stop, interrupt, hold, rename, mark
     /// done, rewind, resume, aside) are not tools of this limb. They are facts
-    /// he authors directly ([`crate::task::TaskEvent`]), because they act on
-    /// tasks no call belongs to, and no agent can call them.
+    /// he authors directly ([`crate::agent::AgentEvent`]), because they act on
+    /// agents no call belongs to, and no agent can call them.
     Max,
     /// Max's queue: read it, rank it, say why. The scheduler's only limb.
     /// Run by the brain like [`LimbKind::Meta`].
@@ -306,7 +306,7 @@ pub enum Reach {
 /// A fact ([`crate::journal::Fact::Described`]), stated by the limb on each
 /// connection, after its hello. So the fold knows what every limb offers:
 /// a root may route only tools its limbs offer agents, Max may call only
-/// tools offered him, a starting task is rooted once each of its limbs has
+/// tools offered him, a starting agent is rooted once each of its limbs has
 /// described itself on its current connection, and a face shows a limb from
 /// the journal without reading its config. The brain's own limbs are
 /// described by the brain's code at each root, since the meta limb's

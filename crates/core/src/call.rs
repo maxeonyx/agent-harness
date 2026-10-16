@@ -3,8 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CallId, LimbId, TaskId, ToolUseId, ValueId};
+use crate::id::{CallId, LimbId, AgentId, ToolUseId, ValueId};
 use crate::resource::Observation;
+use crate::task::{Exit, Owner};
 
 /// One action in a limb, as decided. Its life is its [`CallEvent`]s.
 ///
@@ -23,8 +24,8 @@ use crate::resource::Observation;
 ///
 /// Every harness action an agent takes is a call too, to a limb the brain
 /// itself implements ([`crate::environment::LimbKind`]): a spawn opens a
-/// scope and settles when its last task is done, so a parent waiting on its
-/// children is a task with an outstanding call and nothing more; a handover
+/// scope and settles when its last agent is done, so a parent waiting on its
+/// children is an agent with an outstanding call and nothing more; a handover
 /// moves its caller to a new context; an ask is a call Max answers. Their
 /// effects are appended in the same batch as the call's own events, so a
 /// crash leaves all of them or none, and a restart never spawns twice.
@@ -94,33 +95,34 @@ impl Call {
 /// Who made a call, which decides who owns it, whose context its result
 /// reaches, and how its limb is found.
 ///
-/// Owner and audience are what matter. An agent's call belongs to its task
+/// Owner and audience are what matter. An agent's call belongs to its agent
 /// and answers its tool use. Max's call in an engineer's chat belongs to
 /// Max and only rides into the engineer's next request: the engineer can
 /// finish while Max's file is open, and stopping the engineer never stops
 /// Max's edit.
 ///
-/// An agent names only a tool: which limb runs it is its task's binding,
+/// An agent names only a tool: which limb runs it is its agent's binding,
 /// the same list its root's tools were made from, so a tool use cannot
 /// reach a limb its context was not given. Max and the harness name the limb,
 /// because they act from outside any one context.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Caller {
-    /// A task. With `tool_use`, the call answers that tool use of the
-    /// response in flight, and the task's next request waits for it.
-    /// Without, it is background work the task started through a meta tool:
-    /// the task cannot finish while it runs, and its settlement wakes the
-    /// task.
+    /// An agent. With `tool_use`, the call answers that tool use of the
+    /// response in flight, and the agent's next request waits for it.
+    /// Without, it is background work the agent started through a meta tool:
+    /// the agent cannot finish while it runs, unless it hands the call to its
+    /// owner ([`CallEvent::Handed`]), and its settlement wakes whoever owns
+    /// it then.
     Agent {
-        task: TaskId,
+        agent: AgentId,
         tool_use: Option<ToolUseId>,
     },
     /// Max, in a chat with `chat` (his settlement rides into its next
     /// request), or from the tree, outside any context.
-    Max { limb: LimbId, chat: Option<TaskId> },
+    Max { limb: LimbId, chat: Option<AgentId> },
     /// The harness, while running `call`: the attachments of a spawn's shared
     /// brief or of a handover. Owned by that call, and shown to each
-    /// receiving task as a tool call it made.
+    /// receiving agent as a tool call it made.
     Meta { call: CallId, limb: LimbId },
 }
 
@@ -128,13 +130,27 @@ pub enum Caller {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallEvent {
     Made(Call),
+    /// Its owner asked for it to be stopped: Max for a call he owns (his
+    /// own, or one an agent handed up to him), an agent through its meta
+    /// call for its own background work. The request step of the
+    /// [cancel protocol](crate::task::Task) for a call. A cancel that cascades
+    /// from a draining agent needs no fact of its own: it is read off the
+    /// agents that read the call.
+    Cancel,
     /// Sent to its limb's current connection. Sent again, as another
     /// dispatch, after every reconnection while it is unsettled.
     Dispatched,
-    /// Its limb was asked to stop it, because every task reading it is
-    /// stopping (why is in their [`crate::task::Drain`] facts). Asked again
+    /// Its limb was asked to stop it, because every agent reading it is
+    /// draining (why is in their [`crate::agent::Drain`]): the cleanup step
+    /// of the [cancel protocol](crate::task::Task) for a call. Asked again
     /// after a reconnection, like a dispatch.
     Stopping,
+    /// Its owner, an agent, handed this background call to its own owner
+    /// (its parent, or Max in his scope), so it can finish while the call
+    /// runs. The only way ownership changes, and only up the tree: the new
+    /// owner cannot finish while it runs, and its settlement wakes the new
+    /// owner. The effect of the agent's meta call, stated with its dispatch.
+    Handed { to: Owner },
     /// How it ended, stated by the limb that ran it (or by the brain, for a
     /// call that never reached one). A second settlement is accepted only
     /// after [`Outcome::Unknown`]: the real outcome of a remote command that
@@ -147,7 +163,10 @@ impl CallEvent {
     pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
         match self {
             CallEvent::Made(call) => call.values(out),
-            CallEvent::Dispatched | CallEvent::Stopping => {}
+            CallEvent::Cancel
+            | CallEvent::Dispatched
+            | CallEvent::Stopping
+            | CallEvent::Handed { to: _ } => {}
             CallEvent::Settled(outcome) => outcome.values(out),
         }
     }
@@ -177,6 +196,16 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// How it ended, in the terms every task shares.
+    pub fn exit(&self) -> Exit {
+        match self {
+            Outcome::Completed(_) => Exit::Ok,
+            Outcome::Failed(_) | Outcome::Refused { .. } => Exit::Failed,
+            Outcome::Interrupted { .. } => Exit::Cancelled,
+            Outcome::Unknown => Exit::Unknown,
+        }
+    }
+
     /// What it returned, if anything.
     pub fn output(&self) -> Option<&Output> {
         match self {

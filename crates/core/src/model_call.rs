@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::context::{Entry, EntryId, Message, Rendered, Role};
-use crate::id::{TaskId, Timestamp, ValueId};
+use crate::id::{AgentId, Timestamp, ValueId};
+use crate::task::Exit;
 
 /// One request to the provider, as sent.
 ///
@@ -15,15 +16,15 @@ use crate::id::{TaskId, Timestamp, ValueId};
 /// asked the provider to cache, when the response began and ended, how it
 /// ended, and what the provider reported. Every turn, retry and handover
 /// turn is one. A keep-alive (a request that only refreshes a prefix's
-/// lifetime and moves no task) is a new kind of request when the brain's
+/// lifetime and moves no agent) is a new kind of request when the brain's
 /// policy first sends one; it will need a purpose here and a fold rule that
-/// lets its base trail its task's head.
+/// lets its base trail its agent's head.
 ///
 /// A request names its base and carries its new messages, so its head is
 /// computed, never stated: it cannot claim a context that does not grow
-/// from the one its task has, and the fold learns the new entries from it.
+/// from the one its agent has, and the fold learns the new entries from it.
 ///
-/// It is Bx's build record. The task's environment and binding are the
+/// It is Bx's build record. The agent's environment and binding are the
 /// definition, the head's [`EntryId`] is the resolved input's content
 /// identity, the response is the output, and timing, usage and quota are
 /// the execution evidence. Several model calls on one head (a retry, a
@@ -63,18 +64,18 @@ use crate::id::{TaskId, Timestamp, ValueId};
 /// (`ref-pi/packages/coding-agent/src/core/cache-warmer.ts:27`); OpenCode
 /// and Goose place breakpoints and count usage afterwards. Here the prefix,
 /// not the session, is the thing that is warm, so the same decision sees
-/// every task sharing it, and has two more options: hand over now, or let a
+/// every agent sharing it, and has two more options: hand over now, or let a
 /// fork's reads keep it warm.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCall {
-    pub task: TaskId,
-    /// The context this request extends: its task's head.
+    pub agent: AgentId,
+    /// The context this request extends: its agent's head.
     pub base: EntryId,
     /// The messages this request appended to `base`, in order: the
     /// attachments' tool uses the harness writes, tool results, Max's words,
     /// notes. Empty for a retry of the same head.
     pub appends: Vec<Message>,
-    /// What `appends` was rendered from, in order. A task has seen exactly
+    /// What `appends` was rendered from, in order. An agent has seen exactly
     /// what its requests rendered, so a request retried after a rate limit
     /// renders what arrived meanwhile, and nothing depends on journal
     /// positions.
@@ -128,7 +129,7 @@ impl ModelCall {
 
     pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
         let ModelCall {
-            task: _,
+            agent: _,
             base: _,
             appends,
             renders: _,
@@ -143,8 +144,8 @@ impl ModelCall {
 /// A fact in a model call's life.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ModelCallEvent {
-    /// The request was sent. It moves its task's head to the request's head
-    /// and clears what it rendered from the task's pending inputs.
+    /// The request was sent. It moves its agent's head to the request's head
+    /// and clears what it rendered from the agent's pending inputs.
     Sent(ModelCall),
     /// The response's `message_start` arrived: from here a cache entry this
     /// request wrote is readable by others.
@@ -181,24 +182,25 @@ impl ModelCallEvent {
 pub enum Ending {
     /// The response's `content`, which is the assistant entry after the
     /// request's head ([`ModelCall::response`]). Its tool uses are the calls
-    /// made for its task while the request was in flight, in the order they
+    /// made for its agent while the request was in flight, in the order they
     /// were made (in the same batch as this, so a crash mid-stream leaves no
     /// effect of a response the model never finished).
     Responded { content: ValueId, stop: Stop },
     /// The provider refused or failed this request. `retry` when it said
     /// when; that is about this request, and how long to wait before sending
-    /// its task's next one is the brain's policy.
+    /// its agent's next one is the brain's policy.
     Failed {
         status: Option<u16>,
         message: String,
         retry: Option<Timestamp>,
     },
-    /// The subscription's limit refused it: every task on the account waits
-    /// until `until`. Not the task's failure, so it never counts towards
+    /// The subscription's limit refused it: every agent on the account waits
+    /// until `until`. Not the agent's failure, so it never counts towards
     /// giving up on it.
     Limited { until: Timestamp },
-    /// The harness stopped reading: Max interrupted, or the task is
-    /// stopping. Nothing was kept as the model's; the visible text Max may
+    /// The harness stopped reading: Max interrupted, or the agent is
+    /// leaving (the cleanup step of the [cancel protocol](crate::task::Task)
+    /// for a request). Nothing was kept as the model's; the visible text Max may
     /// have been reacting to is kept here and quoted to the model next.
     Abandoned { partial: Option<ValueId> },
     /// Sent by an earlier brain, which ended before it did. Nothing from it
@@ -206,13 +208,24 @@ pub enum Ending {
     Lost,
 }
 
+impl Ending {
+    /// How it ended, in the terms every task shares.
+    pub fn exit(&self) -> Exit {
+        match self {
+            Ending::Responded { .. } => Exit::Ok,
+            Ending::Failed { .. } | Ending::Limited { .. } | Ending::Lost => Exit::Failed,
+            Ending::Abandoned { .. } => Exit::Cancelled,
+        }
+    }
+}
+
 /// Why the model stopped, in the terms the fold and the brain decide on.
 ///
 /// Only [`Stop::EndTurn`] ends a turn: it is what completes an autonomous
-/// task or gives Max the move. Every other stop without tool uses leaves the
-/// task ready, and the brain's policy reads it off the last turn: carry on
+/// agent or gives Max the move. Every other stop without tool uses leaves the
+/// agent ready, and the brain's policy reads it off the last turn: carry on
 /// after `MaxTokens` or `PauseTurn`, root anew after `ContextWindow`, fail
-/// the task (or root anew) after `Refused`. So a refusal is never mistaken
+/// the agent (or root anew) after `Refused`. So a refusal is never mistaken
 /// for a result.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Stop {

@@ -10,8 +10,8 @@ use crate::id::{CallId, Digest, LimbId, ValueId};
 /// an environment's role file ([`crate::environment::Environment::source`]),
 /// Max's presence, Max's queue, a limb's running instance, a test watcher's
 /// last run, a page's event log. An [`Observation`] says "this context embodies
-/// `resource` at `version`"; it comes from the root a task was given
-/// ([`crate::task::Start::observes`]) and from every call result a request
+/// `resource` at `version`"; it comes from the root an agent was given
+/// ([`crate::agent::Start::observes`]) and from every call result a request
 /// renders ([`crate::call::Output::observes`]). A context knows a version
 /// exactly when it was sent something that embodies it.
 ///
@@ -24,7 +24,7 @@ use crate::id::{CallId, Digest, LimbId, ValueId};
 /// content the owning limb attached to the change when looking again is not
 /// how the context should learn it ([`Change::content`]).
 ///
-/// This is also how an environment speaks between turns. A standing task
+/// This is also how an environment speaks between turns. A standing agent
 /// listening for its environment is woken by a change to anything its
 /// context embodies, and its next request is that notice: the attention
 /// scheduler embodies Max's queue, so a change to the queue is its next
