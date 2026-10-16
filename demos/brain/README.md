@@ -120,7 +120,7 @@ face: https://mx-hv-mj.local:4400
    68.3s   136  orchestrator: first byte
    72.2s   137  orchestrator: responded, EndTurn, 0 calls (2 in, 8060 cached, 503 out)
 
-== the root is done; its result:
+== the task is done; its result:
 
 ## Report
 

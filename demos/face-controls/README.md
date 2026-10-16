@@ -128,7 +128,7 @@ The brain's log, trimmed to the controls. The hold landed just after both childr
 ```
 
 ```
-== the root is done; its result:
+== the task is done; its result:
 
 Done. Report:
 
