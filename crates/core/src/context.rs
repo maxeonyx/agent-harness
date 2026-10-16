@@ -1,17 +1,15 @@
 //! Contexts: exactly what a model was sent, as an immutable tree of entries.
 
+use std::fmt;
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CallId, DeliveryId, Digest, ModelCallId, TaskId, Timestamp};
+use crate::id::{CallId, DeliveryId, Digest, ModelCallId, ParseError, TaskId, Timestamp, ValueId};
 use crate::resource::Observation;
 
-/// Exact JSON text as sent to or received from the provider. Never
-/// re-serialised: what was stored is what is sent again.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Wire(pub String);
-
 /// The identity of an entry, and so of the context that ends at it: the
-/// digest of its bytes and its parent's identity.
+/// digest of the entry's fields, which name its parent and its bytes.
 ///
 /// It commits to the model and every byte from the root, and to nothing that
 /// was not sent. So two contexts with the same id are the same input to the
@@ -20,32 +18,54 @@ pub struct Wire(pub String);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EntryId(pub Digest);
 
+impl fmt::Display for EntryId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for EntryId {
+    type Err = ParseError;
+
+    fn from_str(text: &str) -> Result<EntryId, ParseError> {
+        text.parse().map(EntryId)
+    }
+}
+
 /// One node of the context tree: a root, or one wire message after a parent.
 ///
 /// **Concept.** A context is the chain of entries from a root to a head,
 /// and it is a value. Each entry is one message exactly as it went over the
-/// wire, never edited after it is stored. Entries are content-addressed and
+/// wire, never edited after it exists. Entries are content-addressed and
 /// name their parent, so a context can only grow by appending, two contexts
 /// with a common prefix share those entries, and the tree's branch points
 /// are exactly where the provider caches of its contexts diverge. A context
 /// is named by its head's [`EntryId`].
 ///
+/// An entry is small structure; its bytes are [values](ValueId). So the
+/// tree is a Merkle tree over the value store, and it lives in the journal:
+/// each entry arrives inside the fact that first sends or receives it (a
+/// root in [`crate::task::Start`], a request's messages in
+/// [`crate::model_call::ModelCall::appends`], a response in
+/// [`crate::model_call::Ending::Responded`]), so the fold holds the whole
+/// tree and refuses a head that does not grow along it. Nothing else
+/// stores entries.
+///
 /// Fork, fresh start, shared seed, handover, resume, rewind and aside are
 /// all a task's head moving to an entry ([`crate::task`]): to the parent's
 /// response (a fork), to a new root (a fresh start or a handover), to a
 /// finished task's last entry (a resume), back along its own chain (a
-/// rewind). Fresh siblings that are given the same shared brief and
-/// attachments render the same entries onto the same root, so the shared
-/// seed Max describes in `handoff-improvements.md` is one set of nodes and
-/// one cache prefix by construction, not by bookkeeping.
+/// rewind). Fresh siblings given the same shared brief and attachments
+/// append the same messages to the same root, so the shared seed Max
+/// describes in `handoff-improvements.md` is one set of nodes and one cache
+/// prefix by construction, not by bookkeeping.
 ///
-/// Why each entry exists is not in it. Provenance is in the record that
+/// Why each entry exists is not in it. Provenance is in the request that
 /// first sent it ([`crate::model_call::ModelCall::renders`]) and the
 /// versions it embodies are in the facts it renders
-/// ([`crate::call::Output::observes`]). That is the separation Bx makes
-/// between an artifact (`hash + immutable value`) and the build record that
-/// says how it was made; it keeps identical bytes one node, as they are one
-/// prefix to the provider.
+/// ([`crate::call::Output::observes`]): Bx's separation of an artifact from
+/// the build record that says how it was made, which keeps identical bytes
+/// one node, as they are one prefix to the provider.
 ///
 /// **Vision.** The context lifecycle, which Max ranks among the most
 /// interesting parts: append vs rebuild (`context-and-agent-loop.md`),
@@ -61,9 +81,9 @@ pub struct EntryId(pub Digest);
 /// A history re-rendered from a neutral form on every request breaks both
 /// whenever the renderer changes, and this harness edits its own code. So
 /// the stored form is the wire form and there is no conversion step that
-/// could drift. Cache breakpoints are not stored in entries: they are placed
-/// at send time and recorded on the request (the provider-wire spike found
-/// that moving them does not change what the prefix matches).
+/// could drift. Cache breakpoints are not in entries: they are placed at
+/// send time and recorded on the request (the provider-wire spike found that
+/// moving them does not change what the prefix matches).
 ///
 /// **Existing harnesses.** Every one rebuilds the request from stored
 /// conversation on every call. Oh My Pi and Pi keep a JSONL tree of entries
@@ -80,10 +100,14 @@ pub struct EntryId(pub Digest);
 /// cannot change under the agent, an upgrade cannot re-render old turns, an
 /// inspector shows any request byte for byte, and forks, seeds and resumes
 /// share nodes rather than copies.
+///
+/// **Bx.** Git's and Bx's shape: content named by hash, structure named by
+/// the hash of its encoding over those names. Bx pins a definition's
+/// inputs; here the head pins the whole input of a request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Entry {
     Root(Root),
-    Message(Message),
+    Message { parent: EntryId, message: Message },
 }
 
 /// What leads every request of a context, fixed for its life.
@@ -91,94 +115,144 @@ pub enum Entry {
 /// The model is part of it because the provider's cache and its thinking
 /// signatures are per model. Changing the model, the tools, the role or the
 /// environment's instructions needs a new root: "append or rebuild?" is the
-/// choice between [`Entry::Message`] and [`Entry::Root`], and a context
-/// whose instructions changed in place cannot be expressed. The first block
-/// of `system` is the provider identity string the subscription requires.
+/// choice between a [`Message`] and a [`Root`], and a context whose
+/// instructions changed in place cannot be expressed. The first block of
+/// `system` is the provider identity string the subscription requires.
 ///
 /// Which limb runs each tool is not here: it is the task's
-/// [`crate::environment::Binding`], because identical bytes can be served by
-/// different limbs (a fork whose REPL was cloned).
+/// [`crate::environment::Binding`], made from the same descriptions as
+/// `tools` by [`crate::environment::Binding::new`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Root {
     pub model: String,
     /// The exact `system` blocks: identity, role, the environment's
     /// instructions, the skill index.
-    pub system: Wire,
-    /// The exact `tools` array, including tools declared deferred so a later
-    /// message can surface them without breaking the prefix.
-    pub tools: Wire,
+    pub system: ValueId,
+    /// The exact `tools` array, including tools whose definitions defer
+    /// them, so a later message can surface them without breaking the
+    /// prefix.
+    pub tools: ValueId,
 }
 
-/// One wire message after `parent`.
+/// One wire message: its role and its exact `content` array.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
-    pub parent: EntryId,
     pub role: Role,
-    /// The exact `content` array of the message.
-    pub content: Wire,
+    pub content: ValueId,
 }
 
 /// The role of a message on the wire. Consecutive messages of one role are
-/// allowed; the provider joins them.
+/// allowed; the provider joins them. The harness itself speaks in user
+/// content: the subscription's provider accepts no other operator role
+/// mid-conversation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     User,
     Assistant,
-    /// A mid-conversation operator message, where the provider accepts one
-    /// without breaking the cached prefix (designer B's provider notes,
-    /// October 2026; verify on the wire before relying on it). Otherwise the
-    /// harness speaks in user content.
-    System,
+}
+
+impl Role {
+    /// The provider's name for it, which is also how it is written anywhere.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A role name the provider does not have.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownRole(pub String);
+
+impl fmt::Display for UnknownRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "no role named {:?}", self.0)
+    }
+}
+
+impl std::error::Error for UnknownRole {}
+
+impl FromStr for Role {
+    type Err = UnknownRole;
+
+    fn from_str(text: &str) -> Result<Role, UnknownRole> {
+        match text {
+            "user" => Ok(Role::User),
+            "assistant" => Ok(Role::Assistant),
+            _ => Err(UnknownRole(text.to_owned())),
+        }
+    }
 }
 
 impl Entry {
-    /// The entry's identity: BLAKE3 over a tagged, length-prefixed encoding
-    /// of its fields. Stable across harness builds; changing it is a
+    /// The entry's identity. Stable across harness builds; changing it is a
     /// migration of every stored context.
     pub fn id(&self) -> EntryId {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"harness-entry-1");
-        let mut field = |bytes: &[u8]| {
-            hasher.update(&(bytes.len() as u64).to_le_bytes());
-            hasher.update(bytes);
-        };
         match self {
-            Entry::Root(root) => {
-                field(b"root");
-                field(root.model.as_bytes());
-                field(root.system.0.as_bytes());
-                field(root.tools.0.as_bytes());
-            }
-            Entry::Message(message) => {
-                field(b"message");
-                field(&message.parent.0.0);
-                field(match message.role {
-                    Role::User => b"user",
-                    Role::Assistant => b"assistant",
-                    Role::System => b"system",
-                });
-                field(message.content.0.as_bytes());
-            }
+            Entry::Root(root) => root.id(),
+            Entry::Message { parent, message } => message.id_after(*parent),
         }
-        EntryId(Digest(*hasher.finalize().as_bytes()))
     }
 
     pub fn parent(&self) -> Option<EntryId> {
         match self {
             Entry::Root(_) => None,
-            Entry::Message(message) => Some(message.parent),
+            Entry::Message { parent, .. } => Some(*parent),
         }
     }
 }
 
-/// Something a request newly included, and so the provenance of the entries
-/// it appended.
+impl Root {
+    pub fn id(&self) -> EntryId {
+        let Root {
+            model,
+            system,
+            tools,
+        } = self;
+        digest(&[b"root", model.as_bytes(), &system.0.0, &tools.0.0])
+    }
+}
+
+impl Message {
+    /// The id this message has when it follows `parent`.
+    pub fn id_after(&self, parent: EntryId) -> EntryId {
+        let Message { role, content } = self;
+        digest(&[
+            b"message",
+            &parent.0.0,
+            role.as_str().as_bytes(),
+            &content.0.0,
+        ])
+    }
+}
+
+/// BLAKE3 over a tagged, length-prefixed encoding of the fields.
+fn digest(fields: &[&[u8]]) -> EntryId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"harness-entry-2");
+    for field in fields {
+        hasher.update(&(field.len() as u64).to_le_bytes());
+        hasher.update(field);
+    }
+    EntryId(Digest(*hasher.finalize().as_bytes()))
+}
+
+/// Something a request newly included, and so the provenance of the
+/// messages it appended.
 ///
-/// The provider has two speaking roles, so Max's words, his actions, an
-/// environment's events, attachments and the harness's own notes all reach
-/// the model as user content or tool results. This keeps what actually
-/// happened, so an inspector never confuses "the agent read this file" with
-/// "Max had this file open" or "this was attached at the handover".
+/// The provider has two speaking roles, so Max's words, his actions,
+/// attachments and the harness's own notes all reach the model as user
+/// content or tool results. This keeps what actually happened, so an
+/// inspector never confuses "the agent read this file" with "Max had this
+/// file open" or "this was attached at the handover".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Rendered {
     /// A call's settlement: a tool result for one of the task's own tool uses
@@ -186,15 +260,15 @@ pub enum Rendered {
     /// call the task made, a background call's result, or one of Max's
     /// actions in the chat.
     Call(CallId),
-    /// Max's words, an environment's event, or a turn the harness asked for.
+    /// Max's words, or a turn the harness asked for.
     Delivery(DeliveryId),
     /// Something the harness says.
     Note(Note),
 }
 
 /// What the harness says to a model, and why. Each kind is rendered from
-/// data the harness holds; the wording is policy and the fork-framing spike
-/// decides it for forks.
+/// data the harness holds; the wording is policy, and the fork-framing spike
+/// decided it for forks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Note {
     /// The task's mandate: at a fork, as user text after the answers to the
@@ -209,10 +283,16 @@ pub enum Note {
     /// calls, or for an aside the call its source is waiting on. Their real
     /// results go to the parent's branch.
     Elsewhere { call: CallId },
-    /// Things this context embodies have changed since. `told` are the
-    /// versions announced, so the next request announces only what has moved
-    /// again; the context still embodies the old versions until it looks.
-    Stale { told: Vec<Observation> },
+    /// Things this context embodies have changed since. `told` were only
+    /// announced ("changed after you read it"), so the context still embodies
+    /// the old versions and the next request announces only what moves
+    /// again; `shown` were rendered with the content their limb attached
+    /// ([`crate::resource::Change::content`]), so the context now embodies
+    /// them.
+    Stale {
+        told: Vec<Observation>,
+        shown: Vec<Observation>,
+    },
     /// How long since the context last heard anything, when that is long
     /// enough to matter ("more than 1h", `context-updates.md`).
     Clock { since: Timestamp },

@@ -2,27 +2,28 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::Wire;
-use crate::id::{DeliveryId, LimbId, TaskId};
-use crate::task::Wakes;
+use crate::id::{DeliveryId, TaskId, ValueId};
 
-/// Something addressed to a task: Max's words, an environment's event, a
-/// turn the harness asks for, or what Max said in an aside.
+/// Something addressed to a task: Max's words, a turn the harness asks for,
+/// or what Max said in an aside.
 ///
 /// **Concept.** A delivery is part of its task's fold from the moment it is
-/// made (the task's pending inputs) until a request renders it. Nothing is
-/// pushed into a context while a request or a tool round is in flight: the
-/// provider forbids it (every tool use needs its result first), and a
-/// model's thought would come to depend on text that arrived after it
-/// began. So Max's words typed while a designer streams its last response
-/// are read before its result goes anywhere, and words typed during a long
-/// tool round arrive straight after the results. To be heard sooner he
-/// interrupts; to talk to a task waiting on its children he opens an aside.
+/// made (the task's pending inputs) until a request renders it, and every
+/// delivery wakes a task that waits. Nothing is pushed into a context while
+/// a request or a tool round is in flight: the provider forbids it (every
+/// tool use needs its result first), and a model's thought would come to
+/// depend on text that arrived after it began. So Max's words typed while a
+/// designer streams its last response are read before its result goes
+/// anywhere, and words typed during a long tool round arrive straight after
+/// the results. To be heard sooner he interrupts; to talk to a task waiting
+/// on its children he opens an aside.
 ///
-/// Whether a delivery causes a request is [`Content::wakes`]. Notices about
-/// changed resources, siblings and the clock are not deliveries: they are
-/// derived at each request from what the context embodies, so they never
-/// pile up and are never stale themselves.
+/// What an environment does between turns is not a delivery. A watcher's
+/// result, a page event, a change to Max's queue: each is a new version of a
+/// resource its limb owns ([`crate::resource::Change`]), which reaches every
+/// context that embodies it as one notice at its next request, and wakes a
+/// standing task that is listening. So nothing a limb says needs an
+/// addressee, and nothing piles up.
 ///
 /// **Vision.** The user turn; "what drives API requests" (exactly: a
 /// settled tool round, Max ending his turn, a harness prompt such as the
@@ -50,12 +51,9 @@ pub enum Content {
     /// Max's words: user content blocks (text, a pasted image, a dictated
     /// passage), written having seen the journal up to his record's `seen`.
     /// They end his turn and clear the task from his queue.
-    Words(Wire),
+    Words(ValueId),
     /// A turn the harness asks for.
     Prompt(Prompt),
-    /// An event a limb pushed: a watcher's result, a page event, a change to
-    /// Max's queue for the scheduler.
-    Event { limb: LimbId, event: Wire },
     /// The result of an aside Max held with a fork of this task while it
     /// waited: what he said there reaches the task itself.
     Aside(TaskId),
@@ -75,16 +73,4 @@ pub enum Prompt {
     /// An autonomous turn ended with background work still running: it will
     /// wake the task when it ends; stop it if it is not needed. Said once.
     Lingering,
-}
-
-impl Content {
-    /// Which waits this delivery ends. Max's words, a harness prompt and an
-    /// aside's result end any wait. An environment's event ends only a
-    /// standing wait; for a task waiting on Max it rides along.
-    pub fn wakes(&self) -> Wakes {
-        match self {
-            Content::Words(_) | Content::Prompt(_) | Content::Aside(_) => Wakes::Always,
-            Content::Event { .. } => Wakes::Listening,
-        }
-    }
 }

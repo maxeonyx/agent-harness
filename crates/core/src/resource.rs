@@ -2,35 +2,46 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CallId, Digest, LimbId, TaskId};
+use crate::id::{CallId, Digest, LimbId, ValueId};
 
 /// A changing thing owned by a limb, which a context can hold a copy of.
 ///
 /// **Concept.** A file, a skill, the `AGENTS.md` hierarchy, a tool's schema,
 /// an agent kind's role prompt, the catalogue of startable kinds, Max's
-/// presence, a limb's running instance. An [`Observation`] says "this
-/// context embodies `resource` at `version`"; it comes from the root a task
-/// was given ([`crate::task::Created::observes`]) and from every call result
-/// a request renders ([`crate::call::Output::observes`]). A context knows a
-/// version exactly when it was sent something that embodies it.
+/// presence, Max's queue, a limb's running instance, a test watcher's last
+/// run, a page's event log. An [`Observation`] says "this context embodies
+/// `resource` at `version`"; it comes from the root a task was given
+/// ([`crate::task::Start::observes`]) and from every call result a request
+/// renders ([`crate::call::Output::observes`]). A context knows a version
+/// exactly when it was sent something that embodies it.
 ///
 /// At each request the brain compares what the context embodies with the
 /// current versions and says once what has moved since it last said
 /// ([`crate::context::Note::Stale`]). Nothing is pushed at change time:
 /// twenty agents holding a skill Max edits cost nothing until each next
 /// sends, and a change reverted before then is never mentioned. The notice
-/// carries the boundary ("`design` changed after you loaded it"), not the
-/// new content, unless [`Disclosure`] says otherwise.
+/// carries the boundary ("`design` changed after you loaded it"), or the
+/// content the owning limb attached to the change when looking again is not
+/// how the context should learn it ([`Change::content`]).
+///
+/// This is also how an environment speaks between turns. A standing task
+/// listening for its environment is woken by a change to anything its
+/// context embodies, and its next request is that notice: the attention
+/// scheduler embodies Max's queue, so a change to the queue is its next
+/// turn, and changes that arrive while it thinks fold into the one after.
 ///
 /// Keyed by limb, not environment, so a write through one environment is
-/// seen by every context that read the same thing through another.
+/// seen by every context that read the same thing through another. Kinds
+/// are the owning limb's words, as limb kinds are: the core reads none of
+/// them.
 ///
 /// **Vision.** Context updates and progressive disclosure, with the
 /// testimony in `context-updates.md` that a silently refreshed system prompt
 /// is worse than a stale one, because every claim in it loses its date; the
 /// shared-workspace race (a sibling's write to a file this context read
 /// becomes a notice naming the sibling, and a write based on a stale read is
-/// refused); Max's edits during his turn; "your shell state is gone".
+/// refused); Max's edits during his turn; "your shell state is gone"; the
+/// attention scheduler's input.
 ///
 /// **Existing harnesses.** OpenCode re-reads instructions and skills each
 /// step and appends the diff when one changed
@@ -47,41 +58,17 @@ use crate::id::{CallId, Digest, LimbId, TaskId};
 /// **Different here.** None tracks a file a context read, a skill it loaded,
 /// or what a fork inherited. Here the harness records what each context
 /// observed, so neither the notice nor the stale-write refusal costs the
-/// model anything to carry.
+/// model anything to carry; and one mechanism carries both "your copy is
+/// out of date" and "something happened you are listening for".
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ResourceKey {
     pub limb: LimbId,
-    pub kind: ResourceKind,
+    /// What kind of thing it is, in its limb's words: `file`, `skill`,
+    /// `instructions`, `tool`, `instance`, `queue`, `presence`.
+    pub kind: String,
     /// Within the kind: a path, a skill name, a tool name. Empty for a
     /// singleton such as the instance.
     pub name: String,
-}
-
-/// What kind of thing a resource is, which decides how a change to it is
-/// disclosed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum ResourceKind {
-    File,
-    Skill,
-    /// The index of skills rendered into a root: names and descriptions.
-    SkillIndex,
-    /// An instruction file rendered into a root, such as an `AGENTS.md`.
-    Instructions,
-    Tool,
-    /// An agent kind's role prompt and settings.
-    AgentKind,
-    /// The environments and agent kinds a spawn can name.
-    Catalogue,
-    /// Max's queue as the attention limb holds it.
-    Queue,
-    /// Max's stated availability ("away until 9"). Observed by user-facing
-    /// contexts and the scheduler, so a change reaches each at its next
-    /// request without causing one.
-    Presence,
-    /// The running instance. A new version means in-memory state was lost.
-    Instance,
-    /// A kind a limb plugin defines.
-    Other,
 }
 
 /// A version of a resource.
@@ -101,55 +88,20 @@ pub struct Observation {
     pub version: Version,
 }
 
-/// A limb reports that a resource moved to a new version.
+/// A resource moved to a new version. Stated by the limb that owns it, or
+/// by Max for his own (his presence).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Change {
     pub resource: ResourceKey,
     pub version: Version,
-    /// Who changed it, when that was a call the harness knows of, so a notice
-    /// can say "changed by sibling X" or "edited by Max".
-    pub by: Option<Writer>,
-}
-
-/// Who wrote a change.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Writer {
-    Task(TaskId, CallId),
-    Max(CallId),
-}
-
-/// How much of a change a context is told.
-///
-/// The vision's rule is the minimum that invalidates the agent's
-/// understanding: it should know that looking again is an option. So
-/// [`Disclosure::Boundary`] holds only where looking again *is* an option,
-/// when the context's binding reaches the limb that owns the resource.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Disclosure {
-    /// Not mentioned until the context is replaced: a skill description in
-    /// the index.
-    Silent,
-    /// "This changed after you saw it": a loaded skill, a read file,
-    /// `AGENTS.md`, the catalogue.
-    Boundary,
-    /// The new content, because the old one cannot be acted on safely or the
-    /// context has no way to look: a tool schema, a lost instance, Max's
-    /// presence, anything its binding cannot read.
-    Full,
-}
-
-impl Disclosure {
-    /// The default for a kind of resource, given whether the context can
-    /// read it again. A policy the brain may refine; it lives here so every
-    /// renderer agrees.
-    pub fn of(kind: ResourceKind, can_look: bool) -> Disclosure {
-        match kind {
-            ResourceKind::SkillIndex => Disclosure::Silent,
-            ResourceKind::Tool | ResourceKind::Instance | ResourceKind::Presence => {
-                Disclosure::Full
-            }
-            _ if can_look => Disclosure::Boundary,
-            _ => Disclosure::Full,
-        }
-    }
+    /// The call that wrote it, when the limb was running one: the notice
+    /// says "changed by your sibling X" or "edited by Max", read off the
+    /// call's caller. `None` for a change from outside the harness, such as
+    /// Max's own editor.
+    pub by: Option<CallId>,
+    /// What a context should be shown rather than told to look again: a
+    /// tool's new schema, the new queue, a watcher's result, "away until
+    /// 9". The limb decides, as the owner of what the change means; the
+    /// renderer may still only announce it.
+    pub content: Option<ValueId>,
 }

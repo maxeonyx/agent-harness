@@ -3,22 +3,23 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::Wire;
-use crate::id::{CallId, ContentId, InstanceId, LimbId, TaskId, ToolUseId};
-use crate::journal::Rejected;
+use crate::id::{CallId, LimbId, TaskId, ToolUseId, ValueId};
 use crate::resource::Observation;
 
 /// One action in a limb, as decided. Its life is its [`CallEvent`]s.
 ///
 /// **Concept.** A call is durable from the moment it is decided to the
 /// moment its outcome is known: [made](CallEvent::Made) before it is sent,
-/// [dispatched](CallEvent::Dispatched) to a limb instance, and
-/// [settled](CallEvent::Settled). That is all crash recovery needs. A made
-/// call is sent; a dispatched call is asked about (the limb answers from its
-/// own durable record, or says it has none, and then the call is sent again
-/// if its tool allows a rerun, or settles as [`Outcome::Unknown`]); a
-/// settled call is history. Every attempt is a recorded dispatch, so a rerun
-/// never hides the first.
+/// [dispatched](CallEvent::Dispatched) to a limb, and
+/// [settled](CallEvent::Settled) by that limb. The limb runs each
+/// [`CallId`] at most once, so sending a call again is always safe, and
+/// that is all crash recovery needs: a call is sent again whenever its limb
+/// has reconnected since it was last sent (after its limb restarted, or the
+/// brain did), and the limb answers from its own durable record, keeps
+/// running it, or, having no record, runs it again if its tool may be
+/// rerun or settles it as [`Outcome::Unknown`]. There is no separate
+/// recovery message, and the brain does not need to know which tools may be
+/// rerun: the limb that owns a tool does.
 ///
 /// Every harness action an agent takes is a call too, to a limb the brain
 /// itself implements ([`crate::environment::LimbKind`]): a spawn opens a
@@ -50,123 +51,105 @@ use crate::resource::Observation;
 /// re-dispatches the unanswered call
 /// (`ref-goose/crates/goose/src/agents/state_machine/ops_toolcalling.rs:1015`),
 /// which reruns one that must not be. None asks a surviving executor what
-/// happened, and none lets a tool's author say whether a rerun is safe
-/// ([`crate::environment::Tool::rerun`]). Pi and Codex record a shell
-/// command Max runs from the prompt as its own kind of context
-/// (`ref-pi/packages/coding-agent/src/core/messages.ts:28`,
+/// happened, and none lets a tool's author say whether a rerun is safe. Pi
+/// and Codex record a shell command Max runs from the prompt as its own kind
+/// of context (`ref-pi/packages/coding-agent/src/core/messages.ts:28`,
 /// `ref-codex/codex-rs/core/src/context/user_shell_command.rs:30`); here
 /// every tool a limb offers Max works that way.
+///
+/// **Different here.** Delivery is at-least-once and execution at-most-once
+/// per id, owned by the executor; the record of what was asked and what came
+/// back is the journal's.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Call {
     pub caller: Caller,
-    pub limb: LimbId,
     pub tool: String,
-    pub input: Wire,
+    /// The tool's input exactly as written: the `tool_use` block's `input`.
+    pub input: ValueId,
     /// The versions the caller's view was based on: its context's latest
-    /// observation of each resource this limb owns (for Max, what his face
+    /// observation of each resource the limb owns (for Max, what his face
     /// last showed him). A limb checks those its call names, which covers
     /// the tools whose effects it can know in advance (an edit, a write),
-    /// and refuses the call when they have moved. A command whose effects it
-    /// cannot know (`bash`, `git`) is not checked; its writes reach other
-    /// contexts afterwards, as notices naming the writer.
+    /// and refuses the call when they have moved. A resource the call names
+    /// that is absent here is one the caller has never seen, so a write to
+    /// it that would replace something is refused too ("read it first").
+    /// A command whose effects the limb cannot know (`bash`, `git`) is not
+    /// checked; its writes reach other contexts afterwards, as notices
+    /// naming the call.
     pub expects: Vec<Observation>,
 }
 
-/// Who made a call, which decides who owns it and whose context its result
-/// reaches.
+impl Call {
+    pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
+        let Call {
+            caller: _,
+            tool: _,
+            input,
+            expects: _,
+        } = self;
+        out.push(*input);
+    }
+}
+
+/// Who made a call, which decides who owns it, whose context its result
+/// reaches, and how its limb is found.
 ///
 /// Owner and audience are what matter. An agent's call belongs to its task
 /// and answers its tool use. Max's call in an engineer's chat belongs to
 /// Max and only rides into the engineer's next request: the engineer can
 /// finish while Max's file is open, and stopping the engineer never stops
 /// Max's edit.
+///
+/// An agent names only a tool: which limb runs it is its task's binding,
+/// the same list its root's tools were made from, so a tool use cannot
+/// reach a limb its context was not given. Max and the harness name the limb,
+/// because they act from outside any one context.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Caller {
-    /// A task. With `tool_use`, the call answers that tool use and the task's
-    /// next request waits for it. Without, it is background work the task
-    /// started through a meta tool: the task cannot finish while it runs,
-    /// and its settlement wakes the task.
+    /// A task. With `tool_use`, the call answers that tool use of the
+    /// response in flight, and the task's next request waits for it.
+    /// Without, it is background work the task started through a meta tool:
+    /// the task cannot finish while it runs, and its settlement wakes the
+    /// task.
     Agent {
         task: TaskId,
         tool_use: Option<ToolUseId>,
     },
     /// Max, in a chat with `chat` (his settlement rides into its next
     /// request), or from the tree, outside any context.
-    Max { chat: Option<TaskId> },
+    Max { limb: LimbId, chat: Option<TaskId> },
     /// The harness, while running `call`: the attachments of a spawn's shared
     /// brief or of a handover. Owned by that call, and shown to each
     /// receiving task as a tool call it made.
-    Meta { call: CallId },
+    Meta { call: CallId, limb: LimbId },
 }
 
 /// A fact in a call's life.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallEvent {
     Made(Call),
-    /// Sent to a limb instance. A second dispatch is a rerun.
-    Dispatched {
-        instance: InstanceId,
-    },
+    /// Sent to its limb's current connection. Sent again, as another
+    /// dispatch, after every reconnection while it is unsettled.
+    Dispatched,
+    /// Its limb was asked to stop it, because every task reading it is
+    /// stopping (why is in their [`crate::task::Drain`] facts). Asked again
+    /// after a reconnection, like a dispatch.
+    Stopping,
+    /// How it ended, stated by the limb that ran it (or by the brain, for a
+    /// call that never reached one). A second settlement is accepted only
+    /// after [`Outcome::Unknown`]: the real outcome of a remote command that
+    /// finished while nobody could hear it. The first stands; the caller is
+    /// told the second.
     Settled(Outcome),
-    /// The real outcome of a call that settled as [`Outcome::Unknown`]: a
-    /// remote command that finished while the brain was down. The earlier
-    /// settlement stands; the caller is told.
-    Late(Outcome),
 }
 
-/// Where a call is in its life: the fold of its events.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Status {
-    /// Made, not yet sent.
-    Made,
-    Dispatched {
-        instance: InstanceId,
-        attempt: u32,
-    },
-    Settled {
-        outcome: Outcome,
-        late: Option<Outcome>,
-    },
-}
-
-impl Status {
-    /// Fold one event, or refuse it: a settled call never moves again, and
-    /// only an unknown outcome can be learned late.
-    pub fn apply(&self, event: &CallEvent) -> Result<Status, Rejected> {
-        Ok(match (self, event) {
-            (Status::Made, CallEvent::Dispatched { instance }) => Status::Dispatched {
-                instance: *instance,
-                attempt: 1,
-            },
-            (Status::Dispatched { attempt, .. }, CallEvent::Dispatched { instance }) => {
-                Status::Dispatched {
-                    instance: *instance,
-                    attempt: attempt + 1,
-                }
-            }
-            (Status::Made | Status::Dispatched { .. }, CallEvent::Settled(outcome)) => {
-                Status::Settled {
-                    outcome: outcome.clone(),
-                    late: None,
-                }
-            }
-            (
-                Status::Settled {
-                    outcome: Outcome::Unknown,
-                    late: None,
-                },
-                CallEvent::Late(late),
-            ) => Status::Settled {
-                outcome: Outcome::Unknown,
-                late: Some(late.clone()),
-            },
-            (Status::Settled { .. }, _) => return Err(Rejected::Finished),
-            _ => return Err(Rejected::Busy),
-        })
-    }
-
-    pub fn is_settled(&self) -> bool {
-        matches!(self, Status::Settled { .. })
+impl CallEvent {
+    pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
+        match self {
+            CallEvent::Made(call) => call.values(out),
+            CallEvent::Dispatched | CallEvent::Stopping => {}
+            CallEvent::Settled(outcome) => outcome.values(out),
+        }
     }
 }
 
@@ -174,7 +157,8 @@ impl Status {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Outcome {
     Completed(Output),
-    /// The tool ran and reported failure (a failing command).
+    /// The tool ran and reported failure: a failing command, a timeout, a
+    /// tool name its context does not have.
     Failed(Output),
     /// The limb did nothing, because what the caller expected has moved.
     /// Guaranteed to have had no effect, so trying again after a fresh look
@@ -182,14 +166,42 @@ pub enum Outcome {
     Refused {
         current: Vec<Observation>,
     },
-    /// Stopped while running; it may have had partial effects.
+    /// Stopped while running, because it was asked or because its limb gave
+    /// up on it (the output says which); it may have had partial effects.
     Interrupted {
-        by: Interruption,
         partial: Option<Output>,
     },
     /// Nobody knows whether it ran, and its tool does not allow a rerun. The
     /// agent is told so and decides what to check.
     Unknown,
+}
+
+impl Outcome {
+    /// What it returned, if anything.
+    pub fn output(&self) -> Option<&Output> {
+        match self {
+            Outcome::Completed(output)
+            | Outcome::Failed(output)
+            | Outcome::Interrupted {
+                partial: Some(output),
+            } => Some(output),
+            Outcome::Refused { .. } | Outcome::Interrupted { partial: None } | Outcome::Unknown => {
+                None
+            }
+        }
+    }
+
+    fn values(&self, out: &mut Vec<ValueId>) {
+        if let Some(Output {
+            model,
+            full,
+            observes: _,
+        }) = self.output()
+        {
+            out.push(*model);
+            out.extend(*full);
+        }
+    }
 }
 
 /// What a call returned.
@@ -198,26 +210,13 @@ pub struct Output {
     /// The content the model sees, already shaped for its context: a tool
     /// result's content, or for Max's actions the transcript of what he did.
     /// For a spawn, rendered from its children's outcomes when it settles.
-    pub model: Wire,
+    pub model: ValueId,
     /// The full output when `model` is a cut-down view of it, so Max and
-    /// later reads can see everything.
-    pub full: Option<ContentId>,
+    /// later reads can see everything. Sent by the limb with the settlement,
+    /// into the one value store, so it is readable wherever the limb ran.
+    pub full: Option<ValueId>,
     /// The versions this result embodies: the file version a read returned,
     /// the version a write produced, the skill version a load returned. A
     /// later change to any of them reaches the context as a notice.
     pub observes: Vec<Observation>,
-}
-
-/// Why a call was stopped.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Interruption {
-    /// Max interrupted the turn.
-    Max,
-    /// Its owner is stopping.
-    Stop,
-    /// The limb ran out of the time it allows a call.
-    Timeout,
-    /// The limb lost the brain for longer than it waits, and stopped its
-    /// calls rather than leave them running unowned.
-    Disconnected,
 }

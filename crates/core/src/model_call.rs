@@ -2,23 +2,28 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::{EntryId, Rendered, Wire};
-use crate::id::CallId;
-use crate::id::{TaskId, Timestamp};
+use crate::context::{Entry, EntryId, Message, Rendered, Role};
+use crate::id::{TaskId, Timestamp, ValueId};
 
 /// One request to the provider, as sent.
 ///
 /// **Concept.** The honest account of a nondeterministic step, from which
 /// everything about cost and cache is derived rather than tracked: which
-/// context it sent ([`ModelCall::head`]), what that context newly included
-/// ([`ModelCall::renders`]), where it asked the provider to cache, when the
-/// response began and ended, how it ended, and what the provider reported.
-/// Every turn, retry, keep-alive and handover turn is one.
+/// context it sent (its [`base`](ModelCall::base) and the messages it
+/// [appended](ModelCall::appends), whose last is its [head](ModelCall::head)),
+/// what those messages were rendered from ([`ModelCall::renders`]), where it
+/// asked the provider to cache, when the response began and ended, how it
+/// ended, and what the provider reported. Every turn, retry, keep-alive and
+/// handover turn is one.
+///
+/// A request names its base and carries its new messages, so its head is
+/// computed, never stated: it cannot claim a context that does not grow
+/// from the one its task has, and the fold learns the new entries from it.
 ///
 /// It is Bx's build record. The task's agent kind and binding are the
 /// definition, the head's [`EntryId`] is the resolved input's content
-/// identity, the response entry is the output, and timing, usage and quota
-/// are the execution evidence. Several model calls on one head (a retry, a
+/// identity, the response is the output, and timing, usage and quota are
+/// the execution evidence. Several model calls on one head (a retry, a
 /// rewind, a resend after a crash) expose the model's nondeterminism instead
 /// of hiding it, as one Bx definition with several records does. Unlike Bx,
 /// the output can never be re-derived, so it *is* the history; and the
@@ -43,8 +48,8 @@ use crate::id::{TaskId, Timestamp};
 /// **Vision.** Cache-aware forking; keep-alive vs cache-expiry handover as
 /// an expected-value decision (critique §4); analytics and timesheets; the
 /// throbber's "sent, no first byte yet" vs "streaming"; restart (a request
-/// with no end was lost and is sent again, since nothing it produced was
-/// appended); the subscription's usage window.
+/// sent by an earlier brain with no end was lost and is sent again, since
+/// nothing it produced was appended); the subscription's usage window.
 ///
 /// **Existing harnesses.** Oh My Pi's cache warmer refreshes a cache
 /// shortly before expiry when the continuation probability times the miss
@@ -60,18 +65,74 @@ use crate::id::{TaskId, Timestamp};
 pub struct ModelCall {
     pub task: TaskId,
     pub purpose: Purpose,
-    /// The last entry sent: the identity of the whole context.
-    pub head: EntryId,
-    /// What this request newly included, in order: the tool results of the
-    /// last round, deliveries, notes. Empty for a retry of the same head and
-    /// for a keep-alive. A task has seen exactly what its requests rendered,
-    /// so a request retried after a rate limit renders what arrived
-    /// meanwhile, and nothing depends on journal positions.
+    /// The context this request extends: its task's head for a turn, an
+    /// entry on the task's chain for a keep-alive.
+    pub base: EntryId,
+    /// The messages this request appended to `base`, in order: the
+    /// attachments' tool uses the harness writes, tool results, Max's words,
+    /// notes. Empty for a retry of the same head and for a keep-alive.
+    pub appends: Vec<Message>,
+    /// What `appends` was rendered from, in order. A task has seen exactly
+    /// what its requests rendered, so a request retried after a rate limit
+    /// renders what arrived meanwhile, and nothing depends on journal
+    /// positions.
     pub renders: Vec<Rendered>,
     /// The request's other parameters exactly as sent: `max_tokens`,
     /// thinking, effort, `stream`.
-    pub params: Wire,
+    pub params: ValueId,
     pub breakpoints: Vec<Breakpoint>,
+}
+
+impl ModelCall {
+    /// The last entry sent: the identity of the whole context.
+    pub fn head(&self) -> EntryId {
+        self.appends
+            .iter()
+            .fold(self.base, |parent, message| message.id_after(parent))
+    }
+
+    /// The entries this request appended, each with its id, in order.
+    pub fn entries(&self) -> Vec<(EntryId, Entry)> {
+        let mut parent = self.base;
+        self.appends
+            .iter()
+            .map(|message| {
+                let id = message.id_after(parent);
+                let entry = Entry::Message {
+                    parent,
+                    message: message.clone(),
+                };
+                parent = id;
+                (id, entry)
+            })
+            .collect()
+    }
+
+    /// The entry a response with `content` is: an assistant message after
+    /// the head.
+    pub fn response(&self, content: ValueId) -> Entry {
+        Entry::Message {
+            parent: self.head(),
+            message: Message {
+                role: Role::Assistant,
+                content,
+            },
+        }
+    }
+
+    pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
+        let ModelCall {
+            task: _,
+            purpose: _,
+            base: _,
+            appends,
+            renders: _,
+            params,
+            breakpoints: _,
+        } = self;
+        out.extend(appends.iter().map(|m| m.content));
+        out.push(*params);
+    }
 }
 
 /// Why a request was sent.
@@ -80,16 +141,16 @@ pub enum Purpose {
     /// A model turn for the task. At most one is in flight per task.
     Turn,
     /// A zero-output request that only refreshes the cache's lifetime. Its
-    /// head may be behind the task's: while a tool call is outstanding, the
-    /// only valid keep-alive is the previous request again. It never moves
-    /// the task.
+    /// base may be behind the task's head: while a tool call is outstanding,
+    /// the only valid keep-alive is the previous request again. It appends
+    /// nothing and never moves the task.
     KeepAlive,
 }
 
 /// A cache breakpoint the request placed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Breakpoint {
-    /// The prefix through this entry is cached.
+    /// The prefix through this entry is cached. It is on the request's chain.
     pub at: EntryId,
     pub ttl: Ttl,
 }
@@ -107,7 +168,8 @@ pub enum Ttl {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ModelCallEvent {
     /// The request was sent. A [`Purpose::Turn`] moves its task's head to
-    /// `head` and clears what it rendered from the task's pending inputs.
+    /// the request's head and clears what it rendered from the task's
+    /// pending inputs.
     Sent(ModelCall),
     /// The response's `message_start` arrived: from here a cache entry this
     /// request wrote is readable by others.
@@ -121,31 +183,51 @@ pub enum ModelCallEvent {
     },
 }
 
+impl ModelCallEvent {
+    pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
+        match self {
+            ModelCallEvent::Sent(call) => call.values(out),
+            ModelCallEvent::FirstByte => {}
+            ModelCallEvent::Ended {
+                ending,
+                usage: _,
+                quota: _,
+            } => match ending {
+                Ending::Responded { content, stop: _ } => out.push(*content),
+                Ending::Abandoned { partial } => out.extend(*partial),
+                Ending::Failed { .. } | Ending::Limited { .. } | Ending::Lost => {}
+            },
+        }
+    }
+}
+
 /// How a request ended.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Ending {
-    /// The response was stored as `entry`, and its tool uses made as `calls`,
-    /// in order (each [`crate::call::Call`] is recorded before this). A tool
-    /// use is not acted on until the message holding it is complete, so a
-    /// crash mid-stream leaves no effect of a response the model never
-    /// finished.
-    Responded {
-        entry: EntryId,
-        stop: Stop,
-        calls: Vec<CallId>,
-    },
-    /// The provider refused or failed. `retry` when it said when; a
-    /// subscription limit holds every task on the account until then.
+    /// The response's `content`, which is the assistant entry after the
+    /// request's head ([`ModelCall::response`]). Its tool uses are the calls
+    /// made for its task while the request was in flight, in the order they
+    /// were made (in the same batch as this, so a crash mid-stream leaves no
+    /// effect of a response the model never finished).
+    Responded { content: ValueId, stop: Stop },
+    /// The provider refused or failed this request. `retry` when it said
+    /// when; that is about this request, and how long to wait before sending
+    /// its task's next one is the brain's policy.
     Failed {
         status: Option<u16>,
         message: String,
         retry: Option<Timestamp>,
     },
+    /// The subscription's limit refused it: every task on the account waits
+    /// until `until`. Not the task's failure, so it never counts towards
+    /// giving up on it.
+    Limited { until: Timestamp },
     /// The harness stopped reading: Max interrupted, or the task is
-    /// stopping. Nothing was stored as the model's; the visible text Max may
+    /// stopping. Nothing was kept as the model's; the visible text Max may
     /// have been reacting to is kept here and quoted to the model next.
-    Abandoned { partial: Option<Wire> },
-    /// Found unfinished after a restart. Nothing from it was stored.
+    Abandoned { partial: Option<ValueId> },
+    /// Sent by an earlier brain, which ended before it did. Nothing from it
+    /// was kept.
     Lost,
 }
 
@@ -178,7 +260,7 @@ pub struct Usage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Quota {
     /// `anthropic-ratelimit-unified-representative-claim`: `five_hour` and
-    /// the like are the plan; anything else (`overage`) is billing gone
+    /// `seven_day*` are the plan; anything else (`overage`) is billing gone
     /// wrong, and the brain stops sending.
     pub claim: Option<String>,
     /// Fraction of the 5-hour window used, 0 to 1.

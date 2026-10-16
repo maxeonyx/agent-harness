@@ -9,50 +9,76 @@
 //!
 //! | Identity | Type | Its facts | What is true now |
 //! |---|---|---|---|
-//! | The journal | [`journal::Record`] | everything, in order | [`state::State`] |
-//! | A writer of it | [`journal::Launched`] | one record | [`state::State::build`] |
-//! | A context | [`context::Entry`], named by [`context::EntryId`] | none: a value, stored by content | itself |
-//! | A task | [`task::Task`] | [`task::TaskEvent`], and the facts below that concern it | [`task::Task::apply`] |
+//! | The journal | [`journal::Record`] | everything, in order, through [`journal::Journal::commit`] | [`state::State`] |
+//! | A writer of it | [`journal::Launched`] | one record | [`state::State::launch`] |
+//! | A value | [`id::ValueId`] | none: immutable bytes, arriving in the [`journal::Batch`] that first names them | itself |
+//! | A context | [`context::Entry`], named by [`context::EntryId`] | none: carried inside the fact that first sends or receives it | [`state::State::context`] |
+//! | A task | [`task::Task`] | [`task::TaskEvent`], and the facts below that concern it | [`task::Task`], folded by [`state::State::apply`] |
 //! | A request | [`model_call::ModelCall`] | [`model_call::ModelCallEvent`] | [`state::ModelCallRecord`] |
-//! | A call | [`call::Call`] | [`call::CallEvent`] | [`call::Status`] |
+//! | A call | [`call::Call`] | [`call::CallEvent`] | [`state::CallRecord`] |
 //! | A delivery | [`delivery::Delivery`] | made once | the task's pending inputs |
 //! | An environment | [`environment::Environment`] | each new version | [`state::State::environment`] |
-//! | A limb | [`environment::Limb`] | each new version; [`environment::Reach`] | [`state::State::limb`] |
-//! | A resource | [`resource::ResourceKey`] | [`resource::Change`] | [`state::State::stale`] |
+//! | A limb | [`environment::Limb`] | each new version; [`environment::Reach`] | [`state::State::limb`], [`state::State::connected`] |
+//! | A resource | [`resource::ResourceKey`] | [`resource::Change`] | [`state::State::resource`], [`state::State::stale`] |
 //! | Max's attention | [`attention::Ranking`], [`attention::Focus`] | each new one | [`state::State::queue`] |
 //!
 //! A scope is not an identity: it is the spawn call that owns it
-//! ([`task::Scope`]). Max's queue, the throbber, what each context is stale
-//! on, and the brain's to-do list are views, never stored.
+//! ([`task::Scope`]). Max's queue, the throbber, who reads a call, what each
+//! context is stale on, and the brain's to-do list are views, never stored.
+//!
+//! There is one store of bytes and one vocabulary. Every byte the journal
+//! names (a system prompt, a tool result, a response, Max's pasted image) is
+//! a value; entries, calls and settlements are small structure that names
+//! values. A limb speaks the journal's own facts
+//! ([`environment::FromLimb::Facts`]), so nothing translates between a
+//! protocol and the model, and the fold checks a limb's facts as it checks
+//! anyone's.
 //!
 //! # How the vision falls out
 //!
-//! - **Contexts.** A task's head moves through one immutable tree of wire
-//!   messages. A fork starts on its parent's response; fresh siblings with
-//!   the same brief and attachments render the same entries, so a shared
-//!   seed is one cache prefix with no bookkeeping; a handover or reseed
-//!   moves the head to a new root; a resume starts on a finished task's last
-//!   entry; a rewind moves back; an aside is Max's fork of a busy task.
-//!   Nothing is re-rendered, so nothing drifts when the harness changes its
-//!   own code, and the entry id is the cache key.
+//! - **Contexts.** A task's head moves through one immutable Merkle tree of
+//!   wire messages, held by the fold. A fork starts on its parent's
+//!   response; fresh siblings with the same brief and attachments append the
+//!   same entries, so a shared seed is one cache prefix with no bookkeeping;
+//!   a handover or reseed moves the head to a new root; a resume starts on a
+//!   finished task's last entry; a rewind moves back and restores what the
+//!   context embodied there; an aside is Max's fork of a busy task. A
+//!   request's head is computed from its base and its messages, so it cannot
+//!   claim a context its task does not have. Nothing is re-rendered, so
+//!   nothing drifts when the harness changes its own code, and the entry id
+//!   is the cache key.
 //! - **Structured concurrency.** Spawn is a call. A parent waiting on
 //!   children is acting on one outstanding call; the scope closes when the
 //!   call settles, which it can only do once every member is done; a stop
 //!   cascades through [`state::Todo::Stop`]; background work is a call the
-//!   task watches and cannot finish while it runs.
+//!   task watches and cannot finish while it runs. What a meta limb can
+//!   start is its own list, enforced by the fold.
 //! - **Max as a participant.** His words are deliveries, his edits in a
 //!   chat are calls to the agent's own tools, his controls over the tree are
 //!   task events he authors, and each of his facts records how far his face
 //!   had got. Waiting on him is derived, so his queue is never out of step
 //!   with the tasks.
-//! - **Restart.** A fresh brain folds the journal and works through
-//!   [`state::State::todo`]: a request with no end was lost and is sent
-//!   again, a dispatched call is asked about, an unknown outcome is said to
-//!   be unknown and may arrive late.
-//! - **Context updates.** Each task knows the version of everything its
-//!   context embodies; a change becomes one notice at its next request.
-//! - **No permission prompts.** An agent's call is accepted only along its
-//!   binding's routes, so what it cannot do is what its environment lacks.
+//! - **Restart.** Not a mode: positions in the journal. A fresh brain folds
+//!   the journal and works through [`state::State::todo`]. A request sent
+//!   before the current [`journal::Launched`] with no end was lost and is
+//!   sent again; every unsettled call is sent again to its limb once the
+//!   limb has connected to the new brain, and the limb, which runs each id
+//!   at most once, answers from its own record. A brain restart, a limb
+//!   restart and a dropped connection are one case.
+//! - **Context updates and the environment between turns.** Each task knows
+//!   the version of everything its context embodies; a change becomes one
+//!   notice at its next request, and wakes a standing task that listens.
+//!   A watcher's result, a page event and a change to Max's queue are
+//!   changes, so nothing an environment says needs an addressee.
+//! - **No permission prompts.** An agent's call names only its tool and is
+//!   routed by its task's binding, made with its root's tools from the same
+//!   descriptions ([`environment::Binding::new`]), so what an agent cannot
+//!   do is what its environment lacks. A tool use the binding does not route
+//!   is answered as a failed call ([`state::Todo::Unroutable`]).
+//! - **Integrity.** [`journal::Journal::commit`] is the one writer: it
+//!   stamps positions, checks every value a fact names is stored or in the
+//!   batch, folds, and only then appends. Each author may state only its own
+//!   facts. A refused batch is never written.
 //!
 //! # Left to the brain
 //!
@@ -60,16 +86,19 @@
 //! results it must; the wording of notes; where breakpoints go; keep-alive
 //! and handover timing, an expected-value decision over
 //! [`model_call::ModelCall`] records; when to hold a fan-out's siblings
-//! (until the first one's first byte); retry and give-up thresholds; and
-//! everything the scheduler decides.
+//! (until the first one's first byte); retry and give-up thresholds,
+//! including when an account limit or a bad billing claim stops sending;
+//! and everything the scheduler decides.
 //!
 //! # Bx
 //!
 //! Shared with Bx: an immutable value is named by its hash
-//! ([`id::Digest`], plausibly the same store); a request is a build record
-//! whose input is a content identity and whose output is a value; several
-//! records for one input expose nondeterminism instead of hiding it;
-//! provenance lives in the record, not in the value.
+//! ([`id::ValueId`] is Bx's artifact identity, plausibly the same store);
+//! structure is named by the hash of its encoding over those names (an
+//! [`context::EntryId`]); a request is a build record whose input is a
+//! content identity and whose output is a value; several records for one
+//! input expose nondeterminism instead of hiding it; provenance lives in
+//! the record, not in the value.
 //!
 //! Not shared: a model's output cannot be re-derived, so the record is the
 //! history, not a cache of it; inputs are not pinned, a changed input
@@ -82,11 +111,20 @@
 //!
 //! Each of these is marked where it lives and is Max's to decide:
 //!
+//! - Acting in a finished chat: Max's calls there are accepted and ride
+//!   into a resume of it; his words to it are refused, and the face resumes
+//!   with them as the new mandate.
+//! - What an environment says between turns is a resource change, never a
+//!   delivery ([`resource::Change`]).
+//! - A limb may state only how its own dispatched calls ended and how its
+//!   own resources changed.
 //! - Talking to a parent waiting on its children: an aside
 //!   ([`task::Origin::Aside`]), with background scopes as the other path.
 //! - Which agents may ask Max mid-turn ([`environment::LimbKind::Max`]).
 //! - An autonomous turn that ends with background work running: it lingers,
 //!   told once ([`delivery::Prompt::Lingering`]).
+//! - A limb cloned per fork waits for a limb with such state
+//!   ([`environment::Fork`]).
 //! - No tool is given to every agent implicitly; each comes from a limb.
 
 pub mod attention;
