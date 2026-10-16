@@ -18,8 +18,11 @@
 //! [`ToLimb`]: harness_core::environment::ToLimb
 //! [`FromLimb`]: harness_core::environment::FromLimb
 //!
-//! The face is served from the same process over a second connection to the
-//! same store, so Max watches exactly what the brain appended. Everything
+//! The face is served from the same process. After each commit the brain
+//! hands it the state, a persistent value it holds while the brain moves
+//! on, so Max watches exactly what the brain appended; the bytes facts name
+//! it reads over a connection of its own, since a stored value never
+//! changes. Everything
 //! he does there (his words, answering an ask, interrupting, stopping or
 //! holding a task, opening an aside, marking a chat done, reordering his
 //! queue, focusing a task) reaches the brain as a batch of his
@@ -37,35 +40,45 @@
 //!
 //! ```text
 //! harness-brain --journal J [--port 4321] [--sample WAV]
-//!               [--workspace DIR --mandate FILE [--words FILE] [--name NAME] [--chat]]
+//!               [--workspace DIR --mandate FILE [--name NAME]]
 //! ```
 //! A new journal needs the workspace and the mandate; an existing one is
-//! continued and they are ignored. `--words` delivers Max's own words to
-//! the task with its mandate, so its briefs can quote them. `--chat` makes the root a chat with Max:
-//! each turn's end is his move, and it is never done. `--sample` offers the
-//! page a recording to dictate, for a machine with no microphone.
+//! continued and they are ignored. The task they start is a chat with Max,
+//! like every task he starts: each turn's end is his move, and it is done
+//! when he says. Its mandate is his words, so its briefs can quote it.
+//! `--sample` offers the page a recording to dictate, for a machine with no
+//! microphone.
 
 mod brain;
 mod max;
 mod meta;
 mod policy;
 mod process;
-mod reader;
 mod render;
 mod roles;
 
 use std::net::{IpAddr, TcpListener};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::{Mutex, mpsc};
 use std::thread;
 
-use harness_core::task::Mode;
-use harness_face_web::{Dictation, Face, Feed, Wiring};
+use harness_core::id::ValueId;
+use harness_face_web::{Dictation, Face, Feed, Source, Wiring};
 use harness_provider::{Client, Login};
 use harness_store::Store;
 
 use crate::brain::{Brain, Inbox, Start};
-use crate::reader::Reader;
+
+/// The values the face shows, read over its own connection to the store.
+struct Values(Mutex<Store>);
+
+impl Source for Values {
+    fn value(&self, id: ValueId) -> Option<Vec<u8>> {
+        let store = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        store.value(id).ok().flatten()
+    }
+}
 
 fn main() -> ExitCode {
     match run() {
@@ -82,8 +95,7 @@ fn run() -> Result<(), String> {
     let (mut journal, mut port, mut workspace, mut mandate, mut name) =
         (None, 4321u16, None, None, None);
     let (mut roles, mut role) = (None, "orchestrator".to_string());
-    let mut mode = Mode::Autonomous;
-    let (mut sample, mut words) = (None, None);
+    let mut sample = None;
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
@@ -91,11 +103,9 @@ fn run() -> Result<(), String> {
             "--port" => port = value()?.parse().map_err(|e| format!("--port: {e}"))?,
             "--workspace" => workspace = Some(PathBuf::from(value()?)),
             "--mandate" => mandate = Some(PathBuf::from(value()?)),
-            "--words" => words = Some(PathBuf::from(value()?)),
             "--name" => name = Some(value()?),
             "--roles" => roles = Some(PathBuf::from(value()?)),
             "--role" => role = value()?,
-            "--chat" => mode = Mode::UserFacing,
             "--sample" => sample = Some(PathBuf::from(value()?)),
             _ => return Err(format!("unknown argument {flag}")),
         }
@@ -107,19 +117,16 @@ fn run() -> Result<(), String> {
             workspace,
             name: name.unwrap_or_else(|| role.clone()),
             role,
-            mode,
             mandate: std::fs::read_to_string(&mandate)
                 .map_err(|e| format!("the mandate {mandate:?}: {e}"))?,
-            words: words
-                .map(|w| std::fs::read_to_string(&w).map_err(|e| format!("the words {w:?}: {e}")))
-                .transpose()?,
         }),
         _ => None,
     };
     let state_dir = journal_path.with_extension("workspace-state");
 
     let store = Store::open(&journal_path).map_err(|e| format!("the journal opens: {e}"))?;
-    let reader = Reader::open(&journal_path).map_err(|e| format!("the journal opens: {e}"))?;
+    let values = Store::open(&journal_path).map_err(|e| format!("the journal opens: {e}"))?;
+    let (commits, followed) = mpsc::channel();
 
     let certs = PathBuf::from(std::env::var("HOME").map_err(|e| e.to_string())?)
         .join(".config/dev-certs/shared-local");
@@ -137,7 +144,7 @@ fn run() -> Result<(), String> {
         dictation = dictation.with_sample(&sample)?;
     }
     let face = Face::with(
-        reader.clone(),
+        Values(Mutex::new(values)),
         Wiring {
             act: Some(Box::new(inbox.max())),
             dictation: Some(dictation),
@@ -147,10 +154,12 @@ fn run() -> Result<(), String> {
     // The Windows host, read again for each connection: DHCP can move it.
     let allow = |peer: IpAddr| Some(peer) == harness_face_web::default_gateway().map(IpAddr::V4);
     let client = Client::new(login()?);
-    let mut brain = Brain::launch(store, reader, client, state_dir, &roles, start, inbox, feed)?;
+    let mut brain = Brain::launch(
+        store, commits, client, state_dir, &roles, start, inbox, feed,
+    )?;
     // The brain and the face it serves run until the process is killed.
     thread::scope(|s| {
-        s.spawn(|| face.follow());
+        s.spawn(|| face.follow(followed));
         s.spawn(|| {
             if let Err(e) = harness_face_web::serve(&face, listener, tls, allow) {
                 eprintln!("harness-brain: the face stopped serving: {e}");

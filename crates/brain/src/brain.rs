@@ -12,24 +12,22 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role};
-use harness_core::delivery::{Content, Delivery};
-use harness_core::environment::{
-    Description, Environment, FromLimb, Limb, LimbKind, Reach, ToLimb,
-};
+use harness_core::delivery::{Content, Delivery, Prompt};
+use harness_core::environment::{Description, Environment, FromLimb, LimbKind, Reach, ToLimb};
 use harness_core::id::{
     CallId, DeliveryId, FaceId, InstanceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ToolUseId,
     ValueId,
 };
 use harness_core::journal::{self, Author, Batch, Fact, Launched, Record};
-use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose};
+use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop};
 use harness_core::resource::{Change, Observation, ResourceKey};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
-    Context, Created, Drain, Giver, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome,
-    Scope, Start as TaskStart, Stopper, Task, TaskEvent, TaskState,
+    Context, Created, Drain, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome, Scope,
+    Start as TaskStart, Stopper, Task, TaskEvent,
 };
 use harness_core::value::Bytes;
-use harness_face_web::{Act, Feed, Running};
+use harness_face_web::{Act, Commit, Feed, Running};
 use harness_limb_workspace::{Clone, Settings, user};
 
 use crate::process::Process;
@@ -38,7 +36,6 @@ use harness_store::Store;
 
 use crate::max;
 use crate::meta::{self, How};
-use crate::reader::Reader;
 use crate::{policy, render, roles};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
@@ -104,25 +101,25 @@ impl Act for Max {
 }
 
 /// A task the command line starts in Max's scope, as his: a role, a
-/// directory to work in, and a mandate.
+/// directory to work in, and a mandate. Like every task he starts, it is a
+/// chat with him, done when he says.
 pub struct Start {
     pub role: String,
     pub workspace: PathBuf,
     pub name: String,
-    /// Autonomous, or a chat with Max.
-    pub mode: Mode,
     pub mandate: String,
-    /// Max's words to it as well, delivered with it, so they can be quoted.
-    pub words: Option<String>,
 }
+
+/// How many recent records a face is given at launch.
+const RECENT: u64 = 200;
 
 type Refused = journal::Error<harness_store::Error>;
 
 /// One brain: the only writer of its journal.
 pub struct Brain {
     journal: journal::Journal<Store>,
-    /// The face's connection, woken after each commit.
-    reader: Reader,
+    /// The face, handed the state after each commit.
+    face: Sender<Commit>,
     client: Arc<Client>,
     events: Sender<Event>,
     inbox: Receiver<Event>,
@@ -144,8 +141,6 @@ pub struct Brain {
     connecting: HashSet<LimbId>,
     /// Where each limb keeps its record of calls: `<state>/<limb>`.
     state_dir: PathBuf,
-    /// What each plugin limb tells a new root, as it last said.
-    descriptions: BTreeMap<LimbId, Description>,
     /// The context of each request without a first byte yet: fan-out gating.
     cold: HashMap<ModelCallId, HashSet<EntryId>>,
     /// Each request in flight: the thread that sends it, joined when it
@@ -156,8 +151,6 @@ pub struct Brain {
     root: Option<TaskId>,
     started: Instant,
     reported: bool,
-    /// A response was billed outside the plan: send nothing more.
-    off_plan: bool,
 }
 
 impl Brain {
@@ -167,7 +160,7 @@ impl Brain {
     #[allow(clippy::too_many_arguments)]
     pub fn launch(
         store: Store,
-        reader: Reader,
+        face: Sender<Commit>,
         client: Client,
         state_dir: PathBuf,
         roles: &Path,
@@ -177,6 +170,18 @@ impl Brain {
     ) -> Result<Brain, String> {
         let journal =
             journal::Journal::open(store).map_err(|e| format!("the journal folds: {e}"))?;
+        let from = journal
+            .state()
+            .last()
+            .map_or(0, |s| s.0.saturating_sub(RECENT));
+        let records = journal
+            .store()
+            .read(Seq(from), RECENT)
+            .map_err(|e| format!("the journal reads: {e}"))?;
+        let _ = face.send(Commit {
+            state: journal.state().clone(),
+            records,
+        });
         let shared = |is: &dyn Fn(&LimbKind) -> bool| {
             let state = journal.state();
             state
@@ -191,7 +196,7 @@ impl Brain {
             shared(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let mut brain = Brain {
             journal,
-            reader,
+            face,
             client: Arc::new(client),
             events,
             inbox,
@@ -205,13 +210,11 @@ impl Brain {
             limbs: HashMap::new(),
             connecting: HashSet::new(),
             state_dir,
-            descriptions: BTreeMap::new(),
             cold: HashMap::new(),
             requests: HashMap::new(),
             root: None,
             started: Instant::now(),
             reported: false,
-            off_plan: false,
         };
         let mut facts = vec![Fact::Launched(Launched {
             build: concat!("harness-brain ", env!("CARGO_PKG_VERSION")).into(),
@@ -261,9 +264,9 @@ impl Brain {
             .map_err(|e| format!("the workspace {:?}: {e}", start.workspace))?;
         let mut facts = Vec::new();
         let mut places = BTreeMap::new();
-        for place in &env.places {
+        for kind in &env.places {
             let limb = self.workspace_limb(&dir, None, &mut facts);
-            places.insert(place.name.clone(), limb);
+            places.insert(kind.clone(), limb);
         }
         let mandate = Bytes::from(start.mandate);
         let id = TaskId::generate();
@@ -277,25 +280,15 @@ impl Brain {
                     environment: env.id,
                     places,
                 },
-                mode: start.mode,
+                mode: Mode::UserFacing,
                 mandate: Mandate {
                     text: mandate.id(),
                     brief: None,
                     quotes: Vec::new(),
-                    from: Giver::Max,
                 },
             })),
         ));
-        let mut values = vec![mandate];
-        if let Some(words) = start.words {
-            let words = render::blocks(&[render::text(&words)]);
-            facts.push(Fact::Delivery(Delivery {
-                id: DeliveryId::generate(),
-                to: id,
-                content: Content::Words(words.id()),
-            }));
-            values.push(words);
-        }
+        let values = vec![mandate];
         let max = Author::Max {
             face: FaceId(0),
             seen: self.state().last().unwrap_or(Seq(0)),
@@ -305,41 +298,25 @@ impl Brain {
         Ok(id)
     }
 
-    /// The workspace limb for `dir`: the one already defined there, or a new
-    /// one whose definition goes in `facts`, made by cloning if `clone`.
+    /// The workspace limb for `dir`, which is its name: the one already
+    /// defined, or a new one whose definition goes in `facts`, made by
+    /// cloning if `clone`.
     fn workspace_limb(&self, dir: &Path, clone: Option<Clone>, facts: &mut Vec<Fact>) -> LimbId {
-        let existing = facts
-            .iter()
-            .filter_map(|f| match f {
-                Fact::Limb(l) => Some(l),
-                _ => None,
-            })
-            .chain(self.limbs_defined())
-            .find(|l| Settings::of(l).is_some_and(|s| s.dir == dir));
-        if let Some(limb) = existing {
-            return limb.id;
+        let name = dir.to_string_lossy();
+        let new = facts.iter().find_map(|f| match f {
+            Fact::Limb(l) if l.name == name => Some(l.id),
+            _ => None,
+        });
+        if let Some(id) = new.or_else(|| self.state().limb_named(&name).map(|l| l.id)) {
+            return id;
         }
         let id = LimbId::generate();
-        let name = dir
-            .file_name()
-            .map_or_else(|| dir.to_string_lossy(), |n| n.to_string_lossy())
-            .into_owned();
         let settings = Settings {
             dir: dir.to_path_buf(),
             clone,
         };
         facts.push(Fact::Limb(settings.definition(id, &name)));
         id
-    }
-
-    /// Every limb a task's place holds.
-    fn limbs_defined(&self) -> impl Iterator<Item = &Limb> {
-        let state = self.state();
-        let ids: Vec<LimbId> = state
-            .tasks()
-            .flat_map(|t| t.places.values().copied())
-            .collect();
-        ids.into_iter().filter_map(move |l| state.limb(l))
     }
 
     /// Run until killed. The root's result is printed when it is done; the
@@ -457,18 +434,18 @@ impl Brain {
                 TaskEvent::Drain(Drain::Stop(Stopper::Owner)),
             )),
             Todo::Settle(call) => self.settle_scope(call),
-            Todo::Return(aside) => {
-                let Origin::Aside { from } = self.state().task(aside).expect("an aside").origin
-                else {
-                    unreachable!("only an aside returns")
-                };
-                self.fact(Fact::Delivery(Delivery {
-                    id: DeliveryId::generate(),
-                    to: from,
-                    content: Content::Aside(aside),
-                }));
-            }
+            Todo::Linger(task) => self.prompt(task, Prompt::Lingering),
+            Todo::Unblock(aside) => self.prompt(aside, Prompt::Unblocked),
         }
+    }
+
+    /// Ask a task for a turn.
+    fn prompt(&mut self, to: TaskId, prompt: Prompt) {
+        self.fact(Fact::Delivery(Delivery {
+            id: DeliveryId::generate(),
+            to,
+            content: Content::Prompt(prompt),
+        }));
     }
 
     // Limbs.
@@ -501,10 +478,9 @@ impl Brain {
 
     fn opened(&mut self, limb: LimbId, instance: InstanceId) {
         self.connecting.remove(&limb);
-        let Some(process) = self.limbs.get(&limb) else {
+        if !self.limbs.contains_key(&limb) {
             return;
-        };
-        process.send(&ToLimb::Describe);
+        }
         self.fact(Fact::Reach {
             limb,
             reach: Reach::Connected { instance },
@@ -514,7 +490,7 @@ impl Brain {
             .state()
             .tasks()
             .filter(|t| !t.is_done())
-            .filter_map(|t| t.context.as_ref())
+            .filter_map(|t| t.context())
             .flat_map(|c| c.knows.keys())
             .filter(|r| r.limb == limb)
             .cloned()
@@ -543,7 +519,7 @@ impl Brain {
         let failing: Vec<TaskId> = self
             .state()
             .tasks()
-            .filter(|t| !t.is_done() && t.draining.is_none())
+            .filter(|t| !t.is_done() && t.drain().is_none())
             .filter(|t| self.state().limbs_of(t).contains(&limb))
             .map(|t| t.id)
             .collect();
@@ -562,7 +538,7 @@ impl Brain {
             return Some(max::description(limb));
         }
         if limb != self.meta {
-            return self.descriptions.get(&limb).cloned();
+            return self.state().described(limb).map(|d| d.description.clone());
         }
         let state = self.state();
         let env = state.environment(task.environment)?;
@@ -628,7 +604,7 @@ impl Brain {
     /// The task's handover call, if the round that made it is over: the next
     /// request starts a new context instead.
     fn handover(&mut self, task: &Task) -> bool {
-        let Some(call) = task.pending.iter().find_map(|p| match p.input {
+        let Some(call) = task.pending.iter().find_map(|p| match *p {
             Input::Result(call) if self.call(call).tool == meta::HANDOVER => Some(call),
             _ => None,
         }) else {
@@ -648,7 +624,10 @@ impl Brain {
     // Requests.
 
     fn send(&mut self, id: TaskId, now: Timestamp) {
-        if self.off_plan {
+        // A response billed outside the plan stops every request.
+        if let Some(quota) = self.state().quota().and_then(|e| e.quota.as_ref())
+            && !quota.on_plan
+        {
             return;
         }
         let task = self.state().task(id).expect("a task to send for").clone();
@@ -656,24 +635,57 @@ impl Brain {
             return;
         }
         let head = task.head().expect("a ready task has a context");
-        if task.failures >= policy::GIVE_UP {
-            let reason = format!("the provider failed {} times in a row", task.failures);
+        let failures = task.live().map_or(0, |l| l.failures);
+        if failures >= policy::GIVE_UP {
+            let reason = format!("the provider failed {failures} times in a row");
             return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
         }
         // Nothing is in flight for a ready task, so every turn has ended.
-        let last = self.state().last_turn(id);
-        if task.failures > 0
-            && last.is_some_and(|e| now.0 < e.at.at.0 + policy::backoff_ms(task.failures))
+        let last = self.state().last_turn(id).cloned();
+        if failures > 0
+            && let Some(ended) = &last
         {
-            return;
+            let after = match ended.ending {
+                Ending::Failed {
+                    retry: Some(when), ..
+                } => when.0,
+                _ => ended.at.at.0 + policy::backoff_ms(failures),
+            };
+            if now.0 < after {
+                return;
+            }
+        }
+        match last.as_ref().map(|e| &e.ending) {
+            Some(Ending::Responded {
+                stop: Stop::Refused,
+                ..
+            }) => {
+                let reason = "the model declined to go on".to_string();
+                return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
+            }
+            // A context the provider no longer accepts starts again from a
+            // new root, with a note of where the old one ended.
+            Some(Ending::Responded {
+                stop: Stop::ContextWindow,
+                ..
+            }) if !matches!(self.state().entry(head), Some(Entry::Root(_))) => {
+                return match self.start_of(id) {
+                    None => {}
+                    Some(Err(why)) => self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
+                    Some(Ok((start, values))) => {
+                        self.moved(id, Move::Root(Box::new(start)), values)
+                    }
+                };
+            }
+            _ => {}
         }
         if policy::hold(head, self.cold.values()) {
             return;
         }
 
-        // A new root after a handover starts again from the mandate.
+        // A new root after earlier requests starts again from the mandate.
         let seed = match self.state().entry(head) {
-            Some(Entry::Root(_)) => self.seed(&task),
+            Some(Entry::Root(_)) => self.seed(id),
             _ => None,
         };
         let first = last.is_none() || seed.is_some();
@@ -692,13 +704,7 @@ impl Brain {
                 .mandate
                 .quotes
                 .iter()
-                .filter_map(|q| match self.state().delivery(*q)?.delivery.content {
-                    Content::Words(words) => Some((
-                        *q,
-                        serde_json::from_slice(&self.value(words)).unwrap_or_default(),
-                    )),
-                    _ => None,
-                })
+                .map(|q| (*q, render::words(&self.value(*q))))
                 .collect();
             appends.push(user(render::brief(said.as_deref(), &quotes), &mut values));
             renders.push(Rendered::Note(Note::Brief));
@@ -726,7 +732,6 @@ impl Brain {
             .params;
         let mut call = ModelCall {
             task: id,
-            purpose: Purpose::Turn,
             base: head,
             appends,
             renders,
@@ -785,6 +790,7 @@ impl Brain {
                             let _ = events.send(Event(What::FirstByte(request)));
                         }
                         Progress::Live(live) => feed.push(live),
+                        Progress::Streaming => {}
                     }
                     if flag.load(Ordering::Relaxed) {
                         ControlFlow::Break(())
@@ -798,22 +804,30 @@ impl Brain {
         self.requests.insert(request, (abort, thread));
     }
 
-    /// The note of the task's last handover, and the entry its old context
-    /// ended at.
-    fn seed(&self, task: &Task) -> Option<render::Seed> {
-        let (call, record) = self
-            .state()
-            .calls()
-            .filter(|(_, c)| c.call.tool == meta::HANDOVER && c.limb == Some(self.meta))
-            .filter(|(_, c)| matches!(c.call.caller, Caller::Agent { task: t, .. } if t == task.id))
-            .max_by_key(|(_, c)| c.made.seq)?;
-        let from = self
+    /// Where the task's old context ended, and the note it handed over
+    /// with, or why it ended without one: what a new root after earlier
+    /// requests begins with.
+    fn seed(&self, task: TaskId) -> Option<render::Seed> {
+        let (_, last) = self
             .state()
             .model_calls()
-            .find(|(_, m)| m.calls.contains(&call))
-            .and_then(|(_, m)| m.response);
-        let note = meta::note(&self.value(record.call.input));
-        Some(render::Seed { from, note })
+            .filter(|(_, m)| m.call.task == task)
+            .max_by_key(|(_, m)| m.sent.seq)?;
+        let handover = last
+            .calls
+            .iter()
+            .map(|c| &self.state().call(*c).expect("a response's call").call)
+            .find(|c| c.tool == meta::HANDOVER);
+        let note = match handover {
+            Some(call) => meta::note(&self.value(call.input)),
+            None => "Your previous context no longer fit the model's window, so it ended without a handover. \
+Check your workspace for what you had already done before carrying on."
+                .into(),
+        };
+        Some(render::Seed {
+            from: last.response.or(Some(last.call.head())),
+            note,
+        })
     }
 
     /// The calls a response made, in order: what a fork of it must answer.
@@ -870,11 +884,8 @@ impl Brain {
             }
         }
         batch.values.extend(value.map(Bytes));
-        if let Some(claim) = quota.as_ref().map(|q| q.claim.as_deref())
-            && !harness_provider::on_plan(claim)
-        {
-            eprintln!("billed as {claim:?}, outside the plan: sending nothing more");
-            self.off_plan = true;
+        if quota.as_ref().is_some_and(|q| !q.on_plan) {
+            eprintln!("a response was billed outside the plan: sending nothing more");
         }
         batch.facts.push(Fact::ModelCall(
             request,
@@ -892,10 +903,7 @@ impl Brain {
     /// as unroutable.
     fn tool_uses(&self, task: TaskId, content: &[u8]) -> Vec<(Call, Bytes)> {
         let task = self.state().task(task).expect("the responding task");
-        let context = task
-            .context
-            .as_ref()
-            .expect("a responding task has a context");
+        let context = task.context().expect("a responding task has a context");
         // Each block's fields, with a tool's input kept exactly as written.
         type Block<'a> = BTreeMap<String, &'a serde_json::value::RawValue>;
         let blocks: Vec<Block> = serde_json::from_slice(content).unwrap_or_default();
@@ -1082,17 +1090,17 @@ and you cannot finish until it has.",
                         .find(|e| e.name == role)
                         .ok_or(format!("there is no role `{role}`"))?;
                     let mut places = BTreeMap::new();
-                    for place in &env.places {
+                    for kind in &env.places {
                         let branch = branch
                             .clone()
                             .ok_or(format!("a fresh `{role}` needs a `branch` for its clone"))?;
+                        // A workspace limb is named by its directory.
                         let dir = parent
                             .places
-                            .get(&place.name)
+                            .get(kind)
                             .and_then(|l| state.limb(*l))
-                            .and_then(Settings::of)
-                            .ok_or(format!("you have no {} to clone from", place.name))?
-                            .dir;
+                            .map(|l| PathBuf::from(&l.name))
+                            .ok_or(format!("you have no {kind} to clone from"))?;
                         let (from, dir) = policy::clone_of(&dir, &branch);
                         let clone = Clone {
                             from,
@@ -1100,7 +1108,7 @@ and you cannot finish until it has.",
                             base: base.clone(),
                         };
                         let limb = self.workspace_limb(&dir, Some(clone), &mut batch.facts);
-                        places.insert(place.name.clone(), limb);
+                        places.insert(kind.clone(), limb);
                     }
                     Origin::Fresh {
                         environment: env.id,
@@ -1120,7 +1128,6 @@ and you cannot finish until it has.",
                     text: text.id(),
                     brief: brief.as_ref().filter(|_| fresh).map(Bytes::id),
                     quotes: if fresh { quotes.clone() } else { Vec::new() },
-                    from: Giver::Task(parent.id),
                 },
             };
             batch.values.push(text);
@@ -1142,13 +1149,11 @@ and you cannot finish until it has.",
             .state()
             .members(Scope::Spawn(id))
             .map(|t| {
-                let said = match &t.state {
-                    TaskState::Done(TaskOutcome::Result { entry }) => self.visible(*entry),
-                    TaskState::Done(TaskOutcome::Failed { reason }) => format!("Failed: {reason}"),
-                    TaskState::Done(TaskOutcome::Cancelled { by }) => {
-                        format!("Cancelled by {by:?}.")
-                    }
-                    _ => unreachable!("a scope settles when every member is done"),
+                let said = match t.outcome() {
+                    Some(TaskOutcome::Result { entry }) => self.visible(*entry),
+                    Some(TaskOutcome::Failed { reason }) => format!("Failed: {reason}"),
+                    Some(TaskOutcome::Cancelled { by }) => format!("Cancelled by {by:?}."),
+                    None => unreachable!("a scope settles when every member is done"),
                 };
                 (t.name.clone(), said)
             })
@@ -1168,18 +1173,20 @@ and you cannot finish until it has.",
         });
     }
 
-    /// Stop a call: ask its limb, or settle it at once if it never went.
+    /// Stop a call: ask its limb, settle it at once if it never went, or
+    /// give it up as unknown if its limb cannot be reached to ask.
     fn interrupt(&mut self, id: CallId) {
         let record = self.state().call(id).expect("a call to interrupt");
         let limb = record.limb;
-        if record.dispatched.is_none() {
-            return self.append(Batch {
-                values: Vec::new(),
-                facts: vec![Fact::Call(
-                    id,
-                    CallEvent::Settled(Outcome::Interrupted { partial: None }),
-                )],
-            });
+        let settled = if record.dispatched.is_none() {
+            Some(Outcome::Interrupted { partial: None })
+        } else if limb.is_some_and(|l| self.state().connected(l).is_none()) {
+            Some(Outcome::Unknown)
+        } else {
+            None
+        };
+        if let Some(outcome) = settled {
+            return self.fact(Fact::Call(id, CallEvent::Settled(outcome)));
         }
         self.fact(Fact::Call(id, CallEvent::Stopping));
         if let Some(workspace) = limb.and_then(|l| self.limbs.get(&l)) {
@@ -1220,9 +1227,6 @@ and you cannot finish until it has.",
             }
             What::Limb(limb, FromLimb::Hello { instance }) => self.opened(limb, instance),
             What::Exited(limb) => self.exited(limb),
-            What::Limb(limb, FromLimb::Described(description)) => {
-                self.descriptions.insert(limb, description);
-            }
             What::Limb(limb, FromLimb::Facts(batch)) => self.limb_facts(limb, batch),
             What::Limb(_, FromLimb::Live(live)) => self.feed.push(live),
         }
@@ -1258,7 +1262,7 @@ and you cannot finish until it has.",
                 None => state
                     .tasks()
                     .filter(|t| !t.is_done())
-                    .filter_map(|t| t.context.as_ref()?.knows.get(&resource))
+                    .filter_map(|t| t.context()?.knows.get(&resource))
                     .map(|k| k.has)
                     .collect(),
             };
@@ -1322,9 +1326,10 @@ and you cannot finish until it has.",
                 self.feed.end(running);
             }
         }
-        if let Some(last) = self.state().last() {
-            self.reader.grew(last);
-        }
+        let _ = self.face.send(Commit {
+            state: self.state().clone(),
+            records,
+        });
         Ok(())
     }
 
@@ -1355,10 +1360,10 @@ and you cannot finish until it has.",
         if self.reported {
             return;
         }
-        let Some(TaskState::Done(outcome)) = self
+        let Some(outcome) = self
             .root
             .and_then(|r| self.state().task(r))
-            .map(|t| &t.state)
+            .and_then(Task::outcome)
         else {
             return;
         };
@@ -1457,7 +1462,7 @@ fn expects(context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
 /// bytes: routed by the caller's binding, never to the meta limb.
 fn background(parent: &Task, meta: LimbId, input: &[u8]) -> Result<(Call, Bytes), String> {
     let (tool, input) = meta::background(input)?;
-    let context = parent.context.as_ref().ok_or("you have no context")?;
+    let context = parent.context().ok_or("you have no context")?;
     let limb = context
         .binding
         .limb(&tool)
@@ -1477,15 +1482,25 @@ fn background(parent: &Task, meta: LimbId, input: &[u8]) -> Result<(Call, Bytes)
     Ok((call, input))
 }
 
-/// The delivery of Max's words a label names: one to `parent`, or one its
-/// own brief quoted.
-fn quoted(state: &State, parent: &Task, label: &str) -> Result<DeliveryId, String> {
-    state
-        .deliveries()
-        .map(|d| &d.delivery)
-        .filter(|d| matches!(d.content, Content::Words(_)))
-        .filter(|d| d.to == parent.id || parent.mandate.quotes.contains(&d.id))
-        .find(|d| render::label(d.id) == label)
-        .map(|d| d.id)
-        .ok_or(format!("no words of Max's to you are labelled `{label}`"))
+/// Max's words a label names, among those `parent` has heard: his messages,
+/// the mandates he gave, his answers, and what briefs quoted.
+fn quoted(state: &State, parent: &Task, label: &str) -> Result<ValueId, String> {
+    let words = state.deliveries().filter_map(|d| match d.delivery.content {
+        Content::Words(words) => Some(words),
+        Content::Prompt(_) => None,
+    });
+    let mandates = state
+        .tasks()
+        .flat_map(|t| [t.mandate.text].into_iter().chain(t.mandate.quotes.clone()));
+    let answers = state
+        .calls()
+        .filter_map(|(_, c)| c.outcome()?.output().map(|o| o.model));
+    words
+        .chain(mandates)
+        .chain(answers)
+        .filter(|v| state.heard(parent.id, *v))
+        .find(|v| render::label(*v) == label)
+        .ok_or(format!(
+            "no words of Max's you have heard are labelled `{label}`"
+        ))
 }

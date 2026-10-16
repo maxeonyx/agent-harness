@@ -18,9 +18,8 @@
 //! ```
 //!
 //! `limbs` name the limbs every task of the kind shares, which the brain
-//! runs or defines itself (`meta`, `user`); `places` name the limbs each task
-//! is given its own of, each a place of the same plugin kind (`workspace`: a
-//! clone); `starts` names the roles it can start fresh tasks in. Claude Code
+//! runs or defines itself (`meta`, `user`); `places` name the plugin kinds
+//! each task is given a limb of its own of (`workspace`: a clone); `starts` names the roles it can start fresh tasks in. Claude Code
 //! ignores the keys it does not know.
 //!
 //! A role file is a resource of the meta limb, the brain's own: each
@@ -31,7 +30,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use harness_core::environment::{Environment, Place};
+use harness_core::environment::Environment;
 use harness_core::id::{Digest, EnvironmentId, LimbId};
 use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
@@ -185,14 +184,7 @@ pub fn environments(
                 .iter()
                 .map(|l| limb(l).ok_or(format!("{}: no limb `{l}`", r.name)))
                 .collect::<Result<_, _>>()?,
-            places: r
-                .places
-                .iter()
-                .map(|p| Place {
-                    name: p.clone(),
-                    kind: p.clone(),
-                })
-                .collect(),
+            places: r.places.clone(),
             starts: r
                 .starts
                 .iter()

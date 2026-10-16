@@ -21,7 +21,7 @@
   header h1 { font: 600 1.15em ui-serif, Georgia, serif; margin: 0; }
   header .meta { color: var(--muted); }
   #link.down { color: var(--maroon); font-weight: 600; }
-  #refused, .alarm { color: var(--maroon); font-weight: 600; }
+  .alarm { color: var(--maroon); font-weight: 600; }
   main {
     display: grid; gap: 1em; padding: 1em 1.2em;
     grid-template-columns: minmax(22em, 1fr) minmax(26em, 1.4fr);
@@ -121,7 +121,6 @@
   <span class="meta" id="seq"></span>
   <span class="meta" id="usage"></span>
   <span class="meta" id="link">connecting</span>
-  <span id="refused"></span>
 </header>
 <main>
   <section id="queue"><h2>Waiting on you<button id="next" hidden>Next</button></h2><ul></ul></section>
@@ -245,7 +244,6 @@ function render() {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
   $("#build").textContent = view.build ? `build ${view.build}` : "";
   $("#seq").textContent = `seq ${view.seq}`;
-  $("#refused").textContent = view.refused || "";
   renderUsage();
 
   // Max's queue, in the order the core derives.

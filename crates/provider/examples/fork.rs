@@ -80,11 +80,7 @@ fn main() {
             content: store.value(content.into_bytes()),
         };
         let head = message.id_after(base);
-        let breakpoints = marks
-            .iter()
-            .chain([&head])
-            .copied()
-            .collect();
+        let breakpoints = marks.iter().chain([&head]).copied().collect();
         ModelCall {
             task: TaskId::generate(),
             base,
