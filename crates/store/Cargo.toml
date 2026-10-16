@@ -1,0 +1,11 @@
+[package]
+name = "harness-store"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+description = "The durable home of one brain's journal and its content-addressed values, in SQLite."
+
+[dependencies]
+harness-core = { path = "../core" }
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+serde_json = "1"
