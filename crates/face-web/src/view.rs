@@ -23,7 +23,7 @@ pub fn view(state: &State, now: Timestamp) -> Value {
             json!({
                 "task": tid(q.task),
                 "since": q.since.0,
-                "ask": q.ask.map(cid),
+                "ask": q.ask.map(|a| call(state, a)),
                 "why": q.why,
             })
         })
@@ -190,7 +190,10 @@ pub fn describe(state: &State, record: &Record) -> String {
                         }
                         Ending::Failed {
                             status, message, ..
-                        } => format!("{task}: request failed {status:?}: {message}"),
+                        } => match status {
+                            Some(s) => format!("{task}: request failed, {s}: {message}"),
+                            None => format!("{task}: request failed: {message}"),
+                        },
                         Ending::Abandoned { .. } => format!("{task}: response abandoned"),
                         Ending::Lost => format!("{task}: request lost"),
                     }
