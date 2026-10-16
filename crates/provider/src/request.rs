@@ -1,7 +1,8 @@
-//! A request's wire bytes, spliced from stored entry bytes.
+//! A request's wire bytes, spliced from stored values.
 
-use harness_core::context::{Entry, EntryId, Message, Role, Root, Wire};
-use harness_core::model_call::{Breakpoint, ModelCall, Ttl};
+use harness_core::context::{Entry, EntryId, Root};
+use harness_core::id::ValueId;
+use harness_core::model_call::{ModelCall, Ttl};
 
 /// The identity string the subscription requires as `system[0]`. Without it
 /// Opus refuses with a 429 that pretends to be a rate limit.
@@ -14,124 +15,125 @@ const MAX_BREAKPOINTS: usize = 4;
 #[derive(Debug)]
 pub struct RequestError(pub String);
 
-/// The JSON body of `call`, with every stored byte copied as it is.
+/// The JSON body of `call`, with every value's bytes copied as they are.
 ///
-/// `entry` looks up a stored entry by id. The body is the root's model,
-/// tools and system, the chain of messages to `call.head`, and the members
-/// of `call.params`; a breakpoint adds `cache_control` to the last block of
-/// the entry it names (the last `system` block, for a root). Nothing is
-/// parsed and written again, so what was stored is what is sent.
+/// `base` is the context `call` extends, root first, as
+/// [`harness_core::state::State::context`] gives it for `call.base`. `value`
+/// looks up a value's bytes: stored ones, and the new ones `call` names
+/// (its appends' contents and its params) that are not committed yet.
+///
+/// The body is the root's model, tools and system, the messages of `base`
+/// and then `call.appends`, and the members of `call.params`. A breakpoint
+/// adds `cache_control` to the last block of the entry it names (the last
+/// `system` block, for a root). Nothing is parsed and written again, so what
+/// was stored is what is sent.
 pub fn body(
     call: &ModelCall,
-    mut entry: impl FnMut(EntryId) -> Option<Entry>,
-) -> Result<String, RequestError> {
-    let (root, messages) = chain(call.head, &mut entry)?;
-    check_identity(&root.entry.system)?;
-    let params = params(&call.params)?;
+    base: &[(EntryId, &Entry)],
+    mut value: impl FnMut(ValueId) -> Option<Vec<u8>>,
+) -> Result<Vec<u8>, RequestError> {
+    let Some(&(root_id, Entry::Root(root))) = base.first() else {
+        return Err(RequestError("the context does not start at a root".into()));
+    };
+    if base.last().map(|(id, _)| *id) != Some(call.base) {
+        return Err(RequestError(format!(
+            "the context given does not end at the request's base {}",
+            call.base
+        )));
+    }
+    let mut messages = Vec::new();
+    for (id, entry) in &base[1..] {
+        let Entry::Message { message, .. } = entry else {
+            return Err(RequestError(format!("the context has a second root, {id}")));
+        };
+        messages.push((*id, message));
+    }
+    let mut parent = call.base;
+    for message in &call.appends {
+        parent = message.id_after(parent);
+        messages.push((parent, message));
+    }
+
     if call.breakpoints.len() > MAX_BREAKPOINTS {
         return Err(RequestError(format!(
             "{} breakpoints; the provider allows {MAX_BREAKPOINTS}",
             call.breakpoints.len()
         )));
     }
-    let ttl = |id: EntryId| {
-        let mut at = call.breakpoints.iter().filter(|b| b.at == id).peekable();
-        at.peek()?;
-        Some(if at.any(|b| b.ttl == Ttl::Long) {
+    let on_chain = |at: EntryId| at == root_id || messages.iter().any(|(id, _)| *id == at);
+    if let Some(stray) = call.breakpoints.iter().find(|b| !on_chain(b.at)) {
+        return Err(RequestError(format!(
+            "breakpoint at {} is not on the request's chain",
+            stray.at
+        )));
+    }
+    let ttl = |at: EntryId| {
+        let mut here = call.breakpoints.iter().filter(|b| b.at == at).peekable();
+        here.peek()?;
+        Some(if here.any(|b| b.ttl == Ttl::Long) {
             Ttl::Long
         } else {
             Ttl::Short
         })
     };
-    let marked = |wire: &Wire, id: EntryId| match ttl(id) {
-        Some(ttl) => mark(&wire.0, ttl),
-        None => Ok(wire.0.clone()),
+    let mut bytes = |id: ValueId| {
+        let found = value(id).ok_or_else(|| RequestError(format!("no value {id}")))?;
+        if ValueId::of(&found) != id {
+            return Err(RequestError(format!(
+                "the value stored as {id} has another id"
+            )));
+        }
+        Ok(found)
     };
-    let on_chain = |b: &Breakpoint| b.at == root.id || messages.iter().any(|(id, _)| *id == b.at);
-    if let Some(stray) = call.breakpoints.iter().find(|b| !on_chain(b)) {
-        return Err(RequestError(format!(
-            "breakpoint at {:?} is not on the head's chain",
-            stray.at
-        )));
-    }
+    let marked = |found: Vec<u8>, at: EntryId| match ttl(at) {
+        Some(ttl) => mark(&found, ttl),
+        None => Ok(found),
+    };
 
-    let mut out = String::new();
-    out.push_str("{\"model\":");
-    out.push_str(&serde_json::Value::from(root.entry.model.as_str()).to_string());
-    out.push_str(",\"tools\":");
-    out.push_str(&root.entry.tools.0);
-    out.push_str(",\"system\":");
-    out.push_str(&marked(&root.entry.system, root.id)?);
-    out.push_str(",\"messages\":[");
+    let Root {
+        model,
+        system,
+        tools,
+    } = root;
+    let system = marked(bytes(*system)?, root_id)?;
+    check_identity(&system)?;
+    let tools = bytes(*tools)?;
+    let params = bytes(call.params)?;
+    let params = members(&params)?;
+
+    let mut out = Vec::new();
+    out.extend_from_slice(b"{\"model\":");
+    out.extend_from_slice(
+        serde_json::Value::from(model.as_str())
+            .to_string()
+            .as_bytes(),
+    );
+    out.extend_from_slice(b",\"tools\":");
+    out.extend_from_slice(&tools);
+    out.extend_from_slice(b",\"system\":");
+    out.extend_from_slice(&system);
+    out.extend_from_slice(b",\"messages\":[");
     for (i, (id, message)) in messages.iter().enumerate() {
         if i > 0 {
-            out.push(',');
+            out.push(b',');
         }
-        let role = match message.role {
-            Role::User => "user",
-            Role::Assistant => "assistant",
-            Role::System => {
-                return Err(RequestError(
-                    "a mid-conversation system message is not verified on this wire".into(),
-                ));
-            }
-        };
-        out.push_str("{\"role\":\"");
-        out.push_str(role);
-        out.push_str("\",\"content\":");
-        out.push_str(&marked(&message.content, *id)?);
-        out.push('}');
+        out.extend_from_slice(b"{\"role\":\"");
+        out.extend_from_slice(message.role.as_str().as_bytes());
+        out.extend_from_slice(b"\",\"content\":");
+        out.extend_from_slice(&marked(bytes(message.content)?, *id)?);
+        out.push(b'}');
     }
-    out.push(']');
+    out.push(b']');
     if !params.is_empty() {
-        out.push(',');
-        out.push_str(params);
+        out.push(b',');
+        out.extend_from_slice(params);
     }
-    out.push('}');
+    out.push(b'}');
     Ok(out)
 }
 
-struct RootAt {
-    id: EntryId,
-    entry: Root,
-}
-
-/// The root and the messages from it to `head`, in order.
-fn chain(
-    head: EntryId,
-    entry: &mut impl FnMut(EntryId) -> Option<Entry>,
-) -> Result<(RootAt, Vec<(EntryId, Message)>), RequestError> {
-    let mut messages = Vec::new();
-    let mut at = head;
-    loop {
-        let found = entry(at).ok_or_else(|| RequestError(format!("no entry {at:?}")))?;
-        if found.id() != at {
-            return Err(RequestError(format!(
-                "the entry stored as {at:?} has another id"
-            )));
-        }
-        match found {
-            Entry::Root(root) => {
-                messages.reverse();
-                return Ok((
-                    RootAt {
-                        id: at,
-                        entry: root,
-                    },
-                    messages,
-                ));
-            }
-            Entry::Message(message) => {
-                let parent = message.parent;
-                messages.push((at, message));
-                at = parent;
-            }
-        }
-    }
-}
-
-fn check_identity(system: &Wire) -> Result<(), RequestError> {
-    let blocks: serde_json::Value = serde_json::from_str(&system.0)
+fn check_identity(system: &[u8]) -> Result<(), RequestError> {
+    let blocks: serde_json::Value = serde_json::from_slice(system)
         .map_err(|e| RequestError(format!("the root's system is not JSON: {e}")))?;
     if blocks[0]["text"] != IDENTITY {
         return Err(RequestError(
@@ -142,8 +144,8 @@ fn check_identity(system: &Wire) -> Result<(), RequestError> {
 }
 
 /// The members of the params object, without its braces.
-fn params(params: &Wire) -> Result<&str, RequestError> {
-    let value: serde_json::Value = serde_json::from_str(&params.0)
+fn members(params: &[u8]) -> Result<&[u8], RequestError> {
+    let value: serde_json::Value = serde_json::from_slice(params)
         .map_err(|e| RequestError(format!("params are not JSON: {e}")))?;
     let object = value
         .as_object()
@@ -159,23 +161,26 @@ fn params(params: &Wire) -> Result<&str, RequestError> {
             "params set {key:?}, which the context owns"
         )));
     }
-    let text = params.0.trim();
-    Ok(text[1..text.len() - 1].trim())
+    let text = params.trim_ascii();
+    Ok(text[1..text.len() - 1].trim_ascii())
 }
 
 /// `blocks` (a JSON array of objects) with `cache_control` added to its last
 /// block, spliced in before that block's closing brace.
-fn mark(blocks: &str, ttl: Ttl) -> Result<String, RequestError> {
+fn mark(blocks: &[u8], ttl: Ttl) -> Result<Vec<u8>, RequestError> {
     let not_blocks = || RequestError("a breakpoint's entry does not end in a block".into());
-    let trimmed = blocks.trim_end();
-    let inner = trimmed.strip_suffix(']').ok_or_else(not_blocks)?.trim_end();
-    if !inner.ends_with('}') {
+    let inner = blocks
+        .trim_ascii_end()
+        .strip_suffix(b"]")
+        .ok_or_else(not_blocks)?
+        .trim_ascii_end();
+    if !inner.ends_with(b"}") {
         return Err(not_blocks());
     }
     let at = inner.len() - 1;
-    let control = match ttl {
-        Ttl::Short => r#","cache_control":{"type":"ephemeral"}"#,
-        Ttl::Long => r#","cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+    let control: &[u8] = match ttl {
+        Ttl::Short => br#","cache_control":{"type":"ephemeral"}"#,
+        Ttl::Long => br#","cache_control":{"type":"ephemeral","ttl":"1h"}"#,
     };
     Ok([&blocks[..at], control, &blocks[at..]].concat())
 }

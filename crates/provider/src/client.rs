@@ -4,10 +4,10 @@ use std::io::{BufRead, BufReader, Read};
 use std::ops::ControlFlow;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use harness_core::context::{Entry, EntryId, Message, Role, Wire};
-use harness_core::id::{CallId, ModelCallId, Timestamp};
+use harness_core::context::{Entry, EntryId};
+use harness_core::id::{ModelCallId, Timestamp, ValueId};
 use harness_core::live::Live;
-use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
+use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Usage};
 
 use crate::login::Login;
 use crate::response::Assembly;
@@ -32,33 +32,16 @@ pub enum Progress {
     Live(Live),
 }
 
-/// How a request ended, before the brain records it.
+/// How a request ended: the fields of its [`ModelCallEvent::Ended`], and
+/// the bytes its ending names.
 pub struct Finished {
-    /// The response, or every other [`Ending`].
-    pub result: Result<Reply, Ending>,
+    pub ending: Ending,
+    /// The bytes of [`Ending::Responded`]'s content or
+    /// [`Ending::Abandoned`]'s partial, which travel in the batch that
+    /// records the ending. The brain reads a response's tool uses from them.
+    pub value: Option<Vec<u8>>,
     pub usage: Option<Usage>,
     pub quota: Option<Quota>,
-}
-
-/// A complete response.
-pub struct Reply {
-    /// The assistant message after the request's head. The brain stores it
-    /// as an [`Entry::Message`], records a call for each tool use in it, then
-    /// records [`Reply::ending`].
-    pub message: Message,
-    pub stop: Stop,
-}
-
-impl Reply {
-    /// [`Ending::Responded`], once `calls` (one per tool use, in order) are
-    /// recorded.
-    pub fn ending(&self, calls: Vec<CallId>) -> Ending {
-        Ending::Responded {
-            entry: Entry::Message(self.message.clone()).id(),
-            stop: self.stop.clone(),
-            calls,
-        }
-    }
 }
 
 impl Client {
@@ -70,8 +53,9 @@ impl Client {
         Client { agent, login }
     }
 
-    /// Sends `call`, built from the entries `entry` looks up, and streams
-    /// its response through `on`.
+    /// Sends `call`, built by [`request::body`] from `base` (the context it
+    /// extends) and the bytes `value` looks up, and streams its response
+    /// through `on`.
     ///
     /// `Err` means nothing was sent: the context or the login is unusable.
     /// Otherwise `on` sees [`ModelCallEvent::Sent`] first, then FirstByte
@@ -85,18 +69,20 @@ impl Client {
         &self,
         id: ModelCallId,
         call: &ModelCall,
-        entry: impl FnMut(EntryId) -> Option<Entry>,
+        base: &[(EntryId, &Entry)],
+        value: impl FnMut(ValueId) -> Option<Vec<u8>>,
         mut on: impl FnMut(Progress) -> ControlFlow<()>,
     ) -> Result<Finished, Error> {
-        let body = request::body(call, entry)?;
+        let body = request::body(call, base, value)?;
         let token = self.login.token()?;
-        let end = |result: Result<Reply, Ending>, usage, quota| Finished {
-            result,
+        let end = |ending, usage, quota| Finished {
+            ending,
+            value: None,
             usage,
             quota,
         };
         if on(Progress::Fact(ModelCallEvent::Sent(call.clone()))).is_break() {
-            return Ok(end(Err(Ending::Abandoned { partial: None }), None, None));
+            return Ok(end(Ending::Abandoned { partial: None }, None, None));
         }
 
         let response = match self
@@ -106,10 +92,10 @@ impl Client {
             .header("anthropic-version", "2023-06-01")
             .header("anthropic-beta", "oauth-2025-04-20")
             .header("content-type", "application/json")
-            .send(body.as_bytes())
+            .send(&body[..])
         {
             Ok(response) => response,
-            Err(e) => return Ok(end(Err(failed(None, e.to_string(), None)), None, None)),
+            Err(e) => return Ok(end(failed(None, e.to_string(), None), None, None)),
         };
         let status = response.status().as_u16();
         let header = |name: &str| {
@@ -127,13 +113,12 @@ impl Client {
         });
         let retry = header("retry-after")
             .and_then(|s| s.parse::<f64>().ok())
-            .map(|s| Timestamp(now_ms() + (s * 1000.0) as i64))
-            .or_else(|| {
-                (status == 429)
-                    .then(|| header(&format!("{UNIFIED}reset"))?.parse::<i64>().ok())
-                    .flatten()
-                    .map(|s| Timestamp(s * 1000))
-            });
+            .map(|s| Timestamp(now_ms() + (s * 1000.0) as i64));
+        let limited = (status == 429
+            && header(&format!("{UNIFIED}status")).as_deref() == Some("rejected"))
+        .then(|| header(&format!("{UNIFIED}reset"))?.parse::<i64>().ok())
+        .flatten()
+        .map(|s| Timestamp(s * 1000));
 
         let mut reader = response.into_body().into_reader();
         if status != 200 {
@@ -143,13 +128,17 @@ impl Client {
                 .ok()
                 .and_then(|v| v["error"]["message"].as_str().map(str::to_owned))
                 .unwrap_or(text);
-            return Ok(end(Err(failed(Some(status), message, retry)), None, quota));
+            let ending = match limited {
+                Some(until) => Ending::Limited { until },
+                None => failed(Some(status), message, retry),
+            };
+            return Ok(end(ending, None, quota));
         }
         let claim = quota.as_ref().and_then(|q| q.claim.as_deref());
         if !on_plan(claim) {
             let message =
                 format!("billed as {claim:?}, not to the plan; the response was not read");
-            return Ok(end(Err(failed(Some(status), message, None)), None, quota));
+            return Ok(end(failed(Some(status), message, None), None, quota));
         }
 
         let mut assembly = Assembly::default();
@@ -176,28 +165,39 @@ impl Client {
             }
             let live = Live::Model {
                 call: id,
-                event: Wire(data),
+                event: data,
             };
             if on(Progress::Live(live)).is_break() {
-                break Ending::Abandoned {
-                    partial: assembly.visible(),
-                };
+                let partial = assembly.visible();
+                return Ok(Finished {
+                    ending: Ending::Abandoned {
+                        partial: partial.as_deref().map(ValueId::of),
+                    },
+                    value: partial,
+                    usage: assembly.usage(),
+                    quota,
+                });
             }
             if name == "message_stop" {
-                let reply = assembly.content().and_then(|content| {
-                    let stop = assembly.stop.clone().ok_or("no stop_reason")?;
-                    let message = Message {
-                        parent: call.head,
-                        role: Role::Assistant,
-                        content,
-                    };
-                    Ok(Reply { message, stop })
+                let response = assembly.content().and_then(|content| {
+                    Ok((content, assembly.stop.clone().ok_or("no stop_reason")?))
                 });
-                let result = reply.map_err(|message| failed(Some(status), message, None));
-                return Ok(end(result, assembly.usage(), quota));
+                let (content, stop) = match response {
+                    Ok(response) => response,
+                    Err(message) => break failed(Some(status), message, None),
+                };
+                return Ok(Finished {
+                    ending: Ending::Responded {
+                        content: ValueId::of(&content),
+                        stop,
+                    },
+                    value: Some(content),
+                    usage: assembly.usage(),
+                    quota,
+                });
             }
         };
-        Ok(end(Err(ending), assembly.usage(), quota))
+        Ok(end(ending, assembly.usage(), quota))
     }
 }
 
