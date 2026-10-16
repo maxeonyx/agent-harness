@@ -228,7 +228,6 @@ dependencies = [
 name = "harness-limb-workspace"
 version = "0.0.0"
 dependencies = [
- "blake3",
  "harness-core",
  "libc",
  "regex",
