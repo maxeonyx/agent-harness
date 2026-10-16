@@ -111,7 +111,6 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
     json!({
         "id": t.id.to_string(),
         "name": t.name,
-        "agent": t.agent,
         "mode": match t.mode {
             Mode::Autonomous => "autonomous",
             Mode::UserFacing => "user-facing",
@@ -125,8 +124,9 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
             Scope::Spawn(call) => Some(call.to_string()),
         },
         "mandate": text(value, t.mandate.text),
-        "head": t.head.to_string(),
-        "environment": state.environment(t.binding.environment).map(|e| e.name.clone()),
+        "head": t.head().map(|h| h.to_string()),
+        "environment": state.environment(t.environment).map(|e| e.name.clone()),
+        "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
         "held": t.held,
         "draining": t.draining.as_ref().map(|d| match d {
             Drain::ToMax => "to Max".to_string(),
@@ -146,6 +146,11 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
     let calls =
         |calls: &[CallId]| -> Vec<Value> { calls.iter().map(|c| call(state, value, *c)).collect() };
     match w {
+        Waiting::Starting { limbs, since } => json!({
+            "kind": "starting",
+            "since": since.0,
+            "limbs": limbs.iter().map(|l| state.limb(*l).map_or_else(|| l.to_string(), |l| l.name.clone())).collect::<Vec<_>>(),
+        }),
         Waiting::Brain { since } => json!({"kind": "harness", "since": since.0}),
         Waiting::Held { since } => json!({"kind": "held", "since": since.0}),
         Waiting::Limited { until, since } => {
@@ -232,7 +237,9 @@ pub fn describe(state: &State, record: &Record) -> String {
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {
                 let how = match &c.origin {
-                    Origin::Fresh { agent, .. } => agent.clone(),
+                    Origin::Fresh { environment, .. } => state
+                        .environment(*environment)
+                        .map_or_else(|| environment.to_string(), |e| e.name.clone()),
                     Origin::Fork { from } => format!("forked from {}", name(*from)),
                     Origin::Resume { from } => format!("resuming {}", name(*from)),
                     Origin::Aside { from } => format!("an aside of {}", name(*from)),
