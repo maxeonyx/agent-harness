@@ -52,11 +52,12 @@ use std::path::Path;
 
 use harness_core::id::{Seq, Timestamp, ValueId};
 use harness_core::journal::{self, Author, Fact, Record};
+use harness_core::value::Bytes;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 /// Bumped by any change to the tables below; a store written by another
 /// version is refused rather than misread.
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 
 const SCHEMA: &str = "
 CREATE TABLE record (
@@ -164,7 +165,7 @@ impl journal::Store for Store {
     /// Also refuses records that do not continue the journal from its last
     /// stored position: a second writer on the same file, which only the
     /// store can see.
-    fn append(&mut self, values: &[Vec<u8>], records: &[Record]) -> Result<(), Error> {
+    fn append(&mut self, values: &[Bytes], records: &[Record]) -> Result<(), Error> {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -174,7 +175,7 @@ impl journal::Store for Store {
         let mut value = tx
             .prepare_cached("INSERT INTO value (id, bytes) VALUES (?, ?) ON CONFLICT DO NOTHING")?;
         for bytes in values {
-            value.execute(params![ValueId::of(bytes).0.0, bytes])?;
+            value.execute(params![bytes.id().0.0, &bytes[..]])?;
         }
         let mut insert = tx.prepare_cached(
             "INSERT INTO record (seq, at, kind, subject, by, fact) VALUES (?, ?, ?, ?, ?, ?)",

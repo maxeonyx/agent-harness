@@ -7,21 +7,27 @@
 //!
 //! The writer behaves like a brain: every batch goes through
 //! [`Journal::commit`], carrying the bytes its facts name. A batch is
-//! [`TASKS`] one-turn tasks, each started, sent, answered and so done.
+//! [`TASKS`] one-turn tasks: Max starts them, then the brain roots, sends,
+//! and answers each, so each is done.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 use harness_core::context::{Message, Note, Rendered, Role, Root};
 use harness_core::environment::{Binding, Environment};
-use harness_core::id::{Digest, EnvironmentId, ModelCallId, Seq, TaskId, Timestamp, ValueId};
+use harness_core::id::{
+    Digest, EnvironmentId, FaceId, ModelCallId, Seq, TaskId, Timestamp, ValueId,
+};
 use harness_core::journal::{self, Author, Batch, Fact, Journal, Launched, Rejected};
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose, Stop, Usage};
-use harness_core::task::{Created, Giver, Mandate, Mode, Origin, Scope, Start, TaskEvent};
+use harness_core::task::{Created, Giver, Mandate, Mode, Move, Origin, Scope, Start, TaskEvent};
+use harness_core::value::Bytes;
 use harness_store::Store;
 
-/// Tasks per batch, so records per batch is `4 * TASKS`.
+/// Tasks per batch: Max starts them in one commit, and the brain's commit
+/// of `4 * TASKS` records takes each from its root to done.
 const TASKS: u64 = 500;
 /// Batches the writer commits before the one it is killed in.
 const COMMITTED: u64 = 3;
@@ -105,16 +111,16 @@ fn watch(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
     for n in 1..killed_in {
         rebuilt.commit(n)?;
     }
+    rebuilt.commit_max(killed_in)?;
     let before = rebuilt.journal.state().clone();
-    rebuilt.commit(killed_in)?;
+    rebuilt.commit_brain(killed_in)?;
     if state == before {
         println!(
-            "OK: batch {killed_in} is wholly absent; the state equals the writer's after batch {}",
-            killed_in - 1
+            "OK: the brain's batch {killed_in} is wholly absent; the state equals the writer's before it"
         );
     } else if state == *rebuilt.journal.state() {
         println!(
-            "OK: batch {killed_in} had committed before the kill landed, and is wholly present"
+            "OK: the brain's batch {killed_in} had committed before the kill landed, and is wholly present"
         );
     } else {
         return Err(format!(
@@ -229,33 +235,37 @@ impl journal::Store for Announced {
 
     fn append(
         &mut self,
-        values: &[Vec<u8>],
+        values: &[Bytes],
         records: &[journal::Record],
     ) -> Result<(), Self::Error> {
-        println!("appending");
+        // Aim at the brain's commit, the large one.
+        if records.first().is_some_and(|r| r.by == Author::Brain) {
+            println!("appending");
+        }
         self.0.append(values, records)
     }
 }
 
 /// Just enough of a brain, and deterministic given its start time, so the
-/// watcher can rebuild exactly the state the writer had at each batch.
+/// watcher can rebuild exactly the state the writer had after each commit.
 struct Brain<S> {
     journal: Journal<S>,
     start: i64,
     /// Every task's context starts at this root.
     root: Root,
     /// The bytes the first batch stores and later ones name.
-    shared: Vec<Vec<u8>>,
+    shared: Vec<Bytes>,
 }
 
 /// The one environment, empty: the demo's tasks call no tools.
 const ENVIRONMENT: EnvironmentId = EnvironmentId(0xe0);
 const SYSTEM: &[u8] = br#"[{"type":"text","text":"You are a helpful agent."}]"#;
+const ROLE: &[u8] = b"You answer questions.";
 const PARAMS: &[u8] = br#"{"max_tokens":32000,"stream":true}"#;
 
 impl<S: journal::Store<Error = harness_store::Error>> Brain<S> {
     fn new(store: S, start: i64) -> Result<Brain<S>, Box<dyn std::error::Error>> {
-        let (_, tools) = Binding::new(ENVIRONMENT, &[])?;
+        let (_, tools) = Binding::new(&[])?;
         let root = Root {
             model: "claude-opus-5-5".into(),
             system: ValueId::of(SYSTEM),
@@ -265,33 +275,72 @@ impl<S: journal::Store<Error = harness_store::Error>> Brain<S> {
             journal: Journal::open(store)?,
             start,
             root,
-            shared: vec![SYSTEM.to_vec(), tools.into_bytes(), PARAMS.to_vec()],
+            shared: vec![
+                SYSTEM.into(),
+                tools.into(),
+                PARAMS.into(),
+                ROLE.into(),
+            ],
         })
     }
 
-    /// Commit batch `n`: [`TASKS`] tasks, each one turn from start to done.
+    /// Batch `n`, as two commits: Max starts [`TASKS`] tasks, then the brain
+    /// takes each one turn from its root to done.
     fn commit(&mut self, n: u64) -> Result<(), Box<dyn std::error::Error>> {
+        self.commit_max(n)?;
+        self.commit_brain(n)
+    }
+
+    fn commit_max(&mut self, n: u64) -> Result<(), Box<dyn std::error::Error>> {
         let mut batch = Batch::default();
         if n == 1 {
             batch.values.extend(self.shared.iter().cloned());
-            batch.facts.push(Fact::Launched(Launched {
-                build: "store-demo".into(),
-                by: None,
-            }));
             batch.facts.push(Fact::Environment(Environment {
                 id: ENVIRONMENT,
                 name: "chat".into(),
+                role: ValueId::of(ROLE),
+                model: self.root.model.clone(),
+                params: ValueId::of(PARAMS),
                 limbs: vec![],
+                places: vec![],
+                starts: vec![],
+                source: None,
+            }));
+        }
+        for t in 0..TASKS {
+            let k = n * TASKS + t;
+            let ask = Bytes::from(format!(r#"[{{"type":"text","text":"Question {k}"}}]"#));
+            batch.facts.push(self.created(TaskId(id("task", k)), ask.id()));
+            batch.values.push(ask);
+        }
+        let seen = self.journal.state().last().unwrap_or(Seq(0));
+        self.at(n, Author::Max { face: FACE, seen }, batch)
+    }
+
+    fn commit_brain(&mut self, n: u64) -> Result<(), Box<dyn std::error::Error>> {
+        let mut batch = Batch::default();
+        if n == 1 {
+            batch.facts.push(Fact::Launched(Launched {
+                build: "store-demo".into(),
+                by: None,
             }));
         }
         for t in 0..TASKS {
             let k = n * TASKS + t;
             let task = TaskId(id("task", k));
-            let ask = format!(r#"[{{"type":"text","text":"Question {k}"}}]"#).into_bytes();
-            let reply = format!(r#"[{{"type":"text","text":"Answer {k}."}}]"#).into_bytes();
-            let (ask_id, reply_id) = (ValueId::of(&ask), ValueId::of(&reply));
-            batch.values.extend([ask, reply]);
-            batch.facts.push(self.created(task, ask_id));
+            let ask = Bytes::from(format!(r#"[{{"type":"text","text":"Question {k}"}}]"#));
+            let reply = Bytes::from(format!(r#"[{{"type":"text","text":"Answer {k}."}}]"#));
+            let (ask_id, reply_id) = (ask.id(), reply.id());
+            batch.values.push(reply);
+            batch.facts.push(Fact::Task(
+                task,
+                TaskEvent::Moved(Move::Root(Box::new(Start {
+                    root: self.root.clone(),
+                    binding: Binding { routes: vec![] },
+                    observes: vec![],
+                    awaits: vec![],
+                }))),
+            ));
             let call = ModelCallId(id("model call", k));
             batch.facts.push(Fact::ModelCall(
                 call,
@@ -329,10 +378,14 @@ impl<S: journal::Store<Error = harness_store::Error>> Brain<S> {
                 },
             ));
         }
+        self.at(n, Author::Brain, batch)
+    }
+
+    fn at(&mut self, n: u64, by: Author, batch: Batch) -> Result<(), Box<dyn std::error::Error>> {
         let at = Timestamp(self.start + 1000 * n as i64);
         self.journal
-            .commit(Author::Brain, batch, at)
-            .map_err(|error| format!("the demo brain's batch {n} was not committed: {error:?}"))?;
+            .commit(by, batch, at)
+            .map_err(|error| format!("the demo's batch {n} was not committed: {error:?}"))?;
         Ok(())
     }
 
@@ -342,28 +395,26 @@ impl<S: journal::Store<Error = harness_store::Error>> Brain<S> {
             task,
             TaskEvent::Created(Box::new(Created {
                 name: format!("question {task}"),
+                by: None,
                 scope: Scope::Max,
                 origin: Origin::Fresh {
-                    agent: "assistant".into(),
-                    start: Box::new(Start {
-                        root: self.root.clone(),
-                        binding: Binding {
-                            environment: ENVIRONMENT,
-                            routes: vec![],
-                        },
-                        observes: vec![],
-                        awaits: vec![],
-                    }),
+                    environment: ENVIRONMENT,
+                    places: BTreeMap::new(),
                 },
                 mode: Mode::Autonomous,
                 mandate: Mandate {
                     text: ask,
+                    brief: None,
+                    quotes: vec![],
                     from: Giver::Max,
                 },
             })),
         )
     }
 }
+
+/// The face Max starts the demo's tasks from.
+const FACE: FaceId = FaceId(0xface);
 
 /// A full-width id, so the demo exercises ids beyond SQLite's integers.
 fn id(kind: &str, n: u64) -> u128 {

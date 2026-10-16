@@ -73,6 +73,12 @@ impl From<Vec<u8>> for Bytes {
     }
 }
 
+impl From<&[u8]> for Bytes {
+    fn from(bytes: &[u8]) -> Bytes {
+        Bytes(bytes.to_vec())
+    }
+}
+
 impl From<String> for Bytes {
     fn from(text: String) -> Bytes {
         Bytes(text.into_bytes())
