@@ -75,6 +75,12 @@ impl Inner {
         report: &mut Report,
     ) -> Outcome {
         let expects = &call.expects;
+        if self.user {
+            return match call.tool.as_str() {
+                "skill" => self.skill(input, report),
+                other => report.failed(&format!("Max's config has no tool `{other}`")),
+            };
+        }
         let result = match call.tool.as_str() {
             "bash" => parse(input).and_then(|i| self.bash(id, i, stop, report)),
             "read" => parse(input).and_then(|i| self.read(i, report)),
@@ -312,7 +318,7 @@ impl Inner {
         })
     }
 
-    fn observations(&self, name: &str, version: Version) -> Vec<Observation> {
+    pub(crate) fn observations(&self, name: &str, version: Version) -> Vec<Observation> {
         self.keys(name)
             .into_iter()
             .map(|resource| Observation { resource, version })

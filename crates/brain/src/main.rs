@@ -41,6 +41,7 @@ mod meta;
 mod policy;
 mod reader;
 mod render;
+mod roles;
 
 use std::net::{IpAddr, TcpListener};
 use std::path::PathBuf;
@@ -52,7 +53,7 @@ use harness_face_web::{Dictation, Face, Feed, Wiring};
 use harness_provider::{Client, Login};
 use harness_store::Store;
 
-use crate::brain::{Brain, First, Inbox};
+use crate::brain::{Brain, Inbox, Start};
 use crate::reader::Reader;
 
 fn main() -> ExitCode {
@@ -68,7 +69,8 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let (mut journal, mut port, mut workspace, mut mandate, mut name) =
-        (None, 4321u16, None, None, "orchestrator".to_string());
+        (None, 4321u16, None, None, None);
+    let (mut roles, mut role) = (None, "orchestrator".to_string());
     let mut mode = Mode::Autonomous;
     let mut sample = None;
     while let Some(flag) = args.next() {
@@ -78,17 +80,21 @@ fn run() -> Result<(), String> {
             "--port" => port = value()?.parse().map_err(|e| format!("--port: {e}"))?,
             "--workspace" => workspace = Some(PathBuf::from(value()?)),
             "--mandate" => mandate = Some(PathBuf::from(value()?)),
-            "--name" => name = value()?,
+            "--name" => name = Some(value()?),
+            "--roles" => roles = Some(PathBuf::from(value()?)),
+            "--role" => role = value()?,
             "--chat" => mode = Mode::UserFacing,
             "--sample" => sample = Some(PathBuf::from(value()?)),
             _ => return Err(format!("unknown argument {flag}")),
         }
     }
     let journal_path = journal.ok_or("--journal is required")?;
-    let first = match (workspace, mandate) {
-        (Some(workspace), Some(mandate)) => Some(First {
+    let roles = roles.ok_or("--roles is required")?;
+    let start = match (workspace, mandate) {
+        (Some(workspace), Some(mandate)) => Some(Start {
             workspace,
-            name,
+            name: name.unwrap_or_else(|| role.clone()),
+            role,
             mode,
             mandate: std::fs::read_to_string(&mandate)
                 .map_err(|e| format!("the mandate {mandate:?}: {e}"))?,
@@ -131,7 +137,7 @@ fn run() -> Result<(), String> {
     println!("face: https://mx-hv-mj.local:{port}");
 
     let client = Client::new(login()?);
-    let mut brain = Brain::launch(store, reader, client, state_dir, first, inbox, feed)?;
+    let mut brain = Brain::launch(store, reader, client, state_dir, &roles, start, inbox, feed)?;
     brain.run();
     Ok(())
 }

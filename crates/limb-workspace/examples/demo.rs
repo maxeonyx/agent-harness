@@ -16,7 +16,8 @@ use harness_core::id::{CallId, LimbId, TaskId, ValueId};
 use harness_core::journal::{Batch, Fact};
 use harness_core::live::Live;
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
-use harness_limb_workspace::{Config, Workspace};
+use harness_core::value::Bytes;
+use harness_limb_workspace::{Config, Settings, Workspace};
 use serde_json::{Value, json};
 
 const LIMB: LimbId = LimbId(1);
@@ -86,10 +87,18 @@ fn main() {
         kind: "file".into(),
         name: "src/lib.rs".into(),
     };
-    println!("\n  → Watch src/lib.rs (the limb answers with its current version)");
-    brain.ws.handle(ToLimb::Watch {
-        resources: vec![key],
-    });
+    println!(
+        "\n  → Watch src/lib.rs, giving the versions A and B have seen (the limb reports only a version that is neither)"
+    );
+    let known = [&a, &b]
+        .iter()
+        .filter_map(|c| c.knows.get(&key))
+        .map(|version| Observation {
+            resource: key.clone(),
+            version: *version,
+        })
+        .collect();
+    brain.ws.handle(ToLimb::Watch { known });
     brain.drain();
     brain.call(
         &mut a,
@@ -223,7 +232,11 @@ impl Brain {
         let (tx, rx) = mpsc::channel();
         let config = Config {
             limb: LIMB,
-            root: scratch.join("work"),
+            user: false,
+            settings: Settings {
+                dir: scratch.join("work"),
+                clone: None,
+            },
             state: scratch.join("state"),
         };
         let ws = Workspace::open(config, tx).unwrap();
@@ -243,7 +256,7 @@ impl Brain {
     /// The Run message for one call by `context`.
     fn run(context: &mut Context, tool: &str, input: Value, id: u128) -> (CallId, ToLimb) {
         let id = CallId(id);
-        let input = input.to_string().into_bytes();
+        let input = Bytes::from(input.to_string());
         let expects = context
             .knows
             .iter()
@@ -258,7 +271,7 @@ impl Brain {
                 tool_use: None,
             },
             tool: tool.into(),
-            input: ValueId::of(&input),
+            input: input.id(),
             expects,
         };
         (id, ToLimb::Run { id, call, input })
@@ -267,7 +280,7 @@ impl Brain {
     /// Keep a batch's values, print its changes, and return its settlements.
     fn facts(&mut self, batch: Batch) -> HashMap<CallId, Outcome> {
         for value in batch.values {
-            self.values.insert(ValueId::of(&value), value);
+            self.values.insert(value.id(), value.0);
         }
         let mut settled = HashMap::new();
         for fact in batch.facts {

@@ -1,5 +1,6 @@
 //! Running one command as a process tree the call owns.
 
+use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
@@ -9,6 +10,8 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use harness_core::value::Bytes;
 
 use crate::trunc::{Truncated, Truncator};
 
@@ -85,7 +88,7 @@ impl Process {
 
         let capture = Arc::new(Mutex::new(Some(Capture {
             truncator,
-            full: Vec::new(),
+            full: Full::default(),
         })));
         let (done, finished) = mpsc::channel();
         let shared = capture.clone();
@@ -152,7 +155,7 @@ impl Process {
             .take()
             .expect("the output is taken once");
         let output = capture.truncator.finish();
-        let full = output.cut.then_some(capture.full);
+        let full = output.cut.then(|| capture.full.finish());
         Ok(Ran {
             ended,
             output,
@@ -163,13 +166,50 @@ impl Process {
 
 struct Capture {
     truncator: Truncator,
-    full: Vec<u8>,
+    full: Full,
 }
 
 impl Capture {
     fn feed(&mut self, bytes: &[u8]) {
         self.truncator.feed(bytes);
-        self.full.extend_from_slice(bytes);
+        self.full.feed(bytes);
+    }
+}
+
+/// The whole output, cut to fit [`Bytes::LIMIT`]: its head and its tail,
+/// and how much was left out between them. Holds at most the limit, however
+/// much the command prints.
+#[derive(Default)]
+struct Full {
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    omitted: u64,
+}
+
+/// Each of the head and the tail, leaving room for the marker between.
+const HALF: usize = Bytes::LIMIT / 2 - 64;
+
+impl Full {
+    fn feed(&mut self, mut bytes: &[u8]) {
+        let room = HALF - self.head.len();
+        let n = room.min(bytes.len());
+        self.head.extend_from_slice(&bytes[..n]);
+        bytes = &bytes[n..];
+        self.tail.extend(bytes);
+        let over = self.tail.len().saturating_sub(HALF);
+        self.tail.drain(..over);
+        self.omitted += over as u64;
+    }
+
+    fn finish(self) -> Vec<u8> {
+        let mut out = self.head;
+        if self.omitted > 0 {
+            out.extend_from_slice(
+                format!("\n[... {} bytes left out ...]\n", self.omitted).as_bytes(),
+            );
+        }
+        out.extend(self.tail);
+        out
     }
 }
 

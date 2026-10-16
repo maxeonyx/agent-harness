@@ -38,8 +38,14 @@ impl std::error::Error for ParseError {}
 macro_rules! id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(pub u128);
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, concat!(stringify!($name), "({})"), self)
+            }
+        }
 
         impl $name {
             /// A new id, unique across brains and processes.
@@ -130,9 +136,16 @@ pub struct Seq(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Timestamp(pub i64);
 
-/// A BLAKE3 hash.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A BLAKE3 hash. Written as hex everywhere, `Debug` included, so a
+/// refusal or a log line names a value the way a face and the store do.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Digest(pub [u8; 32]);
+
+impl fmt::Debug for Digest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
 
 impl Digest {
     /// The digest of `bytes`.
@@ -180,7 +193,7 @@ impl<'de> Deserialize<'de> for Digest {
 /// whose bytes are purged leaves every id that names it valid.
 ///
 /// Whoever produces bytes sends them with the facts that name them, in one
-/// [`crate::journal::Batch`]: a limb with its settlement, the brain with
+/// [`crate::journal::Batch`], as [`crate::value::Bytes`]: a limb with its settlement, the brain with
 /// its request, Max's face with his words. There is no second store: a limb
 /// keeps nothing the journal names on its own disk.
 ///

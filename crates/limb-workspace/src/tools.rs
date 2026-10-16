@@ -4,14 +4,23 @@
 use std::path::Path;
 
 use harness_core::environment::{Audience, Tool};
+
+use crate::Clone;
 use serde_json::json;
 
 /// How to use the workspace in `root`, rendered into every root context
-/// that reaches it.
-pub fn instructions(root: &Path) -> String {
+/// that reaches it; for a clone made for its agent, that it is its own.
+pub fn instructions(root: &Path, clone: Option<&Clone>) -> String {
+    let own = match clone {
+        Some(Clone { from, branch, base }) => format!(
+            "\n\nThis directory is your own clone of `{from}`, on the branch `{branch}`, made from `{base}`. \
+Nobody else works in it. Commit your work here and push it: `git push -u origin {branch}`."
+        ),
+        None => String::new(),
+    };
     format!(
         "You work in the directory `{}` through the tools `bash`, `read`, `write`, `edit` and `grep`. \
-Relative paths are relative to it.\n\n{USE}",
+Relative paths are relative to it.{own}\n\n{USE}",
         root.display()
     )
 }
@@ -107,5 +116,5 @@ fn tool(name: &str, description: &str, properties: serde_json::Value, required: 
 /// whole content, which completes as a no-op once it has landed. A command
 /// or an edit may not be.
 pub fn rerun(tool: &str) -> bool {
-    matches!(tool, "read" | "grep" | "write")
+    matches!(tool, "read" | "grep" | "write" | "skill")
 }

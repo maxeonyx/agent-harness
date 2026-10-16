@@ -4,12 +4,12 @@
 demos/brain/run.sh
 ```
 
-Then watch https://mx-hv-mj.local:4321 while it runs, and type to a task from its compose box (another port: `PORT=4400 demos/brain/run.sh`). It takes about two minutes on `claude-sonnet-5` and costs a few dozen requests on the subscription.
+Then watch https://mx-hv-mj.local:4321 while it runs, and type to a task from its compose box (another port: `PORT=4400 demos/brain/run.sh`). It takes about two minutes on Opus (the roles in `roles/`) and costs a few dozen requests on the subscription.
 
 What it does:
 
 1. `scratch.sh` makes a git repository, `target/brain-demo/repo`: a Python package with a README that says what it should be, an `AGENTS.md`, and a `check.sh` that runs the tests and then a 15-second "style check".
-2. Launch 1 starts the brain on a new journal with `mandate.md`. The root orchestrator reads the repository and spawns one scope of two agents: a fork of itself, and a fresh engineer. Each writes one module and its tests and runs `./check.sh`.
+2. Launch 1 starts the brain on a new journal with `mandate.md`. The root orchestrator reads the repository and spawns one scope of two agents: a fork of itself, in the same directory, and a fresh engineer, in its own clone on the branch `palindromes`. Each writes one module and its tests and runs `./check.sh`; the engineer commits and pushes its branch, and the orchestrator merges it.
 3. While an agent's `./check.sh` is running, the script kills the brain with `kill -9`.
 4. Launch 2 is started on the same journal, with no other arguments. It folds the journal and carries on:
    - the request that was in flight is said to be lost and sent again;
@@ -120,7 +120,7 @@ face: https://mx-hv-mj.local:4400
    68.3s   136  orchestrator: first byte
    72.2s   137  orchestrator: responded, EndTurn, 0 calls (2 in, 8060 cached, 503 out)
 
-== the root is done; its result:
+== the task is done; its result:
 
 ## Report
 

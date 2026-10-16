@@ -1,66 +1,145 @@
-//! Environments and limbs: what an agent can do, and what it needs to know to
-//! do it.
+//! Environments and limbs: what a kind of agent is, what it can do, and what
+//! it needs to know to do it.
 
 use serde::{Deserialize, Serialize};
 
 use crate::call::Call;
-use crate::id::{CallId, EnvironmentId, InstanceId, LimbId};
+use crate::id::{CallId, EnvironmentId, InstanceId, LimbId, ValueId};
 use crate::journal::Batch;
 use crate::live::Live;
-use crate::resource::{Observation, ResourceKey};
+use crate::resource::Observation;
+use crate::value::Bytes;
 
-/// A named set of limbs: everything an agent in it can reach.
+/// A role: what one kind of agent is, everything it can reach, and how it
+/// thinks.
 ///
 /// **Concept.** A [`Limb`] is one thing that runs calls and owns resources:
 /// a workspace on a machine, a JavaScript process, the harness's own page in
 /// Max's browser, the brain's meta actions, Max himself, Max's queue. An
-/// environment is a set of them. Each limb [describes](Description) its
-/// tools and the instructions for using them, and the brain renders that
-/// description into the [root](crate::context::Root) of each context it
-/// starts there, so tools and the knowledge to use them arrive together,
-/// are fixed together for the context's life, and change together through
-/// the notices of [`crate::resource`].
+/// environment is the definition of a kind of agent in terms of them: its
+/// role prompt, its model and request parameters, the limbs every agent of
+/// the kind shares ([`Environment::limbs`]), the limbs each agent of the
+/// kind is given its own of ([`Place`]), and the kinds it can start fresh
+/// ([`Environment::starts`]). "Orchestrator", "designer", "engineer" and
+/// "attention scheduler" are environments; a [`crate::task::Task`] is in
+/// exactly one, for life.
+///
+/// Each limb [describes](Description) its tools and the instructions for
+/// using them, and the brain renders the role and those descriptions into
+/// the [root](crate::context::Root) of each context it starts here. So tools
+/// and the knowledge to use them arrive together, are fixed together for
+/// the context's life, and change together through the notices of
+/// [`crate::resource`]. An engineer's root says which directory and branch
+/// are its own because its workspace place describes itself that way, not
+/// because a brief remembered to.
 ///
 /// What an agent cannot do is what its environment does not contain. The
 /// attention scheduler's environment holds only the [`LimbKind::Attention`]
 /// limb, so it can reorder the queue and cannot spawn, read files or speak
-/// to Max: there is no permission check to get wrong. Spawning, adding a
-/// sibling and handing over are tools of the [`LimbKind::Meta`] limb, which
-/// the brain implements, so they go through the same call machinery as a
-/// file edit, and each acts only on its caller. What a meta limb can start
-/// fresh is its own list ([`Startable`]), which the journal enforces: an
-/// orchestrator's lists designers and engineers, a designer's does not list
-/// designers, so "only the orchestrator launches designers" is the shape of
-/// each one's world.
+/// to Max: there is no permission check to get wrong. What a task can start
+/// fresh is its own environment's `starts`, checked by the journal against
+/// the task whose meta call creates it: an orchestrator's lists designers
+/// and engineers, a designer's and an engineer's list none, so "only the
+/// orchestrator launches designers" is the shape of each one's world, and a
+/// member adding a sibling to its scope is held to its own list, not its
+/// parent's.
 ///
-/// An environment is defined by a fact, written by Max or by an agent whose
-/// environment holds a limb that defines environments. A new version takes
-/// effect for a task at its next root (a handover or a reseed), never under
-/// a running context; until then the task is told its catalogue changed.
+/// **Defined and changed.** A version is a fact, stated by Max or by the
+/// brain. The brain states one when a definition it reads changes: a role
+/// file in a repository, edited and reviewed like code, so "another agent
+/// changing the definition" is an engineer's pull request, and the version
+/// records the file it came from ([`Environment::source`]). A new version
+/// takes effect for a task at its next request for `params` (they are not
+/// part of the cached prefix), and at its next root for everything else,
+/// never under a running context; a task whose root observed the old
+/// source is told it changed, at its next request, like any file it read.
 ///
 /// **Vision.** "An environment is not just a set of available tools, it is
-/// also the context needed to use them"; no permission prompts (an
-/// environment's reach is its definition, and widening it means changing the
-/// definition, possibly by another agent); the attention scheduler; Max
-/// using the agent's own tools in its chat ([`Audience`]); limbs that run on
-/// other machines and outlive the brain ([`Host`]); restart ([`Reach`]).
+/// also the context needed to use them", which can be load-bearing; no
+/// permission prompts ("an environment is defined with its permissions;
+/// extending them means changing that definition, possibly by another
+/// agent"); environments that prevent things by construction (the attention
+/// scheduler "has available the tools, and only those"); effort and model
+/// per role; a clone of one's own; Max using the agent's own tools in its
+/// chat ([`Audience`]); limbs that run on other machines and outlive the
+/// brain ([`Host`]); restart ([`Reach`]).
 ///
-/// **Existing harnesses.** OpenCode, Codex and Goose gate tool calls with
-/// permission prompts (OpenCode suspends the call until Max answers,
-/// `ref-opencode/packages/core/src/permission.ts:227`); Codex adds an OS
-/// sandbox; Oh My Pi's `tools.approvalMode` defaults to "yolo"
-/// (`ref-oh-my-pi/packages/coding-agent/src/tools/approval.ts:81`); Pi has
-/// none. In each, the tool set is a filtered list for the session and its
-/// instructions live in one system prompt.
+/// **Existing harnesses.** Claude Code's agent files (this repository's
+/// `.claude/agents/designer.md`) give a kind a prompt, a model and an
+/// effort, and Oh My Pi's add which kinds it may spawn and a thinking level
+/// (`ref-oh-my-pi/packages/coding-agent/src/task/agents.ts:20`); both filter
+/// one session's tool list per kind, and the spawn list is checked in the
+/// task tool's own code. Oh My Pi isolates a spawn by copying the repository
+/// and merging back (`ref-oh-my-pi/packages/coding-agent/src/task/isolation-runner.ts:140`).
+/// OpenCode, Codex and Goose gate tool calls with permission prompts
+/// (OpenCode suspends the call until Max answers,
+/// `ref-opencode/packages/core/src/permission.ts:227`). In each, a changed
+/// definition is either ignored by running agents or silently re-rendered
+/// under them.
 ///
-/// **Different here.** The unit of capability is the environment, a value
-/// that can be inspected, versioned and changed by whoever may change it,
-/// rather than a run-time question to Max.
+/// **Different here.** The definition is a versioned fact, so what an agent
+/// could reach at any moment is in the journal; its reach is checked by the
+/// fold against the task that creates another, not by a filter in a tool; a
+/// clone of its own is a limb its environment names as a place, so the
+/// clone's instructions and file versions are its context; and a change
+/// reaches running agents as a dated notice and takes effect at their next
+/// root.
+///
+/// **Bx.** Shared: a definition that exists before anything is built from
+/// it, and a build record that pins the resolved inputs. A root is that
+/// record here: its [`crate::task::Start::observes`] are the versions of the
+/// role file, the instructions and the tool schemas it was made from, and
+/// the context grown from it is the artifact. Not shared: a changed input
+/// does not rebuild anything, because a context cannot be rebuilt without
+/// losing what the model did in it; it becomes a notice, and the next root
+/// picks it up.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Environment {
     pub id: EnvironmentId,
+    /// What Max and the agents call it: `orchestrator`, `designer`. Unique
+    /// among environments.
     pub name: String,
+    /// The role prompt: who an agent here is and how it works. Rendered into
+    /// every root, after the provider identity and before the limbs'
+    /// instructions.
+    pub role: ValueId,
+    /// The model every root here names.
+    pub model: String,
+    /// The request parameters every turn here sends, as the exact JSON
+    /// object: effort, thinking, the output limit. Not part of the cached
+    /// prefix, so a new version applies from each task's next request.
+    pub params: ValueId,
+    /// The limbs every task here holds: the same ones for all of them, such
+    /// as the meta limb, Max, or a shared read-only checkout.
     pub limbs: Vec<LimbId>,
+    /// The limbs each task here is given its own of.
+    pub places: Vec<Place>,
+    /// The environments a task here can start fresh tasks in. A fork of
+    /// itself can always be started: it cannot reach anything its source
+    /// cannot.
+    pub starts: Vec<EnvironmentId>,
+    /// The definition this version was read from: a role file at a version.
+    /// Roots made here observe it, so an edit to it is a notice to every task
+    /// working under the old one. `None` for a version Max stated directly.
+    pub source: Option<Observation>,
+}
+
+/// A limb each task in an environment is given its own of: an engineer's
+/// clone. Filled when the task is created ([`crate::task::Origin::Fresh`])
+/// with a limb of this plugin kind, and fixed for the task's life; its forks
+/// share it. Usually a limb created in the same batch, such as a workspace
+/// whose config names the clone to make, and sometimes an existing one, such
+/// as the clone a designer pushed that its engineer now builds on.
+///
+/// The kind is checked, so a parent filling a place cannot hand its child a
+/// limb the child's definition does not name, such as Max or its own meta
+/// limb.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Place {
+    /// Unique within the environment: `workspace`.
+    pub name: String,
+    /// The [`LimbKind::Plugin`] kind a limb filling it must be.
+    pub kind: String,
 }
 
 /// Which limb runs each tool of a task's context.
@@ -68,26 +147,21 @@ pub struct Environment {
 /// Made with the root's `tools` array by [`Binding::new`], from the same
 /// descriptions, so a root cannot declare a tool its binding does not route
 /// or route one it does not declare. Carried to every fork of the root, so
-/// the same bytes (the root's tool names) mean the same limbs. A redefined
-/// environment is picked up at the task's next root. An agent's call names
-/// only its tool and is routed here, which is the whole of the harness's
-/// access control.
+/// the same bytes (the root's tool names) mean the same limbs. Every route
+/// goes to a limb of the task's environment or one of its places, which the
+/// journal checks. An agent's call names only its tool and is routed here,
+/// which is the whole of the harness's access control.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Binding {
-    /// The environment, as it was when the root was made.
-    pub environment: EnvironmentId,
     pub routes: Vec<Route>,
 }
 
 impl Binding {
-    /// The binding of a new root in `environment` and the root's exact
-    /// `tools` array, from the descriptions of the limbs it holds, in order.
-    /// Tools only Max may call are routed nowhere and declared nowhere.
-    /// Refused, with the name, when two limbs offer the same tool name.
-    pub fn new(
-        environment: EnvironmentId,
-        limbs: &[(LimbId, &Description)],
-    ) -> Result<(Binding, String), String> {
+    /// The binding of a new root and the root's exact `tools` array, from
+    /// the descriptions of the limbs it holds, in order. Tools only Max may
+    /// call are routed nowhere and declared nowhere. Refused, with the name,
+    /// when two limbs offer the same tool name.
+    pub fn new(limbs: &[(LimbId, &Description)]) -> Result<(Binding, String), String> {
         let mut routes: Vec<Route> = Vec::new();
         let mut tools = String::from("[");
         for (limb, description) in limbs {
@@ -109,13 +183,7 @@ impl Binding {
             }
         }
         tools.push(']');
-        Ok((
-            Binding {
-                environment,
-                routes,
-            },
-            tools,
-        ))
+        Ok((Binding { routes }, tools))
     }
 
     /// The limb that runs `tool` in this context, if the context has it.
@@ -162,13 +230,17 @@ pub enum Fork {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LimbKind {
     /// Lifecycle tools that act on their caller: spawn a scope (forks of
-    /// itself, or fresh tasks of the kinds listed), add a sibling to its own
-    /// scope, hand itself over, run a call in the background. A fork may
-    /// always be spawned: it cannot reach anything its parent cannot.
+    /// itself, fresh tasks in the environments its own environment
+    /// [starts](Environment::starts), or resumes of its finished children),
+    /// add a sibling to its own scope, hand itself over, run a call in the
+    /// background. One meta limb serves every environment: what a call may
+    /// create is read off its caller's environment when the task is created,
+    /// and the brain describes the limb to each root with that
+    /// environment's list.
     ///
     /// The brain runs a meta call by appending its effects with its one
     /// dispatch, so it is never sent twice.
-    Meta { starts: Vec<Startable> },
+    Meta,
     /// Max. Its agent tool is `ask`: a call he answers, which puts the caller
     /// in his queue until he does. Its calls are never dispatched; his face
     /// shows them, and his answer is the settlement he authors. Only agents
@@ -193,13 +265,6 @@ pub enum LimbKind {
         config: String,
         host: Host,
     },
-}
-
-/// A fresh task a meta limb can start: an agent kind in an environment.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Startable {
-    pub agent: String,
-    pub environment: EnvironmentId,
 }
 
 /// Where a plugin limb runs, which decides what survives a brain restart.
@@ -239,8 +304,8 @@ pub enum Reach {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Description {
     /// Instructions for using the limb: its `AGENTS.md` hierarchy, its
-    /// conventions, where it is (a workspace's root directory), its skills
-    /// index.
+    /// conventions, where it is (a workspace's root directory, and the
+    /// branch a clone was made for), its skills index.
     pub instructions: Vec<Instruction>,
     pub tools: Vec<Tool>,
 }
@@ -291,7 +356,7 @@ pub enum ToLimb {
         id: CallId,
         call: Call,
         /// The bytes of `call.input`.
-        input: Vec<u8>,
+        input: Bytes,
     },
     /// Stop this call as soon as it safely can; it settles as interrupted.
     /// Asked again after a reconnection while it is unsettled; a call the
@@ -299,18 +364,24 @@ pub enum ToLimb {
     Stop {
         call: CallId,
     },
-    /// Report changes to these resources: what live contexts embody.
+    /// Watch these resources: what live contexts embody. `known` is every
+    /// version the journal holds of each: its current version where one is
+    /// recorded, otherwise each version a live context embodies. Report, as
+    /// a [`crate::resource::Change`], each resource whose version is none of
+    /// these, and from then on each change as it happens, so every change a
+    /// limb states is one.
     Watch {
-        resources: Vec<ResourceKey>,
+        known: Vec<Observation>,
     },
 }
 
 /// What a limb sends the brain.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum FromLimb {
-    /// Sent first on every connection. The brain records it as
-    /// [`Reach::Connected`], and sends again every unsettled call it last
-    /// sent before.
+    /// Sent first on every connection, once the limb is ready to describe
+    /// itself (a clone it was configured to make is made). The brain records
+    /// it as [`Reach::Connected`], and sends again every unsettled call it
+    /// last sent before.
     Hello {
         instance: InstanceId,
     },

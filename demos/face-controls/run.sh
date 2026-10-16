@@ -11,7 +11,7 @@ url=https://mx-hv-mj.local:$port
 rm -rf "$dir"
 mkdir -p "$dir"
 demos/brain/scratch.sh "$dir/repo"
-target/release/harness-brain --journal "$dir/journal.sqlite" --port "$port" \
+target/release/harness-brain --roles roles --journal "$dir/journal.sqlite" --port "$port" \
   --workspace "$dir/repo" --mandate demos/brain/mandate.md > "$dir/brain.log" 2>&1 &
 brain=$!
 trap 'kill $brain 2>/dev/null || true' EXIT
@@ -30,7 +30,7 @@ act() {
   local body
   body=$(jq -nc --arg face "$FACE" --argjson seen "$(q .seq)" --argjson fact "$1" \
     --argjson values "${2:-[]}" \
-    '{face: $face, seen: $seen, batch: {values: [$values[] | explode], facts: [$fact]}}')
+    '{face: $face, seen: $seen, batch: {values: $values, facts: [$fact]}}')
   echo "$body" > "$dir/last-act.json"
   c -X POST "$url/act" --data-binary "@$dir/last-act.json" -w ' -> %{http_code}' | sed 's/^/          answer: /'
   echo
@@ -67,7 +67,7 @@ ids=$(grep '^id:' "$dir/live2.txt" | cut -c5- | tr '\n' ' ')
 say "reconnected with Last-Event-ID: $n: events $(echo $ids | cut -d' ' -f1) to $(echo $ids | awk '{print $NF}'), then: $(grep -o '^event: end' "$dir/live2.txt")"
 say "the streamed text, from both connections:"
 cat "$dir/live1.txt" "$dir/live2.txt" | grep '^data:' | cut -c7- |
-  jq -rj 'select(.type == "content_block_delta") | .delta | (.text // .thinking // .partial_json // "")' |
+  jq -rj 'fromjson | select(.type == "content_block_delta") | .delta | (.text // .thinking // .partial_json // "")' |
   fold -w 100 | head -12 | sed 's/^/          /' || true
 echo
 
@@ -123,7 +123,7 @@ say "a fact that is not Max's to author (failing a task):"
 act "{\"Task\": [\"$top\", {\"Drain\": {\"Fail\": \"because\"}}]}"
 
 say "== wait for the root's result"
-until grep -q 'the root is done' "$dir/brain.log"; do sleep 0.5; done
+until grep -q 'the task is done' "$dir/brain.log"; do sleep 0.5; done
 sleep 0.5
 say "done; the brain's own log:"
 echo

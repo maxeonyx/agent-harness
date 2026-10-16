@@ -3,38 +3,33 @@
 //! the last round) and leaves the rest here.
 
 use harness_core::call::{Caller, Outcome};
-use harness_core::context::{Entry, Note, Rendered, Role, Root};
+use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root};
 use harness_core::delivery::Content;
 use harness_core::environment::{Binding, Description};
-use harness_core::id::{CallId, EnvironmentId, LimbId, ValueId};
+use harness_core::id::{CallId, LimbId, ValueId};
 use harness_core::resource::Observation;
 use harness_core::state::{Stale, State};
 use harness_core::task::{Giver, Input, Origin, Scope, Task};
+use harness_core::value::Bytes;
 use harness_provider::IDENTITY;
 use serde_json::{Value, json};
-
-use crate::policy::{self, Kind};
 
 /// The bytes of a stored value.
 pub type Values<'a> = &'a dyn Fn(ValueId) -> Vec<u8>;
 
-/// A new root for an agent kind in an environment: the identity, the role,
-/// then each limb's instructions in `system`; the tools its binding routes.
+/// A new root in an environment: the identity, the role, then each limb's
+/// instructions in `system`; the tools its binding routes.
 pub struct NewRoot {
     pub root: Root,
     pub binding: Binding,
     /// The versions the root embodies.
     pub observes: Vec<Observation>,
     /// The bytes of `root.system` and `root.tools`.
-    pub values: Vec<Vec<u8>>,
+    pub values: Vec<Bytes>,
 }
 
-pub fn root(
-    kind: &Kind,
-    environment: EnvironmentId,
-    limbs: &[(LimbId, &Description)],
-) -> Result<NewRoot, String> {
-    let mut system = vec![text(IDENTITY), text(kind.role)];
+pub fn root(model: &str, role: &str, limbs: &[(LimbId, &Description)]) -> Result<NewRoot, String> {
+    let mut system = vec![text(IDENTITY), text(role)];
     let mut observes = Vec::new();
     for (_, description) in limbs {
         for instruction in &description.instructions {
@@ -42,15 +37,15 @@ pub fn root(
             observes.push(instruction.observes.clone());
         }
     }
-    let (binding, tools) = Binding::new(environment, limbs)
-        .map_err(|tool| format!("two limbs offer the tool `{tool}`"))?;
+    let (binding, tools) =
+        Binding::new(limbs).map_err(|tool| format!("two limbs offer the tool `{tool}`"))?;
     let system = blocks(&system);
-    let tools = tools.into_bytes();
+    let tools = Bytes::from(tools);
     Ok(NewRoot {
         root: Root {
-            model: policy::MODEL.into(),
-            system: ValueId::of(&system),
-            tools: ValueId::of(&tools),
+            model: model.into(),
+            system: system.id(),
+            tools: tools.id(),
         },
         binding,
         observes,
@@ -58,10 +53,12 @@ pub fn root(
     })
 }
 
-/// A shared brief, as the first message of every fresh member that is given
-/// it: the same bytes, so the same entry and one cache prefix.
-pub fn brief(said: &str) -> Vec<u8> {
-    blocks(&[text(said)])
+/// What every fresh member of a spawn shares, as its first message: the
+/// same bytes, so the same entry and one cache prefix.
+pub fn brief(said: &str) -> Bytes {
+    blocks(&[text(&format!(
+        "[harness] The brief every agent started with you was given:\n\n{said}"
+    ))])
 }
 
 /// The next request's new content: what it renders, and the blocks of the
@@ -71,10 +68,24 @@ pub struct Turn {
     pub blocks: Vec<String>,
 }
 
+/// What a new context after a handover begins with: the old context's last
+/// entry, and the note it handed over with.
+pub struct Seed {
+    pub from: Option<EntryId>,
+    pub note: String,
+}
+
 /// Everything the task's next request includes, in the order the provider
 /// needs: tool results first, then text. `forked` are the calls of the
 /// response a fork's first request answers.
-pub fn turn(state: &State, values: Values, task: &Task, first: bool, forked: &[CallId]) -> Turn {
+pub fn turn(
+    state: &State,
+    values: Values,
+    task: &Task,
+    first: bool,
+    forked: &[CallId],
+    seed: Option<Seed>,
+) -> Turn {
     let mut turn = Turn {
         renders: Vec::new(),
         blocks: Vec::new(),
@@ -144,9 +155,15 @@ pub fn turn(state: &State, values: Values, task: &Task, first: bool, forked: &[C
             Scope::Spawn(_) => mandate(state, values, task),
         }));
     }
+    if let Some(Seed { from, note }) = seed {
+        turn.renders.push(Rendered::Note(Note::Boundary { from }));
+        texts.push(text(&format!(
+            "[harness] This is a new context: your previous one handed over to it with this note.\n\n{note}"
+        )));
+    }
 
     let after_response = matches!(
-        state.entry(task.head),
+        task.head().and_then(|h| state.entry(h)),
         Some(Entry::Message { message, .. }) if message.role == Role::Assistant
     );
     if turn.blocks.is_empty() && texts.is_empty() && after_response {
@@ -280,8 +297,9 @@ fn elsewhere(state: &State, values: Values, call: CallId) -> String {
     else {
         unreachable!("a response's call answers a tool use")
     };
-    let said = if record.call.tool == crate::meta::SPAWN {
-        let names = crate::meta::names(&values(record.call.input));
+    let tool = record.call.tool.as_str();
+    let said = if tool == crate::meta::SPAWN || tool == crate::meta::ADD_SIBLING {
+        let names = crate::meta::names(tool, &values(record.call.input));
         format!("Started {}.", names.join(", "))
     } else {
         "Done by the agent this context was forked from; the result went to it.".into()
@@ -351,8 +369,8 @@ pub fn text(text: &str) -> String {
 }
 
 /// A content array of these blocks, as bytes.
-pub fn blocks(blocks: &[String]) -> Vec<u8> {
-    format!("[{}]", blocks.join(",")).into_bytes()
+pub fn blocks(blocks: &[String]) -> Bytes {
+    Bytes::from(format!("[{}]", blocks.join(",")))
 }
 
 /// The visible text of an assistant entry's content.

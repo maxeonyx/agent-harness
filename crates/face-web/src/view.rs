@@ -7,11 +7,12 @@ use std::collections::HashMap;
 
 use harness_core::call::{Caller, Outcome as CallOutcome};
 use harness_core::delivery::Content;
+use harness_core::environment::LimbKind;
 use harness_core::id::{CallId, TaskId, Timestamp, ValueId};
 use harness_core::journal::{Fact, Record};
 use harness_core::model_call::{Ending, ModelCallEvent, Purpose};
 use harness_core::state::{Ended, State, Waiting};
-use harness_core::task::{Drain, Mode, Origin, Outcome, Scope, Task, TaskEvent, TaskState};
+use harness_core::task::{Drain, Mode, Move, Origin, Outcome, Scope, Task, TaskEvent, TaskState};
 use serde_json::{Value, json};
 
 /// A stored value as text, for the page: a mandate, a call's input.
@@ -55,8 +56,36 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
             })
         })
         .collect();
+    // The workspaces tasks work in, by directory: what a new task can be
+    // given, or a new limb made for.
+    let mut workspaces: Vec<Value> = Vec::new();
+    for limb in state.tasks().flat_map(|t| t.places.values()) {
+        let Some(LimbKind::Plugin { kind, config, .. }) = state.limb(*limb).map(|l| &l.kind) else {
+            continue;
+        };
+        let dir = serde_json::from_str::<Value>(config)
+            .ok()
+            .and_then(|c| c["dir"].as_str().map(str::to_owned));
+        let id = limb.to_string();
+        if kind == "workspace" && workspaces.iter().all(|w| w["id"] != id.as_str()) {
+            workspaces.push(json!({"id": id, "dir": dir}));
+        }
+    }
+    let environments: Vec<Value> = state
+        .environments()
+        .map(|e| {
+            json!({
+                "id": e.id.to_string(),
+                "name": e.name,
+                "model": e.model,
+                "places": e.places.iter().map(|p| json!({"name": p.name, "kind": p.kind})).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     json!({
         "seq": state.last().map_or(0, |s| s.0),
+        "environments": environments,
+        "workspaces": workspaces,
         "build": state.launch().map(|(_, l)| l.build.clone()),
         "limited": state.limited(now).map(|t| t.0),
         "usage": quota.map(usage),
@@ -111,7 +140,6 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
     json!({
         "id": t.id.to_string(),
         "name": t.name,
-        "agent": t.agent,
         "mode": match t.mode {
             Mode::Autonomous => "autonomous",
             Mode::UserFacing => "user-facing",
@@ -125,8 +153,9 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
             Scope::Spawn(call) => Some(call.to_string()),
         },
         "mandate": text(value, t.mandate.text),
-        "head": t.head.to_string(),
-        "environment": state.environment(t.binding.environment).map(|e| e.name.clone()),
+        "head": t.head().map(|h| h.to_string()),
+        "environment": state.environment(t.environment).map(|e| e.name.clone()),
+        "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
         "held": t.held,
         "draining": t.draining.as_ref().map(|d| match d {
             Drain::ToMax => "to Max".to_string(),
@@ -146,6 +175,11 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
     let calls =
         |calls: &[CallId]| -> Vec<Value> { calls.iter().map(|c| call(state, value, *c)).collect() };
     match w {
+        Waiting::Starting { limbs, since } => json!({
+            "kind": "starting",
+            "since": since.0,
+            "limbs": limbs.iter().map(|l| state.limb(*l).map_or_else(|| l.to_string(), |l| l.name.clone())).collect::<Vec<_>>(),
+        }),
         Waiting::Brain { since } => json!({"kind": "harness", "since": since.0}),
         Waiting::Held { since } => json!({"kind": "held", "since": since.0}),
         Waiting::Limited { until, since } => {
@@ -232,7 +266,9 @@ pub fn describe(state: &State, record: &Record) -> String {
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {
                 let how = match &c.origin {
-                    Origin::Fresh { agent, .. } => agent.clone(),
+                    Origin::Fresh { environment, .. } => state
+                        .environment(*environment)
+                        .map_or_else(|| environment.to_string(), |e| e.name.clone()),
                     Origin::Fork { from } => format!("forked from {}", name(*from)),
                     Origin::Resume { from } => format!("resuming {}", name(*from)),
                     Origin::Aside { from } => format!("an aside of {}", name(*from)),
@@ -241,10 +277,17 @@ pub fn describe(state: &State, record: &Record) -> String {
             }
             TaskEvent::ModeSet(mode) => format!("{} is now {mode:?}", name(*id)),
             TaskEvent::Renamed(new) => format!("{} renamed to {new}", name(*id)),
-            TaskEvent::Moved(m) => format!("{} moved: {m:?}", name(*id))
-                .chars()
-                .take(120)
-                .collect(),
+            TaskEvent::Moved(Move::Root(start)) => {
+                format!("{} has a new root, on {}", name(*id), start.root.model)
+            }
+            TaskEvent::Moved(Move::Handover { start, .. }) => {
+                format!(
+                    "{} handed over to a new root, on {}",
+                    name(*id),
+                    start.root.model
+                )
+            }
+            TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
             TaskEvent::Drain(Drain::ToMax) => format!("{} interrupted", name(*id)),
             TaskEvent::Drain(Drain::Stop(by)) => format!("{} stopped by {by:?}", name(*id)),
             TaskEvent::Drain(Drain::Fail(why)) => format!("{} failing: {why}", name(*id)),

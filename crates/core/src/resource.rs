@@ -7,9 +7,9 @@ use crate::id::{CallId, Digest, LimbId, ValueId};
 /// A changing thing owned by a limb, which a context can hold a copy of.
 ///
 /// **Concept.** A file, a skill, the `AGENTS.md` hierarchy, a tool's schema,
-/// an agent kind's role prompt, the catalogue of startable kinds, Max's
-/// presence, Max's queue, a limb's running instance, a test watcher's last
-/// run, a page's event log. An [`Observation`] says "this context embodies
+/// an environment's role file ([`crate::environment::Environment::source`]),
+/// Max's presence, Max's queue, a limb's running instance, a test watcher's
+/// last run, a page's event log. An [`Observation`] says "this context embodies
 /// `resource` at `version`"; it comes from the root a task was given
 /// ([`crate::task::Start::observes`]) and from every call result a request
 /// renders ([`crate::call::Output::observes`]). A context knows a version

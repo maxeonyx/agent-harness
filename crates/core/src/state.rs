@@ -7,8 +7,7 @@ use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome};
 use crate::context::Entry;
 use crate::context::EntryId;
 use crate::delivery::{Content, Delivery, Prompt};
-use crate::environment::Environment;
-use crate::environment::{Fork, Limb, LimbKind, Reach};
+use crate::environment::{Environment, Fork, Host, Limb, LimbKind, Reach};
 use crate::id::{
     CallId, DeliveryId, EnvironmentId, FaceId, InstanceId, LimbId, ModelCallId, Seq, TaskId,
     Timestamp, ValueId,
@@ -39,14 +38,17 @@ use crate::task::{
 /// What it guarantees, by refusing every record that would break it: a task
 /// is in exactly one [`TaskState`]; no request leaves a tool use unanswered,
 /// is sent while its task drains, or grows a context other than its task's;
-/// a scope's call settles only when every member is done, nothing joins a
-/// closed scope, and a meta limb starts only what it lists; a call by an
-/// agent goes only along its binding; a standing task lives only in Max's
-/// scope; a fork starts where its source is and never through a limb that
-/// refuses forks; a settled call moves again only from unknown to its real
-/// outcome; a meta call is never run twice; a limb states only its own
-/// calls' outcomes and its own resources' changes; and Max's facts say what
-/// he had seen.
+/// a scope's call settles only when every member is done, and nothing joins
+/// a closed scope; only Max starts tasks in his scope, and an agent starts
+/// only what its environment lists, through its own meta call; a place is
+/// filled only by a limb of its kind, and a root routes only to its task's
+/// environment and places; a call by an agent goes only along its binding;
+/// a standing task lives only in Max's scope; a fork starts where its
+/// source is and never through a limb that refuses forks; a settled call
+/// moves again only from unknown to its real outcome; a meta call is never
+/// run twice; a limb states only its own calls' outcomes and its own
+/// resources' changes; and Max's facts say what he had seen, through the
+/// face he used.
 ///
 /// What it leaves to the brain, as policy over these views: what to render
 /// and when (notes, wording, breakpoints), keep-alive and handover timing,
@@ -210,6 +212,13 @@ pub struct Stale {
 /// to "why is nothing happening?".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Waiting {
+    /// On its limbs, before its first root: the plugin limbs it can reach
+    /// that have not connected (a clone being made, a process starting).
+    /// Empty when they all have, and the brain is rooting it.
+    Starting {
+        limbs: Vec<LimbId>,
+        since: Timestamp,
+    },
     /// On the brain to send its next request.
     Brain {
         since: Timestamp,
@@ -255,6 +264,15 @@ pub enum Waiting {
 /// that does it is committed, so a restart needs nothing else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Todo {
+    /// Connect to this plugin limb, starting its process if need be: a live
+    /// task can reach it, or a call to it is unsettled, and it is not
+    /// connected. A limb nobody needs is never on the list, so its process
+    /// can be let go.
+    Connect(LimbId),
+    /// The task is starting and every limb it can reach has connected:
+    /// render its first root from their descriptions and commit
+    /// [`Move::Root`].
+    Root(TaskId),
     /// Build and send the task's next request, rendering every pending
     /// input that the policy includes (every result, always).
     Send(TaskId),
@@ -314,6 +332,17 @@ impl State {
                 if !environment.limbs.iter().all(|l| self.limbs.contains_key(l)) {
                     return Err(Rejected::Unknown);
                 }
+                if self
+                    .environments
+                    .values()
+                    .any(|e| e.id != environment.id && e.name == environment.name)
+                {
+                    return Err(Rejected::Exists);
+                }
+                let mut places = BTreeSet::new();
+                if !environment.places.iter().all(|p| places.insert(&p.name)) {
+                    return Err(Rejected::Ambiguous);
+                }
                 self.environments
                     .insert(environment.id, environment.clone());
             }
@@ -347,21 +376,25 @@ impl State {
         Ok(())
     }
 
-    /// Whether `by` may state `fact`. The brain states anything but Max's
-    /// words. A limb states only how its own dispatched calls ended and how
-    /// its own resources changed. Max states his words, his calls and his
-    /// answers, his controls over the tree, his own presence, and the
-    /// definitions of environments and limbs; never what a model or a limb
-    /// did.
+    /// Whether `by` may state `fact`. The brain states what it decides and
+    /// observes, but never Max's words, his stop, what his face shows, or a
+    /// task no agent's call created. A limb states only how its own
+    /// dispatched calls ended and how its own resources changed. Max states
+    /// his words, his calls and his answers, his controls over the tree, the
+    /// tasks of his own scope, what his own face shows, and the definitions
+    /// of environments and limbs; never what a model or a limb did.
     fn authorised(&self, by: &Author, fact: &Fact) -> bool {
         match by {
-            Author::Brain => !matches!(
-                fact,
+            Author::Brain => match fact {
                 Fact::Delivery(Delivery {
                     content: Content::Words(_),
                     ..
                 })
-            ),
+                | Fact::Task(_, TaskEvent::Drain(Drain::Stop(Stopper::Max)))
+                | Fact::Focus(_) => false,
+                Fact::Task(_, TaskEvent::Created(created)) => created.by.is_some(),
+                _ => true,
+            },
             Author::Limb(limb) => match fact {
                 Fact::Call(id, CallEvent::Settled(_)) => self
                     .calls
@@ -375,11 +408,13 @@ impl State {
                 }
                 _ => false,
             },
-            Author::Max { face: _, seen } => {
+            Author::Max { face, seen } => {
                 *seen < self.next()
                     && match fact {
                         Fact::Task(_, event) => match event {
-                            TaskEvent::Created(created) => created.scope == Scope::Max,
+                            TaskEvent::Created(created) => {
+                                created.by.is_none() && created.scope == Scope::Max
+                            }
                             TaskEvent::Drain(drain) => {
                                 matches!(drain, Drain::ToMax | Drain::Stop(Stopper::Max))
                             }
@@ -401,10 +436,8 @@ impl State {
                             .and_then(|c| c.limb)
                             .is_some_and(|l| self.is_max(l)),
                         Fact::Change(change) => self.is_max(change.resource.limb),
-                        Fact::Environment(_)
-                        | Fact::Limb(_)
-                        | Fact::Ranking(_)
-                        | Fact::Focus(_) => true,
+                        Fact::Focus(focus) => focus.face == *face,
+                        Fact::Environment(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
                         Fact::Launched(_)
                         | Fact::ModelCall(..)
                         | Fact::Call(..)
@@ -418,70 +451,126 @@ impl State {
         if self.tasks.contains_key(&id) {
             return Err(Rejected::Exists);
         }
-        if let Scope::Spawn(spawn) = created.scope {
-            let call = self.calls.get(&spawn).ok_or(Rejected::Unknown)?;
-            if call.settled.is_some() {
-                return Err(Rejected::Finished);
-            }
-            let Some(LimbKind::Meta { starts }) =
-                call.limb.and_then(|l| self.limbs.get(&l)).map(|l| &l.kind)
-            else {
-                return Err(Rejected::WrongScope);
-            };
-            let allowed = match &created.origin {
-                Origin::Fresh { agent, start } => starts
-                    .iter()
-                    .any(|s| s.agent == *agent && s.environment == start.binding.environment),
-                // The parent's fork, or a member forking itself to add a
-                // sibling.
-                Origin::Fork { from } => {
-                    self.call_owner(spawn) == Some(*from)
-                        || self
-                            .tasks
-                            .get(from)
-                            .is_some_and(|t| t.scope == created.scope)
-                }
-                Origin::Resume { .. } | Origin::Aside { .. } => false,
-            };
-            if !allowed || created.mode == Mode::Standing {
-                return Err(Rejected::WrongScope);
-            }
-        }
+        let creator = match created.by {
+            Some(by) => Some(self.creator(by, created)?),
+            None => None,
+        };
         match &created.origin {
-            Origin::Fresh { start, .. } => self.check_start(start)?,
+            Origin::Fresh {
+                environment,
+                places,
+            } => self.check_places(*environment, places)?,
             Origin::Fork { from } | Origin::Aside { from } => {
                 let source = self.tasks.get(from).ok_or(Rejected::Unknown)?;
-                let refuses = source.binding.routes.iter().any(|r| {
-                    self.limbs
-                        .get(&r.limb)
-                        .is_some_and(|l| l.fork == Fork::Refuse)
-                });
+                let refuses = source
+                    .context
+                    .iter()
+                    .flat_map(|c| &c.binding.routes)
+                    .any(|r| {
+                        self.limbs
+                            .get(&r.limb)
+                            .is_some_and(|l| l.fork == Fork::Refuse)
+                    });
                 if refuses {
                     return Err(Rejected::WrongEnvironment);
                 }
             }
             Origin::Resume { .. } => {}
         }
-        let task = Task::new(id, created, record.at, self)?;
-        if let Origin::Fresh { start, .. } = &created.origin {
-            self.entries
-                .insert(start.root.id(), Entry::Root(start.root.clone()));
+        for quote in &created.mandate.quotes {
+            let quoted = self.deliveries.get(quote).ok_or(Rejected::Unknown)?;
+            let heard = creator.is_none_or(|c| {
+                quoted.delivery.to == c
+                    || self
+                        .tasks
+                        .get(&c)
+                        .is_some_and(|t| t.mandate.quotes.contains(quote))
+            });
+            if !matches!(quoted.delivery.content, Content::Words(_)) || !heard {
+                return Err(Rejected::NotForTask);
+            }
         }
+        let task = Task::new(id, created, record.at, self)?;
         self.tasks.insert(id, task);
         Ok(())
     }
 
-    /// A new root and its binding must stay inside one environment, route
-    /// each tool once, and attach only the harness's calls along the
-    /// binding.
-    fn check_start(&self, start: &Start) -> Result<(), Rejected> {
+    /// The task whose meta call `by` creates a task, if that call may: it
+    /// is still running, it is an agent's call to the meta limb, the new
+    /// task joins the scope the call opens or, as a sibling, its caller's
+    /// own spawn scope, and it is a fork of the caller, a resume of a task
+    /// the caller owned, or fresh in an environment the caller's own
+    /// environment starts.
+    fn creator(&self, by: CallId, created: &Created) -> Result<TaskId, Rejected> {
+        let call = self.calls.get(&by).ok_or(Rejected::Unknown)?;
+        if call.settled.is_some() {
+            return Err(Rejected::Finished);
+        }
+        let meta = call
+            .limb
+            .and_then(|l| self.limbs.get(&l))
+            .is_some_and(|l| l.kind == LimbKind::Meta);
+        let Caller::Agent { task: caller, .. } = call.call.caller else {
+            return Err(Rejected::WrongScope);
+        };
+        let task = self.tasks.get(&caller).ok_or(Rejected::Unknown)?;
+        let scope = created.scope == Scope::Spawn(by)
+            || (created.scope == task.scope && task.scope != Scope::Max);
+        let origin = match &created.origin {
+            Origin::Fresh { environment, .. } => self
+                .environments
+                .get(&task.environment)
+                .is_some_and(|e| e.starts.contains(environment)),
+            Origin::Fork { from } => *from == caller,
+            Origin::Resume { from } => self.owner(*from) == Some(caller),
+            Origin::Aside { .. } => false,
+        };
+        if !meta || !scope || !origin || created.mode == Mode::Standing {
+            return Err(Rejected::WrongScope);
+        }
+        Ok(caller)
+    }
+
+    /// Every place of the environment is filled, by a limb of its kind.
+    fn check_places(
+        &self,
+        environment: EnvironmentId,
+        places: &BTreeMap<String, LimbId>,
+    ) -> Result<(), Rejected> {
         let environment = self
             .environments
-            .get(&start.binding.environment)
+            .get(&environment)
+            .ok_or(Rejected::Unknown)?;
+        if places.len() != environment.places.len() {
+            return Err(Rejected::WrongEnvironment);
+        }
+        for place in &environment.places {
+            let fits = places
+                .get(&place.name)
+                .and_then(|l| self.limbs.get(l))
+                .is_some_and(
+                    |l| matches!(&l.kind, LimbKind::Plugin { kind, .. } if *kind == place.kind),
+                );
+            if !fits {
+                return Err(Rejected::WrongEnvironment);
+            }
+        }
+        Ok(())
+    }
+
+    /// A task's new root must route only to its environment's limbs and its
+    /// places, route each tool once, and attach only the harness's calls
+    /// along the binding.
+    fn check_start(&self, task: &Task, start: &Start) -> Result<(), Rejected> {
+        let environment = self
+            .environments
+            .get(&task.environment)
             .ok_or(Rejected::Unknown)?;
         let mut tools = BTreeSet::new();
         for route in &start.binding.routes {
-            if !environment.limbs.contains(&route.limb) {
+            let reachable = environment.limbs.contains(&route.limb)
+                || task.places.values().any(|l| *l == route.limb);
+            if !reachable {
                 return Err(Rejected::WrongEnvironment);
             }
             if !tools.insert(route.tool.as_str()) {
@@ -514,24 +603,24 @@ impl State {
                 if !matches!(made.call.caller, Caller::Agent { task, .. } if task == id) {
                     return Err(Rejected::NotForTask);
                 }
-                if start.binding.environment != task.binding.environment {
-                    return Err(Rejected::WrongEnvironment);
-                }
-                self.check_start(start)?;
+                self.check_start(task, start)?;
                 root = Some(&start.root);
             }
-            TaskEvent::Moved(Move::Reseed(start)) => {
-                if start.binding.environment != task.binding.environment {
-                    return Err(Rejected::WrongEnvironment);
-                }
-                self.check_start(start)?;
+            TaskEvent::Moved(Move::Root(start)) => {
+                self.check_start(task, start)?;
                 root = Some(&start.root);
             }
             TaskEvent::Moved(Move::Rewind { to }) => {
-                let on_chain = self.descends(task.head, *to) && self.descends(*to, task.start);
+                let on_chain = task
+                    .context
+                    .as_ref()
+                    .is_some_and(|c| self.descends(c.head, *to) && self.descends(*to, c.start));
                 if !on_chain || !self.ended_turn(*to) {
                     return Err(Rejected::Detached);
                 }
+            }
+            TaskEvent::Drain(Drain::ToMax) if self.scoped(task) => {
+                return Err(Rejected::Scoped);
             }
             _ => {}
         }
@@ -592,7 +681,11 @@ impl State {
                     }
                     // A keep-alive resends a context its task has, and
                     // moves nothing.
-                    Purpose::KeepAlive if self.descends(task.head, call.head()) => None,
+                    Purpose::KeepAlive
+                        if task.head().is_some_and(|h| self.descends(h, call.head())) =>
+                    {
+                        None
+                    }
                     Purpose::KeepAlive => return Err(Rejected::Detached),
                 };
                 if let Some(task) = task {
@@ -693,10 +786,10 @@ impl State {
                 let instance = match &limb.kind {
                     LimbKind::Max => return Err(Rejected::Busy),
                     // Run once, with its effects, so never twice.
-                    LimbKind::Meta { .. } | LimbKind::Attention if made.dispatched.is_some() => {
+                    LimbKind::Meta | LimbKind::Attention if made.dispatched.is_some() => {
                         return Err(Rejected::Busy);
                     }
-                    LimbKind::Meta { .. } | LimbKind::Attention => None,
+                    LimbKind::Meta | LimbKind::Attention => None,
                     LimbKind::Plugin { .. } => {
                         Some(self.connected(limb.id).ok_or(Rejected::Busy)?.0)
                     }
@@ -738,7 +831,10 @@ impl State {
         let limb = match &call.caller {
             Caller::Agent { task, tool_use } => {
                 let task = self.tasks.get(task).ok_or(Rejected::Unknown)?;
-                let limb = task.binding.limb(&call.tool);
+                let limb = task
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.binding.limb(&call.tool));
                 match (tool_use, &task.state) {
                     (Some(_), TaskState::Thinking(request)) => thinking = Some(*request),
                     (Some(_), _) => return Err(Rejected::Busy),
@@ -757,7 +853,11 @@ impl State {
                 }
                 if let Some(chat) = chat {
                     let task = self.tasks.get(chat).ok_or(Rejected::Unknown)?;
-                    if !task.binding.routes.iter().any(|r| r.limb == *limb) {
+                    let routed = task
+                        .context
+                        .as_ref()
+                        .is_some_and(|c| c.binding.routes.iter().any(|r| r.limb == *limb));
+                    if !routed {
                         return Err(Rejected::WrongEnvironment);
                     }
                     let mut task = task.clone();
@@ -1081,6 +1181,40 @@ impl State {
         false
     }
 
+    /// The limbs a task can reach now: its environment's, as currently
+    /// defined, and its places. A new root is made from these.
+    pub fn limbs_of(&self, task: &Task) -> Vec<LimbId> {
+        let mut limbs: Vec<LimbId> = self
+            .environments
+            .get(&task.environment)
+            .map(|e| e.limbs.clone())
+            .unwrap_or_default();
+        limbs.extend(task.places.values().copied());
+        limbs
+    }
+
+    /// Whether the brain can use a limb now: one it runs itself, or a plugin
+    /// connected to it.
+    fn reached(&self, limb: LimbId) -> bool {
+        match self.limbs.get(&limb).map(|l| &l.kind) {
+            Some(LimbKind::Plugin { .. }) => self.connected(limb).is_some(),
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Whether the task's round waits on a scope with members still running,
+    /// so the move cannot become Max's until it closes.
+    fn scoped(&self, task: &Task) -> bool {
+        match &task.state {
+            TaskState::Acting(step) => step
+                .outstanding
+                .iter()
+                .any(|c| self.members(Scope::Spawn(*c)).any(|m| !m.is_done())),
+            _ => false,
+        }
+    }
+
     /// Whether a call asks Max something.
     pub fn is_ask(&self, call: CallId) -> bool {
         self.calls
@@ -1095,12 +1229,11 @@ impl State {
             .is_some_and(|l| l.kind == LimbKind::Max)
     }
 
-    /// The task's outstanding question to Max, if its round has one.
+    /// The task's outstanding question to Max: one its round waits on, or
+    /// one it asked in the background and carried on (a provisional choice
+    /// he may overturn).
     fn ask(&self, task: &Task) -> Option<CallId> {
-        match &task.state {
-            TaskState::Acting(step) => step.outstanding.iter().copied().find(|c| self.is_ask(*c)),
-            _ => None,
-        }
+        task.awaited().find(|c| self.is_ask(*c))
     }
 
     /// A tool use is acted on only once its response is complete and its
@@ -1122,6 +1255,14 @@ impl State {
         let t = self.tasks.get(&task)?;
         let since = t.since;
         Some(match &t.state {
+            TaskState::Starting => Waiting::Starting {
+                limbs: self
+                    .limbs_of(t)
+                    .into_iter()
+                    .filter(|l| !self.reached(*l))
+                    .collect(),
+                since,
+            },
             TaskState::Done(_) => Waiting::Done { since },
             TaskState::Ready if self.held(task) => Waiting::Held { since },
             TaskState::Ready => match self.limited(now) {
@@ -1136,13 +1277,13 @@ impl State {
                     streaming: sent.first_byte.is_some(),
                 }
             }
-            TaskState::Acting(step) => match self.ask(t) {
+            TaskState::Acting(step) => match step.outstanding.iter().find(|c| self.is_ask(**c)) {
                 Some(ask) => Waiting::Max {
                     since: t
                         .owed_since
-                        .or(self.calls.get(&ask).map(|c| c.made.at))
+                        .or(self.calls.get(ask).map(|c| c.made.at))
                         .unwrap_or(since),
-                    ask: Some(ask),
+                    ask: Some(*ask),
                 },
                 None => Waiting::Calls {
                     calls: step.outstanding.clone(),
@@ -1166,7 +1307,7 @@ impl State {
     }
 
     /// Max's queue, in order: every live task he owes a word or that has
-    /// asked him something.
+    /// asked him something, mid-turn or in the background.
     pub fn queue(&self) -> Vec<Queued> {
         let queued = self
             .tasks
@@ -1189,8 +1330,9 @@ impl State {
     /// What a task's context embodies that has moved since, and that it has
     /// not been told of: the next request's notice.
     pub fn stale(&self, task: &Task) -> Vec<Stale> {
-        task.knows
+        task.context
             .iter()
+            .flat_map(|c| &c.knows)
             .filter_map(|(resource, known)| {
                 let current = self.resources.get(resource)?;
                 let moved = current.version != known.has && Some(current.version) != known.told;
@@ -1226,6 +1368,8 @@ impl State {
             .collect();
         let mut readers: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
         let mut scopes: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
+        let mut needed: BTreeSet<LimbId> = BTreeSet::new();
+        let mut starting = Vec::new();
         for task in self.tasks.values() {
             if let Scope::Spawn(call) = task.scope {
                 scopes.entry(call).or_default().push(task);
@@ -1236,6 +1380,11 @@ impl State {
             for call in task.awaited() {
                 readers.entry(call).or_default().push(task);
             }
+            let limbs = self.limbs_of(task);
+            if task.state == TaskState::Starting && limbs.iter().all(|l| self.reached(*l)) {
+                starting.push(Todo::Root(task.id));
+            }
+            needed.extend(limbs);
             match (&task.state, &task.draining) {
                 (TaskState::Ready, None) if !self.held(task.id) && self.limited(now).is_none() => {
                     todo.push(Todo::Send(task.id));
@@ -1270,6 +1419,7 @@ impl State {
                 todo.push(Todo::Unroutable(*id));
                 continue;
             };
+            needed.insert(limb.id);
             let connection = self.connected(limb.id).map(|(_, mark)| mark.seq);
             let readers = readers.get(id).map_or(&[][..], Vec::as_slice);
             if interrupts(*id, &record.call, readers) {
@@ -1287,7 +1437,7 @@ impl State {
             }
             let due = match &limb.kind {
                 LimbKind::Max => false,
-                LimbKind::Meta { .. } | LimbKind::Attention => record.dispatched.is_none(),
+                LimbKind::Meta | LimbKind::Attention => record.dispatched.is_none(),
                 LimbKind::Plugin { .. } => {
                     connection.is_some_and(|c| record.dispatched.is_none_or(|d| d.last.seq < c))
                 }
@@ -1296,6 +1446,20 @@ impl State {
                 todo.push(Todo::Dispatch(*id));
             }
         }
+        let connect = needed.into_iter().filter(|l| {
+            let process = self.limbs.get(l).is_some_and(|limb| {
+                matches!(
+                    limb.kind,
+                    LimbKind::Plugin {
+                        host: Host::Process(_),
+                        ..
+                    }
+                )
+            });
+            process && self.connected(*l).is_none()
+        });
+        todo.extend(connect.map(Todo::Connect));
+        todo.extend(starting);
         todo
     }
 }
