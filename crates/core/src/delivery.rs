@@ -75,8 +75,9 @@ pub enum Prompt {
     Done,
     /// An autonomous turn ended with background work still running (an ask
     /// of Max included): it will wake the task when it ends, and the task
-    /// cannot finish before; stop it if it is not needed. Said once. This is
-    /// how an agent whose provisional choice Max has not answered decides
-    /// whether to wait for him.
+    /// cannot finish before; stop it if it is not needed. Said once per task
+    /// ([`crate::state::Todo::Linger`]). This is how an agent whose
+    /// provisional choice Max has not answered decides whether to wait for
+    /// him.
     Lingering,
 }

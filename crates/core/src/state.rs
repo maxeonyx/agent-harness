@@ -128,6 +128,8 @@ struct Open {
     responses: OrdMap<EntryId, ModelCallId>,
     /// Each task's last model call to end.
     last_turn: OrdMap<TaskId, ModelCallId>,
+    /// Tasks told they are lingering ([`Prompt::Lingering`]).
+    lingered: OrdSet<TaskId>,
     /// The last model call to report the quota.
     quota: Option<ModelCallId>,
 }
@@ -363,6 +365,10 @@ pub enum Todo {
     /// the task it was opened on is live: deliver `entry` there
     /// ([`Content::Aside`]).
     Return { aside: TaskId, entry: EntryId },
+    /// An autonomous task ended its turn with background work running (an
+    /// unanswered ask of Max included) and has not been told what that
+    /// means: deliver [`Prompt::Lingering`].
+    Linger(TaskId),
 }
 
 impl State {
@@ -1174,7 +1180,10 @@ impl State {
                 }
             }
             Content::Words(words) => self.say(*words, delivery.to, mark),
-            Content::Prompt(_) => {}
+            Content::Prompt(Prompt::Lingering) => {
+                self.open.lingered.insert(delivery.to);
+            }
+            Content::Prompt(Prompt::Done) => {}
         }
         self.deliveries.insert(
             delivery.id,
@@ -1670,7 +1679,13 @@ impl State {
                 starting.push(Todo::Root(task.id));
             }
             needed.extend(limbs);
+            let lingering = task.mode == Mode::Autonomous
+                && !task.background.is_empty()
+                && !self.open.lingered.contains(&task.id);
             match (task.phase(), task.drain()) {
+                (Some(Phase::Listening), None) if lingering => {
+                    todo.push(Todo::Linger(task.id));
+                }
                 (Some(Phase::Ready), None)
                     if !self.held(task.id) && self.limited(now).is_none() =>
                 {
