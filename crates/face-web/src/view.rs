@@ -3,14 +3,12 @@
 //!
 //! Ids are sent as hex strings: JSON numbers cannot hold a u128.
 
-use std::collections::HashMap;
-
 use harness_core::call::{Caller, Outcome as CallOutcome};
 use harness_core::delivery::Content;
 use harness_core::environment::LimbKind;
 use harness_core::id::{CallId, TaskId, Timestamp, ValueId};
 use harness_core::journal::{Fact, Record};
-use harness_core::model_call::{Ending, ModelCallEvent, Purpose};
+use harness_core::model_call::{Ending, ModelCallEvent};
 use harness_core::state::{Ended, State, Waiting};
 use harness_core::task::{Drain, Mode, Move, Origin, Outcome, Scope, Task, TaskEvent, TaskState};
 use serde_json::{Value, json};
@@ -25,24 +23,10 @@ fn text(value: Text, id: ValueId) -> Option<String> {
 /// The tree, what each task waits on, Max's queue and his subscription, as
 /// of the last fold.
 pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
-    // Each task's last turn to end, and the last report of the quota.
-    let mut last: HashMap<TaskId, &Ended> = HashMap::new();
-    let mut quota: Option<&Ended> = None;
-    for (_, m) in state.model_calls() {
-        let Some(ended) = &m.ended else { continue };
-        if m.call.purpose == Purpose::Turn {
-            let slot = last.entry(m.call.task).or_insert(ended);
-            if ended.at.seq > slot.at.seq {
-                *slot = ended;
-            }
-        }
-        if ended.quota.is_some() && quota.is_none_or(|q| ended.at.seq > q.at.seq) {
-            quota = Some(ended);
-        }
-    }
+    let quota = state.quota();
     let tasks: Vec<Value> = state
         .tasks()
-        .map(|t| task(state, value, t, last.get(&t.id).copied(), now))
+        .map(|t| task(state, value, t, state.last_turn(t.id), now))
         .collect();
     let queue: Vec<Value> = state
         .queue()

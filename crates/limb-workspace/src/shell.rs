@@ -68,7 +68,7 @@ impl Process {
         command: &str,
         dir: &Path,
         truncator: Truncator,
-        progress: impl Fn(&[u8]) + Send + 'static,
+        mut progress: impl FnMut(&[u8]) + Send + 'static,
     ) -> io::Result<Process> {
         let (mut reader, writer) = io::pipe()?;
         let mut builder = Command::new("bash");

@@ -103,8 +103,16 @@ impl Inner {
             Duration::from_millis(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT));
         let truncator = Truncator::new(Limits::default(), pattern(Some(&input.grep))?);
         let out = self.out.clone();
+        // A character split across two reads is held until it is whole.
+        let mut tail = Vec::new();
         let progress = move |bytes: &[u8]| {
-            let chunk = String::from_utf8_lossy(bytes).into_owned();
+            tail.extend_from_slice(bytes);
+            let whole = match std::str::from_utf8(&tail) {
+                Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                _ => tail.len(),
+            };
+            let chunk = String::from_utf8_lossy(&tail[..whole]).into_owned();
+            tail.drain(..whole);
             let _ = out.send(FromLimb::Live(Live::Call { call, chunk }));
         };
         let process = Process::start(&input.command, &self.root, truncator, progress)
