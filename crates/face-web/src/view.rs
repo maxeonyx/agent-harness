@@ -82,7 +82,7 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
             let scope = json!({
                 "owner": task.to_string(),
                 "tool_use": tool_use.as_ref().map(|t| t.0.clone()),
-                "made": record.made.at.0,
+                "made": record.made.seq.0,
                 "settled": record.settled.is_some(),
             });
             Some((id.to_string(), scope))
@@ -160,6 +160,7 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
     json!({
         "id": t.id.to_string(),
         "name": t.name,
+        "created": {"seq": t.created.seq.0, "at": t.created.at.0},
         "mode": match t.mode {
             Mode::Autonomous => "autonomous",
             Mode::UserFacing => "user-facing",

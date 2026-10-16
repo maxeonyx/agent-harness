@@ -483,6 +483,8 @@ function look(t) {
 // Under its owner, a task's name without the owner's name it starts with.
 const shortName = (t) => { const o = byId[parentOf(t)]; return o && t.name.startsWith(o.name + "-") ? t.name.slice(o.name.length + 1) : t.name; };
 const glyph = (t) => (t.environment || t.name || "?").trim()[0].toUpperCase();
+// Tasks in the order they were created.
+const order = (a, b) => a.created.seq - b.created.seq;
 const isDone = (t) => t.waiting?.kind === "done";
 // Who a task belongs to on the map: its scope's owner, or the task a resume
 // in Max's own scope continues.
@@ -503,7 +505,6 @@ const unfolded = new Set();
 function derive() {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
   const nodes = new Map(), edges = [];
-  const order = (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
   for (const t of view.tasks) nodes.set(t.id, { id: t.id, kind: "task", t });
   for (const [call, s] of Object.entries(view.scopes)) {
     if (!byId[s.owner]) continue;
@@ -511,10 +512,10 @@ function derive() {
     const waiting = awaited(byId[s.owner]).has(call);
     nodes.set(`s:${call}`, { id: `s:${call}`, kind: "scope", call, scope: s, members });
     edges.push({ from: s.owner, to: `s:${call}`, kind: s.tool_use ? "owns" : "receives", flow: waiting, made: s.made });
-    for (const m of members) edges.push({ from: `s:${call}`, to: m.id, kind: "owns", flow: waiting && !isDone(m) });
+    for (const m of members) edges.push({ from: `s:${call}`, to: m.id, kind: "owns", flow: waiting && !isDone(m), made: m.created.seq });
   }
   for (const t of view.tasks) {
-    if (t.scope && !view.scopes[t.scope] && t.owner) edges.push({ from: t.owner, to: t.id, kind: "owns" });
+    if (t.scope && !view.scopes[t.scope] && t.owner) edges.push({ from: t.owner, to: t.id, kind: "owns", made: t.created.seq });
     if (t.origin === "resume" && byId[t.from]) edges.push({ from: t.from, to: t.id, kind: "continues" });
     const waits = awaited(t);
     for (const b of t.background || []) {
@@ -543,7 +544,7 @@ function derive() {
     const folded = !live && now - last > FOLD_AFTER && !unfolded.has(root.id) && !c.tasks.some((t) => t.id === openId);
     return { root, live, last, folded, nodes: c.nodes, tasks: c.tasks };
   });
-  list.sort((a, b) => (b.live - a.live) || a.root.name.localeCompare(b.root.name));
+  list.sort((a, b) => (b.live - a.live) || order(a.root, b.root));
   graph = { nodes, edges, comps: list };
 }
 
@@ -622,7 +623,7 @@ function depthFirst(c) {
   const inComp = new Set(c.nodes.map((n) => n.id));
   const out = [], seen = new Set();
   const kids = (id) => graph.edges.filter((e) => e.from === id && e.kind !== "continues" && inComp.has(e.to))
-    .sort((a, b) => (a.made || 0) - (b.made || 0) || String(graph.nodes.get(a.to)?.t?.name || a.to).localeCompare(String(graph.nodes.get(b.to)?.t?.name || b.to)));
+    .sort((a, b) => (a.made ?? 0) - (b.made ?? 0));
   const walk = (id) => { if (seen.has(id)) return; seen.add(id); out.push(graph.nodes.get(id)); for (const e of kids(id)) walk(e.to); };
   walk(c.root.id);
   for (const n of c.nodes) walk(n.id);
@@ -1375,7 +1376,7 @@ function fillChips(s, toolUse, t) {
     const names = new Set((r.inner.tasks || []).map((x) => `${t.name}-${x.name}`));
     members = view.tasks.filter((x) => x.owner === t.id && names.has(x.name));
   }
-  r.row.chips.replaceChildren(...members.sort((a, b) => a.name.localeCompare(b.name)).map(chip));
+  r.row.chips.replaceChildren(...members.sort(order).map(chip));
 }
 function chip(m) {
   const l = look(m);

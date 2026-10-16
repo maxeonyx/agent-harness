@@ -650,8 +650,8 @@ impl State {
                 return Err(Rejected::Unheard);
             }
         }
-        let task = Task::new(id, created, record.at, self)?;
         let mark = Mark::of(record);
+        let task = Task::new(id, created, mark, self)?;
         // What its context holds, it has heard.
         if let Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from } =
             created.origin

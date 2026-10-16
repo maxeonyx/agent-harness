@@ -16,7 +16,7 @@ use crate::id::{
 use crate::journal::{Author, Fact, Record, Rejected};
 use crate::model_call::{Ending, ModelCallEvent, Stop};
 use crate::resource::{Change, Observation, ResourceKey, Version};
-use crate::state::State;
+use crate::state::{Mark, State};
 
 /// The fold of the facts about one task: everything the brain, a face or
 /// the scheduler needs to know about it now.
@@ -91,6 +91,8 @@ pub struct Task {
     /// No new requests under this task until released; running work carries
     /// on. Max pausing a subtree, or the brain after a long outage.
     pub held: bool,
+    /// When it was created: the order of siblings and of Max's projects.
+    pub created: Mark,
     /// When its life or phase last changed: how long the throbber has shown
     /// what it shows.
     pub since: Timestamp,
@@ -664,7 +666,7 @@ impl Task {
     pub(crate) fn new(
         id: TaskId,
         created: &Created,
-        at: Timestamp,
+        mark: Mark,
         world: &State,
     ) -> Result<Task, Rejected> {
         let mut pending = Vec::new();
@@ -702,7 +704,8 @@ impl Task {
             mode: created.mode,
             mandate: created.mandate.clone(),
             held: false,
-            since: at,
+            created: mark,
+            since: mark.at,
             pending,
             background: Vec::new(),
             max_actions,
