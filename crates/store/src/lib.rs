@@ -6,8 +6,9 @@
 //! all or nothing, it gives them back in order (to fold into a
 //! [`State`], or to a face catching up), and it keeps the values named by
 //! their content: context entries by [`EntryId`], other bytes by
-//! [`ContentId`]. A value is stored before the fact that names it, and a
-//! message is stored after its parent: the schema refuses a message whose
+//! [`ContentId`]. A value is stored before the fact that names it
+//! ([`Fact::values`]), and a message is stored after its parent: the store
+//! refuses a batch naming a value it does not hold, and a message whose
 //! parent it does not hold.
 //!
 //! # Schema
@@ -22,14 +23,12 @@
 //! the facts stay the only compatibility surface: a change to how the core
 //! folds them never migrates a row. Beside it are the columns its queries
 //! need an index on: `kind`, the fact's variant (`"Task"`, `"ModelCall"`,
-//! ...), and `subject`, the identity it belongs to, as decimal text. Every
-//! id is a `u128`, which SQLite's JSON functions read as a lossy real, so
-//! read ids out of `fact` with `->`, which keeps their exact text and
-//! compares equal to `subject`:
+//! ...), and `subject`, the identity it belongs to, as the same hex string
+//! the fact holds it as:
 //!
 //! ```sql
 //! -- Tokens per task: each request's usage, joined to the task it was for.
-//! SELECT sent.fact -> '$.ModelCall[1].Sent.task' AS task,
+//! SELECT sent.fact ->> '$.ModelCall[1].Sent.task' AS task,
 //!        sum(ended.fact ->> '$.ModelCall[1].Ended.usage.input') AS input,
 //!        sum(ended.fact ->> '$.ModelCall[1].Ended.usage.output') AS output
 //! FROM record AS ended
@@ -57,13 +56,13 @@ use std::path::Path;
 
 use harness_core::context::{Entry, EntryId, Message, Role, Root, Wire};
 use harness_core::id::{ContentId, Digest, Seq, Timestamp};
-use harness_core::journal::{Author, Fact, Record, Rejected};
+use harness_core::journal::{Author, Fact, Record, Rejected, Value};
 use harness_core::state::State;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 /// Bumped by any change to the tables below; a store written by another
 /// version is refused rather than misread.
-const VERSION: i64 = 1;
+const VERSION: i64 = 2;
 
 const SCHEMA: &str = "
 CREATE TABLE record (
@@ -148,7 +147,8 @@ impl Store {
     }
 
     /// Append `batch`, all or nothing. Its records must continue the journal
-    /// from its last position with no gap.
+    /// from its last position with no gap, and every value they name must
+    /// already be stored.
     ///
     /// The store does not fold the batch: the brain already has, on its
     /// state, which is how it knew to write it.
@@ -159,6 +159,8 @@ impl Store {
         let last: u64 = tx.query_row("SELECT coalesce(max(seq), 0) FROM record", [], |row| {
             row.get(0)
         })?;
+        let mut entry = tx.prepare_cached("SELECT 1 FROM entry WHERE id = ?")?;
+        let mut content = tx.prepare_cached("SELECT 1 FROM content WHERE id = ?")?;
         let mut insert = tx.prepare_cached(
             "INSERT INTO record (seq, at, kind, subject, by, fact) VALUES (?, ?, ?, ?, ?, ?)",
         )?;
@@ -169,17 +171,29 @@ impl Store {
                     found: record.seq,
                 });
             }
+            for value in record.fact.values() {
+                let stored = match value {
+                    Value::Entry(id) => entry.exists([id.0.0])?,
+                    Value::Content(id) => content.exists([id.0.0])?,
+                };
+                if !stored {
+                    return Err(Error::NotStored {
+                        seq: record.seq,
+                        value,
+                    });
+                }
+            }
             let (kind, subject) = index(&record.fact);
             insert.execute(params![
                 record.seq.0,
                 record.at.0,
                 kind,
-                subject.map(|id| id.to_string()),
+                subject,
                 serde_json::to_string(&record.by)?,
                 serde_json::to_string(&record.fact)?,
             ])?;
         }
-        drop(insert);
+        drop((entry, content, insert));
         tx.commit()?;
         Ok(())
     }
@@ -317,19 +331,19 @@ impl Store {
 /// The variant of a fact and the identity it belongs to: the columns a
 /// record is indexed by. The names are the variants' serde names, so they
 /// match the top-level key of the record's JSON.
-fn index(fact: &Fact) -> (&'static str, Option<u128>) {
+fn index(fact: &Fact) -> (&'static str, Option<String>) {
     match fact {
         Fact::Launched(_) => ("Launched", None),
-        Fact::Task(id, _) => ("Task", Some(id.0)),
-        Fact::ModelCall(id, _) => ("ModelCall", Some(id.0)),
-        Fact::Call(id, _) => ("Call", Some(id.0)),
-        Fact::Delivery(delivery) => ("Delivery", Some(delivery.id.0)),
+        Fact::Task(id, _) => ("Task", Some(id.to_string())),
+        Fact::ModelCall(id, _) => ("ModelCall", Some(id.to_string())),
+        Fact::Call(id, _) => ("Call", Some(id.to_string())),
+        Fact::Delivery(delivery) => ("Delivery", Some(delivery.id.to_string())),
         Fact::Change(_) => ("Change", None),
-        Fact::Environment(environment) => ("Environment", Some(environment.id.0)),
-        Fact::Limb(limb) => ("Limb", Some(limb.id.0)),
-        Fact::Reach { limb, .. } => ("Reach", Some(limb.0)),
+        Fact::Environment(environment) => ("Environment", Some(environment.id.to_string())),
+        Fact::Limb(limb) => ("Limb", Some(limb.id.to_string())),
+        Fact::Reach { limb, .. } => ("Reach", Some(limb.to_string())),
         Fact::Ranking(_) => ("Ranking", None),
-        Fact::Focus(focus) => ("Focus", Some(focus.face.0)),
+        Fact::Focus(focus) => ("Focus", Some(focus.face.to_string())),
     }
 }
 
@@ -366,6 +380,8 @@ pub enum Error {
     Rejected { seq: Seq, rejected: Rejected },
     /// A message whose parent is not stored.
     NoParent(EntryId),
+    /// A record naming a value that is not stored.
+    NotStored { seq: Seq, value: Value },
 }
 
 impl fmt::Display for Error {
@@ -384,8 +400,17 @@ impl fmt::Display for Error {
             Error::Rejected { seq, rejected } => {
                 write!(f, "journal record {} does not fold: {rejected:?}", seq.0)
             }
-            Error::NoParent(parent) => {
-                write!(f, "entry's parent {} is not stored", hex(&parent.0.0))
+            Error::NoParent(parent) => write!(f, "entry's parent {} is not stored", parent.0),
+            Error::NotStored { seq, value } => {
+                let (kind, digest) = match value {
+                    Value::Entry(id) => ("entry", id.0),
+                    Value::Content(id) => ("content", id.0),
+                };
+                write!(
+                    f,
+                    "record {} names {kind} {digest}, which is not stored",
+                    seq.0
+                )
             }
         }
     }
@@ -411,8 +436,4 @@ impl From<serde_json::Error> for Error {
     fn from(error: serde_json::Error) -> Error {
         Error::Json(error)
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
