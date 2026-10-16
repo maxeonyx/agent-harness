@@ -15,7 +15,12 @@ echo "== launch 1: the orchestrator starts on demos/brain/mandate.md"
 "$brain" "${args[@]}" --workspace "$dir/repo" --mandate demos/brain/mandate.md > "$dir/launch1.log" 2>&1 &
 pid=$!
 # Kill it while a check.sh is running: a bash call, which may not be rerun.
-until grep -q 'bash made .*\./check\.sh' "$dir/launch1.log"; do sleep 0.2; done
+# The face's view, read as the page reads it.
+running_check() {
+  curl -sS --resolve "mx-hv-mj.local:${PORT:-4321}:127.0.0.1" "https://mx-hv-mj.local:${PORT:-4321}/view" |
+    jq -e '[.tasks[].waiting.calls[]? | select(.tool == "bash" and (.input | contains("check.sh")))] | length > 0' >/dev/null
+}
+until running_check 2>/dev/null; do sleep 0.2; done
 sleep 4
 kill -9 "$pid"
 wait "$pid" 2>/dev/null || true
