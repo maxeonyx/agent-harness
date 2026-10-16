@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use harness_core::call::{Caller, Outcome as CallOutcome};
 use harness_core::delivery::Content;
 use harness_core::environment::LimbKind;
-use harness_core::id::{CallId, TaskId, Timestamp, ValueId};
+use harness_core::id::{CallId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::journal::{Fact, Record};
 use harness_core::model_call::{Ending, ModelCallEvent};
 use harness_core::state::{Ended, State, Waiting};
@@ -76,12 +76,14 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
         .into_iter()
         .filter_map(|id| {
             let record = state.call(id)?;
-            let Caller::Agent { task, tool_use } = &record.call.caller else {
-                return None;
+            let (task, background) = match record.call.caller {
+                Caller::Agent { task, .. } => (task, false),
+                Caller::Background { task, .. } => (task, true),
+                Caller::Max { .. } | Caller::Meta { .. } => return None,
             };
             let scope = json!({
                 "owner": task.to_string(),
-                "tool_use": tool_use.as_ref().map(|t| t.0.clone()),
+                "background": background,
                 "made": record.made.seq.0,
                 "settled": record.settled.is_some(),
             });
@@ -161,6 +163,7 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "id": t.id.to_string(),
         "name": t.name,
         "created": {"seq": t.created.seq.0, "at": t.created.at.0},
+        "started_by": t.by.and_then(|c| tool_use(state, c)).map(|t| t.0.clone()),
         "mode": match t.mode {
             Mode::Autonomous => "autonomous",
             Mode::UserFacing => "user-facing",
@@ -211,6 +214,16 @@ fn pending_words(state: &State, value: Text, t: &Task) -> Vec<Value> {
             _ => None,
         })
         .collect()
+}
+
+/// The tool use an agent's call answers, directly or through the
+/// `background` call that started it.
+fn tool_use(state: &State, call: CallId) -> Option<&ToolUseId> {
+    match &state.call(call)?.call.caller {
+        Caller::Agent { tool_use, .. } => Some(tool_use),
+        Caller::Background { from, .. } => tool_use(state, *from),
+        Caller::Max { .. } | Caller::Meta { .. } => None,
+    }
 }
 
 /// The throbber: what the task is waiting on, and since when.
@@ -293,7 +306,7 @@ pub fn describe(state: &State, record: &Record) -> String {
             || format!("call {id}"),
             |c| {
                 let by = match c.call.caller {
-                    Caller::Agent { task, .. } => name(task),
+                    Caller::Agent { task, .. } | Caller::Background { task, .. } => name(task),
                     Caller::Max { .. } => "Max".into(),
                     Caller::Meta { call, .. } => match state.call_owner(call) {
                         Some(task) => format!("the harness for {}", name(task)),

@@ -253,11 +253,7 @@ fn observed_now(state: &State, renders: &[Rendered], stale: &Stale) -> bool {
 /// A tool result for one of the task's own tool uses.
 fn result(state: &State, values: Values, call: CallId) -> String {
     let record = state.call(call).expect("a pending result is a known call");
-    let Caller::Agent {
-        tool_use: Some(tool_use),
-        ..
-    } = &record.call.caller
-    else {
+    let Caller::Agent { tool_use, .. } = &record.call.caller else {
         unreachable!("a round's result answers a tool use")
     };
     let outcome = record.outcome().expect("a pending result is settled");
@@ -328,13 +324,13 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
         .collect();
     let what = match record.call.caller {
         Caller::Max { .. } => format!("Max ran `{}` here", record.call.tool),
-        Caller::Agent { tool_use: None, .. } if record.call.tool == crate::max::ASK => {
+        Caller::Background { .. } if record.call.tool == crate::max::ASK => {
             let label = outcome.output().map_or(String::new(), |o| label(o.model));
             format!(
                 "Max answered the question you asked in the background (`{label}` quotes it in a brief)"
             )
         }
-        Caller::Agent { tool_use: None, .. } => {
+        Caller::Background { .. } => {
             format!("Your background `{}` call has settled", record.call.tool)
         }
         _ => format!(
@@ -378,11 +374,7 @@ fn words_of(values: Values, id: ValueId) -> Vec<String> {
 /// The neutral answer, in a fork, to one tool use of the forked response.
 fn elsewhere(state: &State, values: Values, call: CallId) -> String {
     let record = state.call(call).expect("a forked response's call is known");
-    let Caller::Agent {
-        tool_use: Some(tool_use),
-        ..
-    } = &record.call.caller
-    else {
+    let Caller::Agent { tool_use, .. } = &record.call.caller else {
         unreachable!("a response's call answers a tool use")
     };
     let tool = record.call.tool.as_str();

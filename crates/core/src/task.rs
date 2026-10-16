@@ -1082,10 +1082,7 @@ impl Task {
     ) -> Result<(), Rejected> {
         match event {
             CallEvent::Made(call) => match &call.caller {
-                Caller::Agent {
-                    task,
-                    tool_use: None,
-                } if *task == self.id => {
+                Caller::Background { task, .. } if *task == self.id => {
                     if self.live_mut()?.drain.is_some() {
                         return Err(Rejected::Draining);
                     }

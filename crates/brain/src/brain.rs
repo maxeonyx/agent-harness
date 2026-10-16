@@ -907,7 +907,7 @@ Check your workspace for what you had already done before carrying on."
                 let call = Call {
                     caller: Caller::Agent {
                         task: task.id,
-                        tool_use: Some(ToolUseId(field(b, "id"))),
+                        tool_use: ToolUseId(field(b, "id")),
                     },
                     expects: expects(context, context.binding.limb(&tool)),
                     tool,
@@ -969,7 +969,7 @@ Check your workspace for what you had already done before carrying on."
             return self.append(batch);
         }
         if call.tool == meta::BACKGROUND {
-            match background(&parent, self.meta, &input) {
+            match background(&parent, id, self.meta, &input) {
                 Ok((started, input)) => {
                     let said = render::blocks(&[render::text(&format!(
                         "Started `{}` in the background: its result comes to you as a message when it settles, \
@@ -1443,7 +1443,12 @@ fn expects(context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
 
 /// A `background` call's input as the call it starts, with its input's
 /// bytes: routed by the caller's binding, never to the meta limb.
-fn background(parent: &Task, meta: LimbId, input: &[u8]) -> Result<(Call, Bytes), String> {
+fn background(
+    parent: &Task,
+    from: CallId,
+    meta: LimbId,
+    input: &[u8],
+) -> Result<(Call, Bytes), String> {
     let (tool, input) = meta::background(input)?;
     let context = parent.context().ok_or("you have no context")?;
     let limb = context
@@ -1454,9 +1459,9 @@ fn background(parent: &Task, meta: LimbId, input: &[u8]) -> Result<(Call, Bytes)
         return Err(format!("`{tool}` cannot run in the background"));
     }
     let call = Call {
-        caller: Caller::Agent {
+        caller: Caller::Background {
             task: parent.id,
-            tool_use: None,
+            from,
         },
         expects: expects(context, Some(limb)),
         tool,

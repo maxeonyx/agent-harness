@@ -511,7 +511,7 @@ function derive() {
     const members = view.tasks.filter((t) => t.scope === call).sort(order);
     const waiting = awaited(byId[s.owner]).has(call);
     nodes.set(`s:${call}`, { id: `s:${call}`, kind: "scope", call, scope: s, members });
-    edges.push({ from: s.owner, to: `s:${call}`, kind: s.tool_use ? "owns" : "receives", flow: waiting, made: s.made });
+    edges.push({ from: s.owner, to: `s:${call}`, kind: s.background ? "receives" : "owns", flow: waiting, made: s.made });
     for (const m of members) edges.push({ from: `s:${call}`, to: m.id, kind: "owns", flow: waiting && !isDone(m), made: m.created.seq });
   }
   for (const t of view.tasks) {
@@ -792,7 +792,7 @@ function drawMap() {
         more.textContent = `+${fc.tasks.length - 1} more · finished`;
       } else more?.remove();
     } else if (n.kind === "scope") {
-      a.className = `node scope${n.scope.tool_use ? "" : " background"}${n.scope.settled ? " settled" : ""}`;
+      a.className = `node scope${n.scope.background ? " background" : ""}${n.scope.settled ? " settled" : ""}`;
       $(".name", a).textContent = ""; $(".status", a).textContent = "";
     } else {
       a.className = `node sat${n.call.limb === "max" ? " ask" : " working"}`;
@@ -1347,8 +1347,9 @@ function toolRow(s, b, t) {
     const open = el("button", "open-file", "open"); open.onclick = (e) => { e.stopPropagation(); viewFile(path, inner.content); };
     line.insertBefore(open, line.lastChild);
   }
-  // A spawn's members, beside it: each opens where it is on the map.
-  if (b.name === "spawn" || (b.name === "background" && input.tool === "spawn")) {
+  // What a spawn or add_sibling started, beside it: each opens where it is
+  // on the map.
+  if (b.name === "spawn" || b.name === "add_sibling" || (b.name === "background" && input.tool === "spawn")) {
     const chips = el("div", "chips");
     row.insertBefore(chips, detail);
     row.chips = chips;
@@ -1364,18 +1365,13 @@ function toolRow(s, b, t) {
     row.insertBefore(q, detail);
   }
   s.rows.set(b.id, { row, b, inner });
-  fillChips(s, b.id, t);
+  fillChips(s, b.id);
   return row;
 }
-function fillChips(s, toolUse, t) {
+function fillChips(s, toolUse) {
   const r = s.rows.get(toolUse);
   if (!r?.row.chips) return;
-  const call = Object.entries(view.scopes).find(([, sc]) => sc.tool_use === toolUse)?.[0];
-  let members = call ? view.tasks.filter((x) => x.scope === call) : [];
-  if (!call && r.b.name === "background") {
-    const names = new Set((r.inner.tasks || []).map((x) => `${t.name}-${x.name}`));
-    members = view.tasks.filter((x) => x.owner === t.id && names.has(x.name));
-  }
+  const members = view.tasks.filter((x) => x.started_by === toolUse);
   r.row.chips.replaceChildren(...members.sort(order).map(chip));
 }
 function chip(m) {
@@ -1443,7 +1439,7 @@ function viewFile(path, content) {
 function renderTail(s, t) {
   let tail = $(".tail", logEl);
   if (!tail) { tail = el("div", "tail"); logEl.append(tail); }
-  for (const [id] of s.rows) fillChips(s, id, t);
+  for (const [id] of s.rows) fillChips(s, id);
   // Running calls of the round: their rows show them running.
   for (const c of t.waiting?.kind === "calls" ? t.waiting.calls : []) {
     if (c.children.length) continue;

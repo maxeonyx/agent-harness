@@ -106,15 +106,13 @@ impl Call {
 /// because they act from outside any one context.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Caller {
-    /// A task. With `tool_use`, the call answers that tool use of the
-    /// response in flight, and the task's next request waits for it.
-    /// Without, it is background work the task started through a meta tool:
-    /// the task cannot finish while it runs, and its settlement wakes the
-    /// task.
-    Agent {
-        task: TaskId,
-        tool_use: Option<ToolUseId>,
-    },
+    /// A task, answering `tool_use` of the response in flight: the task's
+    /// next request waits for it.
+    Agent { task: TaskId, tool_use: ToolUseId },
+    /// Background work a task started with its own call `from` to a meta
+    /// tool: the task cannot finish while it runs, and its settlement wakes
+    /// the task.
+    Background { task: TaskId, from: CallId },
     /// Max, in a chat with `chat` (his settlement rides into its next
     /// request), or from the tree, outside any context.
     Max { limb: LimbId, chat: Option<TaskId> },
