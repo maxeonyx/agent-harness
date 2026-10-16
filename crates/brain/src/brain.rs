@@ -650,23 +650,12 @@ impl Brain {
             let reason = format!("the provider failed {} times in a row", task.failures);
             return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
         }
-        let turns: Vec<_> = self
-            .state()
-            .model_calls()
-            .filter(|(_, m)| m.call.task == id && m.call.purpose == Purpose::Turn)
-            .map(|(_, m)| m)
-            .collect();
-        if task.failures > 0 {
-            let last = turns
-                .iter()
-                .filter_map(|m| m.ended.as_ref())
-                .map(|e| e.at.at);
-            if last
-                .max()
-                .is_some_and(|at| now.0 < at.0 + policy::backoff_ms(task.failures))
-            {
-                return;
-            }
+        // Nothing is in flight for a ready task, so every turn has ended.
+        let last = self.state().last_turn(id);
+        if task.failures > 0
+            && last.is_some_and(|e| now.0 < e.at.at.0 + policy::backoff_ms(task.failures))
+        {
+            return;
         }
         if policy::hold(head, self.cold.values()) {
             return;
@@ -677,7 +666,7 @@ impl Brain {
             Some(Entry::Root(_)) => self.seed(&task),
             _ => None,
         };
-        let first = turns.is_empty() || seed.is_some();
+        let first = last.is_none() || seed.is_some();
         let mut values = Vec::new();
         let mut appends = Vec::new();
         let mut renders = Vec::new();
@@ -820,9 +809,8 @@ impl Brain {
     /// The calls a response made, in order: what a fork of it must answer.
     fn response_calls(&self, response: EntryId) -> Vec<CallId> {
         self.state()
-            .model_calls()
-            .find(|(_, m)| m.response == Some(response))
-            .map(|(_, m)| m.calls.clone())
+            .response(response)
+            .map(|m| m.calls.clone())
             .unwrap_or_default()
     }
 
