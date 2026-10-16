@@ -5,14 +5,40 @@
 //! across brains, so federated brains can hold each other's records without
 //! renaming anything. Values that never change (context entries, stored
 //! output, resource versions) are named by their content: a [`Digest`].
+//!
+//! Both kinds are written as lowercase hex: a generated id as 32 digits, a
+//! digest as 64. In JSON that is a string, because readers that take every
+//! number as a double (a browser's `JSON.parse`, SQLite's `->>`) would round
+//! a 128-bit id; hex also sorts as the id does.
 
-use serde::{Deserialize, Serialize};
+use std::fmt;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 macro_rules! id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(pub u128);
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{:032x}", self.0)
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.collect_str(self)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let bytes: [u8; 16] = hex(deserializer)?;
+                Ok($name(u128::from_be_bytes(bytes)))
+            }
+        }
     };
 }
 
@@ -73,7 +99,7 @@ pub struct Timestamp(pub i64);
 /// The same identity as Bx's artifact (`hash + immutable value`), and
 /// plausibly the same store: context entries, stored output too large to
 /// keep inline, and resource versions are all named this way.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Digest(pub [u8; 32]);
 
 impl Digest {
@@ -81,6 +107,57 @@ impl Digest {
     pub fn of(bytes: &[u8]) -> Digest {
         Digest(*blake3::hash(bytes).as_bytes())
     }
+}
+
+impl fmt::Display for Digest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
+    }
+}
+
+impl Serialize for Digest {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Digest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        hex(deserializer).map(Digest)
+    }
+}
+
+/// Read exactly `N` bytes written as `2 * N` lowercase hex digits.
+fn hex<'de, D: Deserializer<'de>, const N: usize>(deserializer: D) -> Result<[u8; N], D::Error> {
+    struct Hex<const N: usize>;
+
+    impl<const N: usize> serde::de::Visitor<'_> for Hex<N> {
+        type Value = [u8; N];
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{} lowercase hex digits", 2 * N)
+        }
+
+        fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<[u8; N], E> {
+            let invalid = || E::invalid_value(serde::de::Unexpected::Str(text), &self);
+            if text.len() != 2 * N {
+                return Err(invalid());
+            }
+            let digit = |c: u8| match c {
+                b'0'..=b'9' => Some(c - b'0'),
+                b'a'..=b'f' => Some(c - b'a' + 10),
+                _ => None,
+            };
+            let mut bytes = [0; N];
+            for (byte, pair) in bytes.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
+                let (high, low) = digit(pair[0]).zip(digit(pair[1])).ok_or_else(invalid)?;
+                *byte = high << 4 | low;
+            }
+            Ok(bytes)
+        }
+    }
+
+    deserializer.deserialize_str(Hex)
 }
 
 /// A stored value by its digest: an image, a tool's full output, a file's
