@@ -19,13 +19,14 @@ use crate::value::Bytes;
 /// environment is the definition of a kind of agent in terms of them: its
 /// role prompt, its model and request parameters, the limbs every agent of
 /// the kind shares ([`Environment::limbs`]), the limbs each agent of the
-/// kind is given its own of ([`Place`]), and the kinds it can start fresh
+/// kind is given its own of ([`Environment::places`]), and the kinds it can start fresh
 /// ([`Environment::starts`]). "Orchestrator", "designer", "engineer" and
 /// "attention scheduler" are environments; a [`crate::task::Task`] is in
 /// exactly one, for life.
 ///
 /// Each limb [describes](Description) its tools and the instructions for
-/// using them, and the brain renders the role and those descriptions into
+/// using them, as a fact in the journal, and the brain renders the role and
+/// those descriptions into
 /// the [root](crate::context::Root) of each context it starts here. So tools
 /// and the knowledge to use them arrive together, are fixed together for
 /// the context's life, and change together through the notices of
@@ -61,8 +62,8 @@ use crate::value::Bytes;
 /// agent"); environments that prevent things by construction (the attention
 /// scheduler "has available the tools, and only those"); effort and model
 /// per role; a clone of one's own; Max using the agent's own tools in its
-/// chat ([`Audience`]); limbs that run on other machines and outlive the
-/// brain ([`Host`]); restart ([`Reach`]).
+/// chat ([`Audience`]); limbs that outlive the brain
+/// ([`LimbKind::Plugin`]); restart ([`Reach`]).
 ///
 /// **Existing harnesses.** Claude Code's agent files (this repository's
 /// `.claude/agents/designer.md`) give a kind a prompt, a model and an
@@ -112,8 +113,17 @@ pub struct Environment {
     /// The limbs every task here holds: the same ones for all of them, such
     /// as the meta limb, Max, or a shared read-only checkout.
     pub limbs: Vec<LimbId>,
-    /// The limbs each task here is given its own of.
-    pub places: Vec<Place>,
+    /// The limbs each task here is given its own of, by plugin kind: an
+    /// engineer's `workspace`, its clone. Filled when the task is created
+    /// ([`crate::task::Origin::Fresh`]) with a limb of that kind, and fixed
+    /// for the task's life; its forks share it. Usually a limb created in
+    /// the same batch, and sometimes an existing one, such as the clone a
+    /// designer pushed that its engineer now builds on. The kind is checked,
+    /// so a parent filling a place cannot hand its child a limb the child's
+    /// definition does not name, such as Max or its own meta limb. Two
+    /// places of one kind wait for an environment that needs them; they
+    /// would each need a name.
+    pub places: Vec<String>,
     /// The environments a task here can start fresh tasks in. A fork of
     /// itself can always be started: it cannot reach anything its source
     /// cannot.
@@ -124,24 +134,6 @@ pub struct Environment {
     pub source: Option<Observation>,
 }
 
-/// A limb each task in an environment is given its own of: an engineer's
-/// clone. Filled when the task is created ([`crate::task::Origin::Fresh`])
-/// with a limb of this plugin kind, and fixed for the task's life; its forks
-/// share it. Usually a limb created in the same batch, such as a workspace
-/// whose config names the clone to make, and sometimes an existing one, such
-/// as the clone a designer pushed that its engineer now builds on.
-///
-/// The kind is checked, so a parent filling a place cannot hand its child a
-/// limb the child's definition does not name, such as Max or its own meta
-/// limb.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Place {
-    /// Unique within the environment: `workspace`.
-    pub name: String,
-    /// The [`LimbKind::Plugin`] kind a limb filling it must be.
-    pub kind: String,
-}
-
 /// Which limb runs each tool of a task's context.
 ///
 /// Made with the root's `tools` array by [`Binding::new`], from the same
@@ -149,11 +141,18 @@ pub struct Place {
 /// or route one it does not declare. Carried to every fork of the root, so
 /// the same bytes (the root's tool names) mean the same limbs. Every route
 /// goes to a limb of the task's environment or one of its places, which the
-/// journal checks. An agent's call names only its tool and is routed here,
+/// journal checks, and only to a tool that limb's journaled description
+/// offers agents. An agent's call names only its tool and is routed here,
 /// which is the whole of the harness's access control.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Binding {
     pub routes: Vec<Route>,
+}
+
+/// Two limbs of one root offer a tool of the same name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Duplicate {
+    pub tool: String,
 }
 
 impl Binding {
@@ -161,7 +160,7 @@ impl Binding {
     /// the descriptions of the limbs it holds, in order. Tools only Max may
     /// call are routed nowhere and declared nowhere. Refused, with the name,
     /// when two limbs offer the same tool name.
-    pub fn new(limbs: &[(LimbId, &Description)]) -> Result<(Binding, String), String> {
+    pub fn new(limbs: &[(LimbId, &Description)]) -> Result<(Binding, String), Duplicate> {
         let mut routes: Vec<Route> = Vec::new();
         let mut tools = String::from("[");
         for (limb, description) in limbs {
@@ -170,7 +169,9 @@ impl Binding {
                     continue;
                 }
                 if routes.iter().any(|r| r.tool == tool.name) {
-                    return Err(tool.name.clone());
+                    return Err(Duplicate {
+                        tool: tool.name.clone(),
+                    });
                 }
                 if !routes.is_empty() {
                     tools.push(',');
@@ -200,28 +201,17 @@ pub struct Route {
 }
 
 /// One thing that runs calls and owns resources.
+///
+/// A new version may change its name or a plugin's config, never its kind:
+/// calls already made were routed by what it is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limb {
     pub id: LimbId,
+    /// Unique among limbs, so a limb is found by name and nothing reads a
+    /// plugin's config to find it: a workspace is named by its directory,
+    /// which is what Max and the agents call it.
     pub name: String,
     pub kind: LimbKind,
-    pub fork: Fork,
-}
-
-/// What a limb's state does when a context using it forks. Declared by the
-/// limb and stated in the instructions it contributes, so the agents know.
-///
-/// The vision's third option, a clone of the limb per fork (a REPL's
-/// variables, a page's state), waits for a limb that has such state; it is a
-/// new variant here and a clone mapping on [`crate::task::Origin::Fork`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Fork {
-    /// Forks call the same limb: a workspace siblings coordinate through,
-    /// whose races the notices and refused stale writes handle.
-    Share,
-    /// A context bound to this limb cannot be forked; spawns from it are
-    /// fresh.
-    Refuse,
 }
 
 /// What a limb is, which decides how its calls are carried out. Only the
@@ -256,33 +246,36 @@ pub enum LimbKind {
     /// Max's queue: read it, rank it, say why. The scheduler's only limb.
     /// Run by the brain like [`LimbKind::Meta`].
     Attention,
-    /// A workspace, a JavaScript process, a page, or anything else. Its
-    /// calls are sent over a connection, again after every reconnection
-    /// while they are unsettled.
+    /// A workspace, a JavaScript process, or anything else: a process of
+    /// its own, started by the brain from its kind, so a brain relaunch does
+    /// not kill its builds. It keeps a durable record of its calls, so it can
+    /// say how one ended after the instance that ran it has gone. Its calls
+    /// are sent over a connection, again after every reconnection while
+    /// they are unsettled. A limb hosted elsewhere (in Max's page, on
+    /// another machine) is a new variant when the first one is built.
     Plugin {
         kind: String,
-        /// The plugin's own settings, as JSON.
+        /// The plugin's own settings, as JSON, read by the plugin alone.
+        /// Anything the harness or a face needs from a limb, it says in its
+        /// [`Description`] or its name.
         config: String,
-        host: Host,
     },
 }
 
-/// Where a plugin limb runs, which decides what survives a brain restart.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Host {
-    /// A process of its own, so a brain relaunch does not kill its builds.
-    /// It keeps a durable record of its calls, so it can say how one ended
-    /// after the instance that ran it has gone.
-    Process(Machine),
-    /// In a face: present only while one is connected.
-    Face,
-}
+impl LimbKind {
+    /// Whether the brain runs it itself, and so states its descriptions'
+    /// equivalents in code and its resources' changes as facts of its own.
+    pub fn is_brains(&self) -> bool {
+        !matches!(self, LimbKind::Plugin { .. })
+    }
 
-/// Where a limb process runs.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Machine {
-    Local,
-    Ssh(String),
+    /// Whether `other` is the same kind, which every version of a limb is.
+    pub fn same(&self, other: &LimbKind) -> bool {
+        match (self, other) {
+            (LimbKind::Plugin { kind: a, .. }, LimbKind::Plugin { kind: b, .. }) => a == b,
+            (a, b) => std::mem::discriminant(a) == std::mem::discriminant(b),
+        }
+    }
 }
 
 /// What the brain knows of its connection to a plugin limb. Three lifetimes
@@ -300,7 +293,16 @@ pub enum Reach {
     Lost,
 }
 
-/// What a limb tells the brain about itself, rendered into each root.
+/// What a plugin limb says about itself, rendered into each root.
+///
+/// A fact ([`crate::journal::Fact::Described`]), stated by the limb on each
+/// connection, after its hello. So the fold knows what every limb offers:
+/// a root may route only tools its limbs offer agents, Max may call only
+/// tools offered him, a starting task is rooted once each of its limbs has
+/// described itself on its current connection, and a face shows a limb from
+/// the journal without reading its config. The brain's own limbs are
+/// described by the brain's code at each root, since the meta limb's
+/// description depends on who holds it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Description {
     /// Instructions for using the limb: its `AGENTS.md` hierarchy, its
@@ -321,6 +323,8 @@ pub struct Instruction {
 /// One tool a limb offers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tool {
+    /// The name in `definition`. Stated beside it so the core reads no JSON;
+    /// a limb builds both from one source.
     pub name: String,
     /// The provider's exact tool definition: name, description, input
     /// schema, and whether it is deferred.
@@ -345,7 +349,6 @@ pub enum Audience {
 /// file) in the fact that records it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToLimb {
-    Describe,
     /// Run this call, at most once per id. It arrives again after every
     /// reconnection while it is unsettled: answer from the durable record if
     /// there is one, keep running it if it runs, otherwise run it if its
@@ -361,18 +364,14 @@ pub enum ToLimb {
     /// Stop this call as soon as it safely can; it settles as interrupted.
     /// Asked again after a reconnection while it is unsettled; a call the
     /// limb has no record of settles as unknown.
-    Stop {
-        call: CallId,
-    },
+    Stop { call: CallId },
     /// Watch these resources: what live contexts embody. `known` is every
     /// version the journal holds of each: its current version where one is
     /// recorded, otherwise each version a live context embodies. Report, as
     /// a [`crate::resource::Change`], each resource whose version is none of
     /// these, and from then on each change as it happens, so every change a
     /// limb states is one.
-    Watch {
-        known: Vec<Observation>,
-    },
+    Watch { known: Vec<Observation> },
 }
 
 /// What a limb sends the brain.
@@ -381,14 +380,13 @@ pub enum FromLimb {
     /// Sent first on every connection, once the limb is ready to describe
     /// itself (a clone it was configured to make is made). The brain records
     /// it as [`Reach::Connected`], and sends again every unsettled call it
-    /// last sent before.
-    Hello {
-        instance: InstanceId,
-    },
-    Described(Description),
-    /// Facts about its own calls and resources, with the bytes they name:
-    /// a settlement with its output, a change with the call that made it.
-    /// The brain commits them as the limb's, and refuses any other fact.
+    /// last sent before. The limb's first facts on the connection are its
+    /// [`crate::journal::Fact::Described`].
+    Hello { instance: InstanceId },
+    /// Facts about itself, its own calls and its own resources, with the
+    /// bytes they name: its description, a settlement with its output, a
+    /// change with the call that made it. The brain commits them as the
+    /// limb's, and the journal refuses any other fact.
     Facts(Batch),
     /// Output so far of a running call.
     Live(Live),

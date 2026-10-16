@@ -2,10 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::context::EntryId;
 use crate::id::{DeliveryId, TaskId, ValueId};
 
 /// Something addressed to a task: Max's words, a turn the harness asks for,
-/// or what Max said in an aside.
+/// or what an aside of it last said.
 ///
 /// **Concept.** A delivery is part of its task's fold from the moment it is
 /// made (the task's pending inputs) until a request renders it, and every
@@ -50,27 +51,32 @@ pub struct Delivery {
 pub enum Content {
     /// Max's words: user content blocks (text, a pasted image, a dictated
     /// passage), written having seen the journal up to his record's `seen`.
-    /// They end his turn and clear the task from his queue.
+    /// They end his turn and clear the task from his queue, and the task has
+    /// heard them, so it can quote them on ([`crate::task::Mandate::quotes`]).
     Words(ValueId),
     /// A turn the harness asks for.
     Prompt(Prompt),
-    /// The result of an aside Max held with a fork of this task while it
-    /// waited: what he said there reaches the task itself.
-    Aside(TaskId),
+    /// What an aside Max is holding with a fork of this task last said:
+    /// `entry`, the response that ended one of its turns. Returned each time
+    /// the aside's turn ends, and once more when it is done, so what Max
+    /// said there reaches the task itself even if he leaves the aside open.
+    /// Provisional: the other path returns only when he marks it done.
+    Aside { aside: TaskId, entry: EntryId },
 }
 
 /// Why the harness asks for a turn the model did not otherwise have.
+///
+/// Only prompts something produces are here. A cache-expiry handover and a
+/// two-stage handover are each a new variant when the brain's policy first
+/// asks for one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Prompt {
     /// Max marked a user-facing task done: write the result for the owner.
     Done,
-    /// The first stage of a handover: how to write a good one; tidy up, then
-    /// call the second stage.
-    Handover,
-    /// The context's cache is about to expire while it waits, and a handover
-    /// now is expected to cost less than a cold resume.
-    Expiring,
-    /// An autonomous turn ended with background work still running: it will
-    /// wake the task when it ends; stop it if it is not needed. Said once.
+    /// An autonomous turn ended with background work still running (an ask
+    /// of Max included): it will wake the task when it ends, and the task
+    /// cannot finish before; stop it if it is not needed. Said once. This is
+    /// how an agent whose provisional choice Max has not answered decides
+    /// whether to wait for him.
     Lingering,
 }

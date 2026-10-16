@@ -13,8 +13,11 @@ use crate::id::{TaskId, Timestamp, ValueId};
 /// [appended](ModelCall::appends), whose last is its [head](ModelCall::head)),
 /// what those messages were rendered from ([`ModelCall::renders`]), where it
 /// asked the provider to cache, when the response began and ended, how it
-/// ended, and what the provider reported. Every turn, retry, keep-alive and
-/// handover turn is one.
+/// ended, and what the provider reported. Every turn, retry and handover
+/// turn is one. A keep-alive (a request that only refreshes a prefix's
+/// lifetime and moves no task) is a new kind of request when the brain's
+/// policy first sends one; it will need a purpose here and a fold rule that
+/// lets its base trail its task's head.
 ///
 /// A request names its base and carries its new messages, so its head is
 /// computed, never stated: it cannot claim a context that does not grow
@@ -43,7 +46,8 @@ use crate::id::{TaskId, Timestamp, ValueId};
 ///   sent one first, then the rest at its first byte.
 /// - Prefixes under about 1k tokens are not cached, silently.
 /// - Every response reports the plan's 5h and 7d utilisation, and a billing
-///   claim; any claim other than a plan window is a failure ([`Quota`]).
+///   claim; the provider turns a claim other than a plan window into
+///   `on_plan: false` ([`Quota`]).
 ///
 /// **Vision.** Cache-aware forking; keep-alive vs cache-expiry handover as
 /// an expected-value decision (critique §4); analytics and timesheets; the
@@ -64,13 +68,11 @@ use crate::id::{TaskId, Timestamp, ValueId};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCall {
     pub task: TaskId,
-    pub purpose: Purpose,
-    /// The context this request extends: its task's head for a turn, an
-    /// entry on the task's chain for a keep-alive.
+    /// The context this request extends: its task's head.
     pub base: EntryId,
     /// The messages this request appended to `base`, in order: the
     /// attachments' tool uses the harness writes, tool results, Max's words,
-    /// notes. Empty for a retry of the same head and for a keep-alive.
+    /// notes. Empty for a retry of the same head.
     pub appends: Vec<Message>,
     /// What `appends` was rendered from, in order. A task has seen exactly
     /// what its requests rendered, so a request retried after a rate limit
@@ -80,7 +82,11 @@ pub struct ModelCall {
     /// The request's other parameters exactly as sent: `max_tokens`,
     /// thinking, effort, `stream`.
     pub params: ValueId,
-    pub breakpoints: Vec<Breakpoint>,
+    /// Where it asked the provider to cache: the prefix through each entry,
+    /// each on the request's chain, for the provider's default lifetime. A
+    /// longer lifetime is a field here when the brain's policy first asks
+    /// for one.
+    pub breakpoints: Vec<EntryId>,
 }
 
 impl ModelCall {
@@ -123,7 +129,6 @@ impl ModelCall {
     pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
         let ModelCall {
             task: _,
-            purpose: _,
             base: _,
             appends,
             renders: _,
@@ -135,41 +140,11 @@ impl ModelCall {
     }
 }
 
-/// Why a request was sent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Purpose {
-    /// A model turn for the task. At most one is in flight per task.
-    Turn,
-    /// A zero-output request that only refreshes the cache's lifetime. Its
-    /// base may be behind the task's head: while a tool call is outstanding,
-    /// the only valid keep-alive is the previous request again. It appends
-    /// nothing and never moves the task.
-    KeepAlive,
-}
-
-/// A cache breakpoint the request placed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Breakpoint {
-    /// The prefix through this entry is cached. It is on the request's chain.
-    pub at: EntryId,
-    pub ttl: Ttl,
-}
-
-/// How long the provider keeps a cache entry after its last use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Ttl {
-    /// Five minutes; writes cost 1.25x input.
-    Short,
-    /// One hour; writes cost 2x input.
-    Long,
-}
-
 /// A fact in a model call's life.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ModelCallEvent {
-    /// The request was sent. A [`Purpose::Turn`] moves its task's head to
-    /// the request's head and clears what it rendered from the task's
-    /// pending inputs.
+    /// The request was sent. It moves its task's head to the request's head
+    /// and clears what it rendered from the task's pending inputs.
     Sent(ModelCall),
     /// The response's `message_start` arrived: from here a cache entry this
     /// request wrote is readable by others.
@@ -231,17 +206,27 @@ pub enum Ending {
     Lost,
 }
 
-/// Why the model stopped.
+/// Why the model stopped, in the terms the fold and the brain decide on.
+///
+/// Only [`Stop::EndTurn`] ends a turn: it is what completes an autonomous
+/// task or gives Max the move. Every other stop without tool uses leaves the
+/// task ready, and the brain's policy reads it off the last turn: carry on
+/// after `MaxTokens` or `PauseTurn`, root anew after `ContextWindow`, fail
+/// the task (or root anew) after `Refused`. So a refusal is never mistaken
+/// for a result.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Stop {
     EndTurn,
     ToolUse,
     /// The output limit; hidden thinking counts against it.
     MaxTokens,
+    /// The provider paused a long turn; it continues if sent again.
     PauseTurn,
-    Refusal,
+    /// The model declined to go on.
+    Refused,
     /// The context no longer fits the model's window.
     ContextWindow,
+    /// A reason this build does not know, as the provider named it.
     Other(String),
 }
 
@@ -256,19 +241,24 @@ pub struct Usage {
 }
 
 /// The subscription's state as one response reported it: a free usage gauge
-/// on every response, and the billing check.
+/// on every response, and the billing check. The provider reads its own
+/// headers and decides; nothing outside it knows their names.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Quota {
-    /// `anthropic-ratelimit-unified-representative-claim`: `five_hour` and
-    /// `seven_day*` are the plan; anything else (`overage`) is billing gone
-    /// wrong, and the brain stops sending.
-    pub claim: Option<String>,
-    /// Fraction of the 5-hour window used, 0 to 1.
-    pub five_hour: Option<f64>,
-    /// Fraction of the 7-day window used, 0 to 1.
-    pub seven_day: Option<f64>,
-    /// When the 5-hour window resets.
-    pub five_hour_reset: Option<Timestamp>,
-    /// When the 7-day window resets.
-    pub seven_day_reset: Option<Timestamp>,
+    /// Whether the provider billed this response to the plan. `false` is
+    /// billing gone wrong, and the brain stops sending. It is a fact, so the
+    /// latest report ([`crate::state::State::quota`]) says so after a
+    /// restart too.
+    pub on_plan: bool,
+    pub five_hour: Option<Window>,
+    pub seven_day: Option<Window>,
+}
+
+/// One of the plan's usage windows.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Window {
+    /// The fraction used, 0 to 1.
+    pub used: f64,
+    /// When it resets.
+    pub resets: Option<Timestamp>,
 }

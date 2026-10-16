@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::attention::{Focus, Ranking};
 use crate::call::CallEvent;
 use crate::delivery::{Content, Delivery};
-use crate::environment::{Environment, Limb, Reach};
+use crate::environment::{Description, Environment, Limb, Reach};
 use crate::id::{CallId, FaceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ValueId};
 use crate::model_call::ModelCallEvent;
 use crate::resource::Change;
@@ -99,6 +99,12 @@ pub enum Fact {
     Environment(Environment),
     /// A new version of a limb's definition.
     Limb(Limb),
+    /// What a plugin limb offers and says about itself, on its current
+    /// connection.
+    Described {
+        limb: LimbId,
+        description: Description,
+    },
     /// What the brain knows of its connection to a limb.
     Reach {
         limb: LimbId,
@@ -127,7 +133,7 @@ impl Fact {
                 content,
             }) => match content {
                 Content::Words(words) => values.push(*words),
-                Content::Prompt(_) | Content::Aside(_) => {}
+                Content::Prompt(_) | Content::Aside { .. } => {}
             },
             Fact::Change(Change {
                 resource: _,
@@ -150,8 +156,11 @@ impl Fact {
                 id: _,
                 name: _,
                 kind: _,
-                fork: _,
             }) => {}
+            Fact::Described {
+                limb: _,
+                description: _,
+            } => {}
             Fact::Reach { limb: _, reach: _ } => {}
             Fact::Ranking(Ranking { order: _ }) => {}
             Fact::Focus(Focus { face: _, task: _ }) => {}
@@ -194,43 +203,71 @@ pub struct Batch {
 /// end something twice, leave a tool use unanswered, move a context off the
 /// tree, outlive an owner, or address something that cannot hear it.
 ///
-/// A refusal of the brain's own facts is a bug in the brain. A refusal of
-/// Max's or a limb's is a race the rules answer: he stops a task that has
-/// just finished, a limb repeats a settlement after reconnecting.
+/// Each variant is one rule, so whoever is refused (Max at his face, a limb,
+/// an engineer reading a log) learns which rule fired, and a face can act on
+/// one by matching it rather than its wording. A refusal of the brain's own
+/// facts is a bug in the brain. A refusal of Max's or a limb's is a race the
+/// rules answer: he stops a task that has just finished, a limb repeats a
+/// settlement after reconnecting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rejected {
     /// Not the next position.
     OutOfOrder { expected: Seq },
     /// Names an identity the journal has never seen.
     Unknown,
-    /// Creates an identity that already exists.
+    /// Creates an identity that already exists, a second environment or
+    /// limb of one name, or runs a call the brain runs a second time.
     Exists,
     /// Addresses a task that is done, a call that has settled, or a scope
     /// that has closed.
     Finished,
-    /// The identity is not in a state that accepts this fact.
+    /// Resumes a task that has not finished.
+    NotFinished,
+    /// The task has no context yet: its limbs are still connecting.
+    Starting,
+    /// Not at a point that accepts this: the task is thinking or acting and
+    /// this waits for its move, a spawn's scope still has members running,
+    /// or a call was never sent.
     Busy,
     /// The task is draining, so it may start nothing new.
     Draining,
     /// A request that leaves a tool use of the previous response unanswered.
     Unanswered,
-    /// A standing task outside Max's scope; a task created by a call that
-    /// is not an agent's meta call, in a scope that call cannot add to, or
-    /// of a kind its caller's environment cannot start; or an aside in a
-    /// spawn's scope.
+    /// A standing task outside Max's scope, a task joining a scope its
+    /// creator's call cannot add to, or an aside in a spawn's scope.
     WrongScope,
+    /// A task created by something other than a running agent's meta call,
+    /// or something its creator cannot start: a fresh task in an environment
+    /// its own does not start, a fork of another task, a resume of a task it
+    /// did not own, an aside or a standing task.
+    CannotStart,
     /// A route to a limb outside its task's environment and places, an
-    /// attachment its context does not route, a place left empty or filled
-    /// by a limb of another kind, or a fork of a context bound to a limb
-    /// that refuses forks.
+    /// attachment its context does not route, or a place left empty or
+    /// filled by a limb of another kind.
     WrongEnvironment,
+    /// A route, or a call of Max's, naming a tool its limb's current
+    /// description does not offer that caller, or a limb that has not
+    /// described itself.
+    Unoffered,
+    /// A dispatch of a call no limb runs: its tool is not in its context.
+    Unroutable,
+    /// A dispatch of a call to Max: he answers, nothing is sent.
+    ForMax,
+    /// A dispatch to, or a description from, a limb not connected to this
+    /// brain.
+    Unreached,
     /// A binding that routes one tool name to two limbs, or an environment
-    /// with two places of one name.
+    /// with two places of one kind.
     Ambiguous,
-    /// A head, breakpoint or rewind that is not on the task's chain.
+    /// A new version of a limb that changes what kind of limb it is.
+    Redefined,
+    /// A head, breakpoint, rewind or aside return that is not on the task's
+    /// chain.
     Detached,
     /// Routed to a task or limb it does not concern.
     NotForTask,
+    /// A quote that is not Max's words heard by the task quoting them.
+    Unheard,
     /// Its author may not state it.
     Author,
     /// Names a value that is neither stored nor in its batch.
@@ -239,34 +276,48 @@ pub enum Rejected {
     TooLarge(ValueId),
     /// An interrupt to a task whose round waits on a scope with members
     /// still running: the move cannot be Max's until the scope closes, so
-    /// his face offers an aside instead.
+    /// his face offers an aside instead ([`State::scoped`] says so first).
     Scoped,
 }
 
 impl std::fmt::Display for Rejected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        let said = match self {
             Rejected::OutOfOrder { expected } => {
-                write!(f, "out of order: the next position is {}", expected.0)
+                return write!(f, "out of order: the next position is {}", expected.0);
             }
-            Rejected::Unknown => f.write_str("names something the journal has never seen"),
-            Rejected::Exists => f.write_str("creates something that already exists"),
-            Rejected::Finished => f.write_str("addresses something already finished"),
-            Rejected::Busy => f.write_str("not in a state that accepts this"),
-            Rejected::Draining => f.write_str("the task is draining and may start nothing new"),
-            Rejected::Unanswered => f.write_str("leaves a tool use unanswered"),
-            Rejected::WrongScope => f.write_str("not allowed in that scope, or by that creator"),
-            Rejected::WrongEnvironment => f.write_str("outside the task's environment"),
-            Rejected::Ambiguous => f.write_str("one name used twice"),
-            Rejected::Detached => f.write_str("not on the task's chain"),
-            Rejected::NotForTask => f.write_str("does not concern what it is routed to"),
-            Rejected::Author => f.write_str("its author may not state it"),
-            Rejected::Missing(value) => write!(f, "value {value} is neither stored nor sent"),
-            Rejected::TooLarge(value) => write!(f, "value {value} is larger than the limit"),
-            Rejected::Scoped => {
-                f.write_str("the task is waiting on its children; talk to it through an aside")
+            Rejected::Missing(value) => {
+                return write!(f, "value {value} is neither stored nor sent");
             }
-        }
+            Rejected::TooLarge(value) => {
+                return write!(f, "value {value} is larger than the limit");
+            }
+            Rejected::Unknown => "names something the journal has never seen",
+            Rejected::Exists => "creates something that already exists",
+            Rejected::Finished => "addresses something already finished",
+            Rejected::NotFinished => "resumes a task that has not finished",
+            Rejected::Starting => "the task has not started: its limbs are still connecting",
+            Rejected::Busy => {
+                "not now: the task is thinking or acting, or the call is not at that point"
+            }
+            Rejected::Draining => "the task is draining and may start nothing new",
+            Rejected::Unanswered => "leaves a tool use unanswered",
+            Rejected::WrongScope => "not allowed in that scope",
+            Rejected::CannotStart => "its creator cannot start that",
+            Rejected::WrongEnvironment => "outside the task's environment",
+            Rejected::Unoffered => "the limb does not offer that tool to that caller",
+            Rejected::Unroutable => "no limb runs that tool in its context",
+            Rejected::ForMax => "a question for Max is answered by him, never sent",
+            Rejected::Unreached => "the limb is not connected",
+            Rejected::Ambiguous => "one name used twice",
+            Rejected::Redefined => "a limb's new version changes its kind",
+            Rejected::Detached => "not on the task's chain",
+            Rejected::NotForTask => "does not concern what it is routed to",
+            Rejected::Unheard => "quotes words Max did not say to the quoting task",
+            Rejected::Author => "its author may not state it",
+            Rejected::Scoped => "the task is waiting on its children; talk to it through an aside",
+        };
+        f.write_str(said)
     }
 }
 
@@ -296,10 +347,11 @@ pub trait Store {
 /// that keep the journal sound, and nothing else in the harness assigns a
 /// position, folds ahead of the store, or appends without folding.
 ///
-/// Each fact folds atomically. A batch refused at its first fact (Max's
-/// races, a limb's repeats, all single facts or led by the contested one)
-/// leaves the fold untouched; one refused later, which is a brain bug, is
-/// rebuilt from the store.
+/// A batch folds into a copy of the state, and the copy replaces it only
+/// once the store has the batch. [`State`] is persistent, so the copy costs
+/// nothing until it diverges: a refusal anywhere in any author's batch, or a
+/// store that fails, leaves the state exactly as it was, with nothing to
+/// rebuild.
 pub struct Journal<S> {
     store: S,
     state: State,
@@ -348,7 +400,9 @@ impl<S: Store> Journal<S> {
         Ok(Journal { store, state })
     }
 
-    /// What the journal says is true now.
+    /// What the journal says is true now. Cloning it is cheap and the clone
+    /// never changes, so a face in the same process reads the brain's state
+    /// as of any commit without folding the journal a second time.
     pub fn state(&self) -> &State {
         &self.state
     }
@@ -389,18 +443,12 @@ impl<S: Store> Journal<S> {
                 return Err(Error::Refused { index, why });
             }
         }
-        for (index, record) in records.iter().enumerate() {
-            if let Err(why) = self.state.apply(record) {
-                if index > 0 {
-                    self.state = fold(&self.store)?;
-                }
-                return Err(Error::Refused { index, why });
-            }
-        }
-        if let Err(error) = self.store.append(&values, &records) {
-            self.state = fold(&self.store)?;
-            return Err(Error::Store(error));
-        }
+        let next = self
+            .state
+            .with(&records)
+            .map_err(|(index, why)| Error::Refused { index, why })?;
+        self.store.append(&values, &records).map_err(Error::Store)?;
+        self.state = next;
         Ok(records)
     }
 }
