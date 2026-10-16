@@ -103,6 +103,10 @@ struct Open {
     asides: BTreeSet<TaskId>,
     /// Responses that ended their model turn.
     turns_ended: BTreeSet<EntryId>,
+    /// Each task's last turn to end.
+    last_turn: BTreeMap<TaskId, ModelCallId>,
+    /// The last model call to report the quota.
+    quota: Option<ModelCallId>,
 }
 
 /// Where and when something was recorded. The position orders it against
@@ -757,6 +761,7 @@ impl State {
                     return Err(Rejected::Busy);
                 }
                 let turn = sent.call.purpose == Purpose::Turn;
+                let owner = sent.call.task;
                 let response = match ending {
                     Ending::Responded { content, .. } if turn => Some(sent.call.response(*content)),
                     _ => None,
@@ -794,6 +799,12 @@ impl State {
                     self.open.turns_ended.insert(entry);
                 }
                 self.open.model_calls.remove(&id);
+                if turn {
+                    self.open.last_turn.insert(owner, id);
+                }
+                if quota.is_some() {
+                    self.open.quota = Some(id);
+                }
                 if let Some(sent) = self.model_calls.get_mut(&id) {
                     sent.ended = Some(Ended {
                         at: mark,
@@ -1214,6 +1225,17 @@ impl State {
             Caller::Max { .. } => None,
             Caller::Meta { call, .. } => self.call_owner(*call),
         }
+    }
+
+    /// How the task's last turn to end, ended.
+    pub fn last_turn(&self, task: TaskId) -> Option<&Ended> {
+        let id = self.open.last_turn.get(&task)?;
+        self.model_calls[id].ended.as_ref()
+    }
+
+    /// The last report of the account's quota.
+    pub fn quota(&self) -> Option<&Ended> {
+        self.model_calls[self.open.quota.as_ref()?].ended.as_ref()
     }
 
     /// The tasks in a scope, in order of creation.

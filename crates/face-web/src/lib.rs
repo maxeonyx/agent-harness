@@ -57,7 +57,7 @@ mod view;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -102,20 +102,32 @@ pub struct Wiring {
 }
 
 /// A face over one journal: folds it as it grows and serves the page.
+///
+/// Only the follower writes `folded`, and holds it only while folding in
+/// memory; viewers read it alongside one another. Nothing reads the store
+/// while holding either lock.
 pub struct Face<S> {
     source: S,
     wiring: Wiring,
-    folded: Mutex<Folded>,
+    folded: RwLock<Folded>,
+    shown: Mutex<Shown>,
     grew: Condvar,
 }
 
 struct Folded {
     state: State,
-    /// The page's view of `state`, rendered once per fold for every viewer.
-    view: Arc<String>,
+    /// Each record as the page's journal shows it, by position.
+    lines: Vec<Arc<str>>,
     /// A record the fold refused: this face's build disagrees with the
     /// brain's, and the views stop at the record before it.
     refused: Option<String>,
+}
+
+/// What every viewer is sent: the page's view, rendered once per fold, and
+/// the last record it includes.
+struct Shown {
+    view: Arc<String>,
+    seq: Seq,
 }
 
 /// How many recent facts a page that has seen nothing is sent.
@@ -135,11 +147,12 @@ impl<S: Source> Face<S> {
         Arc::new(Face {
             source,
             wiring,
-            folded: Mutex::new(Folded {
+            folded: RwLock::new(Folded {
                 state,
-                view,
+                lines: Vec::new(),
                 refused: None,
             }),
+            shown: Mutex::new(Shown { view, seq: Seq(0) }),
             grew: Condvar::new(),
         })
     }
@@ -152,19 +165,25 @@ impl<S: Source> Face<S> {
             if records.is_empty() {
                 continue;
             }
-            let mut folded = self.lock();
-            for record in &records {
-                if let Err(rejected) = folded.state.apply(record) {
-                    let refused = format!("record {} refused: {rejected:?}", record.seq.0);
-                    folded.refused = Some(refused);
-                    break;
+            {
+                let mut folded = self.folded.write().unwrap_or_else(|e| e.into_inner());
+                for record in &records {
+                    if let Err(rejected) = folded.state.apply(record) {
+                        let refused = format!("record {} refused: {rejected:?}", record.seq.0);
+                        folded.refused = Some(refused);
+                        break;
+                    }
+                    let line = fact(&folded.state, record).into();
+                    folded.lines.push(line);
                 }
             }
+            let folded = self.read();
             let value = |id| self.source.value(id);
-            folded.view = Arc::new(render(&folded.state, &value, folded.refused.as_deref()));
+            let view = Arc::new(render(&folded.state, &value, folded.refused.as_deref()));
             last = folded.state.last().unwrap_or(Seq(0));
             let stop = folded.refused.is_some();
             drop(folded);
+            *self.show() = Shown { view, seq: last };
             self.grew.notify_all();
             if stop {
                 return;
@@ -184,7 +203,7 @@ impl<S: Source> Face<S> {
             ),
             ("GET", "/events") => self.events(&mut stream, request.last_event_id),
             ("GET", "/view") => {
-                let view = Arc::clone(&self.lock().view);
+                let view = Arc::clone(&self.show().view);
                 http::respond(&mut stream, "application/json", view.as_bytes(), false)
             }
             ("GET", "/wiring") => {
@@ -268,8 +287,12 @@ impl<S: Source> Face<S> {
         Ok(())
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Folded> {
-        self.folded.lock().unwrap_or_else(|e| e.into_inner())
+    fn read(&self) -> RwLockReadGuard<'_, Folded> {
+        self.folded.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn show(&self) -> MutexGuard<'_, Shown> {
+        self.shown.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The event stream: from the client's cursor, one event per fold.
@@ -277,31 +300,26 @@ impl<S: Source> Face<S> {
         http::start_events(stream)?;
         let mut cursor = cursor;
         loop {
-            let folded = self.lock();
-            let reached = |f: &Folded| f.state.last().unwrap_or(Seq(0));
-            let (folded, _) = self
+            let (shown, _) = self
                 .grew
-                .wait_timeout_while(folded, HEARTBEAT, |f| {
-                    cursor.is_some_and(|c| reached(f) <= c)
+                .wait_timeout_while(self.show(), HEARTBEAT, |s| {
+                    cursor.is_some_and(|c| s.seq <= c)
                 })
                 .unwrap_or_else(|e| e.into_inner());
-            let seq = reached(&folded);
+            let (seq, view) = (shown.seq, Arc::clone(&shown.view));
+            drop(shown);
             if cursor.is_some_and(|c| seq <= c) {
-                drop(folded);
                 stream.write_all(b": heartbeat\n\n")?;
                 stream.flush()?;
                 continue;
             }
             let from = cursor.unwrap_or(Seq(seq.0.saturating_sub(RECENT)));
-            let facts: Vec<String> = self
-                .source
-                .read(from, Duration::ZERO)
-                .iter()
-                .take_while(|r| r.seq <= seq)
-                .map(|r| fact(&folded.state, r))
-                .collect();
-            let view = Arc::clone(&folded.view);
-            drop(folded);
+            let facts: Vec<Arc<str>> = self
+                .read()
+                .lines
+                .get(from.0 as usize..seq.0 as usize)
+                .unwrap_or_default()
+                .to_vec();
             let data = format!(r#"{{"view":{view},"facts":[{}]}}"#, facts.join(","));
             write!(stream, "id: {}\ndata: {data}\n\n", seq.0)?;
             stream.flush()?;
@@ -317,10 +335,14 @@ impl<S: Source> Face<S> {
                 .value(id)
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         };
-        let chain: Vec<serde_json::Value> = self
-            .lock()
+        let chain: Vec<(EntryId, Entry)> = self
+            .read()
             .state
             .context(head)
+            .into_iter()
+            .map(|(id, entry)| (id, entry.clone()))
+            .collect();
+        let chain: Vec<serde_json::Value> = chain
             .into_iter()
             .map(|(id, entry)| match entry {
                 Entry::Root(root) => json!({

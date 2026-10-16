@@ -135,15 +135,20 @@ fn run() -> Result<(), String> {
             feed: feed.clone(),
         },
     );
-    let follower = face.clone();
-    thread::spawn(move || follower.follow());
     // The Windows host, read again for each connection: DHCP can move it.
     let allow = |peer: IpAddr| Some(peer) == harness_face_web::default_gateway().map(IpAddr::V4);
-    thread::spawn(move || harness_face_web::serve(face, listener, tls, allow));
-    println!("face: https://mx-hv-mj.local:{port}");
-
     let client = Client::new(login()?);
     let mut brain = Brain::launch(store, reader, client, state_dir, &roles, start, inbox, feed)?;
-    brain.run();
+    // The brain and the face it serves run until the process is killed.
+    thread::scope(|s| {
+        s.spawn(|| face.follow());
+        s.spawn(|| {
+            if let Err(e) = harness_face_web::serve(face.clone(), listener, tls, allow) {
+                eprintln!("harness-brain: the face stopped serving: {e}");
+            }
+        });
+        println!("face: https://mx-hv-mj.local:{port}");
+        brain.run();
+    });
     Ok(())
 }
