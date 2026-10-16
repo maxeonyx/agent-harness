@@ -82,6 +82,27 @@ pub struct State {
     ranking: Ranking,
     focus: BTreeMap<FaceId, TaskId>,
     limited_until: Option<Timestamp>,
+    open: Open,
+}
+
+/// What is still in motion, kept as the fold goes, so the views over live
+/// work ([`State::todo`], settlement, the members of a scope) cost what
+/// live work costs rather than what all history costs. Derived from the
+/// facts in [`State::apply`], never stated beside them.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Open {
+    /// Tasks not done.
+    tasks: BTreeSet<TaskId>,
+    /// Calls not settled.
+    calls: BTreeSet<CallId>,
+    /// Model calls not ended.
+    model_calls: BTreeSet<ModelCallId>,
+    /// Every task of each scope, in order of creation.
+    scopes: BTreeMap<Scope, Vec<TaskId>>,
+    /// Asides whose result has not been delivered back.
+    asides: BTreeSet<TaskId>,
+    /// Responses that ended their model turn.
+    turns_ended: BTreeSet<EntryId>,
 }
 
 /// Where and when something was recorded. The position orders it against
@@ -304,6 +325,21 @@ pub enum Todo {
 }
 
 impl State {
+    /// Store a task's new state, and whether it is still open.
+    fn put(&mut self, task: Task) {
+        if task.is_done() {
+            self.open.tasks.remove(&task.id);
+        } else {
+            self.open.tasks.insert(task.id);
+        }
+        self.tasks.insert(task.id, task);
+    }
+
+    /// The tasks not done.
+    fn live(&self) -> impl Iterator<Item = &Task> {
+        self.open.tasks.iter().map(|id| &self.tasks[id])
+    }
+
     /// Fold one record, or refuse it and change nothing.
     pub fn apply(&mut self, record: &Record) -> Result<(), Rejected> {
         let expected = self.next();
@@ -494,7 +530,11 @@ impl State {
             }
         }
         let task = Task::new(id, created, record.at, self)?;
-        self.tasks.insert(id, task);
+        self.open.scopes.entry(task.scope).or_default().push(id);
+        if let Origin::Aside { .. } = task.origin {
+            self.open.asides.insert(id);
+        }
+        self.put(task);
         Ok(())
     }
 
@@ -632,25 +672,13 @@ impl State {
         if let Some(root) = root {
             self.entries.insert(root.id(), Entry::Root(root.clone()));
         }
-        self.tasks.insert(id, task);
+        self.put(task);
         Ok(())
     }
 
     /// Whether some request's response is `entry` and ended its model turn.
     fn ended_turn(&self, entry: EntryId) -> bool {
-        self.model_calls.values().any(|m| {
-            m.response == Some(entry)
-                && matches!(
-                    &m.ended,
-                    Some(Ended {
-                        ending: Ending::Responded {
-                            stop: Stop::EndTurn | Stop::Refusal,
-                            ..
-                        },
-                        ..
-                    })
-                )
-        })
+        self.open.turns_ended.contains(&entry)
     }
 
     fn fold_model_call(
@@ -692,9 +720,10 @@ impl State {
                     Purpose::KeepAlive => return Err(Rejected::Detached),
                 };
                 if let Some(task) = task {
-                    self.tasks.insert(task.id, task);
+                    self.put(task);
                 }
                 self.entries.extend(entries);
+                self.open.model_calls.insert(id);
                 self.model_calls.insert(
                     id,
                     ModelCallRecord {
@@ -744,7 +773,7 @@ impl State {
                     None
                 };
                 if let Some(task) = task {
-                    self.tasks.insert(task.id, task);
+                    self.put(task);
                 }
                 if let Ending::Limited { until } = ending {
                     self.limited_until = self.limited_until.max(Some(*until));
@@ -754,6 +783,17 @@ impl State {
                     self.entries.insert(entry_id, entry);
                     entry_id
                 });
+                if let (
+                    Some(entry),
+                    Ending::Responded {
+                        stop: Stop::EndTurn | Stop::Refusal,
+                        ..
+                    },
+                ) = (response, ending)
+                {
+                    self.open.turns_ended.insert(entry);
+                }
+                self.open.model_calls.remove(&id);
                 if let Some(sent) = self.model_calls.get_mut(&id) {
                     sent.ended = Some(Ended {
                         at: mark,
@@ -886,8 +926,9 @@ impl State {
             sent.calls.push(id);
         }
         if let Some(task) = reader {
-            self.tasks.insert(task.id, task);
+            self.put(task);
         }
+        self.open.calls.insert(id);
         self.calls.insert(
             id,
             CallRecord {
@@ -934,7 +975,7 @@ impl State {
                 Caller::Max { chat: None, .. } | Caller::Meta { .. } => Vec::new(),
             }
         } else {
-            self.tasks.values().filter(|t| t.awaits(id)).collect()
+            self.live().filter(|t| t.awaits(id)).collect()
         };
         let mut touched = Vec::with_capacity(readers.len());
         for reader in readers {
@@ -943,7 +984,7 @@ impl State {
             touched.push(task);
         }
         for task in touched {
-            self.tasks.insert(task.id, task);
+            self.put(task);
         }
         let settlement = Settlement {
             outcome: outcome.clone(),
@@ -954,6 +995,7 @@ impl State {
                 made.late = Some(settlement);
             } else {
                 made.settled = Some(settlement);
+                self.open.calls.remove(&id);
             }
         }
         Ok(())
@@ -974,7 +1016,10 @@ impl State {
             .ok_or(Rejected::Unknown)?
             .clone();
         task.apply(record, self)?;
-        self.tasks.insert(task.id, task);
+        self.put(task);
+        if let Content::Aside(aside) = delivery.content {
+            self.open.asides.remove(&aside);
+        }
         self.deliveries.insert(
             delivery.id,
             Delivered {
@@ -996,7 +1041,7 @@ impl State {
             return Err(Rejected::Unknown);
         }
         let mut woken = Vec::new();
-        for task in self.tasks.values() {
+        for task in self.live() {
             if task.mode == Mode::Standing && task.state == TaskState::Listening {
                 let mut task = task.clone();
                 task.apply(record, self)?;
@@ -1004,7 +1049,7 @@ impl State {
             }
         }
         for task in woken {
-            self.tasks.insert(task.id, task);
+            self.put(task);
         }
         self.resources.insert(
             change.resource.clone(),
@@ -1171,10 +1216,10 @@ impl State {
         }
     }
 
-    /// The tasks in a scope. Scanned, not indexed: a few thousand tasks is
-    /// the expected scale.
+    /// The tasks in a scope, in order of creation.
     pub fn members(&self, scope: Scope) -> impl Iterator<Item = &Task> {
-        self.tasks.values().filter(move |t| t.scope == scope)
+        let ids = self.open.scopes.get(&scope).map_or(&[][..], Vec::as_slice);
+        ids.iter().map(|id| &self.tasks[id])
     }
 
     /// Whether the task or any ancestor is held.
@@ -1369,31 +1414,25 @@ impl State {
             sent.ended.is_none() && launch.is_some_and(|l| sent.sent.seq < l)
         };
         let mut todo: Vec<Todo> = self
+            .open
             .model_calls
             .iter()
-            .filter(|(_, sent)| lost(sent))
-            .map(|(id, _)| Todo::Lost(*id))
+            .filter(|id| lost(&self.model_calls[id]))
+            .map(|id| Todo::Lost(*id))
             .collect();
+        for aside in &self.open.asides {
+            if let Some(task) = self.tasks.get(aside)
+                && task.is_done()
+                && let Origin::Aside { from } = task.origin
+                && self.open.tasks.contains(&from)
+            {
+                todo.push(Todo::Return(task.id));
+            }
+        }
         let mut readers: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
-        let mut scopes: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
         let mut needed: BTreeSet<LimbId> = BTreeSet::new();
         let mut starting = Vec::new();
-        for task in self.tasks.values() {
-            if let Scope::Spawn(call) = task.scope {
-                scopes.entry(call).or_default().push(task);
-            }
-            if task.is_done() {
-                if let Origin::Aside { from } = task.origin
-                    && self.tasks.get(&from).is_some_and(|f| !f.is_done())
-                    && !self
-                        .deliveries
-                        .values()
-                        .any(|d| d.delivery.content == Content::Aside(task.id))
-                {
-                    todo.push(Todo::Return(task.id));
-                }
-                continue;
-            }
+        for task in self.live() {
             for call in task.awaited() {
                 readers.entry(call).or_default().push(task);
             }
@@ -1414,16 +1453,17 @@ impl State {
                 _ => {}
             }
         }
-        for (id, record) in &self.calls {
-            if record.settled.is_some() {
-                continue;
-            }
-            if let Some(members) = scopes.get(id) {
+        for id in &self.open.calls {
+            let record = &self.calls[id];
+            if self.open.scopes.contains_key(&Scope::Spawn(*id)) {
                 let stopping = self
                     .call_owner(*id)
                     .and_then(|o| self.tasks.get(&o))
                     .is_some_and(|o| ends(&o.draining));
-                let live: Vec<&&Task> = members.iter().filter(|m| !m.is_done()).collect();
+                let live: Vec<&Task> = self
+                    .members(Scope::Spawn(*id))
+                    .filter(|m| !m.is_done())
+                    .collect();
                 if live.is_empty() {
                     todo.push(Todo::Settle(*id));
                 } else if stopping {
