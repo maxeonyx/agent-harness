@@ -44,7 +44,7 @@ until_waiting() { # task kind seconds
 name() { q ".tasks[] | select(.id == \"$1\") | .name"; }
 queue() { q '.tasks as $t | .queue[] | "          \(.task as $id | $t[] | select(.id == $id) | .name): \(.why // "unranked")"'; }
 
-until c -s -o /dev/null "$url/"; do sleep 0.2; done
+until c -s -o /dev/null "$url/" 2>/dev/null; do sleep 0.2; done
 root=$(q '.tasks[] | select(.owner == null) | .id')
 say "the root task is $(name "$root")"
 

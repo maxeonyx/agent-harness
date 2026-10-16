@@ -578,6 +578,7 @@ function entry(e, isHead) {
   if (typeof content === "string") content = [{ type: "text", text: content }];
   for (const b of content) {
     if (b.type === "text") div.append(el("div", "block", b.text));
+    else if (b.type === "thinking") div.append(el("div", "block thinking", b.thinking));
     else if (b.type === "tool_use") div.append(el("div", "block tool", `→ ${b.name} ${JSON.stringify(b.input)}`));
     else if (b.type === "tool_result") {
       const c = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.text || "").join("\n");
