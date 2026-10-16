@@ -6,7 +6,6 @@ use std::io::{self, Write};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
-use harness_core::context::Wire;
 use harness_core::id::{CallId, ModelCallId};
 use harness_core::live::Live;
 
@@ -37,7 +36,7 @@ pub struct Feed(Arc<Shared>);
 
 #[derive(Default)]
 struct Shared {
-    pieces: Mutex<HashMap<Running, Vec<Wire>>>,
+    pieces: Mutex<HashMap<Running, Vec<String>>>,
     grew: Condvar,
 }
 
@@ -93,7 +92,7 @@ impl Feed {
             for piece in new {
                 after += 1;
                 writeln!(stream, "id: {after}")?;
-                for line in piece.0.lines() {
+                for line in piece.lines() {
                     writeln!(stream, "data: {line}")?;
                 }
                 stream.write_all(b"\n")?;
@@ -102,7 +101,7 @@ impl Feed {
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<Running, Vec<Wire>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<Running, Vec<String>>> {
         self.0.pieces.lock().unwrap_or_else(|e| e.into_inner())
     }
 }

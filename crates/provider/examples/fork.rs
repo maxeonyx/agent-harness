@@ -8,14 +8,55 @@ use std::ops::ControlFlow;
 use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use harness_core::context::{Entry, EntryId, Message, Role, Root, Wire};
-use harness_core::id::{ModelCallId, TaskId};
+use harness_core::context::{Entry, EntryId, Message, Role, Root};
+use harness_core::id::{ModelCallId, TaskId, ValueId};
 use harness_core::live::Live;
 use harness_core::model_call::{Breakpoint, Ending, ModelCall, ModelCallEvent, Purpose, Ttl};
-use harness_provider::{Client, IDENTITY, Login, Progress};
+use harness_provider::{Client, Finished, IDENTITY, Login, Progress};
 use serde_json::json;
 
-type Store = HashMap<EntryId, Entry>;
+/// What the journal and the value store hold, in miniature: the entries the
+/// fold has learnt and the bytes they name.
+#[derive(Default)]
+struct Store {
+    entries: HashMap<EntryId, Entry>,
+    values: HashMap<ValueId, Vec<u8>>,
+}
+
+impl Store {
+    fn value(&mut self, bytes: Vec<u8>) -> ValueId {
+        let id = ValueId::of(&bytes);
+        self.values.insert(id, bytes);
+        id
+    }
+
+    /// The context ending at `head`, root first, as `State::context` gives it.
+    fn context(&self, head: EntryId) -> Vec<(EntryId, &Entry)> {
+        let mut chain = Vec::new();
+        let mut next = Some(head);
+        while let Some(id) = next {
+            let entry = &self.entries[&id];
+            chain.push((id, entry));
+            next = entry.parent();
+        }
+        chain.reverse();
+        chain
+    }
+
+    /// Records what a fold learns from a request that responded: the
+    /// entries it appended, and its response.
+    fn learn(&mut self, call: &ModelCall, finished: Finished) -> EntryId {
+        let Ending::Responded { content, .. } = finished.ending else {
+            unreachable!("only responses are learnt")
+        };
+        self.values.extend(finished.value.map(|v| (content, v)));
+        self.entries.extend(call.entries());
+        let response = call.response(content);
+        let id = response.id();
+        self.entries.insert(id, response);
+        id
+    }
+}
 
 fn main() {
     let model = std::env::args()
@@ -23,97 +64,105 @@ fn main() {
         .unwrap_or_else(|| "claude-sonnet-5".into());
     let client = Client::new(Login::claude_code().unwrap_or_else(|e| fail(&e.to_string())));
     let start = Instant::now();
-    let mut store = Store::new();
+    let mut store = Store::default();
+    let params = store.value(br#"{"max_tokens":2048,"stream":true}"#.to_vec());
 
-    let root = put(&mut store, Entry::Root(root(&model)));
-    let ask = |store: &mut Store, parent, text: &str| {
-        let content = json!([{ "type": "text", "text": text }]).to_string();
-        put(store, message(parent, Role::User, Wire(content)))
+    let root = root(&mut store, &model);
+    let root = {
+        let id = root.id();
+        store.entries.insert(id, Entry::Root(root));
+        id
     };
+    let ask = |store: &mut Store, base, text: &str, marks: &[EntryId]| {
+        let content = json!([{ "type": "text", "text": text }]).to_string();
+        let message = Message {
+            role: Role::User,
+            content: store.value(content.into_bytes()),
+        };
+        let head = message.id_after(base);
+        let breakpoints = marks
+            .iter()
+            .chain([&head])
+            .map(|&at| Breakpoint {
+                at,
+                ttl: Ttl::Short,
+            })
+            .collect();
+        ModelCall {
+            task: TaskId::generate(),
+            purpose: Purpose::Turn,
+            base,
+            appends: vec![message],
+            renders: vec![],
+            params,
+            breakpoints,
+        }
+    };
+
     let q1 = ask(
         &mut store,
         root,
         "Which three brigs carried the most cargo? One short line each.",
+        &[root],
     );
-    let a1 = turn(&client, &store, start, "turn 1", q1, &[root, q1], None);
-    let a1 = put(&mut store, a1);
+    let a1 = turn(&client, &store, start, "turn 1", &q1, None);
+    let a1 = store.learn(&q1, a1);
     let q2 = ask(
         &mut store,
         a1,
         "And which three carried the least? One short line each.",
+        &[root],
     );
-    let a2 = turn(&client, &store, start, "turn 2", q2, &[root, q2], None);
-    let a2 = put(&mut store, a2);
+    let a2 = turn(&client, &store, start, "turn 2", &q2, None);
+    let a2 = store.learn(&q2, a2);
 
     let f1 = ask(
         &mut store,
         a2,
         "Fork 1: which three ports appear most often? One short line each.",
+        &[root, a2],
     );
     let f2 = ask(
         &mut store,
         a2,
         "Fork 2: which three cargoes are most common? One short line each.",
+        &[root, a2],
     );
     let (first_byte, at_first_byte) = mpsc::channel();
     let forks = std::thread::scope(|s| {
-        let store = &store;
-        let client = &client;
-        let one = s.spawn(move || {
-            turn(
-                client,
-                store,
-                start,
-                "fork 1",
-                f1,
-                &[root, a2, f1],
-                Some(first_byte),
-            )
-        });
+        let (store, client) = (&store, &client);
+        let one = s.spawn(|| turn(client, store, start, "fork 1", &f1, Some(first_byte)));
         let _ = at_first_byte.recv();
-        let two = s.spawn(move || turn(client, store, start, "fork 2", f2, &[root, a2, f2], None));
+        let two = s.spawn(|| turn(client, store, start, "fork 2", &f2, None));
         [one.join(), two.join()]
     });
-    for fork in forks {
-        put(&mut store, fork.unwrap_or_else(|_| fail("a fork panicked")));
+    for (call, fork) in [&f1, &f2].into_iter().zip(forks) {
+        store.learn(call, fork.unwrap_or_else(|_| fail("a fork panicked")));
     }
     println!(
-        "[{:6.2}s] done: {} entries stored",
+        "[{:6.2}s] done: {} entries and {} values stored",
         secs(start),
-        store.len()
+        store.entries.len(),
+        store.values.len()
     );
 }
 
-/// One request at `head` with breakpoints at `marks`; its response entry.
+/// Sends `call` and prints its progress; how it ended.
 fn turn(
     client: &Client,
     store: &Store,
     start: Instant,
     label: &str,
-    head: EntryId,
-    marks: &[EntryId],
+    call: &ModelCall,
     mut first_byte: Option<mpsc::Sender<()>>,
-) -> Entry {
-    let call = ModelCall {
-        task: TaskId(1),
-        purpose: Purpose::Turn,
-        head,
-        renders: vec![],
-        params: Wire(r#"{"max_tokens":2048,"stream":true}"#.into()),
-        breakpoints: marks
-            .iter()
-            .map(|&at| Breakpoint {
-                at,
-                ttl: Ttl::Short,
-            })
-            .collect(),
-    };
+) -> Finished {
     let mut line = String::new();
     let finished = client
         .send(
-            ModelCallId(0),
-            &call,
-            |id| store.get(&id).cloned(),
+            ModelCallId::generate(),
+            call,
+            &store.context(call.base),
+            |id| store.values.get(&id).cloned(),
             |progress| {
                 match progress {
                     Progress::Fact(ModelCallEvent::Sent(_)) => {
@@ -127,7 +176,7 @@ fn turn(
                     }
                     Progress::Fact(_) => {}
                     Progress::Live(Live::Model { event, .. }) => {
-                        let event: serde_json::Value = serde_json::from_str(&event.0).unwrap();
+                        let event: serde_json::Value = serde_json::from_str(&event).unwrap();
                         if let Some(text) = event["delta"]["text"].as_str() {
                             line.push_str(text);
                             while let Some(n) = line.find('\n') {
@@ -146,7 +195,7 @@ fn turn(
     if !line.is_empty() {
         println!("[{:6.2}s] {label} > {line}", secs(start));
     }
-    let quota = finished.quota.unwrap_or_else(|| fail("no quota"));
+    let quota = finished.quota.clone().unwrap_or_else(|| fail("no quota"));
     let usage = finished.usage.unwrap_or_default();
     println!(
         "[{:6.2}s] {label}: Ended  cache_read={} cache_write={} input={} output={}  claim={} 5h={:?} 7d={:?}",
@@ -159,21 +208,16 @@ fn turn(
         quota.five_hour,
         quota.seven_day,
     );
-    match finished.result {
-        Ok(reply) => {
-            let Ending::Responded { stop, .. } = reply.ending(vec![]) else {
-                unreachable!()
-            };
-            println!("[{:6.2}s] {label}: stop={stop:?}", secs(start));
-            Entry::Message(reply.message)
-        }
-        Err(ending) => fail(&format!("{label}: {ending:?}")),
+    match &finished.ending {
+        Ending::Responded { stop, .. } => println!("[{:6.2}s] {label}: stop={stop:?}", secs(start)),
+        ending => fail(&format!("{label}: {ending:?}")),
     }
+    finished
 }
 
 /// A root whose system carries a ledger of about 3k tokens, unique to this
 /// run so no earlier run's cache is read.
-fn root(model: &str) -> Root {
+fn root(store: &mut Store, model: &str) -> Root {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -197,23 +241,9 @@ fn root(model: &str) -> Root {
     ]);
     Root {
         model: model.into(),
-        system: Wire(system.to_string()),
-        tools: Wire("[]".into()),
+        system: store.value(system.to_string().into_bytes()),
+        tools: store.value(b"[]".to_vec()),
     }
-}
-
-fn message(parent: EntryId, role: Role, content: Wire) -> Entry {
-    Entry::Message(Message {
-        parent,
-        role,
-        content,
-    })
-}
-
-fn put(store: &mut Store, entry: Entry) -> EntryId {
-    let id = entry.id();
-    store.insert(id, entry);
-    id
 }
 
 fn secs(start: Instant) -> f64 {

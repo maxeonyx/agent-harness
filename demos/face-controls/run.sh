@@ -24,11 +24,13 @@ say() { printf "%6.1fs  %s\n" "$(awk "BEGIN { print $(date +%s.%N) - $start }")"
 view() { c "$url/view"; }
 q() { view | jq -r "$1"; }
 FACE=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-# One of Max's facts, as the page posts it; prints the face's answer.
+# One of Max's facts, as the page posts it, with the text values it names;
+# prints the face's answer.
 act() {
   local body
   body=$(jq -nc --arg face "$FACE" --argjson seen "$(q .seq)" --argjson fact "$1" \
-    '{face: $face, seen: $seen, fact: $fact}')
+    --argjson values "${2:-[]}" \
+    '{face: $face, seen: $seen, batch: {values: [$values[] | explode], facts: [$fact]}}')
   echo "$body" > "$dir/last-act.json"
   c -X POST "$url/act" --data-binary "@$dir/last-act.json" -w ' -> %{http_code}' | sed 's/^/          answer: /'
   echo
@@ -98,11 +100,14 @@ other=$(q '.queue[1].task')
 
 say "== focus the top item, $(name "$top"), and tell it to carry on"
 act "{\"Focus\": {\"face\": \"$FACE\", \"task\": \"$top\"}}"
+# His words are a value: the page names them by their digest, from /digest.
 words=$(jq -nc '[{type: "text", text: "Sorry for the interruption: carry on where you left off."}] | tojson')
+printf '%s' "$(jq -r . <<<"$words")" > "$dir/words.json"
+digest=$(c -X POST "$url/digest" --data-binary "@$dir/words.json")
 delivery=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-act "{\"Delivery\": {\"id\": \"$delivery\", \"to\": \"$top\", \"content\": {\"Words\": $words}}}"
+act "{\"Delivery\": {\"id\": \"$delivery\", \"to\": \"$top\", \"content\": {\"Words\": \"$digest\"}}}" "[$words]"
 say "the same post again, as a page whose connection dropped would retry it:"
-act "{\"Delivery\": {\"id\": \"$delivery\", \"to\": \"$top\", \"content\": {\"Words\": $words}}}"
+act "{\"Delivery\": {\"id\": \"$delivery\", \"to\": \"$top\", \"content\": {\"Words\": \"$digest\"}}}" "[$words]"
 
 say "== stop the other, $(name "$other")"
 act "{\"Task\": [\"$other\", {\"Drain\": {\"Stop\": \"Max\"}}]}"
@@ -113,7 +118,7 @@ say "== what the core refuses"
 say "hold the stopped task:"
 act "{\"Task\": [\"$other\", {\"Held\": true}]}"
 say "words to the stopped task:"
-act "{\"Delivery\": {\"id\": \"$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')\", \"to\": \"$other\", \"content\": {\"Words\": $words}}}"
+act "{\"Delivery\": {\"id\": \"$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')\", \"to\": \"$other\", \"content\": {\"Words\": \"$digest\"}}}" "[$words]"
 say "a fact that is not Max's to author (failing a task):"
 act "{\"Task\": [\"$top\", {\"Drain\": {\"Fail\": \"because\"}}]}"
 

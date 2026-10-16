@@ -3,16 +3,14 @@
 
 use std::collections::HashSet;
 
-use harness_core::context::{EntryId, Wire};
+use harness_core::context::EntryId;
 use harness_core::model_call::{Breakpoint, Ttl};
 
 /// The model every root is made for.
 pub const MODEL: &str = "claude-sonnet-5";
 
 /// The request parameters besides the context, as sent.
-pub fn params() -> Wire {
-    Wire(r#"{"max_tokens":16000,"stream":true}"#.into())
-}
+pub const PARAMS: &[u8] = br#"{"max_tokens":16000,"stream":true}"#;
 
 /// Requests that may fail in a row before the task fails.
 pub const GIVE_UP: u32 = 5;
@@ -24,15 +22,17 @@ pub fn backoff_ms(failures: u32) -> i64 {
 }
 
 /// Where a request asks the provider to cache: the end of the root, the end
-/// of the context the request extends, and its new tail.
+/// of the context the request extends, the end of a shared brief it appends,
+/// and its new tail.
 ///
-/// The middle one is what makes forks cheap. A fork starts on its parent's
-/// response, which no parent request ever marked, so the first request of
-/// the first fork writes it and its siblings read it ([`hold`]). The same
-/// mark on an ordinary turn re-reads the previous request's prefix.
-pub fn breakpoints(root: EntryId, extends: EntryId, tail: EntryId) -> Vec<Breakpoint> {
+/// The middle ones are what make fan-outs cheap. A fork starts on its
+/// parent's response, which no parent request ever marked, and fresh
+/// siblings append the same brief to the same root, so the first request of
+/// the first sibling writes that prefix and the others read it ([`hold`]).
+/// The same mark on an ordinary turn re-reads the previous request's prefix.
+pub fn breakpoints(root: EntryId, shared: &[EntryId], tail: EntryId) -> Vec<Breakpoint> {
     let mut at = vec![root];
-    for id in [extends, tail] {
+    for &id in shared.iter().chain([&tail]) {
         if !at.contains(&id) {
             at.push(id);
         }

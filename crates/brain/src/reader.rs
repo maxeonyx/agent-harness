@@ -1,19 +1,18 @@
 //! The face's view of the brain's store: a second connection to the same
-//! file, woken when the brain appends.
+//! file, woken when the brain commits.
 
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
-use harness_core::context::{Entry, EntryId};
-use harness_core::id::Seq;
+use harness_core::id::{Seq, ValueId};
 use harness_core::journal::Record;
 use harness_face_web::Source;
 use harness_store::Store;
 
 /// The journal as a face reads it.
 #[derive(Clone)]
-pub struct Journal(Arc<Shared>);
+pub struct Reader(Arc<Shared>);
 
 struct Shared {
     store: Mutex<Store>,
@@ -21,23 +20,23 @@ struct Shared {
     grew: Condvar,
 }
 
-impl Journal {
-    pub fn open(path: &Path) -> Result<Journal, harness_store::Error> {
-        Ok(Journal(Arc::new(Shared {
+impl Reader {
+    pub fn open(path: &Path) -> Result<Reader, harness_store::Error> {
+        Ok(Reader(Arc::new(Shared {
             store: Mutex::new(Store::open(path)?),
             last: Mutex::new(Seq(0)),
             grew: Condvar::new(),
         })))
     }
 
-    /// The brain has appended up to `last`.
+    /// The brain has committed up to `last`.
     pub fn grew(&self, last: Seq) {
         *lock(&self.0.last) = last;
         self.0.grew.notify_all();
     }
 }
 
-impl Source for Journal {
+impl Source for Reader {
     fn read(&self, after: Seq, wait: Duration) -> Vec<Record> {
         let last = lock(&self.0.last);
         let (last, _) = self
@@ -52,8 +51,8 @@ impl Source for Journal {
             .unwrap_or_default()
     }
 
-    fn entry(&self, id: EntryId) -> Option<Entry> {
-        lock(&self.0.store).entry(id).ok().flatten()
+    fn value(&self, id: ValueId) -> Option<Vec<u8>> {
+        lock(&self.0.store).value(id).ok().flatten()
     }
 }
 

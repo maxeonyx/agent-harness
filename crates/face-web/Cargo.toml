@@ -13,5 +13,3 @@ serde_json = "1"
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 webpki-roots = "1"
 
-[dev-dependencies]
-harness-store = { path = "../store" }

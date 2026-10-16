@@ -24,10 +24,10 @@ use crate::id::{CallId, FaceId, TaskId, Timestamp};
 ///
 /// The scheduler is an ordinary standing task whose environment holds only
 /// the [attention limb](crate::environment::LimbKind::Attention), which
-/// shows it the queue (a [resource](crate::resource::ResourceKind::Queue)
-/// it observes, so changes that arrive while it thinks fold into its next
-/// turn) and gives it one effect: a new ranking. Max can reorder by hand
-/// with the same fact.
+/// shows it the queue (a [resource](crate::resource::ResourceKey) it
+/// observes, so a change to the queue wakes it, and changes that arrive
+/// while it thinks fold into its next turn) and gives it one effect: a new
+/// ranking. Max can reorder by hand with the same fact.
 ///
 /// **Vision.** The attention scheduler; "the harness schedules the user"
 /// (Max is the scarce resource every waiting task competes for); several
