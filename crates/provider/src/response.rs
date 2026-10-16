@@ -165,7 +165,7 @@ fn stop(reason: &str) -> Stop {
         "tool_use" => Stop::ToolUse,
         "max_tokens" => Stop::MaxTokens,
         "pause_turn" => Stop::PauseTurn,
-        "refusal" => Stop::Refusal,
+        "refusal" => Stop::Refused,
         "model_context_window_exceeded" => Stop::ContextWindow,
         other => Stop::Other(other.into()),
     }

@@ -2,7 +2,7 @@
 
 use harness_core::context::{Entry, EntryId, Root};
 use harness_core::id::ValueId;
-use harness_core::model_call::{ModelCall, Ttl};
+use harness_core::model_call::ModelCall;
 
 /// The identity string the subscription requires as `system[0]`. Without it
 /// Opus refuses with a 429 that pretends to be a rate limit.
@@ -62,21 +62,11 @@ pub fn body(
         )));
     }
     let on_chain = |at: EntryId| at == root_id || messages.iter().any(|(id, _)| *id == at);
-    if let Some(stray) = call.breakpoints.iter().find(|b| !on_chain(b.at)) {
+    if let Some(stray) = call.breakpoints.iter().find(|b| !on_chain(**b)) {
         return Err(RequestError(format!(
-            "breakpoint at {} is not on the request's chain",
-            stray.at
+            "breakpoint at {stray} is not on the request's chain"
         )));
     }
-    let ttl = |at: EntryId| {
-        let mut here = call.breakpoints.iter().filter(|b| b.at == at).peekable();
-        here.peek()?;
-        Some(if here.any(|b| b.ttl == Ttl::Long) {
-            Ttl::Long
-        } else {
-            Ttl::Short
-        })
-    };
     let mut bytes = |id: ValueId| {
         let found = value(id).ok_or_else(|| RequestError(format!("no value {id}")))?;
         if ValueId::of(&found) != id {
@@ -86,9 +76,12 @@ pub fn body(
         }
         Ok(found)
     };
-    let marked = |found: Vec<u8>, at: EntryId| match ttl(at) {
-        Some(ttl) => mark(&found, ttl),
-        None => Ok(found),
+    let marked = |found: Vec<u8>, at: EntryId| {
+        if call.breakpoints.contains(&at) {
+            mark(&found)
+        } else {
+            Ok(found)
+        }
     };
 
     let Root {
@@ -164,8 +157,9 @@ fn members(params: &[u8]) -> Result<&[u8], RequestError> {
 }
 
 /// `blocks` (a JSON array of objects) with `cache_control` added to its last
-/// block, spliced in before that block's closing brace.
-fn mark(blocks: &[u8], ttl: Ttl) -> Result<Vec<u8>, RequestError> {
+/// block, spliced in before that block's closing brace, for the provider's
+/// default lifetime.
+fn mark(blocks: &[u8]) -> Result<Vec<u8>, RequestError> {
     let not_blocks = || RequestError("a breakpoint's entry does not end in a block".into());
     let inner = blocks
         .trim_ascii_end()
@@ -176,9 +170,6 @@ fn mark(blocks: &[u8], ttl: Ttl) -> Result<Vec<u8>, RequestError> {
         return Err(not_blocks());
     }
     let at = inner.len() - 1;
-    let control: &[u8] = match ttl {
-        Ttl::Short => br#","cache_control":{"type":"ephemeral"}"#,
-        Ttl::Long => br#","cache_control":{"type":"ephemeral","ttl":"1h"}"#,
-    };
+    let control: &[u8] = br#","cache_control":{"type":"ephemeral"}"#;
     Ok([&blocks[..at], control, &blocks[at..]].concat())
 }

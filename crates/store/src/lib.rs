@@ -216,6 +216,7 @@ fn index(fact: &Fact) -> (&'static str, Option<String>) {
         Fact::Change(_) => ("Change", None),
         Fact::Environment(environment) => ("Environment", Some(environment.id.to_string())),
         Fact::Limb(limb) => ("Limb", Some(limb.id.to_string())),
+        Fact::Described { limb, .. } => ("Described", Some(limb.to_string())),
         Fact::Reach { limb, .. } => ("Reach", Some(limb.to_string())),
         Fact::Ranking(_) => ("Ranking", None),
         Fact::Focus(focus) => ("Focus", Some(focus.face.to_string())),

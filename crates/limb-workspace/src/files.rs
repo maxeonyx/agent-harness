@@ -75,7 +75,7 @@ impl Inner {
         report: &mut Report,
     ) -> Outcome {
         let expects = &call.expects;
-        if self.user {
+        if self.kind == crate::Kind::User {
             return match call.tool.as_str() {
                 "skill" => self.skill(input, report),
                 other => report.failed(&format!("Max's config has no tool `{other}`")),

@@ -4,7 +4,7 @@
 //! One request is one [`harness_core::model_call::ModelCall`]. The client
 //! turns it into wire bytes from the context it extends and the values its
 //! entries name ([`request::body`]), streams the response as
-//! [`harness_core::live::Live`], and reports its lifecycle facts: `Sent`,
+//! [`harness_core::live::Live`] visible text, and reports its lifecycle facts: `Sent`,
 //! `FirstByte`, and how it ended, with usage, quota, and the bytes the
 //! ending names ([`Client::send`]).
 //!
@@ -20,7 +20,8 @@
 //! here, because a root without it is refused with a fake 429), and a
 //! system prompt free of a fingerprinted sentence (the root's author's to
 //! keep). Every response's billing claim is checked: anything but a plan
-//! window ends the request as a failure before its body is read. A 429 whose
+//! window is reported as off the plan, and ends the request as a failure
+//! before its body is read. A 429 whose
 //! unified status is `rejected` is the plan's limit, ending
 //! [`harness_core::model_call::Ending::Limited`] until its reset; any other
 //! refusal is a failure of that request.
@@ -38,7 +39,7 @@ mod login;
 pub mod request;
 mod response;
 
-pub use client::{Client, Finished, Progress, on_plan};
+pub use client::{Client, Finished, Progress};
 pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};
 

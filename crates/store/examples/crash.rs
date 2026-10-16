@@ -21,8 +21,8 @@ use harness_core::id::{
     Digest, EnvironmentId, FaceId, ModelCallId, Seq, TaskId, Timestamp, ValueId,
 };
 use harness_core::journal::{self, Author, Batch, Fact, Journal, Launched, Rejected};
-use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose, Stop, Usage};
-use harness_core::task::{Created, Giver, Mandate, Mode, Move, Origin, Scope, Start, TaskEvent};
+use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Usage};
+use harness_core::task::{Created, Mandate, Mode, Move, Origin, Scope, Start, TaskEvent};
 use harness_core::value::Bytes;
 use harness_store::Store;
 
@@ -339,7 +339,6 @@ impl<S: journal::Store<Error = harness_store::Error>> Brain<S> {
                 call,
                 ModelCallEvent::Sent(ModelCall {
                     task,
-                    purpose: Purpose::Turn,
                     base: self.root.id(),
                     appends: vec![Message {
                         role: Role::User,
@@ -399,7 +398,6 @@ impl<S: journal::Store<Error = harness_store::Error>> Brain<S> {
                     text: ask,
                     brief: None,
                     quotes: vec![],
-                    from: Giver::Max,
                 },
             })),
         )
