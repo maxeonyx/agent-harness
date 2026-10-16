@@ -36,3 +36,80 @@ Each framing (`src/framing.rs`) is a point on five axes: fork at the parent's re
 | tool-neutral | response | the mandate | `Forked a child for A.3.` | | yes |
 | identity | response | identity break + mandate | `Not yours: ...` | yes | yes |
 | rewind | request | (no spawns seen) identity break + mandate appended as user text | | yes | yes |
+
+## Results (run `full1`, 2026-10-16/17 NZT, 912 trials)
+
+Rows missing for Sonnet at depth 2 and 3 under `tool`, `tool-remind` and `tool-neutral` are missing because no A.1 fork under those framings ever split A.1 as asked (0/18 each): that is the same failure one level up. "Read parent's cache" counts only trials with the warm-request measurement.
+
+| framing | model | depth | n | in lane | stopped | both | read parent's cache | parent prefix (mean) | uncached input (mean) |
+|---|---|---|---|---|---|---|---|---|---|
+| bare | claude-opus-5-5 | 1 | 24 | 0/24 (0%) | 24/24 (100%) | 0/24 (0%) | 20/20 | 2827 | 575 |
+| bare | claude-sonnet-5 | 1 | 24 | 0/24 (0%) | 24/24 (100%) | 0/24 (0%) | 12/12 | 2895 | 1768 |
+| user | claude-opus-5-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 2827 | 598 |
+| user | claude-opus-5-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 5481 | 673 |
+| user | claude-opus-5-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 7150 | 391 |
+| user | claude-sonnet-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 2895 | 1266 |
+| user | claude-sonnet-5 | 2 | 24 | 23/24 (96%) | 24/24 (100%) | 23/24 (96%) | 12/12 | 5889 | 2430 |
+| user | claude-sonnet-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 8903 | 3836 |
+| user-remind | claude-opus-5-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 2827 | 4 |
+| user-remind | claude-opus-5-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 5481 | 605 |
+| user-remind | claude-opus-5-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 7190 | 408 |
+| user-remind | claude-sonnet-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 2895 | 2 |
+| user-remind | claude-sonnet-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 5889 | 1331 |
+| user-remind | claude-sonnet-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 8649 | 2785 |
+| tool | claude-opus-5-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 2827 | 702 |
+| tool | claude-opus-5-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 5507 | 554 |
+| tool | claude-opus-5-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 7394 | 547 |
+| tool | claude-sonnet-5 | 1 | 24 | 0/24 (0%) | 19/24 (79%) | 0/24 (0%) | 12/12 | 2895 | 1067 |
+| tool-remind | claude-opus-5-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 2827 | 2 |
+| tool-remind | claude-opus-5-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 21/21 | 5511 | 379 |
+| tool-remind | claude-opus-5-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 20/20 | 7271 | 432 |
+| tool-remind | claude-sonnet-5 | 1 | 24 | 0/24 (0%) | 22/24 (92%) | 0/24 (0%) | 12/12 | 2895 | 2 |
+| tool-neutral | claude-opus-5-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 21/21 | 2827 | 495 |
+| tool-neutral | claude-opus-5-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 24/24 | 5481 | 278 |
+| tool-neutral | claude-opus-5-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 24/24 | 7262 | 186 |
+| tool-neutral | claude-sonnet-5 | 1 | 24 | 0/24 (0%) | 24/24 (100%) | 0/24 (0%) | 12/12 | 2895 | 831 |
+| identity | claude-opus-5-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 24/24 | 2827 | 714 |
+| identity | claude-opus-5-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 24/24 | 5575 | 215 |
+| identity | claude-opus-5-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 24/24 | 7382 | 188 |
+| identity | claude-sonnet-5 | 1 | 24 | 14/24 (58%) | 24/24 (100%) | 14/24 (58%) | 12/12 | 2895 | 741 |
+| identity | claude-sonnet-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 5971 | 1481 |
+| identity | claude-sonnet-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 10504 | 1534 |
+| rewind | claude-opus-5-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 24/24 | 2827 | 102 |
+| rewind | claude-opus-5-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 24/24 | 3584 | 121 |
+| rewind | claude-opus-5-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 24/24 | 4263 | 135 |
+| rewind | claude-sonnet-5 | 1 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 2895 | 329 |
+| rewind | claude-sonnet-5 | 2 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 3757 | 308 |
+| rewind | claude-sonnet-5 | 3 | 24 | 24/24 (100%) | 24/24 (100%) | 24/24 (100%) | 12/12 | 4782 | 536 |
+
+| composite fork | framing | model | split as asked |
+|---|---|---|---|
+| A.1 | bare | claude-opus-5-5 | 0/18 |
+| A.1 | bare | claude-sonnet-5 | 0/18 |
+| A.1 | user | claude-opus-5-5 | 3/3 |
+| A.1.1 | user | claude-opus-5-5 | 3/3 |
+| A.1 | user | claude-sonnet-5 | 3/3 |
+| A.1.1 | user | claude-sonnet-5 | 3/3 |
+| A.1 | user-remind | claude-opus-5-5 | 3/3 |
+| A.1.1 | user-remind | claude-opus-5-5 | 3/3 |
+| A.1 | user-remind | claude-sonnet-5 | 3/3 |
+| A.1.1 | user-remind | claude-sonnet-5 | 3/3 |
+| A.1 | tool | claude-opus-5-5 | 3/3 |
+| A.1.1 | tool | claude-opus-5-5 | 3/3 |
+| A.1 | tool | claude-sonnet-5 | 0/18 |
+| A.1 | tool-remind | claude-opus-5-5 | 3/3 |
+| A.1.1 | tool-remind | claude-opus-5-5 | 3/3 |
+| A.1 | tool-remind | claude-sonnet-5 | 0/18 |
+| A.1 | tool-neutral | claude-opus-5-5 | 3/3 |
+| A.1.1 | tool-neutral | claude-opus-5-5 | 3/3 |
+| A.1 | tool-neutral | claude-sonnet-5 | 0/18 |
+| A.1 | identity | claude-opus-5-5 | 3/3 |
+| A.1.1 | identity | claude-opus-5-5 | 3/3 |
+| A.1 | identity | claude-sonnet-5 | 3/11 |
+| A.1.1 | identity | claude-sonnet-5 | 3/5 |
+| A.1 | rewind | claude-opus-5-5 | 3/3 |
+| A.1.1 | rewind | claude-opus-5-5 | 3/3 |
+| A.1 | rewind | claude-sonnet-5 | 3/3 |
+| A.1.1 | rewind | claude-sonnet-5 | 3/3 |
+| A | root | claude-opus-5-5 | 3/3 |
+| A | root | claude-sonnet-5 | 3/3 |
