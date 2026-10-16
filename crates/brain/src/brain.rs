@@ -17,7 +17,8 @@ use harness_core::environment::{
     Description, Environment, FromLimb, Limb, LimbKind, Reach, ToLimb,
 };
 use harness_core::id::{
-    CallId, DeliveryId, FaceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ToolUseId, ValueId,
+    CallId, DeliveryId, FaceId, InstanceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ToolUseId,
+    ValueId,
 };
 use harness_core::journal::{self, Author, Batch, Fact, Launched, Record};
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose};
@@ -29,7 +30,9 @@ use harness_core::task::{
 };
 use harness_core::value::Bytes;
 use harness_face_web::{Act, Feed, Running};
-use harness_limb_workspace::{Clone, Config, Settings, Workspace, user};
+use harness_limb_workspace::{Clone, Settings, user};
+
+use crate::process::Process;
 use harness_provider::{Client, Finished, Progress};
 use harness_store::Store;
 
@@ -48,9 +51,9 @@ const ROLES_EVERY: Duration = Duration::from_secs(2);
 pub struct Event(What);
 
 enum What {
-    /// A plugin limb this brain started is ready, or cannot start.
-    Opened(LimbId, Result<Workspace, String>),
     Limb(LimbId, FromLimb),
+    /// A plugin limb's process has stopped talking.
+    Exited(LimbId),
     FirstByte(ModelCallId),
     Finished(ModelCallId, Result<Finished, harness_provider::Error>),
     /// A batch of Max's facts from a face, answered with whether the journal
@@ -136,8 +139,8 @@ pub struct Brain {
     /// Why the role files last could not be read, said once.
     roles_error: Option<String>,
     /// The plugin limbs this brain has started, by id.
-    limbs: HashMap<LimbId, Workspace>,
-    /// Those it is starting: a clone being made.
+    limbs: HashMap<LimbId, Process>,
+    /// Those started that have not said hello yet: a clone being made.
     connecting: HashSet<LimbId>,
     /// Where each limb keeps its record of calls: `<state>/<limb>`.
     state_dir: PathBuf,
@@ -470,52 +473,42 @@ impl Brain {
 
     // Limbs.
 
-    /// Start a plugin limb on its own thread, since making its clone can
-    /// take a while; it reports back as [`What::Opened`].
+    /// Start a plugin limb's process. It says hello once it is ready,
+    /// which may take a while (a clone to make).
     fn connect(&mut self, limb: LimbId) {
         if self.limbs.contains_key(&limb) || !self.connecting.insert(limb) {
             return;
         }
         let definition = self.state().limb(limb).expect("a limb to connect");
-        let Some(settings) = Settings::of(definition) else {
-            let why = format!("the harness cannot run the limb `{}`", definition.name);
-            return self.unreachable(limb, why);
-        };
-        let user = matches!(&definition.kind, LimbKind::Plugin { kind, .. } if kind == user::KIND);
-        let config = Config {
-            limb,
-            user,
-            settings,
-            state: self.state_dir.join(limb.to_string()),
-        };
         let events = self.events.clone();
-        thread::spawn(move || {
-            let (out, from) = mpsc::channel();
-            let opened = Workspace::open(config, out).map_err(|e| e.to_string());
-            let ok = opened.is_ok();
-            if events.send(Event(What::Opened(limb, opened))).is_err() || !ok {
-                return;
+        let said = move |message: Option<FromLimb>| {
+            let what = match message {
+                Some(message) => What::Limb(limb, message),
+                None => What::Exited(limb),
+            };
+            let _ = events.send(Event(what));
+        };
+        match Process::start(definition, &self.state_dir.join(limb.to_string()), said) {
+            Ok(process) => {
+                self.limbs.insert(limb, process);
             }
-            for message in from {
-                if events.send(Event(What::Limb(limb, message))).is_err() {
-                    return;
-                }
+            Err(e) => {
+                self.connecting.remove(&limb);
+                self.unreachable(limb, format!("its process cannot start: {e}"));
             }
-        });
+        }
     }
 
-    fn opened(&mut self, limb: LimbId, opened: Result<Workspace, String>) {
+    fn opened(&mut self, limb: LimbId, instance: InstanceId) {
         self.connecting.remove(&limb);
-        let workspace = match opened {
-            Ok(workspace) => workspace,
-            Err(why) => return self.unreachable(limb, why),
+        let Some(process) = self.limbs.get(&limb) else {
+            return;
         };
-        let reach = Reach::Connected {
-            instance: workspace.instance(),
-        };
-        workspace.handle(ToLimb::Describe);
-        self.limbs.insert(limb, workspace);
-        self.fact(Fact::Reach { limb, reach });
+        process.send(&ToLimb::Describe);
+        self.fact(Fact::Reach {
+            limb,
+            reach: Reach::Connected { instance },
+        });
         // Report what changed while no brain was listening.
         let resources: Vec<ResourceKey> = self
             .state()
@@ -527,6 +520,21 @@ impl Brain {
             .cloned()
             .collect();
         self.watch(resources);
+    }
+
+    /// A limb's process has stopped talking. One that never said hello
+    /// cannot start; one that did is lost, and started again when needed.
+    fn exited(&mut self, limb: LimbId) {
+        self.limbs.remove(&limb);
+        if self.connecting.remove(&limb) {
+            let why = "its process ended before it was ready (its error is above)";
+            return self.unreachable(limb, why.into());
+        }
+        eprintln!("limb {limb}: its process ended");
+        self.fact(Fact::Reach {
+            limb,
+            reach: Reach::Lost,
+        });
     }
 
     /// A limb cannot be started: every live task that needs it fails.
@@ -929,7 +937,7 @@ impl Brain {
             return eprintln!("call {id}: its limb {limb} is not running here; not dispatched");
         };
         let input = Bytes(self.value(call.input));
-        workspace.handle(ToLimb::Run { id, call, input });
+        workspace.send(&ToLimb::Run { id, call, input });
         self.fact(Fact::Call(id, CallEvent::Dispatched));
     }
 
@@ -1175,7 +1183,7 @@ and you cannot finish until it has.",
         }
         self.fact(Fact::Call(id, CallEvent::Stopping));
         if let Some(workspace) = limb.and_then(|l| self.limbs.get(&l)) {
-            workspace.handle(ToLimb::Stop { call: id });
+            workspace.send(&ToLimb::Stop { call: id });
         }
     }
 
@@ -1210,9 +1218,8 @@ and you cannot finish until it has.",
                     });
                 let _ = reply.send(done);
             }
-            What::Opened(limb, opened) => self.opened(limb, opened),
-            // The connection is recorded when the limb is opened.
-            What::Limb(_, FromLimb::Hello { .. }) => {}
+            What::Limb(limb, FromLimb::Hello { instance }) => self.opened(limb, instance),
+            What::Exited(limb) => self.exited(limb),
             What::Limb(limb, FromLimb::Described(description)) => {
                 self.descriptions.insert(limb, description);
             }
@@ -1268,7 +1275,7 @@ and you cannot finish until it has.",
         }
         for (limb, known) in known {
             if let Some(workspace) = self.limbs.get(&limb) {
-                workspace.handle(ToLimb::Watch { known });
+                workspace.send(&ToLimb::Watch { known });
             }
         }
     }

@@ -4,7 +4,7 @@
 # the chat carries on; delete target/chat for a new one.
 set -eu
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain
+cargo build -q --release -p harness-brain -p harness-limb-workspace
 dir=${DIR:-target/chat}
 mkdir -p "$dir"
 [ -e "$dir/journal.sqlite" ] || demos/brain/scratch.sh "$dir/repo"
