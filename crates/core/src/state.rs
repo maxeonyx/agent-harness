@@ -650,8 +650,8 @@ impl State {
                 return Err(Rejected::Unheard);
             }
         }
-        let task = Task::new(id, created, record.at, self)?;
         let mark = Mark::of(record);
+        let task = Task::new(id, created, mark, self)?;
         // What its context holds, it has heard.
         if let Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from } =
             created.origin
@@ -686,7 +686,9 @@ impl State {
             .limb
             .and_then(|l| self.limbs.get(&l))
             .is_some_and(|l| l.kind == LimbKind::Meta);
-        let Caller::Agent { task: caller, .. } = call.call.caller else {
+        let (Caller::Agent { task: caller, .. } | Caller::Background { task: caller, .. }) =
+            call.call.caller
+        else {
             return Err(Rejected::CannotStart);
         };
         if !meta {
@@ -1045,23 +1047,35 @@ impl State {
         let mut thinking = None;
         let mut reader = None;
         let limb = match &call.caller {
-            Caller::Agent { task, tool_use } => {
+            Caller::Agent { task, .. } => {
+                let task = self.tasks.get(task).ok_or(Rejected::Unknown)?;
+                if task.is_done() {
+                    return Err(Rejected::Finished);
+                }
+                let context = task.context().ok_or(Rejected::Starting)?;
+                match task.phase() {
+                    Some(Phase::Thinking(request)) => thinking = Some(*request),
+                    _ => return Err(Rejected::Busy),
+                }
+                context.binding.limb(&call.tool)
+            }
+            Caller::Background { task, from } => {
+                let started = self.calls.get(from).ok_or(Rejected::Unknown)?;
+                if !matches!(started.call.caller, Caller::Agent { task: by, .. } if by == *task) {
+                    return Err(Rejected::NotForTask);
+                }
                 let task = self.tasks.get(task).ok_or(Rejected::Unknown)?;
                 if task.is_done() {
                     return Err(Rejected::Finished);
                 }
                 let context = task.context().ok_or(Rejected::Starting)?;
                 let limb = context.binding.limb(&call.tool);
-                match (tool_use, task.phase()) {
-                    (Some(_), Some(Phase::Thinking(request))) => thinking = Some(*request),
-                    (Some(_), _) => return Err(Rejected::Busy),
-                    (None, _) if limb.is_none() => return Err(Rejected::Unroutable),
-                    (None, _) => {
-                        let mut task = task.clone();
-                        task.apply(record, self)?;
-                        reader = Some(task);
-                    }
+                if limb.is_none() {
+                    return Err(Rejected::Unroutable);
                 }
+                let mut task = task.clone();
+                task.apply(record, self)?;
+                reader = Some(task);
                 limb
             }
             Caller::Max { limb, chat } => {
@@ -1138,6 +1152,7 @@ impl State {
         let readers: Vec<&Task> = if late {
             match made.call.caller {
                 Caller::Agent { task, .. }
+                | Caller::Background { task, .. }
                 | Caller::Max {
                     chat: Some(task), ..
                 } => self
@@ -1433,7 +1448,7 @@ impl State {
     /// task whose call it runs for. Max's calls are his own.
     pub fn call_owner(&self, call: CallId) -> Option<TaskId> {
         match &self.calls.get(&call)?.call.caller {
-            Caller::Agent { task, .. } => Some(*task),
+            Caller::Agent { task, .. } | Caller::Background { task, .. } => Some(*task),
             Caller::Max { .. } => None,
             Caller::Meta { call, .. } => self.call_owner(*call),
         }
@@ -1534,10 +1549,7 @@ impl State {
     /// task is acting on it.
     fn acting_on(&self, id: CallId, call: &Call) -> bool {
         match call.caller {
-            Caller::Agent {
-                task,
-                tool_use: Some(_),
-            } => self.tasks.get(&task).is_some_and(|t| {
+            Caller::Agent { task, .. } => self.tasks.get(&task).is_some_and(|t| {
                 matches!(t.phase(), Some(Phase::Acting(step)) if step.outstanding.contains(&id))
             }),
             _ => true,

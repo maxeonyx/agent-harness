@@ -12,7 +12,7 @@ use std::{env, fs, thread};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::environment::{Description, FromLimb, ToLimb};
-use harness_core::id::{CallId, LimbId, TaskId, ValueId};
+use harness_core::id::{CallId, LimbId, TaskId, ToolUseId, ValueId};
 use harness_core::journal::{Batch, Fact};
 use harness_core::live::Live;
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
@@ -275,7 +275,7 @@ impl Brain {
         let call = Call {
             caller: Caller::Agent {
                 task: context.task,
-                tool_use: None,
+                tool_use: ToolUseId(format!("toolu_{}", id.0)),
             },
             tool: tool.into(),
             input: input.id(),

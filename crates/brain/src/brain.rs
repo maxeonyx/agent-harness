@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
-use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role};
+use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::environment::{Description, Environment, FromLimb, LimbKind, Reach, ToLimb};
 use harness_core::id::{
@@ -27,7 +27,7 @@ use harness_core::task::{
     Start as TaskStart, Stopper, Task, TaskEvent,
 };
 use harness_core::value::Bytes;
-use harness_face_web::{Act, Commit, Feed, Running};
+use harness_face_web::{Act, Feed, Running};
 use harness_limb_workspace::{Clone, Settings, user};
 
 use crate::process::Process;
@@ -110,16 +110,13 @@ pub struct Start {
     pub mandate: String,
 }
 
-/// How many recent records a face is given at launch.
-const RECENT: u64 = 200;
-
 type Refused = journal::Error<harness_store::Error>;
 
 /// One brain: the only writer of its journal.
 pub struct Brain {
     journal: journal::Journal<Store>,
     /// The face, handed the state after each commit.
-    face: Sender<Commit>,
+    face: Sender<State>,
     client: Arc<Client>,
     events: Sender<Event>,
     inbox: Receiver<Event>,
@@ -160,7 +157,7 @@ impl Brain {
     #[allow(clippy::too_many_arguments)]
     pub fn launch(
         store: Store,
-        face: Sender<Commit>,
+        face: Sender<State>,
         client: Client,
         state_dir: PathBuf,
         roles: &Path,
@@ -170,18 +167,7 @@ impl Brain {
     ) -> Result<Brain, String> {
         let journal =
             journal::Journal::open(store).map_err(|e| format!("the journal folds: {e}"))?;
-        let from = journal
-            .state()
-            .last()
-            .map_or(0, |s| s.0.saturating_sub(RECENT));
-        let records = journal
-            .store()
-            .read(Seq(from), RECENT)
-            .map_err(|e| format!("the journal reads: {e}"))?;
-        let _ = face.send(Commit {
-            state: journal.state().clone(),
-            records,
-        });
+        let _ = face.send(journal.state().clone());
         let shared = |is: &dyn Fn(&LimbKind) -> bool| {
             let state = journal.state();
             state
@@ -706,8 +692,12 @@ impl Brain {
                 .iter()
                 .map(|q| (*q, render::words(&self.value(*q))))
                 .collect();
-            appends.push(user(render::brief(said.as_deref(), &quotes), &mut values));
-            renders.push(Rendered::Note(Note::Brief));
+            let brief = render::brief(said.as_deref(), &quotes);
+            appends.push(user(render::blocks(&brief), &mut values));
+            renders.push(Span {
+                from: Rendered::Note(Note::Brief),
+                blocks: brief.len(),
+            });
         }
         let forked = match task.origin {
             Origin::Fork { .. } | Origin::Aside { .. } if first => self.response_calls(head),
@@ -921,7 +911,7 @@ Check your workspace for what you had already done before carrying on."
                 let call = Call {
                     caller: Caller::Agent {
                         task: task.id,
-                        tool_use: Some(ToolUseId(field(b, "id"))),
+                        tool_use: ToolUseId(field(b, "id")),
                     },
                     expects: expects(context, context.binding.limb(&tool)),
                     tool,
@@ -983,7 +973,7 @@ Check your workspace for what you had already done before carrying on."
             return self.append(batch);
         }
         if call.tool == meta::BACKGROUND {
-            match background(&parent, self.meta, &input) {
+            match background(&parent, id, self.meta, &input) {
                 Ok((started, input)) => {
                     let said = render::blocks(&[render::text(&format!(
                         "Started `{}` in the background: its result comes to you as a message when it settles, \
@@ -1326,10 +1316,7 @@ and you cannot finish until it has.",
                 self.feed.end(running);
             }
         }
-        let _ = self.face.send(Commit {
-            state: self.state().clone(),
-            records,
-        });
+        let _ = self.face.send(self.state().clone());
         Ok(())
     }
 
@@ -1460,7 +1447,12 @@ fn expects(context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
 
 /// A `background` call's input as the call it starts, with its input's
 /// bytes: routed by the caller's binding, never to the meta limb.
-fn background(parent: &Task, meta: LimbId, input: &[u8]) -> Result<(Call, Bytes), String> {
+fn background(
+    parent: &Task,
+    from: CallId,
+    meta: LimbId,
+    input: &[u8],
+) -> Result<(Call, Bytes), String> {
     let (tool, input) = meta::background(input)?;
     let context = parent.context().ok_or("you have no context")?;
     let limb = context
@@ -1471,9 +1463,9 @@ fn background(parent: &Task, meta: LimbId, input: &[u8]) -> Result<(Call, Bytes)
         return Err(format!("`{tool}` cannot run in the background"));
     }
     let call = Call {
-        caller: Caller::Agent {
+        caller: Caller::Background {
             task: parent.id,
-            tool_use: None,
+            from,
         },
         expects: expects(context, Some(limb)),
         tool,

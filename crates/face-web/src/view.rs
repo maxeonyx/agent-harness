@@ -3,14 +3,18 @@
 //!
 //! Ids are sent as hex strings: JSON numbers cannot hold a u128.
 
+use std::collections::BTreeSet;
+
 use harness_core::call::{Caller, Outcome as CallOutcome};
 use harness_core::delivery::Content;
 use harness_core::environment::LimbKind;
-use harness_core::id::{CallId, TaskId, Timestamp, ValueId};
+use harness_core::id::{CallId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::journal::{Fact, Record};
 use harness_core::model_call::{Ending, ModelCallEvent};
 use harness_core::state::{Ended, State, Waiting};
-use harness_core::task::{Drain, Mode, Move, Origin, Outcome, Phase, Scope, Task, TaskEvent};
+use harness_core::task::{
+    Drain, Input, Mode, Move, Origin, Outcome, Phase, Scope, Task, TaskEvent,
+};
 use serde_json::{Value, json};
 
 /// A stored value as text, for the page: a mandate, a call's input.
@@ -20,8 +24,8 @@ fn text(value: Text, id: ValueId) -> Option<String> {
     value(id).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The tree, what each task waits on, Max's queue and his subscription, as
-/// of the last fold.
+/// The tasks, the scopes that own them, what each waits on, Max's queue and
+/// his subscription, as of the last fold.
 pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
     let quota = state.quota();
     let tasks: Vec<Value> = state
@@ -58,8 +62,37 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
             })
         })
         .collect();
+    // Each scope: the spawn call that opened it, and the tool use it
+    // answers, so a page can put a scope's members beside the spawn in its
+    // owner's context.
+    let spawns: BTreeSet<CallId> = state
+        .tasks()
+        .filter_map(|t| match t.scope {
+            Scope::Spawn(call) => Some(call),
+            Scope::Max => None,
+        })
+        .collect();
+    let scopes: serde_json::Map<String, Value> = spawns
+        .into_iter()
+        .filter_map(|id| {
+            let record = state.call(id)?;
+            let (task, background) = match record.call.caller {
+                Caller::Agent { task, .. } => (task, false),
+                Caller::Background { task, .. } => (task, true),
+                Caller::Max { .. } | Caller::Meta { .. } => return None,
+            };
+            let scope = json!({
+                "owner": task.to_string(),
+                "background": background,
+                "made": record.made.seq.0,
+                "settled": record.settled.is_some(),
+            });
+            Some((id.to_string(), scope))
+        })
+        .collect();
     json!({
         "seq": state.last().map_or(0, |s| s.0),
+        "scopes": scopes,
         "environments": environments,
         "workspaces": workspaces,
         "build": state.launch().map(|(_, l)| l.build.clone()),
@@ -129,6 +162,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
     json!({
         "id": t.id.to_string(),
         "name": t.name,
+        "created": {"seq": t.created.seq.0, "at": t.created.at.0},
+        "started_by": t.by.and_then(|c| tool_use(state, c)).map(|t| t.0.clone()),
         "mode": match t.mode {
             Mode::Autonomous => "autonomous",
             Mode::UserFacing => "user-facing",
@@ -154,10 +189,41 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         }),
         "failures": t.live().map_or(0, |l| l.failures),
         "trouble": last.map_or(Value::Null, trouble),
-        "pending": t.pending.len(),
+        "pending": pending_words(state, value, t),
+        "background": t.background.iter().map(|c| call(state, value, *c)).collect::<Vec<_>>(),
+        "tokens": last.and_then(|e| e.usage).map(|u| json!({
+            "context": u.input + u.cache_read + u.cache_write_short + u.cache_write_long,
+            "output": u.output,
+        })),
         "outcome": outcome,
         "waiting": state.waiting_on(t.id, now).map(|w| waiting(state, value, &w)),
     })
+}
+
+/// Max's words delivered to the task that no request has rendered yet: what
+/// he sent that the agent has not read.
+fn pending_words(state: &State, value: Text, t: &Task) -> Vec<Value> {
+    t.pending
+        .iter()
+        .filter_map(|p| match p {
+            Input::Delivery(id) => state.delivery(*id),
+            _ => None,
+        })
+        .filter_map(|d| match d.delivery.content {
+            Content::Words(words) => Some(json!({"at": d.at.at.0, "content": text(value, words)})),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The tool use an agent's call answers, directly or through the
+/// `background` call that started it.
+fn tool_use(state: &State, call: CallId) -> Option<&ToolUseId> {
+    match &state.call(call)?.call.caller {
+        Caller::Agent { tool_use, .. } => Some(tool_use),
+        Caller::Background { from, .. } => tool_use(state, *from),
+        Caller::Max { .. } | Caller::Meta { .. } => None,
+    }
 }
 
 /// The throbber: what the task is waiting on, and since when.
@@ -240,7 +306,7 @@ pub fn describe(state: &State, record: &Record) -> String {
             || format!("call {id}"),
             |c| {
                 let by = match c.call.caller {
-                    Caller::Agent { task, .. } => name(task),
+                    Caller::Agent { task, .. } | Caller::Background { task, .. } => name(task),
                     Caller::Max { .. } => "Max".into(),
                     Caller::Meta { call, .. } => match state.call_owner(call) {
                         Some(task) => format!("the harness for {}", name(task)),

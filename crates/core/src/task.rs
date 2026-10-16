@@ -7,7 +7,7 @@ use imbl::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome};
-use crate::context::{EntryId, Message, Note, Rendered, Role, Root};
+use crate::context::{EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::Binding;
 use crate::id::{
@@ -16,7 +16,7 @@ use crate::id::{
 use crate::journal::{Author, Fact, Record, Rejected};
 use crate::model_call::{Ending, ModelCallEvent, Stop};
 use crate::resource::{Change, Observation, ResourceKey, Version};
-use crate::state::State;
+use crate::state::{Mark, State};
 
 /// The fold of the facts about one task: everything the brain, a face or
 /// the scheduler needs to know about it now.
@@ -91,6 +91,8 @@ pub struct Task {
     /// No new requests under this task until released; running work carries
     /// on. Max pausing a subtree, or the brain after a long outage.
     pub held: bool,
+    /// When it was created: the order of siblings and of Max's projects.
+    pub created: Mark,
     /// When its life or phase last changed: how long the throbber has shown
     /// what it shows.
     pub since: Timestamp,
@@ -664,7 +666,7 @@ impl Task {
     pub(crate) fn new(
         id: TaskId,
         created: &Created,
-        at: Timestamp,
+        mark: Mark,
         world: &State,
     ) -> Result<Task, Rejected> {
         let mut pending = Vec::new();
@@ -702,7 +704,8 @@ impl Task {
             mode: created.mode,
             mandate: created.mandate.clone(),
             held: false,
-            since: at,
+            created: mark,
+            since: mark.at,
             pending,
             background: Vec::new(),
             max_actions,
@@ -1008,7 +1011,7 @@ impl Task {
                 if live.context.head != call.base {
                     return Err(Rejected::Detached);
                 }
-                let rendered = |p: &Input| call.renders.iter().any(|r| p.is(r));
+                let rendered = |p: &Input| call.renders.iter().any(|r| p.is(&r.from));
                 if pending
                     .iter()
                     .any(|p| matches!(p, Input::Result(_)) && !rendered(p))
@@ -1079,10 +1082,7 @@ impl Task {
     ) -> Result<(), Rejected> {
         match event {
             CallEvent::Made(call) => match &call.caller {
-                Caller::Agent {
-                    task,
-                    tool_use: None,
-                } if *task == self.id => {
+                Caller::Background { task, .. } if *task == self.id => {
                     if self.live_mut()?.drain.is_some() {
                         return Err(Rejected::Draining);
                     }
@@ -1278,13 +1278,13 @@ pub(crate) fn ends(drain: Option<&Drain>) -> bool {
 fn learn(
     context: &mut Context,
     pending: &[Input],
-    renders: &[Rendered],
+    renders: &[Span],
     head: EntryId,
     world: &State,
 ) -> Result<(), Rejected> {
     let mut before = Vec::new();
-    for rendered in renders {
-        match rendered {
+    for Span { from, .. } in renders {
+        match from {
             Rendered::Call(call) => {
                 let outcome = world
                     .call(*call)

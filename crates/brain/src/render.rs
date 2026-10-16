@@ -3,7 +3,7 @@
 //! the last round) and leaves the rest here.
 
 use harness_core::call::{Caller, Outcome};
-use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root};
+use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Prompt};
 use harness_core::environment::{Binding, Description};
 use harness_core::id::{CallId, LimbId, ValueId};
@@ -56,7 +56,7 @@ pub fn root(model: &str, role: &str, limbs: &[(LimbId, &Description)]) -> Result
 /// What every fresh member of a spawn shares, as its first message: the
 /// brief, then Max's quoted words verbatim, each under its label. The same
 /// bytes for every member, so the same entry and one cache prefix.
-pub fn brief(said: Option<&str>, quotes: &[(ValueId, Vec<String>)]) -> Bytes {
+pub fn brief(said: Option<&str>, quotes: &[(ValueId, Vec<String>)]) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(said) = said {
         out.push(text(&format!(
@@ -70,7 +70,7 @@ pub fn brief(said: Option<&str>, quotes: &[(ValueId, Vec<String>)]) -> Bytes {
         )));
         out.extend(words.iter().cloned());
     }
-    blocks(&out)
+    out
 }
 
 /// How an agent names Max's words to quote them in a brief.
@@ -87,11 +87,32 @@ pub fn words(bytes: &[u8]) -> Vec<String> {
     }
 }
 
-/// The next request's new content: what it renders, and the blocks of the
-/// user message that carries them (empty when there is nothing new).
+/// The next request's new content: the blocks of the user message that
+/// carries it (empty when there is nothing new), and what each run of them
+/// was rendered from.
+#[derive(Default)]
 pub struct Turn {
-    pub renders: Vec<Rendered>,
+    pub renders: Vec<Span>,
     pub blocks: Vec<String>,
+}
+
+impl Turn {
+    fn push(&mut self, from: Rendered, blocks: Vec<String>) {
+        self.renders.push(Span {
+            from,
+            blocks: blocks.len(),
+        });
+        self.blocks.extend(blocks);
+    }
+
+    fn rendered(&self) -> impl Iterator<Item = &Rendered> {
+        self.renders.iter().map(|s| &s.from)
+    }
+
+    fn extend(&mut self, other: Turn) {
+        self.renders.extend(other.renders);
+        self.blocks.extend(other.blocks);
+    }
 }
 
 /// What a new context after a handover begins with: the old context's last
@@ -112,49 +133,47 @@ pub fn turn(
     forked: &[CallId],
     seed: Option<Seed>,
 ) -> Turn {
-    let mut turn = Turn {
-        renders: Vec::new(),
-        blocks: Vec::new(),
-    };
-    let mut texts = Vec::new();
+    let mut turn = Turn::default();
+    let mut texts = Turn::default();
 
     // A fork's first message answers every tool use of the forked response
     // with a neutral result, and gives its mandate as user text.
     for call in forked {
-        turn.renders
-            .push(Rendered::Note(Note::Elsewhere { call: *call }));
-        turn.blocks.push(elsewhere(state, values, *call));
+        turn.push(
+            Rendered::Note(Note::Elsewhere { call: *call }),
+            vec![elsewhere(state, values, *call)],
+        );
     }
     for pending in &task.pending {
         match *pending {
             Input::Result(call) => {
-                turn.renders.push(Rendered::Call(call));
-                turn.blocks.push(result(state, values, call));
+                turn.push(Rendered::Call(call), vec![result(state, values, call)]);
             }
             Input::Background(call) | Input::Late(call) | Input::MaxAction(call) => {
-                turn.renders.push(Rendered::Call(call));
-                texts.push(activity(state, values, call));
+                texts.push(Rendered::Call(call), vec![activity(state, values, call)]);
             }
             Input::Delivery(id) => {
-                turn.renders.push(Rendered::Delivery(id));
-                if let Some(delivered) = state.delivery(id) {
-                    let content = &delivered.delivery.content;
-                    // Max's words are labelled, so a brief can quote them;
-                    // words that arrive with a tool round would read as part
-                    // of it, so they say whose they are.
-                    if let Content::Words(words) = content {
-                        let when = if turn.blocks.is_empty() {
-                            ""
-                        } else {
-                            " while you were working"
-                        };
-                        texts.push(text(&format!(
-                            "[harness] Max wrote this{when} (`{}` quotes it in a brief):",
-                            label(*words)
-                        )));
-                    }
-                    texts.extend(delivery(values, task, content));
+                let Some(delivered) = state.delivery(id) else {
+                    continue;
+                };
+                let content = &delivered.delivery.content;
+                let mut said = Vec::new();
+                // Max's words are labelled, so a brief can quote them;
+                // words that arrive with a tool round would read as part of
+                // it, so they say whose they are.
+                if let Content::Words(words) = content {
+                    let when = if turn.blocks.is_empty() {
+                        ""
+                    } else {
+                        " while you were working"
+                    };
+                    said.push(text(&format!(
+                        "[harness] Max wrote this{when} (`{}` quotes it in a brief):",
+                        label(*words)
+                    )));
                 }
+                said.extend(delivery(values, task, content));
+                texts.push(Rendered::Delivery(id), said);
             }
         }
     }
@@ -162,20 +181,21 @@ pub fn turn(
     let stale: Vec<_> = state
         .stale(task)
         .into_iter()
-        .filter(|s| !observed_now(state, &turn.renders, s))
+        .filter(|s| !observed_now(state, turn.rendered().chain(texts.rendered()), s))
         .collect();
     if !stale.is_empty() {
         let (roles, names): (Vec<_>, Vec<_>) =
             stale.iter().partition(|s| s.resource.kind == "role");
+        let mut said = Vec::new();
         if !roles.is_empty() {
-            texts.push(text(
+            said.push(text(
                 "[harness] Your role's definition changed. Your request parameters follow it now; \
 its prompt and tools take effect from your next `handover`.",
             ));
         }
         if !names.is_empty() {
             let names: Vec<_> = names.iter().map(|s| s.resource.name.as_str()).collect();
-            texts.push(text(&format!(
+            said.push(text(&format!(
                 "[harness] Changed since you last saw them: {}. Read them again before relying on what you saw.",
                 names.join(", ")
             )));
@@ -187,15 +207,17 @@ its prompt and tools take effect from your next `handover`.",
                 version: s.now,
             })
             .collect();
-        turn.renders.push(Rendered::Note(Note::Stale {
-            told,
-            shown: Vec::new(),
-        }));
+        texts.push(
+            Rendered::Note(Note::Stale {
+                told,
+                shown: Vec::new(),
+            }),
+            said,
+        );
     }
 
     if first {
-        turn.renders.push(Rendered::Note(Note::Mandate));
-        texts.push(text(&match (task.origin.clone(), task.scope) {
+        let said = match (task.origin.clone(), task.scope) {
             (Origin::Aside { .. }, _) => format!(
                 "[harness] This is an aside: Max forked you to talk while the agents you started work. You are \
 told when they are all done. When Max marks this aside done, you summarise what came of the talk, and that \
@@ -209,32 +231,41 @@ goes back to the context you were forked from with their results. He wrote (`{}`
                 said(values, task.mandate.text)
             ),
             (_, Scope::Spawn(_)) => mandate(state, values, task),
-        }));
+        };
+        texts.push(Rendered::Note(Note::Mandate), vec![text(&said)]);
     }
     if let Some(Seed { from, note }) = seed {
-        turn.renders.push(Rendered::Note(Note::Boundary { from }));
-        texts.push(text(&format!(
-            "[harness] This is a new context: your previous one handed over to it with this note.\n\n{note}"
-        )));
+        texts.push(
+            Rendered::Note(Note::Boundary { from }),
+            vec![text(&format!(
+                "[harness] This is a new context: your previous one handed over to it with this note.\n\n{note}"
+            ))],
+        );
     }
 
     let after_response = matches!(
         task.head().and_then(|h| state.entry(h)),
         Some(Entry::Message { message, .. }) if message.role == Role::Assistant
     );
-    if turn.blocks.is_empty() && texts.is_empty() && after_response {
+    if turn.blocks.is_empty() && texts.blocks.is_empty() && after_response {
         // The last response stopped short of ending its turn.
-        turn.renders.push(Rendered::Note(Note::Continue));
-        texts.push(text("[harness] Your response was cut off. Carry on."));
+        texts.push(
+            Rendered::Note(Note::Continue),
+            vec![text("[harness] Your response was cut off. Carry on.")],
+        );
     }
-    turn.blocks.extend(texts);
+    turn.extend(texts);
     turn
 }
 
 /// Whether a stale resource is one a call this request renders observed: a
 /// task's own write is not news to it.
-fn observed_now(state: &State, renders: &[Rendered], stale: &Stale) -> bool {
-    renders.iter().any(|r| {
+fn observed_now<'a>(
+    state: &State,
+    mut renders: impl Iterator<Item = &'a Rendered>,
+    stale: &Stale,
+) -> bool {
+    renders.any(|r| {
         let Rendered::Call(call) = r else {
             return false;
         };
@@ -253,11 +284,7 @@ fn observed_now(state: &State, renders: &[Rendered], stale: &Stale) -> bool {
 /// A tool result for one of the task's own tool uses.
 fn result(state: &State, values: Values, call: CallId) -> String {
     let record = state.call(call).expect("a pending result is a known call");
-    let Caller::Agent {
-        tool_use: Some(tool_use),
-        ..
-    } = &record.call.caller
-    else {
+    let Caller::Agent { tool_use, .. } = &record.call.caller else {
         unreachable!("a round's result answers a tool use")
     };
     let outcome = record.outcome().expect("a pending result is settled");
@@ -328,13 +355,13 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
         .collect();
     let what = match record.call.caller {
         Caller::Max { .. } => format!("Max ran `{}` here", record.call.tool),
-        Caller::Agent { tool_use: None, .. } if record.call.tool == crate::max::ASK => {
+        Caller::Background { .. } if record.call.tool == crate::max::ASK => {
             let label = outcome.output().map_or(String::new(), |o| label(o.model));
             format!(
                 "Max answered the question you asked in the background (`{label}` quotes it in a brief)"
             )
         }
-        Caller::Agent { tool_use: None, .. } => {
+        Caller::Background { .. } => {
             format!("Your background `{}` call has settled", record.call.tool)
         }
         _ => format!(
@@ -378,11 +405,7 @@ fn words_of(values: Values, id: ValueId) -> Vec<String> {
 /// The neutral answer, in a fork, to one tool use of the forked response.
 fn elsewhere(state: &State, values: Values, call: CallId) -> String {
     let record = state.call(call).expect("a forked response's call is known");
-    let Caller::Agent {
-        tool_use: Some(tool_use),
-        ..
-    } = &record.call.caller
-    else {
+    let Caller::Agent { tool_use, .. } = &record.call.caller else {
         unreachable!("a response's call answers a tool use")
     };
     let tool = record.call.tool.as_str();
