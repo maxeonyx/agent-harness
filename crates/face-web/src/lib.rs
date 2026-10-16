@@ -424,35 +424,37 @@ pub fn tls(cert: &Path, key: &Path) -> io::Result<Arc<rustls::ServerConfig>> {
 }
 
 /// Serve the face over HTTPS, a thread per connection, until the listener
-/// fails. Only this host and the peers `allow` admits may connect.
+/// fails; then return once every open connection has ended. Only this host
+/// and the peers `allow` admits may connect.
 pub fn serve<S: Source>(
-    face: Arc<Face<S>>,
+    face: &Face<S>,
     listener: TcpListener,
     tls: Arc<rustls::ServerConfig>,
     allow: impl Fn(IpAddr) -> bool,
 ) -> io::Result<()> {
-    loop {
-        let (tcp, peer) = listener.accept()?;
-        let local = tcp.local_addr()?.ip();
-        if !(peer.ip().is_loopback() || peer.ip() == local || allow(peer.ip())) {
-            continue;
-        }
-        let face = Arc::clone(&face);
-        let tls = Arc::clone(&tls);
-        thread::spawn(move || {
-            tcp.set_read_timeout(Some(Duration::from_secs(10))).ok();
-            tcp.set_write_timeout(Some(Duration::from_secs(30))).ok();
-            let Ok(connection) = rustls::ServerConnection::new(tls) else {
-                return;
-            };
-            // A closed tab or a failed handshake ends only this connection.
-            let mut stream = rustls::StreamOwned::new(connection, tcp);
-            if face.handle(&mut stream).is_ok() {
-                stream.conn.send_close_notify();
-                let _ = stream.flush();
+    thread::scope(|s| {
+        loop {
+            let (tcp, peer) = listener.accept()?;
+            let local = tcp.local_addr()?.ip();
+            if !(peer.ip().is_loopback() || peer.ip() == local || allow(peer.ip())) {
+                continue;
             }
-        });
-    }
+            let tls = Arc::clone(&tls);
+            s.spawn(move || {
+                tcp.set_read_timeout(Some(Duration::from_secs(10))).ok();
+                tcp.set_write_timeout(Some(Duration::from_secs(30))).ok();
+                let Ok(connection) = rustls::ServerConnection::new(tls) else {
+                    return;
+                };
+                // A closed tab or a failed handshake ends only this connection.
+                let mut stream = rustls::StreamOwned::new(connection, tcp);
+                if face.handle(&mut stream).is_ok() {
+                    stream.conn.send_close_notify();
+                    let _ = stream.flush();
+                }
+            });
+        }
+    })
 }
 
 /// The IPv4 gateway of this machine's default route: on a Hyper-V guest,
