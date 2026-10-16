@@ -33,9 +33,14 @@
 //! and mints the ids of what it creates, so a post retried after a dropped
 //! connection cannot deliver twice.
 //!
-//! **Live text.** A running request's streamed events are not facts; the
-//! brain puts them in a [`Feed`], and `/live?model=<id>` streams them with
-//! their count as the event id, so a reconnect resumes where it left off.
+//! **Live progress.** A running request's streamed events and a running
+//! command's output are not facts; the brain puts them in a [`Feed`], and
+//! `/live?model=<id>` or `/live?call=<id>` streams them with their count as
+//! the event id, so a reconnect resumes where it left off.
+//!
+//! **Usage and trouble.** The subscription's 5-hour and 7-day use is the
+//! latest response's report, and why a task's last turn did not respond is
+//! that turn's ending: both are read off the fold, never kept.
 //!
 //! The box takes dictation too ([`Dictation`]): the page's microphone,
 //! relayed to Anthropic's speech-to-text endpoint, the transcript arriving in
@@ -231,14 +236,9 @@ impl<S: Source> Face<S> {
 
     /// A running thing's live progress: `?model=<id>` or `?call=<id>`.
     fn live(&self, stream: &mut impl Write, request: &http::Request) -> io::Result<()> {
-        let id = |name| {
-            request
-                .query(name)
-                .map(|v| serde_json::Value::from(v.to_string()))
-        };
-        let running = match (id("model"), id("call")) {
-            (Some(v), _) => serde_json::from_value::<ModelCallId>(v).map(Running::Model),
-            (_, Some(v)) => serde_json::from_value::<CallId>(v).map(Running::Call),
+        let running = match (request.query("model"), request.query("call")) {
+            (Some(id), _) => id.parse::<ModelCallId>().map(Running::Model),
+            (_, Some(id)) => id.parse::<CallId>().map(Running::Call),
             _ => return http::refuse(stream, "400 Bad Request", "expected ?model= or ?call="),
         };
         let Ok(running) = running else {

@@ -16,7 +16,8 @@
 //! reordering his queue, focusing a task) reaches the brain as a batch of his
 //! facts, which it commits as authored by him, as far as his page had seen,
 //! or refuses back to him with the core's reason. Each request's
-//! streamed events go to the face's live feed, never to the journal.
+//! streamed events and each command's output as it prints go to the face's
+//! live feed, never to the journal.
 //!
 //! **Policy** lives in two modules, and nowhere else:
 //! - [`policy`]: the model and request parameters, retries and backoff,
