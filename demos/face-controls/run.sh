@@ -63,8 +63,8 @@ while :; do
 done
 say "first connection to /live?model=$call, cut after 2 s: events 1 to $n"
 c -N -H "Last-Event-ID: $n" "$url/live?model=$call" 2>/dev/null > "$dir/live2.txt" || true
-ids=$(grep '^id:' "$dir/live2.txt" | cut -c5- | tr '\n' ' ')
-say "reconnected with Last-Event-ID: $n: events $(echo $ids | cut -d' ' -f1) to $(echo $ids | awk '{print $NF}'), then: $(grep -o '^event: end' "$dir/live2.txt")"
+ids=$(grep '^id:' "$dir/live2.txt" | cut -c5- | tr '\n' ' ' || true)
+say "reconnected with Last-Event-ID: $n: ${ids:+events $(echo $ids | cut -d' ' -f1) to $(echo $ids | awk '{print $NF}'), }then: $(grep -o '^event: end' "$dir/live2.txt")"
 say "the streamed text, from both connections:"
 cat "$dir/live1.txt" "$dir/live2.txt" | grep '^data: "' | cut -c7- | jq -rj . |
   fold -w 100 | head -12 | sed 's/^/          /' || true

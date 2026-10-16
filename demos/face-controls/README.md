@@ -8,7 +8,7 @@ It starts a real brain run on the brain demo's scratch repo and mandate, then dr
 
 What it does, in order:
 
-1. **Live text.** It reads one of the root's requests from `/live?model=<id>` for 2 seconds, cuts the connection, and reconnects with `Last-Event-ID` the way a browser does. The second connection carries on from the next event to the end of the request.
+1. **Live text.** It reads a request's visible text from `/live?model=<id>` for 2 seconds, cuts the connection, and reconnects with `Last-Event-ID` the way a browser does. The second connection carries on from the next event to the end of the request.
 2. **Hold.** It holds the root. Nothing under it sends a request, and the children show "held". Then it releases the root.
 3. **Interrupt.** It interrupts both children. The one that was streaming has its response abandoned, and both wait on Max: they are in his queue.
 4. **The queue.** It reorders the queue, focuses the new top item, and sends it words. It then posts the same words again, as a page would after a dropped connection, and the core refuses the copy as `Exists`.
@@ -32,7 +32,7 @@ The brain commits the batch as Max's: the core decides what he may author, and a
 
 - **Select a task** and you focus on it: that's a `Focus` fact for this page's face.
 - **Interrupt**, **Stop** and **Hold/Release** sit above its details. The answer appears beside them: done, or `refused: <reason>`.
-- **While the task's request runs**, its text, thinking and tool input stream in below its context.
+- **While the task's request runs**, its visible text streams in below its context.
 - **Waiting on you** lists the queue in ranked order. The ↑ ↓ buttons reorder it, and **Next** opens the top item and puts the cursor in the compose box.
 
 ## Real output
