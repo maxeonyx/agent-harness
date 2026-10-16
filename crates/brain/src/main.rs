@@ -12,17 +12,17 @@
 //!
 //! The face is served from the same process over a second connection to the
 //! same store, so Max watches exactly what the brain appended. Everything
-//! he does there (his words, interrupting, stopping or holding a task,
-//! reordering his queue, focusing a task) reaches the brain as a batch of his
+//! he does there (his words, answering an ask, interrupting, stopping or
+//! holding a task, opening an aside, marking a chat done, reordering his
+//! queue, focusing a task) reaches the brain as a batch of his
 //! facts, which it commits as authored by him, as far as his page had seen,
 //! or refuses back to him with the core's reason. Each request's
 //! streamed events and each command's output as it prints go to the face's
 //! live feed, never to the journal.
 //!
 //! **Policy** lives in two modules, and nowhere else:
-//! - [`policy`]: the model and request parameters, retries and backoff,
-//!   breakpoint placement, fan-out gating on first byte, and the agent
-//!   kinds' role prompts;
+//! - [`policy`]: retries and backoff, breakpoint placement, fan-out
+//!   gating on first byte, and where a clone goes;
 //! - [`render`]: what a request renders beyond the results it must, and the
 //!   wording of everything the harness says to a model, including the
 //!   fork framing the fork-framing spike measured.

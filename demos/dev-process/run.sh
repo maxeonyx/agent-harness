@@ -13,7 +13,7 @@ if [ -n "${FRESH:-}" ] || [ ! -e "$dir/journal.sqlite" ]; then
   rm -rf "$dir"
   mkdir -p "$dir"
   demos/dev-process/scratch.sh "$dir"
-  start="--role orchestrator --workspace $dir/textstats --mandate demos/dev-process/mandate.md"
+  start="--role orchestrator --workspace $dir/textstats --mandate demos/dev-process/mandate.md --words demos/dev-process/words.md"
 fi
 # shellcheck disable=SC2086
 exec target/release/harness-brain --roles roles --journal "$dir/journal.sqlite" \
