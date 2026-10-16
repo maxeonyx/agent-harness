@@ -26,6 +26,8 @@ Every control is a batch of Max's facts in the journal's own encoding, posted to
 {"Delivery": {"id": "<new id>", "to": "<task>", "content": {"Words": "<digest of the words' bytes>"}}}
 ```
 
+A delivery with `"read": "TurnEnd"` waits for the end of the task's turn; without it, the task reads it with its next request.
+
 The brain commits the batch as Max's: the core decides what he may author, and a 409 carries its `Rejected` by name.
 
 ## On the page

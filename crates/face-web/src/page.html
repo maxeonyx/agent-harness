@@ -392,7 +392,7 @@ const ago = (ms) => {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m` : `${Math.floor(s / 86400)}d`;
 };
-const kTokens = (n) => n == null ? "?" : n < 1000 ? `${n}` : `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+const kTokens = (n) => n == null ? "?" : n < 1000 ? `${n}` : n < 1e6 ? `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k` : `${+(n / 1e6).toFixed(1)}M`;
 const parse = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
 const mint = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -579,7 +579,7 @@ let shape = "";
 const CARD_H = 40;
 const cardStatus = (c) => `finished ${ago(c.last)} ago · ${c.tasks.length} task${c.tasks.length > 1 ? "s" : ""}`;
 function sizeOf(n, comp) {
-  if (comp.folded) return { w: Math.min(230, Math.max(150, measure(shortName(n.t), "600 13px Georgia") + 28, measure(cardStatus(comp), "11px sans-serif") + 28)), h: CARD_H };
+  if (comp.folded) return { w: Math.min(260, Math.max(150, measure(shortName(n.t), "600 13px Georgia") + 28, measure(cardStatus(comp), "11px sans-serif") * 1.15 + 44)), h: CARD_H };
   if (n.kind === "scope") return { w: 12, h: 12 };
   if (n.kind === "sat") return { w: Math.min(160, Math.max(90, measure(satLabel(n), "12px sans-serif") + 10)), h: SAT_DOT + 22 };
   const root = comp.root.id === n.id;
@@ -1046,15 +1046,16 @@ async function transition(to) {
     // Unfold a finished project to reach a node in it.
     const comp = graph.comps.find((c) => c.tasks.some((t) => t.id === to));
     if (comp?.folded && comp.root.id !== to) { unfolded.add(comp.root.id); await refreshNow(); }
-    if (!saved) saved = { ...cam };
+    if (!saved) saved = { cam: { ...cam }, framed };
     const k = Math.max(cam.k, phone() ? 1.1 : 1.3);
     centreOn(to, k, true);
     if (from) await sleep(reduced() ? 0 : 380);
     await expand(to);
   } else if (saved) {
-    if (!framed) { cam = saved; applyCamera(true); }
+    // Back to the map as it was: framing all of it, or where Max left it.
+    if (saved.framed) fit(true);
+    else { cam = saved.cam; framed = false; applyCamera(true); }
     saved = null;
-    if (framed) fit(true);
   }
 }
 let pendingOpen = null;
