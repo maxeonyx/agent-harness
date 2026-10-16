@@ -1,0 +1,14 @@
+[package]
+name = "harness-brain"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+description = "The brain: folds the journal, works through its to-do list, and serves the face over its own store."
+
+[dependencies]
+harness-core = { path = "../core" }
+harness-face-web = { path = "../face-web" }
+harness-limb-workspace = { path = "../limb-workspace" }
+harness-provider = { path = "../provider" }
+harness-store = { path = "../store" }
+serde_json = "1"
