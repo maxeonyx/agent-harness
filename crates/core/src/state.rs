@@ -370,6 +370,25 @@ impl State {
     fn put(&mut self, task: Task) {
         if task.is_done() {
             self.open.tasks.remove(&task.id);
+            // An aside closes when it ends without a result to return, or
+            // when the task it was opened on is done.
+            if !matches!(task.outcome(), Some(TaskOutcome::Result { .. })) {
+                self.open.asides.remove(&task.id);
+            }
+            let orphans: Vec<TaskId> = self
+                .open
+                .asides
+                .keys()
+                .filter(|a| {
+                    self.tasks
+                        .get(a)
+                        .is_some_and(|a| a.origin == (Origin::Aside { from: task.id }))
+                })
+                .copied()
+                .collect();
+            for aside in orphans {
+                self.open.asides.remove(&aside);
+            }
         } else {
             self.open.tasks.insert(task.id);
         }

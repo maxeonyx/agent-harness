@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use imbl::OrdMap;
+use imbl::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome};
@@ -196,8 +196,9 @@ pub struct Context {
     /// since. Persistent, so a fork's copy shares it until either changes.
     pub knows: OrdMap<ResourceKey, Known>,
     /// What each request since `start` changed in `knows`, so a rewind
-    /// restores what the earlier context embodied.
-    learned: Vec<Learned>,
+    /// restores what the earlier context embodied. Persistent, so folding a
+    /// fact into a long-lived task does not copy its history.
+    learned: Vector<Learned>,
 }
 
 impl Context {
@@ -218,7 +219,7 @@ impl Context {
                     (o.resource.clone(), known)
                 })
                 .collect(),
-            learned: Vec::new(),
+            learned: Vector::new(),
         }
     }
 
@@ -230,7 +231,7 @@ impl Context {
             head: self.head,
             binding: self.binding.clone(),
             knows: self.knows.clone(),
-            learned: Vec::new(),
+            learned: Vector::new(),
         }
     }
 
@@ -288,7 +289,7 @@ impl Context {
             .last()
             .is_some_and(|l| !world.descends(to, l.head))
         {
-            let Some(learned) = self.learned.pop() else {
+            let Some(learned) = self.learned.pop_back() else {
                 break;
             };
             for (resource, before) in learned.before.into_iter().rev() {
@@ -1294,7 +1295,7 @@ fn learn(
         }
     }
     if !before.is_empty() {
-        context.learned.push(Learned { head, before });
+        context.learned.push_back(Learned { head, before });
     }
     Ok(())
 }
