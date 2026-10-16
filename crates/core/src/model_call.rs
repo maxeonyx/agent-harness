@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::{Entry, EntryId, Message, Rendered, Role};
+use crate::context::{Entry, EntryId, Message, Role, Span};
 use crate::id::{TaskId, Timestamp, ValueId};
 
 /// One request to the provider, as sent.
@@ -74,11 +74,11 @@ pub struct ModelCall {
     /// attachments' tool uses the harness writes, tool results, Max's words,
     /// notes. Empty for a retry of the same head.
     pub appends: Vec<Message>,
-    /// What `appends` was rendered from, in order. A task has seen exactly
-    /// what its requests rendered, so a request retried after a rate limit
-    /// renders what arrived meanwhile, and nothing depends on journal
-    /// positions.
-    pub renders: Vec<Rendered>,
+    /// What `appends` was rendered from, span by span in block order. A
+    /// task has seen exactly what its requests rendered, so a request
+    /// retried after a rate limit renders what arrived meanwhile, and
+    /// nothing depends on journal positions.
+    pub renders: Vec<Span>,
     /// The request's other parameters exactly as sent: `max_tokens`,
     /// thinking, effort, `stream`.
     pub params: ValueId,

@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
-use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role};
+use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::environment::{Description, Environment, FromLimb, LimbKind, Reach, ToLimb};
 use harness_core::id::{
@@ -692,8 +692,12 @@ impl Brain {
                 .iter()
                 .map(|q| (*q, render::words(&self.value(*q))))
                 .collect();
-            appends.push(user(render::brief(said.as_deref(), &quotes), &mut values));
-            renders.push(Rendered::Note(Note::Brief));
+            let brief = render::brief(said.as_deref(), &quotes);
+            appends.push(user(render::blocks(&brief), &mut values));
+            renders.push(Span {
+                from: Rendered::Note(Note::Brief),
+                blocks: brief.len(),
+            });
         }
         let forked = match task.origin {
             Origin::Fork { .. } | Origin::Aside { .. } if first => self.response_calls(head),

@@ -63,6 +63,7 @@ mod http;
 mod live;
 mod view;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::Path;
@@ -71,10 +72,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use harness_core::context::{Entry, EntryId};
+use harness_core::call::Caller;
+use harness_core::context::{Entry, EntryId, Note, Rendered};
+use harness_core::delivery::{Content, Delivery};
 use harness_core::id::{CallId, FaceId, ModelCallId, Seq, Timestamp, ValueId};
 use harness_core::journal::Batch;
-use harness_core::state::State;
+use harness_core::state::{Delivered, State};
 use serde_json::{Value, json};
 
 pub use dictation::{Dictation, Edit, Socket, edits};
@@ -298,16 +301,20 @@ impl<S: Source> Face<S> {
                 .value(id)
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         };
-        // What each response cost and when it came, read with the chain so
-        // the store is read with no lock held.
-        let chain: Vec<(EntryId, Entry, Value)> = {
+        // What each response cost and when it came, and who wrote each
+        // block of what the harness sent, read with the chain so the store
+        // is read with no lock held.
+        let (chain, sent) = {
             let state = self.read();
-            state
+            let chain: Vec<(EntryId, Entry, Value)> = state
                 .context(head)
                 .into_iter()
                 .map(|(id, entry)| (id, entry.clone(), response(&state, id)))
-                .collect()
+                .collect();
+            let sent = sent(&state, &chain);
+            (chain, sent)
         };
+        let mut by = authors(sent, &|id| self.source.value(id));
         let chain: Vec<Value> = chain
             .into_iter()
             .map(|(id, entry, response)| match entry {
@@ -323,6 +330,7 @@ impl<S: Source> Face<S> {
                     "role": message.role.as_str(),
                     "content": text(message.content),
                     "response": response,
+                    "by": by.remove(&id),
                 }),
             })
             .collect();
@@ -332,6 +340,148 @@ impl<S: Source> Face<S> {
         let body = serde_json::to_vec(&chain).expect("a JSON value serialises");
         http::respond(stream, "application/json", &body, true)
     }
+}
+
+/// Who wrote a run of blocks the harness sent.
+#[derive(Clone, Copy)]
+enum Author {
+    /// The harness's own words.
+    Harness,
+    /// A tool's result, or a background call's settlement.
+    Call,
+    /// The task's mandate.
+    Mandate,
+    /// The brief a spawn's members share.
+    Brief,
+    /// Max's words, after the harness's label for them: the last of the
+    /// run's blocks, as many as his words are.
+    Max { words: ValueId, at: Timestamp },
+    /// Max's answer to a question asked in the background, in one block
+    /// with the harness's note.
+    Answer { words: ValueId },
+}
+
+/// A request that appended some of a context: its messages and the runs of
+/// their blocks, with who wrote each run.
+struct Sent {
+    messages: Vec<(EntryId, ValueId)>,
+    runs: Vec<(Author, usize)>,
+}
+
+/// The requests that appended the messages of `chain`.
+fn sent(state: &State, chain: &[(EntryId, Entry, Value)]) -> Vec<Sent> {
+    let wanted: BTreeSet<EntryId> = chain.iter().map(|(id, _, _)| *id).collect();
+    state
+        .model_calls()
+        .filter_map(|(_, record)| {
+            let call = &record.call;
+            let messages: Vec<(EntryId, ValueId)> = call
+                .entries()
+                .into_iter()
+                .filter_map(|(id, entry)| match entry {
+                    Entry::Message { message, .. } => Some((id, message.content)),
+                    Entry::Root(_) => None,
+                })
+                .collect();
+            messages
+                .iter()
+                .any(|(id, _)| wanted.contains(id))
+                .then(|| Sent {
+                    messages,
+                    runs: call
+                        .renders
+                        .iter()
+                        .map(|span| (author(state, &span.from), span.blocks))
+                        .collect(),
+                })
+        })
+        .collect()
+}
+
+fn author(state: &State, from: &Rendered) -> Author {
+    match from {
+        Rendered::Delivery(id) => match state.delivery(*id) {
+            Some(Delivered {
+                delivery:
+                    Delivery {
+                        content: Content::Words(words),
+                        ..
+                    },
+                at,
+                ..
+            }) => Author::Max {
+                words: *words,
+                at: at.at,
+            },
+            _ => Author::Harness,
+        },
+        Rendered::Call(call) => match state.call(*call) {
+            Some(record)
+                if state.is_ask(*call)
+                    && matches!(record.call.caller, Caller::Background { .. }) =>
+            {
+                match record.outcome().and_then(|o| o.output()) {
+                    Some(output) => Author::Answer {
+                        words: output.model,
+                    },
+                    None => Author::Call,
+                }
+            }
+            _ => Author::Call,
+        },
+        Rendered::Note(Note::Mandate) => Author::Mandate,
+        Rendered::Note(Note::Brief) => Author::Brief,
+        Rendered::Note(_) => Author::Harness,
+    }
+}
+
+/// Who wrote each block of each message the harness sent, as the page
+/// reads it: one entry per block.
+fn authors(
+    sent: Vec<Sent>,
+    value: &dyn Fn(ValueId) -> Option<Vec<u8>>,
+) -> BTreeMap<EntryId, Value> {
+    let blocks = |id: ValueId| -> Vec<Value> {
+        value(id)
+            .and_then(|bytes| serde_json::from_slice::<Vec<Value>>(&bytes).ok())
+            .unwrap_or_default()
+    };
+    let mut out = BTreeMap::new();
+    for Sent { messages, runs } in sent {
+        // Each run's author, once per block, in block order across the
+        // request's messages.
+        let mut each = runs.into_iter().flat_map(|(author, n)| {
+            let words = match &author {
+                Author::Max { words, .. } => blocks(*words).len().max(1),
+                _ => 0,
+            };
+            (0..n).map(move |i| (author, n - i <= words))
+        });
+        for (id, content) in messages {
+            let by: Vec<Value> = (0..blocks(content).len())
+                .map(|_| match each.next() {
+                    None => Value::Null,
+                    Some((author, said)) => match author {
+                        Author::Max { at, .. } if said => json!({"by": "max", "at": at.0}),
+                        Author::Max { .. } => json!({"by": "label"}),
+                        Author::Harness => json!({"by": "harness"}),
+                        Author::Call => json!({"by": "call"}),
+                        Author::Mandate => json!({"by": "mandate"}),
+                        Author::Brief => json!({"by": "brief"}),
+                        Author::Answer { words } => {
+                            let said: Vec<String> = blocks(words)
+                                .iter()
+                                .filter_map(|b| b["text"].as_str().map(String::from))
+                                .collect();
+                            json!({"by": "answer", "said": said.join("\n")})
+                        }
+                    },
+                })
+                .collect();
+            out.insert(id, Value::Array(by));
+        }
+    }
+    out
 }
 
 /// When an entry that is a response was sent and ended, and the context it

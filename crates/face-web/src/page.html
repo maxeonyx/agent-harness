@@ -1242,29 +1242,39 @@ function entry(s, into, e, index, t) {
     return;
   }
   const blocks = blocksOf(e);
+  // What the harness sent: each block as whoever wrote it, by the face's
+  // account of the request that sent it.
   if (e.role === "user") {
-    let next = null; // what the harness said the next text is
-    for (const b of blocks) {
-      if (b.type === "tool_result") { result(s, b); continue; }
-      if (b.type === "image") { closeGroup(s); const img = el("img"); img.src = `data:${b.source?.media_type};base64,${b.source?.data}`; img.style.maxWidth = "100%"; into.append(img); continue; }
-      if (b.type !== "text") continue;
-      const text = b.text || "";
+    const by = e.by || [];
+    let run = null; // Max's bubble or the brief's card a block continues
+    blocks.forEach((b, k) => {
+      const who = by[k] || { by: "harness" };
+      if (run && run.by !== who.by) run = null;
+      if (b.type === "tool_result") { result(s, b); return; }
       closeGroup(s);
-      if (/^\[harness\] Max (wrote this|'s own words)/.test(text)) { next = { kind: "max", caption: text.replace(/^\[harness\] /, "").replace(/:$/, "") }; continue; }
-      const answered = text.match(/^\[harness\] Max answered the question you asked in the background:\s*([\s\S]*)$/);
-      if (answered) { into.append(said(answered[1], "answered your question in the background", "answer")); continue; }
-      if (text.startsWith("[harness]")) {
-        const n = el("div", "note"); const tx = el("span", "t", text.replace(/^\[harness\] /, ""));
-        tx.onclick = () => tx.classList.toggle("full"); n.append(tx); into.append(n); continue;
+      if (b.type === "image") { const img = el("img"); img.src = `data:${b.source?.media_type};base64,${b.source?.data}`; img.style.maxWidth = "100%"; into.append(img); return; }
+      if (b.type !== "text" || who.by === "label") return;
+      const text = b.text || "";
+      if (who.by === "max") {
+        if (run) { $(".bubble", run.el).textContent += `\n${text}`; return; }
+        run = { by: "max", el: said(text, `you, ${clock(who.at)}`) };
+        into.append(run.el);
+      } else if (who.by === "answer") {
+        into.append(said(who.said, "answered your question in the background", "answer"));
+      } else if (who.by === "brief") {
+        if (!run) { run = { by: "brief", el: el("div", "card mandate") }; run.el.append(el("div", "label", "Brief · shared by everything its spawn started")); into.append(run.el); }
+        run.el.append(markdown(text));
+      } else if (who.by === "mandate") {
+        const card = el("div", `card mandate${text.length > 900 ? " clip" : ""}`);
+        const from = t.origin === "aside" ? "you, opening this aside" : !t.owner ? "you" : byId[t.owner]?.name || "its owner";
+        card.append(el("div", "label", `Mandate · from ${from}`), markdown(text));
+        if (text.length > 900) { const m = el("button", "more-link", "Show all"); m.onclick = () => { card.classList.toggle("clip"); m.textContent = card.classList.contains("clip") ? "Show all" : "Show less"; }; card.append(m); }
+        into.append(card);
+      } else {
+        const n = el("div", "note"); const tx = el("span", "t", text);
+        tx.onclick = () => tx.classList.toggle("full"); n.append(tx); into.append(n);
       }
-      if (next?.kind === "max") { into.append(said(text, next.caption)); next = null; continue; }
-      // The rest of a first message is the mandate.
-      const card = el("div", `card mandate${text.length > 900 ? " clip" : ""}`);
-      const from = t.origin === "aside" ? "you, opening this aside" : !t.owner ? "you" : byId[t.owner]?.name || "its owner";
-      card.append(el("div", "label", index <= 2 ? `Mandate · from ${from}` : "Instructions"), markdown(text));
-      if (text.length > 900) { const m = el("button", "more-link", "Show all"); m.onclick = () => { card.classList.toggle("clip"); m.textContent = card.classList.contains("clip") ? "Show all" : "Show less"; }; card.append(m); }
-      into.append(card);
-    }
+    });
     return;
   }
   // The assistant's turn: its words read as prose; its tool uses as steps.

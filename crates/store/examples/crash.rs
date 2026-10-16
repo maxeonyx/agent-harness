@@ -15,7 +15,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
-use harness_core::context::{Message, Note, Rendered, Role, Root};
+use harness_core::context::{Message, Note, Rendered, Role, Root, Span};
 use harness_core::environment::{Binding, Environment};
 use harness_core::id::{
     Digest, EnvironmentId, FaceId, ModelCallId, Seq, TaskId, Timestamp, ValueId,
@@ -344,7 +344,10 @@ impl<S: journal::Store<Error = harness_store::Error>> Brain<S> {
                         role: Role::User,
                         content: ask_id,
                     }],
-                    renders: vec![Rendered::Note(Note::Mandate)],
+                    renders: vec![Span {
+                        from: Rendered::Note(Note::Mandate),
+                        blocks: 1,
+                    }],
                     params: ValueId::of(PARAMS),
                     breakpoints: vec![],
                 }),

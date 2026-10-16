@@ -245,6 +245,16 @@ fn digest(fields: &[&[u8]]) -> EntryId {
     EntryId(Digest(*hasher.finalize().as_bytes()))
 }
 
+/// What a run of blocks a request appended was rendered from: the next
+/// `blocks` content blocks of its [appended](crate::model_call::ModelCall::appends)
+/// messages, which are all user messages. So whoever reads a context knows
+/// who said each block, without reading the harness's wording.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Span {
+    pub from: Rendered,
+    pub blocks: usize,
+}
+
 /// Something a request newly included, and so the provenance of the
 /// messages it appended.
 ///

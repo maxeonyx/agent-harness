@@ -7,7 +7,7 @@ use imbl::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome};
-use crate::context::{EntryId, Message, Note, Rendered, Role, Root};
+use crate::context::{EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::Binding;
 use crate::id::{
@@ -1011,7 +1011,7 @@ impl Task {
                 if live.context.head != call.base {
                     return Err(Rejected::Detached);
                 }
-                let rendered = |p: &Input| call.renders.iter().any(|r| p.is(r));
+                let rendered = |p: &Input| call.renders.iter().any(|r| p.is(&r.from));
                 if pending
                     .iter()
                     .any(|p| matches!(p, Input::Result(_)) && !rendered(p))
@@ -1278,13 +1278,13 @@ pub(crate) fn ends(drain: Option<&Drain>) -> bool {
 fn learn(
     context: &mut Context,
     pending: &[Input],
-    renders: &[Rendered],
+    renders: &[Span],
     head: EntryId,
     world: &State,
 ) -> Result<(), Rejected> {
     let mut before = Vec::new();
-    for rendered in renders {
-        match rendered {
+    for Span { from, .. } in renders {
+        match from {
             Rendered::Call(call) => {
                 let outcome = world
                     .call(*call)
