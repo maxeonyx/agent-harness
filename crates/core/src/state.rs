@@ -101,8 +101,8 @@ struct Open {
     scopes: BTreeMap<Scope, Vec<TaskId>>,
     /// Asides whose result has not been delivered back.
     asides: BTreeSet<TaskId>,
-    /// Responses that ended their model turn.
-    turns_ended: BTreeSet<EntryId>,
+    /// The model call each response came from.
+    responses: BTreeMap<EntryId, ModelCallId>,
     /// Each task's last turn to end.
     last_turn: BTreeMap<TaskId, ModelCallId>,
     /// The last model call to report the quota.
@@ -682,7 +682,23 @@ impl State {
 
     /// Whether some request's response is `entry` and ended its model turn.
     fn ended_turn(&self, entry: EntryId) -> bool {
-        self.open.turns_ended.contains(&entry)
+        self.response(entry).is_some_and(|m| {
+            matches!(
+                &m.ended,
+                Some(Ended {
+                    ending: Ending::Responded {
+                        stop: Stop::EndTurn | Stop::Refusal,
+                        ..
+                    },
+                    ..
+                })
+            )
+        })
+    }
+
+    /// The model call a response came from.
+    pub fn response(&self, entry: EntryId) -> Option<&ModelCallRecord> {
+        self.model_calls.get(self.open.responses.get(&entry)?)
     }
 
     fn fold_model_call(
@@ -788,15 +804,8 @@ impl State {
                     self.entries.insert(entry_id, entry);
                     entry_id
                 });
-                if let (
-                    Some(entry),
-                    Ending::Responded {
-                        stop: Stop::EndTurn | Stop::Refusal,
-                        ..
-                    },
-                ) = (response, ending)
-                {
-                    self.open.turns_ended.insert(entry);
+                if let Some(entry) = response {
+                    self.open.responses.insert(entry, id);
                 }
                 self.open.model_calls.remove(&id);
                 if turn {

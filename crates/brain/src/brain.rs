@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
@@ -32,7 +32,6 @@ use harness_face_web::{Act, Feed, Running};
 use harness_limb_workspace::{Clone, Config, Settings, Workspace, user};
 use harness_provider::{Client, Finished, Progress};
 use harness_store::Store;
-use serde_json::Value;
 
 use crate::max;
 use crate::meta::{self, How};
@@ -146,7 +145,9 @@ pub struct Brain {
     descriptions: BTreeMap<LimbId, Description>,
     /// The context of each request without a first byte yet: fan-out gating.
     cold: HashMap<ModelCallId, HashSet<EntryId>>,
-    abort: HashMap<ModelCallId, Arc<AtomicBool>>,
+    /// Each request in flight: the thread that sends it, joined when it
+    /// reports how it ended, and the flag that abandons it.
+    requests: HashMap<ModelCallId, (Arc<AtomicBool>, JoinHandle<()>)>,
     /// The task this launch started, or else the first of Max's it found
     /// unfinished: the one whose result it prints.
     root: Option<TaskId>,
@@ -203,7 +204,7 @@ impl Brain {
             state_dir,
             descriptions: BTreeMap::new(),
             cold: HashMap::new(),
-            abort: HashMap::new(),
+            requests: HashMap::new(),
             root: None,
             started: Instant::now(),
             reported: false,
@@ -444,7 +445,7 @@ impl Brain {
             }
             Todo::Interrupt(call) => self.interrupt(call),
             Todo::Abandon(request) => {
-                if let Some(abort) = self.abort.get(&request) {
+                if let Some((abort, _)) = self.requests.get(&request) {
                     abort.store(true, Ordering::Relaxed);
                 }
             }
@@ -651,23 +652,12 @@ impl Brain {
             let reason = format!("the provider failed {} times in a row", task.failures);
             return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
         }
-        let turns: Vec<_> = self
-            .state()
-            .model_calls()
-            .filter(|(_, m)| m.call.task == id && m.call.purpose == Purpose::Turn)
-            .map(|(_, m)| m)
-            .collect();
-        if task.failures > 0 {
-            let last = turns
-                .iter()
-                .filter_map(|m| m.ended.as_ref())
-                .map(|e| e.at.at);
-            if last
-                .max()
-                .is_some_and(|at| now.0 < at.0 + policy::backoff_ms(task.failures))
-            {
-                return;
-            }
+        // Nothing is in flight for a ready task, so every turn has ended.
+        let last = self.state().last_turn(id);
+        if task.failures > 0
+            && last.is_some_and(|e| now.0 < e.at.at.0 + policy::backoff_ms(task.failures))
+        {
+            return;
         }
         if policy::hold(head, self.cold.values()) {
             return;
@@ -678,7 +668,7 @@ impl Brain {
             Some(Entry::Root(_)) => self.seed(&task),
             _ => None,
         };
-        let first = turns.is_empty() || seed.is_some();
+        let first = last.is_none() || seed.is_some();
         let mut values = Vec::new();
         let mut appends = Vec::new();
         let mut renders = Vec::new();
@@ -721,17 +711,20 @@ impl Brain {
             appends.push(user(render::blocks(&turn.blocks), &mut values));
         }
         renders.extend(turn.renders);
-        let params = self.params(&task);
+        let params = self
+            .state()
+            .environment(task.environment)
+            .expect("the task's environment")
+            .params;
         let mut call = ModelCall {
             task: id,
             purpose: Purpose::Turn,
             base: head,
             appends,
             renders,
-            params: params.id(),
+            params,
             breakpoints: Vec::new(),
         };
-        values.push(params);
         let appended: Vec<EntryId> = call.entries().into_iter().map(|(e, _)| e).collect();
         let root = self.state().context(head)[0].0;
         let shared: Vec<EntryId> = [head]
@@ -767,12 +760,11 @@ impl Brain {
             base.iter().map(|(id, _)| *id).chain(appended).collect(),
         );
         let abort = Arc::new(AtomicBool::new(false));
-        self.abort.insert(request, abort.clone());
-
         let client = self.client.clone();
         let events = self.events.clone();
         let feed = self.feed.clone();
-        thread::spawn(move || {
+        let flag = abort.clone();
+        let thread = thread::spawn(move || {
             let base: Vec<(EntryId, &Entry)> = base.iter().map(|(id, e)| (*id, e)).collect();
             let finished = client.send(
                 request,
@@ -781,13 +773,12 @@ impl Brain {
                 |id| bytes.get(&id).cloned(),
                 |progress| {
                     match progress {
-                        Progress::Fact(ModelCallEvent::FirstByte) => {
+                        Progress::FirstByte => {
                             let _ = events.send(Event(What::FirstByte(request)));
                         }
                         Progress::Live(live) => feed.push(live),
-                        Progress::Fact(_) => {}
                     }
-                    if abort.load(Ordering::Relaxed) {
+                    if flag.load(Ordering::Relaxed) {
                         ControlFlow::Break(())
                     } else {
                         ControlFlow::Continue(())
@@ -796,19 +787,7 @@ impl Brain {
             );
             let _ = events.send(Event(What::Finished(request, finished)));
         });
-    }
-
-    /// The exact parameters of the task's next request: its environment's
-    /// current ones, streamed.
-    fn params(&self, task: &Task) -> Bytes {
-        let env = self
-            .state()
-            .environment(task.environment)
-            .expect("the task's environment");
-        let mut params: serde_json::Map<String, Value> =
-            serde_json::from_slice(&self.value(env.params)).unwrap_or_default();
-        params.insert("stream".into(), Value::Bool(true));
-        Bytes::from(Value::Object(params).to_string())
+        self.requests.insert(request, (abort, thread));
     }
 
     /// The note of the task's last handover, and the entry its old context
@@ -832,9 +811,8 @@ impl Brain {
     /// The calls a response made, in order: what a fork of it must answer.
     fn response_calls(&self, response: EntryId) -> Vec<CallId> {
         self.state()
-            .model_calls()
-            .find(|(_, m)| m.response == Some(response))
-            .map(|(_, m)| m.calls.clone())
+            .response(response)
+            .map(|m| m.calls.clone())
             .unwrap_or_default()
     }
 
@@ -849,7 +827,10 @@ impl Brain {
         finished: Result<Finished, harness_provider::Error>,
     ) {
         self.cold.remove(&request);
-        self.abort.remove(&request);
+        if let Some((_, thread)) = self.requests.remove(&request) {
+            // Its last act was to send this event.
+            thread.join().expect("a request's thread does not panic");
+        }
         let task = self
             .state()
             .model_call(request)
@@ -881,9 +862,8 @@ impl Brain {
             }
         }
         batch.values.extend(value.map(Bytes));
-        if let Some(claim) = quota.as_ref().and_then(|q| q.claim.as_deref())
-            && claim != "five_hour"
-            && !claim.starts_with("seven_day")
+        if let Some(claim) = quota.as_ref().map(|q| q.claim.as_deref())
+            && !harness_provider::on_plan(claim)
         {
             eprintln!("billed as {claim:?}, outside the plan: sending nothing more");
             self.off_plan = true;
@@ -1076,11 +1056,15 @@ and you cannot finish until it has.",
             let origin = match member.how {
                 How::Fork => Origin::Fork { from: parent.id },
                 How::Resume(name) => {
+                    let named = format!("{}-{name}", parent.name);
                     let from = state
                         .tasks()
-                        .filter(|t| state.owner(t.id) == Some(parent.id))
-                        .filter(|t| t.name == name || t.name.ends_with(&format!("-{name}")))
-                        .last()
+                        .filter(|t| state.owner(t.id) == Some(parent.id) && t.name == named)
+                        // The latest: the one its newest scope holds.
+                        .max_by_key(|t| match t.scope {
+                            Scope::Spawn(call) => state.call(call).map(|c| c.made.seq),
+                            Scope::Max => None,
+                        })
                         .ok_or(format!("you started no agent named `{name}`"))?;
                     Origin::Resume { from: from.id }
                 }
@@ -1143,14 +1127,12 @@ and you cannot finish until it has.",
     }
 
     /// Every member of a spawn's scope is done: settle it with their results,
-    /// in the order the spawn named them.
+    /// in the order they were created, which is the order the spawn named
+    /// them, then each sibling added.
     fn settle_scope(&mut self, id: CallId) {
-        let call = self.call(id);
-        let order = meta::names(&call.tool, &self.value(call.input));
-        let mut members: Vec<&Task> = self.state().members(Scope::Spawn(id)).collect();
-        members.sort_by_key(|t| order.iter().position(|n| t.name.ends_with(n.as_str())));
-        let results: Vec<(String, String)> = members
-            .iter()
+        let results: Vec<(String, String)> = self
+            .state()
+            .members(Scope::Spawn(id))
             .map(|t| {
                 let said = match &t.state {
                     TaskState::Done(TaskOutcome::Result { entry }) => self.visible(*entry),

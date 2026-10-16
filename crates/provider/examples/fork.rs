@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use harness_core::context::{Entry, EntryId, Message, Role, Root};
 use harness_core::id::{ModelCallId, TaskId, ValueId};
 use harness_core::live::Live;
-use harness_core::model_call::{Breakpoint, Ending, ModelCall, ModelCallEvent, Purpose, Ttl};
+use harness_core::model_call::{Breakpoint, Ending, ModelCall, Purpose, Ttl};
 use harness_provider::{Client, Finished, IDENTITY, Login, Progress};
 use serde_json::json;
 
@@ -65,7 +65,7 @@ fn main() {
     let client = Client::new(Login::claude_code().unwrap_or_else(|e| fail(&e.to_string())));
     let start = Instant::now();
     let mut store = Store::default();
-    let params = store.value(br#"{"max_tokens":2048,"stream":true}"#.to_vec());
+    let params = store.value(br#"{"max_tokens":2048}"#.to_vec());
 
     let root = root(&mut store, &model);
     let root = {
@@ -157,6 +157,7 @@ fn turn(
     mut first_byte: Option<mpsc::Sender<()>>,
 ) -> Finished {
     let mut line = String::new();
+    println!("[{:6.2}s] {label}: Sent", secs(start));
     let finished = client
         .send(
             ModelCallId::generate(),
@@ -165,16 +166,12 @@ fn turn(
             |id| store.values.get(&id).cloned(),
             |progress| {
                 match progress {
-                    Progress::Fact(ModelCallEvent::Sent(_)) => {
-                        println!("[{:6.2}s] {label}: Sent", secs(start))
-                    }
-                    Progress::Fact(ModelCallEvent::FirstByte) => {
+                    Progress::FirstByte => {
                         println!("[{:6.2}s] {label}: FirstByte", secs(start));
                         if let Some(tx) = first_byte.take() {
                             let _ = tx.send(());
                         }
                     }
-                    Progress::Fact(_) => {}
                     Progress::Live(Live::Model { event, .. }) => {
                         let event: serde_json::Value = serde_json::from_str(&event).unwrap();
                         if let Some(text) = event["delta"]["text"].as_str() {

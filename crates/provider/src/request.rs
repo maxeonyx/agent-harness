@@ -23,7 +23,8 @@ pub struct RequestError(pub String);
 /// (its appends' contents and its params) that are not committed yet.
 ///
 /// The body is the root's model, tools and system, the messages of `base`
-/// and then `call.appends`, and the members of `call.params`. A breakpoint
+/// and then `call.appends`, `"stream": true` (this client only streams),
+/// and the members of `call.params`. A breakpoint
 /// adds `cache_control` to the last block of the entry it names (the last
 /// `system` block, for a root). Nothing is parsed and written again, so what
 /// was stored is what is sent.
@@ -123,7 +124,7 @@ pub fn body(
         out.extend_from_slice(&marked(bytes(message.content)?, *id)?);
         out.push(b'}');
     }
-    out.push(b']');
+    out.extend_from_slice(b"],\"stream\":true");
     if !params.is_empty() {
         out.push(b',');
         out.extend_from_slice(params);
@@ -150,15 +151,12 @@ fn members(params: &[u8]) -> Result<&[u8], RequestError> {
     let object = value
         .as_object()
         .ok_or(RequestError("params are not a JSON object".into()))?;
-    if object.get("stream") != Some(&serde_json::Value::Bool(true)) {
-        return Err(RequestError("params must set \"stream\": true".into()));
-    }
-    if let Some(key) = ["model", "system", "tools", "messages"]
+    if let Some(key) = ["model", "system", "tools", "messages", "stream"]
         .into_iter()
         .find(|k| object.contains_key(*k))
     {
         return Err(RequestError(format!(
-            "params set {key:?}, which the context owns"
+            "params set {key:?}, which the request writes itself"
         )));
     }
     let text = params.trim_ascii();

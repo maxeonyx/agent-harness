@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use harness_core::context::{Entry, EntryId};
 use harness_core::id::{ModelCallId, Timestamp, ValueId};
 use harness_core::live::Live;
-use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Usage};
+use harness_core::model_call::{Ending, ModelCall, Quota, Usage};
 
 use crate::login::Login;
 use crate::response::Assembly;
@@ -25,9 +25,10 @@ pub struct Client {
 
 /// What a request reports while it runs.
 pub enum Progress {
-    /// [`ModelCallEvent::Sent`] or [`ModelCallEvent::FirstByte`], when it
-    /// happens. The end is [`Client::send`]'s return value.
-    Fact(ModelCallEvent),
+    /// The response has started: its [`FirstByte`](harness_core::model_call::ModelCallEvent::FirstByte). The
+    /// caller records [`Sent`](harness_core::model_call::ModelCallEvent::Sent) before sending, and the end
+    /// is [`Client::send`]'s return value.
+    FirstByte,
     /// Each streamed event, as its raw data.
     Live(Live),
 }
@@ -58,8 +59,8 @@ impl Client {
     /// through `on`.
     ///
     /// `Err` means nothing was sent: the context or the login is unusable.
-    /// Otherwise `on` sees [`ModelCallEvent::Sent`] first, then FirstByte
-    /// when `message_start` arrives, and every event as [`Live`]. `on`
+    /// Otherwise `on` sees [`Progress::FirstByte`] when `message_start`
+    /// arrives, and every event as [`Live`]. `on`
     /// returning `Break` stops reading, and the request ends
     /// [`Ending::Abandoned`] with the visible text so far.
     ///
@@ -81,9 +82,6 @@ impl Client {
             usage,
             quota,
         };
-        if on(Progress::Fact(ModelCallEvent::Sent(call.clone()))).is_break() {
-            return Ok(end(Ending::Abandoned { partial: None }, None, None));
-        }
 
         let response = match self
             .agent
@@ -167,7 +165,7 @@ impl Client {
             if let Err(message) = assembly.apply(&name, &parsed) {
                 break failed(Some(status), message, None);
             }
-            if name == "message_start" && on(Progress::Fact(ModelCallEvent::FirstByte)).is_break() {
+            if name == "message_start" && on(Progress::FirstByte).is_break() {
                 break Ending::Abandoned { partial: None };
             }
             let live = Live::Model {
@@ -210,7 +208,7 @@ impl Client {
 
 /// A plan window (`five_hour`, `seven_day`, ...). Anything else, including
 /// no claim at all, is billing gone wrong.
-fn on_plan(claim: Option<&str>) -> bool {
+pub fn on_plan(claim: Option<&str>) -> bool {
     claim.is_some_and(|c| c == "five_hour" || c.starts_with("seven_day"))
 }
 

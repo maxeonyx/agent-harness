@@ -143,7 +143,7 @@ fn run() -> Result<(), String> {
     thread::scope(|s| {
         s.spawn(|| face.follow());
         s.spawn(|| {
-            if let Err(e) = harness_face_web::serve(face.clone(), listener, tls, allow) {
+            if let Err(e) = harness_face_web::serve(&face, listener, tls, allow) {
                 eprintln!("harness-brain: the face stopped serving: {e}");
             }
         });
