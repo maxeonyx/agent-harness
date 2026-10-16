@@ -88,6 +88,7 @@ fn usage(ended: &Ended) -> Value {
         "five_hour_reset": quota.and_then(|q| q.five_hour_reset),
         "seven_day_reset": quota.and_then(|q| q.seven_day_reset),
         "claim": quota.and_then(|q| q.claim.clone()),
+        "on_plan": quota.is_none_or(|q| harness_provider::on_plan(q.claim.as_deref())),
     })
 }
 

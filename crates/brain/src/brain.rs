@@ -32,7 +32,6 @@ use harness_face_web::{Act, Feed, Running};
 use harness_limb_workspace::{Clone, Config, Settings, Workspace, user};
 use harness_provider::{Client, Finished, Progress};
 use harness_store::Store;
-use serde_json::Value;
 
 use crate::max;
 use crate::meta::{self, How};
@@ -721,17 +720,20 @@ impl Brain {
             appends.push(user(render::blocks(&turn.blocks), &mut values));
         }
         renders.extend(turn.renders);
-        let params = self.params(&task);
+        let params = self
+            .state()
+            .environment(task.environment)
+            .expect("the task's environment")
+            .params;
         let mut call = ModelCall {
             task: id,
             purpose: Purpose::Turn,
             base: head,
             appends,
             renders,
-            params: params.id(),
+            params,
             breakpoints: Vec::new(),
         };
-        values.push(params);
         let appended: Vec<EntryId> = call.entries().into_iter().map(|(e, _)| e).collect();
         let root = self.state().context(head)[0].0;
         let shared: Vec<EntryId> = [head]
@@ -781,11 +783,10 @@ impl Brain {
                 |id| bytes.get(&id).cloned(),
                 |progress| {
                     match progress {
-                        Progress::Fact(ModelCallEvent::FirstByte) => {
+                        Progress::FirstByte => {
                             let _ = events.send(Event(What::FirstByte(request)));
                         }
                         Progress::Live(live) => feed.push(live),
-                        Progress::Fact(_) => {}
                     }
                     if abort.load(Ordering::Relaxed) {
                         ControlFlow::Break(())
@@ -796,19 +797,6 @@ impl Brain {
             );
             let _ = events.send(Event(What::Finished(request, finished)));
         });
-    }
-
-    /// The exact parameters of the task's next request: its environment's
-    /// current ones, streamed.
-    fn params(&self, task: &Task) -> Bytes {
-        let env = self
-            .state()
-            .environment(task.environment)
-            .expect("the task's environment");
-        let mut params: serde_json::Map<String, Value> =
-            serde_json::from_slice(&self.value(env.params)).unwrap_or_default();
-        params.insert("stream".into(), Value::Bool(true));
-        Bytes::from(Value::Object(params).to_string())
     }
 
     /// The note of the task's last handover, and the entry its old context
@@ -881,9 +869,8 @@ impl Brain {
             }
         }
         batch.values.extend(value.map(Bytes));
-        if let Some(claim) = quota.as_ref().and_then(|q| q.claim.as_deref())
-            && claim != "five_hour"
-            && !claim.starts_with("seven_day")
+        if let Some(claim) = quota.as_ref().map(|q| q.claim.as_deref())
+            && !harness_provider::on_plan(claim)
         {
             eprintln!("billed as {claim:?}, outside the plan: sending nothing more");
             self.off_plan = true;
@@ -1076,11 +1063,15 @@ and you cannot finish until it has.",
             let origin = match member.how {
                 How::Fork => Origin::Fork { from: parent.id },
                 How::Resume(name) => {
+                    let named = format!("{}-{name}", parent.name);
                     let from = state
                         .tasks()
-                        .filter(|t| state.owner(t.id) == Some(parent.id))
-                        .filter(|t| t.name == name || t.name.ends_with(&format!("-{name}")))
-                        .last()
+                        .filter(|t| state.owner(t.id) == Some(parent.id) && t.name == named)
+                        // The latest: the one its newest scope holds.
+                        .max_by_key(|t| match t.scope {
+                            Scope::Spawn(call) => state.call(call).map(|c| c.made.seq),
+                            Scope::Max => None,
+                        })
                         .ok_or(format!("you started no agent named `{name}`"))?;
                     Origin::Resume { from: from.id }
                 }
@@ -1143,14 +1134,12 @@ and you cannot finish until it has.",
     }
 
     /// Every member of a spawn's scope is done: settle it with their results,
-    /// in the order the spawn named them.
+    /// in the order they were created, which is the order the spawn named
+    /// them, then each sibling added.
     fn settle_scope(&mut self, id: CallId) {
-        let call = self.call(id);
-        let order = meta::names(&call.tool, &self.value(call.input));
-        let mut members: Vec<&Task> = self.state().members(Scope::Spawn(id)).collect();
-        members.sort_by_key(|t| order.iter().position(|n| t.name.ends_with(n.as_str())));
-        let results: Vec<(String, String)> = members
-            .iter()
+        let results: Vec<(String, String)> = self
+            .state()
+            .members(Scope::Spawn(id))
             .map(|t| {
                 let said = match &t.state {
                     TaskState::Done(TaskOutcome::Result { entry }) => self.visible(*entry),

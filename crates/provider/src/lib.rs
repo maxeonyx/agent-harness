@@ -38,7 +38,7 @@ mod login;
 pub mod request;
 mod response;
 
-pub use client::{Client, Finished, Progress};
+pub use client::{Client, Finished, Progress, on_plan};
 pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};
 

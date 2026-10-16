@@ -207,7 +207,6 @@ let byId = {};
 
 // What the subscription has used, as the latest response reported it, and
 // whether the account is stopped.
-const PLAN = (claim) => claim == null || claim === "five_hour" || claim.startsWith("seven_day");
 const pct = (f) => f == null ? "?" : `${Math.round(f * 100)}%`;
 // When a window resets: the time today, else the weekday and time.
 const resets = (ms) => {
@@ -219,7 +218,7 @@ function renderUsage() {
   const u = view.usage, span = $("#usage");
   span.replaceChildren();
   if (u) span.append(`used: 5h ${pct(u.five_hour)}${resets(u.five_hour_reset)} · 7d ${pct(u.seven_day)}${resets(u.seven_day_reset)} · as of ${clock(u.at)}`);
-  if (u && !PLAN(u.claim)) span.append(" ", el("span", "alarm", `billed as ${u.claim}, not the plan: nothing more is sent`));
+  if (u && !u.on_plan) span.append(" ", el("span", "alarm", `billed as ${u.claim}, not the plan: nothing more is sent`));
   if (view.limited) span.append(" ", el("span", "alarm", `account limited until ${clock(view.limited)}`));
 }
 
