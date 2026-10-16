@@ -586,6 +586,16 @@ impl State {
         self.model_calls.get(&id)
     }
 
+    /// Every call, in id order.
+    pub fn calls(&self) -> impl Iterator<Item = (CallId, &CallRecord)> {
+        self.calls.iter().map(|(id, record)| (*id, record))
+    }
+
+    /// Every request, in id order.
+    pub fn model_calls(&self) -> impl Iterator<Item = (ModelCallId, &ModelCallRecord)> {
+        self.model_calls.iter().map(|(id, record)| (*id, record))
+    }
+
     pub fn delivery(&self, id: DeliveryId) -> Option<&Delivered> {
         self.deliveries.get(&id)
     }
