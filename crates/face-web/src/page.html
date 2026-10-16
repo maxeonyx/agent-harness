@@ -332,7 +332,7 @@ function select(id) {
 // posted in the journal's own encoding and the brain folds it before it
 // appends it, so a refusal names the core's reason. A post that the
 // connection dropped is sent again: what the page creates carries an id it
-// minted, so the core refuses a second copy ("Exists"), which means the first
+// minted, so the core refuses a second copy ("creates something that already exists"), which means the first
 // one landed.
 const mint = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 const FACE = localStorage.getItem("face") || mint();
@@ -353,7 +353,7 @@ async function act(facts, values = []) {
     }
     if (res.ok) return null;
     const why = await res.text();
-    if (attempt > 0 && why === "Exists") return null;
+    if (attempt > 0 && why === "creates something that already exists") return null;
     return why || res.statusText;
   }
 }

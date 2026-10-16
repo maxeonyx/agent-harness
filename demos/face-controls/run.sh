@@ -123,7 +123,7 @@ say "a fact that is not Max's to author (failing a task):"
 act "{\"Task\": [\"$top\", {\"Drain\": {\"Fail\": \"because\"}}]}"
 
 say "== wait for the root's result"
-until grep -q 'the root is done' "$dir/brain.log"; do sleep 0.5; done
+until grep -q 'the task is done' "$dir/brain.log"; do sleep 0.5; done
 sleep 0.5
 say "done; the brain's own log:"
 echo
