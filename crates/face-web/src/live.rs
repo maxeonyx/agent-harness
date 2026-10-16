@@ -47,7 +47,7 @@ impl Feed {
 
     pub fn push(&self, live: Live) {
         let running = Running::of(&live);
-        let (Live::Model { event: piece, .. } | Live::Call { chunk: piece, .. }) = live;
+        let (Live::Model { chunk: piece, .. } | Live::Call { chunk: piece, .. }) = live;
         if let Some(pieces) = self.lock().get_mut(&running) {
             pieces.push(piece);
             self.0.grew.notify_all();

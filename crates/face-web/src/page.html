@@ -131,7 +131,6 @@
       <label>Name <input id="tname" placeholder="the role's name"></label>
       <label>Directory <input id="dir" list="dirs" placeholder="/path/to/your/clone" size="34"></label>
       <datalist id="dirs"></datalist>
-      <label><input type="checkbox" id="chat"> a chat with you</label>
       <textarea id="mandate" placeholder="The mandate: what to do, and what to report." rows="4"></textarea>
       <div class="controls-row"><button id="go" type="submit">Start</button><span class="answer" id="started"></span></div>
     </form>
@@ -217,8 +216,9 @@ const resets = (ms) => {
 function renderUsage() {
   const u = view.usage, span = $("#usage");
   span.replaceChildren();
-  if (u) span.append(`used: 5h ${pct(u.five_hour)}${resets(u.five_hour_reset)} · 7d ${pct(u.seven_day)}${resets(u.seven_day_reset)} · as of ${clock(u.at)}`);
-  if (u && !u.on_plan) span.append(" ", el("span", "alarm", `billed as ${u.claim}, not the plan: nothing more is sent`));
+  const used = (w) => `${pct(w?.used)}${resets(w?.resets)}`;
+  if (u) span.append(`used: 5h ${used(u.five_hour)} · 7d ${used(u.seven_day)} · as of ${clock(u.at)}`);
+  if (u && !u.on_plan) span.append(" ", el("span", "alarm", "billed outside the plan: nothing more is sent"));
   if (view.limited) span.append(" ", el("span", "alarm", `account limited until ${clock(view.limited)}`));
 }
 
@@ -276,9 +276,8 @@ function render() {
   $("#next").hidden = !next || next.task === selected;
   if (next) $("#next").textContent = `Next: ${byId[next.task].name}`;
 
-  // The tree: Max's scope at the top, each task under the task that owns it,
-  // an aside under the task it was opened on.
-  const parent = (t) => t.owner || (t.origin === "aside" ? t.from : null);
+  // The tree: Max's scope at the top, each task under the task that owns it.
+  const parent = (t) => t.owner;
   const kids = {};
   for (const t of view.tasks) (kids[parent(t)] ||= []).push(t);
   const tree = $("#tree ul");
@@ -404,8 +403,8 @@ async function control(fact, answer, done) {
   answer.className = why ? "answer bad" : "answer";
   answer.textContent = why ? `refused: ${why}` : done;
   // A task waiting on its children is not interrupted: Max talks to a fork
-  // of it instead.
-  if (why && why.includes("through an aside")) {
+  // of it instead, which joins the children it waits on.
+  if (why && byId[selected]?.scoped) {
     const b = el("button", null, "Open an aside");
     b.onclick = () => aside(answer);
     answer.append(" ", b);
@@ -413,16 +412,17 @@ async function control(fact, answer, done) {
 }
 
 // An aside: a chat with a fork of the selected task, opened on its current
-// context, whose result goes back to it when Max marks the aside done. What
-// is in the compose box is its first message.
+// context as one more of the children it waits on. It is told when the rest
+// are done, and its result goes back with theirs when Max marks it done.
+// What is in the compose box is its first message.
 async function aside(answer) {
   const t = byId[selected];
   const said = box.value.trim() || "I want to talk while your work runs.";
   const text = await (await fetch("/digest", { method: "POST", body: said })).text();
   const id = mint();
   const why = await act({ Task: [id, { Created: {
-    name: `${t.name}-aside`, by: null, scope: "Max", origin: { Aside: { from: t.id } },
-    mode: "UserFacing", mandate: { text, brief: null, quotes: [], from: "Max" },
+    name: `${t.name}-aside`, by: null, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } },
+    mode: "UserFacing", mandate: { text, brief: null, quotes: [] },
   } }] }, [said]);
   answer.className = why ? "answer bad" : "answer";
   answer.textContent = why ? `aside refused: ${why}` : "aside opened";
@@ -632,19 +632,18 @@ $("#start").onsubmit = async (e) => {
   const dir = $("#dir").value.trim();
   const facts = [], places = {};
   for (const place of env.places) {
-    if (!dir) { answer.textContent = `a directory for its ${place.name}`; return; }
+    if (!dir) { answer.textContent = `a directory for its ${place}`; return; }
     const known = view.workspaces.find((w) => w.dir === dir);
     const id = known ? known.id : mint();
-    if (!known) facts.push({ Limb: { id, name: dir.split("/").pop(), fork: "Share",
-      kind: { Plugin: { kind: place.kind, config: JSON.stringify({ dir }), host: { Process: "Local" } } } } });
-    places[place.name] = id;
+    if (!known) facts.push({ Limb: { id, name: dir, kind: { Plugin: { kind: place, config: JSON.stringify({ dir }) } } } });
+    places[place] = id;
   }
   const text = await (await fetch("/digest", { method: "POST", body: mandate })).text();
   facts.push({ Task: [mint(), { Created: {
     name: $("#tname").value.trim() || env.name, by: null, scope: "Max",
     origin: { Fresh: { environment: env.id, places } },
-    mode: $("#chat").checked ? "UserFacing" : "Autonomous",
-    mandate: { text, brief: null, quotes: [], from: "Max" },
+    mode: "UserFacing",
+    mandate: { text, brief: null, quotes: [] },
   } }] });
   const why = await act(facts, [mandate]);
   answer.className = why ? "answer bad" : "answer";
@@ -675,10 +674,8 @@ function renderDetail() {
     button("interrupt", "Interrupt", () => ({ Task: [t.id, { Drain: "ToMax" }] }), () => "interrupted: your move once it stops");
     button("stop", "Stop", () => ({ Task: [t.id, { Drain: { Stop: "Max" } }] }), () => "stopping");
     button("hold", "Hold", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), () => byId[t.id].held ? "released" : "held");
-    button("done", "Done", () => [
-      { Task: [t.id, { ModeSet: "Autonomous" }] },
-      { Delivery: { id: mint(), to: t.id, content: { Prompt: "Done" } } },
-    ], () => "done: its last turn writes the result");
+    button("done", "Done", () => ({ Delivery: { id: mint(), to: t.id, content: { Prompt: "Done" } } }),
+      () => "done: its last turn writes the result");
     controls.append(answer);
     body.replaceChildren(controls, el("dl"), el("div", "context"), el("div", "live"));
   }
