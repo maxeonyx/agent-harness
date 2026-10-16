@@ -48,6 +48,7 @@
 //! say how a call ended.
 
 mod files;
+mod git;
 mod record;
 mod shell;
 pub mod tools;
@@ -55,7 +56,7 @@ pub mod trunc;
 
 use std::collections::HashMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -67,6 +68,8 @@ use harness_core::environment::{
 use harness_core::id::{CallId, Digest, InstanceId, LimbId, ValueId};
 use harness_core::journal::{Batch, Fact};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
+use harness_core::value::Bytes;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::record::{Calls, Recorded};
@@ -76,28 +79,64 @@ use crate::shell::Stop;
 const FILE: &str = "file";
 const INSTRUCTIONS: &str = "instructions";
 
+/// The plugin kind this limb is, which an environment's place names.
+pub const KIND: &str = "workspace";
+
+/// A workspace's own settings: the `config` of its [`Limb`] definition.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Settings {
+    /// The directory the tools work in. Must exist, unless `clone` makes it.
+    pub dir: PathBuf,
+    /// Made before the limb first says hello, if `dir` does not exist yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clone: Option<Clone>,
+}
+
+/// A clone of a repository, made for one agent: its own directory and its
+/// own branch, which it commits and pushes to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clone {
+    /// What `git clone` is given: a URL or a path.
+    pub from: String,
+    /// Checked out from `origin/<branch>` if it exists, otherwise made from
+    /// `origin/<base>`.
+    pub branch: String,
+    pub base: String,
+}
+
+impl Settings {
+    /// The settings a limb definition holds.
+    pub fn of(limb: &Limb) -> Option<Settings> {
+        match &limb.kind {
+            LimbKind::Plugin { kind, config, .. } if kind == KIND => {
+                serde_json::from_str(config).ok()
+            }
+            _ => None,
+        }
+    }
+
+    /// The limb's definition, as the fact that declares it.
+    pub fn definition(&self, id: LimbId, name: &str) -> Limb {
+        Limb {
+            id,
+            name: name.into(),
+            kind: LimbKind::Plugin {
+                kind: KIND.into(),
+                config: serde_json::to_string(self).expect("settings are JSON"),
+                host: Host::Process(Machine::Local),
+            },
+            fork: Fork::Share,
+        }
+    }
+}
+
 /// Where a workspace runs and keeps its records.
 pub struct Config {
     pub limb: LimbId,
-    /// The directory the tools work in. Must exist.
-    pub root: PathBuf,
-    /// Where the limb keeps its record of calls. Outside `root`, so the
-    /// agents' files stay theirs.
+    pub settings: Settings,
+    /// Where the limb keeps its record of calls. Outside the directory, so
+    /// the agents' files stay theirs.
     pub state: PathBuf,
-}
-
-/// The limb's definition, as the fact that declares it.
-pub fn definition(id: LimbId, name: &str, root: &Path) -> Limb {
-    Limb {
-        id,
-        name: name.into(),
-        kind: LimbKind::Plugin {
-            kind: "workspace".into(),
-            config: json!({ "root": root }).to_string(),
-            host: Host::Process(Machine::Local),
-        },
-        fork: Fork::Share,
-    }
 }
 
 /// One running instance of the workspace limb.
@@ -113,6 +152,9 @@ struct Inner {
     limb: LimbId,
     instance: InstanceId,
     root: PathBuf,
+    /// The clone it was made as, which its instructions say is the agent's
+    /// own.
+    clone: Option<Clone>,
     calls: Calls,
     out: Sender<FromLimb>,
     running: Mutex<HashMap<CallId, Running>>,
@@ -130,11 +172,18 @@ struct Running {
 }
 
 impl Workspace {
+    /// Start an instance: make its clone if it has one to make, end what an
+    /// earlier instance left running, and say hello. Blocks while it clones.
     pub fn open(config: Config, out: Sender<FromLimb>) -> io::Result<Workspace> {
+        let Settings { dir, clone } = config.settings;
+        if let Some(clone) = &clone {
+            git::clone(clone, &dir)?;
+        }
         let inner = Inner {
             limb: config.limb,
             instance: InstanceId::generate(),
-            root: config.root.canonicalize()?,
+            root: dir.canonicalize()?,
+            clone,
             calls: Calls::open(config.state.join("calls"))?,
             out,
             running: Mutex::default(),
@@ -165,22 +214,33 @@ impl Workspace {
             ToLimb::Describe => inner.send(FromLimb::Described(inner.describe())),
             ToLimb::Run { id, call, input } => self.run(id, call, input),
             ToLimb::Stop { call } => inner.stop(call),
-            ToLimb::Watch { resources } => {
+            ToLimb::Watch { known } => {
                 let mut report = Report::new(None);
                 let mut watched = lock(&inner.watched);
-                for resource in resources {
-                    if let Some(version) = inner.version_of(&resource) {
-                        watched.insert(resource.clone(), version);
-                        report.changed(resource, version);
+                for o in &known {
+                    if watched.contains_key(&o.resource) {
+                        continue;
+                    }
+                    let Some(version) = inner.version_of(&o.resource) else {
+                        continue;
+                    };
+                    watched.insert(o.resource.clone(), version);
+                    let new = known
+                        .iter()
+                        .all(|k| k.resource != o.resource || k.version != version);
+                    if new {
+                        report.changed(o.resource.clone(), version);
                     }
                 }
-                inner.send(FromLimb::Facts(report.batch(Vec::new())));
+                if !report.changes.is_empty() {
+                    inner.send(FromLimb::Facts(report.batch(Vec::new())));
+                }
             }
         }
     }
 
     /// Run a call at most once, however often it arrives.
-    fn run(&self, id: CallId, call: Call, input: Vec<u8>) {
+    fn run(&self, id: CallId, call: Call, input: Bytes) {
         let inner = &self.inner;
         let mut running = lock(&inner.running);
         if running.contains_key(&id) {
@@ -251,7 +311,7 @@ impl Drop for Workspace {
 /// output names and the files that changed.
 pub(crate) struct Report {
     call: Option<CallId>,
-    values: Vec<Vec<u8>>,
+    values: Vec<Bytes>,
     changes: Vec<Change>,
 }
 
@@ -265,7 +325,8 @@ impl Report {
     }
 
     pub(crate) fn value(&mut self, bytes: Vec<u8>) -> ValueId {
-        let id = ValueId::of(&bytes);
+        let bytes = Bytes(bytes);
+        let id = bytes.id();
         self.values.push(bytes);
         id
     }
@@ -347,7 +408,7 @@ impl Inner {
     }
 
     fn describe(&self) -> Description {
-        let text = tools::instructions(&self.root);
+        let text = tools::instructions(&self.root, self.clone.as_ref());
         let version = Version::Is(Digest::of(text.as_bytes()));
         let mut instructions = vec![Instruction {
             observes: Observation {
@@ -395,7 +456,7 @@ impl Inner {
                 files::version(&self.root.join(&resource.name)).ok()
             }
             INSTRUCTIONS => Some(Version::Is(Digest::of(
-                tools::instructions(&self.root).as_bytes(),
+                tools::instructions(&self.root, self.clone.as_ref()).as_bytes(),
             ))),
             _ => None,
         }
