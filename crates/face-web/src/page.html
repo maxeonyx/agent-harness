@@ -45,12 +45,6 @@
   }
   #box:focus { outline: 2px solid var(--maroon); outline-offset: -1px; }
   #compose .controls { display: flex; gap: .6em; align-items: center; padding: .5em 1em .7em; }
-  #compose button {
-    font: inherit; padding: .25em .8em; border: 1px solid var(--line); border-radius: 5px;
-    background: var(--paper); color: var(--ink); cursor: pointer;
-  }
-  #compose button:hover { background: var(--hover); }
-  #compose button:disabled { color: var(--muted); cursor: default; background: var(--paper); }
   #mic.on { background: var(--maroon); color: var(--paper); border-color: var(--maroon); }
   #status { color: var(--muted); flex: 1; }
   #status.bad { color: var(--maroon); font-weight: 600; }
@@ -84,6 +78,21 @@
   .block { white-space: pre-wrap; margin: .25em 0; }
   .block.tool { font: 12px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; background: var(--ground); padding: .3em .5em; border-radius: 4px; }
   details summary { cursor: pointer; color: var(--muted); }
+  button {
+    font: inherit; padding: .2em .7em; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--paper); color: var(--ink); cursor: pointer;
+  }
+  button:hover { background: var(--hover); }
+  button:disabled { color: var(--muted); cursor: default; background: var(--paper); }
+  .controls-row { display: flex; gap: .5em; align-items: center; flex-wrap: wrap; margin: .2em 0 .8em; }
+  .answer { color: var(--muted); }
+  .answer.bad { color: var(--maroon); font-weight: 600; }
+  section > h2 button { text-transform: none; letter-spacing: 0; font-size: 1.1em; margin-left: .8em; }
+  .queued .move { float: right; display: flex; gap: .3em; }
+  .queued .move button { padding: 0 .45em; }
+  .live { border-top: 1px solid var(--line); padding: .6em 0; }
+  .live .role { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; color: var(--maroon); }
+  .block.thinking { color: var(--muted); font-style: italic; }
   pre { white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; margin: .3em 0; }
 </style>
 </head>
@@ -96,7 +105,7 @@
   <span id="refused"></span>
 </header>
 <main>
-  <section id="queue"><h2>Waiting on you</h2><ul></ul></section>
+  <section id="queue"><h2>Waiting on you<button id="next" hidden>Next</button></h2><ul></ul></section>
   <section id="tree"><h2>Tasks</h2><ul></ul></section>
   <section id="facts"><h2>Journal</h2><ul></ul></section>
   <section id="detail"><h2>Task</h2><div class="body"><p class="empty">Select a task.</p></div></section>
@@ -176,16 +185,26 @@ function render() {
   // Max's queue, in the order the core derives.
   const queue = $("#queue ul");
   queue.replaceChildren();
-  for (const q of view.queue) {
+  view.queue.forEach((q, i) => {
     const t = byId[q.task];
     const li = el("li", "queued");
-    li.append(el("span", "name", t.name), el("span", "tag", `waiting ${ago(q.since)}`));
+    const move = el("span", "move");
+    for (const [label, to] of [["↑", i - 1], ["↓", i + 1]]) {
+      const b = el("button", null, label);
+      b.disabled = !can.act || to < 0 || to >= view.queue.length;
+      b.onclick = (e) => { e.stopPropagation(); reorder(i, to); };
+      move.append(b);
+    }
+    li.append(move, el("span", "name", t.name), el("span", "tag", `waiting ${ago(q.since)}`));
     if (q.ask) li.append(el("span", "ask", `asks: ${preview(q.ask.input)}`));
     li.append(el("span", "why", q.why ? q.why : "unranked"));
     li.onclick = () => select(q.task);
     queue.append(li);
-  }
+  });
   if (!view.queue.length) queue.append(el("li", "empty", "Nothing needs you."));
+  const next = view.queue[0];
+  $("#next").hidden = !next || next.task === selected;
+  if (next) $("#next").textContent = `Next: ${byId[next.task].name}`;
 
   // The tree: Max's scope at the top, each task under the task that owns it,
   // an aside under the task it was opened on.
@@ -207,6 +226,18 @@ function render() {
   renderTo();
 }
 
+// Max's own order for his queue: the whole order, as the scheduler would
+// write it, each task keeping its reason.
+async function reorder(from, to) {
+  const order = view.queue.map((q) => ({ task: q.task, why: q.why || "placed by you" }));
+  order.splice(to, 0, ...order.splice(from, 1));
+  order[to].why = "placed by you";
+  const why = await act({ Ranking: { order } });
+  if (why) alert(`queue not reordered: ${why}`);
+}
+
+$("#next").onclick = () => { select(view.queue[0].task); box.focus(); };
+
 function row(t, depth) {
   const li = el("li", "task");
   li.style.setProperty("--depth", depth);
@@ -226,10 +257,50 @@ function row(t, depth) {
   return li;
 }
 
+// Selecting a task is focusing on it: a fact, so nothing moves the task
+// Max is in from under him.
 function select(id) {
+  if (selected !== id && can.act) act({ Focus: { face: FACE, task: id } });
   selected = id;
   history.replaceState(null, "", `#${id}`);
   render();
+}
+
+// Max's facts. This page is one face, with an id it keeps. Each fact is
+// posted in the journal's own encoding and the brain folds it before it
+// appends it, so a refusal names the core's reason. A post that the
+// connection dropped is sent again: what the page creates carries an id it
+// minted, so the core refuses a second copy ("Exists"), which means the first
+// one landed.
+const mint = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+const FACE = localStorage.getItem("face") || mint();
+localStorage.setItem("face", FACE);
+
+async function act(fact) {
+  if (!can.act) return "this face is not wired to a brain";
+  const body = JSON.stringify({ face: FACE, seen: view.seq, fact });
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch("/act", { method: "POST", body });
+    } catch {
+      await new Promise((r) => setTimeout(r, 1000 * Math.min(attempt + 1, 5)));
+      continue;
+    }
+    if (res.ok) return null;
+    const why = await res.text();
+    if (attempt > 0 && why === "Exists") return null;
+    return why || res.statusText;
+  }
+}
+
+// The answer to a control, beside it: done, or the core's refusal.
+async function control(fact, answer, done) {
+  answer.className = "answer";
+  answer.textContent = "…";
+  const why = await act(fact);
+  answer.className = why ? "answer bad" : "answer";
+  answer.textContent = why ? `refused: ${why}` : done;
 }
 
 // The compose box. Its text is Max's until he sends it, kept across
@@ -238,13 +309,13 @@ function select(id) {
 // edit, and the words still coming go after it.
 
 const box = $("#box");
-let can = { send: false, dictation: false, sample: false };
+let can = { act: false, dictation: false, sample: false };
 let prev = box.value = localStorage.getItem("draft") || "";
 let live = null;
 
 const say = (text, bad) => { $("#status").textContent = text; $("#status").className = bad ? "bad" : ""; };
 
-fetch("/compose").then((r) => r.json()).then((c) => {
+fetch("/wiring").then((r) => r.json()).then((c) => {
   can = c;
   $("#mic").hidden = !c.dictation;
   $("#sample").hidden = !c.sample;
@@ -395,11 +466,11 @@ async function send() {
   const t = selected && byId[selected];
   if (!t) return say("select a task to send to", true);
   if (!box.value.trim()) return;
-  if (!can.send) return say("sending is not wired to a brain yet", true);
   const text = box.value;
   say("sending");
-  const res = await fetch("/send", { method: "POST", body: JSON.stringify({ to: t.id, seen: view.seq, text }) });
-  if (!res.ok) return say(`not sent: ${await res.text()}`, true);
+  const words = JSON.stringify([{ type: "text", text }]);
+  const why = await act({ Delivery: { id: mint(), to: t.id, content: { Words: words } } });
+  if (why) return say(`not sent: ${why}`, true);
   if (box.value === text) { box.value = prev = ""; localStorage.removeItem("draft"); }
   say(`sent to ${t.name}`);
 }
@@ -418,8 +489,22 @@ function renderDetail() {
   if (body.dataset.task !== t.id) {
     body.dataset.task = t.id;
     shownHead = null;
-    body.replaceChildren(el("dl"), el("div", "context"));
+    const controls = el("div", "controls-row");
+    const answer = el("span", "answer");
+    const button = (name, label, fact, done) => {
+      const b = el("button", null, label);
+      b.name = name;
+      b.onclick = () => control(fact(), answer, done());
+      controls.append(b);
+    };
+    button("interrupt", "Interrupt", () => ({ Task: [t.id, { Drain: "ToMax" }] }), () => "interrupted: your move once it stops");
+    button("stop", "Stop", () => ({ Task: [t.id, { Drain: { Stop: "Max" } }] }), () => "stopping");
+    button("hold", "Hold", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), () => byId[t.id].held ? "released" : "held");
+    controls.append(answer);
+    body.replaceChildren(controls, el("dl"), el("div", "context"), el("div", "live"));
   }
+  for (const b of body.querySelectorAll(".controls-row button")) b.disabled = !can.act || t.waiting?.kind === "done";
+  body.querySelector("button[name=hold]").textContent = t.held ? "Release" : "Hold";
   const dl = body.querySelector("dl");
   dl.replaceChildren();
   const th = throbber(t);
@@ -433,6 +518,39 @@ function renderDetail() {
     shownHead = t.head;
     loadContext(t.head, body.querySelector(".context"));
   }
+  follow(t.waiting?.kind === "model" ? t.waiting.call : null, body.querySelector(".live"));
+}
+
+// The selected task's running request, as it streams: never a fact, so it
+// is read from /live, which resumes from the last event on a reconnect and
+// says "end" when the request is over. The text stays until the head moves
+// past it and the context shows the stored response.
+let streaming = null;
+function follow(call, into) {
+  if (streaming && streaming.call === call) return;
+  if (streaming) streaming.source.close();
+  streaming = null;
+  into.replaceChildren();
+  if (!call) return;
+  const blocks = [];
+  const source = new EventSource(`/live?model=${call}`);
+  streaming = { call, source };
+  const head = el("div", "role", "streaming");
+  into.append(head);
+  source.addEventListener("end", () => { source.close(); head.textContent = "streamed"; });
+  source.onmessage = (m) => {
+    const e = JSON.parse(m.data);
+    if (e.type === "content_block_start") {
+      const b = e.content_block;
+      const div = el("div", `block ${b.type === "text" ? "" : b.type === "thinking" ? "thinking" : "tool"}`);
+      div.textContent = b.type === "tool_use" ? `→ ${b.name} ` : "";
+      blocks[e.index] = div;
+      into.append(div);
+    } else if (e.type === "content_block_delta" && blocks[e.index]) {
+      const d = e.delta;
+      blocks[e.index].textContent += d.text ?? d.thinking ?? d.partial_json ?? "";
+    }
+  };
 }
 
 // A context is a value named by its head, so it is fetched once per head.
@@ -460,6 +578,7 @@ function entry(e, isHead) {
   if (typeof content === "string") content = [{ type: "text", text: content }];
   for (const b of content) {
     if (b.type === "text") div.append(el("div", "block", b.text));
+    else if (b.type === "thinking") div.append(el("div", "block thinking", b.thinking));
     else if (b.type === "tool_use") div.append(el("div", "block tool", `→ ${b.name} ${JSON.stringify(b.input)}`));
     else if (b.type === "tool_result") {
       const c = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.text || "").join("\n");

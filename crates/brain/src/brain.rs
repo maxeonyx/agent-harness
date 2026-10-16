@@ -12,13 +12,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Interruption, Outcome, Output, Status};
 use harness_core::context::{Entry, EntryId, Message, Role, Wire};
-use harness_core::delivery::{Content, Delivery};
 use harness_core::environment::{
     Binding, Description, FromLimb, LimbKind, Reach, Startable, ToLimb,
 };
 use harness_core::id::{
-    CallId, DeliveryId, Digest, EnvironmentId, FaceId, InstanceId, LimbId, ModelCallId, Seq,
-    TaskId, Timestamp, ToolUseId,
+    CallId, Digest, EnvironmentId, FaceId, InstanceId, LimbId, ModelCallId, Seq, TaskId, Timestamp,
+    ToolUseId,
 };
 use harness_core::journal::{Author, Fact, Launched, Record, Rejected};
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose};
@@ -28,7 +27,7 @@ use harness_core::task::{
     Created, Drain, Giver, Mandate, Mode, Origin, Outcome as TaskOutcome, Scope, Stopper, Task,
     TaskEvent, TaskState,
 };
-use harness_face_web::Deliver;
+use harness_face_web::{Act, Feed, Running};
 use harness_limb_workspace::{Config, Workspace};
 use harness_provider::{Client, Finished, Progress};
 use harness_store::Store;
@@ -48,11 +47,12 @@ enum What {
     Limb(FromLimb),
     FirstByte(ModelCallId),
     Finished(ModelCallId, Result<Finished, harness_provider::Error>),
-    /// Max's words from a face, answered with whether the journal took them.
-    Words {
+    /// One of Max's facts from a face, answered with whether the journal
+    /// took it.
+    Max {
         face: FaceId,
         seen: Seq,
-        delivery: Delivery,
+        fact: Fact,
         reply: Sender<Result<(), String>>,
     },
 }
@@ -69,42 +69,28 @@ impl Inbox {
         Inbox { events, inbox }
     }
 
-    /// How one face's sends reach the brain.
-    pub fn words(&self, face: FaceId) -> Words {
-        Words {
-            face,
-            events: self.events.clone(),
-        }
+    /// How Max's facts from the faces reach the brain.
+    pub fn max(&self) -> Max {
+        Max(self.events.clone())
     }
 }
 
-/// A face's compose box, sending to the brain: Max's words become a
-/// delivery authored by him, as far as his page had seen.
-pub struct Words {
-    face: FaceId,
-    events: Sender<Event>,
-}
+/// Max's facts, through the brain: each is folded and appended authored by
+/// him, as far as his face had seen, or refused back to him.
+pub struct Max(Sender<Event>);
 
-impl Deliver for Words {
-    fn words(&self, to: TaskId, seen: Seq, words: Wire) -> Result<(), String> {
+impl Act for Max {
+    fn act(&self, face: FaceId, seen: Seq, fact: Fact) -> Result<(), String> {
         let (reply, answer) = mpsc::channel();
-        let delivery = Delivery {
-            id: DeliveryId(new_id()),
-            to,
-            content: Content::Words(words),
-        };
-        let words = What::Words {
-            face: self.face,
+        let max = What::Max {
+            face,
             seen,
-            delivery,
+            fact,
             reply,
         };
-        self.events
-            .send(Event(words))
-            .map_err(|_| "the brain has stopped".to_string())?;
-        answer
-            .recv()
-            .map_err(|_| "the brain has stopped".to_string())?
+        let stopped = "the brain has stopped".to_string();
+        self.0.send(Event(max)).map_err(|_| stopped.clone())?;
+        answer.recv().map_err(|_| stopped)?
     }
 }
 
@@ -112,6 +98,8 @@ impl Deliver for Words {
 pub struct First {
     pub workspace: PathBuf,
     pub name: String,
+    /// The root's mode: autonomous, or a chat with Max.
+    pub mode: Mode,
     pub mandate: String,
 }
 
@@ -123,6 +111,8 @@ pub struct Brain {
     client: Arc<Client>,
     events: Sender<Event>,
     inbox: Receiver<Event>,
+    /// Each request's streamed events, for the face.
+    feed: Feed,
     /// This launch, as the instance meta calls are dispatched to.
     instance: InstanceId,
     meta: LimbId,
@@ -151,6 +141,7 @@ impl Brain {
         state_dir: PathBuf,
         first: Option<First>,
         Inbox { events, inbox }: Inbox,
+        feed: Feed,
     ) -> Result<Brain, String> {
         let state = store
             .fold()
@@ -204,6 +195,7 @@ impl Brain {
             client: Arc::new(client),
             events,
             inbox,
+            feed,
             instance: InstanceId(new_id()),
             meta,
             workspace_limb,
@@ -278,7 +270,7 @@ impl Brain {
                 agent: kind.name.into(),
                 scope: Scope::Max,
                 origin: Origin::Fresh,
-                mode: Mode::Autonomous,
+                mode: first.mode,
                 mandate: Mandate {
                     text: first.mandate,
                     from: Giver::Max,
@@ -443,6 +435,7 @@ impl Brain {
             breakpoints: policy::breakpoints(root, task.head, head),
         };
         let request = ModelCallId(new_id());
+        self.feed.start(Running::Model(request));
         self.append(vec![(
             Author::Brain,
             Fact::ModelCall(request, ModelCallEvent::Sent(call.clone())),
@@ -455,14 +448,19 @@ impl Brain {
         let entries: HashMap<EntryId, Entry> = chain.into_iter().collect();
         let client = self.client.clone();
         let events = self.events.clone();
+        let feed = self.feed.clone();
         thread::spawn(move || {
             let finished = client.send(
                 request,
                 &call,
                 |id| entries.get(&id).cloned(),
                 |progress| {
-                    if let Progress::Fact(ModelCallEvent::FirstByte) = progress {
-                        let _ = events.send(Event(What::FirstByte(request)));
+                    match progress {
+                        Progress::Fact(ModelCallEvent::FirstByte) => {
+                            let _ = events.send(Event(What::FirstByte(request)));
+                        }
+                        Progress::Live(live) => feed.push(live),
+                        Progress::Fact(_) => {}
                     }
                     if abort.load(Ordering::Relaxed) {
                         ControlFlow::Break(())
@@ -553,6 +551,7 @@ impl Brain {
         };
         facts.push((Author::Brain, Fact::ModelCall(request, ended)));
         self.append(facts);
+        self.feed.end(Running::Model(request));
     }
 
     /// A call for each tool use of a response, routed by the task's binding.
@@ -776,15 +775,19 @@ impl Brain {
 
     fn interrupt(&mut self, id: CallId) {
         let record = self.state.call(id).expect("a call to interrupt");
+        let by = match self.state.call_owner(id).and_then(|t| self.state.task(t)) {
+            Some(Task {
+                draining: Some(Drain::ToMax),
+                ..
+            }) => Interruption::Max,
+            _ => Interruption::Stop,
+        };
         match record.status {
             Status::Made => self.append(vec![(
                 Author::Brain,
                 Fact::Call(
                     id,
-                    CallEvent::Settled(Outcome::Interrupted {
-                        by: Interruption::Stop,
-                        partial: None,
-                    }),
+                    CallEvent::Settled(Outcome::Interrupted { by, partial: None }),
                 ),
             )]),
             Status::Dispatched { .. }
@@ -802,18 +805,18 @@ impl Brain {
         match event {
             What::FirstByte(request) => self.first_byte(request),
             What::Finished(request, finished) => self.finished(request, finished),
-            What::Words {
+            What::Max {
                 face,
                 seen,
-                delivery,
+                fact,
                 reply,
             } => {
                 // Max acts on a picture that may be out of date: a refusal
                 // (the task finished meanwhile) is his to see, not a bug.
                 let by = Author::Max { face, seen };
                 let done = self
-                    .try_append(vec![(by, Fact::Delivery(delivery))])
-                    .map_err(|(rejected, _)| format!("not delivered: {rejected:?}"));
+                    .try_append(vec![(by, fact)])
+                    .map_err(|(rejected, _)| format!("{rejected:?}"));
                 let _ = reply.send(done);
             }
             What::Limb(FromLimb::Settled { call, outcome }) => self.limb_settled(call, outcome),

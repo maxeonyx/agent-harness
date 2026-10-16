@@ -19,14 +19,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use harness_core::context::{Entry, EntryId, Message, Role, Root, Wire};
 use harness_core::delivery::{Content, Delivery};
 use harness_core::environment::{Binding, Environment, Fork, Host, Limb, LimbKind, Route};
-use harness_core::id::{
-    DeliveryId, EnvironmentId, FaceId, LimbId, ModelCallId, Seq, TaskId, Timestamp,
-};
+use harness_core::id::{EnvironmentId, FaceId, LimbId, ModelCallId, Seq, TaskId, Timestamp};
 use harness_core::journal::{Author, Fact, Launched, Record};
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose, Stop};
 use harness_core::state::State;
 use harness_core::task::{Created, Giver, Mandate, Mode, Origin, Scope, TaskEvent};
-use harness_face_web::{Compose, Deliver, Dictation, Face, Source, describe};
+use harness_face_web::{Act, Dictation, Face, Feed, Source, Wiring, describe};
 use harness_provider::Login;
 use serde_json::json;
 
@@ -94,21 +92,20 @@ impl Source for Journal {
     }
 }
 
-/// What the brain will do with Max's words: make them his delivery.
-impl Deliver for Journal {
-    fn words(&self, to: TaskId, seen: Seq, words: Wire) -> Result<(), String> {
-        let shown = words.0.clone();
-        let delivery = Delivery {
-            id: DeliveryId(self.id()),
-            to,
-            content: Content::Words(words),
+/// What the brain does with Max's facts: fold and append them as his.
+impl Act for Journal {
+    fn act(&self, face: FaceId, seen: Seq, fact: Fact) -> Result<(), String> {
+        let shown = match &fact {
+            Fact::Delivery(Delivery {
+                content: Content::Words(words),
+                ..
+            }) => Some(words.0.clone()),
+            _ => None,
         };
-        let by = Author::Max {
-            face: FaceId(1),
-            seen,
-        };
-        self.push(by, Fact::Delivery(delivery))?;
-        println!("      {shown}");
+        self.push(Author::Max { face, seen }, fact)?;
+        if let Some(shown) = shown {
+            println!("      {shown}");
+        }
         Ok(())
     }
 }
@@ -212,11 +209,12 @@ fn main() {
 
     let journal = Journal(Arc::default());
     script(&journal).expect("the script folds");
-    let compose = Compose {
-        deliver: Some(Box::new(journal.clone())),
+    let wiring = Wiring {
+        act: Some(Box::new(journal.clone())),
         dictation: Some(Dictation::new(login).with_sample(sample)),
+        feed: Feed::default(),
     };
-    let face = Face::with(journal, compose);
+    let face = Face::with(journal, wiring);
     let follower = Arc::clone(&face);
     thread::spawn(move || follower.follow());
     let listener = TcpListener::bind(("0.0.0.0", port)).expect("the port is free");

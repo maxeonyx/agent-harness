@@ -47,6 +47,12 @@ pub trait Socket: Read + Write {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
 }
 
+impl<T: Socket + ?Sized> Socket for &mut T {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        (**self).set_read_timeout(timeout)
+    }
+}
+
 impl Socket for TcpStream {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         TcpStream::set_read_timeout(self, timeout)
