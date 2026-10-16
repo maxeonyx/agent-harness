@@ -784,7 +784,7 @@ function drawMap() {
       a.title = `${t.name} · ${t.environment || ""} · ${t.mode}\n\n${(t.mandate || "").slice(0, 400)}`;
       let where = $(".where", a);
       const place = Object.values(t.places || {})[0];
-      if (root && place) { if (!where) a.append(where = el("span", "where")); where.textContent = place; } else where?.remove();
+      if (root && place) { if (!where) a.append(where = el("span", "where")); where.textContent = place.split("/").filter(Boolean).pop(); where.title = place; } else where?.remove();
       let more = $(".more", a);
       const fc = folded.get(id);
       if (fc) {
