@@ -131,6 +131,7 @@ impl Fact {
                 id: _,
                 to: _,
                 content,
+                read: _,
             }) => match content {
                 Content::Words(words) => values.push(*words),
                 Content::Prompt(_) => {}

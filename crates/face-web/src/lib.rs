@@ -32,7 +32,8 @@
 //! **Max's facts.** Everything Max does from the page is a batch of his
 //! facts in the core's own encoding, posted to `/act` and passed to [`Act`],
 //! which the brain implements: his words (a delivery from the compose box,
-//! where Enter is a new line and Ctrl+Enter sends), his controls over a task
+//! where Enter is a new line and Max sends now or for the end of the
+//! task's turn), his controls over a task
 //! (interrupt, stop, hold), a new order for his queue, and the task he is
 //! focused on. The bytes his facts name (his words) travel in the batch, and
 //! the page names them with `/digest`, the core's [`ValueId::of`]. The face

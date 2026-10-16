@@ -179,6 +179,7 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "mandate": text(value, t.mandate.text),
         "head": t.head().map(|h| h.to_string()),
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
+        "window": state.environment(t.environment).map(|e| harness_provider::context_window(&e.model)),
         "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
         "held": t.held,
         "scoped": scoped,
@@ -210,7 +211,11 @@ fn pending_words(state: &State, value: Text, t: &Task) -> Vec<Value> {
             _ => None,
         })
         .filter_map(|d| match d.delivery.content {
-            Content::Words(words) => Some(json!({"at": d.at.at.0, "content": text(value, words)})),
+            Content::Words(words) => Some(json!({
+                "at": d.at.at.0,
+                "content": text(value, words),
+                "read": format!("{:?}", d.delivery.read),
+            })),
             _ => None,
         })
         .collect()

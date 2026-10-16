@@ -4,11 +4,13 @@
 
 use harness_core::call::{Caller, Outcome};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
-use harness_core::delivery::{Content, Prompt};
+use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Binding, Description};
 use harness_core::id::{CallId, LimbId, ValueId};
+use harness_core::journal::Author;
+use harness_core::model_call::{Ending, Stop};
 use harness_core::resource::Observation;
-use harness_core::state::{Stale, State};
+use harness_core::state::{Delivered, Stale, State};
 use harness_core::task::{Input, Origin, Scope, Task};
 use harness_core::value::Bytes;
 use harness_provider::IDENTITY;
@@ -16,6 +18,38 @@ use serde_json::{Value, json};
 
 /// The bytes of a stored value.
 pub type Values<'a> = &'a dyn Fn(ValueId) -> Vec<u8>;
+
+/// Where Max's words fall in the agent's work: during a turn, the tool
+/// calls it made after the journal position his face had shown him, and
+/// whether he asked them to wait for its turn's end.
+fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> String {
+    let Author::Max { seen, .. } = delivered.by else {
+        return String::new();
+    };
+    let mut unseen: Vec<_> = state
+        .calls()
+        .filter_map(|(_, c)| match &c.call.caller {
+            Caller::Agent { task: t, tool_use } if *t == task.id && c.made.seq > seen => {
+                Some((c.made.seq, tool_use.0.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    unseen.sort();
+    let mut when = match unseen.as_slice() {
+        [] if mid_turn => " while you were working".to_string(),
+        [] => String::new(),
+        [(_, one)] => format!(" while you were working, before your tool call `{one}`"),
+        [(_, first), ..] => format!(
+            " while you were working, before your last {} tool calls (from `{first}` on)",
+            unseen.len()
+        ),
+    };
+    if delivered.delivery.read == Read::TurnEnd {
+        when.push_str(", asking that it wait for the end of your turn");
+    }
+    when
+}
 
 /// A new root in an environment: the identity, the role, then each limb's
 /// instructions in `system`; the tools its binding routes.
@@ -144,6 +178,17 @@ pub fn turn(
             vec![elsewhere(state, values, *call)],
         );
     }
+    // Does this request carry on the model's turn (a tool round's results,
+    // or a response cut short) rather than start a new one?
+    let mid_turn = !forked.is_empty()
+        || task.pending.iter().any(|p| matches!(p, Input::Result(_)))
+        || matches!(
+            state.last_turn(task.id).map(|e| &e.ending),
+            Some(Ending::Responded {
+                stop: Stop::MaxTokens | Stop::PauseTurn,
+                ..
+            })
+        );
     for pending in &task.pending {
         match *pending {
             Input::Result(call) => {
@@ -156,19 +201,17 @@ pub fn turn(
                 let Some(delivered) = state.delivery(id) else {
                     continue;
                 };
-                let content = &delivered.delivery.content;
+                let Delivery { content, read, .. } = &delivered.delivery;
+                if *read == Read::TurnEnd && mid_turn {
+                    continue;
+                }
                 let mut said = Vec::new();
-                // Max's words are labelled, so a brief can quote them;
-                // words that arrive with a tool round would read as part of
-                // it, so they say whose they are.
+                // Max's words are labelled, so a brief can quote them, and
+                // say where in the agent's work he wrote them.
                 if let Content::Words(words) = content {
-                    let when = if turn.blocks.is_empty() {
-                        ""
-                    } else {
-                        " while you were working"
-                    };
                     said.push(text(&format!(
-                        "[harness] Max wrote this{when} (`{}` quotes it in a brief):",
+                        "[harness] Max wrote this{} (`{}` quotes it in a brief):",
+                        when(state, task, delivered, mid_turn),
                         label(*words)
                     )));
                 }

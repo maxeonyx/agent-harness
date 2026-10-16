@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
-use harness_core::delivery::{Content, Delivery, Prompt};
+use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Description, Environment, FromLimb, LimbKind, Reach, ToLimb};
 use harness_core::id::{
     CallId, DeliveryId, FaceId, InstanceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ToolUseId,
@@ -431,6 +431,7 @@ impl Brain {
             id: DeliveryId::generate(),
             to,
             content: Content::Prompt(prompt),
+            read: Read::Next,
         }));
     }
 
