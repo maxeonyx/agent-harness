@@ -27,6 +27,7 @@ use wire::{Client, Token};
 const USAGE: &str = "usage:
   fork-framing run [--models a,b] [--framings bare,user,user-remind,tool,tool-remind,tool-neutral,identity,rewind] [--depths 1,2,3]
                    [--trunks K] [--trials N] [--jobs J] [--rounds R] [--out DIR]
+  fork-framing resume RUN_DIR [--models ..] [--framings ..] [--depths ..] [--trials N] [--jobs J] [--rounds R]
   fork-framing report RUN_DIR...";
 
 /// Room for hidden thinking as well as a page.
@@ -36,6 +37,10 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
+        Some("resume") => match args.get(1) {
+            Some(dir) => resume(dir, &args[2..]),
+            None => Err(USAGE.into()),
+        },
         Some("report") => report(&args[1..]),
         _ => Err(USAGE.into()),
     };
@@ -106,10 +111,7 @@ fn parse(args: &[String]) -> Result<Config, String> {
 
 fn run(args: &[String]) -> Result<(), String> {
     let c = parse(args)?;
-    let home = std::env::var("HOME").map_err(|_| "HOME is not set")?;
-    let token = Token::from_claude_code(&Path::new(&home).join(".claude/.credentials.json"))
-        .map_err(|e| e.to_string())?;
-    let client = Client::new(token);
+    let client = client()?;
     std::fs::create_dir_all(&c.out).map_err(|e| e.to_string())?;
     let outline = scenario::outline();
     let deepest = *c.depths.iter().max().unwrap_or(&1);
@@ -186,41 +188,133 @@ fn run(args: &[String]) -> Result<(), String> {
         .collect();
     writeln!(file, "{}", Value::Array(dump)).map_err(|e| e.to_string())?;
 
-    let jobs: Vec<_> = trunks
-        .iter()
-        .flat_map(|(m, k, f, ctxs)| {
-            c.depths
-                .iter()
-                .filter(|&&d| d <= ctxs.len())
-                .flat_map(move |&d| (0..c.trials).map(move |i| (m, *k, *f, d, i, &ctxs[d - 1])))
+    let trunks: Vec<_> = trunks
+        .into_iter()
+        .map(|(m, k, f, ctxs)| Trunk {
+            model: m,
+            k,
+            framing: f,
+            ctxs,
         })
         .collect();
-    eprintln!("{} trunks, {} trials", trunks.len(), jobs.len());
+    trials(
+        &client,
+        &c,
+        &trunks,
+        File::create(c.out.join("trials.jsonl")),
+        &[],
+    )?;
+    report(&[c.out.display().to_string()])
+}
+
+/// One trunk's contexts: `ctxs[d - 1]` ends with the spawning response of
+/// the forker at depth `d`.
+struct Trunk {
+    model: String,
+    k: usize,
+    framing: Framing,
+    ctxs: Vec<Vec<Value>>,
+}
+
+fn client() -> Result<Client, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME is not set")?;
+    let token = Token::from_claude_code(&Path::new(&home).join(".claude/.credentials.json"))
+        .map_err(|e| e.to_string())?;
+    Ok(Client::new(token))
+}
+
+/// Runs the trials of `dir`'s recorded trunks that `trials.jsonl` lacks,
+/// appending to it.
+fn resume(dir: &str, args: &[String]) -> Result<(), String> {
+    let mut flags = args.to_vec();
+    flags.extend(["--out".into(), dir.into()]);
+    let c = parse(&flags)?;
+    let text = std::fs::read_to_string(c.out.join("trunks.json")).map_err(|e| e.to_string())?;
+    let dump: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let trunks: Vec<_> = dump
+        .as_array()
+        .ok_or("trunks.json is not an array")?
+        .iter()
+        .map(|t| Trunk {
+            model: t["model"].as_str().unwrap_or_default().to_owned(),
+            k: t["trunk"].as_u64().unwrap_or(0) as usize,
+            framing: Framing::parse(t["framing"].as_str().unwrap_or_default())
+                .expect("known framing"),
+            ctxs: serde_json::from_value(t["contexts"].clone()).unwrap_or_default(),
+        })
+        .filter(|t| c.models.contains(&t.model) && c.framings.contains(&t.framing))
+        .collect();
     let path = c.out.join("trials.jsonl");
-    let out = Mutex::new(File::create(&path).map_err(|e| e.to_string())?);
-    par(jobs, c.jobs, |(model, k, f, depth, i, ctx)| {
-        let mut record = match trial(&client, &outline, model, f, depth, ctx, c.rounds) {
+    let done: Vec<String> = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .map(|r| {
+            key(
+                r["model"].as_str().unwrap_or_default(),
+                r["framing"].as_str().unwrap_or_default(),
+                r["depth"].as_u64().unwrap_or(0) as usize,
+                r["trunk"].as_u64().unwrap_or(0) as usize,
+                r["i"].as_u64().unwrap_or(0) as usize,
+            )
+        })
+        .collect();
+    let file = File::options().append(true).create(true).open(&path);
+    trials(&client()?, &c, &trunks, file, &done)?;
+    report(&[dir.to_owned()])
+}
+
+fn key(model: &str, framing: &str, depth: usize, k: usize, i: usize) -> String {
+    format!("{model} {framing} d{depth} t{k}.{i}")
+}
+
+/// Runs `c.trials` trials per trunk and depth, except those in `done`,
+/// writing each record to `file`.
+fn trials(
+    client: &Client,
+    c: &Config,
+    trunks: &[Trunk],
+    file: std::io::Result<File>,
+    done: &[String],
+) -> Result<(), String> {
+    let outline = scenario::outline();
+    let jobs: Vec<_> = trunks
+        .iter()
+        .flat_map(|t| {
+            c.depths
+                .iter()
+                .filter(|&&d| d <= t.ctxs.len())
+                .flat_map(move |&d| (0..c.trials).map(move |i| (t, d, i)))
+        })
+        .filter(|(t, d, i)| !done.contains(&key(&t.model, t.framing.name, *d, t.k, *i)))
+        .collect();
+    eprintln!("{} trunks, {} trials to run", trunks.len(), jobs.len());
+    let out = Mutex::new(file.map_err(|e| e.to_string())?);
+    par(jobs, c.jobs, |(t, depth, i)| {
+        let name = key(&t.model, t.framing.name, depth, t.k, i);
+        let ctx = &t.ctxs[depth - 1];
+        let mut record = match trial(client, &outline, &t.model, t.framing, depth, ctx, c.rounds) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[{model} {} d{depth} t{k}.{i}] failed: {e}", f.name);
+                eprintln!("[{name}] failed: {e}");
                 return;
             }
         };
-        record["trunk"] = json!(k);
+        record["trunk"] = json!(t.k);
         record["i"] = json!(i);
         eprintln!(
-            "[{model} {} d{depth} t{k}.{i}] lane={} stop={} writes={} spawns={} cache_read={}",
-            f.name,
+            "[{name}] lane={} stop={} writes={} spawns={} cache_read={} prefix={}",
             record["lane"],
             record["stop"],
             record["writes"],
             record["spawns"],
-            record["cache_read"]
+            record["cache_read"],
+            record["prefix"]
         );
         let mut out = out.lock().unwrap();
         let _ = writeln!(out, "{record}");
     });
-    report(&[c.out.display().to_string()])
+    Ok(())
 }
 
 /// Runs a fork for `own` at the head of `ctx` (the response of `forker`)
@@ -240,12 +334,21 @@ fn trial(
         scenario::forker(depth),
         scenario::target(depth),
     )?;
+    // Resend the parent's request, so its cache entry is warm and its size
+    // known: the fork read its parent's cache if its first request reads at
+    // least that much.
+    let warm = turn(client, model, &ctx[..ctx.len() - 1], 1)?;
+    let u = &warm.usage;
+    let prefix = ["cache_read_input_tokens", "cache_creation_input_tokens"]
+        .iter()
+        .map(|k| u[k].as_u64().unwrap_or(0))
+        .sum::<u64>();
     let mut msgs = f.open(ctx, &fork);
     let start = msgs.len() - 1;
     let (mut writes, mut spawns, mut usages) = (vec![], vec![], vec![]);
     let mut stop = String::new();
     for _ in 0..rounds {
-        let reply = turn(client, model, &msgs)?;
+        let reply = turn(client, model, &msgs, MAX_TOKENS)?;
         usages.push(reply.usage.clone());
         stop = reply.stop.clone();
         msgs.push(json!({ "role": "assistant", "content": reply.content }));
@@ -294,6 +397,8 @@ fn trial(
         "spawns": spawns,
         "calls": usages.len(),
         "cache_read": first["cache_read_input_tokens"],
+        "prefix": prefix,
+        "warm": u,
         "cache_write": first["cache_creation_input_tokens"],
         "input": first["input_tokens"],
         "usage": usages,
@@ -345,7 +450,7 @@ fn split(
     want.sort();
     let mut last = String::new();
     for _ in 0..6 {
-        let reply = turn(client, model, &msgs)?;
+        let reply = turn(client, model, &msgs, MAX_TOKENS)?;
         let content = Value::Array(reply.content.clone());
         let calls = spawns(&content);
         let mut got: Vec<_> = calls.iter().map(|c| c.part.clone()).collect();
@@ -394,7 +499,7 @@ struct Reply {
 
 /// One streamed request, with a cache breakpoint on its last block, retried
 /// on rate limits and overload.
-fn turn(client: &Client, model: &str, msgs: &[Value]) -> Result<Reply, String> {
+fn turn(client: &Client, model: &str, msgs: &[Value], max_tokens: u32) -> Result<Reply, String> {
     let mut messages = msgs.to_vec();
     if let Some(Value::Array(blocks)) = messages.last_mut().map(|m| &mut m["content"])
         && let Some(last) = blocks.last_mut()
@@ -403,7 +508,7 @@ fn turn(client: &Client, model: &str, msgs: &[Value]) -> Result<Reply, String> {
     }
     let body = json!({
         "model": model,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens,
         "system": [{ "type": "text", "text": scenario::system() }],
         "tools": scenario::tools(),
         "messages": messages,
@@ -538,30 +643,35 @@ fn report(dirs: &[String]) -> Result<(), String> {
 
     let trials = read("trials.jsonl")?;
     println!(
-        "| framing | model | depth | n | in lane | stopped | both | cache read (mean, min) | uncached input (mean) |"
+        "| framing | model | depth | n | in lane | stopped | both | read parent's cache | parent prefix (mean) | uncached input (mean) |"
     );
-    println!("|---|---|---|---|---|---|---|---|---|");
+    println!("|---|---|---|---|---|---|---|---|---|---|");
     for group in groups(&trials, |r| key(r, "depth")) {
         let n = group.len();
         let count = |p: &dyn Fn(&Value) -> bool| group.iter().filter(|r| p(r)).count();
         let pct = |k: usize| format!("{k}/{n} ({:.0}%)", 100.0 * k as f64 / n as f64);
         let num = |r: &Value, k: &str| r[k].as_u64().unwrap_or(0);
-        let reads: Vec<u64> = group.iter().map(|r| num(r, "cache_read")).collect();
+        let measured: Vec<_> = group.iter().filter(|r| r["prefix"].is_u64()).collect();
+        let hits = measured
+            .iter()
+            .filter(|r| num(r, "cache_read") >= num(r, "prefix"))
+            .count();
+        let prefix =
+            measured.iter().map(|r| num(r, "prefix")).sum::<u64>() / measured.len().max(1) as u64;
         let uncached: u64 = group
             .iter()
             .map(|r| num(r, "input") + num(r, "cache_write"))
             .sum();
         let r = group[0];
         println!(
-            "| {} | {} | {} | {n} | {} | {} | {} | {}, {} | {} |",
+            "| {} | {} | {} | {n} | {} | {} | {} | {hits}/{} | {prefix} | {} |",
             r["framing"].as_str().unwrap_or(""),
             r["model"].as_str().unwrap_or(""),
             r["depth"],
             pct(count(&|r| r["lane"] == true)),
             pct(count(&|r| r["stop"] == true)),
             pct(count(&|r| r["lane"] == true && r["stop"] == true)),
-            reads.iter().sum::<u64>() / n as u64,
-            reads.iter().min().unwrap_or(&0),
+            measured.len(),
             uncached / n as u64,
         );
     }
