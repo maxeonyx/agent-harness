@@ -18,24 +18,34 @@
 //! (`/context/<entry>`) and never changes, so the browser caches it forever
 //! and refetches only when the task's head moves.
 //!
-//! Transport is std's TCP, rustls and one static page with no build step.
+//! **Max's words.** Under the selected task is a compose box: a plain text
+//! box, where Enter is a new line and Ctrl+Enter sends. What it sends goes to
+//! [`Deliver`], which the brain implements; the face itself still writes
+//! nothing. The box takes dictation too ([`Dictation`]): the page's
+//! microphone, relayed to Anthropic's speech-to-text endpoint, the
+//! transcript arriving in the box as editable text.
+//!
+//! Transport is std's TCP, rustls and one static page with no build step;
+//! the dictation socket is a WebSocket (tungstenite, without its TLS).
 
+mod dictation;
 mod http;
 mod view;
 
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use harness_core::context::{Entry, EntryId, Role};
-use harness_core::id::{Seq, Timestamp};
+use harness_core::context::{Entry, EntryId, Role, Wire};
+use harness_core::id::{Seq, TaskId, Timestamp};
 use harness_core::journal::{Author, Record};
 use harness_core::state::State;
 use serde_json::json;
 
+pub use dictation::{Dictation, Edit, Socket, edits};
 pub use view::describe;
 
 /// What a face reads: the journal, and the context entries it names.
@@ -50,9 +60,28 @@ pub trait Source: Send + Sync + 'static {
     fn entry(&self, id: EntryId) -> Option<Entry>;
 }
 
+/// Where the words Max sends from this face go: the brain.
+///
+/// The brain makes them a [`harness_core::delivery::Content::Words`]
+/// delivery to `to`, authored [`harness_core::journal::Author::Max`] with
+/// this face's id and `seen`, the journal position the page had shown him.
+pub trait Deliver: Send + Sync + 'static {
+    /// Max's words to `to`: user content blocks, as the provider takes them.
+    /// An `Err` is shown to Max, and the box keeps his text.
+    fn words(&self, to: TaskId, seen: Seq, words: Wire) -> Result<(), String>;
+}
+
+/// What the compose box can do. With neither, it is a box that cannot send.
+#[derive(Default)]
+pub struct Compose {
+    pub deliver: Option<Box<dyn Deliver>>,
+    pub dictation: Option<Dictation>,
+}
+
 /// A face over one journal: folds it as it grows and serves the page.
 pub struct Face<S> {
     source: S,
+    compose: Compose,
     folded: Mutex<Folded>,
     grew: Condvar,
 }
@@ -73,10 +102,16 @@ const HEARTBEAT: Duration = Duration::from_secs(15);
 
 impl<S: Source> Face<S> {
     pub fn new(source: S) -> Arc<Face<S>> {
+        Face::with(source, Compose::default())
+    }
+
+    /// A face whose compose box sends and dictates as `compose` allows.
+    pub fn with(source: S, compose: Compose) -> Arc<Face<S>> {
         let state = State::default();
         let view = Arc::new(render(&state, None));
         Arc::new(Face {
             source,
+            compose,
             folded: Mutex::new(Folded {
                 state,
                 view,
@@ -114,21 +149,79 @@ impl<S: Source> Face<S> {
     }
 
     /// Serve one connection: read its request, answer it.
-    pub fn handle(&self, stream: impl Read + Write) -> io::Result<()> {
+    pub fn handle(&self, stream: impl Socket) -> io::Result<()> {
         let (request, mut stream) = http::read_request(stream)?;
-        match request.path.as_str() {
-            "/" => http::respond(
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/") => http::respond(
                 &mut stream,
                 "text/html; charset=utf-8",
                 PAGE.as_bytes(),
                 false,
             ),
-            "/events" => self.events(&mut stream, request.last_event_id),
-            path => match path.strip_prefix("/context/").and_then(view::parse_entry) {
+            ("GET", "/events") => self.events(&mut stream, request.last_event_id),
+            ("GET", "/compose") => {
+                let dictation = self.compose.dictation.as_ref();
+                let can = json!({
+                    "send": self.compose.deliver.is_some(),
+                    "dictation": dictation.is_some(),
+                    "sample": dictation.is_some_and(Dictation::has_sample),
+                });
+                http::respond(
+                    &mut stream,
+                    "application/json",
+                    can.to_string().as_bytes(),
+                    false,
+                )
+            }
+            ("POST", "/send") => self.send(&mut stream, &request.body),
+            ("GET", "/dictation") => self.dictate(stream, &request),
+            ("GET", path) => match path.strip_prefix("/context/").and_then(view::parse_entry) {
                 Some(head) => self.context(&mut stream, head),
                 None => http::not_found(&mut stream),
             },
+            _ => http::not_found(&mut stream),
         }
+    }
+
+    /// Max's words from the compose box: `{"to", "seen", "text"}`.
+    fn send(&self, stream: &mut impl Write, body: &[u8]) -> io::Result<()> {
+        let Some(deliver) = &self.compose.deliver else {
+            return http::refuse(
+                stream,
+                "501 Not Implemented",
+                "sending is not wired to a brain",
+            );
+        };
+        let said: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+        let to = serde_json::from_value::<TaskId>(said["to"].clone());
+        let (Ok(to), Some(seen), Some(text)) = (to, said["seen"].as_u64(), said["text"].as_str())
+        else {
+            return http::refuse(stream, "400 Bad Request", "expected {to, seen, text}");
+        };
+        let words = Wire(json!([{"type": "text", "text": text}]).to_string());
+        match deliver.words(to, Seq(seen), words) {
+            Ok(()) => http::respond(stream, "text/plain", b"", false),
+            Err(why) => http::refuse(stream, "409 Conflict", &why),
+        }
+    }
+
+    /// The dictation socket: `?rate=<Hz>` of the page's PCM, or `?sample`.
+    fn dictate(&self, mut stream: impl Socket, request: &http::Request) -> io::Result<()> {
+        let (Some(dictation), Some(key)) = (&self.compose.dictation, &request.websocket_key) else {
+            return http::not_found(&mut stream);
+        };
+        let rate = request.query("rate").and_then(|r| r.parse().ok());
+        let Some(rate) = rate.filter(|r| (8_000..=96_000).contains(r)) else {
+            return http::refuse(&mut stream, "400 Bad Request", "expected ?rate=<Hz>");
+        };
+        http::accept_websocket(&mut stream, key)?;
+        let mut page = tungstenite::WebSocket::from_raw_socket(
+            stream,
+            tungstenite::protocol::Role::Server,
+            None,
+        );
+        dictation.relay(&mut page, rate, request.query("sample").is_some());
+        Ok(())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Folded> {
