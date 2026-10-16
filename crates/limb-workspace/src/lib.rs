@@ -4,7 +4,7 @@
 //! **Concept.** A workspace is a [`Limb`] that owns a directory on a
 //! machine. It runs the coding tools an engineer needs (`bash`, `read`,
 //! `write`, `edit`, `grep`; see [`tools`]) as [`harness_core::call::Call`]s,
-//! and its files are [`ResourceKind::File`] resources: a read's result
+//! and its files are resources of kind `file`: a read's result
 //! observes the version it returned, a write's the version it produced, and
 //! a write or edit whose caller has not seen the current version is
 //! [refused](Outcome::Refused) before it touches anything. A caller who has
@@ -12,15 +12,21 @@
 //! nothing is overwritten blind. Forks [share](Fork::Share) the workspace;
 //! the notices and refusals are how siblings coordinate in it.
 //!
+//! Everything it says is journal facts about its own calls and files
+//! ([`FromLimb::Facts`]): a settlement, with the bytes of its output, and a
+//! [`Change`] naming the call for each file the call wrote, in one batch.
+//!
 //! Access control is the definition and nothing else: the limb has no
 //! prompts and no checks on what a command may touch. An environment either
 //! holds this limb or does not.
 //!
 //! A call is run on its own thread, and recorded on disk as started before
-//! it has any effect and as settled before the settlement is sent, so after
-//! a crash of the brain or of the limb, [`ToLimb::Recover`] is answered from
-//! the record: the outcome, or [`FromLimb::Unknown`] when the instance that
-//! ran it is gone. Never a failure that did not happen.
+//! it has any effect and as settled before the settlement is sent. So
+//! [`ToLimb::Run`] is idempotent per call, however often a crash of the
+//! brain or of the limb makes it arrive: it is answered from the record, left
+//! running, run for the first time, rerun if its tool allows
+//! ([`tools::rerun`]), or settled as [`Outcome::Unknown`] when the instance
+//! running it was cut off. Never a failure that did not happen.
 //!
 //! **Vision.** No permission prompts; process trees owned by their call;
 //! interrupted calls whose outcome is unknown kept distinct from failed
@@ -54,25 +60,29 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
-use harness_core::call::{Interruption, Outcome};
-use harness_core::context::Wire;
+use harness_core::call::{Call, CallEvent, Outcome, Output};
 use harness_core::environment::{
-    Description, Fork, FromLimb, Host, Limb, LimbKind, Machine, ToLimb,
+    Description, Fork, FromLimb, Host, Instruction, Limb, LimbKind, Machine, ToLimb,
 };
-use harness_core::id::{CallId, Digest, InstanceId, LimbId};
-use harness_core::resource::{Change, Observation, ResourceKey, ResourceKind, Version};
+use harness_core::id::{CallId, Digest, InstanceId, LimbId, ValueId};
+use harness_core::journal::{Batch, Fact};
+use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use serde_json::json;
 
-use crate::record::{Blobs, Calls, Entry};
+use crate::record::{Calls, Recorded};
 use crate::shell::Stop;
+
+/// The resource kinds this limb owns.
+const FILE: &str = "file";
+const INSTRUCTIONS: &str = "instructions";
 
 /// Where a workspace runs and keeps its records.
 pub struct Config {
     pub limb: LimbId,
     /// The directory the tools work in. Must exist.
     pub root: PathBuf,
-    /// Where the limb keeps its record of calls and the full outputs of
-    /// truncated results. Outside `root`, so the agents' files stay theirs.
+    /// Where the limb keeps its record of calls. Outside `root`, so the
+    /// agents' files stay theirs.
     pub state: PathBuf,
 }
 
@@ -81,12 +91,10 @@ pub fn definition(id: LimbId, name: &str, root: &Path) -> Limb {
     Limb {
         id,
         name: name.into(),
-        host: Host::Process {
-            machine: Machine::Local,
-        },
         kind: LimbKind::Plugin {
             kind: "workspace".into(),
-            config: Wire(json!({ "root": root }).to_string()),
+            config: json!({ "root": root }).to_string(),
+            host: Host::Process(Machine::Local),
         },
         fork: Fork::Share,
     }
@@ -95,7 +103,7 @@ pub fn definition(id: LimbId, name: &str, root: &Path) -> Limb {
 /// One running instance of the workspace limb.
 ///
 /// Everything it says goes to the `Sender` given at [`Workspace::open`],
-/// [`FromLimb::Instance`] first. Dropping it stops every running call and
+/// [`FromLimb::Hello`] first. Dropping it stops every running call and
 /// reaps its processes.
 pub struct Workspace {
     inner: Arc<Inner>,
@@ -106,7 +114,6 @@ struct Inner {
     instance: InstanceId,
     root: PathBuf,
     calls: Calls,
-    blobs: Blobs,
     out: Sender<FromLimb>,
     running: Mutex<HashMap<CallId, Running>>,
     /// The resources the brain asked to hear about, at the version last
@@ -124,13 +131,11 @@ struct Running {
 
 impl Workspace {
     pub fn open(config: Config, out: Sender<FromLimb>) -> io::Result<Workspace> {
-        let root = config.root.canonicalize()?;
         let inner = Inner {
             limb: config.limb,
-            instance: new_instance(),
-            root,
+            instance: InstanceId::generate(),
+            root: config.root.canonicalize()?,
             calls: Calls::open(config.state.join("calls"))?,
-            blobs: Blobs::open(config.state.join("blobs"))?,
             out,
             running: Mutex::default(),
             watched: Mutex::default(),
@@ -140,7 +145,9 @@ impl Workspace {
         for orphan in inner.calls.orphans()? {
             shell::kill_orphan(orphan.group, orphan.start);
         }
-        inner.send(FromLimb::Instance(inner.instance));
+        inner.send(FromLimb::Hello {
+            instance: inner.instance,
+        });
         Ok(Workspace {
             inner: Arc::new(inner),
         })
@@ -150,90 +157,68 @@ impl Workspace {
         self.inner.instance
     }
 
-    /// Where a stored full output is on disk.
-    pub fn full_output(&self, id: harness_core::id::ContentId) -> PathBuf {
-        self.inner.blobs.path(id)
-    }
-
     /// Act on one message from the brain. Never blocks on a call: calls run
     /// on their own threads and report when they settle.
     pub fn handle(&self, message: ToLimb) {
         let inner = &self.inner;
         match message {
             ToLimb::Describe => inner.send(FromLimb::Described(inner.describe())),
-            ToLimb::Call {
-                call,
-                tool,
-                input,
-                expects,
-            } => self.call(call, tool, input, expects),
-            ToLimb::Interrupt { call } => {
-                if let Some(running) = lock(&inner.running).get(&call) {
-                    // The brain knows why it interrupts; the limb does not.
-                    running.stop.set(Interruption::Stop);
-                }
-            }
-            ToLimb::Recover { calls } => {
-                for call in calls {
-                    inner.recover(call);
-                }
-            }
+            ToLimb::Run { id, call, input } => self.run(id, call, input),
+            ToLimb::Stop { call } => inner.stop(call),
             ToLimb::Watch { resources } => {
+                let mut report = Report::new(None);
+                let mut watched = lock(&inner.watched);
                 for resource in resources {
                     if let Some(version) = inner.version_of(&resource) {
-                        lock(&inner.watched).insert(resource.clone(), version);
-                        inner.send(FromLimb::Changed(Change {
-                            resource,
-                            version,
-                            by: None,
-                        }));
+                        watched.insert(resource.clone(), version);
+                        report.changed(resource, version);
                     }
                 }
+                inner.send(FromLimb::Facts(report.batch(Vec::new())));
             }
-            // Forks share this limb, so a fork's clone is the limb itself.
-            ToLimb::Fork => inner.send(FromLimb::Forked { limb: inner.limb }),
         }
     }
 
-    fn call(&self, call: CallId, tool: String, input: Wire, expects: Vec<Observation>) {
+    /// Run a call at most once, however often it arrives.
+    fn run(&self, id: CallId, call: Call, input: Vec<u8>) {
         let inner = &self.inner;
         let mut running = lock(&inner.running);
-        if running.contains_key(&call) {
+        if running.contains_key(&id) {
             return;
         }
-        match inner.calls.get(call) {
-            Ok(Some(Entry {
-                outcome: Some(outcome),
-                ..
-            })) => return inner.send(FromLimb::Settled { call, outcome }),
-            Ok(_) => {}
+        match inner.calls.get(id) {
+            Ok(None) => {}
+            Ok(Some(Recorded::Settled(batch))) => return inner.send(FromLimb::Facts(batch)),
+            Ok(Some(Recorded::Started)) if tools::rerun(&call.tool) => {}
+            // Cut off while an earlier instance ran it.
+            Ok(Some(Recorded::Started)) => {
+                return inner.settle(Report::new(Some(id)), Outcome::Unknown);
+            }
             Err(e) => {
-                return inner.settle(
-                    call,
-                    files::failed(format!("cannot read the limb's record: {e}")),
-                );
+                let mut report = Report::new(Some(id));
+                let outcome = report.failed(&format!("cannot read the limb's record: {e}"));
+                return inner.settle(report, outcome);
             }
         }
-        let started = Entry {
-            instance: inner.instance,
-            outcome: None,
-        };
-        if let Err(e) = inner.calls.put(call, &started) {
-            return inner.settle(call, files::failed(format!("cannot record the call: {e}")));
+        if let Err(e) = inner.calls.put(id, &Recorded::Started) {
+            let mut report = Report::new(Some(id));
+            let outcome = report.failed(&format!("cannot record the call: {e}"));
+            return inner.settle(report, outcome);
         }
         let stop = Arc::new(Stop::default());
         let thread = {
             let inner = self.inner.clone();
             let stop = stop.clone();
             thread::spawn(move || {
-                let outcome = inner.execute(call, &tool, &input, &expects, &stop);
-                inner.rescan();
-                inner.settle(call, outcome);
-                lock(&inner.running).remove(&call);
+                let mut report = Report::new(Some(id));
+                let outcome = inner.execute(id, &call, &input, &stop, &mut report);
+                inner.rescan(&mut report, call.tool == "bash");
+                inner.settle(report, outcome);
+                lock(&inner.running).remove(&id);
             })
         };
         running.insert(
-            call,
+            id,
             Running {
                 stop,
                 thread: Some(thread),
@@ -246,7 +231,7 @@ impl Workspace {
     pub fn shutdown(&self) {
         let running: Vec<Running> = lock(&self.inner.running).drain().map(|(_, r)| r).collect();
         for r in &running {
-            r.stop.set(Interruption::Stop);
+            r.stop.set();
         }
         for mut r in running {
             if let Some(thread) = r.thread.take() {
@@ -262,52 +247,123 @@ impl Drop for Workspace {
     }
 }
 
+/// What one call, or one answer to [`ToLimb::Watch`], says: the bytes its
+/// output names and the files that changed.
+pub(crate) struct Report {
+    call: Option<CallId>,
+    values: Vec<Vec<u8>>,
+    changes: Vec<Change>,
+}
+
+impl Report {
+    fn new(call: Option<CallId>) -> Report {
+        Report {
+            call,
+            values: Vec::new(),
+            changes: Vec::new(),
+        }
+    }
+
+    pub(crate) fn value(&mut self, bytes: Vec<u8>) -> ValueId {
+        let id = ValueId::of(&bytes);
+        self.values.push(bytes);
+        id
+    }
+
+    /// A tool result's content: one text block.
+    pub(crate) fn text(&mut self, text: &str) -> ValueId {
+        self.value(
+            json!([{ "type": "text", "text": text }])
+                .to_string()
+                .into_bytes(),
+        )
+    }
+
+    pub(crate) fn completed(&mut self, said: &str, observes: Vec<Observation>) -> Outcome {
+        Outcome::Completed(Output {
+            model: self.text(said),
+            full: None,
+            observes,
+        })
+    }
+
+    pub(crate) fn failed(&mut self, message: &str) -> Outcome {
+        Outcome::Failed(Output {
+            model: self.text(message),
+            full: None,
+            observes: Vec::new(),
+        })
+    }
+
+    /// `resource` is now at `version`, by this report's call.
+    fn changed(&mut self, resource: ResourceKey, version: Version) {
+        self.changes.retain(|c| c.resource != resource);
+        self.changes.push(Change {
+            resource,
+            version,
+            by: self.call,
+            content: None,
+        });
+    }
+
+    /// The facts, led by the settlement when there is one, so that a repeat
+    /// the journal already has is refused at its first fact.
+    fn batch(self, settled: Vec<Fact>) -> Batch {
+        Batch {
+            values: self.values,
+            facts: settled
+                .into_iter()
+                .chain(self.changes.into_iter().map(Fact::Change))
+                .collect(),
+        }
+    }
+}
+
 impl Inner {
     fn send(&self, message: FromLimb) {
         // A brain that has gone hears nothing; the record still has it.
         let _ = self.out.send(message);
     }
 
-    fn settle(&self, call: CallId, outcome: Outcome) {
-        let entry = Entry {
-            instance: self.instance,
-            outcome: Some(outcome.clone()),
-        };
-        // If the record cannot be written, a recovery says the outcome is
-        // unknown, which is still true.
-        let _ = self.calls.put(call, &entry);
-        self.send(FromLimb::Settled { call, outcome });
+    /// Record how a call ended, then say so.
+    fn settle(&self, report: Report, outcome: Outcome) {
+        let call = report.call.expect("a settlement is a call's");
+        let batch = report.batch(vec![Fact::Call(call, CallEvent::Settled(outcome))]);
+        // If the record cannot be written, a repeated Run finds the call
+        // started and cut off, which is still true.
+        let _ = self.calls.put(call, &Recorded::Settled(batch.clone()));
+        self.send(FromLimb::Facts(batch));
     }
 
-    fn recover(&self, call: CallId) {
-        if lock(&self.running).contains_key(&call) {
-            return;
+    fn stop(&self, call: CallId) {
+        if let Some(running) = lock(&self.running).get(&call) {
+            return running.stop.set();
         }
         match self.calls.get(call) {
-            Ok(Some(Entry {
-                outcome: Some(outcome),
-                ..
-            })) => self.send(FromLimb::Settled { call, outcome }),
-            _ => self.send(FromLimb::Unknown { call }),
+            Ok(Some(Recorded::Settled(batch))) => self.send(FromLimb::Facts(batch)),
+            // Cut off, or never received: nobody knows what it did.
+            _ => self.settle(Report::new(Some(call)), Outcome::Unknown),
         }
     }
 
     fn describe(&self) -> Description {
-        let mut instructions = vec![(
-            text_block(tools::INSTRUCTIONS),
-            Observation {
-                resource: self.key(ResourceKind::Instructions, ""),
-                version: Version::Is(Digest::of(tools::INSTRUCTIONS.as_bytes())),
+        let text = tools::instructions(&self.root);
+        let version = Version::Is(Digest::of(text.as_bytes()));
+        let mut instructions = vec![Instruction {
+            observes: Observation {
+                resource: self.key(INSTRUCTIONS, ""),
+                version,
             },
-        )];
+            text,
+        }];
         if let Ok(agents) = std::fs::read_to_string(self.root.join("AGENTS.md")) {
-            instructions.push((
-                text_block(&format!("Contents of AGENTS.md:\n\n{agents}")),
-                Observation {
-                    resource: self.key(ResourceKind::Instructions, "AGENTS.md"),
+            instructions.push(Instruction {
+                observes: Observation {
+                    resource: self.key(INSTRUCTIONS, "AGENTS.md"),
                     version: Version::Is(Digest::of(agents.as_bytes())),
                 },
-            ));
+                text: format!("Contents of AGENTS.md:\n\n{agents}"),
+            });
         }
         Description {
             instructions,
@@ -315,10 +371,10 @@ impl Inner {
         }
     }
 
-    fn key(&self, kind: ResourceKind, name: &str) -> ResourceKey {
+    fn key(&self, kind: &str, name: &str) -> ResourceKey {
         ResourceKey {
             limb: self.limb,
-            kind,
+            kind: kind.into(),
             name: name.into(),
         }
     }
@@ -326,77 +382,58 @@ impl Inner {
     /// Every resource a file is: the file, and the root's instructions when
     /// it is the root's `AGENTS.md`.
     fn keys(&self, name: &str) -> Vec<ResourceKey> {
-        let mut keys = vec![self.key(ResourceKind::File, name)];
+        let mut keys = vec![self.key(FILE, name)];
         if name == "AGENTS.md" {
-            keys.push(self.key(ResourceKind::Instructions, name));
+            keys.push(self.key(INSTRUCTIONS, name));
         }
         keys
     }
 
     fn version_of(&self, resource: &ResourceKey) -> Option<Version> {
-        match resource.kind {
-            ResourceKind::File | ResourceKind::Instructions if !resource.name.is_empty() => {
+        match resource.kind.as_str() {
+            FILE | INSTRUCTIONS if !resource.name.is_empty() => {
                 files::version(&self.root.join(&resource.name)).ok()
             }
-            ResourceKind::Instructions => {
-                Some(Version::Is(Digest::of(tools::INSTRUCTIONS.as_bytes())))
-            }
+            INSTRUCTIONS => Some(Version::Is(Digest::of(
+                tools::instructions(&self.root).as_bytes(),
+            ))),
             _ => None,
         }
     }
 
-    /// Tell the brain a file moved, as written by one of this limb's calls.
-    fn changed(&self, name: &str, version: Version) {
+    /// A file moved, written by the report's call.
+    pub(crate) fn changed(&self, report: &mut Report, name: &str, version: Version) {
         for resource in self.keys(name) {
-            if let Some(known) = lock(&self.watched).get_mut(&resource) {
-                *known = version;
-            }
-            self.send(FromLimb::Changed(Change {
-                resource,
-                version,
-                by: None,
-            }));
+            report.changed(resource, version);
         }
     }
 
-    /// After a call: report every watched resource that moved, which is how
-    /// a command's writes reach the contexts that read them.
-    fn rescan(&self) {
-        let watched: Vec<(ResourceKey, Version)> = lock(&self.watched)
-            .iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect();
-        for (resource, known) in watched {
-            let Some(version) = self.version_of(&resource) else {
+    /// After a call: add every watched resource that moved, which is how a
+    /// command's writes reach the contexts that read them. Attributed to the
+    /// call when it was a command, whose writes the limb cannot see.
+    fn rescan(&self, report: &mut Report, command: bool) {
+        let mut watched = lock(&self.watched);
+        for change in &report.changes {
+            if let Some(known) = watched.get_mut(&change.resource) {
+                *known = change.version;
+            }
+        }
+        let by = report.call.filter(|_| command);
+        for (resource, known) in watched.iter_mut() {
+            let Some(version) = self.version_of(resource) else {
                 continue;
             };
-            if version != known {
-                lock(&self.watched).insert(resource.clone(), version);
-                self.send(FromLimb::Changed(Change {
-                    resource,
+            if version != *known {
+                *known = version;
+                report.changes.push(Change {
+                    resource: resource.clone(),
                     version,
-                    by: None,
-                }));
+                    by,
+                    content: None,
+                });
             }
         }
     }
-}
-
-fn text_block(text: &str) -> Wire {
-    Wire(json!({ "type": "text", "text": text }).to_string())
-}
-
-/// An id no other instance has had: this process, and this moment.
-fn new_instance() -> InstanceId {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let seed = format!("{}:{now}", std::process::id());
-    let digest = Digest::of(seed.as_bytes());
-    let mut bytes = [0; 16];
-    bytes.copy_from_slice(&digest.0[..16]);
-    InstanceId(u128::from_le_bytes(bytes))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
