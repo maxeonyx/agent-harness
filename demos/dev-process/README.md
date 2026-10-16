@@ -18,7 +18,9 @@ What to do on the page:
 
 - **The question.** The orchestrator asks you something in the background: it hangs off its node as **? asks you**, and the **needs you** pill counts it. Open the orchestrator; the question sits at the foot of its log and the compose box answers it. It gets your answer as a message at its next request.
 - **An aside** while the orchestrator waits on its agents. Its header offers **Aside** instead of **Interrupt** (the core refuses to interrupt it: "the task is waiting on its children; talk to it through an aside"). Write first if you like, then press **Aside**: a chat with a fork of the orchestrator opens, and what you wrote is its first message. On the map it is one more member of the scope the orchestrator waits on. When the others are done it is told so; you decide when it is done, and press **Done** twice: it summarises what came of your talk, and that goes back to the orchestrator with the others' results.
-- **Done** on the orchestrator once it has reported: its last turn writes its result.
+- **Sending while an agent works.** Open a working agent and write to it. **Send now** (Ctrl+Enter) reaches it with its next request; **At turn end** (Ctrl+Shift+Enter) waits for its turn to end, so on the orchestrator it waits until the agents are back and it has reported. Either way the model is told where in its work you wrote, as "Max wrote this while you were working, before your last 4 tool calls (from `toolu_…` on), asking that it wait for the end of your turn". Enter alone is a new line.
+- **What a context holds.** The context gauge in an open node's header; click it for the split.
+- **Done** on the orchestrator once it has reported: its last turn writes its result. Thirty minutes after the whole project is done it folds into a small card on a shelf below anything live; click the card for the root's log, or ⌄ to unfold it.
 - **The header.** How much of the subscription is used, and when each window resets.
 
 ## Real output
