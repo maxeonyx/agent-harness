@@ -178,19 +178,19 @@ impl<S: Source> Face<S> {
         let mut next = Some(head);
         while let Some(id) = next {
             let Some(entry) = self.source.entry(id) else {
-                chain.push(json!({"id": view::entry(id), "missing": true}));
+                chain.push(json!({"id": id.0.to_string(), "missing": true}));
                 break;
             };
             chain.push(match &entry {
                 Entry::Root(root) => json!({
-                    "id": view::entry(id),
+                    "id": id.0.to_string(),
                     "role": "root",
                     "model": root.model,
                     "system": root.system.0,
                     "tools": root.tools.0,
                 }),
                 Entry::Message(m) => json!({
-                    "id": view::entry(id),
+                    "id": id.0.to_string(),
                     "role": match m.role {
                         Role::User => "user",
                         Role::Assistant => "assistant",

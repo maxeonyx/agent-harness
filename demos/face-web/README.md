@@ -15,4 +15,6 @@ What to watch:
 - click a task to read its context, root first, its head marked;
 - reload the page, or drop the network, at any point: the stream resumes from the last journal position the page saw and loses nothing.
 
+The journal is a real `harness-store` file, `target/face-web-demo.sqlite`, recreated each run; the face reads it on its own connection.
+
 It serves with the shared wildcard certificate in `~/.config/dev-certs/shared-local/` and accepts only this machine and the Windows host (the default route's gateway).

@@ -21,7 +21,7 @@ pub fn view(state: &State, now: Timestamp) -> Value {
         .iter()
         .map(|q| {
             json!({
-                "task": tid(q.task),
+                "task": q.task.to_string(),
                 "since": q.since.0,
                 "ask": q.ask.map(|a| call(state, a)),
                 "why": q.why,
@@ -53,7 +53,7 @@ fn task(state: &State, t: &Task, now: Timestamp) -> Value {
         _ => Value::Null,
     };
     json!({
-        "id": tid(t.id),
+        "id": t.id.to_string(),
         "name": t.name,
         "agent": t.agent,
         "mode": match t.mode {
@@ -62,14 +62,14 @@ fn task(state: &State, t: &Task, now: Timestamp) -> Value {
             Mode::Standing => "standing",
         },
         "origin": origin,
-        "from": from.map(tid),
-        "owner": state.owner(t.id).map(tid),
+        "from": from.map(|t| t.to_string()),
+        "owner": state.owner(t.id).map(|t| t.to_string()),
         "scope": match t.scope {
             Scope::Max => None,
-            Scope::Spawn(call) => Some(cid(call)),
+            Scope::Spawn(call) => Some(call.to_string()),
         },
         "mandate": t.mandate.text,
-        "head": entry(t.head),
+        "head": t.head.0.to_string(),
         "environment": state.environment(t.binding.environment).map(|e| e.name.clone()),
         "held": t.held,
         "draining": t.draining.as_ref().map(|d| match d {
@@ -113,11 +113,14 @@ fn waiting(state: &State, w: &Waiting) -> Value {
 
 fn call(state: &State, id: CallId) -> Value {
     let Some(record) = state.call(id) else {
-        return json!({"id": cid(id)});
+        return json!({"id": id.to_string()});
     };
-    let children: Vec<String> = state.members(Scope::Spawn(id)).map(|t| tid(t.id)).collect();
+    let children: Vec<String> = state
+        .members(Scope::Spawn(id))
+        .map(|t| t.id.to_string())
+        .collect();
     json!({
-        "id": cid(id),
+        "id": id.to_string(),
         "tool": record.call.tool,
         "limb": state.limb(record.call.limb).map(|l| l.name.clone()),
         "input": record.call.input.0,
@@ -133,15 +136,22 @@ fn call(state: &State, id: CallId) -> Value {
 
 /// One line saying what a record did, naming tasks as the state knows them.
 pub fn describe(state: &State, record: &Record) -> String {
-    let name = |id: TaskId| state.task(id).map_or_else(|| tid(id), |t| t.name.clone());
+    let name = |id: TaskId| {
+        state
+            .task(id)
+            .map_or_else(|| id.to_string(), |t| t.name.clone())
+    };
     let call_name = |id: CallId| {
         state.call(id).map_or_else(
-            || format!("call {}", cid(id)),
+            || format!("call {id}"),
             |c| {
                 let by = match c.call.caller {
                     Caller::Agent { task, .. } => name(task),
                     Caller::Max { .. } => "Max".into(),
-                    Caller::Meta { call } => format!("harness for call {}", cid(call)),
+                    Caller::Meta { call } => match state.call_owner(call) {
+                        Some(task) => format!("the harness for {}", name(task)),
+                        None => "the harness".into(),
+                    },
                 };
                 format!("{by}'s {}", c.call.tool)
             },
@@ -242,19 +252,7 @@ fn outcome(o: &CallOutcome) -> &'static str {
     }
 }
 
-pub fn tid(id: TaskId) -> String {
-    format!("{:x}", id.0)
-}
-
-fn cid(id: CallId) -> String {
-    format!("{:x}", id.0)
-}
-
-pub fn entry(id: EntryId) -> String {
-    id.0.0.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The entry an [`entry`] string names.
+/// The entry its hex names.
 pub fn parse_entry(hex: &str) -> Option<EntryId> {
     let bytes = hex.as_bytes();
     if bytes.len() != 64 {

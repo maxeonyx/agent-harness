@@ -3,13 +3,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::attention::{Focus, Ranking};
-use crate::call::CallEvent;
+use crate::call::{CallEvent, Outcome, Output};
+use crate::context::{EntryId, Note, Rendered};
 use crate::delivery::Delivery;
 use crate::environment::{Environment, Limb, Reach};
-use crate::id::{CallId, FaceId, LimbId, ModelCallId, Seq, TaskId, Timestamp};
-use crate::model_call::ModelCallEvent;
+use crate::id::{CallId, ContentId, FaceId, LimbId, ModelCallId, Seq, TaskId, Timestamp};
+use crate::model_call::{Ending, ModelCallEvent};
 use crate::resource::Change;
-use crate::task::TaskEvent;
+use crate::task::{Move, TaskEvent};
 
 /// One fact, at its position in one brain's journal.
 ///
@@ -47,7 +48,7 @@ use crate::task::TaskEvent;
 ///
 /// **Different here.** One log per brain holds every participant's facts,
 /// typed by the identity they belong to, with who appended each.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub seq: Seq,
     pub at: Timestamp,
@@ -75,7 +76,7 @@ pub enum Author {
 }
 
 /// What a record says, and which identity it belongs to.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Fact {
     /// A brain started writing this journal.
     Launched(Launched),
@@ -101,6 +102,68 @@ pub enum Fact {
     Focus(Focus),
 }
 
+impl Fact {
+    /// The stored values this fact names, each of which must be stored
+    /// before the fact is appended: the entries a task or request points
+    /// into, and a call's full output.
+    pub fn values(&self) -> Vec<Value> {
+        let mut values = Vec::new();
+        let mut entry = |id: EntryId| values.push(Value::Entry(id));
+        match self {
+            Fact::Task(_, TaskEvent::Created(created)) => entry(created.head),
+            Fact::Task(
+                _,
+                TaskEvent::Moved(
+                    Move::Handover { head, .. } | Move::Reseed { head, .. } | Move::Rewind { head },
+                ),
+            ) => entry(*head),
+            Fact::ModelCall(_, ModelCallEvent::Sent(call)) => {
+                entry(call.head);
+                call.breakpoints.iter().for_each(|b| entry(b.at));
+                for rendered in &call.renders {
+                    if let Rendered::Note(Note::Boundary { from: Some(from) }) = rendered {
+                        entry(*from);
+                    }
+                }
+            }
+            Fact::ModelCall(
+                _,
+                ModelCallEvent::Ended {
+                    ending: Ending::Responded { entry: id, .. },
+                    ..
+                },
+            ) => entry(*id),
+            Fact::Call(_, CallEvent::Settled(outcome) | CallEvent::Late(outcome)) => {
+                if let Outcome::Completed(Output {
+                    full: Some(full), ..
+                })
+                | Outcome::Failed(Output {
+                    full: Some(full), ..
+                })
+                | Outcome::Interrupted {
+                    partial:
+                        Some(Output {
+                            full: Some(full), ..
+                        }),
+                    ..
+                } = outcome
+                {
+                    values.push(Value::Content(*full));
+                }
+            }
+            _ => {}
+        }
+        values
+    }
+}
+
+/// An immutable value a fact names, by its content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Value {
+    Entry(EntryId),
+    Content(ContentId),
+}
+
 /// The boundary between two writers of one journal.
 ///
 /// After a crash, a relaunch onto a newer build, or the relaunch an agent
@@ -109,7 +172,7 @@ pub enum Fact {
 /// everything after this record was written by `build`, which is how an
 /// operator links a stuck subtree to an upgrade and how a rolled-back build
 /// knows which facts are newer than it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Launched {
     pub build: String,
     pub by: Option<CallId>,

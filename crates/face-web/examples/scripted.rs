@@ -1,8 +1,9 @@
 //! The web face watching a scripted night of work.
 //!
 //! A realistic journal is written as it would be by a brain: every record is
-//! folded with `State::apply` first and appended only if the fold accepts
-//! it. An orchestrator spawns two designers that share one attachment, then
+//! folded with `State::apply` first and appended to a `harness-store` file
+//! only if the fold accepts it. The face reads the same file on its own
+//! connection. An orchestrator spawns two designers that share one attachment, then
 //! two engineers and a fork of itself; one engineer asks Max a question and
 //! waits on him, the other fails after three overloaded requests. Each
 //! agent's facts are written from its own thread, so the tree moves the way
@@ -10,7 +11,6 @@
 //!
 //! Run: `cargo run -p harness-face-web --example scripted [port]`.
 
-use std::collections::BTreeMap;
 use std::net::{IpAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
@@ -35,40 +35,41 @@ use harness_core::model_call::{
 use harness_core::state::State;
 use harness_core::task::{Created, Drain, Giver, Mandate, Mode, Origin, Scope, TaskEvent};
 use harness_face_web::{Face, Source, describe};
+use harness_store::Store;
 use serde_json::{Value, json};
 
-// The journal and the entry store, in memory.
+// The journal: one SQLite store. The brain writes it on its connection; the
+// face reads it on its own, woken when the brain appends.
 
-#[derive(Clone, Default)]
-struct Journal(Arc<Inner>);
+#[derive(Clone)]
+struct Reader(Arc<Shared>);
 
-#[derive(Default)]
-struct Inner {
-    records: Mutex<Vec<Record>>,
+struct Shared {
+    store: Mutex<Store>,
+    last: Mutex<Seq>,
     grew: Condvar,
-    entries: Mutex<BTreeMap<EntryId, Entry>>,
 }
 
-impl Source for Journal {
+impl Source for Reader {
     fn read(&self, after: Seq, wait: Duration) -> Vec<Record> {
-        let records = self.0.records.lock().unwrap();
-        let (records, _) = self
-            .0
-            .grew
-            .wait_timeout_while(records, wait, |r| r.len() as u64 <= after.0)
-            .unwrap();
-        records.get(after.0 as usize..).unwrap_or_default().to_vec()
+        let last = self.0.last.lock().unwrap();
+        let wake = self.0.grew.wait_timeout_while(last, wait, |l| *l <= after);
+        drop(wake.unwrap());
+        let store = self.0.store.lock().unwrap();
+        store.read(after, u64::MAX).expect("the store reads")
     }
 
     fn entry(&self, id: EntryId) -> Option<Entry> {
-        self.0.entries.lock().unwrap().get(&id).cloned()
+        let store = self.0.store.lock().unwrap();
+        store.entry(id).expect("the store reads")
     }
 }
 
 // The writer: the one brain this journal has.
 
 struct Writer {
-    journal: Journal,
+    store: Store,
+    reader: Reader,
     state: State,
     next: u128,
 }
@@ -110,8 +111,9 @@ impl Brain {
             panic!("the script is wrong at {}: {rejected:?}\n{record:?}", seq.0);
         }
         println!("{:>4}  {}", seq.0, describe(&w.state, &record));
-        w.journal.0.records.lock().unwrap().push(record);
-        w.journal.0.grew.notify_all();
+        w.store.append(&[record]).expect("the store appends");
+        *w.reader.0.last.lock().unwrap() = seq;
+        w.reader.0.grew.notify_all();
     }
 
     fn brain(&self, fact: Fact) {
@@ -120,10 +122,10 @@ impl Brain {
 
     /// Store an entry before any fact names it.
     fn store(&self, entry: Entry) -> EntryId {
-        let id = entry.id();
         let w = self.0.lock().unwrap();
-        w.journal.0.entries.lock().unwrap().insert(id, entry);
-        id
+        w.store
+            .put_entry(&entry)
+            .expect("the store keeps the entry")
     }
 
     fn message(&self, parent: EntryId, role: Role, content: Value) -> EntryId {
@@ -836,8 +838,20 @@ fn main() {
     )
     .expect("the shared wildcard certificate");
 
-    let journal = Journal::default();
-    let face = Face::new(journal.clone());
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../target/face-web-demo.sqlite"
+    );
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{path}{suffix}"));
+    }
+    let store = Store::open(path).expect("the store opens");
+    let reader = Reader(Arc::new(Shared {
+        store: Mutex::new(Store::open(path).expect("the store opens")),
+        last: Mutex::new(Seq(0)),
+        grew: Condvar::new(),
+    }));
+    let face = Face::new(reader.clone());
     let follower = Arc::clone(&face);
     thread::spawn(move || follower.follow());
     let listener = TcpListener::bind(("0.0.0.0", port)).expect("the port is free");
@@ -847,7 +861,8 @@ fn main() {
     println!("face: https://mx-hv-mj.local:{port}\n");
 
     let brain = Brain(Arc::new(Mutex::new(Writer {
-        journal,
+        store,
+        reader,
         state: State::default(),
         next: 0,
     })));

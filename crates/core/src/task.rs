@@ -52,7 +52,7 @@ use crate::resource::{Observation, ResourceKey, Version};
 /// record with a per-kind checkpoint that must be migrated. None treats the
 /// mandate as data the harness can restate, and none folds status from
 /// history.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Task {
     pub id: TaskId,
     /// Short and descriptive, growing with depth (`tk-prodsync-findfiles`).
