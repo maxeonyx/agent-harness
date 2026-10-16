@@ -508,7 +508,7 @@ impl State {
     /// Whether `by` may state `fact`.
     ///
     /// The brain states what it decides and observes, but never Max's words,
-    /// his stop, what his face shows, a task no agent's call created, a
+    /// his marking a task done, his stop, what his face shows, a task no agent's call created, a
     /// limb's description, how a call a limb was sent ended, or a change to
     /// a resource it does not own (its own limbs' resources, such as the
     /// role files the meta limb reads, are its to state). A limb states only
@@ -526,7 +526,7 @@ impl State {
         match by {
             Author::Brain => match fact {
                 Fact::Delivery(Delivery {
-                    content: Content::Words(_),
+                    content: Content::Words(_) | Content::Prompt(Prompt::Done),
                     ..
                 })
                 | Fact::Task(_, TaskEvent::Drain(Drain::Stop(Stopper::Max)))
