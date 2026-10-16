@@ -1,24 +1,33 @@
-//! The harness's web face: the task tree Max watches, live from the journal.
+//! The harness's web face: Max's work as a map of tasks, live from the
+//! journal, each opening into the log of what it did.
 //!
 //! A face is a reader of the journal and nothing else. The brain hands it
-//! each [`Commit`]: the state as of that commit, a persistent value it holds
-//! while the brain moves on, and the records it added. It shows the views
-//! the core derives: the tree of tasks and their states,
-//! what each waits on ([`State::waiting_on`], the throbber), Max's queue
-//! ([`State::queue`]) and a selected task's context. It keeps no state of
-//! its own that could disagree with the journal.
+//! the [`State`] after each commit, a persistent value the face holds while
+//! the brain moves on. It sends the views the core derives: every
+//! task, the scope that owns it and what it waits on
+//! ([`State::waiting_on`], the throbber), Max's queue ([`State::queue`]) and
+//! a task's context. It keeps no state of its own that could disagree with
+//! the journal.
+//!
+//! **The page** (`page.html`) is the map. A task is a node; a scope (the
+//! spawn call that owns its members) is a junction under its owner; the
+//! projects are the map's disconnected components. A node opens into its
+//! log: its context, exactly as sent, rendered, with what is streaming now
+//! and Max's words it has not read yet. Moving the map closes it.
 //!
 //! **The cursor is the journal position.** The page's event stream is one
-//! event per commit, with the [`Seq`] it reached as the event id. The
-//! browser resends the last id it got when it reconnects, so a dropped
-//! connection resumes with the recent records after it, and the views are
-//! whole at every position, so nothing is applied twice. `/view` is the latest view
-//! alone, for a client that only looks.
+//! event per commit: the whole view, with the [`Seq`] it reached as the
+//! event id. The browser resends the last id it got when it reconnects, and
+//! is sent the next view once the journal is past it, so a view is never
+//! sent twice and never missed. `/view` is the latest view alone, for a
+//! client that only looks.
 //!
 //! **A context is a value.** It is fetched by its head entry
 //! (`/context/<entry>`), read off the fold ([`State::context`]) with the
-//! bytes each entry names from the [`Source`], and never changes, so the
-//! browser caches it forever and refetches only when the task's head moves.
+//! bytes each entry names from the [`Source`], and when each response was
+//! sent and ended and the context it was sent with, which never change; so
+//! the browser caches it forever and refetches only when the task's head
+//! moves.
 //!
 //! **Max's facts.** Everything Max does from the page is a batch of his
 //! facts in the core's own encoding, posted to `/act` and passed to [`Act`],
@@ -54,7 +63,6 @@ mod http;
 mod live;
 mod view;
 
-use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::Path;
@@ -65,9 +73,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use harness_core::context::{Entry, EntryId};
 use harness_core::id::{CallId, FaceId, ModelCallId, Seq, Timestamp, ValueId};
-use harness_core::journal::{Author, Batch, Record};
+use harness_core::journal::Batch;
 use harness_core::state::State;
-use serde_json::json;
+use serde_json::{Value, json};
 
 pub use dictation::{Dictation, Edit, Socket, edits};
 pub use live::{Feed, Running};
@@ -78,14 +86,6 @@ pub use view::describe;
 pub trait Source: Send + Sync + 'static {
     /// A value's bytes, if stored.
     fn value(&self, id: ValueId) -> Option<Vec<u8>>;
-}
-
-/// What the brain hands its face after each commit: the state as of it, and
-/// the records it added. A face given the journal at launch gets the state
-/// and the recent records.
-pub struct Commit {
-    pub state: State,
-    pub records: Vec<Record>,
 }
 
 /// Where Max's facts go: the brain, the journal's only writer.
@@ -108,21 +108,15 @@ pub struct Wiring {
 
 /// A face over one journal: follows its commits and serves the page.
 ///
-/// Only the follower writes `folded`, and holds it only to swap the state
+/// Only the follower writes `state`, and holds it only to swap the state
 /// in; viewers read it alongside one another. Nothing reads the store while
 /// holding either lock.
 pub struct Face<S> {
     source: S,
     wiring: Wiring,
-    folded: RwLock<Folded>,
+    state: RwLock<State>,
     shown: Mutex<Shown>,
     grew: Condvar,
-}
-
-struct Folded {
-    state: State,
-    /// The recent records as the page's journal shows them, in order.
-    lines: VecDeque<(Seq, Arc<str>)>,
 }
 
 /// What every viewer is sent: the page's view, rendered once per fold, and
@@ -132,10 +126,6 @@ struct Shown {
     seq: Seq,
 }
 
-/// How many recent facts a page that has seen nothing is sent.
-const RECENT: u64 = 200;
-/// How many recent facts a face keeps for pages that reconnect.
-const KEPT: usize = 2000;
 /// How often an idle event stream is written to, so a dead one is noticed.
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
@@ -151,40 +141,22 @@ impl<S: Source> Face<S> {
         Arc::new(Face {
             source,
             wiring,
-            folded: RwLock::new(Folded {
-                state,
-                lines: VecDeque::new(),
-            }),
+            state: RwLock::new(state),
             shown: Mutex::new(Shown { view, seq: Seq(0) }),
             grew: Condvar::new(),
         })
     }
 
-    /// Follow the brain's commits until it stops sending them. Commits that
-    /// queue while a view renders are shown together.
-    pub fn follow(&self, commits: Receiver<Commit>) {
-        while let Ok(Commit {
-            mut state,
-            mut records,
-        }) = commits.recv()
-        {
-            for more in commits.try_iter() {
-                state = more.state;
-                records.extend(more.records);
+    /// Follow the brain's commits until it stops sending them. States that
+    /// queue while a view renders are shown as the last of them.
+    pub fn follow(&self, commits: Receiver<State>) {
+        while let Ok(mut state) = commits.recv() {
+            if let Some(last) = commits.try_iter().last() {
+                state = last;
             }
-            let lines: Vec<(Seq, Arc<str>)> = records
-                .iter()
-                .map(|r| (r.seq, fact(&state, r).into()))
-                .collect();
             let view = Arc::new(render(&state, &|id| self.source.value(id)));
             let last = state.last().unwrap_or(Seq(0));
-            {
-                let mut folded = self.folded.write().unwrap_or_else(|e| e.into_inner());
-                folded.state = state;
-                folded.lines.extend(lines);
-                let over = folded.lines.len().saturating_sub(KEPT);
-                folded.lines.drain(..over);
-            }
+            *self.state.write().unwrap_or_else(|e| e.into_inner()) = state;
             *self.show() = Shown { view, seq: last };
             self.grew.notify_all();
         }
@@ -286,8 +258,8 @@ impl<S: Source> Face<S> {
         Ok(())
     }
 
-    fn read(&self) -> RwLockReadGuard<'_, Folded> {
-        self.folded.read().unwrap_or_else(|e| e.into_inner())
+    fn read(&self) -> RwLockReadGuard<'_, State> {
+        self.state.read().unwrap_or_else(|e| e.into_inner())
     }
 
     fn show(&self) -> MutexGuard<'_, Shown> {
@@ -312,16 +284,7 @@ impl<S: Source> Face<S> {
                 stream.flush()?;
                 continue;
             }
-            let from = cursor.unwrap_or(Seq(seq.0.saturating_sub(RECENT)));
-            let facts: Vec<Arc<str>> = self
-                .read()
-                .lines
-                .iter()
-                .filter(|(at, _)| *at > from && *at <= seq)
-                .map(|(_, line)| Arc::clone(line))
-                .collect();
-            let data = format!(r#"{{"view":{view},"facts":[{}]}}"#, facts.join(","));
-            write!(stream, "id: {}\ndata: {data}\n\n", seq.0)?;
+            write!(stream, "id: {}\ndata: {view}\n\n", seq.0)?;
             stream.flush()?;
             cursor = Some(seq);
         }
@@ -335,16 +298,19 @@ impl<S: Source> Face<S> {
                 .value(id)
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         };
-        let chain: Vec<(EntryId, Entry)> = self
-            .read()
-            .state
-            .context(head)
+        // What each response cost and when it came, read with the chain so
+        // the store is read with no lock held.
+        let chain: Vec<(EntryId, Entry, Value)> = {
+            let state = self.read();
+            state
+                .context(head)
+                .into_iter()
+                .map(|(id, entry)| (id, entry.clone(), response(&state, id)))
+                .collect()
+        };
+        let chain: Vec<Value> = chain
             .into_iter()
-            .map(|(id, entry)| (id, entry.clone()))
-            .collect();
-        let chain: Vec<serde_json::Value> = chain
-            .into_iter()
-            .map(|(id, entry)| match entry {
+            .map(|(id, entry, response)| match entry {
                 Entry::Root(root) => json!({
                     "id": id.to_string(),
                     "role": "root",
@@ -356,6 +322,7 @@ impl<S: Source> Face<S> {
                     "id": id.to_string(),
                     "role": message.role.as_str(),
                     "content": text(message.content),
+                    "response": response,
                 }),
             })
             .collect();
@@ -367,20 +334,20 @@ impl<S: Source> Face<S> {
     }
 }
 
-/// A record as the page's journal shows it.
-fn fact(state: &State, record: &Record) -> String {
-    let by = match record.by {
-        Author::Max { .. } => "Max",
-        Author::Brain => "brain",
-        Author::Limb(_) => "limb",
+/// When an entry that is a response was sent and ended, and the context it
+/// was sent with: what it cost.
+fn response(state: &State, entry: EntryId) -> Value {
+    let Some(record) = state.response(entry) else {
+        return Value::Null;
     };
-    let line = json!({
-        "seq": record.seq.0,
-        "at": record.at.0,
-        "by": by,
-        "text": describe(state, record),
-    });
-    line.to_string()
+    let ended = record.ended.as_ref();
+    let usage = ended.and_then(|e| e.usage);
+    json!({
+        "sent": record.sent.at.0,
+        "ended": ended.map(|e| e.at.at.0),
+        "context": usage.map(|u| u.input + u.cache_read + u.cache_write_short + u.cache_write_long),
+        "output": usage.map(|u| u.output),
+    })
 }
 
 fn render(state: &State, value: &dyn Fn(ValueId) -> Option<Vec<u8>>) -> String {

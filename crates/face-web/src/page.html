@@ -2,326 +2,941 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>harness</title>
+<script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <style>
   :root {
-    --ground: #f0eee6; --paper: #faf9f5; --line: #e0dccf; --ink: #141413;
-    --muted: #6b6a64; --maroon: #7a1f22; --hover: #e8e4d8;
+    --ground: #f0eee6; --paper: #faf9f5; --white: #fffefb; --line: #e3dfd3; --ink: #141413;
+    --muted: #6b6a64; --faint: #a19f96; --maroon: #7a1f22; --maroon-soft: #f3e3e1; --hover: #e9e5d9;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    --ease: cubic-bezier(.2, .8, .2, 1);
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--ground); color: var(--ink);
-    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); -webkit-tap-highlight-color: transparent; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  .btn {
+    display: inline-flex; align-items: center; gap: .35em; padding: .3em .75em; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--paper); white-space: nowrap;
   }
-  header {
-    display: flex; flex-wrap: wrap; gap: .3em 1.5em; align-items: baseline; padding: .7em 1.2em;
-    border-bottom: 1px solid var(--line);
+  .btn:hover { background: var(--hover); }
+  .btn:disabled { color: var(--faint); cursor: default; background: var(--paper); }
+  .btn.armed { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
+  .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .btn.primary:hover { background: #33322e; }
+  .btn.primary.armed { background: var(--maroon); border-color: var(--maroon); }
+  [hidden] { display: none !important; }
+
+  /* The header and the footer float over the map. */
+  #top, #bottom {
+    position: fixed; left: 0; right: 0; z-index: 30; display: flex; align-items: center; gap: .9em;
+    padding: .55em 1.1em; pointer-events: none;
   }
-  header h1 { font: 600 1.15em ui-serif, Georgia, serif; margin: 0; }
-  header .meta { color: var(--muted); }
-  #link.down { color: var(--maroon); font-weight: 600; }
+  #top > *, #bottom > * { pointer-events: auto; }
+  #top { top: 0; padding-top: max(.55em, env(safe-area-inset-top)); }
+  #bottom { bottom: 0; color: var(--muted); font-size: 12.5px; padding-bottom: max(.55em, env(safe-area-inset-bottom)); }
+  .mark { font: 600 17px var(--serif); letter-spacing: .01em; }
+  .spacer { flex: 1; pointer-events: none !important; }
+  #link { width: .55em; height: .55em; border-radius: 50%; background: #6c8f5e; }
+  #link.down { background: var(--maroon); animation: breathe 1.2s infinite; }
+  #pill { border-color: transparent; background: rgba(250, 249, 245, .85); backdrop-filter: blur(6px); }
+  #pill.owed { background: var(--maroon); color: var(--paper); border-color: var(--maroon); }
+  #pill.owed .n { font-weight: 700; }
+  #lock { color: var(--maroon); font-size: 12.5px; }
+  #usage { display: inline-flex; gap: 1.1em; align-items: center; }
+  .gauge { display: inline-flex; gap: .4em; align-items: center; }
+  .gauge i { display: inline-block; width: 3.4em; height: .32em; border-radius: 1em; background: var(--line); overflow: hidden; }
+  .gauge i b { display: block; height: 100%; background: var(--muted); }
+  .gauge.high i b { background: var(--maroon); }
   .alarm { color: var(--maroon); font-weight: 600; }
-  main {
-    display: grid; gap: 1em; padding: 1em 1.2em;
-    grid-template-columns: minmax(22em, 1fr) minmax(26em, 1.4fr);
-    grid-template-areas: "queue detail" "tree detail" "facts compose";
-    grid-template-rows: auto 1fr auto;
-    height: calc(100vh - 3em);
+  #bottom .btn { font-size: 13px; background: rgba(250, 249, 245, .85); backdrop-filter: blur(6px); }
+
+  /* The map: an endless dotted ground, the world on it. */
+  #map { position: fixed; inset: 0; overflow: hidden; touch-action: none; cursor: grab;
+    background-color: var(--ground);
+    background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); }
+  #map.grabbing { cursor: grabbing; }
+  #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #world.flying { transition: transform .45s var(--ease); }
+  #edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  #map.dim #world { opacity: .4; filter: saturate(.5); transition: opacity .3s, filter .3s; }
+  #world { transition: opacity .3s, filter .3s; }
+  #empty { position: fixed; inset: 0; display: grid; place-content: center; text-align: center; gap: .8em; color: var(--muted); }
+  #empty h2 { font: 500 22px var(--serif); color: var(--ink); margin: 0; }
+
+  path.edge { fill: none; stroke: rgba(20, 20, 19, .32); stroke-width: 1.5; }
+  path.edge.receives { stroke-dasharray: 5 5; }
+  path.edge.continues { stroke-dasharray: 1.5 4.5; stroke-linecap: round; stroke: rgba(20, 20, 19, .28); }
+  path.edge.flow { stroke: rgba(20, 20, 19, .62); stroke-dasharray: 2 7; stroke-linecap: round; stroke-width: 2; animation: flow .9s linear infinite; }
+  path.edge.flow.max { stroke: var(--maroon); }
+  @keyframes flow { to { stroke-dashoffset: 18; } }
+
+  /* A node: a dot and its name, no box. */
+  .node {
+    position: absolute; left: 0; top: 0; display: flex; flex-direction: column; align-items: center;
+    text-decoration: none; color: inherit; text-align: center; transform-origin: 50% 0;
   }
-  section { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; overflow: auto; }
-  section > h2 {
-    font: 600 .8em ui-sans-serif, system-ui, sans-serif; text-transform: uppercase;
-    letter-spacing: .06em; color: var(--muted); margin: 0; padding: .7em 1em .3em;
+  .node .dot {
+    position: relative; width: var(--d); height: var(--d); border-radius: 50%; display: grid; place-items: center;
+    background: var(--paper); border: 1.5px solid var(--ink); font: 600 calc(var(--d) * .44) / 1 var(--serif);
+    transition: transform .2s var(--ease), background .3s, border-color .3s, color .3s;
   }
-  #queue { grid-area: queue; } #tree { grid-area: tree; }
-  #facts { grid-area: facts; max-height: 14em; } #detail { grid-area: detail; }
-  #compose { grid-area: compose; display: flex; flex-direction: column; overflow: hidden; }
-  #compose h2 .to { text-transform: none; letter-spacing: 0; color: var(--ink); }
-  #box {
-    flex: 1; min-height: 6em; margin: 0 1em; padding: .5em .6em; resize: none;
-    font: inherit; color: var(--ink); background: var(--ground);
-    border: 1px solid var(--line); border-radius: 6px;
+  .node:hover .dot { transform: scale(1.1); }
+  .node .name { margin-top: 5px; font: 600 13.5px/1.2 var(--serif); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node.root .name { font-size: 15.5px; }
+  .node .status { margin-top: 1px; font-size: 11.5px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node .where { font-size: 11px; color: var(--faint); }
+  .node .ring { position: absolute; inset: -5px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
+  .node.working .ring { border-top-color: var(--ink); border-right-color: rgba(20, 20, 19, .25); animation: spin 1.5s linear infinite; }
+  .node.streaming .ring { animation-duration: .7s; }
+  .node.tool .ring { border: 2px dashed rgba(20, 20, 19, .55); animation: spin 4s linear infinite; }
+  .node.waiting-children .ring { border-color: rgba(20, 20, 19, .18); }
+  .node.starting .dot { border-style: dashed; color: var(--faint); }
+  .node.starting .ring { border: 2px dotted rgba(20, 20, 19, .3); animation: spin 6s linear infinite; }
+  .node.open .dot { border-color: var(--maroon); color: var(--maroon); background: var(--white); border-width: 2px; }
+  .node.open .ring { border-color: var(--maroon); opacity: .5; animation: halo 2.4s var(--ease) infinite; }
+  .node.open .status { color: var(--maroon); font-weight: 600; }
+  .node.listening .dot { border-style: double; border-width: 3px; }
+  .node.held .dot, .node.limited .dot { border-color: var(--faint); color: var(--faint); }
+  .node.done .dot { background: #8d8b83; border-color: #8d8b83; color: var(--paper); }
+  .node.done .name { color: var(--muted); font-weight: 500; }
+  .node.failed .dot { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
+  .node.failed .status, .node .status.trouble { color: var(--maroon); }
+  .node.cancelled .dot { background: var(--line); border-color: var(--faint); color: var(--muted); border-radius: 30%; }
+  .node .badge {
+    position: absolute; top: -7px; right: -9px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+    background: var(--maroon); color: var(--paper); font: 700 10.5px/17px var(--sans);
   }
-  #box:focus { outline: 2px solid var(--maroon); outline-offset: -1px; }
-  #compose .controls { display: flex; gap: .6em; align-items: center; padding: .5em 1em .7em; }
-  #mic.on { background: var(--maroon); color: var(--paper); border-color: var(--maroon); }
-  #status { color: var(--muted); flex: 1; }
-  #status.bad { color: var(--maroon); font-weight: 600; }
-  ul { list-style: none; margin: 0; padding: 0; }
-  .task { padding: .25em 1em .25em calc(1em + var(--depth) * 1.3em); cursor: pointer; }
-  .task:hover { background: var(--hover); }
-  .task.selected { background: var(--hover); box-shadow: inset 3px 0 var(--maroon); }
-  .name { font-weight: 600; }
-  .tag { color: var(--muted); font-size: .85em; margin-left: .4em; }
-  .throb { display: block; color: var(--muted); font-size: .9em; }
-  .throb.max, .throb.failed { color: var(--maroon); font-weight: 600; }
-  .throb .spin { display: inline-block; width: 1.1em; }
-  .done .name { color: var(--muted); font-weight: 500; }
-  .queued { padding: .4em 1em; cursor: pointer; border-top: 1px solid var(--line); }
-  .queued:first-of-type { border-top: 0; }
+  .node .more { margin-top: 3px; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; padding: 0 .5em; background: var(--paper); }
+  .node.selected .dot { box-shadow: 0 0 0 4px var(--paper), 0 0 0 5.5px var(--ink); }
+  .node.scope { pointer-events: none; }
+  .node.scope .dot { --d: 9px; background: var(--ink); border: 0; }
+  .node.scope.background .dot { background: var(--paper); border: 1.5px solid var(--ink); }
+  .node.scope.settled .dot { background: #8d8b83; }
+  .node.sat .dot { font: 600 11px/1 var(--sans); border-style: dashed; }
+  .node.sat .name { font: 12px/1.2 var(--sans); color: var(--muted); font-weight: 400; }
+  .node.sat.ask .dot { border-color: var(--maroon); color: var(--maroon); border-style: solid; }
+  .node.sat.ask .name { color: var(--maroon); font-weight: 600; }
+  .node.enter { animation: grow .45s var(--ease); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes halo { 0% { transform: scale(1); opacity: .55; } 70% { transform: scale(1.45); opacity: 0; } 100% { opacity: 0; } }
+  @keyframes breathe { 50% { opacity: .35; } }
+  @keyframes grow { from { transform: scale(.2); opacity: 0; } }
+
+  /* The queue: what waits on Max, in his order. */
+  #drawer {
+    position: fixed; top: 3.2em; right: 1em; z-index: 40; width: min(26em, calc(100vw - 2em)); max-height: 70vh; overflow: auto;
+    background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 50px rgba(40, 30, 20, .18);
+    padding: .4em;
+  }
+  #drawer h3 { margin: .4em .7em .3em; font: 600 11.5px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); display: flex; align-items: center; }
+  #drawer h3 .btn { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 12.5px; }
+  .queued { display: grid; grid-template-columns: 1.6em 1fr auto; gap: .1em .5em; padding: .55em .6em; border-radius: 10px; cursor: pointer; }
   .queued:hover { background: var(--hover); }
-  .queued .name { color: var(--maroon); }
-  .queued .why, .queued .ask { display: block; color: var(--ink); font-size: .9em; }
-  .empty { color: var(--muted); padding: .2em 1em .8em; }
-  #facts li { padding: .05em 1em; font: 12px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; }
-  #facts .seq, #facts .at { color: var(--muted); }
-  #facts .Max { color: var(--maroon); }
-  #detail .body { padding: 0 1em 1em; }
-  dl { display: grid; grid-template-columns: max-content 1fr; gap: .2em 1em; margin: .3em 0 1em; }
-  dt { color: var(--muted); } dd { margin: 0; }
-  .mandate { white-space: pre-wrap; }
-  .entry { border-top: 1px solid var(--line); padding: .6em 0; }
-  .entry .role { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-  .entry.assistant .role { color: var(--maroon); }
-  .entry.head { box-shadow: inset 3px 0 var(--maroon); padding-left: .7em; }
-  .block { white-space: pre-wrap; margin: .25em 0; }
-  .block.tool { font: 12px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; background: var(--ground); padding: .3em .5em; border-radius: 4px; }
-  details summary { cursor: pointer; color: var(--muted); }
-  button {
-    font: inherit; padding: .2em .7em; border: 1px solid var(--line); border-radius: 5px;
-    background: var(--paper); color: var(--ink); cursor: pointer;
+  .queued .num { color: var(--maroon); font-weight: 700; text-align: right; }
+  .queued .what { font: 600 14px var(--serif); }
+  .queued .ask, .queued .why { grid-column: 2 / 4; font-size: 12.5px; color: var(--muted); }
+  .queued .ask { color: var(--ink); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .queued .move { display: flex; gap: .2em; }
+  .queued .move button { padding: 0 .35em; border-radius: 5px; color: var(--muted); }
+  .queued .move button:hover { background: var(--line); color: var(--ink); }
+  .queued .move button:disabled { visibility: hidden; }
+  .nothing { padding: .6em .8em; color: var(--muted); }
+
+  /* A node opened: its log, over the map, which still shows around it. */
+  #panel {
+    position: fixed; z-index: 20; top: 3.4em; bottom: 2.9em; left: 50%; width: min(70rem, calc(100vw - 7rem)); transform: translateX(-50%);
+    display: flex; flex-direction: column; background: var(--paper); border: 1px solid var(--line); border-radius: 18px;
+    box-shadow: 0 24px 70px rgba(40, 30, 20, .22); overflow: hidden;
   }
-  button:hover { background: var(--hover); }
-  button:disabled { color: var(--muted); cursor: default; background: var(--paper); }
-  .controls-row { display: flex; gap: .5em; align-items: center; flex-wrap: wrap; margin: .2em 0 .8em; }
-  .answer { color: var(--muted); }
-  #start[hidden] { display: none; }
-  #start { display: flex; flex-wrap: wrap; gap: .4em .8em; padding: .3em 1em .6em; border-bottom: 1px solid var(--line); }
-  #start textarea { flex-basis: 100%; font: inherit; padding: .4em .5em; background: var(--ground); border: 1px solid var(--line); border-radius: 6px; }
-  #start input, #start select { font: inherit; }
-  .answer.bad { color: var(--maroon); font-weight: 600; }
-  section > h2 button { text-transform: none; letter-spacing: 0; font-size: 1.1em; margin-left: .8em; }
-  .queued .move { float: right; display: flex; gap: .3em; }
-  .queued .move button { padding: 0 .45em; }
-  .queued .reply { display: flex; gap: .3em; margin-top: .3em; }
-  .queued .reply input { flex: 1; min-width: 0; }
-  .stream { border-top: 1px solid var(--line); padding: .6em 0; }
-  .stream .role { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; color: var(--maroon); }
-  .block.thinking { color: var(--muted); font-style: italic; }
-  pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, monospace; margin: .3em 0; }
-  .block { overflow-wrap: anywhere; }
-  .stream .command { font: 12px/1.5 ui-monospace, monospace; color: var(--maroon); }
-  .trouble { display: block; color: var(--maroon); font-size: .9em; }
-  .output { background: var(--ground); padding: .3em .5em; border-radius: 4px; max-height: 30em; overflow: auto; }
-  @media (max-width: 800px) {
-    main {
-      grid-template-columns: 1fr; grid-template-rows: none; height: auto;
-      grid-template-areas: "queue" "tree" "detail" "compose" "facts";
-    }
-    #tree { max-height: 45vh; } #detail { max-height: 75vh; }
-    #compose { min-height: 12em; }
+  #panel > .bar { display: flex; align-items: center; gap: .6em; padding: .6em .8em .6em 1.1em; border-bottom: 1px solid var(--line); min-height: 3.1em; flex-wrap: wrap; }
+  .crumbs { display: flex; align-items: baseline; gap: .3em; min-width: 0; flex: 1 1 auto; overflow: hidden; white-space: nowrap; }
+  .crumbs a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  .crumbs a:hover { color: var(--ink); text-decoration: underline; }
+  .crumbs .sep { color: var(--faint); }
+  .crumbs .here { font: 600 17px var(--serif); overflow: hidden; text-overflow: ellipsis; }
+  .crumbs .role { font-size: 12px; color: var(--muted); margin-left: .3em; }
+  .bar .state { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+  .bar .state.max { color: var(--maroon); font-weight: 600; }
+  .bar .ctx { display: inline-flex; align-items: center; gap: .4em; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .bar .controls { display: flex; gap: .35em; align-items: center; }
+  .bar .controls .btn, .bar > .btn { font-size: 12.5px; padding: .2em .65em; }
+  .bar .answer { font-size: 12.5px; color: var(--muted); }
+  .bar .answer.bad { color: var(--maroon); font-weight: 600; }
+  .bar .x { font-size: 20px; line-height: 1; padding: .1em .35em; border-radius: 8px; color: var(--muted); }
+  .bar .x:hover { background: var(--hover); color: var(--ink); }
+  #panel .back { display: none; }
+  #panel > .body { flex: 1; display: flex; min-height: 0; }
+  .scroll { flex: 1; overflow: auto; overscroll-behavior: contain; scroll-padding-bottom: 2em; }
+  .log { max-width: 48rem; margin: 0 auto; padding: 1.4em 1.6em 2.5em; }
+  .viewer { flex: 1; min-width: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; background: var(--white); }
+  .viewer header { display: flex; align-items: center; gap: .6em; padding: .5em .8em; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .viewer header .path { font-family: var(--mono); font-size: 12.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .viewer .content { flex: 1; overflow: auto; padding: 1em 1.4em; }
+  .viewer iframe { width: 100%; height: 100%; border: 0; background: white; }
+  .viewer .content.frame { padding: 0; }
+  .jump { position: sticky; bottom: .8em; margin: 0 auto; display: block; width: max-content; box-shadow: 0 6px 18px rgba(40, 30, 20, .15); }
+
+  /* The log reads like Claude Desktop's chat, and is the exact context. */
+  .entry { margin: 0 0 1.1em; }
+  .prose { font: 16px/1.62 var(--serif); overflow-wrap: anywhere; }
+  .prose > :first-child { margin-top: 0; } .prose > :last-child { margin-bottom: 0; }
+  .prose p, .prose ul, .prose ol, .prose pre, .prose blockquote, .prose table { margin: .65em 0; }
+  .prose h1, .prose h2, .prose h3, .prose h4 { font-family: var(--serif); line-height: 1.25; margin: 1.1em 0 .45em; }
+  .prose h1 { font-size: 1.35em; } .prose h2 { font-size: 1.2em; } .prose h3 { font-size: 1.07em; }
+  .prose code { font: .86em var(--mono); background: rgba(20, 20, 19, .055); padding: .1em .3em; border-radius: 4px; }
+  .prose pre { background: #f3f1ea; border: 1px solid var(--line); border-radius: 8px; padding: .7em .9em; overflow: auto; }
+  .prose pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.5; }
+  .prose blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 1em; color: var(--muted); }
+  .prose table { border-collapse: collapse; font-size: .92em; display: block; overflow: auto; }
+  .prose th, .prose td { border: 1px solid var(--line); padding: .3em .6em; text-align: left; }
+  .prose a { color: var(--maroon); }
+  .prose img { max-width: 100%; }
+  .plain { white-space: pre-wrap; }
+  .said { display: flex; flex-direction: column; align-items: flex-end; }
+  .said .caption { font-size: 11.5px; color: var(--muted); margin: 0 .5em .2em; }
+  .said .bubble { max-width: 85%; background: #e9e5da; border-radius: 16px 16px 4px 16px; padding: .6em 1em; font: 15px/1.55 var(--sans); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .said.queued-words .bubble { background: transparent; border: 1.5px dashed var(--faint); }
+  .said.answer .bubble { border-left: 3px solid var(--maroon); }
+  .card { border: 1px solid var(--line); border-radius: 12px; background: var(--white); padding: .75em 1em; }
+  .card .label { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: .35em; display: flex; gap: .6em; align-items: baseline; }
+  .card.mandate { background: transparent; }
+  .card.mandate .prose { font-size: 15px; }
+  .card.clip .prose { max-height: 13em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .more-link { font-size: 12.5px; color: var(--maroon); margin-top: .3em; cursor: pointer; }
+  details > summary.more-link { margin: .1em 0 .3em 1em; }
+  .card.ask { border-color: var(--maroon); background: var(--maroon-soft); }
+  .card.ask .label { color: var(--maroon); }
+  .card.result { border-color: #c9c4b4; }
+  .card.ended { border-color: var(--maroon); color: var(--maroon); }
+  .note { display: flex; gap: .5em; font-size: 12.5px; color: var(--muted); margin: .2em 0 1em; }
+  .note::before { content: "⚙"; color: var(--faint); }
+  .note .t { white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; cursor: pointer; }
+  .note .t.full { display: block; }
+  .meta { font-size: 11.5px; color: var(--faint); margin: -.5em 0 1.1em; }
+  .thought { font-size: 13px; color: var(--muted); margin: 0 0 .7em; }
+  .thought summary { cursor: pointer; list-style: none; }
+  .thought summary::before { content: "◌ "; }
+  .thought .plain { font-style: italic; margin: .3em 0 0 1.1em; }
+  .steps { margin: 0 0 1.1em; border-left: 2px solid var(--line); padding-left: .2em; }
+  .steps > .head { font-size: 12.5px; color: var(--muted); padding: .1em .5em .3em; cursor: pointer; }
+  .steps > .head:hover { color: var(--ink); }
+  .steps.folded > .row:not(:last-child) { display: none; }
+  .row { margin: 0 0 .15em; }
+  .row > .line { display: flex; align-items: baseline; gap: .55em; padding: .22em .5em; border-radius: 7px; cursor: pointer; font-size: 13.5px; min-width: 0; }
+  .row > .line:hover { background: var(--hover); }
+  .row .tool { font: 600 12px var(--mono); color: var(--ink); }
+  .row .gist { font: 12.5px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .row .st { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .row .st.bad { color: var(--maroon); }
+  .row .st.run::before { content: ""; display: inline-block; width: .7em; height: .7em; border: 1.5px solid var(--ink); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -.05em; margin-right: .3em; }
+  .row .open-file { font-size: 12px; color: var(--maroon); }
+  .row > .meta { margin: 0 0 .3em .5em; }
+  .row > .detail { margin: .2em 0 .6em 1em; }
+  .row:not(.expanded) > .detail { display: none; }
+  .io { font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f1ea; border: 1px solid var(--line); border-radius: 8px; padding: .55em .75em; margin: .3em 0; max-height: 28em; overflow: auto; }
+  .io.err { border-color: var(--maroon); }
+  .io .k { color: var(--muted); }
+  .rendered { border: 1px solid var(--line); border-radius: 8px; padding: .7em 1em; background: var(--white); margin: .3em 0; max-height: 34em; overflow: auto; }
+  .rendered img { max-width: 100%; }
+  .chips { display: flex; flex-wrap: wrap; gap: .4em; margin: .25em 0 .5em 1em; }
+  .chip { display: inline-flex; align-items: center; gap: .4em; padding: .25em .7em .25em .35em; border: 1px solid var(--line); border-radius: 999px; background: var(--white); font: 600 13px var(--serif); text-decoration: none; color: inherit; }
+  .chip:hover { border-color: var(--ink); }
+  .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid var(--ink); display: grid; place-items: center; font: 600 9px var(--serif); }
+  .chip.done .d { background: #8d8b83; border-color: #8d8b83; color: var(--paper); }
+  .chip.open .d { border-color: var(--maroon); color: var(--maroon); }
+  .chip.failed .d { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
+  .chip .s { font: 11.5px var(--sans); color: var(--muted); }
+  .live-text { border-left: 2px solid var(--ink); padding-left: .9em; }
+  .live-text::after { content: "▍"; animation: breathe 1s infinite; }
+  .exact .io { max-height: none; }
+  .exact-entry { margin: 0 0 1em; }
+  .exact-entry .who { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  .exact-entry.assistant .who { color: var(--maroon); }
+
+  /* What Max writes: kept until sent, sent with two actions. */
+  .compose { padding: .2em 1.2em 1em; }
+  .compose .box { max-width: 48rem; margin: 0 auto; background: var(--white); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 2px 10px rgba(40, 30, 20, .06); padding: .55em .7em .5em .9em; }
+  .compose .box:focus-within { border-color: #c9c4b4; box-shadow: 0 2px 14px rgba(40, 30, 20, .1); }
+  .compose.armed .box { border-color: var(--maroon); box-shadow: 0 0 0 3px var(--maroon-soft); }
+  .compose .to { font-size: 11.5px; color: var(--muted); margin-bottom: .15em; }
+  .compose .to.answering { color: var(--maroon); font-weight: 600; }
+  .compose textarea { display: block; width: 100%; border: 0; outline: 0; resize: none; background: transparent; font: 15px/1.5 var(--sans); color: var(--ink); min-height: 2.6em; max-height: 40vh; padding: 0; }
+  .compose .row2 { display: flex; align-items: center; gap: .5em; margin-top: .3em; }
+  .compose .status { flex: 1; font-size: 12px; color: var(--muted); }
+  .compose .status.bad { color: var(--maroon); font-weight: 600; }
+  .compose .mic.on { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
+  .compose .closed { max-width: 48rem; margin: 0 auto; color: var(--muted); font-size: 13px; text-align: center; padding: .4em; }
+
+  /* A new task: Max's own scope. */
+  #sheet {
+    position: fixed; z-index: 40; left: 1em; bottom: 3.4em; width: min(30em, calc(100vw - 2em));
+    background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 18px 50px rgba(40, 30, 20, .2); padding: 1em 1.1em;
+  }
+  #sheet h3 { margin: 0 0 .6em; font: 600 16px var(--serif); }
+  #sheet label { display: block; font-size: 12px; color: var(--muted); margin: .45em 0 .15em; }
+  #sheet input, #sheet select, #sheet textarea { width: 100%; font: 14px var(--sans); padding: .4em .55em; border: 1px solid var(--line); border-radius: 8px; background: var(--white); color: var(--ink); }
+  #sheet textarea { min-height: 7em; resize: vertical; }
+  #sheet .check { display: flex; gap: .5em; align-items: center; color: var(--ink); font-size: 13.5px; margin-top: .6em; }
+  #sheet .check input { width: auto; }
+  #sheet .acts { display: flex; gap: .5em; align-items: center; margin-top: .8em; }
+  #sheet .acts .answer { flex: 1; font-size: 12.5px; color: var(--muted); }
+  #sheet .acts .answer.bad { color: var(--maroon); font-weight: 600; }
+
+  @media (max-width: 760px) {
+    #panel { inset: 0; width: auto; transform: none; border-radius: 0; border: 0; border-top: 1px solid var(--line); top: calc(2.75em + env(safe-area-inset-top)); bottom: 0; z-index: 31; box-shadow: none; }
+    #top { background: var(--ground); }
+    #panel > .bar { padding: .4em .6em .4em .3em; gap: .4em; }
+    #panel .back { display: inline-block; font-size: 22px; padding: 0 .4em; }
+    .bar .x { display: none; }
+    .crumbs a, .crumbs .sep, .crumbs .role { display: none; }
+    .bar .ctx { display: none; }
+    .bar .controls { order: 9; width: 100%; overflow-x: auto; }
+    .log { padding: 1em 1em 2em; }
+    .prose { font-size: 15.5px; }
+    .compose { padding: .2em .5em max(.5em, env(safe-area-inset-bottom)); }
+    .viewer { position: absolute; inset: 0; z-index: 2; border: 0; }
+    #panel > .body { position: relative; }
+    #usage .reset { display: none; }
+    #bottom { gap: .6em; padding-left: .7em; padding-right: .7em; }
+    #build { display: none; }
   }
 </style>
 </head>
 <body>
-<header>
-  <h1>harness</h1>
-  <span class="meta" id="build"></span>
-  <span class="meta" id="seq"></span>
-  <span class="meta" id="usage"></span>
-  <span class="meta" id="link">connecting</span>
+<header id="top">
+  <span class="mark">harness</span>
+  <span id="link" class="down" title="connecting"></span>
+  <span class="spacer"></span>
+  <span id="lock" hidden></span>
+  <button id="pill" class="btn" type="button"></button>
 </header>
-<main>
-  <section id="queue"><h2>Waiting on you<button id="next" hidden>Next</button></h2><ul></ul></section>
-  <section id="tree"><h2>Tasks<button id="new">New task</button></h2>
-    <form id="start" hidden>
-      <label>Role <select id="role"></select></label>
-      <label>Name <input id="tname" placeholder="the role's name"></label>
-      <label>Directory <input id="dir" list="dirs" placeholder="/path/to/your/clone" size="34"></label>
-      <datalist id="dirs"></datalist>
-      <textarea id="mandate" placeholder="The mandate: what to do, and what to report." rows="4"></textarea>
-      <div class="controls-row"><button id="go" type="submit">Start</button><span class="answer" id="started"></span></div>
-    </form>
-    <ul></ul></section>
-  <section id="facts"><h2>Journal</h2><ul></ul></section>
-  <section id="detail"><h2>Task</h2><div class="body"><p class="empty">Select a task.</p></div></section>
-  <section id="compose">
-    <h2>To <span class="to" id="to">no task selected</span></h2>
-    <textarea id="box" placeholder="Write, paste or dictate. Enter is a new line; Ctrl+Enter sends." spellcheck="true"></textarea>
-    <div class="controls">
-      <button id="mic" hidden>Dictate</button>
-      <button id="sample" hidden>Dictate the sample</button>
-      <span id="status"></span>
-      <button id="send">Send</button>
-    </div>
-  </section>
-</main>
+<div id="drawer" hidden></div>
+
+<main id="map"><div id="world"><svg id="edges"></svg><div id="nodes"></div></div></main>
+<div id="empty" hidden><h2>Nothing is running.</h2><div>Start a task, and it appears here as a node.</div><div><button class="btn primary" id="empty-new" type="button">New task</button></div></div>
+
+<section id="panel" hidden>
+  <div class="bar">
+    <button class="back" type="button" aria-label="back to the map">‹</button>
+    <nav class="crumbs"></nav>
+    <span class="state"></span>
+    <span class="ctx"></span>
+    <span class="controls"></span>
+    <button class="btn exact-toggle" type="button" title="Show the context exactly as it was sent">Exact</button>
+    <button class="x" type="button" aria-label="close" title="Back to the map (Esc)">×</button>
+  </div>
+  <div class="body"><div class="scroll"><div class="log"></div><button class="btn jump" type="button" hidden>↓ Latest</button></div><aside class="viewer" hidden></aside></div>
+  <div class="compose"></div>
+</section>
+
+<footer id="bottom">
+  <button class="btn" id="new" type="button">+ New</button>
+  <span id="usage"></span>
+  <span class="spacer"></span>
+  <span id="build"></span>
+  <button class="btn" id="fit" type="button" title="Fit the map (F)">Fit</button>
+</footer>
+
+<form id="sheet" hidden autocomplete="off">
+  <h3>A new task in your scope</h3>
+  <label for="s-role">Role</label><select id="s-role"></select>
+  <label for="s-name">Name</label><input id="s-name" placeholder="the role's name">
+  <label for="s-dir">Directory</label><input id="s-dir" list="s-dirs" placeholder="/path/to/your/clone"><datalist id="s-dirs"></datalist>
+  <label for="s-mandate">Mandate</label><textarea id="s-mandate" placeholder="What to do, and what to report."></textarea>
+  <div class="acts"><span class="answer"></span><button class="btn" type="button" id="s-cancel">Close</button><button class="btn primary" id="s-go" type="submit">Start</button></div>
+</form>
+
 <script>
 "use strict";
-const $ = (sel) => document.querySelector(sel);
+// ─── Small things ──────────────────────────────────────────────────────────
+const $ = (s, root = document) => root.querySelector(s);
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   if (text != null) e.textContent = text;
   return e;
 };
-const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour12: false });
+const svgEl = (tag) => document.createElementNS("http://www.w3.org/2000/svg", tag);
+const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 const ago = (ms) => {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m`;
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m` : `${Math.floor(s / 86400)}d`;
 };
-const FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+const kTokens = (n) => n == null ? "?" : n < 1000 ? `${n}` : `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+const parse = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
+const mint = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const phone = () => matchMedia("(max-width: 760px)").matches;
+const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+// The gist of a call's input: its command, or the path or pattern it names.
+function gist(input) {
+  const v = typeof input === "string" ? parse(input) : input;
+  const s = v && (v.command ?? v.path ?? v.pattern ?? v.question ?? v.name ?? v.tool);
+  if (typeof s !== "string") return "";
+  const line = s.split("\n")[0];
+  return line.length > 90 ? line.slice(0, 90) + "…" : line;
+}
+
+function markdown(text) {
+  if (!window.marked || !window.DOMPurify) return el("div", "plain", text);
+  const div = el("div", "prose");
+  div.innerHTML = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: false }));
+  for (const a of div.querySelectorAll("a")) { a.target = "_blank"; a.rel = "noopener"; }
+  return div;
+}
+
+// ─── This face ─────────────────────────────────────────────────────────────
+// Each tab is its own face, with an id it keeps across reloads; text Max is
+// writing is kept per task across tabs and reloads, so nothing he writes is
+// lost when the map changes under him or he goes somewhere else.
+const FACE = sessionStorage.getItem("face") || mint();
+sessionStorage.setItem("face", FACE);
+let can = { act: false, dictation: false, sample: false };
+fetch("/wiring").then((r) => r.json()).then((c) => { can = c; render(); });
+
+const drafts = {
+  get: (key) => localStorage.getItem(`draft:${key}`) || "",
+  set: (key, text) => text ? localStorage.setItem(`draft:${key}`, text) : localStorage.removeItem(`draft:${key}`),
+};
+// A field that keeps what is typed in it.
+function kept(input, key) {
+  input.value = drafts.get(key);
+  input.addEventListener("input", () => drafts.set(key, input.value));
+  addEventListener("storage", (e) => { if (e.key === `draft:${key}` && document.activeElement !== input) input.value = e.newValue || ""; });
+}
+
+// This tab may act only inside one subtree; it can still look anywhere.
+let lock = sessionStorage.getItem("lock") || null;
+
+// Max's facts, with the text of each value they name, in one batch. A post
+// the connection dropped is sent again: what the page creates carries an id
+// it minted, so the core refuses a second copy, which means the first landed.
+async function act(facts, values = []) {
+  if (!can.act) return "this face is not wired to a brain";
+  const batch = { values, facts: Array.isArray(facts) ? facts : [facts] };
+  const body = JSON.stringify({ face: FACE, seen: view.seq, batch });
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try { res = await fetch("/act", { method: "POST", body }); }
+    catch { await sleep(1000 * Math.min(attempt + 1, 5)); continue; }
+    if (res.ok) return null;
+    const why = await res.text();
+    if (attempt > 0 && why === "creates something that already exists") return null;
+    return why || res.statusText;
+  }
+}
+const digest = async (bytes) => (await fetch("/digest", { method: "POST", body: bytes })).text();
+
+// ─── The model: the view as a map ──────────────────────────────────────────
+// A node is a task. A scope (the spawn call that owns its members) is a
+// junction under its owner. Background work a task will hear back from
+// hangs off it. Projects are the map's disconnected components.
+//
+// Edges: solid, a scope and its members (owned, settled together); dashed,
+// a result that will arrive without anyone waiting for it now (background
+// work); dotted, a task continued by a resume; flowing,
+// waited on right now.
 let view = null;
-let selected = location.hash.slice(1) || null;
-let shownHead = null;
-const facts = [];
+let byId = {};
+let graph = { nodes: new Map(), edges: [], comps: [] };
 
-// What the task waits on: a glyph, words, and since when.
-function throbber(t) {
-  const w = t.waiting;
-  if (!w) return { cls: "", spin: "", text: "" };
+// What a task is waiting on, as the map shows it: a class and a few words.
+function look(t) {
+  const w = t.waiting || {};
   const since = w.since != null ? ` · ${ago(w.since)}` : "";
   switch (w.kind) {
-    case "model":
-      return { cls: "model", spin: true, text: (w.streaming ? "model streaming" : "model, before the first byte") + since };
+    case "model": return { cls: w.streaming ? "working streaming" : "working", text: (w.streaming ? "writing" : "thinking") + since };
     case "calls": {
       const kids = w.calls.flatMap((c) => c.children);
       if (kids.length) {
-        const live = kids.filter((k) => byId[k] && byId[k].waiting && byId[k].waiting.kind !== "done").length;
-        return { cls: "children", spin: true, text: `${live} of ${kids.length} children running${since}` };
+        const live = kids.filter((k) => byId[k] && byId[k].waiting?.kind !== "done").length;
+        return { cls: "waiting-children", text: `waiting on ${live} of ${kids.length}${since}` };
       }
-      const tools = w.calls.map((c) => `${c.tool}${c.status === "made" ? " (queued)" : ""}${gist(c.input)}`).join(", ");
-      return { cls: "tool", spin: true, text: `tool: ${tools}${since}` };
+      const c = w.calls[0] || {};
+      return { cls: "working tool", text: `${c.tool || "tools"}${c.input ? " " + gist(c.input) : ""}` };
     }
-    case "max": return { cls: "max", spin: "●", text: (w.ask ? "asked you" : "your turn") + since };
-    case "starting": return { cls: "harness", spin: true, text: (w.limbs.length ? `making ${w.limbs.join(", ")}…` : "starting") + since };
-    case "harness": return { cls: "harness", spin: true, text: "harness: preparing the next request" };
-    case "held": return { cls: "held", spin: "‖", text: "held" };
-    case "limited": return { cls: "limited", spin: "⧗", text: `usage limit until ${clock(w.until)}` };
-    case "listening": return { cls: "listening", spin: "◦", text: w.calls.length ? `listening, ${w.calls.length} background` : "listening" };
+    case "max": return { cls: "open", text: w.ask ? "asks you" : "your turn" };
+    case "starting": return { cls: "starting", text: w.limbs.length ? `making ${w.limbs.join(", ")}` : "starting" };
+    case "harness": return { cls: "working", text: "harness" + since };
+    case "held": return { cls: "held", text: "held" };
+    case "limited": return { cls: "limited", text: `limited until ${clock(w.until)}` };
+    case "listening": {
+      const asks = (t.background || []).filter((b) => b.limb === "max").length;
+      return { cls: "listening", text: asks ? "waits on your answer" : w.calls.length ? `waits on ${w.calls.length} in background` : "listening" };
+    }
     case "done": {
       const o = t.outcome || {};
-      if (o.kind === "failed") return { cls: "failed", spin: "✗", text: `failed: ${o.reason}` };
-      if (o.kind === "cancelled") return { cls: "done", spin: "■", text: `cancelled by ${o.by}` };
-      return { cls: "done", spin: "✓", text: "done" };
+      if (o.kind === "failed") return { cls: "done failed", text: `failed · ${ago(w.since)} ago` };
+      if (o.kind === "cancelled") return { cls: "done cancelled", text: `cancelled · ${ago(w.since)} ago` };
+      return { cls: "done", text: `done · ${ago(w.since)} ago` };
     }
   }
-  return { cls: "", spin: "", text: w.kind };
+  return { cls: "", text: w.kind || "" };
+}
+// Under its owner, a task's name without the owner's name it starts with.
+const shortName = (t) => { const o = byId[parentOf(t)]; return o && t.name.startsWith(o.name + "-") ? t.name.slice(o.name.length + 1) : t.name; };
+const glyph = (t) => (t.environment || t.name || "?").trim()[0].toUpperCase();
+const isDone = (t) => t.waiting?.kind === "done";
+// Who a task belongs to on the map: its scope's owner, or the task a resume
+// in Max's own scope continues.
+const parentOf = (t) => t.owner || (t.from && byId[t.from] ? t.from : null);
+const ancestry = (t) => { const out = []; for (let p = parentOf(t); p && byId[p] && out.length < 50; p = parentOf(byId[p])) out.unshift(byId[p]); return out; };
+const within = (id, root) => id === root || ancestry(byId[id] || {}).some((a) => a.id === root);
+const mayAct = (id) => can.act && (!lock || within(id, lock));
+// The calls a task is waiting on right now.
+function awaited(t) {
+  const w = t.waiting || {};
+  return new Set([...(w.calls || []).map((c) => c.id), ...(w.ask ? [w.ask.id] : [])]);
 }
 
-let byId = {};
+// Finished projects fold to their root once they have been finished a while.
+const FOLD_AFTER = 30 * 60 * 1000;
+const unfolded = new Set();
 
-// What the subscription has used, as the latest response reported it, and
-// whether the account is stopped.
-const pct = (f) => f == null ? "?" : `${Math.round(f * 100)}%`;
-// When a window resets: the time today, else the weekday and time.
-const resets = (ms) => {
-  if (ms == null) return "";
-  const d = new Date(ms), hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-  return d.toDateString() === new Date().toDateString() ? ` (resets ${hm})` : ` (resets ${d.toLocaleDateString([], { weekday: "short" })} ${hm})`;
+function derive() {
+  byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
+  const nodes = new Map(), edges = [];
+  const order = (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+  for (const t of view.tasks) nodes.set(t.id, { id: t.id, kind: "task", t });
+  for (const [call, s] of Object.entries(view.scopes)) {
+    if (!byId[s.owner]) continue;
+    const members = view.tasks.filter((t) => t.scope === call).sort(order);
+    const waiting = awaited(byId[s.owner]).has(call);
+    nodes.set(`s:${call}`, { id: `s:${call}`, kind: "scope", call, scope: s, members });
+    edges.push({ from: s.owner, to: `s:${call}`, kind: s.tool_use ? "owns" : "receives", flow: waiting, made: s.made });
+    for (const m of members) edges.push({ from: `s:${call}`, to: m.id, kind: "owns", flow: waiting && !isDone(m) });
+  }
+  for (const t of view.tasks) {
+    if (t.scope && !view.scopes[t.scope] && t.owner) edges.push({ from: t.owner, to: t.id, kind: "owns" });
+    if (t.origin === "resume" && byId[t.from]) edges.push({ from: t.from, to: t.id, kind: "continues" });
+    const waits = awaited(t);
+    for (const b of t.background || []) {
+      if (b.status === "settled" || b.tool === "spawn") continue;
+      const id = `b:${b.id}`;
+      nodes.set(id, { id, kind: "sat", call: b, task: t.id });
+      edges.push({ from: t.id, to: id, kind: "receives", flow: waits.has(b.id) || t.waiting?.kind === "listening", max: b.limb === "max" });
+    }
+  }
+  // Components, by the edges between them.
+  const up = new Map([...nodes.keys()].map((k) => [k, k]));
+  const find = (k) => { while (up.get(k) !== k) { up.set(k, up.get(up.get(k))); k = up.get(k); } return k; };
+  for (const e of edges) if (nodes.has(e.from) && nodes.has(e.to)) up.set(find(e.from), find(e.to));
+  const comps = new Map();
+  for (const n of nodes.values()) {
+    const c = find(n.id);
+    if (!comps.has(c)) comps.set(c, { nodes: [], tasks: [] });
+    comps.get(c).nodes.push(n);
+    if (n.kind === "task") comps.get(c).tasks.push(n.t);
+  }
+  const now = Date.now();
+  const list = [...comps.values()].filter((c) => c.tasks.length).map((c) => {
+    const root = c.tasks.find((t) => !parentOf(t)) || c.tasks[0];
+    const live = c.tasks.some((t) => !isDone(t));
+    const last = Math.max(...c.tasks.map((t) => t.waiting?.since || 0));
+    const folded = !live && now - last > FOLD_AFTER && !unfolded.has(root.id) && !c.tasks.some((t) => t.id === openId);
+    return { root, live, last, folded, nodes: c.nodes, tasks: c.tasks };
+  });
+  list.sort((a, b) => (b.live - a.live) || a.root.name.localeCompare(b.root.name));
+  graph = { nodes, edges, comps: list };
+}
+
+// ─── Layout: ELK, laid out again only when the shape changes ──────────────
+const elk = window.ELK ? new ELK() : null;
+const measure = (() => { const c = document.createElement("canvas").getContext("2d"); return (text, font) => { c.font = font; return c.measureText(text).width; }; })();
+const DOT = 30, ROOT_DOT = 38, SAT_DOT = 20;
+let positions = new Map();   // id -> {x, y, w, h}: laid out
+let shown = new Map();       // id -> {x, y}: drawn now (tweened)
+let shape = "";
+
+function sizeOf(n, comp) {
+  if (n.kind === "scope") return { w: 12, h: 12 };
+  if (n.kind === "sat") return { w: Math.min(160, Math.max(90, measure(satLabel(n), "12px sans-serif") + 10)), h: SAT_DOT + 22 };
+  const root = comp.root.id === n.id;
+  const w = Math.min(210, Math.max(118, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
+  return { w, h: (root ? ROOT_DOT : DOT) + 44 + (root ? 18 : 0) };
+}
+const satLabel = (n) => n.call.limb === "max" ? "asks you" : `${n.call.tool} ${gist(n.call.input)}`.trim();
+
+// Each project is laid out on its own, then the projects are shelved in
+// reading order, live ones first, in rows as wide as the screen: on a phone
+// they stack, and a project keeps its shape wherever it lands.
+const ELK_OPTIONS = {
+  "elk.algorithm": "layered", "elk.direction": "DOWN",
+  "elk.spacing.nodeNode": "26", "elk.layered.spacing.nodeNodeBetweenLayers": "34",
+  "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
+  "elk.layered.crossingMinimization.forceNodeModelOrder": "true",
+  "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
+  "elk.layered.nodePlacement.bk.fixedAlignment": "BALANCED",
+  "elk.padding": "[top=0,left=0,bottom=0,right=0]",
 };
-function renderUsage() {
-  const u = view.usage, span = $("#usage");
-  span.replaceChildren();
-  const used = (w) => `${pct(w?.used)}${resets(w?.resets)}`;
-  if (u) span.append(`used: 5h ${used(u.five_hour)} · 7d ${used(u.seven_day)} · as of ${clock(u.at)}`);
-  if (u && !u.on_plan) span.append(" ", el("span", "alarm", "billed outside the plan: nothing more is sent"));
-  if (view.limited) span.append(" ", el("span", "alarm", `account limited until ${clock(view.limited)}`));
+const GAP = 90;
+async function layout() {
+  const parts = graph.comps.map((c) => {
+    const ns = c.folded ? [graph.nodes.get(c.root.id)] : depthFirst(c);
+    const ids = new Set(ns.map((n) => n.id));
+    const children = ns.map((n) => { const z = sizeOf(n, c); return { id: n.id, width: z.w, height: z.h }; });
+    // Only what owns what is laid out, so each project is a tree; a
+    // continuation is drawn between wherever its two ends land.
+    const edges = graph.edges.filter((e) => e.kind !== "continues" && ids.has(e.from) && ids.has(e.to)).map((e, i) => ({ id: `e${i}`, sources: [e.from], targets: [e.to] }));
+    return { children, edges };
+  });
+  const sig = JSON.stringify([parts.map((p) => [p.children.map((c) => [c.id, Math.round(c.width), c.height]), p.edges.map((e) => [e.sources[0], e.targets[0]])]), Math.round(innerWidth / 200)]);
+  if (sig === shape) return false;
+  shape = sig;
+  const laid = await Promise.all(parts.map(async (p) => {
+    if (!elk) { let x = 0; return { w: 0, h: 0, nodes: p.children.map((c) => { const n = { ...c, x, y: 0 }; x += c.width + 30; return n; }) }; }
+    const out = await elk.layout({ id: "p", layoutOptions: ELK_OPTIONS, children: p.children, edges: p.edges });
+    return { w: out.width, h: out.height, nodes: out.children };
+  }));
+  // Shelves as wide as the screen at an easy reading zoom.
+  const row = Math.max((innerWidth - 80) / (phone() ? .75 : 1), ...laid.map((l) => l.w));
+  const shelves = [];
+  for (const l of laid) {
+    const last = shelves[shelves.length - 1];
+    if (last && last.w + GAP + l.w <= row) { last.items.push(l); last.w += GAP + l.w; last.h = Math.max(last.h, l.h); }
+    else shelves.push({ items: [l], w: l.w, h: l.h });
+  }
+  // Each shelf centred under the widest.
+  const widest = Math.max(0, ...shelves.map((r) => r.w));
+  positions = new Map();
+  let y = 0;
+  for (const r of shelves) {
+    let x = (widest - r.w) / 2;
+    for (const l of r.items) {
+      for (const c of l.nodes) positions.set(c.id, { x: x + c.x, y: y + c.y, w: c.width, h: c.height });
+      x += l.w + GAP;
+    }
+    y += r.h + GAP;
+  }
+  return true;
+}
+// A component's nodes, owners before what they own, in a stable order.
+function depthFirst(c) {
+  const inComp = new Set(c.nodes.map((n) => n.id));
+  const out = [], seen = new Set();
+  const kids = (id) => graph.edges.filter((e) => e.from === id && e.kind !== "continues" && inComp.has(e.to))
+    .sort((a, b) => (a.made || 0) - (b.made || 0) || String(graph.nodes.get(a.to)?.t?.name || a.to).localeCompare(String(graph.nodes.get(b.to)?.t?.name || b.to)));
+  const walk = (id) => { if (seen.has(id)) return; seen.add(id); out.push(graph.nodes.get(id)); for (const e of kids(id)) walk(e.to); };
+  walk(c.root.id);
+  for (const n of c.nodes) walk(n.id);
+  return out;
+}
+
+// ─── The camera ────────────────────────────────────────────────────────────
+const map = $("#map"), world = $("#world"), nodesLayer = $("#nodes"), edgesLayer = $("#edges");
+let cam = { x: 0, y: 0, k: 1 };
+let framed = true;  // follows the map's growth until Max moves it himself
+function applyCamera(fly = false) {
+  world.classList.toggle("flying", fly && !reduced());
+  world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.k})`;
+  const g = 24 * cam.k;
+  map.style.backgroundSize = `${g}px ${g}px`;
+  map.style.backgroundPosition = `${cam.x}px ${cam.y}px`;
+  if (fly) setTimeout(() => world.classList.remove("flying"), 480);
+}
+function bounds(ids) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [id, p] of positions) {
+    if (ids && !ids.has(id)) continue;
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + p.w); y1 = Math.max(y1, p.y + p.h);
+  }
+  return x0 === Infinity ? null : { x0, y0, x1, y1 };
+}
+function fit(fly = true) {
+  const b = bounds();
+  if (!b) return;
+  const top = 64, bottom = 56, side = 40;
+  const w = innerWidth - side * 2, h = innerHeight - top - bottom;
+  const least = phone() ? .7 : .45;
+  const k = Math.max(least, Math.min(1.25, w / (b.x1 - b.x0), h / (b.y1 - b.y0)));
+  cam = { k, x: side + (w - (b.x1 - b.x0) * k) / 2 - b.x0 * k, y: top + (h - (b.y1 - b.y0) * k) / 2 - b.y0 * k };
+  // Too big to fit at a size that reads: start at the top, the first project centred.
+  if ((b.y1 - b.y0) * k > h) cam.y = top - b.y0 * k;
+  if ((b.x1 - b.x0) * k > w) {
+    const first = graph.comps[0] && positions.get(graph.comps[0].root.id);
+    cam.x = first ? innerWidth / 2 - (first.x + first.w / 2) * k : side - b.x0 * k;
+  }
+  framed = true;
+  applyCamera(fly);
+}
+// Where a node's dot is on screen.
+function dotAt(id) {
+  const p = shown.get(id) || positions.get(id);
+  if (!p) return null;
+  const n = graph.nodes.get(id);
+  const d = n?.kind === "task" && graph.comps.some((c) => c.root.id === id) ? ROOT_DOT : DOT;
+  return { x: cam.x + (p.x + p.w / 2) * cam.k, y: cam.y + (p.y + d / 2) * cam.k, r: d / 2 * cam.k };
+}
+function centreOn(id, k = cam.k, fly = true) {
+  const p = positions.get(id);
+  if (!p) return;
+  cam = { k, x: innerWidth / 2 - (p.x + p.w / 2) * k, y: innerHeight * .42 - (p.y + DOT / 2) * k };
+  framed = false;
+  applyCamera(fly);
+}
+
+// Dragging, the wheel and a pinch move the map; moving it closes an open node.
+const pointers = new Map();
+let drag = null;
+map.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 && e.pointerType === "mouse") return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  drag = { moved: false, start: { x: e.clientX, y: e.clientY }, cam: { ...cam }, pinch: pointers.size === 2 ? pinchOf() : null };
+  map.setPointerCapture?.(e.pointerId);
+});
+map.addEventListener("pointermove", (e) => {
+  if (!pointers.has(e.pointerId) || !drag) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    const p = pinchOf();
+    if (!drag.pinch) { drag.pinch = p; drag.cam = { ...cam }; }
+    const k = Math.max(.15, Math.min(3, drag.cam.k * p.d / drag.pinch.d));
+    const wx = (drag.pinch.x - drag.cam.x) / drag.cam.k, wy = (drag.pinch.y - drag.cam.y) / drag.cam.k;
+    cam = { k, x: p.x - wx * k, y: p.y - wy * k };
+    drag.moved = true;
+  } else {
+    const dx = e.clientX - drag.start.x, dy = e.clientY - drag.start.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    if (!drag.moved) { drag.moved = true; map.classList.add("grabbing"); if (openId) closeNode(); }
+    cam = { ...cam, x: drag.cam.x + dx, y: drag.cam.y + dy };
+  }
+  framed = false;
+  applyCamera();
+});
+const lift = (e) => {
+  pointers.delete(e.pointerId);
+  if (!pointers.size) { map.classList.remove("grabbing"); setTimeout(() => { drag = null; }, 0); }
+  else if (drag) { drag.pinch = null; const p = [...pointers.values()][0]; drag.start = p; drag.cam = { ...cam }; }
+};
+map.addEventListener("pointerup", lift);
+map.addEventListener("pointercancel", lift);
+function pinchOf() { const [a, b] = [...pointers.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)) }; }
+map.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  if (openId) closeNode();
+  const k = Math.max(.15, Math.min(3, cam.k * Math.exp(-e.deltaY * (e.deltaMode ? .05 : .0015))));
+  const wx = (e.clientX - cam.x) / cam.k, wy = (e.clientY - cam.y) / cam.k;
+  cam = { k, x: e.clientX - wx * k, y: e.clientY - wy * k };
+  framed = false;
+  applyCamera();
+}, { passive: false });
+// A click on the bare map closes an open node.
+map.addEventListener("click", (e) => { if (!drag?.moved && openId && !e.target.closest(".node")) closeNode(); });
+
+// ─── Drawing the map ───────────────────────────────────────────────────────
+const nodeEls = new Map();
+let tween = null;
+
+function drawMap() {
+  const visible = new Set(positions.keys());
+  for (const [id, elx] of nodeEls) if (!visible.has(id)) { elx.remove(); nodeEls.delete(id); shown.delete(id); }
+  const roots = new Set(graph.comps.map((c) => c.root.id));
+  const folded = new Map(graph.comps.filter((c) => c.folded).map((c) => [c.root.id, c]));
+  const queue = new Map((view.queue || []).map((q, i) => [q.task, i + 1]));
+  for (const id of visible) {
+    const n = graph.nodes.get(id);
+    if (!n) continue;
+    let a = nodeEls.get(id);
+    const fresh = !a;
+    if (fresh) {
+      a = el(n.kind === "task" ? "a" : "div", "node");
+      a.append(el("span", "dot"), el("span", "name"), el("span", "status"));
+      $(".dot", a).append(el("span", "ring"));
+      if (n.kind === "task") {
+        a.href = `#${id}`;
+        a.addEventListener("click", (e) => { if (e.button || e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); if (!drag?.moved) go(id); });
+      } else if (n.kind === "sat") {
+        a.addEventListener("click", () => { if (!drag?.moved) go(n.task); });
+        a.style.cursor = "pointer";
+      }
+      nodesLayer.append(a);
+      nodeEls.set(id, a);
+      // A new node grows out of where its owner is.
+      const from = graph.edges.find((e) => e.to === id)?.from;
+      const pf = from && (shown.get(from) || positions.get(from));
+      const p = positions.get(id);
+      shown.set(id, pf && shown.size ? { x: pf.x + (pf.w || 0) / 2 - p.w / 2, y: pf.y } : { x: p.x, y: p.y });
+      if (shown.size > 1) a.classList.add("enter");
+    }
+    const p = positions.get(id);
+    a.style.width = `${p.w}px`;
+    if (n.kind === "task") {
+      const t = n.t, l = look(t), root = roots.has(id);
+      a.className = `node ${l.cls}${root ? " root" : ""}${id === openId ? " selected" : ""}`;
+      a.style.setProperty("--d", `${root ? ROOT_DOT : DOT}px`);
+      const dot = $(".dot", a);
+      dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = glyph(t)) : dot.prepend(document.createTextNode(glyph(t)));
+      let badge = $(".badge", dot);
+      if (queue.has(id)) { if (!badge) dot.append(badge = el("span", "badge")); badge.textContent = queue.get(id); } else badge?.remove();
+      $(".name", a).textContent = shortName(t);
+      const st = $(".status", a);
+      const bad = trouble(t);
+      st.textContent = bad || l.text;
+      st.classList.toggle("trouble", !!bad);
+      a.title = `${t.name} · ${t.environment || ""} · ${t.mode}\n\n${(t.mandate || "").slice(0, 400)}`;
+      let where = $(".where", a);
+      const place = Object.values(t.places || {})[0];
+      if (root && place) { if (!where) a.append(where = el("span", "where")); where.textContent = place; } else where?.remove();
+      let more = $(".more", a);
+      const fc = folded.get(id);
+      if (fc) {
+        if (!more) { a.append(more = el("button", "more")); more.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); unfolded.add(id); refresh(); }); }
+        more.textContent = `+${fc.tasks.length - 1} more · finished`;
+      } else more?.remove();
+    } else if (n.kind === "scope") {
+      a.className = `node scope${n.scope.tool_use ? "" : " background"}${n.scope.settled ? " settled" : ""}`;
+      $(".name", a).textContent = ""; $(".status", a).textContent = "";
+    } else {
+      a.className = `node sat${n.call.limb === "max" ? " ask" : " working"}`;
+      a.style.setProperty("--d", `${SAT_DOT}px`);
+      const dot = $(".dot", a);
+      dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = n.call.limb === "max" ? "?" : "⋯") : dot.prepend(document.createTextNode(n.call.limb === "max" ? "?" : "⋯"));
+      $(".name", a).textContent = satLabel(n);
+      $(".status", a).textContent = ago(n.call.made);
+      a.title = n.call.input || "";
+    }
+  }
+  startTween();
+}
+
+// Nodes glide to where the layout puts them; edges follow every frame.
+function startTween() {
+  const from = new Map([...shown].map(([id, p]) => [id, { ...p }]));
+  const t0 = performance.now(), T = reduced() ? 0 : 480;
+  cancelAnimationFrame(tween);
+  const frame = (now) => {
+    const u = T ? Math.min(1, (now - t0) / T) : 1;
+    const e = 1 - Math.pow(1 - u, 3);
+    for (const [id, p] of positions) {
+      const f = from.get(id) || p;
+      shown.set(id, { x: f.x + (p.x - f.x) * e, y: f.y + (p.y - f.y) * e, w: p.w, h: p.h });
+      const a = nodeEls.get(id);
+      if (a) a.style.transform = `translate(${shown.get(id).x}px, ${shown.get(id).y}px)`;
+    }
+    drawEdges();
+    if (u < 1) tween = requestAnimationFrame(frame);
+  };
+  tween = requestAnimationFrame(frame);
+}
+
+function anchor(id, end) {
+  const p = shown.get(id);
+  const n = graph.nodes.get(id);
+  if (!p || !n) return null;
+  const cx = p.x + p.w / 2;
+  if (n.kind === "scope") return { x: cx, y: p.y + 6 };
+  const d = n.kind === "sat" ? SAT_DOT : graph.comps.some((c) => c.root.id === id) ? ROOT_DOT : DOT;
+  return end === "out" ? { x: cx, y: p.y + d + 2 } : { x: cx, y: p.y - 2 };
+}
+function drawEdges() {
+  const paths = [];
+  for (const e of graph.edges) {
+    const a = anchor(e.from, "out"), b = anchor(e.to, "in");
+    if (!a || !b) continue;
+    if (e.kind === "continues") {
+      const p = shown.get(e.from), q = shown.get(e.to), d = DOT / 2;
+      const x0 = p.x + p.w / 2, y0 = p.y + d, x1 = q.x + q.w / 2, y1 = q.y + d;
+      const lift = Math.min(60, 12 + Math.abs(x1 - x0) / 6);
+      const path = svgEl("path");
+      path.setAttribute("d", `M${x0 + Math.sign(x1 - x0) * (d + 3)},${y0} C${x0},${Math.min(y0, y1) - lift} ${x1},${Math.min(y0, y1) - lift} ${x1 - Math.sign(x1 - x0) * (d + 3)},${y1}`);
+      path.setAttribute("class", "edge continues");
+      paths.push(path);
+      continue;
+    }
+    // Out of the bottom of the source's dot, below its name, into the top of the target's.
+    const n = graph.nodes.get(e.from);
+    const sx = a.x, sy = n.kind === "task" || n.kind === "sat" ? (shown.get(e.from).y + shown.get(e.from).h - 4) : a.y;
+    const dy = Math.max(18, (b.y - sy) / 2);
+    const path = svgEl("path");
+    path.setAttribute("d", b.y > sy ? `M${sx},${sy} C${sx},${sy + dy} ${b.x},${b.y - dy} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x + 60},${a.y} ${b.x + 60},${b.y} ${b.x},${b.y}`);
+    path.setAttribute("class", `edge ${e.kind}${e.flow ? " flow" : ""}${e.max ? " max" : ""}`);
+    paths.push(path);
+  }
+  edgesLayer.replaceChildren(...paths);
 }
 
 // Why a task's last turn did not respond, while it matters.
 function trouble(t) {
   const x = t.trouble;
-  if (!x || t.waiting?.kind === "done") return null;
+  if (!x || isDone(t)) return null;
   if (x.until != null) return x.until > Date.now() ? `limited until ${clock(x.until)}` : null;
-  return t.failures ? `failed ${t.failures}× in a row, last ${ago(x.at)} ago: ${x.text}` : null;
+  return t.failures ? `failed ${t.failures}× · ${x.text}` : null;
 }
 
-// The gist of a call's input: its command, or the path or pattern it names.
-function gist(input) {
-  let v;
-  try { v = JSON.parse(input); } catch { return ""; }
-  const s = v && (v.command ?? v.path ?? v.pattern ?? v.name);
-  if (typeof s !== "string") return "";
-  const line = s.split("\n")[0];
-  return `: ${line.length > 70 ? line.slice(0, 70) + "…" : line}`;
+// ─── The whole page, from the view ─────────────────────────────────────────
+let busy = false, again = false;
+async function refresh() {
+  if (!view) return;
+  if (busy) { again = true; return; }
+  busy = true;
+  try {
+    derive();
+    const changed = await layout();
+    drawMap();
+    if (changed && framed && !openId) fit(nodeEls.size > 0 && shownBefore);
+    shownBefore = true;
+    render();
+  } finally {
+    busy = false;
+    if (again) { again = false; refresh(); }
+  }
 }
+let shownBefore = false;
 
 function render() {
   if (!view) return;
-  byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
-  $("#build").textContent = view.build ? `build ${view.build}` : "";
-  $("#seq").textContent = `seq ${view.seq}`;
+  $("#empty").hidden = view.tasks.length > 0;
+  renderPill();
   renderUsage();
+  $("#build").textContent = `${view.build || ""} · seq ${view.seq}`;
+  $("#lock").hidden = !lock;
+  if (lock) { $("#lock").replaceChildren(`this tab acts only in ${byId[lock]?.name || "?"} `, Object.assign(el("button", "btn", "unlock"), { onclick: () => setLock(null) })); }
+  if (openId) renderPanel();
+  if (!$("#drawer").hidden) renderDrawer();
+}
 
-  // Max's queue, in the order the core derives.
-  const queue = $("#queue ul");
-  const typing = document.activeElement?.dataset?.ask;
-  queue.replaceChildren();
-  view.queue.forEach((q, i) => {
-    const t = byId[q.task];
-    const li = el("li", "queued");
+// ─── Max's queue ───────────────────────────────────────────────────────────
+function renderPill() {
+  const q = view.queue || [];
+  const pill = $("#pill");
+  pill.classList.toggle("owed", q.length > 0);
+  pill.replaceChildren();
+  if (q.length) pill.append(el("span", "n", String(q.length)), q.length === 1 ? " needs you" : " need you");
+  else pill.append("nothing needs you");
+}
+$("#pill").onclick = () => { const d = $("#drawer"); d.hidden = !d.hidden; if (!d.hidden) renderDrawer(); };
+function renderDrawer() {
+  const d = $("#drawer"), q = view.queue || [];
+  const h = el("h3", null, "Waiting on you");
+  if (q.length) { const next = el("button", "btn", "Next ›"); next.onclick = () => { d.hidden = true; go(q[0].task); }; h.append(next); }
+  d.replaceChildren(h);
+  if (!q.length) d.append(el("div", "nothing", "Nothing needs you."));
+  q.forEach((item, i) => {
+    const t = byId[item.task];
+    const row = el("div", "queued");
     const move = el("span", "move");
     for (const [label, to] of [["↑", i - 1], ["↓", i + 1]]) {
       const b = el("button", null, label);
-      b.disabled = !can.act || to < 0 || to >= view.queue.length;
+      b.disabled = !can.act || to < 0 || to >= q.length;
       b.onclick = (e) => { e.stopPropagation(); reorder(i, to); };
       move.append(b);
     }
-    li.append(move, el("span", "name", t.name), el("span", "tag", `waiting ${ago(q.since)}`));
-    if (q.ask) {
-      li.append(el("span", "ask", `asks: ${preview(q.ask.input)}`));
-      if (can.act) li.append(reply(q.ask, typing === q.ask.id));
-    }
-    li.append(el("span", "why", q.why ? q.why : "unranked"));
-    li.onclick = () => select(q.task);
-    queue.append(li);
+    const proj = ancestry(t)[0];
+    row.append(el("span", "num", String(i + 1)), el("span", "what", `${t.name}`), move);
+    row.append(el("span", "ask", item.ask ? `asks: ${parse(item.ask.input)?.question || item.ask.input}` : `your turn · ${ago(item.since)}`));
+    row.append(el("span", "why", `${proj ? proj.name + " · " : ""}${item.why || "unranked"} · waiting ${ago(item.since)}`));
+    row.onclick = () => { d.hidden = true; go(item.task); };
+    d.append(row);
   });
-  if (!view.queue.length) queue.append(el("li", "empty", "Nothing needs you."));
-  const next = view.queue[0];
-  $("#next").hidden = !next || next.task === selected;
-  if (next) $("#next").textContent = `Next: ${byId[next.task].name}`;
-
-  // The tree: Max's scope at the top, each task under the task that owns it.
-  const parent = (t) => t.owner;
-  const kids = {};
-  for (const t of view.tasks) (kids[parent(t)] ||= []).push(t);
-  const tree = $("#tree ul");
-  tree.replaceChildren();
-  const walk = (id, depth) => {
-    for (const t of kids[id] || []) {
-      tree.append(row(t, depth));
-      walk(t.id, depth + 1);
-    }
-  };
-  walk(null, 0);
-  if (!view.tasks.length) tree.append(el("li", "empty", "No tasks yet."));
-
-  renderDetail();
-  renderTo();
 }
-
-// Max's answer to an ask: the call's settlement, which he authors. What he
-// types survives the queue being drawn again.
-const replies = {};
-function reply(ask, focus) {
-  const form = el("form", "reply");
-  const input = el("input");
-  input.dataset.ask = ask.id;
-  input.placeholder = "your answer";
-  input.value = replies[ask.id] || "";
-  input.oninput = () => { replies[ask.id] = input.value; };
-  const answer = el("span", "answer");
-  form.append(input, el("button", null, "Answer"), answer);
-  form.onclick = (e) => e.stopPropagation();
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    const said = input.value.trim();
-    if (!said) return;
-    const content = JSON.stringify([{ type: "text", text: said }]);
-    const model = await (await fetch("/digest", { method: "POST", body: content })).text();
-    const why = await act({ Call: [ask.id, { Settled: { Completed: { model, full: null, observes: [] } } }] }, [content]);
-    if (why) { answer.className = "answer bad"; answer.textContent = `refused: ${why}`; return; }
-    delete replies[ask.id];
-  };
-  if (focus) queueMicrotask(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
-  return form;
-}
-
-// Max's own order for his queue: the whole order, as the scheduler would
-// write it, each task keeping its reason.
+// Max's own order for his queue: the whole order, each keeping its reason.
 async function reorder(from, to) {
   const order = view.queue.map((q) => ({ task: q.task, why: q.why || "placed by you" }));
   order.splice(to, 0, ...order.splice(from, 1));
@@ -329,94 +944,222 @@ async function reorder(from, to) {
   const why = await act({ Ranking: { order } });
   if (why) alert(`queue not reordered: ${why}`);
 }
+document.addEventListener("pointerdown", (e) => {
+  if (!$("#drawer").hidden && !e.target.closest("#drawer, #pill")) $("#drawer").hidden = true;
+});
 
-$("#next").onclick = () => { select(view.queue[0].task); box.focus(); };
-
-function row(t, depth) {
-  const li = el("li", "task");
-  li.style.setProperty("--depth", depth);
-  if (t.id === selected) li.classList.add("selected");
-  if (t.waiting && t.waiting.kind === "done") li.classList.add("done");
-  li.append(el("span", "name", t.name), el("span", "tag", t.environment || ""));
-  for (const limb of Object.values(t.places || {})) li.append(el("span", "tag", `in ${limb}`));
-  if (t.origin !== "fresh") li.append(el("span", "tag", `${t.origin} of ${byId[t.from] ? byId[t.from].name : t.from}`));
-  if (t.held) li.append(el("span", "tag", "held"));
-  if (t.draining) li.append(el("span", "tag", `draining: ${t.draining}`));
-  const th = throbber(t);
-  const line = el("span", `throb ${th.cls}`);
-  const spin = el("span", "spin", th.spin === true ? "" : th.spin);
-  if (th.spin === true) spin.dataset.spin = "1";
-  line.append(spin, document.createTextNode(th.text));
-  li.append(line);
-  const bad = trouble(t);
-  if (bad) li.append(el("span", "trouble", bad));
-  li.onclick = () => select(t.id);
-  return li;
+// ─── Usage ─────────────────────────────────────────────────────────────────
+const pct = (f) => f == null ? "?" : `${Math.round(f * 100)}%`;
+const resets = (ms) => {
+  if (ms == null) return "";
+  const d = new Date(ms);
+  return d.toDateString() === new Date().toDateString() ? `resets ${clock(ms)}` : `resets ${d.toLocaleDateString([], { weekday: "short" })} ${clock(ms)}`;
+};
+function renderUsage() {
+  const u = view.usage, span = $("#usage");
+  span.replaceChildren();
+  if (!u) return;
+  for (const [label, w] of [["5h", u.five_hour], ["7d", u.seven_day]]) {
+    const f = w?.used, r = w?.resets;
+    const g = el("span", `gauge${f > .8 ? " high" : ""}`);
+    const bar = el("i"); const fill = el("b"); fill.style.width = `${Math.round((f || 0) * 100)}%`; bar.append(fill);
+    g.append(label, bar, pct(f), el("span", "reset", resets(r)));
+    g.title = `as of ${clock(u.at)}`;
+    span.append(g);
+  }
+  if (!u.on_plan) span.append(el("span", "alarm", "billed outside the plan: nothing more is sent"));
+  if (view.limited) span.append(el("span", "alarm", `limited until ${clock(view.limited)}`));
 }
 
-// Selecting a task is focusing on it: a fact, so nothing moves the task
-// Max is in from under him.
-function select(id) {
-  if (selected !== id && can.act) act({ Focus: { face: FACE, task: id } });
-  selected = id;
-  history.replaceState(null, "", `#${id}`);
+// ─── Opening a node ────────────────────────────────────────────────────────
+// The URL names the open node, so the back button closes it and a node opens
+// in a tab of its own with a middle click.
+const panel = $("#panel"), logEl = $(".log", panel), scrollEl = $(".scroll", panel);
+let openId = null, saved = null, moving = Promise.resolve();
+
+function go(id) {
+  if (id === openId) return;
+  history.pushState({ node: id }, "", `#${id}`);
+  route();
+}
+function closeNode() {
+  if (!openId) return;
+  if (history.state?.node) history.back();
+  else { history.replaceState(null, "", location.pathname); route(); }
+}
+addEventListener("popstate", route);
+addEventListener("hashchange", route);
+
+function route() {
+  const id = location.hash.slice(1) || null;
+  moving = moving.then(() => transition(id && byId[id] ? id : id && !view ? id : null));
+}
+
+async function transition(to) {
+  if (to === openId) return;
+  const from = openId;
+  if (from) await shrink(from, !to);
+  if (to) {
+    if (!view || !byId[to]) { pendingOpen = to; return; }
+    // Unfold a finished project to reach a node in it.
+    const comp = graph.comps.find((c) => c.tasks.some((t) => t.id === to));
+    if (comp?.folded) { unfolded.add(comp.root.id); await refreshNow(); }
+    if (!saved) saved = { ...cam };
+    const k = Math.max(cam.k, phone() ? 1.1 : 1.3);
+    centreOn(to, k, true);
+    if (from) await sleep(reduced() ? 0 : 380);
+    await expand(to);
+  } else if (saved) {
+    if (!framed) { cam = saved; applyCamera(true); }
+    saved = null;
+    if (framed) fit(true);
+  }
+}
+let pendingOpen = null;
+async function refreshNow() { await refresh(); while (busy) await sleep(20); }
+
+// The node opens into the panel: the panel is revealed from the node's dot.
+async function expand(id) {
+  openId = id;
+  if (can.act && id) act({ Focus: { face: FACE, task: id } });
+  for (const [nid, a] of nodeEls) a.classList.toggle("selected", nid === id);
+  map.classList.add("dim");
+  panel.hidden = false;
+  buildPanel(id);
+  await sleep(0);
+  const d = dotAt(id), P = panel.getBoundingClientRect();
+  if (d && !reduced()) {
+    const inset = `inset(${d.y - d.r - P.top}px ${P.right - d.x - d.r}px ${P.bottom - d.y - d.r}px ${d.x - d.r - P.left}px round ${d.r}px)`;
+    await panel.animate([{ clipPath: inset, opacity: .6 }, { clipPath: "inset(0 0 0 0 round 18px)", opacity: 1 }], { duration: 420, easing: "cubic-bezier(.2,.8,.2,1)" }).finished.catch(() => {});
+  }
+  if (!phone()) $(".compose textarea", panel)?.focus({ preventScroll: true });
+}
+async function shrink(id, toMap) {
+  stopFollowing();
+  const d = dotAt(id), P = panel.getBoundingClientRect();
+  if (dictation) stopDictation();
+  if (d && !reduced()) {
+    const inset = `inset(${d.y - d.r - P.top}px ${P.right - d.x - d.r}px ${P.bottom - d.y - d.r}px ${d.x - d.r - P.left}px round ${d.r}px)`;
+    await panel.animate([{ clipPath: "inset(0 0 0 0 round 18px)", opacity: 1 }, { clipPath: inset, opacity: .3 }], { duration: toMap ? 300 : 240, easing: "cubic-bezier(.4,0,.6,1)" }).finished.catch(() => {});
+  }
+  panel.hidden = true;
+  openId = null;
+  logState = null;
+  for (const a of nodeEls.values()) a.classList.remove("selected");
+  if (toMap) map.classList.remove("dim");
+}
+
+// ─── The panel: who, what state, controls ─────────────────────────────────
+let logState = null;
+function buildPanel(id) {
+  logState = { id, head: undefined, rendered: [], rows: new Map(), group: null, exact: logState?.exact || false, follow: true };
+  logEl.replaceChildren();
+  logEl.classList.toggle("exact", logState.exact);
+  $(".viewer", panel).hidden = true;
+  scrollEl.scrollTop = 0;
+  buildCompose(id);
+  renderPanel();
+}
+$(".x", panel).onclick = closeNode;
+$(".back", panel).onclick = closeNode;
+$(".exact-toggle", panel).onclick = () => {
+  logState.exact = !logState.exact;
+  $(".exact-toggle", panel).classList.toggle("armed", logState.exact);
+  const id = logState.id; const exact = logState.exact;
+  logState = { id, head: undefined, rendered: [], rows: new Map(), group: null, exact, follow: true };
+  logEl.classList.toggle("exact", exact);
+  logEl.replaceChildren();
+  renderPanel();
+};
+addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (!$("#drawer").hidden) { $("#drawer").hidden = true; return; }
+    if (!$("#sheet").hidden) { $("#sheet").hidden = true; return; }
+    if (sendArmed) { disarm(); return; }
+    if (!$(".viewer", panel).hidden) { $(".viewer", panel).hidden = true; return; }
+    if (openId) closeNode();
+  }
+  if ((e.key === "f" || e.key === "F") && !openId && !e.target.closest("input, textarea, select")) fit(true);
+});
+
+function renderPanel() {
+  const t = byId[openId];
+  if (!t) return;
+  // Breadcrumbs: the project, the way down, and this task.
+  const crumbs = $(".crumbs", panel);
+  crumbs.replaceChildren();
+  for (const a of ancestry(t)) {
+    const link = el("a", null, a.name); link.href = `#${a.id}`;
+    link.onclick = (e) => { e.preventDefault(); go(a.id); };
+    crumbs.append(link, el("span", "sep", "›"));
+  }
+  crumbs.append(el("span", "here", t.name), el("span", "role", [t.environment, t.mode === "user-facing" ? "chat" : t.origin !== "fresh" ? t.origin : null].filter(Boolean).join(" · ")));
+  const l = look(t);
+  const st = $(".state", panel);
+  st.textContent = trouble(t) || l.text;
+  st.className = `state${l.cls.includes("open") ? " max" : ""}`;
+  const ctx = $(".ctx", panel);
+  ctx.replaceChildren();
+  if (t.tokens) {
+    const g = el("span", `gauge${t.tokens.context > 160000 ? " high" : ""}`);
+    const bar = el("i"); const fill = el("b"); fill.style.width = `${Math.min(100, t.tokens.context / 2000)}%`; bar.append(fill);
+    g.append(bar, `${kTokens(t.tokens.context)} context`);
+    g.title = "tokens in its context at its last request, of a 200k window";
+    ctx.append(g);
+  }
+  renderControls(t);
+  renderLog(t);
+  renderComposeState(t);
+}
+
+function renderControls(t) {
+  const box = $(".controls", panel);
+  const key = `${t.id}:${t.waiting?.kind}:${t.held}:${t.mode}:${mayAct(t.id)}:${lock}`;
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.replaceChildren();
+  if (!mayAct(t.id) || isDone(t)) {
+    if (can.act && !isDone(t)) box.append(el("span", "answer", "this tab acts elsewhere"));
+    return;
+  }
+  const answer = el("span", "answer");
+  const button = (label, title, fact, done, confirm) => {
+    const b = el("button", "btn", label);
+    b.title = title;
+    b.onclick = async () => {
+      if (confirm && !b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = `${label}?`; setTimeout(() => { b.classList.remove("armed"); b.textContent = label; }, 4000); return; }
+      b.classList.remove("armed"); b.textContent = label;
+      answer.className = "answer"; answer.textContent = "…";
+      const why = await act(fact());
+      answer.className = why ? "answer bad" : "answer";
+      answer.textContent = why ? `refused: ${why}` : done;
+      if (why && byId[t.id]?.scoped) { const a = el("button", "btn", "Open an aside"); a.onclick = () => aside(t, answer); answer.append(" ", a); }
+    };
+    box.append(b);
+  };
+  if (t.scoped) { const a = el("button", "btn", "Aside"); a.title = "Talk to a fork of it while its agents work; it is told when they are done, and when you say Done its summary goes back with their results"; a.onclick = () => aside(t, answer); box.append(a); }
+  else if (t.waiting?.kind !== "max") button("Interrupt", "Stop at the next safe point and wait for you", () => ({ Task: [t.id, { Drain: "ToMax" }] }), "interrupted: your move once it stops");
+  button(t.held ? "Release" : "Hold", "No new requests under it until released", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), t.held ? "released" : "held");
+  if (t.mode === "user-facing") button("Done", "It writes its result and finishes", () => ({ Delivery: { id: mint(), to: t.id, content: { Prompt: "Done" } } }), "done: its last turn writes the result", true);
+  button("Stop", "Cancel it and everything it started", () => ({ Task: [t.id, { Drain: { Stop: "Max" } }] }), "stopping", true);
+  const lockB = el("button", "btn", lock === t.id ? "Unlock tab" : "Act only here");
+  lockB.title = "This tab acts only in this task and what it started; it can still show anything";
+  lockB.onclick = () => setLock(lock === t.id ? null : t.id);
+  box.append(lockB, answer);
+}
+function setLock(id) {
+  lock = id;
+  if (id) sessionStorage.setItem("lock", id); else sessionStorage.removeItem("lock");
   render();
 }
 
-// Max's facts. This page is one face, with an id it keeps. Each fact is
-// posted in the journal's own encoding and the brain folds it before it
-// appends it, so a refusal names the core's reason. A post that the
-// connection dropped is sent again: what the page creates carries an id it
-// minted, so the core refuses a second copy ("creates something that already exists"), which means the first
-// one landed.
-const mint = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
-const FACE = localStorage.getItem("face") || mint();
-localStorage.setItem("face", FACE);
-
-// Max's facts, with the text of each value they name, in one batch.
-async function act(facts, values = []) {
-  if (!can.act) return "this face is not wired to a brain";
-  const batch = { values, facts: Array.isArray(facts) ? facts : [facts] };
-  const body = JSON.stringify({ face: FACE, seen: view.seq, batch });
-  for (let attempt = 0; ; attempt++) {
-    let res;
-    try {
-      res = await fetch("/act", { method: "POST", body });
-    } catch {
-      await new Promise((r) => setTimeout(r, 1000 * Math.min(attempt + 1, 5)));
-      continue;
-    }
-    if (res.ok) return null;
-    const why = await res.text();
-    if (attempt > 0 && why === "creates something that already exists") return null;
-    return why || res.statusText;
-  }
-}
-
-// The answer to a control, beside it: done, or the core's refusal.
-async function control(fact, answer, done) {
-  answer.className = "answer";
-  answer.textContent = "…";
-  const why = await act(fact);
-  answer.className = why ? "answer bad" : "answer";
-  answer.textContent = why ? `refused: ${why}` : done;
-  // A task waiting on its children is not interrupted: Max talks to a fork
-  // of it instead, which joins the children it waits on.
-  if (why && byId[selected]?.scoped) {
-    const b = el("button", null, "Open an aside");
-    b.onclick = () => aside(answer);
-    answer.append(" ", b);
-  }
-}
-
-// An aside: a chat with a fork of the selected task, opened on its current
-// context as one more of the children it waits on. It is told when the rest
-// are done, and its result goes back with theirs when Max marks it done.
-// What is in the compose box is its first message.
-async function aside(answer) {
-  const t = byId[selected];
-  const said = box.value.trim() || "I want to talk while your work runs.";
-  const text = await (await fetch("/digest", { method: "POST", body: said })).text();
+// An aside: a chat with a fork of a task waiting on agents it started, as
+// one more of them. It is told when the rest are done, and its summary goes
+// back with their results when Max marks it done.
+async function aside(t, answer) {
+  const key = t.id;
+  const said = drafts.get(key).trim() || "I want to talk while your work runs.";
+  const text = await digest(said);
   const id = mint();
   const why = await act({ Task: [id, { Created: {
     name: `${t.name}-aside`, by: null, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } },
@@ -425,77 +1168,504 @@ async function aside(answer) {
   answer.className = why ? "answer bad" : "answer";
   answer.textContent = why ? `aside refused: ${why}` : "aside opened";
   if (why) return;
-  if (box.value.trim()) { box.value = prev = ""; localStorage.removeItem("draft"); }
-  select(id);
+  drafts.set(key, "");
+  if ($(".compose textarea", panel)?.dataset.key === key) $(".compose textarea", panel).value = "";
+  await sleep(300);
+  go(id);
 }
 
-// The compose box. Its text is Max's until he sends it, kept across
-// reloads. Dictation streams into it as edits to a live region, which he can
-// edit too: an edit inside the region pins the text up to the end of his
-// edit, and the words still coming go after it.
-
-const box = $("#box");
-let can = { act: false, dictation: false, sample: false };
-let prev = box.value = localStorage.getItem("draft") || "";
-let live = null;
-
-const say = (text, bad) => { $("#status").textContent = text; $("#status").className = bad ? "bad" : ""; };
-
-fetch("/wiring").then((r) => r.json()).then((c) => {
-  can = c;
-  $("#mic").hidden = !c.dictation;
-  $("#sample").hidden = !c.sample;
-});
-
-function renderTo() {
-  const t = selected && byId[selected];
-  $("#to").textContent = t ? t.name : "no task selected";
+// ─── The log: the context, exactly as sent, rendered ──────────────────────
+const contexts = new Map();
+async function contextOf(head) {
+  if (!contexts.has(head)) contexts.set(head, fetch(`/context/${head}`).then((r) => r.ok ? r.json() : null).catch(() => null));
+  return contexts.get(head);
 }
 
-// One input from Max: one contiguous change, found by trimming what is the
-// same at both ends.
-box.addEventListener("input", () => {
-  const now = box.value;
-  let x = 0;
-  while (x < prev.length && x < now.length && prev[x] === now[x]) x++;
-  let tail = 0;
-  while (tail < prev.length - x && tail < now.length - x && prev[prev.length - 1 - tail] === now[now.length - 1 - tail]) tail++;
-  const removed = prev.length - x - tail, inserted = now.length - x - tail;
-  if (live) {
-    const end = live.start + live.T.length - live.P;
-    if (x + removed <= live.start && !(x === live.start && removed === 0 && live.T.length === live.P)) {
-      live.start += inserted - removed;
-    } else if (x <= end) {
-      live.P = Math.min(live.T.length, live.P + Math.max(0, x + removed - live.start));
-      live.start = x + inserted;
+async function renderLog(t) {
+  const s = logState;
+  if (!s || s.id !== t.id) return;
+  if (s.head !== t.head) {
+    const head = t.head;
+    s.head = head;
+    const chain = head ? await contextOf(head) : [];
+    if (logState !== s || s.head !== head) return;
+    if (!chain) return;
+    stick(() => appendChain(s, chain, t));
+  }
+  stick(() => renderTail(s, t));
+}
+
+// New entries append; an entry no longer in the chain (a rewind, a new root)
+// starts the log again.
+function appendChain(s, chain, t) {
+  const ids = chain.map((e) => e.id);
+  const keep = s.rendered.findIndex((r, i) => r.id !== ids[i]);
+  if (keep !== -1 || s.rendered.length > ids.length) {
+    s.rendered = []; s.rows = new Map(); s.group = null; s.prevText = null;
+    logEl.replaceChildren();
+  }
+  for (let i = s.rendered.length; i < chain.length; i++) {
+    const e = chain[i];
+    const into = el("div", "chunk");
+    into.dataset.entry = e.id;
+    if (s.exact) exactEntry(into, e);
+    else entry(s, into, e, i, t);
+    s.rendered.push({ id: e.id, el: into });
+    const tail = $(".tail", logEl);
+    if (tail) tail.before(into); else logEl.append(into);
+  }
+}
+
+function exactEntry(into, e) {
+  const div = el("div", `exact-entry ${e.role}`);
+  div.append(el("div", "who", e.role === "root" ? `root · ${e.model}` : e.role));
+  if (e.role === "root") div.append(el("div", "io", e.system || ""), el("div", "io", e.tools || ""));
+  else { const c = parse(e.content); div.append(el("div", "io", c === undefined ? e.content : JSON.stringify(c, null, 2))); }
+  into.append(div);
+}
+
+function blocksOf(e) {
+  let c = parse(e.content);
+  if (c === undefined) c = e.content;
+  if (typeof c === "string") c = [{ type: "text", text: c }];
+  return Array.isArray(c) ? c : [];
+}
+
+function entry(s, into, e, index, t) {
+  if (e.role === "root") {
+    const d = el("details", "thought");
+    const tools = (parse(e.tools) || []).map((x) => x.name);
+    d.append(el("summary", null, `${e.model} · system prompt (${kTokens(Math.round((e.system || "").length / 4))} tokens) · ${tools.length} tools: ${tools.join(", ")}`));
+    d.append(el("div", "io", e.system || ""), el("div", "io", JSON.stringify(parse(e.tools), null, 2) || ""));
+    into.append(d);
+    return;
+  }
+  const blocks = blocksOf(e);
+  if (e.role === "user") {
+    let next = null; // what the harness said the next text is
+    for (const b of blocks) {
+      if (b.type === "tool_result") { result(s, b); continue; }
+      if (b.type === "image") { closeGroup(s); const img = el("img"); img.src = `data:${b.source?.media_type};base64,${b.source?.data}`; img.style.maxWidth = "100%"; into.append(img); continue; }
+      if (b.type !== "text") continue;
+      const text = b.text || "";
+      closeGroup(s);
+      if (/^\[harness\] Max (wrote this|'s own words)/.test(text)) { next = { kind: "max", caption: text.replace(/^\[harness\] /, "").replace(/:$/, "") }; continue; }
+      const answered = text.match(/^\[harness\] Max answered the question you asked in the background:\s*([\s\S]*)$/);
+      if (answered) { into.append(said(answered[1], "answered your question in the background", "answer")); continue; }
+      if (text.startsWith("[harness]")) {
+        const n = el("div", "note"); const tx = el("span", "t", text.replace(/^\[harness\] /, ""));
+        tx.onclick = () => tx.classList.toggle("full"); n.append(tx); into.append(n); continue;
+      }
+      if (next?.kind === "max") { into.append(said(text, next.caption)); next = null; continue; }
+      // The rest of a first message is the mandate.
+      const card = el("div", `card mandate${text.length > 900 ? " clip" : ""}`);
+      const from = t.origin === "aside" ? "you, opening this aside" : !t.owner ? "you" : byId[t.owner]?.name || "its owner";
+      card.append(el("div", "label", index <= 2 ? `Mandate · from ${from}` : "Instructions"), markdown(text));
+      if (text.length > 900) { const m = el("button", "more-link", "Show all"); m.onclick = () => { card.classList.toggle("clip"); m.textContent = card.classList.contains("clip") ? "Show all" : "Show less"; }; card.append(m); }
+      into.append(card);
     }
+    return;
+  }
+  // The assistant's turn: its words read as prose; its tool uses as steps.
+  for (const b of blocks) {
+    if (b.type === "thinking" || b.type === "redacted_thinking") {
+      if (!b.thinking) continue;
+      const d = el("details", "thought"); d.append(el("summary", null, "Thinking"), el("div", "plain", b.thinking));
+      (s.group ? s.group.el : into).append(d);
+    } else if (b.type === "text") {
+      closeGroup(s);
+      const p = markdown(b.text || "");
+      p.classList.add("entry");
+      if (t.outcome?.kind === "result" && isLast(s, e, t)) { const card = el("div", "card result"); card.append(el("div", "label", "Result"), p); into.append(card); }
+      else into.append(p);
+    } else if (b.type === "tool_use") {
+      step(s, into, b, t);
+    }
+  }
+  const r = e.response;
+  if (r && r.ended) {
+    const meta = el("div", "meta", `${clock(r.ended)} · ${((r.ended - r.sent) / 1000).toFixed(1)}s · ${kTokens(r.context)} context · ${kTokens(r.output)} out`);
+    // A turn of only tools keeps its timing on its last step, so a folded group shows one.
+    (s.group ? s.group.rows[s.group.rows.length - 1] : into).append(meta);
+  }
+}
+const isLast = (s, e, t) => e.id === t.head || (t.outcome && e.id === t.head);
+
+function said(text, caption, cls = "") {
+  const d = el("div", `entry said ${cls}`);
+  const words = parse(text);
+  const body = Array.isArray(words) ? words.map((w) => w.text || "").join("\n") : text;
+  d.append(el("div", "caption", caption), el("div", "bubble", body));
+  return d;
+}
+
+// Consecutive tool steps with no words between them fold into one group,
+// which shows its latest step until opened.
+function step(s, into, b, t) {
+  if (!s.group) {
+    const g = el("div", "steps folded");
+    const head = el("div", "head");
+    const group = { el: g, head, rows: [], opened: false };
+    head.onclick = () => { group.opened = g.classList.contains("folded"); groupHead(group); };
+    g.append(head);
+    s.group = group;
+    into.append(g);
+  }
+  const row = toolRow(s, b, t);
+  s.group.el.append(row);
+  s.group.rows.push(row);
+  groupHead(s.group);
+}
+function groupHead(g) {
+  const n = g.rows.length;
+  g.head.hidden = n < 3;
+  g.el.classList.toggle("folded", n >= 3 && !g.opened);
+  if (n < 3) return;
+  const counts = {};
+  for (const r of g.rows) counts[r.dataset.tool] = (counts[r.dataset.tool] || 0) + 1;
+  const what = Object.entries(counts).map(([k, v]) => v > 1 ? `${k} ×${v}` : k).join(", ");
+  g.head.textContent = `${g.el.classList.contains("folded") ? "▸" : "▾"} ${n} steps · ${what}`;
+}
+function closeGroup(s) { s.group = null; }
+
+const FILES = /\.(md|markdown|svg|html?|txt|json|rs|py|js|ts|toml|ya?ml|sh|css)$/i;
+function toolRow(s, b, t) {
+  const row = el("div", "row");
+  row.dataset.tool = b.name;
+  const line = el("div", "line");
+  const input = b.input || {};
+  const inner = b.name === "background" ? input.input || {} : input;
+  const name = b.name === "background" ? `${input.tool} ↷` : b.name;
+  line.append(el("span", "tool", name), el("span", "gist", gist(inner)), el("span", "st run", ""));
+  const detail = el("div", "detail");
+  detail.append(el("div", "io", fields(input)));
+  row.append(line, detail);
+  line.onclick = () => row.classList.toggle("expanded");
+  const path = inner.path;
+  if (path && FILES.test(path) && (b.name === "write" || input.tool === "write")) {
+    const open = el("button", "open-file", "open"); open.onclick = (e) => { e.stopPropagation(); viewFile(path, inner.content); };
+    line.insertBefore(open, line.lastChild);
+  }
+  // A spawn's members, beside it: each opens where it is on the map.
+  if (b.name === "spawn" || (b.name === "background" && input.tool === "spawn")) {
+    const chips = el("div", "chips");
+    row.insertBefore(chips, detail);
+    row.chips = chips;
+  }
+  if (b.name === "ask" || (b.name === "background" && input.tool === "ask")) {
+    const q = el("div", "card ask");
+    q.append(el("div", "label", b.name === "ask" ? "Asked you" : "Asked you, carrying on meanwhile"), markdown(inner.question || JSON.stringify(inner)));
+    row.insertBefore(q, detail);
+  }
+  if (b.name === "handover") {
+    const q = el("div", "card");
+    q.append(el("div", "label", "Handed over to a fresh context"), markdown(input.note || ""));
+    row.insertBefore(q, detail);
+  }
+  s.rows.set(b.id, { row, b, inner });
+  fillChips(s, b.id, t);
+  return row;
+}
+function fillChips(s, toolUse, t) {
+  const r = s.rows.get(toolUse);
+  if (!r?.row.chips) return;
+  const call = Object.entries(view.scopes).find(([, sc]) => sc.tool_use === toolUse)?.[0];
+  let members = call ? view.tasks.filter((x) => x.scope === call) : [];
+  if (!call && r.b.name === "background") {
+    const names = new Set((r.inner.tasks || []).map((x) => `${t.name}-${x.name}`));
+    members = view.tasks.filter((x) => x.owner === t.id && names.has(x.name));
+  }
+  r.row.chips.replaceChildren(...members.sort((a, b) => a.name.localeCompare(b.name)).map(chip));
+}
+function chip(m) {
+  const l = look(m);
+  const a = el("a", `chip ${l.cls}`);
+  a.href = `#${m.id}`;
+  a.onclick = (e) => { if (e.button || e.ctrlKey || e.metaKey) return; e.preventDefault(); go(m.id); };
+  a.append(el("span", "d", glyph(m)), m.name, el("span", "s", l.text));
+  return a;
+}
+// A tool use's result, shown in its row.
+function result(s, b) {
+  const r = s.rows.get(b.tool_use_id);
+  if (!r) return;
+  const st = $(".st", r.row);
+  const text = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.type === "text" ? x.text : `[${x.type}]`).join("\n");
+  st.className = `st${b.is_error ? " bad" : ""}`;
+  st.textContent = b.is_error ? "failed" : r.b.name === "spawn" ? "results in" : "✓";
+  const detail = $(".detail", r.row);
+  const out = el("div", `io${b.is_error ? " err" : ""}`, text);
+  const path = r.inner.path;
+  if (r.b.name === "read" && path && /\.(md|markdown|svg|html?)$/i.test(path) && !b.is_error) {
+    const raw = text.split("\n").map((l) => l.replace(/^\s*\d+[\t│|:] ?/, "")).join("\n");
+    const open = el("button", "open-file", "open");
+    open.onclick = (e) => { e.stopPropagation(); viewFile(path, raw); };
+    $(".line", r.row).insertBefore(open, st);
+  }
+  if (r.b.name === "spawn") {
+    const card = el("div", "card result");
+    card.append(el("div", "label", "Their results"), markdown(text));
+    const d = el("details"); d.append(el("summary", "more-link", "Their results"), card);
+    r.row.insertBefore(d, detail);
+  }
+  for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") { const img = el("img"); img.src = `data:${x.source?.media_type};base64,${x.source?.data}`; img.style.maxWidth = "100%"; detail.append(img); }
+  detail.append(out);
+}
+// A tool's input as its fields, each string as it reads.
+const fields = (input) => Object.entries(input || {}).map(([k, v]) => `${k}: ${typeof v === "string" && v.includes("\n") ? "\n" + v : typeof v === "string" ? v : JSON.stringify(v, null, 2)}`).join("\n");
+
+// A file an agent wrote or read, shown as itself beside the log.
+function viewFile(path, content) {
+  const v = $(".viewer", panel);
+  v.hidden = false;
+  const head = el("header");
+  const raw = el("button", "btn", "Raw"), close = el("button", "x", "×");
+  head.append(el("span", "path", path), raw, close);
+  const body = el("div", "content");
+  const show = (asRaw) => {
+    body.className = "content";
+    if (asRaw) body.replaceChildren(el("div", "io", content));
+    else if (/\.svg$/i.test(path)) { const img = el("img"); img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`; img.style.maxWidth = "100%"; body.replaceChildren(img); }
+    else if (/\.html?$/i.test(path)) { const f = el("iframe"); f.sandbox = ""; f.srcdoc = content; body.className = "content frame"; body.replaceChildren(f); }
+    else if (/\.(md|markdown)$/i.test(path)) body.replaceChildren(markdown(content));
+    else body.replaceChildren(el("div", "io", content));
+  };
+  let asRaw = false;
+  raw.onclick = () => { asRaw = !asRaw; raw.classList.toggle("armed", asRaw); show(asRaw); };
+  close.onclick = () => { v.hidden = true; };
+  show(false);
+  v.replaceChildren(head, body);
+}
+
+// What is not in the context yet: what is streaming now, what Max sent that
+// the agent has not read, a question waiting for him, how it ended.
+function renderTail(s, t) {
+  let tail = $(".tail", logEl);
+  if (!tail) { tail = el("div", "tail"); logEl.append(tail); }
+  for (const [id] of s.rows) fillChips(s, id, t);
+  // Running calls of the round: their rows show them running.
+  for (const c of t.waiting?.kind === "calls" ? t.waiting.calls : []) {
+    if (c.children.length) continue;
+    const r = [...s.rows.values()].find((r) => r.b.name === c.tool && JSON.stringify(r.b.input) === JSON.stringify(parse(c.input)));
+    if (r && c.status === "running") followCall(c, r.row);
+  }
+  const parts = [];
+  if (t.waiting?.kind === "model") parts.push(followModel(t.waiting.call));
+  else stopModel();
+  for (const p of t.pending || []) parts.push(said(p.content, `you, ${clock(p.at)} · not read yet`, "queued-words"));
+  const ask = askOf(t);
+  if (ask) {
+    const card = el("div", "entry card ask");
+    card.append(el("div", "label", t.waiting?.kind === "max" ? "Waiting for your answer" : "Asked you in the background · it carries on meanwhile"), markdown(parse(ask.input)?.question || ask.input || ""));
+    parts.push(card);
+  } else if (t.waiting?.kind === "max" && t.mode === "user-facing") {
+    parts.push(el("div", "note", "Its turn ended: your move. It finishes when you say Done."));
+  }
+  const bad = trouble(t);
+  if (bad) parts.push(Object.assign(el("div", "entry card ended", bad)));
+  const o = t.outcome;
+  if (o?.kind === "failed") parts.push(el("div", "entry card ended", `Failed: ${o.reason}`));
+  if (o?.kind === "cancelled") parts.push(el("div", "entry card ended", `Cancelled by ${o.by === "Max" ? "you" : "its owner stopping"}`));
+  if (!t.head && !isDone(t)) parts.push(el("div", "note", `Starting: ${look(t).text}`), mandateCard(t));
+  const key = JSON.stringify([t.waiting?.kind, t.waiting?.call, (t.pending || []).length, ask?.id, bad, o, t.head]);
+  if (tail.dataset.key !== key || parts.some((p) => p.classList?.contains("live-holder"))) {
+    tail.dataset.key = key;
+    tail.replaceChildren(...parts);
+  }
+}
+function mandateCard(t) {
+  const c = el("div", "card mandate");
+  c.append(el("div", "label", `Mandate · from ${t.owner ? byId[t.owner]?.name : "you"}`), markdown(t.mandate || ""));
+  return c;
+}
+// The task's outstanding question to Max: mid-turn, or in the background.
+function askOf(t) {
+  if (t.waiting?.kind === "max" && t.waiting.ask) return t.waiting.ask;
+  return (view.queue || []).find((q) => q.task === t.id && q.ask)?.ask || (t.background || []).find((b) => b.limb === "max" && b.status !== "settled") || null;
+}
+
+// The log keeps to its bottom while Max is there, so live text scrolls into
+// view; once he scrolls up, it stays where he is.
+function stick(change) {
+  const atBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80 || logState?.follow;
+  change();
+  if (atBottom) { scrollEl.scrollTop = scrollEl.scrollHeight; if (logState) logState.follow = false; }
+  else $(".jump", panel).hidden = false;
+}
+scrollEl.addEventListener("scroll", () => { if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80) $(".jump", panel).hidden = true; });
+$(".jump", panel).onclick = () => { scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" }); };
+
+// A request streaming, or a command printing: neither is a fact, so each is
+// read from /live, which resumes from its last event after a reconnect.
+let modelStream = null;
+const callStreams = new Map();
+function followModel(call) {
+  if (modelStream?.call === call) return modelStream.holder;
+  stopModel();
+  const holder = el("div", "entry live-holder");
+  const prose = el("div", "prose live-text");
+  holder.append(prose);
+  const source = new EventSource(`/live?model=${call}`);
+  let text = "", pendingDraw = null;
+  modelStream = { call, source, holder };
+  source.addEventListener("end", () => source.close());
+  source.onmessage = (m) => {
+    text += parse(m.data) ?? "";
+    if (pendingDraw) return;
+    pendingDraw = setTimeout(() => {
+      pendingDraw = null;
+      stick(() => { if (window.marked && window.DOMPurify) prose.innerHTML = DOMPurify.sanitize(marked.parse(text)); else prose.textContent = text; });
+    }, 80);
+  };
+  return holder;
+}
+function stopModel() { if (modelStream) { modelStream.source.close(); modelStream = null; } }
+function followCall(c, row) {
+  if (callStreams.has(c.id)) return;
+  const source = new EventSource(`/live?call=${c.id}`);
+  const out = el("div", "io");
+  $(".detail", row).append(out);
+  row.classList.add("expanded");
+  let raw = "";
+  callStreams.set(c.id, source);
+  source.addEventListener("end", () => { source.close(); callStreams.delete(c.id); });
+  source.onmessage = (m) => {
+    raw += parse(m.data) ?? "";
+    stick(() => { out.textContent = screen(raw); out.scrollTop = out.scrollHeight; });
+  };
+}
+function stopFollowing() { stopModel(); for (const s of callStreams.values()) s.close(); callStreams.clear(); }
+// A command's output as a terminal would leave it: only the last lines.
+function screen(raw) {
+  const lines = raw.replace(/\r\n/g, "\n").split("\n").map((l) => l.slice(l.lastIndexOf("\r") + 1));
+  return (lines.length > 300 ? [`[${lines.length - 300} earlier lines]`, ...lines.slice(-300)] : lines).join("\n");
+}
+
+// ─── What Max writes ───────────────────────────────────────────────────────
+// One box per open node, its text kept per task. Sending takes two actions:
+// Ctrl+Enter (or Send) arms it, the same again sends; any edit disarms.
+// Dictation streams into the box as edits to a live region, which Max can
+// edit too: an edit inside it pins the text up to the end of his edit, and
+// the words still coming go after it.
+const compose = $(".compose", panel);
+let box = null, sendArmed = false, dictation = null;
+
+function buildCompose(id) {
+  compose.replaceChildren();
+  box = null;
+  disarm();
+  const t = byId[id];
+  if (!t || isDone(t)) { compose.append(el("div", "closed", t && isDone(t) ? "Finished. Its log is read-only." : "")); return; }
+  if (!mayAct(id)) { compose.append(el("div", "closed", can.act ? `This tab acts only in ${byId[lock]?.name}.` : "This face only watches.")); return; }
+  const wrap = el("div", "box");
+  const to = el("div", "to");
+  box = el("textarea");
+  box.rows = 2;
+  box.dataset.key = id;
+  box.spellcheck = true;
+  box.value = drafts.get(id);
+  box.placeholder = "Write, paste or dictate. Ctrl+Enter twice sends.";
+  const row = el("div", "row2");
+  const mic = el("button", "btn mic", "Dictate"); mic.type = "button"; mic.hidden = !can.dictation;
+  const sample = el("button", "btn", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
+  const status = el("span", "status");
+  const send = el("button", "btn primary send", "Send"); send.type = "button";
+  row.append(mic, sample, status, send);
+  wrap.append(to, box, row);
+  compose.append(wrap);
+  mic.onclick = () => dictate(false);
+  sample.onclick = () => dictate(true);
+  send.onclick = () => submit();
+  box.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); } });
+  box.addEventListener("input", onInput);
+  autosize();
+  renderComposeState(t);
+}
+function renderComposeState(t) {
+  if (!box || box.dataset.key !== t.id) return;
+  const to = $(".to", compose), ask = askOf(t);
+  to.className = `to${ask ? " answering" : ""}`;
+  to.textContent = ask ? `Answering: ${(parse(ask.input)?.question || "").split("\n")[0].slice(0, 120)}` : t.waiting?.kind === "max" ? `To ${t.name} · your turn` : `To ${t.name} · it reads this with its next request`;
+}
+const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = text; s.className = `status${bad ? " bad" : ""}`; } };
+function autosize() { if (!box) return; box.style.height = "auto"; box.style.height = `${Math.min(box.scrollHeight, innerHeight * .4)}px`; }
+addEventListener("storage", (e) => { if (box && e.key === `draft:${box.dataset.key}` && document.activeElement !== box && !dictation) { box.value = e.newValue || ""; prev = box.value; autosize(); } });
+
+function arm() {
+  sendArmed = true;
+  compose.classList.add("armed");
+  const b = $(".send", compose); if (b) { b.classList.add("armed"); b.textContent = "Send now"; }
+  say(phone() ? "Tap again to send" : "Ctrl+Enter again to send · Esc or any edit cancels");
+}
+function disarm() {
+  if (!sendArmed) return;
+  sendArmed = false;
+  compose.classList.remove("armed");
+  const b = $(".send", compose); if (b) { b.classList.remove("armed"); b.textContent = "Send"; }
+  say("");
+}
+async function submit() {
+  if (!box) return;
+  if (dictation) { dictation.thenArm = true; return stopDictation(); }
+  if (!box.value.trim()) return;
+  if (!sendArmed) return arm();
+  disarm();
+  const t = byId[box.dataset.key];
+  const text = box.value;
+  say("sending");
+  const ask = askOf(t);
+  const words = JSON.stringify([{ type: "text", text }]);
+  let why;
+  try {
+    const id = await digest(words);
+    // An answer settles the question; anything else is words for its next turn.
+    why = ask
+      ? await act({ Call: [ask.id, { Settled: { Completed: { model: id, full: null, observes: [] } } }] }, [words])
+      : await act({ Delivery: { id: mint(), to: t.id, content: { Words: id } } }, [words]);
+  } catch (e) { why = String(e); }
+  if (why) return say(`not sent: ${why}`, true);
+  if (box.value === text) { box.value = prev = ""; drafts.set(t.id, ""); autosize(); }
+  say(ask ? "answered" : `sent to ${t.name}`);
+}
+
+let prev = "";
+function onInput() {
+  disarm();
+  const now = box.value;
+  if (dictation && dictation.key === box.dataset.key) {
+    let x = 0;
+    while (x < prev.length && x < now.length && prev[x] === now[x]) x++;
+    let tail = 0;
+    while (tail < prev.length - x && tail < now.length - x && prev[prev.length - 1 - tail] === now[now.length - 1 - tail]) tail++;
+    const removed = prev.length - x - tail, inserted = now.length - x - tail;
+    const l = dictation;
+    const end = l.start + l.T.length - l.P;
+    if (x + removed <= l.start && !(x === l.start && removed === 0 && l.T.length === l.P)) l.start += inserted - removed;
+    else if (x <= end) { l.P = Math.min(l.T.length, l.P + Math.max(0, x + removed - l.start)); l.start = x + inserted; }
   }
   prev = now;
-  localStorage.setItem("draft", now);
-});
+  drafts.set(box.dataset.key, now);
+  autosize();
+}
 
 // The endpoint's edits, in the transcript's own offsets, last first so the
-// earlier offsets still hold.
+// earlier offsets still hold. If Max has gone to another node meanwhile,
+// they land in the draft of the node he was dictating to.
 function applyEdits(edits) {
-  const l = live;
+  const l = dictation;
+  const shown = box && box.dataset.key === l.key;
+  const target = shown ? box : Object.assign(document.createElement("textarea"), { value: drafts.get(l.key) });
   const end = () => l.start + l.T.length - l.P;
-  const following = box.selectionStart === box.selectionEnd && box.selectionEnd === end();
+  const following = shown && target.selectionStart === target.selectionEnd && target.selectionEnd === end();
   for (const e of [...edits].reverse()) {
-    if (e.at >= l.P) {
-      const from = l.start + e.at - l.P;
-      box.setRangeText(e.put, from, from + e.cut, "preserve");
-    } else if (e.at + e.cut <= l.P) {
-      l.P += e.put.length - e.cut;
-    } else {
-      box.setRangeText(e.put, l.start, l.start + e.at + e.cut - l.P, "preserve");
-      l.P = e.at;
-    }
+    if (e.at >= l.P) { const from = l.start + e.at - l.P; target.setRangeText(e.put, from, from + e.cut, "preserve"); }
+    else if (e.at + e.cut <= l.P) l.P += e.put.length - e.cut;
+    else { target.setRangeText(e.put, l.start, l.start + e.at + e.cut - l.P, "preserve"); l.P = e.at; }
     l.T = l.T.slice(0, e.at) + e.put + l.T.slice(e.at + e.cut);
   }
-  // A caret at the end of the words keeps following them.
-  if (following) box.setSelectionRange(end(), end());
-  prev = box.value;
-  localStorage.setItem("draft", prev);
+  if (following) target.setSelectionRange(end(), end());
+  drafts.set(l.key, target.value);
+  if (shown) { prev = box.value; autosize(); disarm(); }
 }
 
 // The microphone as 16-bit PCM, in chunks of a tenth of a second.
@@ -518,7 +1688,8 @@ registerProcessor("pcm", class extends AudioWorkletProcessor {
 });`], { type: "application/javascript" }));
 
 async function dictate(sample) {
-  if (live) return stopDictation();
+  if (dictation) return stopDictation();
+  if (!box) return;
   let rate = 16000, mic = null;
   try {
     if (!sample) {
@@ -530,115 +1701,88 @@ async function dictate(sample) {
       rate = ctx.sampleRate;
       mic = { stream, ctx, node };
     }
-  } catch (e) {
-    return say(`no microphone: ${e.message}`, true);
-  }
+  } catch (e) { return say(`no microphone: ${e.message}`, true); }
   // Dictation goes in at the caret, a space from the word before it.
   let at = box.selectionEnd;
-  if (at > 0 && !/\s/.test(box.value[at - 1])) {
-    box.setRangeText(" ", at, at, "end");
-    at += 1;
-    prev = box.value;
-  }
+  if (at > 0 && !/\s/.test(box.value[at - 1])) { box.setRangeText(" ", at, at, "end"); at += 1; prev = box.value; }
   const ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
   ws.binaryType = "arraybuffer";
-  live = { ws, mic, T: "", P: 0, start: at, thenSend: false };
+  dictation = { ws, mic, key: box.dataset.key, T: "", P: 0, start: at, thenArm: false };
   if (mic) mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); };
-  $("#mic").classList.add("on");
-  $("#mic").textContent = "Stop";
-  $("#sample").disabled = true;
+  const b = $(".mic", compose); if (b) { b.classList.add("on"); b.textContent = "Stop"; }
   say("connecting");
-  const l = live;
+  const l = dictation;
   ws.onmessage = (m) => {
     const d = JSON.parse(m.data);
     if (d.listening) say(sample ? "dictating the sample" : "listening");
-    if (d.edits && live === l) applyEdits(d.edits);
+    if (d.edits && dictation === l) applyEdits(d.edits);
     if (d.error) say(d.error, true);
     if (d.final) finishDictation(l);
   };
   ws.onclose = () => finishDictation(l);
   box.focus();
 }
-
 function releaseMic(l) {
   if (!l.mic) return;
   l.mic.stream.getTracks().forEach((t) => t.stop());
   l.mic.ctx.close();
   l.mic = null;
 }
-
 function stopDictation() {
-  if (!live) return;
-  releaseMic(live);
-  if (live.ws.readyState === 1) live.ws.send(JSON.stringify({ type: "stop" }));
+  if (!dictation) return;
+  releaseMic(dictation);
+  if (dictation.ws.readyState === 1) dictation.ws.send(JSON.stringify({ type: "stop" }));
   say("finishing");
-  box.focus();
 }
-
 function finishDictation(l) {
-  if (live !== l) return;
+  if (dictation !== l) return;
   releaseMic(l);
-  live = null;
+  dictation = null;
   l.ws.close();
-  $("#mic").classList.remove("on");
-  $("#mic").textContent = "Dictate";
-  $("#sample").disabled = false;
-  if ($("#status").className !== "bad") say("");
-  if (l.thenSend) send();
+  const b = $(".mic", compose); if (b) { b.classList.remove("on"); b.textContent = "Dictate"; }
+  if (!$(".status", compose)?.classList.contains("bad")) say("");
+  if (l.thenArm && box?.dataset.key === l.key && box.value.trim()) arm();
 }
 
-async function send() {
-  if (live) { live.thenSend = true; return stopDictation(); }
-  const t = selected && byId[selected];
-  if (!t) return say("select a task to send to", true);
-  if (!box.value.trim()) return;
-  const text = box.value;
-  say("sending");
-  const words = JSON.stringify([{ type: "text", text }]);
-  let why;
-  try {
-    const id = await (await fetch("/digest", { method: "POST", body: words })).text();
-    why = await act({ Delivery: { id: mint(), to: t.id, content: { Words: id } } }, [words]);
-  } catch (e) {
-    why = String(e);
-  }
-  if (why) return say(`not sent: ${why}`, true);
-  if (box.value === text) { box.value = prev = ""; localStorage.removeItem("draft"); }
-  say(`sent to ${t.name}`);
-}
-
-box.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
-});
-$("#send").onclick = send;
-
-// Starting a task in Max's own scope: a role, a directory for each of its
-// places (the workspace limb already there, or a new one), and a mandate.
-$("#new").onclick = () => {
-  const form = $("#start");
-  form.hidden = !form.hidden;
-  if (form.hidden) return;
-  $("#role").replaceChildren(...view.environments.map((e) => { const o = el("option", null, e.name); o.value = e.id; return o; }));
-  $("#dirs").replaceChildren(...view.workspaces.map((w) => { const o = el("option"); o.value = w.dir; return o; }));
+// ─── A new task, in Max's own scope ───────────────────────────────────────
+const sheet = $("#sheet");
+for (const [id, key] of [["#s-name", "new:name"], ["#s-dir", "new:dir"], ["#s-mandate", "new:mandate"]]) kept($(id), key);
+const openSheet = () => {
+  sheet.hidden = !sheet.hidden;
+  if (sheet.hidden || !view) return;
+  const role = $("#s-role");
+  const chosen = role.value;
+  role.replaceChildren(...view.environments.map((e) => { const o = el("option", null, e.name); o.value = e.id; return o; }));
+  if (chosen) role.value = chosen;
+  $("#s-dirs").replaceChildren(...view.workspaces.map((w) => { const o = el("option"); o.value = w.dir; return o; }));
+  $("#s-mandate").focus();
 };
-$("#start").onsubmit = async (e) => {
+$("#new").onclick = openSheet;
+$("#empty-new").onclick = openSheet;
+$("#s-cancel").onclick = () => { sheet.hidden = true; };
+let startArmed = false;
+for (const f of sheet.querySelectorAll("input, textarea, select")) f.addEventListener("input", () => { startArmed = false; $("#s-go").classList.remove("armed"); $("#s-go").textContent = "Start"; });
+sheet.onsubmit = async (e) => {
   e.preventDefault();
-  const env = view.environments.find((x) => x.id === $("#role").value);
-  const mandate = $("#mandate").value.trim();
-  const answer = $("#started");
+  const answer = $(".answer", sheet);
+  const env = view.environments.find((x) => x.id === $("#s-role").value);
+  const mandate = $("#s-mandate").value.trim();
   if (!env || !mandate) { answer.textContent = "a role and a mandate"; return; }
-  const dir = $("#dir").value.trim();
+  const dir = $("#s-dir").value.trim();
+  if (env.places.length && !dir) { answer.textContent = `a directory for its ${env.places[0]}`; return; }
+  if (!startArmed) { startArmed = true; $("#s-go").classList.add("armed"); $("#s-go").textContent = "Start now"; answer.textContent = "again to start"; return; }
+  startArmed = false; $("#s-go").classList.remove("armed"); $("#s-go").textContent = "Start";
   const facts = [], places = {};
   for (const place of env.places) {
-    if (!dir) { answer.textContent = `a directory for its ${place}`; return; }
     const known = view.workspaces.find((w) => w.dir === dir);
     const id = known ? known.id : mint();
     if (!known) facts.push({ Limb: { id, name: dir, kind: { Plugin: { kind: place, config: JSON.stringify({ dir }) } } } });
     places[place] = id;
   }
-  const text = await (await fetch("/digest", { method: "POST", body: mandate })).text();
-  facts.push({ Task: [mint(), { Created: {
-    name: $("#tname").value.trim() || env.name, by: null, scope: "Max",
+  const text = await digest(mandate);
+  const id = mint();
+  facts.push({ Task: [id, { Created: {
+    name: $("#s-name").value.trim() || env.name, by: null, scope: "Max",
     origin: { Fresh: { environment: env.id, places } },
     mode: "UserFacing",
     mandate: { text, brief: null, quotes: [] },
@@ -646,191 +1790,38 @@ $("#start").onsubmit = async (e) => {
   const why = await act(facts, [mandate]);
   answer.className = why ? "answer bad" : "answer";
   answer.textContent = why ? `refused: ${why}` : "started";
-  if (!why) { $("#mandate").value = ""; $("#start").hidden = true; }
+  if (why) return;
+  for (const k of ["new:name", "new:mandate"]) drafts.set(k, "");
+  $("#s-mandate").value = ""; $("#s-name").value = "";
+  sheet.hidden = true;
+  pendingOpen = id;
 };
-$("#mic").onclick = () => dictate(false);
-$("#sample").onclick = () => dictate(true);
 
-function renderDetail() {
-  const body = $("#detail .body");
-  const t = selected && byId[selected];
-  if (!t) return;
-  if (body.dataset.task !== t.id) {
-    body.dataset.task = t.id;
-    shownHead = null;
-    for (const s of streams.values()) s.source.close();
-    streams.clear();
-    toBottom = true;
-    const controls = el("div", "controls-row");
-    const answer = el("span", "answer");
-    const button = (name, label, fact, done) => {
-      const b = el("button", null, label);
-      b.name = name;
-      b.onclick = () => control(fact(), answer, done());
-      controls.append(b);
-    };
-    button("interrupt", "Interrupt", () => ({ Task: [t.id, { Drain: "ToMax" }] }), () => "interrupted: your move once it stops");
-    button("stop", "Stop", () => ({ Task: [t.id, { Drain: { Stop: "Max" } }] }), () => "stopping");
-    button("hold", "Hold", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), () => byId[t.id].held ? "released" : "held");
-    button("done", "Done", () => ({ Delivery: { id: mint(), to: t.id, content: { Prompt: "Done" } } }),
-      () => "done: its last turn writes the result");
-    controls.append(answer);
-    body.replaceChildren(controls, el("dl"), el("div", "context"), el("div", "live"));
-  }
-  for (const b of body.querySelectorAll(".controls-row button")) b.disabled = !can.act || t.waiting?.kind === "done";
-  body.querySelector("button[name=hold]").textContent = t.held ? "Release" : "Hold";
-  body.querySelector("button[name=done]").hidden = t.mode !== "user-facing";
-  const dl = body.querySelector("dl");
-  dl.replaceChildren();
-  const th = throbber(t);
-  const fields = [
-    ["task", t.name], ["agent", t.agent], ["mode", t.mode], ["environment", t.environment],
-    ["waiting on", th.text], ["pending inputs", t.pending], ["trouble", trouble(t)],
-  ];
-  for (const [k, v] of fields) if (v != null) dl.append(el("dt", null, k), el("dd", null, String(v ?? "")));
-  dl.append(el("dt", null, "mandate"), el("dd", "mandate", t.mandate));
-  if (t.head !== shownHead) {
-    shownHead = t.head;
-    loadContext(t.head, body.querySelector(".context"));
-  }
-  const w = t.waiting;
-  const into = body.querySelector(".live");
-  if (w?.kind === "model") follow("model", w.call, into, null);
-  for (const c of w?.calls || []) if (c.status === "running" && !c.children.length) follow("call", c.id, into, c);
-}
+$("#fit").onclick = () => fit(true);
+addEventListener("resize", () => { shape = ""; refresh(); });
 
-// The detail pane keeps to its bottom while Max is there, so live text
-// scrolls into view; once he scrolls up, it stays where he is.
-let toBottom = false;
-function stick(change) {
-  const pane = $("#detail");
-  const atBottom = toBottom || pane.scrollHeight - pane.scrollTop - pane.clientHeight < 60;
-  change();
-  if (atBottom) pane.scrollTop = pane.scrollHeight;
-}
-
-// A command's output as a terminal would leave it: a carriage return starts
-// its line again. Only the last lines are shown.
-const SHOWN = 400;
-function screen(raw) {
-  const lines = raw.replace(/\r\n/g, "\n").split("\n").map((l) => l.slice(l.lastIndexOf("\r") + 1));
-  return (lines.length > SHOWN ? [`[${lines.length - SHOWN} earlier lines]`, ...lines.slice(-SHOWN)] : lines).join("\n");
-}
-
-
-// What the selected task is running, as it streams: a request's text, or
-// a command's output as it prints. Neither is a fact, so each is read from
-// /live, which resumes from the last event on a reconnect and says "end" when
-// it is over. What has ended stays until the head moves past it and the
-// context shows what was kept.
-const streams = new Map();
-function follow(kind, id, into, call) {
-  const key = `${kind}:${id}`;
-  if (streams.has(key)) return;
-  const source = new EventSource(`/live?${kind}=${id}`);
-  const div = el("div", "stream");
-  const head = kind === "model" ? el("div", "role", "streaming") : el("div", "command", `running ${call.tool}${gist(call.input)}`);
-  div.append(head);
-  const stream = { source, div, ended: false };
-  streams.set(key, stream);
-  stick(() => into.append(div));
-  source.addEventListener("end", () => {
-    source.close();
-    stream.ended = true;
-    head.textContent = kind === "model" ? "streamed" : head.textContent.replace(/^running/, "ran");
-  });
-  // A command's output is shown as a terminal would; a response's visible
-  // text as it arrives.
-  let raw = "";
-  const out = el(kind === "call" ? "pre" : "div", kind === "call" ? "output" : "block");
-  div.append(out);
-  source.onmessage = (m) => {
-    raw += JSON.parse(m.data);
-    stick(() => {
-      out.textContent = kind === "call" ? screen(raw) : raw;
-      if (kind === "call") out.scrollTop = out.scrollHeight;
-    });
-  };
-}
-
-// A context is a value named by its head, so it is fetched once per head.
-async function loadContext(head, into) {
-  const res = await fetch(`/context/${head}`);
-  if (!res.ok || shownHead !== head) return;
-  const chain = await res.json();
-  stick(() => {
-    into.replaceChildren();
-    for (const e of chain) into.append(entry(e, e.id === head));
-    for (const [key, s] of streams) if (s.ended) { s.div.remove(); streams.delete(key); }
-  });
-  toBottom = false;
-}
-
-function entry(e, isHead) {
-  const div = el("div", `entry ${e.role}${isHead ? " head" : ""}`);
-  div.append(el("div", "role", e.missing ? "entry not stored" : e.role));
-  if (e.role === "root") {
-    div.append(el("div", "block", e.model));
-    const sys = el("details");
-    sys.append(el("summary", null, "system prompt and tools"), el("pre", null, json(e.system)), el("pre", null, json(e.tools)));
-    div.append(sys);
-    return div;
-  }
-  if (e.content == null) return div;
-  let content;
-  try { content = JSON.parse(e.content); } catch { content = e.content; }
-  if (typeof content === "string") content = [{ type: "text", text: content }];
-  for (const b of content) {
-    if (b.type === "text") div.append(el("div", "block", b.text));
-    else if (b.type === "thinking") div.append(el("div", "block thinking", b.thinking));
-    else if (b.type === "tool_use") {
-      const input = JSON.stringify(b.input);
-      const use = el("details", "block tool");
-      use.append(el("summary", null, `→ ${b.name}${gist(input)}`), el("pre", null, fields(b.input)));
-      div.append(use);
-    }
-    else if (b.type === "tool_result") {
-      const c = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.text || "").join("\n");
-      div.append(el("div", "block tool", `← ${c}`));
-    } else div.append(el("div", "block tool", JSON.stringify(b)));
-  }
-  return div;
-}
-
-// A tool's input as its fields, each string as it reads.
-const fields = (input) => Object.entries(input || {}).map(([k, v]) => `${k}: ${typeof v === "string" && v.includes("\n") ? "\n" + v : JSON.stringify(v)}`).join("\n");
-const json = (s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } };
-const preview = (s) => { try { const v = JSON.parse(s); return v.question || s; } catch { return s; } };
-
-function addFacts(list) {
-  const ul = $("#facts ul");
-  for (const f of list) {
-    const li = el("li");
-    li.append(el("span", "seq", `${f.seq} `), el("span", "at", `${clock(f.at)} `), el("span", f.by, f.text));
-    ul.prepend(li);
-  }
-  while (ul.children.length > 300) ul.lastChild.remove();
-}
-
-// The stream's event id is the journal position: the browser resends it on
-// reconnect and gets every record after it.
+// ─── The stream ────────────────────────────────────────────────────────────
+// The event id is the journal position: the browser resends it on reconnect
+// and gets the next view after it.
 const source = new EventSource("/events");
-source.onopen = () => { $("#link").textContent = "live"; $("#link").className = "meta"; };
-source.onerror = () => { $("#link").textContent = "reconnecting"; $("#link").className = "meta down"; };
-source.onmessage = (m) => {
-  const data = JSON.parse(m.data);
-  view = data.view;
-  addFacts(data.facts);
-  render();
+source.onopen = () => { $("#link").className = ""; $("#link").title = "live"; };
+source.onerror = () => { $("#link").className = "down"; $("#link").title = "reconnecting"; };
+source.onmessage = async (m) => {
+  view = JSON.parse(m.data);
+  await refresh();
+  if (pendingOpen && byId[pendingOpen]) { const id = pendingOpen; pendingOpen = null; go(id); }
+  else if (!openId && location.hash.length > 1 && byId[location.hash.slice(1)] && !moving.started) { moving.started = true; route(); }
 };
-
-// Throbbers move and waits grow between events.
-let frame = 0;
-setInterval(() => {
-  frame = (frame + 1) % FRAMES.length;
-  for (const s of document.querySelectorAll("[data-spin]")) s.textContent = FRAMES[frame];
-}, 100);
-setInterval(render, 1000);
+// Waits grow between events.
+setInterval(() => { if (view) { drawMapText(); if (openId) renderPanel(); } }, 1000);
+function drawMapText() {
+  for (const [id, a] of nodeEls) {
+    const n = graph.nodes.get(id);
+    if (n?.kind !== "task") continue;
+    const st = $(".status", a);
+    st.textContent = trouble(n.t) || look(n.t).text;
+  }
+}
 </script>
 </body>
 </html>

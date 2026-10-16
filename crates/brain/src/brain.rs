@@ -27,7 +27,7 @@ use harness_core::task::{
     Start as TaskStart, Stopper, Task, TaskEvent,
 };
 use harness_core::value::Bytes;
-use harness_face_web::{Act, Commit, Feed, Running};
+use harness_face_web::{Act, Feed, Running};
 use harness_limb_workspace::{Clone, Settings, user};
 
 use crate::process::Process;
@@ -110,16 +110,13 @@ pub struct Start {
     pub mandate: String,
 }
 
-/// How many recent records a face is given at launch.
-const RECENT: u64 = 200;
-
 type Refused = journal::Error<harness_store::Error>;
 
 /// One brain: the only writer of its journal.
 pub struct Brain {
     journal: journal::Journal<Store>,
     /// The face, handed the state after each commit.
-    face: Sender<Commit>,
+    face: Sender<State>,
     client: Arc<Client>,
     events: Sender<Event>,
     inbox: Receiver<Event>,
@@ -160,7 +157,7 @@ impl Brain {
     #[allow(clippy::too_many_arguments)]
     pub fn launch(
         store: Store,
-        face: Sender<Commit>,
+        face: Sender<State>,
         client: Client,
         state_dir: PathBuf,
         roles: &Path,
@@ -170,18 +167,7 @@ impl Brain {
     ) -> Result<Brain, String> {
         let journal =
             journal::Journal::open(store).map_err(|e| format!("the journal folds: {e}"))?;
-        let from = journal
-            .state()
-            .last()
-            .map_or(0, |s| s.0.saturating_sub(RECENT));
-        let records = journal
-            .store()
-            .read(Seq(from), RECENT)
-            .map_err(|e| format!("the journal reads: {e}"))?;
-        let _ = face.send(Commit {
-            state: journal.state().clone(),
-            records,
-        });
+        let _ = face.send(journal.state().clone());
         let shared = |is: &dyn Fn(&LimbKind) -> bool| {
             let state = journal.state();
             state
@@ -1326,10 +1312,7 @@ and you cannot finish until it has.",
                 self.feed.end(running);
             }
         }
-        let _ = self.face.send(Commit {
-            state: self.state().clone(),
-            records,
-        });
+        let _ = self.face.send(self.state().clone());
         Ok(())
     }
 
