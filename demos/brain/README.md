@@ -4,7 +4,7 @@
 demos/brain/run.sh
 ```
 
-Then watch https://mx-hv-mj.local:4321 while it runs (another port: `PORT=4400 demos/brain/run.sh`). It takes about two minutes on `claude-sonnet-5` and costs a few dozen requests on the subscription.
+Then watch https://mx-hv-mj.local:4321 while it runs, and type to a task from its compose box (another port: `PORT=4400 demos/brain/run.sh`). It takes about two minutes on `claude-sonnet-5` and costs a few dozen requests on the subscription.
 
 What it does:
 
@@ -17,6 +17,18 @@ What it does:
 5. The orchestrator gets both results when the scope closes, runs `./check.sh`, commits, and reports. The script prints its result and the repository's log.
 
 To serve a finished run again: `target/release/harness-brain --journal target/brain-demo/journal.sqlite --port 4321`. A journal whose root is done does nothing but serve.
+
+What the agents were told, from the store (`entry.content`, cut):
+
+The fork's first message, in the framing the fork-framing spike measured: a neutral answer to the spawn, then its part as user text.
+```
+[{"content":"Started wordcount, palindromes.","tool_use_id":"toolu_016w…","type":"tool_result"},{"text":"You are now `orchestrator-wordcount`, a fork of `orchestrator`. Everything above is `orchestrator`'s context; from here you do one part of its work, and only that part.\n\nYour part:\nWrite textstats/wordcount.py …
+```
+
+The fork's `./check.sh` after the relaunch:
+```
+[{"content":[{"text":"The outcome of this call is unknown: the harness stopped while it was running, and this tool is not safe to run again blind. It may or may not have had its effects. Check before relying on either.","type":"text"}],"is_error":true,"tool_use_id":"toolu_013E…","type":"tool_result"}]
+```
 
 ## Real output
 
@@ -34,98 +46,111 @@ face: https://mx-hv-mj.local:4321
     0.0s     7  orchestrator: request sent
     0.0s     8   changed
     0.0s     9  AGENTS.md changed
-    1.1s    10  orchestrator: first byte
-    1.9s    11  orchestrator's bash made {"command":"cat README.md; echo ---; find . -not -path './.git*' | sort; echo ---; cat check.sh 2>/dev/null",
-    1.9s    12  orchestrator: responded, ToolUse, 1 calls (1 in, 0 cached, 123 out)
-    1.9s    13  orchestrator's bash dispatched
-    1.9s    14  orchestrator's bash completed
-    1.9s    15  orchestrator: request sent
-    2.9s    16  orchestrator: first byte
-    3.7s    17  orchestrator's bash made {"command":"cat textstats/__init__.py; echo ---; cat tests/__init__.py","grep":""}
-    3.7s    18  orchestrator: responded, ToolUse, 1 calls (2 in, 2587 cached, 109 out)
-    3.7s    19  orchestrator's bash dispatched
-    3.7s    20  orchestrator's bash completed
-    3.7s    21  orchestrator: request sent
-    4.8s    22  orchestrator: first byte
-   19.1s    23  orchestrator's spawn made
-   19.1s    24  orchestrator: responded, ToolUse, 1 calls (2 in, 3150 cached, 1381 out)
-   19.1s    25  orchestrator's spawn dispatched
-   19.1s    26  orchestrator-wordcount created (orchestrator, forked from orchestrator)
-   19.1s    27  orchestrator-palindromes created (engineer)
-   19.1s    28  orchestrator-wordcount: request sent
-   19.1s    29  orchestrator-palindromes: request sent
+    1.2s    10  orchestrator: first byte
+    2.2s    11  orchestrator's bash made {"command":"cat README.md; echo ---; ls -la; echo ---; find . -type f -not -path './.git/*' | sort; echo ---;
+    2.2s    12  orchestrator: responded, ToolUse, 1 calls (1 in, 2214 cached, 137 out)
+    2.2s    13  orchestrator's bash dispatched
+    2.2s    14  orchestrator's bash completed
+    2.2s    15  orchestrator: request sent
+    3.3s    16  orchestrator: first byte
+    4.4s    17  orchestrator's bash made {"command":"echo ---init textstats; cat textstats/__init__.py; echo ---init tests; cat tests/__init__.py; ech
+    4.4s    18  orchestrator: responded, ToolUse, 1 calls (2 in, 2587 cached, 143 out)
+    4.4s    19  orchestrator's bash dispatched
+    4.4s    20  orchestrator's bash completed
+    4.4s    21  orchestrator: request sent
+    5.4s    22  orchestrator: first byte
+   16.5s    23  orchestrator's spawn made
+   16.5s    24  orchestrator: responded, ToolUse, 1 calls (2 in, 3543 cached, 1363 out)
+   16.5s    25  orchestrator's spawn dispatched
+   16.5s    26  orchestrator-wordcount created (orchestrator, forked from orchestrator)
+   16.5s    27  orchestrator-palindromes created (engineer)
+   16.5s    28  orchestrator-wordcount: request sent
+   16.5s    29  orchestrator-palindromes: request sent
 [...]
-   32.2s    58  orchestrator-wordcount: first byte
-   32.9s    59  orchestrator-wordcount's bash made {"command":"cd /home/user 2>/dev/null; cd \"$(pwd)\" ; true","grep":""}
-   32.9s    60  orchestrator-wordcount: responded, ToolUse, 1 calls (2 in, 5756 cached, 94 out)
-   32.9s    61  orchestrator-wordcount's bash dispatched
-   32.9s    62  orchestrator-wordcount's bash completed
-   32.9s    63  orchestrator-wordcount: request sent
-   34.0s    64  orchestrator-wordcount: first byte
-   35.0s    65  orchestrator-wordcount's bash made {"command":"pwd; ls; ./check.sh","grep":"FAIL|Error|OK|ok"}
-   35.0s    66  orchestrator-wordcount: responded, ToolUse, 1 calls (2 in, 6742 cached, 116 out)
-   35.0s    67  orchestrator-wordcount's bash dispatched
-   37.5s    68  orchestrator-palindromes's write made {"content":"import unittest\n\nfrom textstats.palindromes import is_palindrome, find_palindromes
-   37.5s    69  orchestrator-palindromes: responded, ToolUse, 1 calls (2 in, 3799 cached, 1163 out)
-   37.5s    70  orchestrator-palindromes's write dispatched
-   37.5s    71  tests/test_palindromes.py changed
-   37.5s    72  orchestrator-palindromes's write completed
-   37.5s    73  orchestrator-palindromes: request sent
-   38.4s    74  orchestrator-palindromes: first byte
+   28.3s    43  orchestrator-wordcount's write completed
+   28.3s    44  orchestrator-wordcount: request sent
+   29.7s    45  orchestrator-wordcount: first byte
+   31.4s    46  orchestrator-wordcount's bash made {"command":"cd /home/user/textstats 2>/dev/null || cd \"$(dirname \"$0\")\"; pwd; ls; ./check.sh","
+   31.4s    47  orchestrator-wordcount: responded, ToolUse, 1 calls (2 in, 6119 cached, 125 out)
+   31.4s    48  orchestrator-wordcount's bash dispatched
+   33.9s    49  orchestrator-palindromes's write made {"content":"\"\"\"Palindrome detection utilities.\"\"\"\nimport re\n\n_WORD_RE = re.compile(r\"[
+   33.9s    50  orchestrator-palindromes: responded, ToolUse, 1 calls (2 in, 0 cached, 1990 out)
+   33.9s    51  orchestrator-palindromes's write dispatched
+   33.9s    52  textstats/palindromes.py changed
+   33.9s    53  orchestrator-palindromes's write completed
+   33.9s    54  orchestrator-palindromes: request sent
+   34.8s    55  orchestrator-palindromes: first byte
 
 ** kill -9 the brain
 
 == launch 2: the same journal, nothing else
 face: https://mx-hv-mj.local:4321
-    0.0s    75  brain launched, build harness-brain 0.0.0
-    0.0s    76  workspace connected
-    0.0s    77  orchestrator-palindromes: request lost
-    0.0s    78  orchestrator-palindromes: request sent
-    0.0s    79  orchestrator-wordcount's bash ended unknown
-    0.0s    80  orchestrator-wordcount: request sent
-    0.9s    81  orchestrator-palindromes: first byte
-    1.1s    82  orchestrator-wordcount: first byte
-    1.5s    83  orchestrator-wordcount's bash made {"command":"pwd; ls","grep":""}
+    0.0s    56  brain launched, build harness-brain 0.0.0
+    0.0s    57  workspace connected
+    0.0s    58  orchestrator-palindromes: request lost
+    0.0s    59  orchestrator-palindromes: request sent
+    0.0s    60  orchestrator-wordcount's bash ended unknown
+    0.0s    61  orchestrator-wordcount: request sent
+    0.9s    62  orchestrator-palindromes: first byte
+    1.1s    63  orchestrator-wordcount: first byte
+    1.4s    64  orchestrator-wordcount's bash made {"command":"pwd; ls","grep":""}
+    1.4s    65  orchestrator-wordcount: responded, ToolUse, 1 calls (2 in, 7155 cached, 72 out)
+    1.4s    66  orchestrator-wordcount's bash dispatched
+    1.5s    67  orchestrator-wordcount's bash completed
+    1.5s    68  orchestrator-wordcount: request sent
+    2.4s    69  orchestrator-wordcount: first byte
+    4.1s    70  orchestrator-wordcount's bash made {"command":"cd /home/maxeonyx/agent-harness-workspace/ah-brain/target/brain-demo/repo && ./check.sh
+    4.1s    71  orchestrator-wordcount: responded, ToolUse, 1 calls (2 in, 7347 cached, 205 out)
 [...]
-    3.2s    93  orchestrator-wordcount: first byte
-    3.5s    94  orchestrator-palindromes: first byte
-    3.6s    95  orchestrator-wordcount's bash made {"command":"cd /home/maxeonyx/agent-harness-workspace/ah-brain/target/brain-demo/repo && ./check.sh
-    3.6s    96  orchestrator-wordcount: responded, ToolUse, 1 calls (2 in, 7031 cached, 124 out)
-    3.6s    97  orchestrator-wordcount's bash dispatched
-    4.6s    98  orchestrator-palindromes's bash made {"command":"cd textstats_repo 2>/dev/null || true; ls; ./check.sh 2>&1 | tail -40","grep":"FAIL|E
-    4.6s    99  orchestrator-palindromes: responded, ToolUse, 1 calls (2 in, 5725 cached, 148 out)
-    4.6s   100  orchestrator-palindromes's bash dispatched
-   18.6s   101  orchestrator-wordcount's bash completed
-   18.6s   102  orchestrator-wordcount: request sent
-   19.6s   103  orchestrator-palindromes's bash completed
-   19.6s   104  orchestrator-palindromes: request sent
-   19.7s   105  orchestrator-wordcount: first byte
-   20.6s   106  orchestrator-palindromes: first byte
-   21.3s   107  orchestrator-wordcount: responded, EndTurn, 0 calls (2 in, 7176 cached, 162 out)
-   23.6s   108  orchestrator-palindromes: responded, EndTurn, 0 calls (2 in, 6734 cached, 359 out)
-   23.6s   109  orchestrator's spawn completed
-   23.8s   110  orchestrator: request sent
-   24.9s   111  orchestrator: first byte
-   26.1s   112  orchestrator's bash made {"command":"cd /home/user 2>/dev/null; cd \"$(pwd)\" ; ls; cat textstats/wordcount.py; echo ---; cat textstat
-   26.1s   113  orchestrator: responded, ToolUse, 1 calls (2 in, 4637 cached, 149 out)
-   26.1s   114  orchestrator's bash dispatched
-   26.1s   115  orchestrator's bash completed
-   26.1s   116  orchestrator: request sent
-   27.1s   117  orchestrator: first byte
-   27.6s   118  orchestrator's bash made {"command":"cd . && ./check.sh","grep":"OK|FAIL|Error|style"}
-   27.6s   119  orchestrator: responded, ToolUse, 1 calls (2 in, 5182 cached, 88 out)
-   27.6s   120  orchestrator's bash dispatched
-   42.7s   121  orchestrator's bash completed
-   42.7s   122  orchestrator: request sent
-   43.7s   123  orchestrator: first byte
-   44.8s   124  orchestrator's bash made {"command":"cd . && git add -A && git -c user.email=\"agent@example.com\" -c user.name=\"Agent\" commit -m \"
-   44.8s   125  orchestrator: responded, ToolUse, 1 calls (2 in, 6021 cached, 148 out)
-   44.8s   126  orchestrator's bash dispatched
-   44.8s   127  orchestrator's bash completed
-   44.8s   128  orchestrator: request sent
-   45.8s   129  orchestrator: first byte
-   49.4s   130  orchestrator: responded, EndTurn, 0 calls (2 in, 7547 cached, 436 out)
+   42.9s   125  orchestrator's bash made {"command":"cd /home/maxeonyx/agent-harness-workspace/ah-brain/target/brain-demo/repo && ./check.sh","grep":"
+   42.9s   126  orchestrator: responded, ToolUse, 1 calls (2 in, 5739 cached, 148 out)
+   42.9s   127  orchestrator's bash dispatched
+   58.0s   128  orchestrator's bash completed
+   58.0s   129  orchestrator: request sent
+   59.0s   130  orchestrator: first byte
+   60.2s   131  orchestrator's bash made {"command":"cd /home/maxeonyx/agent-harness-workspace/ah-brain/target/brain-demo/repo && git add -A && git st
+   60.2s   132  orchestrator: responded, ToolUse, 1 calls (2 in, 6708 cached, 171 out)
+   60.2s   133  orchestrator's bash dispatched
+   60.3s   134  orchestrator's bash completed
+   60.3s   135  orchestrator: request sent
+   61.3s   136  orchestrator: first byte
+   65.4s   137  orchestrator: responded, EndTurn, 0 calls (2 in, 8092 cached, 532 out)
 
 == the root is done; its result:
 
+Committed cleanly (pycache files were excluded via `.gitignore`).
+
+## Report
+
+**wordcount agent (fork)** built `textstats/wordcount.py`:
+- `count_words(text)` — regex `[A-Za-z0-9']+`, lower-cased, via `Counter`.
+- `top(text, n)` — sorted by count descending, ties broken alphabetically, sliced to `n`.
+- `tests/test_wordcount.py` — 14 cases: basics, case-insensitivity, apostrophes, digits, punctuation splitting, empty/no-words text, tie-breaking, `n`
+
+**palindromes agent (fresh engineer)** built `textstats/palindromes.py`:
+- `is_palindrome(s)` — strips to letters/digits, lower-cases, empty result is not a palindrome.
+- `find_palindromes(text, min_len=3)` — extracts words, cleans/lower-cases, dedupes, filters by `min_len`, preserves first-appearance order.
+- `tests/test_palindromes.py` — 14 cases: simple/mixed-case words, non-alphanumeric stripping, empty/single-char strings, example text, `min_len` filt
+
+**My verification:** ran `./check.sh` from the repo root — all 28 tests pass, style check ok. No fixes needed. Committed all new files (`textstats/wor
+
+== the repository afterwards
+31ebe25 Implement textstats.wordcount and textstats.palindromes with tests
+
+ tests/test_palindromes.py | 67 +++++++++++++++++++++++++++++++++++++
+ tests/test_wordcount.py   | 84 +++++++++++++++++++++++++++++++++++++++++++++++
+ textstats/palindromes.py  | 45 +++++++++++++++++++++++++
+ textstats/wordcount.py    | 22 +++++++++++++
+ 4 files changed, 218 insertions(+)
+b9fc98f Start textstats
+
+ .gitignore            |  1 +
+ AGENTS.md             |  4 ++++
+ README.md             | 10 ++++++++++
+ check.sh              |  7 +++++++
+ tests/__init__.py     |  0
+ textstats/__init__.py |  0
+ 6 files changed, 22 insertions(+)
+
+To keep serving the finished run: target/release/harness-brain --journal target/brain-demo/journal.sqlite --port 4321
 ```

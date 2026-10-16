@@ -94,7 +94,13 @@ pub fn turn(
             Input::Delivery(id) => {
                 turn.renders.push(Rendered::Delivery(id));
                 if let Some(delivered) = state.delivery(id) {
-                    texts.extend(delivery(&delivered.delivery.content));
+                    let content = &delivered.delivery.content;
+                    // Words that arrive with a tool round would read as part
+                    // of it; say whose they are.
+                    if matches!(content, Content::Words(_)) && !turn.blocks.is_empty() {
+                        texts.push(text("[harness] Max wrote this while you were working:"));
+                    }
+                    texts.extend(delivery(content));
                 }
             }
         }

@@ -12,14 +12,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Interruption, Outcome, Output, Status};
 use harness_core::context::{Entry, EntryId, Message, Role, Wire};
+use harness_core::delivery::{Content, Delivery};
 use harness_core::environment::{
     Binding, Description, FromLimb, LimbKind, Reach, Startable, ToLimb,
 };
 use harness_core::id::{
-    CallId, Digest, EnvironmentId, InstanceId, LimbId, ModelCallId, Seq, TaskId, Timestamp,
-    ToolUseId,
+    CallId, DeliveryId, Digest, EnvironmentId, FaceId, InstanceId, LimbId, ModelCallId, Seq,
+    TaskId, Timestamp, ToolUseId,
 };
-use harness_core::journal::{Author, Fact, Launched, Record};
+use harness_core::journal::{Author, Fact, Launched, Record, Rejected};
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose};
 use harness_core::resource::Observation;
 use harness_core::state::{State, Todo};
@@ -27,6 +28,7 @@ use harness_core::task::{
     Created, Drain, Giver, Mandate, Mode, Origin, Outcome as TaskOutcome, Scope, Stopper, Task,
     TaskEvent, TaskState,
 };
+use harness_face_web::Deliver;
 use harness_limb_workspace::{Config, Workspace};
 use harness_provider::{Client, Finished, Progress};
 use harness_store::Store;
@@ -39,11 +41,71 @@ use crate::{meta, policy, render};
 /// and fan-out timing.
 const TICK: Duration = Duration::from_millis(250);
 
-/// What reaches the loop from the threads it started.
-enum Event {
+/// What reaches the loop from the threads it started, and from faces.
+pub struct Event(What);
+
+enum What {
     Limb(FromLimb),
     FirstByte(ModelCallId),
     Finished(ModelCallId, Result<Finished, harness_provider::Error>),
+    /// Max's words from a face, answered with whether the journal took them.
+    Words {
+        face: FaceId,
+        seen: Seq,
+        delivery: Delivery,
+        reply: Sender<Result<(), String>>,
+    },
+}
+
+/// The loop's inbox, made before the brain so a face can hold its sender.
+pub struct Inbox {
+    events: Sender<Event>,
+    inbox: Receiver<Event>,
+}
+
+impl Inbox {
+    pub fn new() -> Inbox {
+        let (events, inbox) = mpsc::channel();
+        Inbox { events, inbox }
+    }
+
+    /// How one face's sends reach the brain.
+    pub fn words(&self, face: FaceId) -> Words {
+        Words {
+            face,
+            events: self.events.clone(),
+        }
+    }
+}
+
+/// A face's compose box, sending to the brain: Max's words become a
+/// delivery authored by him, as far as his page had seen.
+pub struct Words {
+    face: FaceId,
+    events: Sender<Event>,
+}
+
+impl Deliver for Words {
+    fn words(&self, to: TaskId, seen: Seq, words: Wire) -> Result<(), String> {
+        let (reply, answer) = mpsc::channel();
+        let delivery = Delivery {
+            id: DeliveryId(new_id()),
+            to,
+            content: Content::Words(words),
+        };
+        let words = What::Words {
+            face: self.face,
+            seen,
+            delivery,
+            reply,
+        };
+        self.events
+            .send(Event(words))
+            .map_err(|_| "the brain has stopped".to_string())?;
+        answer
+            .recv()
+            .map_err(|_| "the brain has stopped".to_string())?
+    }
 }
 
 /// What only the first launch of a journal is given.
@@ -88,6 +150,7 @@ impl Brain {
         client: Client,
         state_dir: PathBuf,
         first: Option<First>,
+        Inbox { events, inbox }: Inbox,
     ) -> Result<Brain, String> {
         let state = store
             .fold()
@@ -107,12 +170,11 @@ impl Brain {
             }
         };
 
-        let (events, inbox) = mpsc::channel();
         let (limb_out, limb_in) = mpsc::channel();
         let forward = events.clone();
         thread::spawn(move || {
             for message in limb_in {
-                if forward.send(Event::Limb(message)).is_err() {
+                if forward.send(Event(What::Limb(message))).is_err() {
                     return;
                 }
             }
@@ -129,7 +191,7 @@ impl Brain {
         workspace.handle(ToLimb::Describe);
         let described = loop {
             match inbox.recv_timeout(Duration::from_secs(10)) {
-                Ok(Event::Limb(FromLimb::Described(d))) => break d,
+                Ok(Event(What::Limb(FromLimb::Described(d)))) => break d,
                 Ok(_) => {}
                 Err(_) => return Err("the workspace did not describe itself".into()),
             }
@@ -400,7 +462,7 @@ impl Brain {
                 |id| entries.get(&id).cloned(),
                 |progress| {
                     if let Progress::Fact(ModelCallEvent::FirstByte) = progress {
-                        let _ = events.send(Event::FirstByte(request));
+                        let _ = events.send(Event(What::FirstByte(request)));
                     }
                     if abort.load(Ordering::Relaxed) {
                         ControlFlow::Break(())
@@ -409,7 +471,7 @@ impl Brain {
                     }
                 },
             );
-            let _ = events.send(Event::Finished(request, finished));
+            let _ = events.send(Event(What::Finished(request, finished)));
         });
     }
 
@@ -736,13 +798,27 @@ impl Brain {
 
     // What arrives.
 
-    fn handle(&mut self, event: Event) {
+    fn handle(&mut self, Event(event): Event) {
         match event {
-            Event::FirstByte(request) => self.first_byte(request),
-            Event::Finished(request, finished) => self.finished(request, finished),
-            Event::Limb(FromLimb::Settled { call, outcome }) => self.limb_settled(call, outcome),
-            Event::Limb(FromLimb::Unknown { call }) => self.limb_unknown(call),
-            Event::Limb(FromLimb::Changed(change)) => {
+            What::FirstByte(request) => self.first_byte(request),
+            What::Finished(request, finished) => self.finished(request, finished),
+            What::Words {
+                face,
+                seen,
+                delivery,
+                reply,
+            } => {
+                // Max acts on a picture that may be out of date: a refusal
+                // (the task finished meanwhile) is his to see, not a bug.
+                let by = Author::Max { face, seen };
+                let done = self
+                    .try_append(vec![(by, Fact::Delivery(delivery))])
+                    .map_err(|(rejected, _)| format!("not delivered: {rejected:?}"));
+                let _ = reply.send(done);
+            }
+            What::Limb(FromLimb::Settled { call, outcome }) => self.limb_settled(call, outcome),
+            What::Limb(FromLimb::Unknown { call }) => self.limb_unknown(call),
+            What::Limb(FromLimb::Changed(change)) => {
                 let current = self.state.resource(&change.resource).map(|c| c.version);
                 if current != Some(change.version) {
                     self.append(vec![(
@@ -751,7 +827,7 @@ impl Brain {
                     )]);
                 }
             }
-            Event::Limb(_) => {}
+            What::Limb(_) => {}
         }
     }
 
@@ -848,6 +924,14 @@ impl Brain {
     /// Fold a batch into a copy of the state, then append it. A refused
     /// record is a bug in the brain: nothing is appended, and it stops.
     fn append(&mut self, facts: Vec<(Author, Fact)>) {
+        if let Err((rejected, record)) = self.try_append(facts) {
+            let shown: String = format!("{record:?}").chars().take(600).collect();
+            panic!("the model refuses the brain's record ({rejected:?}): {shown}");
+        }
+    }
+
+    /// Append a batch, or refuse it whole and append nothing.
+    fn try_append(&mut self, facts: Vec<(Author, Fact)>) -> Result<(), (Rejected, Box<Record>)> {
         let mut state = self.state.clone();
         let mut seq = state.last().map_or(0, |s| s.0);
         let at = now();
@@ -865,8 +949,7 @@ impl Brain {
             .collect();
         for record in &records {
             if let Err(rejected) = state.apply(record) {
-                let shown: String = format!("{record:?}").chars().take(600).collect();
-                panic!("the model refuses the brain's record ({rejected:?}): {shown}");
+                return Err((rejected, Box::new(record.clone())));
             }
         }
         self.store
@@ -877,6 +960,7 @@ impl Brain {
             self.log(record);
         }
         self.journal.grew(Seq(seq));
+        Ok(())
     }
 
     fn log(&self, record: &Record) {
@@ -1000,7 +1084,7 @@ fn now() -> Timestamp {
 
 /// A generated id: unique across brains, from this process, this moment and
 /// a counter.
-fn new_id() -> u128 {
+pub fn new_id() -> u128 {
     use std::sync::atomic::AtomicU64;
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()

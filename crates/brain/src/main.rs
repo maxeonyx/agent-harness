@@ -11,7 +11,10 @@
 //! on.
 //!
 //! The face is served from the same process over a second connection to the
-//! same store, so Max watches exactly what the brain appended.
+//! same store, so Max watches exactly what the brain appended. Its compose
+//! box sends through the brain: his words become a delivery he authored,
+//! as far as his page had seen, or are refused back to him (the task has
+//! finished meanwhile).
 //!
 //! **Policy** lives in two modules, and nowhere else:
 //! - [`policy`]: the model and request parameters, retries and backoff,
@@ -38,11 +41,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::thread;
 
-use harness_face_web::Face;
+use harness_core::id::FaceId;
+use harness_face_web::{Compose, Dictation, Face};
 use harness_provider::{Client, Login};
 use harness_store::Store;
 
-use crate::brain::{Brain, First};
+use crate::brain::{Brain, First, Inbox};
 use crate::journal::Journal;
 
 fn main() -> ExitCode {
@@ -93,7 +97,15 @@ fn run() -> Result<(), String> {
     )
     .map_err(|e| format!("the certificate: {e}"))?;
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("port {port}: {e}"))?;
-    let face = Face::new(journal.clone());
+    let inbox = Inbox::new();
+    let login = || Login::claude_code().map_err(|e| format!("the login: {}", e.0));
+    let face = Face::with(
+        journal.clone(),
+        Compose {
+            deliver: Some(Box::new(inbox.words(FaceId(brain::new_id())))),
+            dictation: Some(Dictation::new(login()?)),
+        },
+    );
     let follower = face.clone();
     thread::spawn(move || follower.follow());
     // The Windows host, read again for each connection: DHCP can move it.
@@ -101,8 +113,8 @@ fn run() -> Result<(), String> {
     thread::spawn(move || harness_face_web::serve(face, listener, tls, allow));
     println!("face: https://mx-hv-mj.local:{port}");
 
-    let login = Login::claude_code().map_err(|e| format!("the login: {}", e.0))?;
-    let mut brain = Brain::launch(store, journal, Client::new(login), state_dir, first)?;
+    let client = Client::new(login()?);
+    let mut brain = Brain::launch(store, journal, client, state_dir, first, inbox)?;
     brain.run();
     Ok(())
 }
