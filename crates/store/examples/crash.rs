@@ -233,11 +233,7 @@ impl journal::Store for Announced {
         self.0.has(value)
     }
 
-    fn append(
-        &mut self,
-        values: &[Bytes],
-        records: &[journal::Record],
-    ) -> Result<(), Self::Error> {
+    fn append(&mut self, values: &[Bytes], records: &[journal::Record]) -> Result<(), Self::Error> {
         // Aim at the brain's commit, the large one.
         if records.first().is_some_and(|r| r.by == Author::Brain) {
             println!("appending");
@@ -275,12 +271,7 @@ impl<S: journal::Store<Error = harness_store::Error>> Brain<S> {
             journal: Journal::open(store)?,
             start,
             root,
-            shared: vec![
-                SYSTEM.into(),
-                tools.into(),
-                PARAMS.into(),
-                ROLE.into(),
-            ],
+            shared: vec![SYSTEM.into(), tools.into(), PARAMS.into(), ROLE.into()],
         })
     }
 
@@ -310,7 +301,9 @@ impl<S: journal::Store<Error = harness_store::Error>> Brain<S> {
         for t in 0..TASKS {
             let k = n * TASKS + t;
             let ask = Bytes::from(format!(r#"[{{"type":"text","text":"Question {k}"}}]"#));
-            batch.facts.push(self.created(TaskId(id("task", k)), ask.id()));
+            batch
+                .facts
+                .push(self.created(TaskId(id("task", k)), ask.id()));
             batch.values.push(ask);
         }
         let seen = self.journal.state().last().unwrap_or(Seq(0));
