@@ -16,19 +16,22 @@
 //! alone, for a client that only looks.
 //!
 //! **A context is a value.** It is fetched by its head entry
-//! (`/context/<entry>`) and never changes, so the browser caches it forever
-//! and refetches only when the task's head moves.
+//! (`/context/<entry>`), read off the fold ([`State::context`]) with the
+//! bytes each entry names from the [`Source`], and never changes, so the
+//! browser caches it forever and refetches only when the task's head moves.
 //!
-//! **Max's facts.** Everything Max does from the page is one of his facts in
-//! the core's own encoding, posted to `/act` and passed to [`Act`], which the
-//! brain implements: his words (a delivery from the compose box, where Enter
-//! is a new line and Ctrl+Enter sends), his controls over a task (interrupt,
-//! stop, hold), a new order for his queue, and the task he is focused on.
-//! The face itself still writes nothing, and passes on only facts that are
-//! Max's to author ([`is_maxs`]). The brain folds each one before it appends
-//! it, so a refusal comes back with the core's reason. Each page is its own
-//! face, with an id it keeps, and mints the ids of what it creates, so a post
-//! retried after a dropped connection cannot deliver twice.
+//! **Max's facts.** Everything Max does from the page is a batch of his
+//! facts in the core's own encoding, posted to `/act` and passed to [`Act`],
+//! which the brain implements: his words (a delivery from the compose box,
+//! where Enter is a new line and Ctrl+Enter sends), his controls over a task
+//! (interrupt, stop, hold), a new order for his queue, and the task he is
+//! focused on. The bytes his facts name (his words) travel in the batch, and
+//! the page names them with `/digest`, the core's [`ValueId::of`]. The face
+//! writes nothing and judges nothing: the brain commits the batch as his,
+//! and the core's fold decides what Max may author, so a refusal comes back
+//! with the core's reason. Each page is its own face, with an id it keeps,
+//! and mints the ids of what it creates, so a post retried after a dropped
+//! connection cannot deliver twice.
 //!
 //! **Live text.** A running request's streamed events are not facts; the
 //! brain puts them in a [`Feed`], and `/live?model=<id>` streams them with
@@ -53,19 +56,17 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use harness_core::context::{Entry, EntryId, Role};
-use harness_core::delivery::Content;
-use harness_core::id::{CallId, FaceId, ModelCallId, Seq, Timestamp};
-use harness_core::journal::{Author, Fact, Record};
+use harness_core::context::{Entry, EntryId};
+use harness_core::id::{CallId, FaceId, ModelCallId, Seq, Timestamp, ValueId};
+use harness_core::journal::{Author, Batch, Record};
 use harness_core::state::State;
-use harness_core::task::{Drain, Stopper, TaskEvent};
 use serde_json::json;
 
 pub use dictation::{Dictation, Edit, Socket, edits};
 pub use live::{Feed, Running};
 pub use view::describe;
 
-/// What a face reads: the journal, and the context entries it names.
+/// What a face reads: the journal, and the values its facts name.
 ///
 /// The store implements this. A face never writes.
 pub trait Source: Send + Sync + 'static {
@@ -73,31 +74,17 @@ pub trait Source: Send + Sync + 'static {
     /// least one. Empty if none came.
     fn read(&self, after: Seq, wait: Duration) -> Vec<Record>;
 
-    /// A context entry by its id, if stored.
-    fn entry(&self, id: EntryId) -> Option<Entry>;
+    /// A value's bytes, if stored.
+    fn value(&self, id: ValueId) -> Option<Vec<u8>>;
 }
 
 /// Where Max's facts go: the brain, the journal's only writer.
 pub trait Act: Send + Sync + 'static {
-    /// Append `fact` authored [`Author::Max`] by `face`, which had shown him
-    /// the journal up to `seen`. An `Err` is why it was not appended (the
-    /// core's [`harness_core::journal::Rejected`], by name), shown to Max.
-    fn act(&self, face: FaceId, seen: Seq, fact: Fact) -> Result<(), String>;
-}
-
-/// Whether Max may author `fact` from `face`: his words, his controls over
-/// a task, his queue's order, and this face's focus.
-pub fn is_maxs(face: FaceId, fact: &Fact) -> bool {
-    match fact {
-        Fact::Delivery(d) => matches!(d.content, Content::Words(_)),
-        Fact::Task(_, event) => matches!(
-            event,
-            TaskEvent::Drain(Drain::ToMax | Drain::Stop(Stopper::Max)) | TaskEvent::Held(_)
-        ),
-        Fact::Ranking(_) => true,
-        Fact::Focus(focus) => focus.face == face,
-        _ => false,
-    }
+    /// Commit `batch` authored [`Author::Max`] by `face`, which had shown
+    /// him the journal up to `seen`. An `Err` is why it was not committed
+    /// (the core's [`harness_core::journal::Rejected`], by name), shown to
+    /// Max.
+    fn act(&self, face: FaceId, seen: Seq, batch: Batch) -> Result<(), String>;
 }
 
 /// What a face is wired to. With nothing, it only watches.
@@ -139,7 +126,7 @@ impl<S: Source> Face<S> {
     /// A face that acts, dictates and shows live progress as `wiring` allows.
     pub fn with(source: S, wiring: Wiring) -> Arc<Face<S>> {
         let state = State::default();
-        let view = Arc::new(render(&state, None));
+        let view = Arc::new(render(&state, &|_| None, None));
         Arc::new(Face {
             source,
             wiring,
@@ -168,7 +155,8 @@ impl<S: Source> Face<S> {
                     break;
                 }
             }
-            folded.view = Arc::new(render(&folded.state, folded.refused.as_deref()));
+            let value = |id| self.source.value(id);
+            folded.view = Arc::new(render(&folded.state, &value, folded.refused.as_deref()));
             last = folded.state.last().unwrap_or(Seq(0));
             let stop = folded.refused.is_some();
             drop(folded);
@@ -209,9 +197,13 @@ impl<S: Source> Face<S> {
                 )
             }
             ("POST", "/act") => self.act(&mut stream, &request.body),
+            ("POST", "/digest") => {
+                let id = ValueId::of(&request.body).to_string();
+                http::respond(&mut stream, "text/plain", id.as_bytes(), false)
+            }
             ("GET", "/dictation") => self.dictate(stream, &request),
             ("GET", "/live") => self.live(&mut stream, &request),
-            ("GET", path) => match path.strip_prefix("/context/").and_then(view::parse_entry) {
+            ("GET", path) => match path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
                 Some(head) => self.context(&mut stream, head),
                 None => http::not_found(&mut stream),
             },
@@ -219,22 +211,19 @@ impl<S: Source> Face<S> {
         }
     }
 
-    /// One of Max's facts: `{"face", "seen", "fact"}`, the fact in the
-    /// journal's own encoding.
+    /// A batch of Max's facts: `{"face", "seen", "batch"}`, in the journal's
+    /// own encoding.
     fn act(&self, stream: &mut impl Write, body: &[u8]) -> io::Result<()> {
         let Some(act) = &self.wiring.act else {
             return http::refuse(stream, "501 Not Implemented", "not wired to a brain");
         };
         let mut said: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
         let face = serde_json::from_value::<FaceId>(said["face"].take());
-        let fact = serde_json::from_value::<Fact>(said["fact"].take());
-        let (Ok(face), Some(seen), Ok(fact)) = (face, said["seen"].as_u64(), fact) else {
-            return http::refuse(stream, "400 Bad Request", "expected {face, seen, fact}");
+        let batch = serde_json::from_value::<Batch>(said["batch"].take());
+        let (Ok(face), Some(seen), Ok(batch)) = (face, said["seen"].as_u64(), batch) else {
+            return http::refuse(stream, "400 Bad Request", "expected {face, seen, batch}");
         };
-        if !is_maxs(face, &fact) {
-            return http::refuse(stream, "403 Forbidden", "not a fact Max authors");
-        }
-        match act.act(face, Seq(seen), fact) {
+        match act.act(face, Seq(seen), batch) {
             Ok(()) => http::respond(stream, "text/plain", b"", false),
             Err(why) => http::refuse(stream, "409 Conflict", &why),
         }
@@ -320,36 +309,37 @@ impl<S: Source> Face<S> {
         }
     }
 
-    /// The context ending at `head`, root first.
+    /// The context ending at `head`, root first, with the bytes its entries
+    /// name as text.
     fn context(&self, stream: &mut impl Write, head: EntryId) -> io::Result<()> {
-        let mut chain = Vec::new();
-        let mut next = Some(head);
-        while let Some(id) = next {
-            let Some(entry) = self.source.entry(id) else {
-                chain.push(json!({"id": id.0.to_string(), "missing": true}));
-                break;
-            };
-            chain.push(match &entry {
+        let text = |id: ValueId| {
+            self.source
+                .value(id)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        };
+        let chain: Vec<serde_json::Value> = self
+            .lock()
+            .state
+            .context(head)
+            .into_iter()
+            .map(|(id, entry)| match entry {
                 Entry::Root(root) => json!({
-                    "id": id.0.to_string(),
+                    "id": id.to_string(),
                     "role": "root",
                     "model": root.model,
-                    "system": root.system.0,
-                    "tools": root.tools.0,
+                    "system": text(root.system),
+                    "tools": text(root.tools),
                 }),
-                Entry::Message(m) => json!({
-                    "id": id.0.to_string(),
-                    "role": match m.role {
-                        Role::User => "user",
-                        Role::Assistant => "assistant",
-                        Role::System => "system",
-                    },
-                    "content": m.content.0,
+                Entry::Message { message, .. } => json!({
+                    "id": id.to_string(),
+                    "role": message.role.as_str(),
+                    "content": text(message.content),
                 }),
-            });
-            next = entry.parent();
+            })
+            .collect();
+        if chain.is_empty() {
+            return http::not_found(stream);
         }
-        chain.reverse();
         let body = serde_json::to_vec(&chain).expect("a JSON value serialises");
         http::respond(stream, "application/json", &body, true)
     }
@@ -371,8 +361,12 @@ fn fact(state: &State, record: &Record) -> String {
     line.to_string()
 }
 
-fn render(state: &State, refused: Option<&str>) -> String {
-    let mut view = view::view(state, now());
+fn render(
+    state: &State,
+    value: &dyn Fn(ValueId) -> Option<Vec<u8>>,
+    refused: Option<&str>,
+) -> String {
+    let mut view = view::view(state, value, now());
     view["refused"] = json!(refused);
     view.to_string()
 }

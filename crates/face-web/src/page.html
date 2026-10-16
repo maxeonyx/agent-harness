@@ -276,9 +276,11 @@ const mint = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.
 const FACE = localStorage.getItem("face") || mint();
 localStorage.setItem("face", FACE);
 
-async function act(fact) {
+// One of Max's facts, with the bytes it names (each a Uint8Array).
+async function act(fact, values = []) {
   if (!can.act) return "this face is not wired to a brain";
-  const body = JSON.stringify({ face: FACE, seen: view.seq, fact });
+  const batch = { values: values.map((v) => [...v]), facts: [fact] };
+  const body = JSON.stringify({ face: FACE, seen: view.seq, batch });
   for (let attempt = 0; ; attempt++) {
     let res;
     try {
@@ -468,8 +470,14 @@ async function send() {
   if (!box.value.trim()) return;
   const text = box.value;
   say("sending");
-  const words = JSON.stringify([{ type: "text", text }]);
-  const why = await act({ Delivery: { id: mint(), to: t.id, content: { Words: words } } });
+  const words = new TextEncoder().encode(JSON.stringify([{ type: "text", text }]));
+  let why;
+  try {
+    const id = await (await fetch("/digest", { method: "POST", body: words })).text();
+    why = await act({ Delivery: { id: mint(), to: t.id, content: { Words: id } } }, [words]);
+  } catch (e) {
+    why = String(e);
+  }
   if (why) return say(`not sent: ${why}`, true);
   if (box.value === text) { box.value = prev = ""; localStorage.removeItem("draft"); }
   say(`sent to ${t.name}`);

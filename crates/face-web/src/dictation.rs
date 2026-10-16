@@ -26,6 +26,7 @@
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::TcpStream;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -112,12 +113,12 @@ impl Dictation {
         }
     }
 
-    /// Offer the page a recording to dictate instead of its microphone: 16
-    /// kHz mono 16-bit PCM, sent at real time through the same relay. For a
-    /// machine with no microphone.
-    pub fn with_sample(mut self, pcm: Vec<u8>) -> Dictation {
-        self.sample = Some(pcm);
-        self
+    /// Offer the page a recording to dictate instead of its microphone: a
+    /// 16 kHz mono 16-bit WAV file, sent at real time through the same
+    /// relay. For a machine with no microphone.
+    pub fn with_sample(mut self, wav: &Path) -> Result<Dictation, String> {
+        self.sample = Some(read_wav(wav)?);
+        Ok(self)
     }
 
     pub fn has_sample(&self) -> bool {
@@ -419,4 +420,31 @@ fn words(text: &str) -> Vec<&str> {
 
 fn utf16(s: &str) -> usize {
     s.encode_utf16().count()
+}
+
+/// The PCM of a 16 kHz mono 16-bit WAV file.
+fn read_wav(path: &Path) -> Result<Vec<u8>, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("not a WAV file".into());
+    }
+    let mut at = 12;
+    let mut format_ok = false;
+    while at + 8 <= bytes.len() {
+        let id = &bytes[at..at + 4];
+        let len = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+        let body = &bytes[at + 8..(at + 8 + len).min(bytes.len())];
+        match id {
+            b"fmt " if body.len() >= 16 => {
+                let field = |i: usize| u16::from_le_bytes([body[i], body[i + 1]]);
+                let rate = u32::from_le_bytes(body[4..8].try_into().unwrap());
+                format_ok = field(0) == 1 && field(2) == 1 && rate == 16_000 && field(14) == 16;
+            }
+            b"data" if format_ok => return Ok(body.to_vec()),
+            b"data" => return Err("the WAV must be 16 kHz mono 16-bit PCM".into()),
+            _ => {}
+        }
+        at += 8 + len + (len & 1);
+    }
+    Err("the WAV has no data chunk".into())
 }

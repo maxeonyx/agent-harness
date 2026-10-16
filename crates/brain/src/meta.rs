@@ -6,15 +6,14 @@
 //! facts) are appended in the same batch as its `Dispatched`, so a crash
 //! leaves both or neither, and a restart never spawns twice.
 
-use harness_core::context::Wire;
 use harness_core::environment::{
-    Audience, Description, Fork, Host, Limb, LimbKind, Startable, Tool,
+    Audience, Description, Fork, Instruction, Limb, LimbKind, Startable, Tool,
 };
 use harness_core::id::{Digest, LimbId};
-use harness_core::resource::{Observation, ResourceKey, ResourceKind, Version};
+use harness_core::resource::{Observation, ResourceKey, Version};
 use serde_json::{Value, json};
 
-use crate::render::text;
+use crate::render::{blocks, text};
 
 pub const SPAWN: &str = "spawn";
 
@@ -22,7 +21,6 @@ pub fn definition(id: LimbId, starts: Vec<Startable>) -> Limb {
     Limb {
         id,
         name: "meta".into(),
-        host: Host::Brain,
         kind: LimbKind::Meta { starts },
         fork: Fork::Share,
     }
@@ -64,25 +62,22 @@ pub fn description(limb: LimbId, kinds: &[&str]) -> Description {
             "required": ["tasks"]
         }
     });
-    let instructions = text(INSTRUCTIONS);
     Description {
-        instructions: vec![(
-            Wire(instructions.clone()),
-            Observation {
+        instructions: vec![Instruction {
+            text: INSTRUCTIONS.into(),
+            observes: Observation {
                 resource: ResourceKey {
                     limb,
-                    kind: ResourceKind::Instructions,
+                    kind: "instructions".into(),
                     name: String::new(),
                 },
-                version: Version::Is(Digest::of(instructions.as_bytes())),
+                version: Version::Is(Digest::of(INSTRUCTIONS.as_bytes())),
             },
-        )],
+        }],
         tools: vec![Tool {
             name: SPAWN.into(),
-            definition: Wire(schema.to_string()),
+            definition: schema.to_string(),
             audience: Audience::Agent,
-            rerun: false,
-            deferred: false,
         }],
     }
 }
@@ -100,8 +95,8 @@ pub struct Member {
     pub fresh: Option<String>,
 }
 
-pub fn parse(input: &Wire) -> Result<Spawn, String> {
-    let value: Value = serde_json::from_str(&input.0).map_err(|e| format!("invalid input: {e}"))?;
+pub fn parse(input: &[u8]) -> Result<Spawn, String> {
+    let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
     let tasks = value["tasks"]
         .as_array()
         .filter(|t| !t.is_empty())
@@ -122,17 +117,18 @@ pub fn parse(input: &Wire) -> Result<Spawn, String> {
 }
 
 /// The task names a spawn's input gives, for the neutral answer a fork sees.
-pub fn names(input: &Wire) -> Vec<String> {
+pub fn names(input: &[u8]) -> Vec<String> {
     parse(input)
         .map(|s| s.members.into_iter().map(|m| m.name).collect())
         .unwrap_or_default()
 }
 
-/// A scope's result: each member's outcome under its name.
-pub fn result(members: &[(String, String)]) -> Wire {
+/// A scope's result: each member's outcome under its name, as a tool
+/// result's content.
+pub fn result(members: &[(String, String)]) -> Vec<u8> {
     let body: Vec<_> = members
         .iter()
         .map(|(name, said)| format!("## {name}\n\n{said}"))
         .collect();
-    Wire(format!("[{}]", text(&body.join("\n\n"))))
+    blocks(&[text(&body.join("\n\n"))])
 }
