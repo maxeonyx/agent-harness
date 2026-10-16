@@ -274,6 +274,27 @@ pub enum Error<E> {
     Unreadable { seq: Seq, why: Rejected },
 }
 
+impl<E: std::fmt::Display> std::fmt::Display for Error<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Refused { index, why } => write!(f, "fact {index} of the batch refused: {why:?}"),
+            Error::Store(error) => write!(f, "journal store: {error}"),
+            Error::Unreadable { seq, why } => {
+                write!(f, "journal record {} does not fold: {why:?}", seq.0)
+            }
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for Error<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Store(error) => Some(error),
+            Error::Refused { .. } | Error::Unreadable { .. } => None,
+        }
+    }
+}
+
 impl<S: Store> Journal<S> {
     /// Fold everything the store holds.
     pub fn open(store: S) -> Result<Journal<S>, Error<S::Error>> {
