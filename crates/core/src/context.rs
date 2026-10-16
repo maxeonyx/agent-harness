@@ -197,16 +197,17 @@ pub enum Rendered {
 /// decides it for forks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Note {
-    /// The task's mandate: at a fork, as the result of the spawn tool use in
-    /// the child's branch; at a fresh start, after the shared brief; after a
-    /// handover, at the top.
+    /// The task's mandate: at a fork, as user text after the answers to the
+    /// forked response's tool uses; at a fresh start, after the shared brief;
+    /// after a handover, at the top.
     Mandate,
     /// A restatement of the mandate after a tool round, so a deep fork
     /// remembers it is A.1.3 and stops.
     Reminder,
-    /// The answer, in a fork's first message, to a tool use in the forked
-    /// response that belongs to another branch: the parent's other calls, a
-    /// sibling's spawn, or for an aside the call its source is waiting on.
+    /// The neutral answer, in a fork's first message, to a tool use in the
+    /// forked response: the spawn that started the fork, the parent's other
+    /// calls, or for an aside the call its source is waiting on. Their real
+    /// results go to the parent's branch.
     Elsewhere { call: CallId },
     /// Things this context embodies have changed since. `told` are the
     /// versions announced, so the next request announces only what has moved
