@@ -23,7 +23,7 @@ use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Purpose};
 use harness_core::resource::{Observation, ResourceKey};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
-    Created, Drain, Giver, Mandate, Mode, Move, Origin, Outcome as TaskOutcome, Scope,
+    Created, Drain, Giver, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome, Scope,
     Start as TaskStart, Stopper, Task, TaskEvent, TaskState,
 };
 use harness_core::value::Bytes;
@@ -484,39 +484,70 @@ impl Brain {
     /// A starting task's first root, once every limb it reaches has
     /// described itself.
     fn root(&mut self, id: TaskId) {
-        let task = self.state().task(id).expect("a task to root").clone();
+        match self.start_of(id) {
+            None => {}
+            Some(Err(why)) => self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
+            Some(Ok((start, values))) => self.moved(id, Move::Root(Box::new(start)), values),
+        }
+    }
+
+    /// A new root for the task from its environment's current version and
+    /// its limbs' descriptions, with the bytes it names; `None` while a limb
+    /// has not described itself.
+    fn start_of(&self, id: TaskId) -> Option<Result<(TaskStart, Vec<Bytes>), String>> {
+        let task = self.state().task(id).expect("a task to root");
         let env = self
             .state()
             .environment(task.environment)
-            .expect("the task's environment")
-            .clone();
+            .expect("the task's environment");
         let mut described = Vec::new();
-        for limb in self.state().limbs_of(&task) {
-            match self.description(&task, limb) {
-                Some(d) => described.push((limb, d)),
-                None => return,
-            }
+        for limb in self.state().limbs_of(task) {
+            described.push((limb, self.description(task, limb)?));
         }
         let refs: Vec<(LimbId, &Description)> = described.iter().map(|(l, d)| (*l, d)).collect();
         let role = String::from_utf8_lossy(&self.value(env.role)).into_owned();
-        let new = match render::root(&env.model, &role, &refs) {
-            Ok(new) => new,
-            Err(why) => return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
+        Some(render::root(&env.model, &role, &refs).map(|new| {
+            let start = TaskStart {
+                root: new.root,
+                binding: new.binding,
+                observes: env.source.iter().cloned().chain(new.observes).collect(),
+                awaits: Vec::new(),
+            };
+            (start, new.values)
+        }))
+    }
+
+    /// Commit a move to a new root, and watch what it embodies.
+    fn moved(&mut self, id: TaskId, movement: Move, values: Vec<Bytes>) {
+        let observes = match &movement {
+            Move::Root(start) | Move::Handover { start, .. } => start.observes.clone(),
+            Move::Rewind { .. } => Vec::new(),
         };
-        let observes: Vec<Observation> = env.source.into_iter().chain(new.observes).collect();
         self.append(Batch {
-            values: new.values,
-            facts: vec![Fact::Task(
-                id,
-                TaskEvent::Moved(Move::Root(Box::new(TaskStart {
-                    root: new.root,
-                    binding: new.binding,
-                    observes: observes.clone(),
-                    awaits: Vec::new(),
-                }))),
-            )],
+            values,
+            facts: vec![Fact::Task(id, TaskEvent::Moved(movement))],
         });
         self.watch(observes.into_iter().map(|o| o.resource).collect());
+    }
+
+    /// The task's handover call, if the round that made it is over: the next
+    /// request starts a new context instead.
+    fn handover(&mut self, task: &Task) -> bool {
+        let Some(call) = task.pending.iter().find_map(|p| match p.input {
+            Input::Result(call) if self.call(call).tool == meta::HANDOVER => Some(call),
+            _ => None,
+        }) else {
+            return false;
+        };
+        match self.start_of(task.id) {
+            None => {}
+            Some(Err(why)) => self.fact(Fact::Task(task.id, TaskEvent::Drain(Drain::Fail(why)))),
+            Some(Ok((start, values))) => {
+                let start = Box::new(start);
+                self.moved(task.id, Move::Handover { call, start }, values);
+            }
+        }
+        true
     }
 
     // Requests.
@@ -526,6 +557,9 @@ impl Brain {
             return;
         }
         let task = self.state().task(id).expect("a task to send for").clone();
+        if self.handover(&task) {
+            return;
+        }
         let head = task.head().expect("a ready task has a context");
         if task.failures >= policy::GIVE_UP {
             let reason = format!("the provider failed {} times in a row", task.failures);
@@ -553,7 +587,12 @@ impl Brain {
             return;
         }
 
-        let first = turns.is_empty();
+        // A new root after a handover starts again from the mandate.
+        let seed = match self.state().entry(head) {
+            Some(Entry::Root(_)) => self.seed(&task),
+            _ => None,
+        };
+        let first = turns.is_empty() || seed.is_some();
         let mut values = Vec::new();
         let mut appends = Vec::new();
         let mut renders = Vec::new();
@@ -569,7 +608,14 @@ impl Brain {
             Origin::Fork { .. } if first => self.response_calls(head),
             _ => Vec::new(),
         };
-        let turn = render::turn(self.state(), &|v| self.value(v), &task, first, &forked);
+        let turn = render::turn(
+            self.state(),
+            &|v| self.value(v),
+            &task,
+            first,
+            &forked,
+            seed,
+        );
         if !turn.blocks.is_empty() {
             appends.push(user(render::blocks(&turn.blocks), &mut values));
         }
@@ -662,6 +708,24 @@ impl Brain {
             serde_json::from_slice(&self.value(env.params)).unwrap_or_default();
         params.insert("stream".into(), Value::Bool(true));
         Bytes::from(Value::Object(params).to_string())
+    }
+
+    /// The note of the task's last handover, and the entry its old context
+    /// ended at.
+    fn seed(&self, task: &Task) -> Option<render::Seed> {
+        let (call, record) = self
+            .state()
+            .calls()
+            .filter(|(_, c)| c.call.tool == meta::HANDOVER && c.limb == Some(self.meta))
+            .filter(|(_, c)| matches!(c.call.caller, Caller::Agent { task: t, .. } if t == task.id))
+            .max_by_key(|(_, c)| c.made.seq)?;
+        let from = self
+            .state()
+            .model_calls()
+            .find(|(_, m)| m.calls.contains(&call))
+            .and_then(|(_, m)| m.response);
+        let note = meta::note(&self.value(record.call.input));
+        Some(render::Seed { from, note })
     }
 
     /// The calls a response made, in order: what a fork of it must answer.
@@ -807,6 +871,22 @@ impl Brain {
             facts: vec![Fact::Call(id, CallEvent::Dispatched)],
         };
         let input = self.value(call.input);
+        if call.tool == meta::HANDOVER {
+            let said = render::blocks(&[render::text(
+                "Handed over: your next request starts a new context from your note.",
+            )]);
+            let output = Output {
+                model: said.id(),
+                full: None,
+                observes: Vec::new(),
+            };
+            batch.values.push(said);
+            batch.facts.push(Fact::Call(
+                id,
+                CallEvent::Settled(Outcome::Completed(output)),
+            ));
+            return self.append(batch);
+        }
         match self.members(id, &call.tool, &parent, &input, &mut batch) {
             Ok(names) if call.tool == meta::ADD_SIBLING => {
                 let said = render::blocks(&[render::text(&format!(

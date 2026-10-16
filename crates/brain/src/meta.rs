@@ -4,7 +4,8 @@
 //! fresh agents in the roles its environment starts, or resumes of its
 //! finished children, and which settles with every member's result once
 //! the last is done. `add_sibling` adds one task to the caller's own scope
-//! and returns at once. Their effects (the members' `Created` facts, with a
+//! and returns at once. `handover` moves the caller to a new root once its
+//! round is over, carrying only its note. Their effects (the members' `Created` facts, with a
 //! limb for each new clone) are appended in the same batch as the
 //! `Dispatched`, so a crash leaves both or neither, and a restart never
 //! spawns twice.
@@ -19,6 +20,7 @@ use crate::render::{blocks, text};
 
 pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
+pub const HANDOVER: &str = "handover";
 
 pub fn definition(id: LimbId) -> Limb {
     Limb {
@@ -51,6 +53,11 @@ A fresh agent starts from nothing but its role, the shared `brief` and its manda
             roles.join(", ")
         ));
     }
+    said.push_str(
+        "\n\n`handover` replaces your context with a fresh one that starts from your role, your mandate and the note \
+you write: use it when your context has grown long, or before a new phase of the work. The note is all you keep, so \
+write what the next context needs: where the work stands, what you decided and why, what is next, and Max's words verbatim.",
+    );
     if member {
         said.push_str(
             "\n\n`add_sibling` adds one task to the scope you are in, as a fork of you or in a role you can start, \
@@ -81,7 +88,18 @@ and returns at once: the agent that started you gets its result with yours.",
             "required": ["tasks"]
         }
     });
-    let mut tools = vec![tool(SPAWN, spawn)];
+    let handover = json!({
+        "name": HANDOVER,
+        "description": "Continue in a fresh context that starts from your role, your mandate and this note. Call it alone, as the last thing in a turn.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note": { "type": "string", "description": "Everything the next context needs to carry on." }
+            },
+            "required": ["note"]
+        }
+    });
+    let mut tools = vec![tool(SPAWN, spawn), tool(HANDOVER, handover)];
     if member {
         let sibling = json!({
             "name": ADD_SIBLING,
@@ -119,6 +137,14 @@ fn tool(name: &str, definition: Value) -> Tool {
         definition: definition.to_string(),
         audience: Audience::Agent,
     }
+}
+
+/// A handover call's note.
+pub fn note(input: &[u8]) -> String {
+    serde_json::from_slice::<Value>(input)
+        .ok()
+        .and_then(|v| v["note"].as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 /// A spawn or add_sibling call's input.

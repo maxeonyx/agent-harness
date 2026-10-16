@@ -3,7 +3,7 @@
 //! the last round) and leaves the rest here.
 
 use harness_core::call::{Caller, Outcome};
-use harness_core::context::{Entry, Note, Rendered, Role, Root};
+use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root};
 use harness_core::delivery::Content;
 use harness_core::environment::{Binding, Description};
 use harness_core::id::{CallId, LimbId, ValueId};
@@ -68,10 +68,24 @@ pub struct Turn {
     pub blocks: Vec<String>,
 }
 
+/// What a new context after a handover begins with: the old context's last
+/// entry, and the note it handed over with.
+pub struct Seed {
+    pub from: Option<EntryId>,
+    pub note: String,
+}
+
 /// Everything the task's next request includes, in the order the provider
 /// needs: tool results first, then text. `forked` are the calls of the
 /// response a fork's first request answers.
-pub fn turn(state: &State, values: Values, task: &Task, first: bool, forked: &[CallId]) -> Turn {
+pub fn turn(
+    state: &State,
+    values: Values,
+    task: &Task,
+    first: bool,
+    forked: &[CallId],
+    seed: Option<Seed>,
+) -> Turn {
     let mut turn = Turn {
         renders: Vec::new(),
         blocks: Vec::new(),
@@ -140,6 +154,12 @@ pub fn turn(state: &State, values: Values, task: &Task, first: bool, forked: &[C
             Scope::Max => said(values, task.mandate.text),
             Scope::Spawn(_) => mandate(state, values, task),
         }));
+    }
+    if let Some(Seed { from, note }) = seed {
+        turn.renders.push(Rendered::Note(Note::Boundary { from }));
+        texts.push(text(&format!(
+            "[harness] This is a new context: your previous one handed over to it with this note.\n\n{note}"
+        )));
     }
 
     let after_response = matches!(
