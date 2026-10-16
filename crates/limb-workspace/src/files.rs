@@ -5,20 +5,19 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use harness_core::call::{Outcome, Output};
-use harness_core::context::Wire;
+use harness_core::call::{Call, Outcome, Output};
 use harness_core::environment::FromLimb;
 use harness_core::id::{CallId, Digest};
+use harness_core::live::Live;
 use harness_core::resource::{Observation, Version};
 use regex::Regex;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use serde_json::json;
 
 use crate::record::{Group, replace};
 use crate::shell::{self, Ended, Process, Stop};
 use crate::trunc::{Limits, Truncator};
-use crate::{Inner, lock};
+use crate::{Inner, Report, lock};
 
 const DEFAULT_TIMEOUT: u64 = 120_000;
 const MAX_TIMEOUT: u64 = 600_000;
@@ -69,40 +68,40 @@ struct Place {
 impl Inner {
     pub(crate) fn execute(
         &self,
-        call: CallId,
-        tool: &str,
-        input: &Wire,
-        expects: &[Observation],
+        id: CallId,
+        call: &Call,
+        input: &[u8],
         stop: &Stop,
+        report: &mut Report,
     ) -> Outcome {
-        let result = match tool {
-            "bash" => parse(input).and_then(|i| self.bash(call, i, stop)),
-            "read" => parse(input).and_then(|i| self.read(i)),
-            "write" => parse(input).and_then(|i| self.write(i, expects)),
-            "edit" => parse(input).and_then(|i| self.edit(i, expects)),
-            "grep" => parse(input).and_then(|i| self.grep(i, stop)),
+        let expects = &call.expects;
+        let result = match call.tool.as_str() {
+            "bash" => parse(input).and_then(|i| self.bash(id, i, stop, report)),
+            "read" => parse(input).and_then(|i| self.read(i, report)),
+            "write" => parse(input).and_then(|i| self.write(i, expects, report)),
+            "edit" => parse(input).and_then(|i| self.edit(i, expects, report)),
+            "grep" => parse(input).and_then(|i| self.grep(i, stop, report)),
             other => Err(format!("this workspace has no tool `{other}`")),
         };
-        result.unwrap_or_else(failed)
+        result.unwrap_or_else(|message| report.failed(&message))
     }
 
-    fn bash(&self, call: CallId, input: Bash, stop: &Stop) -> Result<Outcome, String> {
+    fn bash(
+        &self,
+        call: CallId,
+        input: Bash,
+        stop: &Stop,
+        report: &mut Report,
+    ) -> Result<Outcome, String> {
         let timeout =
             Duration::from_millis(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT));
         let truncator = Truncator::new(Limits::default(), pattern(Some(&input.grep))?);
-        let spool = self
-            .blobs
-            .spool(&format!("{:032x}", call.0))
-            .map_err(|e| format!("cannot store the output: {e}"))?;
         let out = self.out.clone();
         let progress = move |bytes: &[u8]| {
-            let chunk = serde_json::to_string(&String::from_utf8_lossy(bytes)).unwrap_or_default();
-            let _ = out.send(FromLimb::Progress {
-                call,
-                chunk: Wire(chunk),
-            });
+            let chunk = String::from_utf8_lossy(bytes).into_owned();
+            let _ = out.send(FromLimb::Live(Live::Call { call, chunk }));
         };
-        let process = Process::start(&input.command, &self.root, truncator, spool, progress)
+        let process = Process::start(&input.command, &self.root, truncator, progress)
             .map_err(|e| format!("cannot run the command: {e}"))?;
         let group = process.group();
         if let Some(start) = shell::started(group) {
@@ -113,25 +112,24 @@ impl Inner {
         self.calls.ran(call);
         let ran = ran.map_err(|e| format!("lost the command: {e}"))?;
         let output = Output {
-            model: text(&format!(
+            model: report.text(&format!(
                 "{}{}",
                 ran.output.text,
                 shell::describe(&ran.ended, timeout)
             )),
-            full: ran.full,
+            full: ran.full.map(|full| report.value(full)),
             observes: Vec::new(),
         };
         Ok(match ran.ended {
             Ended::Exited(status) if status.success() => Outcome::Completed(output),
-            Ended::Exited(_) => Outcome::Failed(output),
-            Ended::Stopped(by) => Outcome::Interrupted {
-                by,
+            Ended::Exited(_) | Ended::TimedOut => Outcome::Failed(output),
+            Ended::Stopped => Outcome::Interrupted {
                 partial: Some(output),
             },
         })
     }
 
-    fn read(&self, input: Read) -> Result<Outcome, String> {
+    fn read(&self, input: Read, report: &mut Report) -> Result<Outcome, String> {
         let place = self.place(&input.path);
         let shown = &input.path;
         if place.path.is_dir() {
@@ -149,7 +147,7 @@ impl Inner {
             names.sort();
             let mut truncator = Truncator::new(Limits::default(), None);
             names.iter().for_each(|n| truncator.line(n));
-            return Ok(completed(truncator.finish().text, Vec::new()));
+            return Ok(report.completed(&truncator.finish().text, Vec::new()));
         }
         let bytes = fs::read(&place.path).map_err(|e| format!("cannot read {shown}: {e}"))?;
         let version = Version::Is(Digest::of(&bytes));
@@ -166,10 +164,15 @@ impl Inner {
         if bytes.is_empty() {
             shown = "(empty file)".into();
         }
-        Ok(completed(shown, self.observations(&place.name, version)))
+        Ok(report.completed(&shown, self.observations(&place.name, version)))
     }
 
-    fn write(&self, input: Write, expects: &[Observation]) -> Result<Outcome, String> {
+    fn write(
+        &self,
+        input: Write,
+        expects: &[Observation],
+        report: &mut Report,
+    ) -> Result<Outcome, String> {
         let place = self.place(&input.path);
         let _files = lock(&self.files);
         let current =
@@ -179,7 +182,7 @@ impl Inner {
             // Writing what is already there changes nothing, so a rerun of a
             // write that landed completes rather than being refused.
             let said = format!("{} already has this content.", input.path);
-            return Ok(completed(said, self.observations(&place.name, target)));
+            return Ok(report.completed(&said, self.observations(&place.name, target)));
         }
         if let Some(refused) = self.refuse(&place, current, expects) {
             return Ok(refused);
@@ -190,16 +193,21 @@ impl Inner {
         }
         replace(&place.path, input.content.as_bytes())
             .map_err(|e| format!("cannot write {}: {e}", input.path))?;
-        self.changed(&place.name, target);
+        self.changed(report, &place.name, target);
         let said = format!(
             "Wrote {} ({} lines).",
             input.path,
             input.content.lines().count()
         );
-        Ok(completed(said, self.observations(&place.name, target)))
+        Ok(report.completed(&said, self.observations(&place.name, target)))
     }
 
-    fn edit(&self, input: Edit, expects: &[Observation]) -> Result<Outcome, String> {
+    fn edit(
+        &self,
+        input: Edit,
+        expects: &[Observation],
+        report: &mut Report,
+    ) -> Result<Outcome, String> {
         let place = self.place(&input.path);
         let _files = lock(&self.files);
         let current =
@@ -229,24 +237,24 @@ impl Inner {
         replace(&place.path, edited.as_bytes())
             .map_err(|e| format!("cannot write {}: {e}", input.path))?;
         let version = Version::Is(Digest::of(edited.as_bytes()));
-        self.changed(&place.name, version);
+        self.changed(report, &place.name, version);
         let said = format!(
             "Replaced {count} occurrence{} in {}.",
             if count == 1 { "" } else { "s" },
             input.path
         );
-        Ok(completed(said, self.observations(&place.name, version)))
+        Ok(report.completed(&said, self.observations(&place.name, version)))
     }
 
-    fn grep(&self, input: Grep, stop: &Stop) -> Result<Outcome, String> {
+    fn grep(&self, input: Grep, stop: &Stop, report: &mut Report) -> Result<Outcome, String> {
         let regex = Regex::new(&input.pattern).map_err(|e| format!("invalid pattern: {e}"))?;
         let place = self.place(input.path.as_deref().unwrap_or("."));
         let mut truncator = Truncator::new(Limits::default(), None);
         let mut found = 0;
         let mut pending = vec![place.path];
         while let Some(path) = pending.pop() {
-            if let Some(by) = stop.get() {
-                return Ok(Outcome::Interrupted { by, partial: None });
+            if stop.get() {
+                return Ok(Outcome::Interrupted { partial: None });
             }
             let Ok(meta) = fs::symlink_metadata(&path) else {
                 continue;
@@ -286,7 +294,7 @@ impl Inner {
             0 => "No matches.".into(),
             _ => truncator.finish().text,
         };
-        Ok(completed(said, Vec::new()))
+        Ok(report.completed(&said, Vec::new()))
     }
 
     /// The refusal of a write or edit whose caller has not seen `current`.
@@ -336,29 +344,8 @@ pub(crate) fn version(path: &Path) -> io::Result<Version> {
     }
 }
 
-pub(crate) fn failed(message: String) -> Outcome {
-    Outcome::Failed(Output {
-        model: text(&message),
-        full: None,
-        observes: Vec::new(),
-    })
-}
-
-fn completed(said: String, observes: Vec<Observation>) -> Outcome {
-    Outcome::Completed(Output {
-        model: text(&said),
-        full: None,
-        observes,
-    })
-}
-
-/// A tool result's content: one text block.
-fn text(text: &str) -> Wire {
-    Wire(json!([{ "type": "text", "text": text }]).to_string())
-}
-
-fn parse<T: DeserializeOwned>(input: &Wire) -> Result<T, String> {
-    serde_json::from_str(&input.0).map_err(|e| format!("invalid input: {e}"))
+fn parse<T: DeserializeOwned>(input: &[u8]) -> Result<T, String> {
+    serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))
 }
 
 fn pattern(grep: Option<&str>) -> Result<Option<Regex>, String> {

@@ -1,15 +1,22 @@
 //! The tools the workspace offers, as a context's root declares them, and
 //! the instructions that come with them.
 
-use harness_core::context::Wire;
+use std::path::Path;
+
 use harness_core::environment::{Audience, Tool};
 use serde_json::json;
 
-/// How to use the workspace, rendered into every root that reaches it.
-pub const INSTRUCTIONS: &str = "\
-You work in a directory on a machine through the tools `bash`, `read`, `write`, `edit` and `grep`. \
-Relative paths are relative to the directory.
+/// How to use the workspace in `root`, rendered into every root context
+/// that reaches it.
+pub fn instructions(root: &Path) -> String {
+    format!(
+        "You work in the directory `{}` through the tools `bash`, `read`, `write`, `edit` and `grep`. \
+Relative paths are relative to it.\n\n{USE}",
+        root.display()
+    )
+}
 
+const USE: &str = "\
 Every `bash` call starts a fresh shell there: no working directory, variables or background jobs carry over. \
 Each command owns every process it starts, and they are all killed when it ends, is interrupted or reaches its time limit. \
 A server you need across calls must leave the command's process group (`setsid`).
@@ -38,7 +45,6 @@ pub fn tools() -> Vec<Tool> {
                 "timeout_ms": { "type": "integer", "description": "Stop the command after this long. Default 120000, at most 600000." }
             }),
             &["command", "grep"],
-            false,
         ),
         tool(
             "read",
@@ -50,7 +56,6 @@ pub fn tools() -> Vec<Tool> {
                 "grep": { "type": "string", "description": "A regular expression for lines worth seeing from the middle of a long file." }
             }),
             &["path"],
-            true,
         ),
         tool(
             "write",
@@ -60,7 +65,6 @@ pub fn tools() -> Vec<Tool> {
                 "content": { "type": "string" }
             }),
             &["path", "content"],
-            true,
         ),
         tool(
             "edit",
@@ -72,7 +76,6 @@ pub fn tools() -> Vec<Tool> {
                 "all": { "type": "boolean", "description": "Replace every occurrence." }
             }),
             &["path", "old", "new"],
-            false,
         ),
         tool(
             "grep",
@@ -82,18 +85,11 @@ pub fn tools() -> Vec<Tool> {
                 "path": { "type": "string", "description": "Where to search. Default: the workspace directory." }
             }),
             &["pattern"],
-            true,
         ),
     ]
 }
 
-fn tool(
-    name: &str,
-    description: &str,
-    properties: serde_json::Value,
-    required: &[&str],
-    rerun: bool,
-) -> Tool {
+fn tool(name: &str, description: &str, properties: serde_json::Value, required: &[&str]) -> Tool {
     let definition = json!({
         "name": name,
         "description": description,
@@ -101,9 +97,15 @@ fn tool(
     });
     Tool {
         name: name.into(),
-        definition: Wire(definition.to_string()),
+        definition: definition.to_string(),
         audience: Audience::Both,
-        rerun,
-        deferred: false,
     }
+}
+
+/// Whether running `tool` again, after an instance was cut off while running
+/// it, is the same as running it once: a read, a search, or a write of
+/// whole content, which completes as a no-op once it has landed. A command
+/// or an edit may not be.
+pub fn rerun(tool: &str) -> bool {
+    matches!(tool, "read" | "grep" | "write")
 }

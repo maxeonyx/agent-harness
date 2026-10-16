@@ -4,57 +4,40 @@ use std::io::{self, Read};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use harness_core::call::Interruption;
-use harness_core::id::ContentId;
-
-use crate::record::Spool;
 use crate::trunc::{Truncated, Truncator};
 
-/// A request to stop a running call, and why.
+/// A request to stop a running call.
 #[derive(Default)]
-pub struct Stop(AtomicU8);
+pub struct Stop(AtomicBool);
 
 impl Stop {
-    pub fn set(&self, by: Interruption) {
-        let code = match by {
-            Interruption::Max => 1,
-            Interruption::Stop => 2,
-            Interruption::Timeout => 3,
-            Interruption::Disconnected => 4,
-        };
-        let _ = self
-            .0
-            .compare_exchange(0, code, Ordering::SeqCst, Ordering::SeqCst);
+    pub fn set(&self) {
+        self.0.store(true, Ordering::SeqCst);
     }
 
-    pub fn get(&self) -> Option<Interruption> {
-        match self.0.load(Ordering::SeqCst) {
-            1 => Some(Interruption::Max),
-            2 => Some(Interruption::Stop),
-            3 => Some(Interruption::Timeout),
-            4 => Some(Interruption::Disconnected),
-            _ => None,
-        }
+    pub fn get(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
     }
 }
 
 /// How a command ended.
 pub enum Ended {
     Exited(ExitStatus),
-    Stopped(Interruption),
+    Stopped,
+    TimedOut,
 }
 
 pub struct Ran {
     pub ended: Ended,
     pub output: Truncated,
     /// The whole output, when `output` left some of it out.
-    pub full: Option<ContentId>,
+    pub full: Option<Vec<u8>>,
 }
 
 /// How long a process tree gets to exit after `SIGTERM` before `SIGKILL`.
@@ -82,7 +65,6 @@ impl Process {
         command: &str,
         dir: &Path,
         truncator: Truncator,
-        spool: Spool,
         progress: impl Fn(&[u8]) + Send + 'static,
     ) -> io::Result<Process> {
         let (mut reader, writer) = io::pipe()?;
@@ -103,8 +85,7 @@ impl Process {
 
         let capture = Arc::new(Mutex::new(Some(Capture {
             truncator,
-            spool,
-            error: None,
+            full: Vec::new(),
         })));
         let (done, finished) = mpsc::channel();
         let shared = capture.clone();
@@ -147,11 +128,11 @@ impl Process {
             if let Some(status) = self.child.try_wait()? {
                 break Ended::Exited(status);
             }
-            if let Some(by) = stop.get() {
-                break Ended::Stopped(by);
+            if stop.get() {
+                break Ended::Stopped;
             }
             if Instant::now() >= deadline {
-                break Ended::Stopped(Interruption::Timeout);
+                break Ended::TimedOut;
             }
             thread::sleep(POLL);
         };
@@ -170,16 +151,8 @@ impl Process {
             .unwrap_or_else(|e| e.into_inner())
             .take()
             .expect("the output is taken once");
-        if let Some(e) = capture.error {
-            return Err(e);
-        }
         let output = capture.truncator.finish();
-        let full = if output.cut {
-            Some(capture.spool.keep()?)
-        } else {
-            capture.spool.discard()?;
-            None
-        };
+        let full = output.cut.then_some(capture.full);
         Ok(Ran {
             ended,
             output,
@@ -190,18 +163,13 @@ impl Process {
 
 struct Capture {
     truncator: Truncator,
-    spool: Spool,
-    error: Option<io::Error>,
+    full: Vec<u8>,
 }
 
 impl Capture {
     fn feed(&mut self, bytes: &[u8]) {
         self.truncator.feed(bytes);
-        if self.error.is_none()
-            && let Err(e) = self.spool.write(bytes)
-        {
-            self.error = Some(e);
-        }
+        self.full.extend_from_slice(bytes);
     }
 }
 
@@ -258,10 +226,10 @@ pub fn describe(ended: &Ended, timeout: Duration) -> String {
             (None, Some(signal)) => format!("[killed by signal {signal}]"),
             (None, None) => "[ended]".into(),
         },
-        Ended::Stopped(Interruption::Timeout) => format!(
+        Ended::TimedOut => format!(
             "[stopped after {}s, the call's time limit; its processes were killed]",
             timeout.as_secs()
         ),
-        Ended::Stopped(_) => "[interrupted; its processes were killed]".into(),
+        Ended::Stopped => "[interrupted; its processes were killed]".into(),
     }
 }
