@@ -11,10 +11,12 @@
 //! on.
 //!
 //! The face is served from the same process over a second connection to the
-//! same store, so Max watches exactly what the brain appended. Its compose
-//! box sends through the brain: his words become a delivery he authored,
-//! as far as his page had seen, or are refused back to him (the task has
-//! finished meanwhile).
+//! same store, so Max watches exactly what the brain appended. Everything
+//! he does there (his words, interrupting, stopping or holding a task,
+//! reordering his queue, focusing a task) reaches the brain as one of his
+//! facts, which it folds and appends as authored by him, as far as his page
+//! had seen, or refuses back to him with the core's reason. Each request's
+//! streamed events go to the face's live feed, never to the journal.
 //!
 //! **Policy** lives in two modules, and nowhere else:
 //! - [`policy`]: the model and request parameters, retries and backoff,
@@ -25,10 +27,11 @@
 //!   fork framing the fork-framing spike measured.
 //!
 //! ```text
-//! harness-brain --journal J [--port 4321] [--workspace DIR --mandate FILE [--name NAME]]
+//! harness-brain --journal J [--port 4321] [--workspace DIR --mandate FILE [--name NAME] [--chat]]
 //! ```
 //! A new journal needs the workspace and the mandate; an existing one is
-//! continued and they are ignored.
+//! continued and they are ignored. `--chat` makes the root a chat with Max:
+//! each turn's end is his move, and it is never done.
 
 mod brain;
 mod journal;
@@ -41,8 +44,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::thread;
 
-use harness_core::id::FaceId;
-use harness_face_web::{Compose, Dictation, Face};
+use harness_core::task::Mode;
+use harness_face_web::{Dictation, Face, Feed, Wiring};
 use harness_provider::{Client, Login};
 use harness_store::Store;
 
@@ -63,6 +66,7 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let (mut journal, mut port, mut workspace, mut mandate, mut name) =
         (None, 4321u16, None, None, "orchestrator".to_string());
+    let mut mode = Mode::Autonomous;
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
@@ -71,6 +75,7 @@ fn run() -> Result<(), String> {
             "--workspace" => workspace = Some(PathBuf::from(value()?)),
             "--mandate" => mandate = Some(PathBuf::from(value()?)),
             "--name" => name = value()?,
+            "--chat" => mode = Mode::UserFacing,
             _ => return Err(format!("unknown argument {flag}")),
         }
     }
@@ -79,6 +84,7 @@ fn run() -> Result<(), String> {
         (Some(workspace), Some(mandate)) => Some(First {
             workspace,
             name,
+            mode,
             mandate: std::fs::read_to_string(&mandate)
                 .map_err(|e| format!("the mandate {mandate:?}: {e}"))?,
         }),
@@ -99,11 +105,13 @@ fn run() -> Result<(), String> {
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("port {port}: {e}"))?;
     let inbox = Inbox::new();
     let login = || Login::claude_code().map_err(|e| format!("the login: {}", e.0));
+    let feed = Feed::default();
     let face = Face::with(
         journal.clone(),
-        Compose {
-            deliver: Some(Box::new(inbox.words(FaceId(brain::new_id())))),
+        Wiring {
+            act: Some(Box::new(inbox.max())),
             dictation: Some(Dictation::new(login()?)),
+            feed: feed.clone(),
         },
     );
     let follower = face.clone();
@@ -114,7 +122,7 @@ fn run() -> Result<(), String> {
     println!("face: https://mx-hv-mj.local:{port}");
 
     let client = Client::new(login()?);
-    let mut brain = Brain::launch(store, journal, client, state_dir, first, inbox)?;
+    let mut brain = Brain::launch(store, journal, client, state_dir, first, inbox, feed)?;
     brain.run();
     Ok(())
 }
