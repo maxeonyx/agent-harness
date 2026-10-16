@@ -60,7 +60,9 @@ impl Feed {
     }
 
     /// Stream `running`'s pieces after the first `after`, each with its
-    /// count as the event id, until it ends; then an `end` event.
+    /// count as the event id, until it ends; then an `end` event. Each
+    /// piece is sent as a JSON string, so a command's carriage returns and
+    /// a chunk's trailing newline arrive as they were.
     pub(crate) fn stream(
         &self,
         stream: &mut impl Write,
@@ -91,11 +93,8 @@ impl Feed {
             }
             for piece in new {
                 after += 1;
-                writeln!(stream, "id: {after}")?;
-                for line in piece.lines() {
-                    writeln!(stream, "data: {line}")?;
-                }
-                stream.write_all(b"\n")?;
+                let piece = serde_json::Value::from(piece);
+                write!(stream, "id: {after}\ndata: {piece}\n\n")?;
             }
             stream.flush()?;
         }
