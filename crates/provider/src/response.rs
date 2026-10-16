@@ -1,6 +1,5 @@
 //! A streamed response, assembled into the assistant message it becomes.
 
-use harness_core::context::Wire;
 use harness_core::model_call::{Stop, Usage};
 use serde_json::{Map, Value};
 
@@ -65,20 +64,20 @@ impl Assembly {
 
     /// The `content` array of the assistant message: the first and only
     /// time these bytes are written.
-    pub(crate) fn content(&self) -> Result<Wire, String> {
+    pub(crate) fn content(&self) -> Result<Vec<u8>, String> {
         let blocks: Result<Vec<_>, _> = self.blocks.iter().map(Block::render).collect();
-        Ok(Wire(format!("[{}]", blocks?.join(","))))
+        Ok(format!("[{}]", blocks?.join(",")).into_bytes())
     }
 
     /// The visible text so far, as a `content` array, if there is any.
-    pub(crate) fn visible(&self) -> Option<Wire> {
+    pub(crate) fn visible(&self) -> Option<Vec<u8>> {
         let text: Vec<_> = self
             .blocks
             .iter()
             .filter(|b| b.fields.get("type").and_then(Value::as_str) == Some("text"))
             .filter_map(|b| b.render().ok())
             .collect();
-        (!text.is_empty()).then(|| Wire(format!("[{}]", text.join(","))))
+        (!text.is_empty()).then(|| format!("[{}]", text.join(",")).into_bytes())
     }
 
     pub(crate) fn usage(&self) -> Option<Usage> {
