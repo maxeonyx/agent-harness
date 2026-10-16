@@ -72,13 +72,13 @@ fn watch(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
                 began = Instant::now();
                 println!("writer: folded batch {batch}, appending it");
                 if batch > COMMITTED {
-                    // Land the kill halfway through a typical commit.
-                    std::thread::sleep(append_took / 2);
+                    // Land the kill a quarter of the way into a typical append.
+                    std::thread::sleep(append_took / 4);
                     writer.kill()?;
                     writer.wait()?;
                     println!(
                         "** kill -9 the writer {:?} into appending batch {batch}",
-                        append_took / 2
+                        append_took / 4
                     );
                     break batch;
                 }
