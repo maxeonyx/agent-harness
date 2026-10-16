@@ -29,14 +29,16 @@
 //!
 //! ```text
 //! harness-brain --journal J [--port 4321] [--sample WAV]
-//!               [--workspace DIR --mandate FILE [--name NAME] [--chat]]
+//!               [--workspace DIR --mandate FILE [--words FILE] [--name NAME] [--chat]]
 //! ```
 //! A new journal needs the workspace and the mandate; an existing one is
-//! continued and they are ignored. `--chat` makes the root a chat with Max:
+//! continued and they are ignored. `--words` delivers Max's own words to
+//! the task with its mandate, so its briefs can quote them. `--chat` makes the root a chat with Max:
 //! each turn's end is his move, and it is never done. `--sample` offers the
 //! page a recording to dictate, for a machine with no microphone.
 
 mod brain;
+mod max;
 mod meta;
 mod policy;
 mod reader;
@@ -72,7 +74,7 @@ fn run() -> Result<(), String> {
         (None, 4321u16, None, None, None);
     let (mut roles, mut role) = (None, "orchestrator".to_string());
     let mut mode = Mode::Autonomous;
-    let mut sample = None;
+    let (mut sample, mut words) = (None, None);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
@@ -80,6 +82,7 @@ fn run() -> Result<(), String> {
             "--port" => port = value()?.parse().map_err(|e| format!("--port: {e}"))?,
             "--workspace" => workspace = Some(PathBuf::from(value()?)),
             "--mandate" => mandate = Some(PathBuf::from(value()?)),
+            "--words" => words = Some(PathBuf::from(value()?)),
             "--name" => name = Some(value()?),
             "--roles" => roles = Some(PathBuf::from(value()?)),
             "--role" => role = value()?,
@@ -98,6 +101,9 @@ fn run() -> Result<(), String> {
             mode,
             mandate: std::fs::read_to_string(&mandate)
                 .map_err(|e| format!("the mandate {mandate:?}: {e}"))?,
+            words: words
+                .map(|w| std::fs::read_to_string(&w).map_err(|e| format!("the words {w:?}: {e}")))
+                .transpose()?,
         }),
         _ => None,
     };

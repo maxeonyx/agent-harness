@@ -94,6 +94,8 @@
   section > h2 button { text-transform: none; letter-spacing: 0; font-size: 1.1em; margin-left: .8em; }
   .queued .move { float: right; display: flex; gap: .3em; }
   .queued .move button { padding: 0 .45em; }
+  .queued .reply { display: flex; gap: .3em; margin-top: .3em; }
+  .queued .reply input { flex: 1; min-width: 0; }
   .stream { border-top: 1px solid var(--line); padding: .6em 0; }
   .stream .role { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; color: var(--maroon); }
   .block.thinking { color: var(--muted); font-style: italic; }
@@ -249,6 +251,7 @@ function render() {
 
   // Max's queue, in the order the core derives.
   const queue = $("#queue ul");
+  const typing = document.activeElement?.dataset?.ask;
   queue.replaceChildren();
   view.queue.forEach((q, i) => {
     const t = byId[q.task];
@@ -261,7 +264,10 @@ function render() {
       move.append(b);
     }
     li.append(move, el("span", "name", t.name), el("span", "tag", `waiting ${ago(q.since)}`));
-    if (q.ask) li.append(el("span", "ask", `asks: ${preview(q.ask.input)}`));
+    if (q.ask) {
+      li.append(el("span", "ask", `asks: ${preview(q.ask.input)}`));
+      if (can.act) li.append(reply(q.ask, typing === q.ask.id));
+    }
     li.append(el("span", "why", q.why ? q.why : "unranked"));
     li.onclick = () => select(q.task);
     queue.append(li);
@@ -289,6 +295,33 @@ function render() {
 
   renderDetail();
   renderTo();
+}
+
+// Max's answer to an ask: the call's settlement, which he authors. What he
+// types survives the queue being drawn again.
+const replies = {};
+function reply(ask, focus) {
+  const form = el("form", "reply");
+  const input = el("input");
+  input.dataset.ask = ask.id;
+  input.placeholder = "your answer";
+  input.value = replies[ask.id] || "";
+  input.oninput = () => { replies[ask.id] = input.value; };
+  const answer = el("span", "answer");
+  form.append(input, el("button", null, "Answer"), answer);
+  form.onclick = (e) => e.stopPropagation();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const said = input.value.trim();
+    if (!said) return;
+    const content = JSON.stringify([{ type: "text", text: said }]);
+    const model = await (await fetch("/digest", { method: "POST", body: content })).text();
+    const why = await act({ Call: [ask.id, { Settled: { Completed: { model, full: null, observes: [] } } }] }, [content]);
+    if (why) { answer.className = "answer bad"; answer.textContent = `refused: ${why}`; return; }
+    delete replies[ask.id];
+  };
+  if (focus) queueMicrotask(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+  return form;
 }
 
 // Max's own order for his queue: the whole order, as the scheduler would

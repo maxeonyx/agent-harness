@@ -1097,6 +1097,11 @@ impl State {
         self.deliveries.get(&id)
     }
 
+    /// Every delivery, in id order.
+    pub fn deliveries(&self) -> impl Iterator<Item = &Delivered> {
+        self.deliveries.values()
+    }
+
     pub fn environment(&self, id: EnvironmentId) -> Option<&Environment> {
         self.environments.get(&id)
     }

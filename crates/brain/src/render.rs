@@ -6,7 +6,7 @@ use harness_core::call::{Caller, Outcome};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root};
 use harness_core::delivery::Content;
 use harness_core::environment::{Binding, Description};
-use harness_core::id::{CallId, LimbId, ValueId};
+use harness_core::id::{CallId, DeliveryId, LimbId, ValueId};
 use harness_core::resource::Observation;
 use harness_core::state::{Stale, State};
 use harness_core::task::{Giver, Input, Origin, Scope, Task};
@@ -54,11 +54,28 @@ pub fn root(model: &str, role: &str, limbs: &[(LimbId, &Description)]) -> Result
 }
 
 /// What every fresh member of a spawn shares, as its first message: the
-/// same bytes, so the same entry and one cache prefix.
-pub fn brief(said: &str) -> Bytes {
-    blocks(&[text(&format!(
-        "[harness] The brief every agent started with you was given:\n\n{said}"
-    ))])
+/// brief, then Max's quoted words verbatim, each under its label. The same
+/// bytes for every member, so the same entry and one cache prefix.
+pub fn brief(said: Option<&str>, quotes: &[(DeliveryId, Vec<Value>)]) -> Bytes {
+    let mut out = Vec::new();
+    if let Some(said) = said {
+        out.push(text(&format!(
+            "[harness] The brief every agent started with you was given:\n\n{said}"
+        )));
+    }
+    for (id, words) in quotes {
+        out.push(text(&format!(
+            "[harness] Max's own words, quoted verbatim (`{}`):",
+            label(*id)
+        )));
+        out.extend(words.iter().map(Value::to_string));
+    }
+    blocks(&out)
+}
+
+/// How an agent names Max's words to quote them in a brief.
+pub fn label(id: DeliveryId) -> String {
+    format!("max-{}", &id.to_string()[..8])
 }
 
 /// The next request's new content: what it renders, and the blocks of the
@@ -113,10 +130,19 @@ pub fn turn(
                 turn.renders.push(Rendered::Delivery(id));
                 if let Some(delivered) = state.delivery(id) {
                     let content = &delivered.delivery.content;
-                    // Words that arrive with a tool round would read as part
-                    // of it; say whose they are.
-                    if matches!(content, Content::Words(_)) && !turn.blocks.is_empty() {
-                        texts.push(text("[harness] Max wrote this while you were working:"));
+                    // Max's words are labelled, so a brief can quote them;
+                    // words that arrive with a tool round would read as part
+                    // of it, so they say whose they are.
+                    if matches!(content, Content::Words(_)) {
+                        let when = if turn.blocks.is_empty() {
+                            ""
+                        } else {
+                            " while you were working"
+                        };
+                        texts.push(text(&format!(
+                            "[harness] Max wrote this{when} (`{}` quotes it in a brief):",
+                            label(id)
+                        )));
                     }
                     texts.extend(delivery(values, content));
                 }
@@ -267,6 +293,12 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
         .collect();
     let what = match record.call.caller {
         Caller::Max { .. } => format!("Max ran `{}` here", record.call.tool),
+        Caller::Agent { tool_use: None, .. } if record.call.tool == crate::max::ASK => {
+            "Max answered the question you asked in the background".to_string()
+        }
+        Caller::Agent { tool_use: None, .. } => {
+            format!("Your background `{}` call has settled", record.call.tool)
+        }
         _ => format!(
             "Your earlier `{}` call, whose outcome was unknown, did finish",
             record.call.tool
