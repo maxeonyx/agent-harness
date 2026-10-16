@@ -9,7 +9,9 @@ use crate::call::{CallEvent, Caller, Outcome as CallOutcome};
 use crate::context::{EntryId, Message, Note, Rendered, Role, Root};
 use crate::delivery::{Content, Delivery};
 use crate::environment::Binding;
-use crate::id::{CallId, DeliveryId, ModelCallId, TaskId, Timestamp, ValueId};
+use crate::id::{
+    CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, TaskId, Timestamp, ValueId,
+};
 use crate::journal::{Author, Fact, Record, Rejected};
 use crate::model_call::{Ending, ModelCallEvent, Purpose, Stop};
 use crate::resource::{Observation, ResourceKey, Version};
@@ -21,18 +23,28 @@ use crate::state::State;
 /// **Concept.** A task is the unit of structured concurrency and the thing
 /// Max watches, talks to, and is asked to attend to. It has a [`Mandate`],
 /// a [`Scope`] that owns it, a [`Mode`] that says what the end of a turn
-/// means, an environment [`Binding`], and a head: the entry its context
-/// currently ends at. A task is an identity; its context is a value. The
-/// head moves through the context tree (a fork starts a task on its
-/// parent's response, a handover moves a task to a new root, a resume
-/// starts a task on another's last entry, a rewind moves it back), and none
-/// of that copies or edits a context.
+/// means, an [environment](crate::environment::Environment) that is its role
+/// for life, the limbs that fill that environment's places (its own clone),
+/// and once it has started, a [`Context`]: the entry its context currently
+/// ends at, and which limb runs each tool there. A task is an identity; its
+/// context is a value. The head moves through the context tree (a fork
+/// starts a task on its parent's response, a handover moves a task to a new
+/// root, a resume starts a task on another's last entry, a rewind moves it
+/// back), and none of that copies or edits a context.
+///
+/// Creation and the first root are separate facts. A spawn creates its
+/// members in the batch that dispatches it, so a scope's membership is
+/// atomic with the call that owns it; a fresh member is then
+/// [`TaskState::Starting`] until every limb it can reach has connected and
+/// described itself (a clone made, a process started), when the brain gives
+/// it its first root ([`Move::Root`]). A member whose limbs are all reached
+/// already is rooted in the same batch.
 ///
 /// Its [`TaskState`] says whose move it is, and is folded from the facts
 /// that concern it (`Task::apply`, run only by [`State::apply`]): its own
 /// events, its model calls, the settlements of the calls it waits on,
 /// deliveries to it, and changes to what it embodies. The whole fold is here, including what its context
-/// embodies ([`Task::knows`]); it reads the rest of the journal's state
+/// embodies ([`Context::knows`]); it reads the rest of the journal's state
 /// (call outcomes, the context tree, current versions) but keeps none of it.
 /// The state is never written down as a fact, so it cannot disagree with its
 /// history; "what is it waiting on" and "is it waiting on Max" are read off
@@ -62,22 +74,22 @@ pub struct Task {
     pub id: TaskId,
     /// Short and descriptive, growing with depth (`tk-prodsync-findfiles`).
     pub name: String,
-    /// The agent kind (role) whose prompt is in the root. Fixed for life,
-    /// and inherited by forks, resumes and asides: models do not reliably
-    /// honour a role that changes mid-context.
-    pub agent: String,
+    /// Its role, and everything it can reach. Fixed for life, and inherited
+    /// by forks, resumes and asides: models do not reliably honour a role
+    /// that changes mid-context. A new version of the environment reaches
+    /// it at its next root.
+    pub environment: EnvironmentId,
+    /// The limb filling each of its environment's
+    /// [places](crate::environment::Place), by place name. Fixed for life,
+    /// and shared by its forks.
+    pub places: BTreeMap<String, LimbId>,
     pub scope: Scope,
     pub origin: Origin,
     pub mode: Mode,
     pub mandate: Mandate,
-    /// Where its current context began: its root, or the entry it was
-    /// forked, resumed or opened at. A rewind cannot go before it.
-    pub start: EntryId,
-    pub head: EntryId,
-    /// Which limb runs each of its context's tools. Set when a root is made
-    /// and kept until the next one, so a redefined environment takes effect
-    /// at the task's next handover, never under it.
-    pub binding: Binding,
+    /// The context it works in; `None` while it is starting, or for a task
+    /// stopped before it started.
+    pub context: Option<Context>,
     pub state: TaskState,
     /// When it entered its current state: how long the throbber has shown
     /// what it shows.
@@ -102,12 +114,101 @@ pub struct Task {
     /// Requests that failed in a row; the brain's policy gives up at some
     /// count ([`Drain::Fail`]). The account's limit is not a failure.
     pub failures: u32,
-    /// The version of each resource its context embodies, and what it has
-    /// been told since.
+}
+
+/// The context a task is working in, and everything that belongs to it
+/// rather than to the task: where it began, where it ends now, which limb
+/// runs each of its tools, and what it embodies. A new root replaces the
+/// whole of it; Max's words and actions pending for the task survive, since
+/// they are for the task.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Context {
+    /// Where it began: its root, or the entry it was forked, resumed or
+    /// opened at. A rewind cannot go before it.
+    pub start: EntryId,
+    pub head: EntryId,
+    /// Which limb runs each of its tools. Made with its root and kept until
+    /// the next one, so a redefined environment takes effect at the task's
+    /// next root, never under it.
+    pub binding: Binding,
+    /// The version of each resource it embodies, and what it has been told
+    /// since.
     pub knows: BTreeMap<ResourceKey, Known>,
     /// What each request since `start` changed in `knows`, so a rewind
     /// restores what the earlier context embodied.
     learned: Vec<Learned>,
+}
+
+impl Context {
+    /// A new root's context.
+    fn rooted(start: &Start) -> Context {
+        Context {
+            start: start.root.id(),
+            head: start.root.id(),
+            binding: start.binding.clone(),
+            knows: start
+                .observes
+                .iter()
+                .map(|o| {
+                    let known = Known {
+                        has: o.version,
+                        told: None,
+                    };
+                    (o.resource.clone(), known)
+                })
+                .collect(),
+            learned: Vec::new(),
+        }
+    }
+
+    /// A context that continues this one from its head: a fork's, a
+    /// resume's, an aside's.
+    fn continued(&self) -> Context {
+        Context {
+            start: self.head,
+            head: self.head,
+            binding: self.binding.clone(),
+            knows: self.knows.clone(),
+            learned: Vec::new(),
+        }
+    }
+
+    /// The context now embodies these versions.
+    fn observe(
+        &mut self,
+        observations: &[Observation],
+        before: &mut Vec<(ResourceKey, Option<Known>)>,
+    ) {
+        for o in observations {
+            let old = self.knows.insert(
+                o.resource.clone(),
+                Known {
+                    has: o.version,
+                    told: None,
+                },
+            );
+            if !before.iter().any(|(k, _)| *k == o.resource) {
+                before.push((o.resource.clone(), old));
+            }
+        }
+    }
+
+    /// The context has been told these resources moved, without seeing them.
+    fn tell(
+        &mut self,
+        observations: &[Observation],
+        before: &mut Vec<(ResourceKey, Option<Known>)>,
+    ) {
+        for o in observations {
+            if let Some(known) = self.knows.get_mut(&o.resource) {
+                let old = *known;
+                known.told = Some(o.version);
+                if !before.iter().any(|(k, _)| *k == o.resource) {
+                    before.push((o.resource.clone(), Some(old)));
+                }
+            }
+        }
+    }
 }
 
 /// What a task's context knows of one resource.
@@ -158,14 +259,19 @@ pub enum Scope {
     Spawn(CallId),
 }
 
-/// How a task's first context came to be. It decides where the head starts,
-/// how the first request is framed, and how the tree shows the task.
+/// How a task came to be. It decides its environment, where its first
+/// context starts, how the first request is framed, and how the tree shows
+/// the task.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Origin {
-    /// A new root in an environment, for an agent kind; then its shared
-    /// brief and attachments, then its own mandate. In a spawn's scope, only
-    /// the kinds and environments its meta limb [starts](crate::environment::Startable).
-    Fresh { agent: String, start: Box<Start> },
+    /// A new task in an environment, with a limb for each of its places. It
+    /// starts on a new root ([`Move::Root`]), then its attachments, its
+    /// shared brief and its own mandate. Created by an agent, only in an
+    /// environment its own [starts](crate::environment::Environment::starts).
+    Fresh {
+        environment: EnvironmentId,
+        places: BTreeMap<String, LimbId>,
+    },
     /// The parent's spawning response, the source's head when the fork is
     /// made. The first request answers every tool use in it with the same
     /// neutral result, its own spawn included, so no fork waits on its
@@ -176,7 +282,9 @@ pub enum Origin {
     Fork { from: TaskId },
     /// A finished task's last entry, continued with a new mandate. It
     /// inherits what its source had not yet rendered, such as Max's edits
-    /// in the finished chat.
+    /// in the finished chat. Max resumes any finished task; an agent resumes
+    /// a task of a scope it owned, so an orchestrator can ask its designer a
+    /// follow-up with the designer's context intact.
     Resume { from: TaskId },
     /// A busy task's head, opened by Max as a user-facing fork so he can talk
     /// to it while it waits; its result is delivered back to `from`.
@@ -184,14 +292,15 @@ pub enum Origin {
 }
 
 /// A new root, and what is decided with it: a fresh task's first context,
-/// a handover's, a reseed's.
+/// a handover's, a rebuild's.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Start {
     pub root: Root,
     /// Made with the root's tools ([`Binding::new`]).
     pub binding: Binding,
-    /// The versions the root embodies: the environment's instructions, the
-    /// role prompt, the skill index, each tool's schema.
+    /// The versions the root embodies: the environment's source, each
+    /// limb's instructions (an `AGENTS.md`, the skills index), each tool's
+    /// schema.
     pub observes: Vec<Observation>,
     /// Attachments to run before the first request, shown to the task as
     /// tool calls it made: calls made by the harness ([`Caller::Meta`]),
@@ -244,9 +353,21 @@ pub enum Mode {
 /// overall work: "A, then A.1, then A.1.3". Rendering that chain at a fork,
 /// as a reminder after each tool round, and at the top of a handover is how
 /// a deeply forked agent knows to stop after A.1.3.
+///
+/// A fresh task's mandate also carries what every member of its spawn
+/// shares, rendered before its own text and identical for each of them, so
+/// N siblings are one cache prefix: the parent's brief, and Max's words the
+/// parent quotes. A quote is his delivery itself, so a brief carries his
+/// words verbatim by construction, and the child can tell them from its
+/// parent's paraphrase.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mandate {
     pub text: ValueId,
+    /// What every member of the spawn is told first.
+    pub brief: Option<ValueId>,
+    /// Max's words, each delivered to the creating task or quoted to it in
+    /// turn.
+    pub quotes: Vec<DeliveryId>,
     pub from: Giver,
 }
 
@@ -258,9 +379,16 @@ pub enum Giver {
     Task(TaskId),
 }
 
-/// Whose move it is. Exactly one holds at a time.
+/// Whose move it is. Exactly one holds at a time. Every state but
+/// [`TaskState::Starting`] has a [`Context`], and so may a done task.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskState {
+    /// Created, with no context yet: some limb it can reach has not
+    /// connected or described itself (its clone is being made). The brain
+    /// gives it its first root once every one has
+    /// ([`crate::state::Todo::Root`]). Max can stop it; it cannot be
+    /// interrupted, forked or rewound.
+    Starting,
     /// The task's move: the brain builds and sends its next request, unless
     /// it is held or the account is limited (derived, not stored here).
     Ready,
@@ -335,13 +463,15 @@ pub struct Watched {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Drain {
     /// Max interrupted: the move becomes his, whatever the mode. It never
-    /// passes through a spawn call (that would stop the scope); to talk to a
-    /// task waiting on children, Max opens an aside.
+    /// passes through a spawn call (that would stop the scope), so it is
+    /// refused while the task's round waits on a scope with members still
+    /// running ([`Rejected::Scoped`]); to talk to it then, Max opens an
+    /// aside.
     ToMax,
     /// The task is cancelled, and everything it owns with it.
     Stop(Stopper),
     /// The brain cannot carry the task on: the provider rejects its context,
-    /// its environment is gone, retries are exhausted.
+    /// a limb it needs cannot be made, retries are exhausted.
     Fail(String),
 }
 
@@ -389,21 +519,22 @@ impl TaskEvent {
             TaskEvent::Created(created) => {
                 let Created {
                     name: _,
+                    by: _,
                     scope: _,
-                    origin,
+                    origin: _,
                     mode: _,
                     mandate,
                 } = &**created;
-                let Mandate { text, from: _ } = mandate;
+                let Mandate {
+                    text,
+                    brief,
+                    quotes: _,
+                    from: _,
+                } = mandate;
                 out.push(*text);
-                match origin {
-                    Origin::Fresh { agent: _, start } => start.values(out),
-                    Origin::Fork { from: _ }
-                    | Origin::Resume { from: _ }
-                    | Origin::Aside { from: _ } => {}
-                }
+                out.extend(*brief);
             }
-            TaskEvent::Moved(Move::Handover { call: _, start } | Move::Reseed(start)) => {
+            TaskEvent::Moved(Move::Handover { call: _, start } | Move::Root(start)) => {
                 start.values(out);
             }
             TaskEvent::Moved(Move::Rewind { to: _ })
@@ -415,11 +546,20 @@ impl TaskEvent {
     }
 }
 
-/// A task begins. Where its head starts, its agent kind and its binding
-/// follow from its origin: a fresh task's root, or its source's head.
+/// A task begins. Its environment and places, and for a fork, resume or
+/// aside its context, follow from its origin.
+///
+/// Who may create one is checked by the journal. Max creates in his own
+/// scope, with `by` empty. The brain creates only as the effect of an
+/// agent's meta call, `by`: in the scope that call opens, or as a sibling in
+/// its caller's own spawn scope, and only what the caller's environment can
+/// start. So the tree records who started each task, and the brain cannot
+/// put a task in Max's scope that he did not start.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Created {
     pub name: String,
+    /// The meta call that created it; `None` when Max did.
+    pub by: Option<CallId>,
     pub scope: Scope,
     pub origin: Origin,
     pub mode: Mode,
@@ -433,14 +573,15 @@ pub enum Move {
     /// call has settled with the seed and its round is over, the next
     /// request starts the new context instead of continuing the old one,
     /// which ends on it. The root is rendered from the environment's
-    /// current definitions, which is where a rebuild picks up a changed
-    /// AGENTS.md, role or tool set.
+    /// current version, which is where a rebuild picks up a changed
+    /// AGENTS.md, role, model or tool set.
     Handover { call: CallId, start: Box<Start> },
-    /// To a new root the harness built without the agent's help: a boundary
-    /// note and the mandate. For a context the provider will no longer
+    /// To a new root the harness built without the agent's help: a starting
+    /// task's first, once its limbs have described themselves; or a boundary
+    /// note and the mandate, for a context the provider will no longer
     /// accept, or a task with no handover tool (the scheduler, whose memory
     /// is the queue it observes).
-    Reseed(Box<Start>),
+    Root(Box<Start>),
     /// Back to a response on the task's own chain since its start that
     /// ended a model turn, so the next message is Max's. The abandoned
     /// branch stays in the tree, and the context embodies again only what
@@ -449,17 +590,42 @@ pub enum Move {
 }
 
 impl Task {
-    /// The task its creation describes, reading its source and its
-    /// attachments from the journal's state. Its attachments are its first
-    /// round, and those already settled are its results at once.
+    /// The task its creation describes, reading its source from the
+    /// journal's state. A fresh task starts with no context; any other
+    /// continues its source's.
     pub(crate) fn new(
         id: TaskId,
         created: &Created,
         at: Timestamp,
         world: &State,
     ) -> Result<Task, Rejected> {
-        let source = match &created.origin {
-            Origin::Fresh { .. } => None,
+        let mut task = Task {
+            id,
+            name: created.name.clone(),
+            environment: EnvironmentId(0),
+            places: BTreeMap::new(),
+            scope: created.scope,
+            origin: created.origin.clone(),
+            mode: created.mode,
+            mandate: created.mandate.clone(),
+            context: None,
+            state: TaskState::Starting,
+            since: at,
+            pending: Vec::new(),
+            watching: Vec::new(),
+            draining: None,
+            held: false,
+            owed_since: None,
+            failures: 0,
+        };
+        match &created.origin {
+            Origin::Fresh {
+                environment,
+                places,
+            } => {
+                task.environment = *environment;
+                task.places = places.clone();
+            }
             Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from } => {
                 let source = world.task(*from).ok_or(Rejected::Unknown)?;
                 let resume = matches!(created.origin, Origin::Resume { .. });
@@ -468,50 +634,23 @@ impl Task {
                     (false, true) => return Err(Rejected::Finished),
                     _ => {}
                 }
-                Some((source, resume))
-            }
-        };
-        let (agent, head, binding) = match (&created.origin, source) {
-            (Origin::Fresh { agent, start }, _) => {
-                (agent.clone(), start.root.id(), start.binding.clone())
-            }
-            (_, Some((source, _))) => (source.agent.clone(), source.head, source.binding.clone()),
-            (_, None) => return Err(Rejected::Unknown),
-        };
-        let mut task = Task {
-            id,
-            name: created.name.clone(),
-            agent,
-            scope: created.scope,
-            origin: created.origin.clone(),
-            mode: created.mode,
-            mandate: created.mandate.clone(),
-            start: head,
-            head,
-            binding,
-            state: TaskState::Ready,
-            since: at,
-            pending: Vec::new(),
-            watching: Vec::new(),
-            draining: None,
-            held: false,
-            owed_since: None,
-            failures: 0,
-            knows: BTreeMap::new(),
-            learned: Vec::new(),
-        };
-        match (&created.origin, source) {
-            (Origin::Fresh { start, .. }, _) => task.reroot(start, at, world)?,
-            (_, Some((source, resume))) => {
-                task.knows = source.knows.clone();
+                let context = source.context.as_ref().ok_or(Rejected::Detached)?;
+                task.environment = source.environment;
+                task.places = source.places.clone();
+                task.context = Some(context.continued());
+                task.state = TaskState::Ready;
                 if resume {
                     task.pending = source.pending.clone();
                     task.watching = source.watching.clone();
                 }
             }
-            (_, None) => {}
         }
         Ok(task)
+    }
+
+    /// Where its context ends now, once it has one.
+    pub fn head(&self) -> Option<EntryId> {
+        self.context.as_ref().map(|c| c.head)
     }
 
     pub fn is_done(&self) -> bool {
@@ -566,9 +705,13 @@ impl Task {
             Fact::Change(change) => {
                 // Read off the change itself, so the fold of a change never
                 // depends on whether the world has recorded it yet.
-                let moved = self.knows.get(&change.resource).is_some_and(|known| {
-                    known.has != change.version && known.told != Some(change.version)
-                });
+                let moved = self
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.knows.get(&change.resource))
+                    .is_some_and(|known| {
+                        known.has != change.version && known.told != Some(change.version)
+                    });
                 if moved
                     && self.mode == Mode::Standing
                     && self.state == TaskState::Listening
@@ -640,38 +783,42 @@ impl Task {
                 if self.state != S::Ready || !self.pending.iter().any(|p| p.input == result) {
                     return Err(Rejected::Busy);
                 }
-                self.reroot(start, at, world)?;
+                self.root(start, at, world)?;
             }
-            TaskEvent::Moved(Move::Reseed(start)) => {
+            TaskEvent::Moved(Move::Root(start)) => {
                 if self.draining.is_some() {
                     return Err(Rejected::Draining);
                 }
-                if !waiting {
+                if !waiting && self.state != S::Starting {
                     return Err(Rejected::Busy);
                 }
-                self.reroot(start, at, world)?;
+                self.root(start, at, world)?;
             }
             TaskEvent::Moved(Move::Rewind { to }) => {
                 if !waiting {
                     return Err(Rejected::Busy);
                 }
-                self.head = *to;
                 self.drop_results();
-                while self
+                let context = self.context.as_mut().ok_or(Rejected::Busy)?;
+                context.head = *to;
+                while context
                     .learned
                     .last()
                     .is_some_and(|l| !world.descends(*to, l.head))
                 {
-                    let Some(learned) = self.learned.pop() else {
+                    let Some(learned) = context.learned.pop() else {
                         break;
                     };
                     for (resource, before) in learned.before.into_iter().rev() {
                         match before {
-                            Some(known) => self.knows.insert(resource, known),
-                            None => self.knows.remove(&resource),
+                            Some(known) => context.knows.insert(resource, known),
+                            None => context.knows.remove(&resource),
                         };
                     }
                 }
+            }
+            TaskEvent::Drain(Drain::ToMax) if self.state == S::Starting => {
+                return Err(Rejected::Busy);
             }
             TaskEvent::Drain(drain) => {
                 // An ending outranks an interrupt; the first ending stands.
@@ -691,21 +838,8 @@ impl Task {
     /// nowhere to go in it; Max's words and actions stay pending, since they
     /// are for the task, not the context. A task waiting on Max still waits
     /// on him unless the new context has attachments to run.
-    fn reroot(&mut self, start: &Start, at: Timestamp, world: &State) -> Result<(), Rejected> {
-        self.start = start.root.id();
-        self.head = self.start;
-        self.binding = start.binding.clone();
-        self.knows.clear();
-        self.learned.clear();
-        for o in &start.observes {
-            self.knows.insert(
-                o.resource.clone(),
-                Known {
-                    has: o.version,
-                    told: None,
-                },
-            );
-        }
+    fn root(&mut self, start: &Start, at: Timestamp, world: &State) -> Result<(), Rejected> {
+        self.context = Some(Context::rooted(start));
         self.drop_results();
         if start.awaits.is_empty() {
             if self.state == TaskState::Ready {
@@ -757,7 +891,7 @@ impl Task {
                 if self.state != TaskState::Ready {
                     return Err(Rejected::Busy);
                 }
-                if call.base != self.head {
+                if self.head() != Some(call.base) {
                     return Err(Rejected::Detached);
                 }
                 let rendered = |p: &Pending| call.renders.iter().any(|r| p.input.is(r));
@@ -771,7 +905,9 @@ impl Task {
                 let head = call.head();
                 self.learn(&call.renders, head, world)?;
                 self.pending.retain(|p| !rendered(p));
-                self.head = head;
+                if let Some(context) = &mut self.context {
+                    context.head = head;
+                }
                 self.enter(TaskState::Thinking(id), at);
             }
             ModelCallEvent::FirstByte => {}
@@ -779,18 +915,19 @@ impl Task {
                 if self.state != TaskState::Thinking(id) {
                     return Err(Rejected::Busy);
                 }
+                let context = self.context.as_mut().ok_or(Rejected::Busy)?;
                 match ending {
                     Ending::Responded { content, stop } => {
                         let entry = Message {
                             role: Role::Assistant,
                             content: *content,
                         }
-                        .id_after(self.head);
+                        .id_after(context.head);
+                        context.head = entry;
                         let calls = world
                             .model_call(id)
                             .map(|m| m.calls.clone())
                             .unwrap_or_default();
-                        self.head = entry;
                         self.failures = 0;
                         if !calls.is_empty() {
                             self.enter(
@@ -804,7 +941,7 @@ impl Task {
                             self.turn_ended(entry, at, world);
                         } else {
                             // Stopped short: the brain carries on with a
-                            // continue note, or reseeds a context too long.
+                            // continue note, or roots a context too long anew.
                             self.drained(at);
                         }
                     }
@@ -829,6 +966,7 @@ impl Task {
         head: EntryId,
         world: &State,
     ) -> Result<(), Rejected> {
+        let context = self.context.as_mut().ok_or(Rejected::Busy)?;
         let mut before = Vec::new();
         for rendered in renders {
             match rendered {
@@ -839,10 +977,10 @@ impl Task {
                         .outcome()
                         .ok_or(Rejected::Busy)?;
                     match outcome {
-                        CallOutcome::Refused { current } => self.tell(current, &mut before),
+                        CallOutcome::Refused { current } => context.tell(current, &mut before),
                         outcome => {
                             if let Some(output) = outcome.output() {
-                                self.observe(&output.observes, &mut before);
+                                context.observe(&output.observes, &mut before);
                             }
                         }
                     }
@@ -854,8 +992,8 @@ impl Task {
                     }
                 }
                 Rendered::Note(Note::Stale { told, shown }) => {
-                    self.tell(told, &mut before);
-                    self.observe(shown, &mut before);
+                    context.tell(told, &mut before);
+                    context.observe(shown, &mut before);
                 }
                 Rendered::Note(Note::Boundary { from: Some(from) }) => {
                     world.entry(*from).ok_or(Rejected::Unknown)?;
@@ -867,46 +1005,9 @@ impl Task {
             }
         }
         if !before.is_empty() {
-            self.learned.push(Learned { head, before });
+            context.learned.push(Learned { head, before });
         }
         Ok(())
-    }
-
-    /// The context now embodies these versions.
-    fn observe(
-        &mut self,
-        observations: &[Observation],
-        before: &mut Vec<(ResourceKey, Option<Known>)>,
-    ) {
-        for o in observations {
-            let old = self.knows.insert(
-                o.resource.clone(),
-                Known {
-                    has: o.version,
-                    told: None,
-                },
-            );
-            if !before.iter().any(|(k, _)| *k == o.resource) {
-                before.push((o.resource.clone(), old));
-            }
-        }
-    }
-
-    /// The context has been told these resources moved, without seeing them.
-    fn tell(
-        &mut self,
-        observations: &[Observation],
-        before: &mut Vec<(ResourceKey, Option<Known>)>,
-    ) {
-        for o in observations {
-            if let Some(known) = self.knows.get_mut(&o.resource) {
-                let old = *known;
-                known.told = Some(o.version);
-                if !before.iter().any(|(k, _)| *k == o.resource) {
-                    before.push((o.resource.clone(), Some(old)));
-                }
-            }
-        }
     }
 
     fn call(

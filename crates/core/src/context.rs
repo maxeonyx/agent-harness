@@ -125,8 +125,8 @@ pub enum Entry {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Root {
     pub model: String,
-    /// The exact `system` blocks: identity, role, the environment's
-    /// instructions, the skill index.
+    /// The exact `system` blocks: identity, the environment's role, its
+    /// limbs' instructions, the skill index.
     pub system: ValueId,
     /// The exact `tools` array, including tools whose definitions defer
     /// them, so a later message can surface them without breaking the
@@ -271,6 +271,11 @@ pub enum Rendered {
 /// decided it for forks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Note {
+    /// What every member of a fresh task's spawn shares, verbatim: its
+    /// mandate's brief, then Max's quoted words, each marked as his
+    /// ([`crate::task::Mandate::quotes`]). After the attachments and before
+    /// the task's own mandate, so siblings share one prefix.
+    Brief,
     /// The task's mandate: at a fork, as user text after the answers to the
     /// forked response's tool uses; at a fresh start, after the shared brief;
     /// after a handover, at the top.
@@ -303,7 +308,7 @@ pub enum Note {
         done: Vec<TaskId>,
     },
     /// This context begins where another ended (a handover, a resume, a
-    /// reseed), and what is and is not carried over.
+    /// rebuild), and what is and is not carried over.
     Boundary { from: Option<EntryId> },
     /// The visible text of a response Max interrupted, quoted so that his
     /// correction has something to refer to.

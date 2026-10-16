@@ -1,7 +1,7 @@
 //! The journal: one brain's append-only record of everything that happened,
 //! and the one way facts get into it.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,7 @@ use crate::model_call::ModelCallEvent;
 use crate::resource::Change;
 use crate::state::State;
 use crate::task::TaskEvent;
+use crate::value::Bytes;
 
 /// One fact, at its position in one brain's journal.
 ///
@@ -137,8 +138,14 @@ impl Fact {
             Fact::Environment(Environment {
                 id: _,
                 name: _,
+                role,
+                model: _,
+                params,
                 limbs: _,
-            }) => {}
+                places: _,
+                starts: _,
+                source: _,
+            }) => values.extend([*role, *params]),
             Fact::Limb(Limb {
                 id: _,
                 name: _,
@@ -179,7 +186,7 @@ pub struct Launched {
 /// command output, Max's pasted image), into the one value store.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Batch {
-    pub values: Vec<Vec<u8>>,
+    pub values: Vec<Bytes>,
     pub facts: Vec<Fact>,
 }
 
@@ -207,14 +214,18 @@ pub enum Rejected {
     Draining,
     /// A request that leaves a tool use of the previous response unanswered.
     Unanswered,
-    /// A standing task outside Max's scope, a fresh task its spawn's limb
-    /// cannot start, or an aside or resume in a spawn's scope.
+    /// A standing task outside Max's scope; a task created by a call that
+    /// is not an agent's meta call, in a scope that call cannot add to, or
+    /// of a kind its caller's environment cannot start; or an aside in a
+    /// spawn's scope.
     WrongScope,
-    /// A route to a limb outside its environment, an attachment its context
-    /// does not route, a handover to another environment, or a fork of a
-    /// context bound to a limb that refuses forks.
+    /// A route to a limb outside its task's environment and places, an
+    /// attachment its context does not route, a place left empty or filled
+    /// by a limb of another kind, or a fork of a context bound to a limb
+    /// that refuses forks.
     WrongEnvironment,
-    /// A binding that routes one tool name to two limbs.
+    /// A binding that routes one tool name to two limbs, or an environment
+    /// with two places of one name.
     Ambiguous,
     /// A head, breakpoint or rewind that is not on the task's chain.
     Detached,
@@ -224,6 +235,39 @@ pub enum Rejected {
     Author,
     /// Names a value that is neither stored nor in its batch.
     Missing(ValueId),
+    /// Names a value in its batch larger than [`Bytes::LIMIT`].
+    TooLarge(ValueId),
+    /// An interrupt to a task whose round waits on a scope with members
+    /// still running: the move cannot be Max's until the scope closes, so
+    /// his face offers an aside instead.
+    Scoped,
+}
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Rejected::OutOfOrder { expected } => {
+                write!(f, "out of order: the next position is {}", expected.0)
+            }
+            Rejected::Unknown => f.write_str("names something the journal has never seen"),
+            Rejected::Exists => f.write_str("creates something that already exists"),
+            Rejected::Finished => f.write_str("addresses something already finished"),
+            Rejected::Busy => f.write_str("not in a state that accepts this"),
+            Rejected::Draining => f.write_str("the task is draining and may start nothing new"),
+            Rejected::Unanswered => f.write_str("leaves a tool use unanswered"),
+            Rejected::WrongScope => f.write_str("not allowed in that scope, or by that creator"),
+            Rejected::WrongEnvironment => f.write_str("outside the task's environment"),
+            Rejected::Ambiguous => f.write_str("one name used twice"),
+            Rejected::Detached => f.write_str("not on the task's chain"),
+            Rejected::NotForTask => f.write_str("does not concern what it is routed to"),
+            Rejected::Author => f.write_str("its author may not state it"),
+            Rejected::Missing(value) => write!(f, "value {value} is neither stored nor sent"),
+            Rejected::TooLarge(value) => write!(f, "value {value} is larger than the limit"),
+            Rejected::Scoped => {
+                f.write_str("the task is waiting on its children; talk to it through an aside")
+            }
+        }
+    }
 }
 
 /// Where a journal is kept, from the model's side: records in order, and
@@ -237,9 +281,9 @@ pub trait Store {
     /// Whether the value is stored.
     fn has(&self, value: ValueId) -> Result<bool, Self::Error>;
 
-    /// Store the values (each under [`ValueId::of`] its bytes, idempotently)
-    /// and append the records, in one transaction.
-    fn append(&mut self, values: &[Vec<u8>], records: &[Record]) -> Result<(), Self::Error>;
+    /// Store the values (each under [`Bytes::id`], idempotently) and append
+    /// the records, in one transaction.
+    fn append(&mut self, values: &[Bytes], records: &[Record]) -> Result<(), Self::Error>;
 }
 
 /// The journal's one writer: its store and its fold, kept in step.
@@ -278,11 +322,11 @@ impl<E: std::fmt::Display> std::fmt::Display for Error<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Refused { index, why } => {
-                write!(f, "fact {index} of the batch refused: {why:?}")
+                write!(f, "fact {index} of the batch refused: {why}")
             }
             Error::Store(error) => write!(f, "journal store: {error}"),
             Error::Unreadable { seq, why } => {
-                write!(f, "journal record {} does not fold: {why:?}", seq.0)
+                write!(f, "journal record {} does not fold: {why}", seq.0)
             }
         }
     }
@@ -322,7 +366,7 @@ impl<S: Store> Journal<S> {
         at: Timestamp,
     ) -> Result<Vec<Record>, Error<S::Error>> {
         let Batch { values, facts } = batch;
-        let given: BTreeSet<ValueId> = values.iter().map(|v| ValueId::of(v)).collect();
+        let given: BTreeMap<ValueId, usize> = values.iter().map(|v| (v.id(), v.len())).collect();
         let first = self.state.next().0;
         let records: Vec<Record> = facts
             .into_iter()
@@ -336,12 +380,13 @@ impl<S: Store> Journal<S> {
             .collect();
         for (index, record) in records.iter().enumerate() {
             for value in record.fact.values() {
-                if !given.contains(&value) && !self.store.has(value).map_err(Error::Store)? {
-                    return Err(Error::Refused {
-                        index,
-                        why: Rejected::Missing(value),
-                    });
-                }
+                let why = match given.get(&value) {
+                    Some(len) if *len > Bytes::LIMIT => Rejected::TooLarge(value),
+                    Some(_) => continue,
+                    None if self.store.has(value).map_err(Error::Store)? => continue,
+                    None => Rejected::Missing(value),
+                };
+                return Err(Error::Refused { index, why });
             }
         }
         for (index, record) in records.iter().enumerate() {
