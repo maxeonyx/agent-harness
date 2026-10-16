@@ -1,0 +1,1 @@
+This is the harness's own compose box. I'm dictating straight into it, and the words should appear while I'm still talking. When I stop, the text stays editable, and Control Enter sends it to the task.
