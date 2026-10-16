@@ -71,20 +71,49 @@ pub fn read(dir: &Path) -> Result<Vec<Role>, String> {
         .collect()
 }
 
+/// The keys a role's frontmatter may have: a plain value each, except the
+/// lists, which are written `[a, b]`.
+const KEYS: [&str; 7] = [
+    "name",
+    "description",
+    "model",
+    "effort",
+    "limbs",
+    "places",
+    "starts",
+];
+const LISTS: [&str; 3] = ["limbs", "places", "starts"];
+
+/// A role file: frontmatter of one `key: value` per line, then the prompt.
+/// The frontmatter is a subset of YAML, and anything outside it (a quoted,
+/// folded or multi-line value, an unknown or repeated key) is refused
+/// rather than misread.
 fn parse(text: &str) -> Result<Role, String> {
     let rest = text.strip_prefix("---\n").ok_or("no frontmatter")?;
     let (front, prompt) = rest
         .split_once("\n---\n")
         .ok_or("unterminated frontmatter")?;
-    let keys: BTreeMap<&str, &str> = front
-        .lines()
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim(), v.trim()))
-        .collect();
+    let mut keys: BTreeMap<&str, &str> = BTreeMap::new();
+    for line in front.lines().filter(|l| !l.trim().is_empty()) {
+        let outside = || format!("`{line}` is outside the frontmatter this harness reads");
+        let (key, value) = line.split_once(':').ok_or_else(outside)?;
+        let value = value.trim();
+        let list = LISTS.contains(&key);
+        let plain = !value.starts_with(['"', '\'', '|', '>', '[', '{', '&', '*', '!', '#']);
+        let ok = KEYS.contains(&key)
+            && if list {
+                value.starts_with('[') && value.ends_with(']')
+            } else {
+                plain
+            };
+        if !ok || keys.insert(key, value).is_some() {
+            return Err(outside());
+        }
+    }
     let one = |k: &str| keys.get(k).map(|v| v.to_string());
     let list = |k: &str| -> Vec<String> {
         keys.get(k)
-            .map(|v| v.trim_start_matches('[').trim_end_matches(']'))
+            .map(|v| &v[1..v.len() - 1])
             .into_iter()
             .flat_map(|v| v.split(','))
             .map(|s| s.trim().to_string())
