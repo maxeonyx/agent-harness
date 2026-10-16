@@ -4,7 +4,7 @@
 # words, stop, and the core's refusals. Watch it at https://mx-hv-mj.local:4323.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain
+cargo build -q --release -p harness-brain -p harness-limb-workspace
 dir=target/face-controls-demo
 port=${PORT:-4323}
 url=https://mx-hv-mj.local:$port

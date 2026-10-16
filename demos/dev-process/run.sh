@@ -6,7 +6,7 @@
 # journal yet); otherwise the brain carries on the journal and serves it.
 set -eu
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain
+cargo build -q --release -p harness-brain -p harness-limb-workspace
 dir=${DIR:-target/dev-process}
 start=""
 if [ -n "${FRESH:-}" ] || [ ! -e "$dir/journal.sqlite" ]; then

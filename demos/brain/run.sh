@@ -3,7 +3,7 @@
 # relaunched onto the same journal. Watch it at https://mx-hv-mj.local:4321.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain
+cargo build -q --release -p harness-brain -p harness-limb-workspace
 dir=target/brain-demo
 brain=target/release/harness-brain
 rm -rf "$dir"

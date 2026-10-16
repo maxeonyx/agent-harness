@@ -10,6 +10,14 @@
 //! and sends every unsettled call to the workspace again, which answers from
 //! its own record.
 //!
+//! Each plugin limb runs as a process of its own, `harness-limb-<kind>`
+//! from beside the brain's executable, spoken to in [`ToLimb`] and
+//! [`FromLimb`] lines over its stdio ([`process`]). A limb whose process
+//! ends is recorded as lost and started again when a task needs it.
+//!
+//! [`ToLimb`]: harness_core::environment::ToLimb
+//! [`FromLimb`]: harness_core::environment::FromLimb
+//!
 //! The face is served from the same process over a second connection to the
 //! same store, so Max watches exactly what the brain appended. Everything
 //! he does there (his words, answering an ask, interrupting, stopping or
@@ -41,6 +49,7 @@ mod brain;
 mod max;
 mod meta;
 mod policy;
+mod process;
 mod reader;
 mod render;
 mod roles;

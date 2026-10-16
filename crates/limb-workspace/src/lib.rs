@@ -20,6 +20,9 @@
 //! prompts and no checks on what a command may touch. An environment either
 //! holds this limb or does not.
 //!
+//! The brain runs it as a process of its own, `harness-limb-workspace` or
+//! `harness-limb-user` ([`process`]).
+//!
 //! A call is run on its own thread, and recorded on disk as started before
 //! it has any effect and as settled before the settlement is sent. So
 //! [`ToLimb::Run`] is idempotent per call, however often a crash of the
@@ -49,6 +52,7 @@
 
 mod files;
 mod git;
+pub mod process;
 mod record;
 mod shell;
 pub mod tools;
