@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome};
 use crate::context::{EntryId, Message, Note, Rendered, Role, Root};
-use crate::delivery::{Content, Delivery};
+use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::Binding;
 use crate::id::{
     CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, TaskId, Timestamp, ValueId,
@@ -865,6 +865,15 @@ impl Task {
                         && live.drain.is_none()
                     {
                         self.wait(at, world);
+                        // An autonomous task left waiting on nothing would
+                        // never move again: mark it done instead, or say
+                        // something with the change.
+                        if *mode == Mode::Autonomous
+                            && self.phase() == Some(&Phase::Listening)
+                            && self.background.is_empty()
+                        {
+                            return Err(Rejected::Idle);
+                        }
                     }
                 }
             }
@@ -897,6 +906,8 @@ impl Task {
                 }
                 live.context.rewind(*to, world);
                 self.drop_results();
+                // The head is a response that ended a turn: the next word is Max's.
+                self.await_max(at);
             }
             TaskEvent::Drain(drain) => match &mut self.life {
                 Life::Starting => match drain {
@@ -1136,6 +1147,14 @@ impl Task {
 
     fn deliver(&mut self, delivery: &Delivery, by: &Author, at: Timestamp) {
         self.pending.push(Input::Delivery(delivery.id));
+        // Marking a task done hands it its last turn: it finishes when that
+        // turn ends.
+        if delivery.content == Content::Prompt(Prompt::Done) {
+            self.mode = Mode::Autonomous;
+            if let Life::Live(live) = &mut self.life {
+                live.owed_since = None;
+            }
+        }
         if matches!(delivery.content, Content::Words(_))
             && matches!(by, Author::Max { .. })
             && let Life::Live(live) = &mut self.life

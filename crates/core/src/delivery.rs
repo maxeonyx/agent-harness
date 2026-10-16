@@ -71,7 +71,8 @@ pub enum Content {
 /// asks for one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Prompt {
-    /// Max marked a user-facing task done: write the result for the owner.
+    /// Max marked a task done: write the result for the owner. It makes the
+    /// task autonomous, so the turn it asks for is its last.
     Done,
     /// An autonomous turn ended with background work still running (an ask
     /// of Max included): it will wake the task when it ends, and the task

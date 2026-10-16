@@ -212,7 +212,9 @@ pub struct Batch {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rejected {
     /// Not the next position.
-    OutOfOrder { expected: Seq },
+    OutOfOrder {
+        expected: Seq,
+    },
     /// Names an identity the journal has never seen.
     Unknown,
     /// Creates an identity that already exists, a second environment or
@@ -277,6 +279,10 @@ pub enum Rejected {
     /// An interrupt to a task whose round waits on a scope with members
     /// still running: the move cannot be Max's until the scope closes, so
     /// his face offers an aside instead ([`State::scoped`] says so first).
+    /// The change would leave an autonomous task waiting on nothing, so it
+    /// would never move again: mark it done ([`crate::delivery::Prompt::Done`]),
+    /// or say something with the change.
+    Idle,
     Scoped,
 }
 
@@ -316,6 +322,9 @@ impl std::fmt::Display for Rejected {
             Rejected::Unheard => "quotes words Max did not say to the quoting task",
             Rejected::Author => "its author may not state it",
             Rejected::Scoped => "the task is waiting on its children; talk to it through an aside",
+            Rejected::Idle => {
+                "the task would wait on nothing; mark it done, or say something with the change"
+            }
         };
         f.write_str(said)
     }

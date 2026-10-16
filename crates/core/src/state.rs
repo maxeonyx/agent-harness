@@ -100,8 +100,9 @@ pub struct State {
     resources: OrdMap<ResourceKey, Current>,
     /// Max's words, each with when he first said them.
     said: OrdMap<ValueId, Mark>,
-    /// Which task has heard which of Max's words.
-    heard: OrdSet<(TaskId, ValueId)>,
+    /// Which of Max's words each task has heard. A task continuing another's
+    /// context (a fork, resume or aside) starts with its source's set, shared.
+    heard: OrdMap<TaskId, OrdSet<ValueId>>,
     ranking: Ranking,
     focus: OrdMap<FaceId, TaskId>,
     limited_until: Option<Timestamp>,
@@ -350,9 +351,11 @@ pub enum Todo {
     /// The call's tool is not in its task's binding: settle it as failed,
     /// saying so.
     Unroutable(CallId),
-    /// Stop the call. If it was dispatched, ask its limb (`ToLimb::Stop`)
-    /// and commit [`CallEvent::Stopping`]; otherwise settle it as
-    /// interrupted.
+    /// Stop the call. If it was dispatched and its limb is connected, ask
+    /// it (`ToLimb::Stop`) and commit [`CallEvent::Stopping`]; if its limb
+    /// is unreached, settle it as unknown, so a dead limb never holds a
+    /// task (its real outcome is still taken if it comes back); if it was
+    /// never dispatched, settle it as interrupted.
     Interrupt(CallId),
     /// Stop reading the task's response.
     Abandon(ModelCallId),
@@ -533,10 +536,29 @@ impl State {
                 | Fact::Focus(_)
                 | Fact::Described { .. } => false,
                 Fact::Task(_, TaskEvent::Created(created)) => created.by.is_some(),
-                Fact::Call(id, CallEvent::Settled(_)) => self
-                    .calls
-                    .get(id)
-                    .is_some_and(|c| c.dispatched.is_none() || c.limb.is_some_and(brains)),
+                Fact::Call(_, CallEvent::Made(call)) => !matches!(call.caller, Caller::Max { .. }),
+                Fact::Call(id, CallEvent::Settled(outcome)) => {
+                    self.calls.get(id).is_some_and(|c| {
+                        let Some(limb) = c.limb.and_then(|l| self.limbs.get(&l)) else {
+                            return c.dispatched.is_none();
+                        };
+                        match &limb.kind {
+                            // Max's answer is his; the brain only withdraws the question.
+                            LimbKind::Max => matches!(outcome, CallOutcome::Interrupted { .. }),
+                            LimbKind::Meta | LimbKind::Attention => true,
+                            // A plugin's outcome is its own, unless it was never
+                            // sent, or the brain gives up on it while the limb is
+                            // unreached; the limb's real outcome is still taken
+                            // when it reconnects.
+                            LimbKind::Plugin { .. } => {
+                                c.dispatched.is_none()
+                                    || (c.settled.is_none()
+                                        && *outcome == CallOutcome::Unknown
+                                        && self.connected(limb.id).is_none())
+                            }
+                        }
+                    })
+                }
                 Fact::Change(change) => brains(change.resource.limb),
                 _ => true,
             },
@@ -619,7 +641,7 @@ impl State {
         if !self.said.contains_key(&words) {
             self.said.insert(words, at);
         }
-        self.heard.insert((to, words));
+        self.heard.entry(to).or_default().insert(words);
     }
 
     fn create(&mut self, id: TaskId, created: &Created, record: &Record) -> Result<(), Rejected> {
@@ -639,7 +661,7 @@ impl State {
         }
         for quote in &created.mandate.quotes {
             let heard = match creator {
-                Some(creator) => self.heard.contains(&(creator, *quote)),
+                Some(creator) => self.heard(creator, *quote),
                 None => self.said.contains_key(quote),
             };
             if !heard {
@@ -648,12 +670,19 @@ impl State {
         }
         let task = Task::new(id, created, record.at, self)?;
         let mark = Mark::of(record);
+        // What its context holds, it has heard.
+        if let Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from } =
+            created.origin
+            && let Some(heard) = self.heard.get(&from).cloned()
+        {
+            self.heard.insert(id, heard);
+        }
         if creator.is_none() {
             // A mandate Max gives is his words.
             self.say(created.mandate.text, id, mark);
         }
         for quote in &created.mandate.quotes {
-            self.heard.insert((id, *quote));
+            self.heard.entry(id).or_default().insert(*quote);
         }
         self.open.scopes.entry(task.scope).or_default().push(id);
         if let Origin::Aside { .. } = task.origin {
@@ -811,6 +840,15 @@ impl State {
             }
             TaskEvent::Drain(Drain::ToMax) if self.scoped(task) => {
                 return Err(Rejected::Scoped);
+            }
+            TaskEvent::Drain(Drain::Stop(Stopper::Owner)) => {
+                let ending = self
+                    .owner(id)
+                    .and_then(|o| self.tasks.get(&o))
+                    .is_some_and(|o| ends(o.drain()));
+                if !ending {
+                    return Err(Rejected::NotForTask);
+                }
             }
             _ => {}
         }
@@ -971,6 +1009,10 @@ impl State {
                 };
                 if !self.acting_on(id, &made.call) {
                     return Err(Rejected::Busy);
+                }
+                let readers: Vec<&Task> = self.live().filter(|t| t.awaits(id)).collect();
+                if interrupts(id, &made.call, &readers) {
+                    return Err(Rejected::Draining);
                 }
                 let first = made.dispatched.map_or(mark, |d| d.first);
                 if let Some(made) = self.calls.get_mut(&id) {
@@ -1330,7 +1372,7 @@ impl State {
     /// its mandate, answered to its question, or quoted in its mandate. What
     /// it may quote on.
     pub fn heard(&self, task: TaskId, words: ValueId) -> bool {
-        self.heard.contains(&(task, words))
+        self.heard.get(&task).is_some_and(|w| w.contains(&words))
     }
 
     pub fn environment(&self, id: EnvironmentId) -> Option<&Environment> {
@@ -1536,7 +1578,9 @@ impl State {
                 ..
             } => *entry,
             Life::Live(live) if live.phase == Phase::AwaitingMax => {
-                self.response(live.context.head)?;
+                if !self.ended_turn(live.context.head) {
+                    return None;
+                }
                 live.context.head
             }
             _ => return None,
@@ -1730,9 +1774,10 @@ impl State {
             if interrupts(*id, &record.call, readers) {
                 let due = match (&record.dispatched, &limb.kind) {
                     (None, _) => true,
-                    (Some(_), LimbKind::Plugin { .. }) => {
-                        connection.is_some_and(|c| record.stopping.is_none_or(|s| s.seq < c))
-                    }
+                    (Some(_), LimbKind::Plugin { .. }) => match connection {
+                        Some(c) => record.stopping.is_none_or(|s| s.seq < c),
+                        None => true,
+                    },
                     (Some(_), _) => false,
                 };
                 if due {
