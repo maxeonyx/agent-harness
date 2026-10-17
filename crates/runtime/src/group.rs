@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::process::{Command, ExitStatus};
+use std::process::{ChildStdin, ChildStdout, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use crate::cancel::Waiter;
@@ -37,6 +37,8 @@ pub struct Group {
     pidfd: OwnedFd,
     mark: String,
     status: Option<ExitStatus>,
+    /// The leader's piped stdin and stdout, until its owner takes them.
+    pipes: (Option<ChildStdin>, Option<ChildStdout>),
 }
 
 /// How a tree ended.
@@ -56,8 +58,9 @@ impl Group {
     pub fn spawn(command: &mut Command, mark: &str) -> io::Result<Group> {
         let mark = format!("{MARK}{mark}");
         command.env(&mark, "1").process_group(0);
-        let child = command.spawn()?;
+        let mut child = command.spawn()?;
         let leader = child.id() as libc::pid_t;
+        let pipes = (child.stdin.take(), child.stdout.take());
         // The leader is an unreaped child, so its pid is still its own.
         let pidfd = pidfd(leader)?;
         Ok(Group {
@@ -65,7 +68,14 @@ impl Group {
             pidfd,
             mark,
             status: None,
+            pipes,
         })
+    }
+
+    /// The leader's stdin and stdout, where the command piped them: the
+    /// owner's line to it. Once.
+    pub fn pipes(&mut self) -> (Option<ChildStdin>, Option<ChildStdout>) {
+        (self.pipes.0.take(), self.pipes.1.take())
     }
 
     /// The leader's pid, which is the group's id.

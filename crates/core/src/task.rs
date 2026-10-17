@@ -821,6 +821,12 @@ impl Task {
         self.live().and_then(|l| l.drain.as_ref())
     }
 
+    /// Whether it is being stopped or failed: nothing new may start under
+    /// it, and it ends once what it owns has.
+    pub fn ends(&self) -> bool {
+        ends(self.drain())
+    }
+
     /// Since when Max has owed it a word, if he does.
     pub fn owed_since(&self) -> Option<Timestamp> {
         self.live().and_then(|l| l.owed_since)

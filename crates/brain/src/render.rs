@@ -6,12 +6,12 @@ use harness_core::call::{Caller, Outcome};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Binding, Description};
-use harness_core::id::{CallId, LimbId, ValueId};
+use harness_core::id::{CallId, LimbId, Timestamp, ValueId};
 use harness_core::journal::Author;
 use harness_core::model_call::{Ending, Stop};
 use harness_core::resource::Observation;
 use harness_core::state::{Delivered, Stale, State};
-use harness_core::task::{Input, Origin, Scope, Task};
+use harness_core::task::{Draining, Input, Origin, Scope, Stopper, Task};
 use harness_core::value::Bytes;
 use harness_provider::IDENTITY;
 use serde_json::{Value, json};
@@ -215,7 +215,7 @@ pub fn turn(
                         label(*words)
                     )));
                 }
-                said.extend(delivery(values, task, content));
+                said.extend(delivery(values, task, content, delivered.at.at));
                 texts.push(Rendered::Delivery(id), said);
             }
         }
@@ -415,8 +415,10 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
     text(&format!("[harness] {what}:\n{}", said.join("\n")))
 }
 
-fn delivery(values: Values, task: &Task, content: &Content) -> Vec<String> {
+/// What a delivery made `at` says.
+fn delivery(values: Values, task: &Task, content: &Content, at: Timestamp) -> Vec<String> {
     let aside = matches!(task.origin, Origin::Aside { .. });
+    let stopping;
     let said = match content {
         Content::Words(words) => return words_of(values, *words),
         Content::Prompt(Prompt::Done) if aside => {
@@ -432,6 +434,24 @@ left undone. This is your last message here."
             "Your turn ended, but work you started in the background is still running (a question to Max \
 included). Its result wakes you when it settles, and you cannot finish before then. If there is nothing \
 else to do meanwhile, end your turn to wait."
+        }
+        Content::Prompt(Prompt::Stopping) => {
+            let (by, left) = match task.drain() {
+                Some(Draining::Stopping(s)) => (s.by, (s.deadline.0 - at.0).max(0) / 1000),
+                _ => (Stopper::Max, 0),
+            };
+            let by = match by {
+                Stopper::Max => "Max has stopped you",
+                Stopper::Owner => "The agent that started you is being stopped, so you are too",
+            };
+            stopping = format!(
+                "{by}. Everything you had running, and every agent you started, has been stopped. \
+You have about {left} seconds before you are killed. Use them to leave your work safe and understandable \
+to whoever picks it up: nothing half-written, nothing left running. Then end your turn with a short report \
+of where things stand: what is done, what is not, and anything left that someone must know about. \
+Start nothing new. This is your last turn."
+            );
+            &stopping
         }
         Content::Prompt(Prompt::Unblocked) => {
             "Every other agent the context you were forked from started is done, and its results wait on this \

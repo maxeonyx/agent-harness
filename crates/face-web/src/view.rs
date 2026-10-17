@@ -13,7 +13,7 @@ use harness_core::journal::{Fact, Record};
 use harness_core::model_call::{Ending, ModelCallEvent};
 use harness_core::state::{Ended, State, Waiting};
 use harness_core::task::{
-    Drain, Input, Mode, Move, Origin, Outcome, Phase, Scope, Task, TaskEvent,
+    Drain, Draining, Input, Mode, Move, Origin, Outcome, Phase, Scope, Task, TaskEvent,
 };
 use serde_json::{Value, json};
 
@@ -144,8 +144,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
     let outcome = match t.outcome() {
         Some(Outcome::Result { .. }) => json!({"kind": "result"}),
         Some(Outcome::Failed { reason }) => json!({"kind": "failed", "reason": reason}),
-        Some(Outcome::Cancelled { by }) => {
-            json!({"kind": "cancelled", "by": format!("{by:?}")})
+        Some(Outcome::Cancelled { by, report }) => {
+            json!({"kind": "cancelled", "by": format!("{by:?}"), "report": report.is_some()})
         }
         None => Value::Null,
     };
@@ -184,10 +184,20 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "held": t.held,
         "scoped": scoped,
         "draining": t.drain().map(|d| match d {
-            Drain::ToMax => "to Max".to_string(),
-            Drain::Stop(by) => format!("stop ({by:?})"),
-            Drain::Fail(reason) => format!("fail: {reason}"),
+            Draining::ToMax => "to Max".to_string(),
+            Draining::Stopping(s) => format!("stop ({:?})", s.by),
+            Draining::Failing(reason) => format!("fail: {reason}"),
         }),
+        // How far through its stop it is, and by when it must have exited.
+        "stop": match t.drain() {
+            Some(Draining::Stopping(s)) => json!({
+                "by": format!("{:?}", s.by),
+                "deadline": s.deadline.0,
+                "tidying": s.tidying,
+                "hard": s.hard,
+            }),
+            _ => Value::Null,
+        },
         "failures": t.live().map_or(0, |l| l.failures),
         "trouble": last.map_or(Value::Null, trouble),
         "pending": pending_words(state, value, t),
@@ -324,6 +334,7 @@ pub fn describe(state: &State, record: &Record) -> String {
     };
     match &record.fact {
         Fact::Launched(l) => format!("brain launched, build {}", l.build),
+        Fact::Shutdown { within } => format!("brain shutting down, within {}s", within / 1000),
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {
                 let how = match &c.origin {
@@ -350,7 +361,15 @@ pub fn describe(state: &State, record: &Record) -> String {
             }
             TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
             TaskEvent::Drain(Drain::ToMax) => format!("{} interrupted", name(*id)),
-            TaskEvent::Drain(Drain::Stop(by)) => format!("{} stopped by {by:?}", name(*id)),
+            TaskEvent::Drain(Drain::Stop { by, within: 0 }) => {
+                format!("{} stopped by {by:?}, now", name(*id))
+            }
+            TaskEvent::Drain(Drain::Stop { by, within }) => format!(
+                "{} stopped by {by:?}, to exit within {}s",
+                name(*id),
+                within / 1000
+            ),
+            TaskEvent::Expired => format!("{} is past its deadline: stopped hard", name(*id)),
             TaskEvent::Drain(Drain::Fail(why)) => format!("{} failing: {why}", name(*id)),
             TaskEvent::Held(true) => format!("{} held", name(*id)),
             TaskEvent::Held(false) => format!("{} released", name(*id)),
@@ -391,7 +410,9 @@ pub fn describe(state: &State, record: &Record) -> String {
             match event {
                 E::Made(_) => format!("{} made", call_name(*id)),
                 E::Dispatched => format!("{} dispatched", call_name(*id)),
-                E::Stopping => format!("{} stopping", call_name(*id)),
+                E::Stopping { within } => {
+                    format!("{} stopping, within {}s", call_name(*id), within / 1000)
+                }
                 E::Settled(o) => format!("{} {}", call_name(*id), outcome(o)),
             }
         }

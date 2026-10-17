@@ -4,8 +4,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use harness_core::context::EntryId;
+use harness_core::id::Timestamp;
 
 /// Requests that may fail in a row before the task fails.
 pub const GIVE_UP: u32 = 5;
@@ -64,4 +66,41 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
     let name = format!("{repo}-{}", branch.replace('/', "-"));
     let parent = dir.parent().unwrap_or(dir);
     (from, parent.join(name))
+}
+
+/// How long a call has to stop when no task reading it has a deadline (Max
+/// interrupted it, or its task is failing): `SIGTERM`, then `SIGKILL` at
+/// this.
+pub const CALL_GRACE: Duration = Duration::from_secs(10);
+
+/// How long a member has to stop when the task that owns it is failing
+/// rather than being stopped, and so has no deadline to share.
+pub const MEMBER_STOP: Duration = Duration::from_secs(60);
+
+/// How long Ctrl-C (or `SIGTERM`) gives the requests in flight to finish
+/// before they are cut and the brain exits. A second signal cuts them now.
+pub const DRAIN: Duration = Duration::from_secs(30);
+
+/// How long the limbs have to stop their running commands when the brain
+/// shuts down: commands are started again from the journal, so they are
+/// not waited for.
+pub const LIMB_SHUTDOWN: Duration = Duration::from_secs(5);
+
+/// How long past a deadline the brain waits for a process it owns to
+/// confirm its exit before killing it.
+pub const HARD_WAIT: Duration = Duration::from_secs(2);
+
+/// The time to give what an owner whose deadline is `deadline` owns, asked
+/// at `now`: three quarters of what it has left, so it keeps the rest to
+/// clean up after them; none once less than a second is left.
+pub fn share(now: Timestamp, deadline: Timestamp) -> u64 {
+    match u64::try_from(deadline.0 - now.0) {
+        Ok(left) if left >= 1000 => left / 4 * 3,
+        _ => 0,
+    }
+}
+
+/// A duration as the milliseconds a fact states.
+pub fn ms(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
