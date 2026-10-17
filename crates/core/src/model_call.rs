@@ -46,9 +46,7 @@ use crate::id::{TaskId, Timestamp, ValueId};
 ///   miss and each pays a full write, so N siblings over a cold prefix are
 ///   sent one first, then the rest at its first byte.
 /// - Prefixes under about 1k tokens are not cached, silently.
-/// - Every response reports the plan's 5h and 7d utilisation, and a billing
-///   claim; the provider turns a claim other than a plan window into
-///   `on_plan: false` ([`Quota`]).
+/// - Every response reports the plan's 5h and 7d utilisation ([`Quota`]).
 ///
 /// **Vision.** Cache-aware forking; keep-alive vs cache-expiry compaction as
 /// an expected-value decision (critique §4); analytics and timesheets; the
@@ -252,16 +250,11 @@ pub struct Usage {
     pub output: u64,
 }
 
-/// The subscription's state as one response reported it: a free usage gauge
-/// on every response, and the billing check. The provider reads its own
-/// headers and decides; nothing outside it knows their names.
+/// The subscription's usage as one response reported it: a free gauge on
+/// every response that reports it. The provider reads its own headers;
+/// nothing outside it knows their names.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Quota {
-    /// Whether the provider billed this response to the plan. `false` is
-    /// billing gone wrong, and the brain stops sending. It is a fact, so the
-    /// latest report ([`crate::state::State::quota`]) says so after a
-    /// restart too.
-    pub on_plan: bool,
     pub five_hour: Option<Window>,
     pub seven_day: Option<Window>,
 }

@@ -827,12 +827,6 @@ impl Brain {
     // Requests.
 
     fn send(&mut self, id: TaskId, now: Timestamp) {
-        // A response billed outside the plan stops every request.
-        if let Some(quota) = self.state().quota().and_then(|e| e.quota.as_ref())
-            && !quota.on_plan
-        {
-            return;
-        }
         let task = self.state().task(id).expect("a task to send for").clone();
         // A stopping task's tidy-up turn is its last: it does not compact.
         let ending = task.ends();
@@ -1035,9 +1029,6 @@ impl Brain {
             }
         }
         batch.values.extend(value.map(Bytes));
-        if quota.as_ref().is_some_and(|q| !q.on_plan) {
-            errln!("a response was billed outside the plan: sending nothing more");
-        }
         batch.facts.push(Fact::ModelCall(
             request,
             ModelCallEvent::Ended {

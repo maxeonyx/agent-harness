@@ -219,9 +219,6 @@ impl Client {
     /// it ends [`Ending::Cut`] with the visible text so far and the
     /// usage the stream had reported. A request has no graceful phase; its
     /// owner decides whether to let it finish.
-    ///
-    /// A billing claim other than the plan's window is reported as
-    /// [`Quota::on_plan`] `false`, and is a failure: the response is not read.
     pub fn send(
         &self,
         call: &ModelCall,
@@ -277,15 +274,13 @@ impl Client {
                 resets: reset(name),
             })
         };
-        let claim = header(&format!("{UNIFIED}representative-claim"));
-        let on_plan = on_plan(claim.as_deref());
-        // The scripted model is on no plan: it reports no quota, and is
-        // not billed.
-        let quota = (!local).then(|| Quota {
-            on_plan,
+        // A response that reports no window (the scripted model's, a
+        // refused login's) is no reading of the quota.
+        let quota = Some(Quota {
             five_hour: window("5h"),
             seven_day: window("7d"),
-        });
+        })
+        .filter(|q| q.five_hour.is_some() || q.seven_day.is_some());
         let retry = header("retry-after")
             .and_then(|s| s.parse::<f64>().ok())
             .map(|s| Timestamp(now_ms() + (s * 1000.0) as i64));
@@ -313,12 +308,6 @@ impl Client {
             };
             return Ok(end(ending, None, quota));
         }
-        if !local && !on_plan {
-            let message =
-                format!("billed as {claim:?}, not to the plan; the response was not read");
-            return Ok(end(failed(Some(status), message, None), None, quota));
-        }
-
         let mut assembly = Assembly::default();
         let mut lines = BufReader::new(reader).lines();
         let ending = loop {
@@ -427,12 +416,6 @@ fn iso_ms(s: &str) -> Option<i64> {
     let days = era * 146_097 + doe - 719_468;
     let seconds = days * 86_400 + h * 3600 + mi * 60 + sec - offset * 60;
     Some(seconds * 1000 + millis)
-}
-
-/// A plan window (`five_hour`, `seven_day`, ...). Anything else, including
-/// no claim at all, is billing gone wrong.
-fn on_plan(claim: Option<&str>) -> bool {
-    claim.is_some_and(|c| c == "five_hour" || c.starts_with("seven_day"))
 }
 
 /// The visible text an event adds, if it adds any.
