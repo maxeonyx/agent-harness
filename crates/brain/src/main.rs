@@ -80,6 +80,7 @@ use std::process::ExitCode;
 use std::sync::{Mutex, mpsc};
 use std::thread;
 
+use harness_core::environment::UnknownEffort;
 use harness_core::id::ValueId;
 use harness_face_web::{Dictation, Face, Feed, Source, Wiring};
 use harness_provider::{Client, Login};
@@ -105,15 +106,17 @@ const SOURCE: &str = env!("HARNESS_SOURCE");
 /// What `harness-brain --help` prints. `--model scripted` is
 /// [`harness_provider::SCRIPTED`].
 const USAGE: &str = "\
-usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL] [--page DIR]
+usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL[/EFFORT]] [--page DIR]
        harness-brain --version
 
   --db DB          the database; a new one is made if none is there
   --port PORT      where the face is served, over HTTPS
   --roles DIR      the role files the roles limb reads; a new database needs
                    it, and on an existing one it moves the limb to DIR
-  --model MODEL    run every role on MODEL over its file's; `scripted` costs
-                   nothing (it answers from a script in the chat)
+  --model MODEL[/EFFORT]
+                   run every role on MODEL (and at EFFORT) over its file's:
+                   `sonnet/low`; `scripted` costs nothing (it answers from a
+                   script in the chat)
   --sample WAV     a recording the page offers to dictate, for a machine with
                    no microphone
   --page DIR       serve the page's files from DIR (crates/face-web/src/page)
@@ -166,6 +169,23 @@ fn run() -> Result<(), String> {
         }
     }
     let db = db.ok_or("--db is required")?;
+    // `--model sonnet/low`: the model, and the effort after a slash.
+    let (every, effort) = match model
+        .as_deref()
+        .map(|m| m.split_once('/').unwrap_or((m, "")))
+    {
+        None => (None, None),
+        Some((model, effort)) => (
+            Some(model.to_owned()).filter(|m| !m.is_empty()),
+            match effort {
+                "" => None,
+                e => Some(
+                    e.parse()
+                        .map_err(|e: UnknownEffort| format!("--model: {e}"))?,
+                ),
+            },
+        ),
+    };
     outln!("harness-brain {SOURCE}");
     let port: u16 = port.ok_or("--port is required")?;
     let store = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
@@ -212,7 +232,8 @@ fn run() -> Result<(), String> {
         client,
         roles::Models {
             offered,
-            every: model,
+            every,
+            effort,
         },
         roles.as_deref(),
         inbox,

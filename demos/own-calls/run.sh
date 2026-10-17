@@ -5,19 +5,16 @@
 # chat's transcript, each tool call with its whole result.
 set -eu
 cd "$(dirname "$0")/../.."
-port=${PORT:-4391}
 dir=$PWD/target/own-calls
 rm -rf "$dir"
 mkdir -p "$dir"
 printf 'one\ntwo\n' > "$dir/f.txt"
 echo theirs > "$dir/other.txt"
 echo draft > "$dir/shared.txt"
-node dev/drive.mjs up "$port"
-chat=$(node dev/drive.mjs chat "$port" engineer "$dir" "$(cat demos/own-calls/mandate.md)" | awk '{print $NF}')
+node dev/drive.mjs up --brain own-calls
+chat=$(node dev/drive.mjs chat --brain own-calls engineer "$dir" "$(cat demos/own-calls/mandate.md)")
 # Another agent in the same directory, while A's second response streams.
-other=$(node dev/drive.mjs chat "$port" engineer "$dir" "$(cat demos/own-calls/other.md)" | awk '{print $NF}')
-node dev/drive.mjs settle "$port" "$other"
-node dev/drive.mjs settle "$port" "$chat"
-node dev/drive.mjs log "$port" "$other" --full
-node dev/drive.mjs log "$port" "$chat" --full
-node dev/drive.mjs down "$port" --wipe
+other=$(node dev/drive.mjs chat --brain own-calls engineer "$dir" "$(cat demos/own-calls/other.md)")
+for c in "$other" "$chat"; do node dev/drive.mjs settle --brain own-calls "$c"; done
+for c in "$other" "$chat"; do node dev/drive.mjs log --brain own-calls "$c" --full; done
+node dev/drive.mjs down --brain own-calls --wipe
