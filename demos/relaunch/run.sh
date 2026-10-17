@@ -43,10 +43,12 @@ good=$(git -C "$work/clone" rev-parse --short=12 HEAD)
 "$act" "$port" chat engineer "$work/ws" "tool relaunch {\"clone\":\"$work/clone\"}
 tool bash {\"command\":\"echo a round trip on the new build\"}
 say done" | tail -1
+# Proven, the builds limb moves NAME/build, and its watch ends.
 for _ in $(seq 300); do
-    view | grep -q "\"source\":\"$good\".*Proven" && break
+    [[ $(readlink "$home/$name/build") == */$good ]] && break
     sleep 1
 done
+sleep 1
 view
 echo "NAME/build -> $(readlink "$home/$name/build")"
 
@@ -55,7 +57,7 @@ sed -i 's/^fn main() -> ExitCode {$/fn main() -> ExitCode {\n    if !std::env::a
 git -C "$work/clone" commit -q -am "demo: a brain that exits 20 s after it starts"
 bad=$(git -C "$work/clone" rev-parse --short=12 HEAD)
 chat=$("$act" "$port" chat engineer "$work/ws" "tool relaunch {\"clone\":\"$work/clone\"}
-slow 30000 say this request is in flight when the new brain dies
+slow 30000 say hung
 say after going back" | tail -1)
 chat=${chat#chat }
 for _ in $(seq 300); do
