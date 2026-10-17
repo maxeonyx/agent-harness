@@ -16,6 +16,7 @@ use harness_core::task::{
     Drain, Draining, Input, Mode, Move, Origin, Outcome, Pause, Phase, Scope, Task, TaskEvent,
 };
 use harness_face_tab::{DraftRow, FaceKey, FaceRow};
+use harness_provider::Model;
 use serde_json::{Value, json};
 
 /// A stored value as text, for the page: a mandate, a call's input.
@@ -44,8 +45,13 @@ fn tuning(value: Text, t: &Task, env: &Environment, last: Option<&Ended>) -> Val
 
 /// Every tab's rows, as of the state: each task, each spawn's scope, Max's
 /// queue, the harness as a whole, and his drafts that can still be sent or
-/// were held.
-pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, FaceRow> {
+/// were held. `models` are the ones on offer, newest first.
+pub fn rows(
+    state: &State,
+    value: Text,
+    models: &[Model],
+    now: Timestamp,
+) -> BTreeMap<FaceKey, FaceRow> {
     let mut rows = BTreeMap::new();
     // Each task's newest request: what an interrupt names.
     let mut turns = BTreeMap::new();
@@ -95,7 +101,10 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
         .map(|l| l.id);
     let harness = json!({
         "environments": environments,
-        "models": harness_provider::MODELS.map(|m| json!({"id": m.id, "name": m.name})),
+        "models": harness_provider::current(models)
+            .iter()
+            .map(|m| json!({"id": m.id, "name": m.name}))
+            .collect::<Vec<_>>(),
         "efforts": Effort::ALL,
         "workspaces": workspaces,
         "build": state.launch().map(|(_, l)| format!("build {:.12}", l.build.to_string())),
@@ -286,6 +295,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         },
         "mandate": text(value, t.mandate.text),
         "head": t.head().map(|h| h.to_string()),
+        // When its last request ended: a retry can end where it began.
+        "turn": last.map(|e| e.at.seq.n),
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
         "window": state.environment(t.environment).map(|e| harness_provider::context_window(t.tuning.model(e))),
         "tuning": state.environment(t.environment).map(|e| tuning(value, t, e, last)),

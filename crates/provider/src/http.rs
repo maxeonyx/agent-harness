@@ -22,7 +22,8 @@ type Stream = BufReader<StreamOwned<ClientConnection, Socket>>;
 /// A response whose head has arrived; its body is read as it streams.
 pub struct Response {
     pub status: u16,
-    headers: Vec<(String, String)>,
+    /// Each header, its name lowercase, in the order they arrived.
+    pub headers: Vec<(String, String)>,
     pub body: Body,
 }
 
@@ -112,6 +113,8 @@ pub enum Body {
     },
     /// Until the server closes the connection.
     Close(Stream),
+    /// Made in this process, not read from a socket: the scripted model's.
+    Local(Box<dyn Read + Send>),
     Done,
 }
 
@@ -120,6 +123,7 @@ impl Read for Body {
         match self {
             Body::Done => Ok(0),
             Body::Close(stream) => stream.read(buf),
+            Body::Local(body) => body.read(buf),
             Body::Length { stream, left } => {
                 if *left == 0 {
                     return Ok(0);

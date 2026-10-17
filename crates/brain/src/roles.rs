@@ -47,6 +47,7 @@ use harness_core::id::{Digest, EnvironmentId, LimbId, ReplicaId, Time};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::schema::Harness;
 use harness_core::value::Bytes;
+use harness_provider::Model;
 use harness_substrate::{Log, Memory, Mirror, Up};
 use serde::{Deserialize, Serialize};
 
@@ -87,11 +88,43 @@ impl Settings {
     }
 }
 
+/// What a role's `model` resolves against, for one run of the brain.
+#[derive(Clone, Debug, Default)]
+pub struct Models {
+    /// The models on offer, newest first ([`harness_provider::Client::models`]).
+    pub offered: Vec<Model>,
+    /// The model every role runs on, over its file's: `--model scripted`
+    /// for a brain that costs nothing.
+    pub every: Option<String>,
+}
+
+impl Models {
+    /// The provider's name for the model a role naming `named` runs on:
+    /// [`resolved`](harness_provider::resolve) against the models on offer,
+    /// then against the one its environment had (`before`), so an alias
+    /// keeps its model while the provider cannot be asked; else as named,
+    /// for the provider to refuse.
+    fn resolve(&self, named: &str, before: Option<&str>) -> String {
+        let named = self.every.as_deref().unwrap_or(named);
+        let ids = self.offered.iter().map(|m| m.id.as_str()).chain(before);
+        harness_provider::resolve(named, ids)
+            .unwrap_or(named)
+            .to_owned()
+    }
+}
+
 /// Run the roles limb `limb` as the replica `here`, on a link: what the brain
 /// ships arrives on `down`, and what it says goes to `up`. Its log is in
 /// memory, so each run is a new replica: everything it says, it derives
-/// again from its files. Returns once the brain lets go of the link.
-pub fn run(limb: &Limb, here: ReplicaId, down: Receiver<LimbDown>, up: impl Fn(LimbUp)) {
+/// again from its files, with each role's model resolved by `models`.
+/// Returns once the brain lets go of the link.
+pub fn run(
+    limb: &Limb,
+    here: ReplicaId,
+    down: Receiver<LimbDown>,
+    up: impl Fn(LimbUp),
+    models: &Models,
+) {
     let Some(settings) = Settings::of(limb) else {
         return errln!("the roles limb's settings do not parse");
     };
@@ -133,8 +166,15 @@ pub fn run(limb: &Limb, here: ReplicaId, down: Receiver<LimbDown>, up: impl Fn(L
             let (roles, unusable): (Vec<Role>, Vec<Role>) = roles
                 .into_iter()
                 .partition(|r| r.limbs.iter().all(|l| settings.limbs.contains_key(l)));
-            let batch = environments(&roles, &current, &settings.limbs, limb.id, log.next())
-                .map_err(|e| skipped(e, &unusable, &settings.limbs))?;
+            let batch = environments(
+                &roles,
+                &current,
+                &settings.limbs,
+                models,
+                limb.id,
+                log.next(),
+            )
+            .map_err(|e| skipped(e, &unusable, &settings.limbs))?;
             if !batch.facts.is_empty() {
                 let record = log
                     .say(crate::brain::now(), |_| batch)
@@ -178,6 +218,7 @@ pub struct Role {
     pub path: String,
     pub version: Version,
     pub name: String,
+    /// As the file names it: an alias, an id, or `scripted`.
     pub model: String,
     /// The request parameters, as the exact JSON object every turn sends.
     pub params: String,
@@ -265,7 +306,7 @@ fn parse(text: &str) -> Result<Role, String> {
         path: String::new(),
         version: Version::Gone,
         name: one("name").ok_or("no `name`")?,
-        model: harness_provider::model_id(&model).to_owned(),
+        model,
         params: serde_json::json!({
             "max_tokens": 64000,
             "thinking": {"type": "adaptive"},
@@ -289,6 +330,7 @@ fn environments(
     roles: &[Role],
     current: &[&Environment],
     limbs: &BTreeMap<String, LimbId>,
+    models: &Models,
     owner: LimbId,
     at: Time,
 ) -> Result<Batch, String> {
@@ -322,7 +364,7 @@ fn environments(
             id: ids[r.name.as_str()],
             name: r.name.clone(),
             role: role.id(),
-            model: r.model.clone(),
+            model: models.resolve(&r.model, existing(&r.name).map(|e| e.model.as_str())),
             params: params.id(),
             limbs: r
                 .limbs

@@ -118,7 +118,7 @@ fn main() {
     brain.call(
         &mut a,
         "bash",
-        json!({ "command": "sed -i 's/a + b/b + a/' src/lib.rs && cat src/lib.rs", "grep": "" }),
+        json!({ "command": "sed -i 's/a + b/b + a/' src/lib.rs && cat src/lib.rs" }),
     );
     brain.call(
         &mut b,
@@ -190,16 +190,12 @@ fn main() {
         );
     }
     println!("\n  with an empty grep, only the head and tail:");
-    brain.call(
-        &mut a,
-        "bash",
-        json!({ "command": "seq 1 100", "grep": "" }),
-    );
+    brain.call(&mut a, "bash", json!({ "command": "seq 1 100" }));
 
     title("A long-running command is stopped and its whole process tree ended");
     let pids = scratch.join("work/tree.pids");
     let tree = "echo $$ > tree.pids; sleep 300 & echo $! >> tree.pids; (sleep 300 & echo $! >> tree.pids; wait) & sleep 0.2; echo started a tree; wait";
-    let call = brain.dispatch(&mut a, "bash", json!({ "command": tree, "grep": "" }));
+    let call = brain.dispatch(&mut a, "bash", json!({ "command": tree }));
     brain.live_until("started");
     let pids = read_pids(&pids);
     println!("  running: {}", alive(&pids));
@@ -216,31 +212,27 @@ fn main() {
     brain.call(
         &mut a,
         "bash",
-        json!({ "command": "setsid sleep 300 > /dev/null 2>&1 & echo $! > server.pid; echo started $(cat server.pid)", "grep": "" }),
+        json!({ "command": "setsid sleep 300 > /dev/null 2>&1 & echo $! > server.pid; echo started $(cat server.pid)" }),
     );
     brain.call(
         &mut a,
         "bash",
-        json!({ "command": "kill -0 $(cat server.pid) && echo still running in the next call", "grep": "" }),
+        json!({ "command": "kill -0 $(cat server.pid) && echo still running in the next call" }),
     );
     brain.call(
         &mut a,
         "bash",
-        json!({ "command": "kill $(cat server.pid); sleep 0.2; ps -o stat= -p $(cat server.pid) | grep -qv Z && echo running || echo stopped", "grep": "" }),
+        json!({ "command": "kill $(cat server.pid); sleep 0.2; ps -o stat= -p $(cat server.pid) | grep -qv Z && echo running || echo stopped" }),
     );
 
     title("The limb is killed mid-command; the next instance ends what it left and settles");
     brain.disconnect();
     println!("  (the in-process instance closed; the next calls go to one in a child process)");
-    let once = brain.dispatch(
-        &mut a,
-        "bash",
-        json!({ "command": "echo ran >> once.log", "grep": "" }),
-    );
+    let once = brain.dispatch(&mut a, "bash", json!({ "command": "echo ran >> once.log" }));
     let cut = brain.dispatch(
         &mut a,
         "bash",
-        json!({ "command": "echo $$ > crash.pid; echo running; sleep 300", "grep": "" }),
+        json!({ "command": "echo $$ > crash.pid; echo running; sleep 300" }),
     );
     let orphan = scratch.join("work/crash.pid");
     fs::write(

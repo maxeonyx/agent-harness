@@ -47,10 +47,11 @@ mod http;
 mod live;
 mod view;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use std::thread;
@@ -87,6 +88,13 @@ pub struct Wiring {
     pub dictation: Option<Dictation>,
     /// Live progress, from whoever runs things.
     pub feed: Feed,
+    /// The models on offer, newest first ([`harness_provider::Client::models`]),
+    /// which Max chooses a chat's from.
+    pub models: Vec<harness_provider::Model>,
+    /// Where to read the page's files (`crates/face-web/src/page`) from on
+    /// each request, so an edit shows on reload; `None` serves the ones
+    /// built in.
+    pub page: Option<PathBuf>,
 }
 
 /// What the brain hands the face after each fold.
@@ -148,7 +156,8 @@ impl<S: Source> Face<S> {
             if let Some(last) = folds.try_iter().last() {
                 folded = last;
             }
-            let rows = view::rows(&folded.state, &|id| self.source.value(id), now());
+            let value = |id| self.source.value(id);
+            let rows = view::rows(&folded.state, &value, &self.wiring.models, now());
             *self.state.write().unwrap_or_else(|e| e.into_inner()) = folded.state;
             *self.show() = Some(Arc::new(Shown {
                 as_of: folded.as_of,
@@ -158,16 +167,43 @@ impl<S: Source> Face<S> {
         }
     }
 
+    /// One of the page's files, by its name in `page/`: from disk, read now,
+    /// if [`Wiring::page`] says where; otherwise as built in.
+    fn page_file(&self, name: &str) -> io::Result<Cow<'static, str>> {
+        let missing = || io::Error::new(ErrorKind::NotFound, format!("no page file {name}"));
+        match &self.wiring.page {
+            // Only a name in the directory, never a path out of it.
+            Some(dir) if !name.contains('/') && !name.starts_with('.') => {
+                std::fs::read_to_string(dir.join(name))
+                    .map(Cow::Owned)
+                    .map_err(|e| io::Error::new(e.kind(), format!("page file {name}: {e}")))
+            }
+            Some(_) => Err(missing()),
+            None => PAGE
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, text)| Cow::Borrowed(*text))
+                .ok_or_else(missing),
+        }
+    }
+
     /// Serve one connection: read its request, answer it.
     pub fn handle(&self, stream: impl Socket) -> io::Result<()> {
         let (request, mut stream) = http::read_request(stream)?;
         match request.path.as_str() {
-            "/" => http::respond(
-                &mut stream,
-                "text/html; charset=utf-8",
-                PAGE.as_bytes(),
-                false,
-            ),
+            "/" => match DOCUMENT
+                .iter()
+                .map(|name| self.page_file(name))
+                .collect::<io::Result<String>>()
+            {
+                Ok(document) => http::respond(
+                    &mut stream,
+                    "text/html; charset=utf-8",
+                    document.as_bytes(),
+                    false,
+                ),
+                Err(e) => http::refuse(&mut stream, "500 Internal Server Error", &e.to_string()),
+            },
             "/tab.wasm" => http::respond(&mut stream, "application/wasm", TAB, false),
             "/wiring" => {
                 let dictation = self.wiring.dictation.as_ref();
@@ -198,16 +234,16 @@ impl<S: Source> Face<S> {
                 )
             }
             path => {
-                if let Some(script) = path
-                    .strip_prefix("/page/")
-                    .and_then(|name| SCRIPTS.iter().find(|(n, _)| *n == name))
-                {
-                    return http::respond(
-                        &mut stream,
-                        "text/javascript; charset=utf-8",
-                        script.1.as_bytes(),
-                        false,
-                    );
+                if let Some(name) = path.strip_prefix("/page/") {
+                    let kind = match name.rsplit_once('.') {
+                        Some((_, "js")) => "text/javascript; charset=utf-8",
+                        Some((_, "css")) => "text/css; charset=utf-8",
+                        _ => "text/html; charset=utf-8",
+                    };
+                    return match self.page_file(name) {
+                        Ok(text) => http::respond(&mut stream, kind, text.as_bytes(), false),
+                        Err(_) => http::not_found(&mut stream),
+                    };
                 }
                 if let Some(head) = path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
                     return self.context(&mut stream, head);
@@ -527,8 +563,10 @@ fn authors(
 /// siblings it has been at, which of them it is (`n` of `of`, in the order
 /// they were first made), and where Max lands moving to the one before or
 /// after: the last response the task had on that path, or failing one, the
-/// last request. Read whole on every change of head, since a version is
-/// added by any request.
+/// last request. And for each response the model gave more than once, how
+/// many times (`tries`): an entry is its bytes, so a retry that says the
+/// same words is the same version, asked again. Read whole on every change
+/// of head and every request that ends, since either can add to it.
 fn versions(state: &State, task: TaskId) -> Value {
     let Some(start) = state.task(task).and_then(|t| t.context()).map(|c| c.start) else {
         return json!({});
@@ -541,7 +579,11 @@ fn versions(state: &State, task: TaskId) -> Value {
     calls.sort_by_key(|m| m.sent.seq);
     let mut children: BTreeMap<EntryId, Vec<EntryId>> = BTreeMap::new();
     let mut landing: HashMap<EntryId, (bool, EntryId)> = HashMap::new();
+    let mut tries: HashMap<EntryId, usize> = HashMap::new();
     for m in calls {
+        if let Some(r) = m.response {
+            *tries.entry(r).or_default() += 1;
+        }
         let ends = [Some((false, m.call.head())), m.response.map(|r| (true, r))];
         for (responded, end) in ends.into_iter().flatten() {
             let mut child = end;
@@ -581,6 +623,10 @@ fn versions(state: &State, task: TaskId) -> Value {
             );
         }
     }
+    for (entry, n) in tries.into_iter().filter(|(_, n)| *n > 1) {
+        let at = out.entry(entry.to_string()).or_insert_with(|| json!({}));
+        at["tries"] = n.into();
+    }
     Value::Object(out)
 }
 
@@ -619,24 +665,25 @@ fn now() -> Timestamp {
     Timestamp(ms as i64)
 }
 
-/// The page: one document and its style sheet, joined from the pieces in
-/// `page/` in this order. Its script is the modules `page/*.js`, served at
-/// `/page/<name>`: `main.js` starts the page, and each module imports what
-/// it uses from the others, so a name lives in one module and says where.
-const PAGE: &str = concat!(
-    include_str!("page/head.html"),
-    include_str!("page/base.css"),
-    include_str!("page/chrome.css"),
-    include_str!("page/map.css"),
-    include_str!("page/overlays.css"),
-    include_str!("page/card.css"),
-    include_str!("page/compose.css"),
-    include_str!("page/phone.css"),
-    include_str!("page/body.html"),
-    include_str!("page/tail.html"),
-);
-/// The page's modules, by name: every `page/*.js`, listed by `build.rs`.
-const SCRIPTS: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/scripts.rs"));
+/// The page's files, built in: every file in `page/`, by name, as
+/// `build.rs` lists them. [`Wiring::page`] reads them from disk instead.
+const PAGE: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/page.rs"));
+/// The page's document and its style sheet, joined from these files in this
+/// order. Its script is the modules `page/*.js`, served at `/page/<name>`:
+/// `main.js` starts the page, and each module imports what it uses from the
+/// others, so a name lives in one module and says where.
+const DOCUMENT: &[&str] = &[
+    "head.html",
+    "base.css",
+    "chrome.css",
+    "map.css",
+    "overlays.css",
+    "card.css",
+    "compose.css",
+    "phone.css",
+    "body.html",
+    "tail.html",
+];
 /// The tab, as the page runs it.
 const TAB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tab.wasm"));
 
