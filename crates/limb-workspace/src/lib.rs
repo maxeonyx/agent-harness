@@ -67,7 +67,7 @@ pub mod tools;
 pub mod trunc;
 pub mod user;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, PipeReader};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -87,7 +87,7 @@ use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::schema::{Harness, Record};
 use harness_core::value::Bytes;
 use harness_store::Store;
-use harness_substrate::{Log, Mirror, Restored, Up};
+use harness_substrate::{Log, Mirror, Restored, Time, Up};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -234,6 +234,8 @@ struct Inner {
     /// For each task, the end of its latest call: it hangs up when that
     /// call ends, and the task's next call waits for that.
     latest: Mutex<HashMap<TaskId, PipeReader>>,
+    /// What each task's own calls did, so that it is not refused for it.
+    own: Mutex<HashMap<TaskId, Own>>,
     /// Shutting down: no new call runs, and a stopped one says why.
     shutting_down: AtomicBool,
     /// The resources the brain asked to hear about, at the version last
@@ -291,6 +293,7 @@ impl Workspace {
             out,
             running: Mutex::default(),
             latest: Mutex::default(),
+            own: Mutex::default(),
             shutting_down: AtomicBool::new(false),
             watched: Mutex::default(),
             files: Mutex::default(),
@@ -453,10 +456,15 @@ impl Workspace {
             let call = call.clone();
             thread::spawn(move || {
                 let mut report = Report::new(Some(id));
+                let started = SystemTime::now();
                 let mut outcome = match after(before, &cancel) {
-                    Ok(()) => inner.execute(id, &call, &input.0, &cancel, &mut report),
+                    Ok(()) => {
+                        let call = inner.as_written(id, call.clone());
+                        inner.execute(id, &call, &input.0, &cancel, &mut report)
+                    }
                     Err(_) => Outcome::Interrupted { partial: None },
                 };
+                let ran = (started, SystemTime::now());
                 let made = inner.rescan(&mut report, call.tool == "bash");
                 if let Outcome::Completed(output)
                 | Outcome::Failed(output)
@@ -466,6 +474,7 @@ impl Workspace {
                 {
                     output.observes.extend(made);
                 }
+                inner.did(id, &call, &outcome, ran);
                 inner.settle(report, outcome);
                 drop(ended);
                 let mut running = lock(&inner.running);
@@ -828,6 +837,91 @@ impl Inner {
             }
         }
         made
+    }
+}
+
+/// What one task's own calls did.
+struct Own {
+    /// The record that made its latest response's calls, which their ids
+    /// share, and what those calls have observed so far.
+    response: Time,
+    observed: Vec<Observation>,
+    /// When its latest commands ran, oldest first.
+    commands: VecDeque<(SystemTime, SystemTime)>,
+}
+
+/// Commands remembered for each task.
+const COMMANDS: usize = 50;
+
+/// How far a file's time may lag the clock: the kernel stamps files from
+/// a coarse clock, a tick behind the one a command's start is read from.
+const COARSE: Duration = Duration::from_millis(20);
+
+impl Inner {
+    /// `call` as its caller wrote it: one response's tool uses run in the
+    /// order written (see the crate docs), so each was written knowing what
+    /// the earlier ones would leave. It expects what its context knew when
+    /// the response was made, updated by what those calls observed: an
+    /// agent's second `edit` of a file in one response is not refused for
+    /// its first.
+    fn as_written(&self, id: CallId, mut call: Call) -> Call {
+        let Caller::Agent { task, .. } = &call.caller else {
+            return call;
+        };
+        let own = lock(&self.own);
+        let Some(own) = own.get(task).filter(|o| o.response == id.0.at) else {
+            return call;
+        };
+        for o in &own.observed {
+            call.expects.retain(|e| e.resource != o.resource);
+            call.expects.push(o.clone());
+        }
+        call
+    }
+
+    /// Remember what `call` did: what its outcome observed, for the later
+    /// calls of its response, and when it ran, if it was a command.
+    fn did(&self, id: CallId, call: &Call, outcome: &Outcome, ran: (SystemTime, SystemTime)) {
+        let Caller::Agent { task, .. } = &call.caller else {
+            return;
+        };
+        let mut own = lock(&self.own);
+        let own = own.entry(*task).or_insert_with(|| Own {
+            response: id.0.at,
+            observed: Vec::new(),
+            commands: VecDeque::new(),
+        });
+        if own.response != id.0.at {
+            own.response = id.0.at;
+            own.observed.clear();
+        }
+        if let Some(output) = outcome.output() {
+            own.observed.extend(output.observes.iter().cloned());
+        }
+        if call.tool == "bash" {
+            own.commands.push_back(ran);
+            if own.commands.len() > COMMANDS {
+                own.commands.pop_front();
+            }
+        }
+    }
+
+    /// Whether `caller`'s own command last changed `path`: it changed while
+    /// one ran. A command's other writes reach this limb only as changes
+    /// to what some context has seen ([`Inner::rescan`]); a file it made
+    /// that nobody has seen, it has seen as its maker.
+    pub(crate) fn made_by(&self, caller: &Caller, path: &Path) -> bool {
+        let Caller::Agent { task, .. } = caller else {
+            return false;
+        };
+        let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) else {
+            return false;
+        };
+        lock(&self.own).get(task).is_some_and(|own| {
+            own.commands
+                .iter()
+                .any(|(start, end)| (*start - COARSE..=*end).contains(&modified))
+        })
     }
 }
 

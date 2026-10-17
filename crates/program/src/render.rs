@@ -619,7 +619,7 @@ fn outcome_content(values: Values, outcome: &Outcome) -> (Value, bool) {
             let names: Vec<_> = current.iter().map(|o| o.resource.name.as_str()).collect();
             (
                 said(&format!(
-                    "Refused, with no effect: {} changed since you last saw it. Read it again, then retry.",
+                    "Refused, with no effect: {} changed since you last saw it, or you have not seen it through `read`, `write` or `edit` (a command's output does not count). Read it, then retry.",
                     names.join(", ")
                 )),
                 true,

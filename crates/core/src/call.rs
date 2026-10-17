@@ -76,6 +76,11 @@ pub struct Call {
     /// A command whose effects the limb cannot know (`bash`, `git`) is not
     /// checked; its writes reach other contexts afterwards, as notices
     /// naming the call.
+    ///
+    /// What the caller's own calls did is not held against it: a call also
+    /// expects what the earlier calls of its response observed, since its
+    /// caller wrote them to run in order; and a resource last changed while
+    /// the caller's own command ran counts as seen.
     pub expects: Vec<Observation>,
 }
 

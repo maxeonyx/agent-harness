@@ -3,14 +3,18 @@
 //!
 //! ```text
 //! act PORT done           Done on the task Max started
+//! act PORT say WORDS      Send it WORDS
+//! act PORT back ENTRY     Move it back to ENTRY, where it has been
 //! act PORT abandon MS     Abandon it, with MS milliseconds to finish
 //! act PORT stop CALL      Stop a call, such as one passed to Max
-//! act PORT chat ENV DIR TEXT
-//!                         Start a chat in environment ENV, in a new
-//!                         workspace over DIR, with TEXT as its mandate
+//! act PORT chat ROLE DIR TEXT
+//!                         Start a chat in ROLE's environment, in a new
+//!                         workspace over DIR (`-` for a role with none),
+//!                         with TEXT as its mandate
 //! ```
 //!
-//! It prints `included`, or `refused: <why>` and exits 1.
+//! It prints `included` (for a chat, `chat <id>`), or `refused: <why>` and
+//! exits 1.
 
 mod device;
 
@@ -25,7 +29,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: act PORT done | act PORT say WORDS | act PORT back ENTRY | act PORT abandon MS | act PORT stop CALL | act PORT chat ENV DIR TEXT"
+            "usage: act PORT done | act PORT say WORDS | act PORT back ENTRY | act PORT abandon MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT"
         );
         exit(2)
     };
@@ -33,12 +37,18 @@ fn main() {
         usage()
     };
     let mut tab = Device::connect("act", port);
-    let n = if let [_, chat, env, dir, text] = &args[..]
+    let mut started = None;
+    let n = if let [_, chat, role, dir, text] = &args[..]
         && chat == "chat"
     {
-        let Ok(env) = env.parse() else { usage() };
         tab.pump_until(|d| d.tab.view().is_some());
-        tab.chat(env, dir, text)
+        let Some(env) = tab.environment(role) else {
+            println!("refused: no role {role}");
+            exit(1)
+        };
+        let (n, task) = tab.chat(env, (dir != "-").then_some(dir.as_str()), text);
+        started = Some(task);
+        n
     } else {
         tab.pump_until(|d| d.root().is_some());
         let root = tab.root().expect("a root");
@@ -66,6 +76,9 @@ fn main() {
             println!("refused: {why}");
             exit(1)
         }
-        _ => println!("included"),
+        _ => match started {
+            Some(task) => println!("chat {task}"),
+            None => println!("included"),
+        },
     }
 }
