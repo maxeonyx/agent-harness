@@ -249,15 +249,17 @@ impl Brain {
         .map(|(n, l)| (n.to_string(), l))
         .collect();
         let roles = match (roles_limb, roles_dir) {
-            // A roles limb defined before a shared limb was is told of it.
-            (Some(id), _) => {
+            // A roles limb defined before a shared limb was is told of it,
+            // and `--roles` moves it to another directory.
+            (Some(id), dir) => {
                 let limb = state.limb(id).expect("found among the limbs");
                 if let Some(settings) = roles::Settings::of(limb) {
                     let mut limbs = settings.limbs.clone();
                     limbs.extend(shared);
-                    if limbs != settings.limbs {
-                        let settings = roles::Settings { limbs, ..settings };
-                        facts.push(Fact::Limb(reconfigured(limb, &settings)));
+                    let dir = dir.unwrap_or_else(|| settings.dir.clone());
+                    let wanted = roles::Settings { dir, limbs };
+                    if wanted != settings {
+                        facts.push(Fact::Limb(reconfigured(limb, &wanted)));
                     }
                 }
                 Some(id)
