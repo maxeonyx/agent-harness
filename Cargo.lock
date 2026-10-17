@@ -222,6 +222,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-face-tab"
+version = "0.0.0"
+dependencies = [
+ "harness-core",
+ "harness-substrate",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "harness-face-web"
 version = "0.0.0"
 dependencies = [
