@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # The harness on a root task in a scratch git repo, killed -9 mid-run and
-# relaunched onto the same journal. Watch it at https://mx-hv-mj.local:4321.
+# relaunched onto the same database. Watch it at https://mx-hv-mj.local:4321.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain -p harness-limb-workspace
+cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example act
 dir=target/brain-demo
 brain=target/release/harness-brain
 rm -rf "$dir"
 mkdir -p "$dir"
 demos/brain/scratch.sh "$dir/repo"
-args=(--roles roles --journal "$dir/journal.sqlite" --port "${PORT:-4321}")
+args=(--roles roles --db "$dir/brain.sqlite" --port "${PORT:-4321}")
 
 echo "== launch 1: the orchestrator starts on demos/brain/mandate.md"
 "$brain" "${args[@]}" --workspace "$dir/repo" --mandate demos/brain/mandate.md > "$dir/launch1.log" 2>&1 &
@@ -18,7 +18,7 @@ pid=$!
 # The face's view, read as the page reads it.
 running_check() {
   curl -sS --resolve "mx-hv-mj.local:${PORT:-4321}:127.0.0.1" "https://mx-hv-mj.local:${PORT:-4321}/view" |
-    jq -e '[.tasks[].waiting.calls[]? | select(.tool == "bash" and (.input | contains("check.sh")))] | length > 0' >/dev/null
+    jq -e '[.rows[] | .Task // empty | .waiting.calls[]? | select(.tool == "bash" and (.input | contains("check.sh")))] | length > 0' >/dev/null
 }
 until running_check 2>/dev/null; do sleep 0.2; done
 sleep 4
@@ -29,7 +29,7 @@ echo
 echo "** kill -9 the brain"
 echo
 
-echo "== launch 2: the same journal, nothing else"
+echo "== launch 2: the same database, nothing else"
 "$brain" "${args[@]}" > "$dir/launch2.log" 2>&1 &
 pid=$!
 demos/brain/done.sh "${PORT:-4321}"
