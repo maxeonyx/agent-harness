@@ -50,6 +50,7 @@ pub fn rows(
     state: &State,
     value: Text,
     models: &[Model],
+    source: &str,
     now: Timestamp,
 ) -> BTreeMap<FaceKey, FaceRow> {
     let mut rows = BTreeMap::new();
@@ -108,6 +109,7 @@ pub fn rows(
         "efforts": Effort::ALL,
         "workspaces": workspaces,
         "build": state.launch().map(|(_, l)| format!("build {:.12}", l.build.to_string())),
+        "source": source,
         "limited": state.limited(now).map(|t| t.0),
         "provider": provider.map(|l| l.to_string()),
         "usage": usage(state, value, provider),

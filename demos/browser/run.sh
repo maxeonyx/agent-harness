@@ -9,7 +9,7 @@ port=${PORT:-4342}
 dir=$PWD/target/browser-demo
 brain=target/release/harness-brain
 rm -rf "$dir"
-mkdir -p "$dir/work"
+mkdir -p "$dir"
 site=$PWD/demos/browser/site
 sed -e "s|RECEIPTS|file://$site/receipts.html|" -e "s|CLAIM|file://$site/claim.html|" \
   demos/browser/mandate.md > "$dir/mandate.md"
@@ -24,9 +24,8 @@ waits_on_max() { [ "$(c /view 2>/dev/null | jq -r "$root | .waiting.kind")" = ma
 echo "== Max asks a chat, in the chat role:"
 cat "$dir/mandate.md"
 echo
-env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" \
-  --role chat --workspace "$dir/work" --mandate "$dir/mandate.md" > "$dir/brain.log" 2>&1 &
-sleep 3
+env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" > "$dir/brain.log" 2>&1 &
+target/release/examples/act "$port" chat chat - "$(cat "$dir/mandate.md")" > /dev/null
 until waits_on_max; do sleep 1; done
 grep -E 'browser|tab|passed|spawn|responded' "$dir/brain.log" | cut -c1-170
 echo

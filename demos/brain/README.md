@@ -9,7 +9,7 @@ Then watch https://mx-hv-mj.local:4341 while it runs, and type to a task from it
 What it does:
 
 1. `scratch.sh` makes a git repository, `target/brain-demo/repo`: a Python package with a README that says what it should be, an `AGENTS.md`, and a `check.sh` that runs the tests and then a 15-second "style check".
-2. Launch 1 starts the brain on a new database with `mandate.md`. The root orchestrator reads the repository and spawns one scope of two agents: a fork of itself, in the same directory, and a fresh engineer, in its own clone on the branch `palindromes`. Each writes one module and its tests and runs `./check.sh`; the engineer commits and pushes its branch, and the orchestrator merges it.
+2. Launch 1 starts the brain on a new database, and Max starts an orchestrator on `mandate.md` at a tab (the script runs `examples/act`). The root orchestrator reads the repository and spawns one scope of two agents: a fork of itself, in the same directory, and a fresh engineer, in its own clone on the branch `palindromes`. Each writes one module and its tests and runs `./check.sh`; the engineer commits and pushes its branch, and the orchestrator merges it.
 3. While an agent's `./check.sh` is running, the script kills the brain with `kill -9`.
 4. Launch 2 is started on the same database, with no other arguments. It folds its records and carries on:
    - the request that was in flight is said to be lost and sent again, reading the prompt cache;

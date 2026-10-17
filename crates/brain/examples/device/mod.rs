@@ -82,28 +82,31 @@ pub struct Device {
     socket: WebSocket<Tls>,
 }
 
+fn link_within(name: &str, replica: ReplicaId, port: u16) -> WebSocket<Tls> {
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        match link(replica, port) {
+            Ok(socket) => return socket,
+            Err(_) if Instant::now() < until => thread::sleep(Duration::from_millis(300)),
+            Err(e) => panic!("{name}: cannot link to the face on {port}: {e}"),
+        }
+    }
+}
+
 impl Device {
+    /// A new tab, linked once the face at `port` serves: a brain that has
+    /// just launched has 30 s to.
     pub fn connect(name: &'static str, port: u16) -> Device {
         let replica = ReplicaId(u64::from_le_bytes(random()));
         let tab = Tab::open(replica, Vec::new());
-        let socket = link(replica, port).expect("the face links");
+        let socket = link_within(name, replica, port);
         println!("  {name}: tab {replica} linked");
         Device { name, tab, socket }
     }
 
     /// A new link after the brain restarted: ship what it has not included.
     pub fn reconnect(&mut self, port: u16) {
-        let until = Instant::now() + Duration::from_secs(30);
-        loop {
-            match link(self.tab.here(), port) {
-                Ok(socket) => {
-                    self.socket = socket;
-                    break;
-                }
-                Err(_) if Instant::now() < until => thread::sleep(Duration::from_millis(300)),
-                Err(e) => panic!("{}: cannot link again: {e}", self.name),
-            }
-        }
+        self.socket = link_within(self.name, self.tab.here(), port);
         self.pump_until(|d| d.tab.view().is_some());
         for record in self.tab.unsent().expect("the tab's log is whole") {
             self.ship(Up::Record(record));

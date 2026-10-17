@@ -91,6 +91,9 @@ pub struct Wiring {
     /// The models on offer, newest first ([`harness_provider::Client::models`]),
     /// which Max chooses a chat's from.
     pub models: Vec<harness_provider::Model>,
+    /// The commit the brain was built from, `+dirty` if the tree had
+    /// changes.
+    pub source: String,
     /// Where to read the page's files (`crates/face-web/src/page`) from on
     /// each request, so an edit shows on reload; `None` serves the ones
     /// built in.
@@ -157,7 +160,13 @@ impl<S: Source> Face<S> {
                 folded = last;
             }
             let value = |id| self.source.value(id);
-            let rows = view::rows(&folded.state, &value, &self.wiring.models, now());
+            let rows = view::rows(
+                &folded.state,
+                &value,
+                &self.wiring.models,
+                &self.wiring.source,
+                now(),
+            );
             *self.state.write().unwrap_or_else(|e| e.into_inner()) = folded.state;
             *self.show() = Some(Arc::new(Shown {
                 as_of: folded.as_of,

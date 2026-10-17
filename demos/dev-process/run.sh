@@ -6,15 +6,14 @@
 # database yet); otherwise the brain carries on its database and serves it.
 set -eu
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain -p harness-limb-workspace
+cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example act
 dir=${DIR:-target/dev-process}
-start=""
 if [ -n "${FRESH:-}" ] || [ ! -e "$dir/brain.sqlite" ]; then
   rm -rf "$dir"
   mkdir -p "$dir"
   demos/dev-process/scratch.sh "$dir"
-  start="--role orchestrator --workspace $dir/textstats --mandate demos/dev-process/mandate.md"
+  # Max starts the orchestrator at a tab, once the brain below serves one.
+  target/release/examples/act "${PORT:-4345}" chat orchestrator "$PWD/$dir/textstats" \
+    "$(cat demos/dev-process/mandate.md)" &
 fi
-# shellcheck disable=SC2086
-exec target/release/harness-brain --roles roles --db "$dir/brain.sqlite" \
-  --port "${PORT:-4345}" $start
+exec target/release/harness-brain --roles roles --db "$dir/brain.sqlite" --port "${PORT:-4345}"
