@@ -111,9 +111,6 @@ struct Inner {
     out: Out,
     /// The relaunch running, through its watch, by call.
     running: Mutex<HashMap<CallId, JoinHandle<()>>>,
-    /// The brain would start another build of this limb: exit once no
-    /// relaunch runs.
-    superseded: AtomicBool,
     shutting_down: AtomicBool,
 }
 
@@ -132,7 +129,6 @@ impl harness_limb::Kind for Builds {
             log: Mutex::new(log),
             out,
             running: Mutex::default(),
-            superseded: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
         });
         std::fs::create_dir_all(inner.marks()).map_err(|e| e.to_string())?;
@@ -178,22 +174,19 @@ impl harness_limb::Kind for Builds {
             });
         }
         for (key, row) in &view.rows {
-            match (key, row) {
-                (LimbKey::Call(id), LimbRow::Call { call, stopping, .. }) => {
-                    let input = match view.rows.get(&LimbKey::Value(call.input)) {
-                        Some(LimbRow::Value(bytes)) => Some(bytes.clone()),
-                        _ => None,
-                    };
-                    Inner::call(inner, *id, call, input, stopping.is_some());
-                }
-                (LimbKey::Superseded, LimbRow::Superseded { .. }) => {
-                    inner.superseded.store(true, Ordering::SeqCst);
-                }
-                _ => {}
+            if let (LimbKey::Call(id), LimbRow::Call { call, stopping, .. }) = (key, row) {
+                let input = match view.rows.get(&LimbKey::Value(call.input)) {
+                    Some(LimbRow::Value(bytes)) => Some(bytes.clone()),
+                    _ => None,
+                };
+                Inner::call(inner, *id, call, input, stopping.is_some());
             }
         }
-        inner.exit_if_superseded();
         Ok(ship)
+    }
+
+    fn holds(&self) -> bool {
+        !lock(&self.inner.running).is_empty()
     }
 
     fn stop_all(&self, _within: Duration) {
@@ -268,7 +261,6 @@ impl Inner {
         let thread = thread::spawn(move || {
             inner.relaunch(id, &unit, &request);
             lock(&inner.running).remove(&id);
-            inner.exit_if_superseded();
         });
         running.insert(id, thread);
     }
@@ -320,15 +312,6 @@ impl Inner {
                 name: unit.into(),
             },
             version: Version::Is(Digest::of(commit.as_bytes())),
-        }
-    }
-
-    fn exit_if_superseded(&self) {
-        if self.superseded.load(Ordering::SeqCst) && lock(&self.running).is_empty() {
-            eprintln!("superseded by another build of this limb: exiting");
-            // The limb's own shutdown, as for any signal.
-            // SAFETY: raise takes a signal number.
-            unsafe { libc::raise(libc::SIGTERM) };
         }
     }
 
