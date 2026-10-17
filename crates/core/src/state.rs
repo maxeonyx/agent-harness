@@ -377,7 +377,8 @@ pub enum Todo {
     /// Dispatch the call: a plugin's becomes a row of its limb's view
     /// ([`State::limb_rows`]), which the limb holds across reconnections,
     /// so it is dispatched once; for a limb the brain runs, run it and
-    /// commit its effects with the dispatch.
+    /// commit its effects with the dispatch, or for the provider, commit the
+    /// dispatch and run it off the brain's thread.
     Dispatch(CallId),
     /// The call's tool is not in its task's binding: settle it as failed,
     /// saying so.
@@ -1320,7 +1321,8 @@ impl State {
                 let limb = self.limbs.get(&limb).ok_or(Rejected::Unknown)?;
                 let instance = match &limb.kind {
                     LimbKind::Max => return Err(Rejected::ForMax),
-                    LimbKind::Provider => return Err(Rejected::Unroutable),
+                    // Run off the brain's thread; again by a later brain.
+                    LimbKind::Provider => None,
                     // Run once, with its effects, so never twice.
                     LimbKind::Meta | LimbKind::Attention if made.dispatched.is_some() => {
                         return Err(Rejected::Exists);
@@ -2160,7 +2162,11 @@ impl State {
                 continue;
             }
             let due = match &limb.kind {
-                LimbKind::Max | LimbKind::Provider => false,
+                LimbKind::Max => false,
+                // It only reads, so one an earlier brain was running is run again.
+                LimbKind::Provider => record
+                    .dispatched
+                    .is_none_or(|d| launch.is_some_and(|l| d.last.seq < l)),
                 LimbKind::Meta | LimbKind::Attention => record.dispatched.is_none(),
                 LimbKind::Plugin { .. } => connection.is_some() && record.dispatched.is_none(),
             };
