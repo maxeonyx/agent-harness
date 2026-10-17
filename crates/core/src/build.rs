@@ -16,24 +16,33 @@
 //! **Relaunching** is an act of the builds limb, a plugin limb of the
 //! brain's machine whose resource is the brain's own service. An agent whose
 //! environment holds it calls its `relaunch` tool on a clone; the limb
-//! builds and installs that clone's commit, proves the new build beside the
-//! running brain without touching it, then stops the running brain (it
-//! drains), starts the new build on the same database and settles the call.
-//! The new build is then on [`Probation`] until the session that asked
-//! makes a request the provider answers and a call a limb settles. Until
-//! then the limb, a process of the old build, watches by folding the
-//! database with its own code, and on any failure starts the old build
-//! again from its installed bytes, telling the session why as a change of
-//! the resource the call observed. So the way back never runs the new
+//! builds and installs that clone's commit and proves the new build beside
+//! the running brain without touching it: on a copy of the live database
+//! it folds every record, renders every live session's next request and
+//! has the provider check each one without generating anything, sends one
+//! minimal request, and serves the face for a headless page load; the old
+//! build then opens the same copy, so the way back is known to read what
+//! the new build leaves behind; and a scratch brain of the new build, on
+//! the scripted model, makes a full round trip through a limb of the new
+//! build. Only then does it stop the running brain (it drains), start the
+//! new build on the same database and settle the call. The new build is
+//! then on [`Probation`] until it shows what only the live brain can.
+//! Until then the limb, a process of the old build, watches its resource
+//! by folding the database with its own code, and on any failure starts
+//! the old build again from its installed bytes, telling the session why
+//! as a change of that resource. So the way back never runs the new
 //! build's code, and a broken build bricks nothing.
 //!
-//! **Limbs move with the brain.** A [`Launched`] names the executable it
-//! would start for each kind of limb. A limb running other bytes is
-//! superseded ([`crate::state::State::superseded`]): its view says so, and
-//! it exits once nothing it holds would die with it, so the brain's next
-//! attach starts it from the new build. A limb running a long command
-//! stays on its build until the command ends; facts are the contract
-//! between the two.
+//! **Limbs move with the brain, once it is proven.** A [`Launched`] names
+//! the executable it would start for each kind of limb. Once its build is
+//! proven, a limb running other bytes is superseded
+//! ([`crate::state::State::superseded`]): its view says so, and it exits
+//! once nothing it holds would die with it, so the brain's next attach
+//! starts it from the new build. Waiting for the proof means a build that
+//! goes back never has to move a limb back, and probation shows the new
+//! brain working with the limbs it inherited, the mixed case. A limb
+//! running a long command stays on its build until the command ends;
+//! facts are the contract between the two.
 //!
 //! **Where it goes next.** A version as a place: the candidate folds the
 //! database while the old brain serves and takes over its socket with no
@@ -202,15 +211,19 @@ pub enum Launch {
 
 /// What a build has shown since it took over: whether it works end to end.
 ///
-/// **Concept.** The end of a build's trial. Folding the database and
-/// rendering every live session's next request was proven before it took
-/// over, on its own process; serving the face and reaching its limbs, by
-/// getting this far. What only the live brain can show is that the provider
-/// accepts what it renders and that a call it makes comes back from a limb:
-/// a response to a request of this span, and a settlement by a limb of a
-/// call made in this span. A refusal the build is to blame for
-/// ([`blames_build`]) before both is its failure. Once proven, later
-/// refusals are ordinary trouble.
+/// **Concept.** The end of a build's trial. Before it took over, on its own
+/// processes, it showed that it folds a copy of the database, renders
+/// every live session's next request in a shape the provider accepts
+/// (checked by the provider's token count, which generates nothing),
+/// streams a minimal response, serves a page that loads, and makes a round
+/// trip through a fresh limb of its own build. What only the live brain can
+/// show is that it keeps working with the real sessions and the limbs it
+/// inherited: a response to a request of this span, and a settlement by a
+/// limb of a call made in this span. A refusal the build is to blame for
+/// ([`blames_build`]) before both is its failure; so are its process
+/// ending and a request of the span left unanswered past the watcher's
+/// deadline, which the watcher sees and this fold does not. Once proven,
+/// later refusals are ordinary trouble.
 ///
 /// The span's first request is due at once, because the relaunch call's
 /// settlement wakes the session that made it; so a span that stays
@@ -220,7 +233,10 @@ pub enum Launch {
 /// [`crate::state::State::probation`] for the face, and the builds limb,
 /// built from the code before, folds the same records with its own code to
 /// decide whether to go back. So the judge of a new build is never the new
-/// build.
+/// build. The watch outlives the relaunch call, which settles at takeover
+/// so the session that asked can make the request that proves it; the
+/// limb owns the watch as part of its resource, the brain's service, as a
+/// browser limb owns a tab.
 ///
 /// **Vision.** "A broken build bricks nothing", and the advocate's answer
 /// to what proves a build: "its first full tool round trip; before taking

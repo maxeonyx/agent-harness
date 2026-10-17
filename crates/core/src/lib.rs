@@ -150,17 +150,18 @@
 //!   built yet: [`environment::Host`].
 //! - **Upgrades.** An agent whose environment holds the builds limb
 //!   relaunches the harness onto a commit with one call: the limb proves
-//!   the new build beside the running brain (it folds the database and
-//!   renders every live session's next request; a throwaway brain of it
-//!   serves its face and completes a tool round trip on the scripted
-//!   model), then the running brain drains, the new build takes over the
+//!   the new build beside the running brain (on a copy of the database it
+//!   folds every record, has the provider check every live session's next
+//!   request as rendered, and serves a page that loads, and the old build
+//!   reopens that copy; a throwaway brain of it completes a tool round trip
+//!   on the scripted model), then the running brain drains, the new build takes over the
 //!   same database, and the call settles. Every session moves at its next
 //!   step, keeping its data and the tool definitions its root declared.
 //!   The new build is on [`build::Probation`] until it shows a response and
 //!   a limb's round trip; the limb, still the old build, judges that with
 //!   its own fold and goes back to the old build's installed bytes on any
-//!   failure, so a broken build bricks nothing. Limbs follow at their next
-//!   idle moment ([`state::State::superseded`]).
+//!   failure, so a broken build bricks nothing. Once it is proven, limbs
+//!   follow at their next idle moment ([`state::State::superseded`]).
 //! - **Context updates and the environment between turns.** Each task knows
 //!   the version of everything its context embodies; a change becomes one
 //!   notice at its next request, and wakes a standing task that listens.

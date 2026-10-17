@@ -10,7 +10,7 @@ use crate::context::{Entry, EntryId, Note, Rendered, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
-use crate::build::{BuildId, Launch, Launched, Probation};
+use crate::build::{BuildId, Launch, Launched, Probation, Verdict};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::environment::{
     Audience, Description, Environment, Limb, LimbKey, LimbKind, LimbRow, Reach,
@@ -2039,11 +2039,16 @@ impl State {
     }
 
     /// The executable the current launch would start for `limb`, when the
-    /// limb is connected running another: it should exit once nothing it
-    /// holds would die with it, so the next attach starts this one. `None`
-    /// for a limb on the launch's own build, one that did not say what it
-    /// runs, or a kind the launch has no executable for.
+    /// limb is connected running another and the launch's build is proven:
+    /// it should exit once nothing it holds would die with it, so the next
+    /// attach starts this one. `None` while the build is on probation (a
+    /// build that goes back never moves a limb back), for a limb on the
+    /// launch's own build, one that did not say what it runs, or a kind the
+    /// launch has no executable for.
     pub fn superseded(&self, limb: LimbId) -> Option<BuildId> {
+        if !matches!(self.probation.verdict(), Verdict::Proven { .. }) {
+            return None;
+        }
         let Some(Reached {
             reach:
                 Reach::Connected {
