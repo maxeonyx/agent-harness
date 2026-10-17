@@ -20,6 +20,7 @@ start=$(date +%s.%N)
 # Everything a demo brain starts inherits this mark, however it escapes
 # its process group, so what is left of them is found by it.
 mark=HARNESS_OWNER_cancel-demo-$$
+trap 'demos/end.sh "$mark"' EXIT
 left() {
   local pids=()
   for e in /proc/[0-9]*/environ; do
