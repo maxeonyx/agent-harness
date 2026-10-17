@@ -23,7 +23,7 @@
 //   wait CSS             until something it matches is visible
 //   gone CSS             until nothing it matches is visible
 //   text WORDS           until the page shows the words
-//   reply                until the open chat's turn is Max's again
+//   reply                until the open chat waits on Max, or is done
 //   shot FILE            a PNG, for `read`
 //   eval JS              prints what the expression comes to
 //   sleep MS
@@ -310,7 +310,8 @@ const steps = {
   wait: (b, css) => b.until(css, visible(css)),
   gone: (b, css) => b.until(`${css} to go`, `!${visible(css)}`),
   text: (b, words) => b.until(JSON.stringify(words), `document.body.innerText.includes(${JSON.stringify(words)})`),
-  reply: (b) => b.until("Max's turn in the open chat", visible("#panel .mini.needs")),
+  // The open chat's dot says what it waits on first: Max, or nothing.
+  reply: (b) => b.until("the open chat to wait on Max or be done", visible(`#panel .mini[class^="mini needs"], #panel .mini[class^="mini done"]`)),
   shot: async (b, file) => { await b.shot(file); console.log(`shot ${path.resolve(file)}`); },
   eval: async (b, js) => console.log(JSON.stringify(await b.eval(js)) ?? "undefined"),
   sleep: (b, ms) => sleep(Number(ms)).then(() => b.check()),
