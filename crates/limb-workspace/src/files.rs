@@ -46,6 +46,12 @@ struct Write {
 #[derive(Deserialize)]
 struct Edit {
     path: String,
+    edits: Vec<Replace>,
+}
+
+/// One replacement of an edit.
+#[derive(Deserialize)]
+struct Replace {
     old: String,
     new: String,
     #[serde(default)]
@@ -254,6 +260,10 @@ impl Inner {
         Ok(report.completed(&said, self.observations(&place.name, target)))
     }
 
+    /// Apply the replacements in order, each to the text the ones before it
+    /// left, and write the result once: all of them or nothing. One that
+    /// does not match exactly once (or at all, with `all`) fails the edit,
+    /// naming it and showing the file, which the caller has then seen.
     fn edit(
         &self,
         id: CallId,
@@ -262,39 +272,62 @@ impl Inner {
         report: &mut Report,
     ) -> Result<Outcome, String> {
         let place = self.place(&input.path);
+        let path = &input.path;
+        let first = input.edits.first().map(|r| r.old.as_str());
         let _files = lock(&self.files);
-        let current =
-            version(&place.path).map_err(|e| format!("cannot read {}: {e}", input.path))?;
-        if let Some(refused) = self.refuse(id, &place, current, call, Some(&input.old), report) {
+        let current = version(&place.path).map_err(|e| format!("cannot read {path}: {e}"))?;
+        if let Some(refused) = self.refuse(id, &place, current, call, first, report) {
             return Ok(refused);
         }
-        let bytes =
-            fs::read(&place.path).map_err(|e| format!("cannot read {}: {e}", input.path))?;
-        let content =
-            String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8 text", input.path))?;
-        if input.old.is_empty() {
-            return Err("`old` is empty; use `write` to replace a whole file".into());
+        if input.edits.is_empty() {
+            return Err("`edits` is empty: give at least one replacement".into());
         }
-        let count = content.matches(&input.old).count();
-        let edited = match count {
-            0 => return Err(format!("`old` does not occur in {}", input.path)),
-            1 => content.replacen(&input.old, &input.new, 1),
-            n if !input.all => {
-                return Err(format!(
-                    "`old` occurs {n} times in {}; include more context to pick one, or set `all`",
-                    input.path
+        let bytes = fs::read(&place.path).map_err(|e| format!("cannot read {path}: {e}"))?;
+        let content = String::from_utf8(bytes).map_err(|_| format!("{path} is not UTF-8 text"))?;
+        let mut edited = content.clone();
+        let mut count = 0;
+        for (n, r) in input.edits.iter().enumerate() {
+            let found = edited.matches(&r.old).count();
+            let wrong = match found {
+                _ if r.old.is_empty() => {
+                    Some("is empty; use `write` to replace a whole file".into())
+                }
+                0 => Some("does not occur".into()),
+                1 => None,
+                _ if r.all => None,
+                n => Some(format!(
+                    "occurs {n} times; include more context to pick one, or set `all`"
+                )),
+            };
+            if let Some(wrong) = wrong {
+                let wrong = match input.edits.len() {
+                    1 => format!("`old` {wrong}"),
+                    total => format!(
+                        "the `old` of replacement {} of {total} {wrong}, in the text the ones before it left",
+                        n + 1
+                    ),
+                };
+                let from = start(&content, Some(&r.old)).unwrap_or(1);
+                let shown = budgeted(content.lines().skip(from - 1), from, true);
+                let said = format!(
+                    "Nothing written to {path}: {wrong}. It is as it was, which counts as having read it:\n{shown}"
+                );
+                return Ok(Outcome::Failed(
+                    report.output(&said, self.observations(&place.name, current)),
                 ));
             }
-            _ => content.replace(&input.old, &input.new),
-        };
-        replace(&place.path, edited.as_bytes())
-            .map_err(|e| format!("cannot write {}: {e}", input.path))?;
+            edited = match r.all {
+                true => edited.replace(&r.old, &r.new),
+                false => edited.replacen(&r.old, &r.new, 1),
+            };
+            count += found;
+        }
+        replace(&place.path, edited.as_bytes()).map_err(|e| format!("cannot write {path}: {e}"))?;
         let version = Version::Is(Digest::of(edited.as_bytes()));
         self.changed(report, &place.name, version);
         let said = format!(
-            "Replaced {count} occurrence{} in {}.",
+            "Replaced {count} occurrence{} in {path}.",
             if count == 1 { "" } else { "s" },
-            input.path
         );
         Ok(report.completed(&said, self.observations(&place.name, version)))
     }
@@ -433,13 +466,9 @@ impl Inner {
     /// What `read` returns of a file, from a little before the first line
     /// holding `near` when the file is over the budget.
     fn look(&self, place: &Place, near: Option<&str>, report: &mut Report) -> Option<Output> {
-        let offset = near.and_then(|near| {
-            let bytes = fs::read(&place.path).ok()?;
-            (bytes.len() > READ_BUDGET).then_some(())?;
-            let content = String::from_utf8_lossy(&bytes);
-            let at = content.find(near)?;
-            Some(content[..at].lines().count().saturating_sub(LEAD).max(1))
-        });
+        let offset = fs::read(&place.path)
+            .ok()
+            .and_then(|bytes| start(&String::from_utf8_lossy(&bytes), near));
         let read = Read {
             path: place.path.to_string_lossy().into_owned(),
             offset,
@@ -498,6 +527,20 @@ fn pattern(grep: Option<&str>) -> Result<Option<Regex>, String> {
 
 /// Resolve `.` and `..` without touching the disk, since the path may not
 /// exist yet.
+/// The line to show `content` from so that `near`, or failing that its
+/// first line, is in view: from a little before it, when the whole of
+/// `content` would not fit in [`READ_BUDGET`].
+fn start(content: &str, near: Option<&str>) -> Option<usize> {
+    if content.len() <= READ_BUDGET {
+        return None;
+    }
+    let near = near?;
+    let at = content
+        .find(near)
+        .or_else(|| content.find(near.lines().find(|l| !l.trim().is_empty())?.trim()))?;
+    Some(content[..at].lines().count().saturating_sub(LEAD).max(1))
+}
+
 /// `lines` from line `first` on, whole, until [`READ_BUDGET`]; then where
 /// to read on. A single line longer than the budget is shown up to it, and
 /// says how much of it is left out.
