@@ -1,6 +1,5 @@
 //! Running one command as a tree of processes the call owns.
 
-use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::process::ExitStatusExt;
@@ -9,7 +8,6 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use harness_core::id::CallId;
-use harness_core::value::Bytes;
 use harness_runtime::{Cancel, Ended as TreeEnded, Group, Wake};
 
 use crate::trunc::{Truncated, Truncator};
@@ -25,8 +23,6 @@ pub enum Ended {
 pub struct Ran {
     pub ended: Ended,
     pub output: Truncated,
-    /// The whole output, when `output` left some of it out.
-    pub full: Option<Vec<u8>>,
     /// How what was left of its tree ended.
     pub tree: TreeEnded,
 }
@@ -78,10 +74,7 @@ pub fn run(
         fd: reader.as_raw_fd(),
         reader,
         open: true,
-        capture: Capture {
-            truncator,
-            full: Full::default(),
-        },
+        truncator,
         progress,
     };
     let mut waiter = cancel.waiter()?;
@@ -111,13 +104,9 @@ pub fn run(
     // A process that left the tree's reach may hold the output open; it
     // does not hold the call.
     output.drain();
-    let capture = output.capture;
-    let truncated = capture.truncator.finish();
-    let full = truncated.cut.then(|| capture.full.finish());
     Ok(Ran {
         ended,
-        output: truncated,
-        full,
+        output: output.truncator.finish(),
         tree,
     })
 }
@@ -128,7 +117,7 @@ struct Output<P> {
     fd: RawFd,
     /// Until every writer has closed it.
     open: bool,
-    capture: Capture,
+    truncator: Truncator,
     progress: P,
 }
 
@@ -140,7 +129,7 @@ impl<P: FnMut(&[u8])> Output<P> {
             match self.reader.read(&mut buffer) {
                 Ok(0) => self.open = false,
                 Ok(n) => {
-                    self.capture.feed(&buffer[..n]);
+                    self.truncator.feed(&buffer[..n]);
                     (self.progress)(&buffer[..n]);
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return,
@@ -153,55 +142,6 @@ impl<P: FnMut(&[u8])> Output<P> {
     /// The descriptor to wake on for more.
     fn watch(&self) -> Option<RawFd> {
         self.open.then_some(self.fd)
-    }
-}
-
-struct Capture {
-    truncator: Truncator,
-    full: Full,
-}
-
-impl Capture {
-    fn feed(&mut self, bytes: &[u8]) {
-        self.truncator.feed(bytes);
-        self.full.feed(bytes);
-    }
-}
-
-/// The whole output, cut to fit [`Bytes::LIMIT`]: its head and its tail,
-/// and how much was left out between them. Holds at most the limit, however
-/// much the command prints.
-#[derive(Default)]
-struct Full {
-    head: Vec<u8>,
-    tail: VecDeque<u8>,
-    omitted: u64,
-}
-
-/// Each of the head and the tail, leaving room for the marker between.
-const HALF: usize = Bytes::LIMIT / 2 - 64;
-
-impl Full {
-    fn feed(&mut self, mut bytes: &[u8]) {
-        let room = HALF - self.head.len();
-        let n = room.min(bytes.len());
-        self.head.extend_from_slice(&bytes[..n]);
-        bytes = &bytes[n..];
-        self.tail.extend(bytes);
-        let over = self.tail.len().saturating_sub(HALF);
-        self.tail.drain(..over);
-        self.omitted += over as u64;
-    }
-
-    fn finish(self) -> Vec<u8> {
-        let mut out = self.head;
-        if self.omitted > 0 {
-            out.extend_from_slice(
-                format!("\n[... {} bytes left out ...]\n", self.omitted).as_bytes(),
-            );
-        }
-        out.extend(self.tail);
-        out
     }
 }
 

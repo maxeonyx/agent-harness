@@ -12,17 +12,18 @@
 //! each unfinished request was lost, and each limb that reconnects is
 //! shipped the calls it holds rows for.
 //!
-//! Each plugin limb runs as a process of its own, `harness-limb-<kind>`
-//! from beside the brain's executable, linked to the brain over a Unix
-//! socket in its state directory ([`link`], [`process`]). A limb outlives
-//! the brain that started it, and reconnects to the next one. The roles
+//! Each plugin limb runs as a server of its own, which the brain reaches
+//! by running `harness-limb-<kind> attach <limb>` from beside its own
+//! executable: that starts the limb if it is not running, and its stdin and
+//! stdout are the link ([`link`], [`process`]). A limb outlives the brain
+//! that started it, and serves the next one. The roles
 //! limb, which states the environments read from role files, runs on a
 //! thread of the brain, linked by a channel ([`roles`]).
 //!
 //! Ctrl-C, `SIGTERM` or `SIGHUP` shuts the brain down: nothing new starts,
-//! the requests in flight have [`harness_program::policy::DRAIN`] to finish, the limbs stop
-//! their commands by the same deadline and exit, and the process exits
-//! once none of it is left. A second signal cuts everything now. Tasks are
+//! the requests in flight have [`harness_program::policy::DRAIN`] to finish, and the process
+//! exits once none of them is left. Its limbs run on, with their calls, for
+//! the next brain. A second signal cuts everything now. Tasks are
 //! not stopped: the next launch carries them on ([`harness_core::cancel`]).
 //!
 //! The face is served from the same process. After each change the brain
@@ -39,7 +40,7 @@
 //! limbs' tools, and the policy the core leaves open live in
 //! `harness-program`, which does no I/O and builds for wasm32; the brain
 //! only calls it. What is left here is I/O: the database, the provider,
-//! limb processes and sockets, the face, signals, and where a new clone
+//! limb links, the face, signals, and where a new clone
 //! goes on disk.
 //!
 //! ```text
@@ -141,7 +142,6 @@ fn run() -> Result<(), String> {
         }),
         _ => None,
     };
-    let state_dir = db.with_extension("limbs");
 
     let store = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
     let values = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
@@ -174,16 +174,7 @@ fn run() -> Result<(), String> {
     // The Windows host, read again for each connection: DHCP can move it.
     let allow = |peer: IpAddr| Some(peer) == harness_face_web::default_gateway().map(IpAddr::V4);
     let client = Client::new(login()?);
-    let mut brain = Brain::launch(
-        store,
-        folds,
-        client,
-        state_dir,
-        roles.as_deref(),
-        start,
-        inbox,
-        feed,
-    )?;
+    let mut brain = Brain::launch(store, folds, client, roles.as_deref(), start, inbox, feed)?;
     // The face serves until the brain has shut down or panicked: the scope
     // would wait for the face forever, so the process exits from inside it.
     thread::scope(|s| {
