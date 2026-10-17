@@ -339,6 +339,8 @@ pub struct Current {
     pub version: Version,
     pub by: Option<CallId>,
     pub content: Option<ValueId>,
+    /// Whether the change was news ([`Change::wakes`]).
+    pub wakes: bool,
     pub at: Mark,
 }
 
@@ -360,6 +362,8 @@ pub struct Stale {
     pub by: Option<CallId>,
     /// What its limb said to show rather than announce.
     pub content: Option<ValueId>,
+    /// Whether it is news, which wakes the task ([`Change::wakes`]).
+    pub wakes: bool,
 }
 
 /// What a task is waiting on, and since when: the throbber, and the answer
@@ -1997,7 +2001,7 @@ impl State {
         }
         let mut woken = Vec::new();
         for task in self.live() {
-            if task.mode == Mode::Standing && task.phase() == Some(&Phase::Listening) {
+            if task.woken_by(change) {
                 let mut task = task.clone();
                 task.apply(record, self)?;
                 woken.push(task);
@@ -2012,6 +2016,7 @@ impl State {
                 version: change.version,
                 by: change.by,
                 content: change.content,
+                wakes: change.wakes,
                 at: Mark::of(record),
             },
         );
@@ -2541,6 +2546,7 @@ impl State {
                     now: current.version,
                     by: current.by,
                     content: current.content,
+                    wakes: current.wakes,
                 })
             })
             .collect()

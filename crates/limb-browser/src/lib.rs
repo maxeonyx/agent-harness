@@ -579,6 +579,7 @@ impl Inner {
                             version,
                             by: None,
                             content: None,
+                            wakes: false,
                         })],
                     });
                 }
@@ -627,6 +628,7 @@ impl Inner {
                     version,
                     by: None,
                     content: None,
+                    wakes: false,
                 }));
             }
         }

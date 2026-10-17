@@ -629,6 +629,7 @@ impl Report {
             version,
             by: self.call,
             content: None,
+            wakes: false,
         });
     }
 
@@ -840,6 +841,7 @@ impl Inner {
                     version,
                     by,
                     content: None,
+                    wakes: false,
                 });
                 if by.is_some() {
                     made.push(Observation {

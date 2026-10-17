@@ -404,6 +404,7 @@ fn environments(
                 version: r.version,
                 by: None,
                 content: None,
+                wakes: false,
             }));
         }
         batch.values.extend([role, params]);
