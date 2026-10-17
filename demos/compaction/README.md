@@ -14,6 +14,12 @@ What it does:
 4. After step 2 it calls `compact_and_report` with its summary and its report. The checkpoint is now the first carry, so that carry is kept as it was, and only step 2 is replaced. The report lands right after the new carry as its last message, and the turn ends there with no further request.
 5. Max answers through a tab (`node dev/drive.mjs say --brain compaction CHAT …`; on the scripted model his words are `answer.md`). His message begins a turn, so it is a checkpoint: the agent works, then compacts and reports again, and Max's words and both reports are kept word for word; only the tool calls between them go.
 6. Max presses **Done**, and the agent's last turn writes its result.
+7. On the scripted model, a second chat compacts in a loop: its summary scripts another `compact_and_continue`, with no call between. The harness refuses it, saying there is nothing to replace, so the agent carries on instead of compacting again:
+
+```
+  → compact_and_continue {"summary":"again"}
+  ← error Not compacted: you compacted last and have made no other call since, so there is nothing to replace. Carry on with your next step, or, if your work is done, call `compact_and_report`.
+```
 
 `context.sh` prints the context the face shows: one line per entry, who wrote it, and its text. Click the dashed "compacted" card in the face to see the work it replaced. That work is still in the tree, and the card fetches it from `/context/<old head>`.
 

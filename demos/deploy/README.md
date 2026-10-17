@@ -32,4 +32,4 @@ Open https://harness.maxeonyx.com in Chrome, log in, then ⋮ → **Install app*
 
 ## After a reboot
 
-`harness-home.service` is a transient unit (`systemd-run`), so it does not come back after a reboot: run `dev/serve home 4320` again from a clean clone, with the flags it ran with (`systemctl --user cat harness-home` shows them while it runs; today `--sample demos/home/sample.wav`).
+`harness-home.service` is a durable user unit (`~/.config/systemd/user/harness-home.service`, enabled for `default.target`), and lingering is on, so it starts at boot before anyone logs in, on the last proven build (`~/.local/share/agent-harness/home/build`) with the flags it was served with. It restarts after a crash too. To change its flags, stop it and run `dev/serve home 4320 FLAGS...` again.
