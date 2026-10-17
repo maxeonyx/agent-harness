@@ -1,7 +1,7 @@
 //! The loop: act on each item of the to-do list, commit what happened,
 //! repeat.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -134,6 +134,9 @@ pub struct Brain {
     limbs: HashMap<LimbId, Process>,
     /// When the brain last failed to reach a limb.
     failed: HashMap<LimbId, Instant>,
+    /// The limbs whose link ended while they were superseded: their
+    /// ending is a move to the build the brain starts, not a failure.
+    moving: HashSet<LimbId>,
     /// The limbs connected now.
     links: HashMap<LimbId, Link>,
     /// The next number for a process link, counting up from 1.
@@ -286,6 +289,7 @@ impl Brain {
             models,
             limbs: HashMap::new(),
             failed: HashMap::new(),
+            moving: HashSet::new(),
             links: HashMap::new(),
             attached: 1,
             hosted: Conn::MAX,
@@ -567,7 +571,9 @@ impl Brain {
             let Some(process) = self.limbs.remove(&limb) else {
                 continue;
             };
-            if !success && self.state().shutdown().is_none() {
+            if self.moving.remove(&limb) {
+                self.connect(limb);
+            } else if !success && self.state().shutdown().is_none() {
                 self.unreached(limb, process.last_words());
             }
         }
@@ -626,6 +632,9 @@ impl Brain {
         };
         let link = self.links.remove(&limb).expect("found");
         errln!("limb {limb}: its link ended");
+        if self.state().superseded(limb).is_some() {
+            self.moving.insert(limb);
+        }
         if link.unsaid.is_some() {
             return;
         }
