@@ -1,0 +1,45 @@
+# The skills of Max's (~/.claude/skills) that the harness's agents are
+# offered: one name a line. A proposal for Max to review. Left out are the
+# skills about running Claude Code itself (delegation, subagents, handoffs,
+# prompts for other agents, review rounds), which the harness does its own
+# way, and the work-only ones.
+
+# Everyday
+home
+personal-details
+tools
+writing
+explaining
+evidence
+maxs-voice
+notes-files
+walkthrough
+
+# Code
+programming
+error-handling
+design
+refactoring
+desloppify
+tests
+verifying-work
+critical-review
+js
+python
+nix
+
+# Git and GitHub
+github
+github-pr-wip
+github-pr-descs
+github-merge
+git-merge
+no-worktrees
+
+# This machine
+linux-cleanup
+systemd-user-jobs
+no-nohup
+local-vm-tls
+hyper-dual-boot-setup
+immich

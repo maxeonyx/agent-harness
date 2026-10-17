@@ -33,8 +33,8 @@ use harness_provider::{Client, Finished, Progress};
 use harness_runtime::{Cancel, signals};
 use harness_store::Store;
 
-use crate::max;
 use crate::meta::{self, How};
+use crate::{max, web};
 use crate::{policy, render, roles};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
@@ -137,6 +137,8 @@ pub struct Brain {
     meta: LimbId,
     /// Max's limb: his answers to `ask`.
     max: LimbId,
+    /// The provider's web search and fetch.
+    web: LimbId,
     /// The user limb: `~/.claude`.
     user: LimbId,
     /// Where the role files are, and when they were last read.
@@ -190,6 +192,7 @@ impl Brain {
         };
         let meta = shared(&|k| *k == LimbKind::Meta);
         let max = shared(&|k| *k == LimbKind::Max);
+        let web = shared(&|k| *k == LimbKind::Provider);
         let user_limb =
             shared(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let mut brain = Brain {
@@ -201,6 +204,7 @@ impl Brain {
             feed,
             meta: meta.unwrap_or_else(LimbId::generate),
             max: max.unwrap_or_else(LimbId::generate),
+            web: web.unwrap_or_else(LimbId::generate),
             user: LimbId::generate(),
             roles: roles.to_path_buf(),
             roles_read: Instant::now(),
@@ -224,13 +228,10 @@ impl Brain {
         if max.is_none() {
             facts.push(Fact::Limb(max::definition(brain.max)));
         }
-        let user_id = user_limb.unwrap_or_else(LimbId::generate);
-        if user_limb.is_none() {
-            let home = std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?;
-            let config = PathBuf::from(home).join(".claude");
-            facts.push(Fact::Limb(Settings::user(user_id, config)));
+        if web.is_none() {
+            facts.push(Fact::Limb(web::definition(brain.web)));
         }
-        brain.user = user_id;
+        brain.user = user_limb.unwrap_or_else(LimbId::generate);
         brain.append(Batch {
             values: Vec::new(),
             facts,
@@ -312,6 +313,7 @@ impl Brain {
         let settings = Settings {
             dir: dir.to_path_buf(),
             clone,
+            skills: None,
         };
         facts.push(Fact::Limb(settings.definition(id, &name)));
         id
@@ -356,7 +358,7 @@ impl Brain {
     /// task whose context embodies the old version is told.
     fn define(&mut self) -> Result<(), String> {
         self.roles_read = Instant::now();
-        let (meta, max, user) = (self.meta, self.max, self.user);
+        let (meta, max, user, web) = (self.meta, self.max, self.user, self.web);
         let current: Vec<Environment> = self.state().environments().cloned().collect();
         let (defined, values) = roles::environments(
             &roles::read(&self.roles)?,
@@ -365,11 +367,15 @@ impl Brain {
                 "meta" => Some(meta),
                 "max" => Some(max),
                 "user" => Some(user),
+                "web" => Some(web),
                 _ => None,
             },
             meta,
         )?;
         let mut facts = Vec::new();
+        if let Some(user) = self.user_definition()? {
+            facts.push(Fact::Limb(user));
+        }
         for env in defined {
             if self.state().environment(env.id) == Some(&env) {
                 continue;
@@ -388,9 +394,45 @@ impl Brain {
             facts.push(Fact::Environment(env));
         }
         if !facts.is_empty() {
+            let redefined = facts
+                .iter()
+                .any(|f| matches!(f, Fact::Limb(l) if l.id == user));
             self.append(Batch { values, facts });
+            if redefined {
+                // Its process started from the old settings: the next task
+                // that needs it starts it again from the new ones.
+                self.limbs.remove(&user);
+            }
         }
         Ok(())
+    }
+
+    /// The user limb's new definition, if `skills.txt` beside the role
+    /// files names a different set of Max's skills from the one it has (a
+    /// name a line, `#` for comments; every skill when there is no file).
+    fn user_definition(&self) -> Result<Option<harness_core::environment::Limb>, String> {
+        let file = self.roles.join("skills.txt");
+        let skills = match std::fs::read_to_string(&file) {
+            Ok(text) => Some(
+                text.lines()
+                    .map(|l| l.split('#').next().unwrap_or("").trim())
+                    .filter(|l| !l.is_empty())
+                    .map(String::from)
+                    .collect(),
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("{file:?}: {e}")),
+        };
+        let current = self.state().limb(self.user).and_then(Settings::of);
+        let dir = match &current {
+            Some(settings) => settings.dir.clone(),
+            None => PathBuf::from(std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?)
+                .join(".claude"),
+        };
+        if current.is_some_and(|c| c.skills == skills) {
+            return Ok(None);
+        }
+        Ok(Some(Settings::user(self.user, dir, skills)))
     }
 
     fn work(&mut self) {
@@ -608,6 +650,9 @@ impl Brain {
     fn description(&self, task: &Task, limb: LimbId) -> Option<Description> {
         if limb == self.max {
             return Some(max::description(limb));
+        }
+        if limb == self.web {
+            return Some(web::description());
         }
         if limb != self.meta {
             return self.state().described(limb).map(|d| d.description.clone());

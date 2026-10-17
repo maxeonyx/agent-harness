@@ -238,6 +238,7 @@ impl Brain {
             settings: Settings {
                 dir: scratch.join("work"),
                 clone: None,
+                skills: None,
             },
             state: scratch.join("state"),
         };

@@ -24,7 +24,11 @@
 //! The brain runs it as a process of its own, `harness-limb-workspace` or
 //! `harness-limb-user` ([`process`]).
 //!
-//! A call is run on its own thread, and recorded on disk as started before
+//! A call is run on its own thread, after the calls its task made before it
+//! in the same workspace have ended: a model writes one response's tool uses
+//! in the order it means them to happen (write a file, then commit it), so
+//! they run in that order. Background work and other tasks run alongside.
+//! Each call is recorded on disk as started before
 //! it has any effect and as settled before the settlement is sent. So
 //! [`ToLimb::Run`] is idempotent per call, however often a crash of the
 //! brain or of the limb makes it arrive: it is answered from the record, left
@@ -61,7 +65,8 @@ pub mod trunc;
 pub mod user;
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, PipeReader};
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -69,9 +74,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use harness_core::call::{Call, CallEvent, Outcome, Output};
+use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::environment::{Description, FromLimb, Instruction, Limb, LimbKind, ToLimb};
-use harness_core::id::{CallId, Digest, InstanceId, LimbId, ValueId};
+use harness_core::id::{CallId, Digest, InstanceId, LimbId, TaskId, ValueId};
 use harness_core::journal::{Batch, Fact};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
@@ -101,6 +106,10 @@ pub struct Settings {
     /// Made before the limb first says hello, if `dir` does not exist yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clone: Option<Clone>,
+    /// A user limb's set of Max's skills, by name: the index lists only
+    /// these and `skill` loads only these. Every skill when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
 }
 
 /// A clone of a repository, made for one agent: its own directory and its
@@ -132,8 +141,13 @@ impl Settings {
     }
 
     /// The definition of a user limb over Max's config directory `dir`.
-    pub fn user(id: LimbId, dir: PathBuf) -> Limb {
-        Settings { dir, clone: None }.limb(id, "user", Kind::User)
+    pub fn user(id: LimbId, dir: PathBuf, skills: Option<Vec<String>>) -> Limb {
+        Settings {
+            dir,
+            clone: None,
+            skills,
+        }
+        .limb(id, "user", Kind::User)
     }
 
     fn limb(&self, id: LimbId, name: &str, kind: Kind) -> Limb {
@@ -201,10 +215,15 @@ struct Inner {
     /// The clone it was made as, which its instructions say is the agent's
     /// own.
     clone: Option<Clone>,
+    /// The skills a user limb offers; every one when `None`.
+    skills: Option<Vec<String>>,
     kind: Kind,
     calls: Calls,
     out: Sender<FromLimb>,
     running: Mutex<HashMap<CallId, Running>>,
+    /// For each task, the end of its latest call: it hangs up when that
+    /// call ends, and the task's next call waits for that.
+    latest: Mutex<HashMap<TaskId, PipeReader>>,
     /// Shutting down: no new call runs, and a stopped one says why.
     shutting_down: AtomicBool,
     /// The resources the brain asked to hear about, at the version last
@@ -225,7 +244,7 @@ impl Workspace {
     /// earlier instance left running, say hello, and describe itself. Blocks
     /// while it clones.
     pub fn open(config: Config, out: Sender<FromLimb>) -> io::Result<Workspace> {
-        let Settings { dir, clone } = config.settings;
+        let Settings { dir, clone, skills } = config.settings;
         if let Some(clone) = &clone {
             git::clone(clone, &dir)?;
         }
@@ -234,10 +253,12 @@ impl Workspace {
             instance: InstanceId::generate(),
             root: dir.canonicalize()?,
             clone,
+            skills,
             kind: config.kind,
             calls: Calls::open(config.state.join("calls"))?,
             out,
             running: Mutex::default(),
+            latest: Mutex::default(),
             shutting_down: AtomicBool::new(false),
             watched: Mutex::default(),
             files: Mutex::default(),
@@ -332,14 +353,26 @@ impl Workspace {
             return inner.settle(report, outcome);
         }
         let cancel = Cancel::new();
+        // This call's end: the writer, held until it has settled. The
+        // task's next call waits on the reader.
+        let (before, ended) = match (&call.caller, io::pipe()) {
+            (Caller::Agent { task, .. }, Ok((reader, writer))) => {
+                (lock(&inner.latest).insert(*task, reader), Some(writer))
+            }
+            _ => (None, None),
+        };
         let thread = {
             let inner = self.inner.clone();
             let cancel = cancel.clone();
             thread::spawn(move || {
                 let mut report = Report::new(Some(id));
-                let outcome = inner.execute(id, &call, &input, &cancel, &mut report);
+                let outcome = match after(before, &cancel) {
+                    Ok(()) => inner.execute(id, &call, &input, &cancel, &mut report),
+                    Err(_) => Outcome::Interrupted { partial: None },
+                };
                 inner.rescan(&mut report, call.tool == "bash");
                 inner.settle(report, outcome);
+                drop(ended);
                 let mut running = lock(&inner.running);
                 running.remove(&id);
                 // Orphans the limb adopted that have exited. Only while no
@@ -379,6 +412,24 @@ impl Workspace {
                 return;
             };
             let _ = thread.join();
+        }
+    }
+}
+
+/// Wait until the call `before` ends (its pipe hangs up), unless this call
+/// is asked to stop first.
+fn after(before: Option<PipeReader>, cancel: &Cancel) -> io::Result<()> {
+    let Some(before) = before else {
+        return Ok(());
+    };
+    let mut waiter = cancel.waiter()?;
+    loop {
+        if cancel.is_requested() {
+            return Err(harness_runtime::Cancelled::error());
+        }
+        if waiter.wait(&[(before.as_raw_fd(), libc::POLLIN)], None)? == harness_runtime::Wake::Ready
+        {
+            return Ok(());
         }
     }
 }
@@ -530,7 +581,7 @@ impl Inner {
                 text: format!("Max's own instructions, for every agent:\n\n{own}"),
             });
         }
-        let index = user::index(&self.root);
+        let index = user::index(&self.root, self.skills.as_deref());
         instructions.push(Instruction {
             observes: Observation {
                 resource: self.key(INSTRUCTIONS, user::INDEX),
@@ -574,7 +625,9 @@ impl Inner {
     fn version_of(&self, resource: &ResourceKey) -> Option<Version> {
         match resource.kind.as_str() {
             INSTRUCTIONS if self.kind == Kind::User && resource.name == user::INDEX => {
-                Some(Version::Is(Digest::of(user::index(&self.root).as_bytes())))
+                Some(Version::Is(Digest::of(
+                    user::index(&self.root, self.skills.as_deref()).as_bytes(),
+                )))
             }
             FILE | INSTRUCTIONS if !resource.name.is_empty() => {
                 files::version(&self.root.join(&resource.name)).ok()
