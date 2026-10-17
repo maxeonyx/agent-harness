@@ -2,10 +2,18 @@
 const map = $("#map"), world = $("#world"), nodesLayer = $("#nodes"), edgesLayer = $("#edges");
 let cam = { x: 0, y: 0, k: 1 };
 let framed = true;  // follows the map's growth until Max moves it himself
+// While the map moves it is a layer of its own, so the browser moves a
+// picture instead of drawing every frame. A layer keeps the zoom it was
+// drawn at, so at rest it goes, and the open card's text is drawn again at
+// the zoom it is read at, sharp.
+let resting = 0;
 function applyCamera() {
   // Whole pixels, so the open card's text stays sharp.
   const x = Math.round(cam.x), y = Math.round(cam.y);
   world.style.transform = `translate(${x}px, ${y}px) scale(${cam.k})`;
+  map.classList.add("moving");
+  clearTimeout(resting);
+  resting = setTimeout(() => map.classList.remove("moving"), 150);
   const g = 24 * cam.k;
   map.style.backgroundSize = `${g}px ${g}px`;
   map.style.backgroundPosition = `${x}px ${y}px`;
