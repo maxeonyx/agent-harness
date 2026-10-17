@@ -6,8 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use harness_core::context::{Entry, EntryId};
-use harness_core::id::{ModelCallId, Timestamp, ValueId};
-use harness_core::live::Live;
+use harness_core::id::{Timestamp, ValueId};
 use harness_core::model_call::{Ending, ModelCall, Quota, Usage, Window};
 use harness_runtime::{Cancel, Cancelled};
 
@@ -19,6 +18,19 @@ use crate::{Error, Model, http, request};
 
 const HOST: &str = "api.anthropic.com";
 const PATH: &str = "/v1/messages";
+const COUNT: &str = "/v1/messages/count_tokens";
+/// What a request body says that only generating reads, which the token
+/// count refuses.
+const GENERATING: [&str; 8] = [
+    "max_tokens",
+    "stream",
+    "temperature",
+    "top_p",
+    "top_k",
+    "stop_sequences",
+    "metadata",
+    "service_tier",
+];
 const USAGE: &str = "/api/oauth/usage";
 const MODELS: &str = "/v1/models?limit=1000";
 const UNIFIED: &str = "anthropic-ratelimit-unified-";
@@ -40,7 +52,15 @@ pub enum Progress {
     /// is [`Client::send`]'s return value.
     FirstByte,
     /// Visible text as it streams.
-    Live(Live),
+    Text(String),
+}
+
+/// The provider's answer to a token count ([`Client::count`]).
+pub enum Counted {
+    /// It accepts the request as it is: this many input tokens.
+    Tokens(u64),
+    /// It refuses the request, in its own words.
+    Refused { status: u16, message: String },
 }
 
 /// How a request ended: the fields of its [`ModelCallEvent::Ended`], and
@@ -136,13 +156,64 @@ impl Client {
             .collect())
     }
 
+    /// Has the provider count the input tokens of `call`, as [`Client::send`]
+    /// would send it, generating nothing: whether it accepts the request's
+    /// shape, and if not, why. The [scripted](crate::SCRIPTED) model is
+    /// counted by nobody: name a real one in `call.model`.
+    ///
+    /// `Err` means nothing was counted: the context, the login or the
+    /// exchange is unusable.
+    pub fn count(
+        &self,
+        call: &ModelCall,
+        base: &[(EntryId, &Entry)],
+        value: impl FnMut(ValueId) -> Option<Vec<u8>>,
+        cancel: &Cancel,
+    ) -> Result<Counted, Error> {
+        let body = request::body(call, base, value)?;
+        let mut body: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&body)
+            .map_err(|e| Error::Request(request::RequestError(e.to_string())))?;
+        for member in GENERATING {
+            body.remove(member);
+        }
+        let body = serde_json::to_vec(&body).expect("a JSON object serialises");
+        let mut response = self.exchange("POST", COUNT, &body, cancel)?;
+        let mut text = String::new();
+        response.body.read_to_string(&mut text).map_err(Error::Io)?;
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        Ok(match parsed["input_tokens"].as_u64() {
+            Some(tokens) if response.status == 200 => Counted::Tokens(tokens),
+            _ => Counted::Refused {
+                status: response.status,
+                message: parsed["error"]["message"]
+                    .as_str()
+                    .map_or(text.clone(), str::to_owned),
+            },
+        })
+    }
+
+    /// Streams the shortest answer `model` gives to a one-word request, on
+    /// the path every request's response takes: whether the provider's
+    /// stream still reads as this build expects.
+    pub fn ping(&self, model: &str, cancel: &Cancel) -> Result<Finished, Error> {
+        let body = serde_json::json!({
+            "model": model,
+            "max_tokens": 8,
+            "stream": true,
+            "system": [{"type": "text", "text": request::IDENTITY}],
+            "messages": [{"role": "user", "content": "Say ok."}],
+        });
+        let body = serde_json::to_vec(&body).expect("JSON serialises");
+        self.respond(&body, model == SCRIPTED, cancel, |_| {})
+    }
+
     /// Sends `call`, built by [`request::body`] from `base` (the context it
     /// extends) and the bytes `value` looks up, and streams its response
     /// through `on`.
     ///
     /// `Err` means nothing was sent: the context or the login is unusable.
     /// Otherwise `on` sees [`Progress::FirstByte`] when `message_start`
-    /// arrives, then the visible text as [`Live`].
+    /// arrives, then the visible text as [`Progress::Text`].
     ///
     /// Requesting `cancel` cuts the request at once, wherever it is blocked:
     /// it ends [`Ending::Cut`] with the visible text so far and the
@@ -153,15 +224,25 @@ impl Client {
     /// [`Quota::on_plan`] `false`, and is a failure: the response is not read.
     pub fn send(
         &self,
-        id: ModelCallId,
         call: &ModelCall,
         base: &[(EntryId, &Entry)],
         value: impl FnMut(ValueId) -> Option<Vec<u8>>,
         cancel: &Cancel,
-        mut on: impl FnMut(Progress),
+        on: impl FnMut(Progress),
     ) -> Result<Finished, Error> {
         let body = request::body(call, base, value)?;
         let local = request::model(call, base) == Some(SCRIPTED);
+        self.respond(&body, local, cancel, on)
+    }
+
+    /// Sends `body`, to the scripted model if `local`, and reads its response.
+    fn respond(
+        &self,
+        body: &[u8],
+        local: bool,
+        cancel: &Cancel,
+        mut on: impl FnMut(Progress),
+    ) -> Result<Finished, Error> {
         let end = |ending, usage, quota| Finished {
             ending,
             value: None,
@@ -174,8 +255,8 @@ impl Client {
         };
 
         let response = match local {
-            true => Ok(scripted::respond(&body, cancel, &self.seen)),
-            false => self.exchange("POST", PATH, &body, cancel),
+            true => Ok(scripted::respond(body, cancel, &self.seen)),
+            false => self.exchange("POST", PATH, body, cancel),
         };
         let response = match response {
             Ok(response) => response,
@@ -272,10 +353,7 @@ impl Client {
                 on(Progress::FirstByte);
             }
             if let Some(chunk) = text_delta(&name, &parsed) {
-                on(Progress::Live(Live::Model {
-                    call: id,
-                    chunk: chunk.to_owned(),
-                }));
+                on(Progress::Text(chunk.to_owned()));
             }
             if name == "message_stop" {
                 let response = assembly.content().and_then(|content| {

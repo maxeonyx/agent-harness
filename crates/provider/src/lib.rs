@@ -23,6 +23,12 @@
 //! a real model. [`Client::exchange`] is one call on the login, for
 //! whatever the harness has no call for (`harness-api`, a binary here).
 //!
+//! **Checking a build.** [`Client::count`] has the provider count a
+//! request's input tokens (`/v1/messages/count_tokens`), which generates
+//! nothing and costs nothing on the plan but checks the request's shape as
+//! a send would; [`Client::ping`] streams a response a few tokens long. A
+//! new build runs both before it takes over (`harness-brain --check`).
+//!
 //! **Usage.** [`Client::usage`] reads the plan's usage windows from the
 //! subscription's own endpoint (`/api/oauth/usage`), for Max's call to the
 //! provider limb; every response's headers report the 5-hour and 7-day
@@ -60,7 +66,7 @@ pub mod request;
 mod response;
 mod scripted;
 
-pub use client::{Client, Finished, Progress};
+pub use client::{Client, Counted, Finished, Progress};
 pub use http::{Body, Response};
 pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};

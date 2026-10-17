@@ -69,6 +69,7 @@ macro_rules! errln {
 }
 
 mod brain;
+mod check;
 mod link;
 mod process;
 mod roles;
@@ -107,6 +108,7 @@ const SOURCE: &str = env!("HARNESS_SOURCE");
 /// [`harness_provider::SCRIPTED`].
 const USAGE: &str = "\
 usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL[/EFFORT]] [--page DIR]
+       harness-brain --check DB
        harness-brain --version
 
   --db DB          the database; a new one is made if none is there
@@ -122,6 +124,10 @@ usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model M
   --page DIR       serve the page's files from DIR (crates/face-web/src/page)
                    as they are on disk, so an edit shows on reload, instead of
                    the ones built in
+  --check DB       whether this build can take over the brain whose database
+                   DB is a copy of: fold it, have the provider count each live
+                   session's next request, stream one short response; print a
+                   JSON report, and fail if anything did (a few real tokens)
   --version        print the commit it was built from
   --help           print this
 
@@ -161,6 +167,17 @@ fn run() -> Result<(), String> {
                 return Ok(());
             }
             "--page" => page = Some(PathBuf::from(value()?)),
+            "--check" => {
+                let db = PathBuf::from(value()?);
+                let login = Login::claude_code().map_err(|e| format!("the login: {}", e.0))?;
+                let (report, ok) = check::check(&db, &Client::new(login), SOURCE)?;
+                outln!("{report:#}");
+                return if ok {
+                    Ok(())
+                } else {
+                    Err("the check failed".into())
+                };
+            }
             "--help" | "-h" => {
                 outln!("{}", USAGE.trim_end());
                 return Ok(());
