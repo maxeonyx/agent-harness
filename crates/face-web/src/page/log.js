@@ -9,36 +9,45 @@ async function contextOf(head) {
   return contexts.get(head);
 }
 
+// Where the task's context has other versions, read again with each head,
+// since any request can add one.
+const versionsOf = (task) => fetch(`/versions/${task}`).then((r) => r.ok ? r.json() : {}).catch(() => ({}));
+
 async function renderLog(t) {
   const s = logState;
   if (!s || s.id !== t.id) return;
   if (s.head !== t.head) {
     const head = t.head;
     s.head = head;
-    const chain = head ? await contextOf(head) : [];
+    const [chain, versions] = await Promise.all([head ? contextOf(head) : [], versionsOf(t.id)]);
     if (logState !== s || s.head !== head) return;
     if (!chain) { s.head = undefined; return; }
+    s.versions = versions;
     stick(() => appendChain(s, chain, t));
   }
   stick(() => renderTail(s, t));
   revealIn(s);
 }
 
-// New entries append; an entry no longer in the chain (a rewind, a new root)
-// starts the log again.
+// New entries append; entries no longer in the chain (Max moved it back, to
+// another version, or to a new root) go, and the chain is drawn on from
+// where the two share their prefix.
 function appendChain(s, chain, t) {
   const ids = chain.map((e) => e.id);
-  const keep = s.rendered.findIndex((r, i) => r.id !== ids[i]);
-  if (keep !== -1 || s.rendered.length > ids.length) {
-    s.rendered = []; s.rows = new Map(); s.group = null; s.prevText = null;
-    logEl.replaceChildren();
+  let keep = s.rendered.findIndex((r, i) => r.id !== ids[i]);
+  if (keep === -1) keep = Math.min(s.rendered.length, ids.length);
+  if (keep < s.rendered.length) {
+    for (const r of s.rendered.splice(keep)) r.el.remove();
+    s.group = null; s.prevText = null;
   }
   for (let i = s.rendered.length; i < chain.length; i++) {
     const e = chain[i];
     const into = el("div", "chunk");
     into.dataset.entry = e.id;
     if (s.exact) exactEntry(into, e);
-    else entry(s, into, e, i, t);
+    else entry(s, into, e, i, t, ids[i - 1]);
+    const v = s.versions?.[e.id];
+    if (v) into.prepend(versionArrows(v, e.role));
     s.rendered.push({ id: e.id, el: into });
     const tail = $(".tail", logEl);
     if (tail) tail.before(into); else logEl.append(into);
@@ -60,7 +69,7 @@ function blocksOf(e) {
   return Array.isArray(c) ? c : [];
 }
 
-function entry(s, into, e, index, t) {
+function entry(s, into, e, index, t, parent) {
   if (e.role === "root") { into.append(rootEntry(e)); return; }
   const blocks = blocksOf(e);
   // What the harness sent: each block as whoever wrote it, by the face's
@@ -82,6 +91,14 @@ function entry(s, into, e, index, t) {
         const words = text.replace(/^\[harness\][^\n]*:\n\n/, "");
         if (run) { $(".bubble", run.el).textContent += `\n${words}`; return; }
         run = { by: "max", el: said(words, clock(who.at)) };
+        // His message: edit it, or run its turn again.
+        if (!$(".moves", into)) {
+          const bubble = $(".bubble", run.el);
+          run.el.append(moves([
+            ["✎", "Edit", "Edit this message: the box holds it, and sending replaces it and what followed", () => editMessage(t.id, parent, bubble.textContent)],
+            ["↻", "Retry", "Run this turn again from this message", () => moveBack(e.id, "Retry")],
+          ]));
+        }
         into.append(run.el);
       } else if (who.by === "prompt") {
         into.append(prompted(who.prompt, text));
@@ -123,6 +140,12 @@ function entry(s, into, e, index, t) {
       served(s, b);
     }
   }
+  // A response: sample it again, or go back to it if it ended a turn.
+  const ended = !blocks.some((b) => b.type === "tool_use");
+  into.append(moves([
+    ["↻", "Retry", "Ask for this response again", () => moveBack(parent, "Retry")],
+    ...(ended ? [["⤺", "Back to here", "Go back to this reply: what followed stays as another version", () => moveBack(e.id, "Back")]] : []),
+  ]));
   const r = e.response;
   if (r && r.ended) {
     const meta = el("div", "meta", `${clock(r.ended)} · ${((r.ended - r.sent) / 1000).toFixed(1)}s · ${kTokens(r.context)} context · ${kTokens(r.output)} out`);
@@ -298,10 +321,51 @@ function chip(m) {
   a.title = l.text;
   return a;
 }
-// A tool use's result, shown in its row.
+// Moving the chat: a row of small buttons under an entry, refused with
+// the reason while the task cannot move.
+function moves(list) {
+  const row = el("div", "moves");
+  for (const [glyph, label, title, run] of list) {
+    const b = el("button", "mv", `${glyph} ${label}`);
+    b.type = "button"; b.title = title;
+    b.onclick = (ev) => { ev.stopPropagation(); run(); };
+    row.append(b);
+  }
+  return row;
+}
+function versionArrows(v, role) {
+  const d = el("div", `versions ${role}`);
+  const go = (to, word) => {
+    const b = el("button", "mv", word);
+    b.type = "button"; b.disabled = !to;
+    b.title = word === "‹" ? "The version before" : "The version after";
+    b.onclick = (ev) => { ev.stopPropagation(); moveBack(to, "Version"); };
+    return b;
+  };
+  d.append(go(v.prev, "‹"), el("span", "n", `${v.n}/${v.of}`), go(v.next, "›"));
+  return d;
+}
+// Why the task cannot be moved now, if it cannot.
+function unmovable(t) {
+  if (!t) return "no task";
+  if (isDone(t)) return "it has finished";
+  if (["model", "calls", "starting"].includes(t.waiting?.kind)) return "it is working: stop it first";
+  return null;
+}
+async function moveBack(to, what) {
+  const t = byId[logState?.id];
+  const blocked = unmovable(t);
+  if (blocked) return say(`${what}: ${blocked}`, true);
+  if (!to) return;
+  const why = await act({ Task: [t.id, { Moved: { Back: { to } } }] });
+  if (why) say(`${what}: ${why}`, true);
+}
+
+// A tool use's result, shown in its row: again, if a move back drew it anew.
 function result(s, b) {
   const r = s.rows.get(b.tool_use_id);
   if (!r) return;
+  for (const old of r.row.querySelectorAll(".res")) old.remove();
   const st = $(".st", r.row);
   const text = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.type === "text" ? x.text : `[${x.type}]`).join("\n");
   st.className = `st${b.is_error ? " bad" : ""}`;
@@ -309,21 +373,22 @@ function result(s, b) {
   const detail = $(".detail", r.row);
   const fields = parse(text);
   const out = fields && typeof fields === "object" ? readable(fields) : el("div", "io", text);
+  out.classList.add("res");
   if (b.is_error) out.classList.add("err");
   const path = r.inner.path;
   if (r.b.name === "read" && path && /\.(md|markdown|svg|html?)$/i.test(path) && !b.is_error) {
     const raw = text.split("\n").map((l) => l.replace(/^\s*\d+[\t│|:] ?/, "")).join("\n");
-    const open = el("button", "open-file", "open");
+    const open = el("button", "open-file res", "open");
     open.onclick = (e) => { e.stopPropagation(); viewFile(path, raw); };
     $(".line", r.row).insertBefore(open, st);
   }
   if (r.b.name === "spawn") {
     const card = el("div", "card result");
     card.append(markdown(text));
-    const d = el("details"); d.append(el("summary", "more-link", "Their results"), card);
+    const d = el("details", "res"); d.append(el("summary", "more-link", "Their results"), card);
     r.row.insertBefore(d, detail);
   }
-  for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") { const img = el("img"); img.src = `data:${x.source?.media_type};base64,${x.source?.data}`; img.style.maxWidth = "100%"; detail.append(img); }
+  for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") { const img = el("img", "res"); img.src = `data:${x.source?.media_type};base64,${x.source?.data}`; img.style.maxWidth = "100%"; detail.append(img); }
   detail.append(out);
 }
 // A tool's input, or a result that is data, as it reads: each field by its
@@ -377,6 +442,7 @@ function renderTail(s, t) {
   let tail = $(".tail", logEl);
   if (!tail) { tail = el("div", "tail"); logEl.append(tail); }
   for (const [id] of s.rows) fillChips(s, id);
+  logEl.classList.toggle("unmovable", !!unmovable(t));
   // Running calls of the round: their rows show them running.
   for (const c of t.waiting?.kind === "calls" ? t.waiting.calls : []) {
     if (c.children.length) continue;

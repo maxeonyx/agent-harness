@@ -123,6 +123,7 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
             text: d.text.and_then(|id| text(value, id)),
             held: d.held.as_ref().map(|why| why.to_string()),
             from: d.from,
+            at: d.at,
         };
         rows.insert(FaceKey::Draft(d.id), FaceRow::Draft(row));
     }

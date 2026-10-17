@@ -197,10 +197,18 @@ impl<S: Source> Face<S> {
                     false,
                 )
             }
-            path => match path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
-                Some(head) => self.context(&mut stream, head),
-                None => http::not_found(&mut stream),
-            },
+            path => {
+                if let Some(head) = path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
+                    return self.context(&mut stream, head);
+                }
+                match path.strip_prefix("/versions/").and_then(|t| t.parse().ok()) {
+                    Some(task) => {
+                        let body = versions(&self.read(), task).to_string();
+                        http::respond(&mut stream, "application/json", body.as_bytes(), false)
+                    }
+                    None => http::not_found(&mut stream),
+                }
+            }
         }
     }
 
@@ -497,6 +505,67 @@ fn authors(
         }
     }
     out
+}
+
+/// Where a task's context has more than one version: for each entry with
+/// siblings it has been at, which of them it is (`n` of `of`, in the order
+/// they were first made), and where Max lands moving to the one before or
+/// after: the last response the task had on that path, or failing one, the
+/// last request. Read whole on every change of head, since a version is
+/// added by any request.
+fn versions(state: &State, task: TaskId) -> Value {
+    let Some(start) = state.task(task).and_then(|t| t.context()).map(|c| c.start) else {
+        return json!({});
+    };
+    let mut calls: Vec<_> = state
+        .model_calls()
+        .filter(|(_, m)| m.call.task == task && state.descends(m.call.base, start))
+        .map(|(_, m)| m)
+        .collect();
+    calls.sort_by_key(|m| m.sent.seq);
+    let mut children: BTreeMap<EntryId, Vec<EntryId>> = BTreeMap::new();
+    let mut landing: HashMap<EntryId, (bool, EntryId)> = HashMap::new();
+    for m in calls {
+        let ends = [Some((false, m.call.head())), m.response.map(|r| (true, r))];
+        for (responded, end) in ends.into_iter().flatten() {
+            let mut child = end;
+            while child != start {
+                let Some(parent) = state.entry(child).and_then(Entry::parent) else {
+                    break;
+                };
+                let siblings = children.entry(parent).or_default();
+                if !siblings.contains(&child) {
+                    siblings.push(child);
+                }
+                // A response outranks a request; a later one an earlier.
+                let best = landing.entry(child).or_insert((responded, end));
+                if responded || !best.0 {
+                    *best = (responded, end);
+                }
+                child = parent;
+            }
+        }
+    }
+    let mut out = serde_json::Map::new();
+    for siblings in children.values().filter(|s| s.len() > 1) {
+        let to = |i: Option<usize>| {
+            i.and_then(|i| siblings.get(i))
+                .and_then(|s| landing.get(s))
+                .map(|(_, e)| e.to_string())
+        };
+        for (i, child) in siblings.iter().enumerate() {
+            out.insert(
+                child.to_string(),
+                json!({
+                    "n": i + 1,
+                    "of": siblings.len(),
+                    "prev": to(i.checked_sub(1)),
+                    "next": to(Some(i + 1)),
+                }),
+            );
+        }
+    }
+    Value::Object(out)
 }
 
 /// When an entry that is a response was sent and ended, and the context it

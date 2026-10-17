@@ -99,6 +99,17 @@
   .note::before { content: "⚙"; }
   .note .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; min-width: 0; }
   .note .t.full { white-space: pre-wrap; color: var(--muted); }
+  /* Moving the chat: retry, back, edit, and a reply's versions. Shown on hover, dimmed while it cannot move. */
+  .moves { display: flex; gap: .2em; margin: -.3em 0 .6em; opacity: 0; transition: opacity .15s; }
+  .said .moves { justify-content: flex-end; margin: .2em 0 0; }
+  .chunk:hover .moves, .moves:focus-within { opacity: 1; }
+  @media (hover: none) { .moves { opacity: .6; } }
+  .mv { font: 12px var(--sans); color: var(--muted); background: none; border: 0; padding: .1em .35em; border-radius: 4px; cursor: pointer; }
+  .mv:hover:not(:disabled) { background: #0000000d; color: inherit; }
+  .mv:disabled { opacity: .3; cursor: default; }
+  .unmovable .moves .mv, .unmovable .versions .mv { opacity: .35; cursor: not-allowed; }
+  .versions { display: flex; align-items: center; gap: .1em; font: 12px var(--sans); color: var(--muted); margin: 0 0 .2em; }
+  .versions.user { justify-content: flex-end; }
   .meta { font-size: 11.5px; color: var(--faint); margin: -.5em 0 1.1em; opacity: 0; transition: opacity .15s; }
   .chunk:hover .meta, .row:hover > .meta { opacity: 1; }
   .thought { font-size: 13px; color: var(--muted); margin: 0 0 .7em; }
