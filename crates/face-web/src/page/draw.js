@@ -1,7 +1,16 @@
-// ─── Drawing the map ───────────────────────────────────────────────────────
-const nodeEls = new Map();
+import { $, clock, el, ICONS, panel, svgEl } from "./base.js";
+import { byId, derive, DOT, glyph, graph, isDone, layout, live, look, positions, ROOT_DOT, SAT_DOT, satLabel, shortName, shown, unfolded, view } from "./map.js";
+import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setSeam, target } from "./camera.js";
+import { fillTip, hoverable, tipFor } from "./hover.js";
+import { notify, renderUsage } from "./chrome.js";
+import { go, goStaying, moving, NEW, openId, renderPanel } from "./card.js";
+import { renderOthers, syncCompose } from "./compose.js";
+import { finding, found } from "./newchat.js";
 
-function drawMap() {
+// ─── Drawing the map ───────────────────────────────────────────────────────
+export const nodeEls = new Map();
+
+export function drawMap() {
   const visible = new Set(positions.keys());
   for (const [id, elx] of nodeEls) if (!visible.has(id)) { elx.remove(); nodeEls.delete(id); shown.delete(id); }
   const roots = new Set(graph.comps.map((c) => c.root.id));
@@ -73,7 +82,7 @@ function anchor(id, end) {
   const d = n.kind === "sat" ? SAT_DOT : graph.comps.some((c) => c.root.id === id) ? ROOT_DOT : DOT;
   return end === "out" ? { x: cx, y: p.y + d + 2 } : { x: cx, y: p.y - 2 };
 }
-function drawEdges() {
+export function drawEdges() {
   const paths = [];
   for (const e of graph.edges) {
     const a = anchor(e.from, "out"), b = anchor(e.to, "in");
@@ -101,7 +110,7 @@ function drawEdges() {
 
 // Why a task is stuck, while it matters: a place it starts in that could
 // not be made, or its last turn not responding.
-function trouble(t) {
+export function trouble(t) {
   const failed = t.waiting?.kind === "starting" ? t.waiting.failed || [] : [];
   if (failed.length) return failed.map((f) => `couldn't make ${f.limb}: ${f.why} · the harness keeps trying; abandon it, or start again elsewhere`).join("; ");
   const x = t.trouble;
@@ -113,14 +122,14 @@ function trouble(t) {
 // ─── The whole page, from the view ─────────────────────────────────────────
 let busy = false, again = false, shownBefore = false;
 // The view folded into the map: what it is, where everything goes.
-async function rebuild() {
+export async function rebuild() {
   derive();
   const changed = await layout();
-  if (openId) seam = seamFor(openId) || seam;
+  if (openId) setSeam(seamFor(openId) || seam);
   drawMap();
   return changed;
 }
-async function refresh() {
+export async function refresh() {
   if (!view) return;
   if (busy) { again = true; return; }
   busy = true;
@@ -138,14 +147,14 @@ async function refresh() {
   }
 }
 
-function render() {
+export function render() {
   if (!view) return;
   $("#empty").hidden = view.tasks.length > 0 || !!openId;
   renderUsage();
   const q = view.queue || [];
   document.title = q.length ? `(${q.length}) harness` : "harness";
   notify(q);
-  if (openId && openId !== NEW && live(openId) !== openId) { stay = true; go(live(openId)); }
+  if (openId && openId !== NEW && live(openId) !== openId) goStaying(live(openId));
   else if (openId) renderPanel();
   syncCompose();
   renderOthers();
@@ -156,7 +165,7 @@ function render() {
 // What waits on Max where the camera does not show it is a mark at the
 // screen's edge, toward it, the next one haloed; a click opens it.
 const marksEl = $("#marks"), markEls = new Map();
-function placeMarks() {
+export function placeMarks() {
   if (!view) return;
   const m = 20, seen = new Set(), placed = [];
   // The open card covers what is under it: no mark goes there.

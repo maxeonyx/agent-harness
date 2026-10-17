@@ -1,6 +1,14 @@
+import { $, clock, el, gist, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
+import { act } from "./tab.js";
+import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
+import { trouble } from "./draw.js";
+import { go, logState } from "./card.js";
+import { editMessage, modelName, say } from "./compose.js";
+import { revealIn } from "./newchat.js";
+
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
 const contexts = new Map();
-async function contextOf(head) {
+export async function contextOf(head) {
   if (!contexts.has(head)) {
     contexts.set(head, fetch(`/context/${head}`).then((r) => r.ok ? r.json() : null).catch(() => null)
       .then((c) => { if (!c) contexts.delete(head); return c; }));
@@ -13,7 +21,7 @@ async function contextOf(head) {
 // since any request can add one.
 const versionsOf = (task) => fetch(`/versions/${task}`).then((r) => r.ok ? r.json() : {}).catch(() => ({}));
 
-async function renderLog(t) {
+export async function renderLog(t) {
   const s = logState;
   if (!s || s.id !== t.id) return;
   if (s.head !== t.head) {
@@ -62,7 +70,7 @@ function exactEntry(into, e) {
   into.append(div);
 }
 
-function blocksOf(e) {
+export function blocksOf(e) {
   let c = parse(e.content);
   if (c === undefined) c = e.content;
   if (typeof c === "string") c = [{ type: "text", text: c }];
@@ -346,7 +354,7 @@ function versionArrows(v, role) {
   return d;
 }
 // Why the task cannot be moved now, if it cannot.
-function unmovable(t) {
+export function unmovable(t) {
   if (!t) return "no task";
   if (isDone(t)) return "it has finished";
   if (["model", "calls", "starting"].includes(t.waiting?.kind)) return "it is working: stop it first";
@@ -489,13 +497,13 @@ $(".jump", panel).onclick = () => { scrollEl.scrollTo({ top: scrollEl.scrollHeig
 // A request streaming, or a command printing: neither is a fact. Each
 // arrives on the link as live pieces, all of them again after a reconnect.
 const pieces = new Map(), watchers = new Map();
-function liveArrived(l) {
+export function liveArrived(l) {
   const [kind] = Object.keys(l), key = `${kind}:${l[kind].call}`;
   const text = (pieces.get(key) || "") + l[kind].chunk;
   pieces.set(key, text);
   watchers.get(key)?.(text);
 }
-function liveReset() { pieces.clear(); for (const f of watchers.values()) f(""); }
+export function liveReset() { pieces.clear(); for (const f of watchers.values()) f(""); }
 function watch(key, f) { watchers.set(key, f); f(pieces.get(key) || ""); }
 let modelStream = null;
 const callStreams = new Set();
@@ -526,7 +534,7 @@ function followCall(c, row) {
   callStreams.add(c.id);
   watch(`Call:${c.id}`, (raw) => stick(() => { out.textContent = screen(raw); out.scrollTop = out.scrollHeight; }));
 }
-function stopFollowing() { stopModel(); for (const id of callStreams) watchers.delete(`Call:${id}`); callStreams.clear(); }
+export function stopFollowing() { stopModel(); for (const id of callStreams) watchers.delete(`Call:${id}`); callStreams.clear(); }
 // A command's output as a terminal would leave it: only the last lines.
 function screen(raw) {
   const lines = raw.replace(/\r\n/g, "\n").split("\n").map((l) => l.slice(l.lastIndexOf("\r") + 1));

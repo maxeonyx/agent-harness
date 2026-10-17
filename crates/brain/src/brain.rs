@@ -45,12 +45,8 @@ use harness_program::{policy, render, web};
 /// and fan-out timing.
 const TICK: Duration = Duration::from_millis(250);
 
-/// How long after launch the brain waits for the limbs an earlier brain
-/// left running to reconnect, before starting its own.
-const REATTACH: Duration = Duration::from_secs(2);
-
-/// How long the brain waits before starting again a limb whose process
-/// ended without connecting.
+/// How long the brain waits before attaching again to a limb it could not
+/// reach.
 const RESTART: Duration = Duration::from_secs(30);
 
 /// What reaches the loop from the threads it started, from its limbs'
@@ -117,6 +113,10 @@ struct Link {
     replica: ReplicaId,
     wire: Wire,
     publisher: Publisher<LimbKey, LimbRow, Refusal>,
+    /// How it connected, until it first speaks: recorded then, so a limb
+    /// that says hello and fails before it can serve (its directory cannot
+    /// be made) leaves only why.
+    unsaid: Option<Reach>,
 }
 
 /// One brain: the decider of everything its replicas say.
@@ -139,18 +139,17 @@ pub struct Brain {
     roles: Option<LimbId>,
     /// What its roles' models resolve against.
     models: roles::Models,
-    /// The plugin limbs this brain has started, by id, until they exit.
+    /// The links to plugin limbs this brain is making or has, by id,
+    /// until their `attach` exits.
     limbs: HashMap<LimbId, Process>,
-    /// When a limb's process last ended without connecting.
+    /// When the brain last failed to reach a limb.
     failed: HashMap<LimbId, Instant>,
     /// The limbs connected now.
     links: HashMap<LimbId, Link>,
-    /// The next number for a co-hosted link: process links count up from
-    /// 1, these down from the top.
+    /// The next number for a process link, counting up from 1.
+    attached: Conn,
+    /// The next number for a co-hosted link, counting down from the top.
     hosted: Conn,
-    /// Where each limb keeps its log: `<state>/<limb>`, and the socket.
-    state_dir: PathBuf,
-    socket: PathBuf,
     /// The model and context of each request without a first byte yet:
     /// fan-out gating.
     cold: HashMap<ModelCallId, (String, std::collections::HashSet<EntryId>)>,
@@ -175,7 +174,6 @@ impl Brain {
         face: Sender<Folded>,
         client: Client,
         models: roles::Models,
-        state_dir: PathBuf,
         roles: Option<&Path>,
         start: Option<Start>,
         Inbox { events, inbox }: Inbox,
@@ -196,8 +194,6 @@ impl Brain {
         let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let roles_limb =
             find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == roles::KIND));
-        std::fs::create_dir_all(&state_dir).map_err(|e| format!("{state_dir:?}: {e}"))?;
-        let socket = state_dir.join("limbs.sock");
         let at = decider.next();
         let exe = std::env::current_exe()
             .and_then(std::fs::read)
@@ -261,9 +257,8 @@ impl Brain {
             limbs: HashMap::new(),
             failed: HashMap::new(),
             links: HashMap::new(),
+            attached: 1,
             hosted: Conn::MAX,
-            state_dir,
-            socket,
             cold: HashMap::new(),
             requests: HashMap::new(),
             root: None,
@@ -274,11 +269,6 @@ impl Brain {
             values: Vec::new(),
             facts,
         });
-        let events = brain.events.clone();
-        link::listen(&brain.socket, move |conn, said| {
-            let _ = events.send(Event(What::Link(conn, said)));
-        })
-        .map_err(|e| format!("the limbs' socket {:?}: {e}", brain.socket))?;
         brain.host_roles();
         brain.root = match start {
             Some(start) => {
@@ -570,22 +560,20 @@ impl Brain {
 
     // Limbs.
 
-    /// Start a plugin limb's process, which connects back when it is ready:
-    /// that may take a while (a clone to make). Not while one is running,
-    /// nor just after launch, while the limbs an earlier brain left running
-    /// reconnect, nor soon after its process ended without connecting, nor
-    /// while the brain shuts down.
+    /// Attach to a plugin limb, starting it if it is not running: it says
+    /// hello once it is ready, which may take a while (a clone to make).
+    /// Not while a link to it is made or being made, nor soon after the
+    /// brain failed to reach it, nor while the brain shuts down.
     fn connect(&mut self, limb: LimbId) {
         let recently = |at: &Instant| at.elapsed() < RESTART;
         if self.links.contains_key(&limb)
             || self.limbs.contains_key(&limb)
-            || self.started.elapsed() < REATTACH
             || self.failed.get(&limb).is_some_and(recently)
             || self.state().shutdown().is_some()
         {
             return;
         }
-        let definition = self.state().limb(limb).expect("a limb to connect");
+        let definition = self.state().limb(limb).expect("a limb to connect").clone();
         match &definition.kind {
             LimbKind::Plugin {
                 host: Host::Local, ..
@@ -600,17 +588,19 @@ impl Brain {
             // Hosted in the brain's own process at launch.
             _ => return,
         }
-        match Process::start(
-            definition,
-            &self.state_dir.join(limb.to_string()),
-            &self.socket,
-        ) {
+        let conn = self.attached;
+        self.attached += 1;
+        let events = self.events.clone();
+        let said = move |conn, said| {
+            let _ = events.send(Event(What::Link(conn, said)));
+        };
+        match Process::attach(&definition, conn, said) {
             Ok(process) => {
                 self.limbs.insert(limb, process);
             }
             Err(e) => {
-                errln!("limb {limb}: its process cannot start: {e}");
-                self.unreached(limb, format!("its process cannot start: {e}"));
+                errln!("limb {limb}: cannot attach: {e}");
+                self.unreached(limb, format!("cannot attach: {e}"));
             }
         }
     }
@@ -627,21 +617,20 @@ impl Brain {
         }
     }
 
-    /// Let go of the limb processes that have exited.
+    /// Let go of the links whose `attach` has exited, recording why of
+    /// each that failed: the limb could not start, or ended.
     fn reap(&mut self) {
-        let exited: Vec<LimbId> = self
+        let exited: Vec<(LimbId, bool)> = self
             .limbs
             .iter_mut()
-            .filter_map(|(id, p)| p.exited().then_some(*id))
+            .filter_map(|(id, p)| p.exited().map(|status| (*id, status.success())))
             .collect();
-        for limb in exited {
+        for (limb, success) in exited {
             let Some(process) = self.limbs.remove(&limb) else {
                 continue;
             };
-            if !self.links.contains_key(&limb) && self.state().shutdown().is_none() {
-                let why = process.last_words();
-                errln!("limb {limb}: its process ended without connecting: {why}");
-                self.unreached(limb, why);
+            if !success && self.state().shutdown().is_none() {
+                self.unreached(limb, process.last_words());
             }
         }
     }
@@ -657,6 +646,11 @@ impl Brain {
         if self.state().limb(limb).is_none_or(|l| l.kind.is_brains()) {
             return errln!("a link said it is limb {limb}, which is no plugin limb here");
         }
+        let known = self.state().connected(limb).map(|(p, _)| p) == Some(replica);
+        let unsaid = (!known).then_some(Reach::Connected {
+            instance: replica,
+            build,
+        });
         self.links.insert(
             limb,
             Link {
@@ -664,22 +658,26 @@ impl Brain {
                 replica,
                 wire,
                 publisher: Publisher::default(),
+                unsaid,
             },
         );
-        if self.state().connected(limb).map(|(p, _)| p) == Some(replica) {
-            return self.publish();
-        }
-        self.fact(Fact::Reach {
-            limb,
-            reach: Reach::Connected {
-                instance: replica,
-                build,
-            },
-        });
+        self.publish();
     }
 
-    /// A link ended. If it was its limb's current one, the limb is lost
-    /// until it connects again.
+    /// A record from link `conn`: the limb's, if the link is its current
+    /// one, which is connected from its first record on.
+    fn heard(&mut self, conn: Conn, record: Record) {
+        let Some((&limb, link)) = self.links.iter_mut().find(|(_, l)| l.conn == conn) else {
+            return;
+        };
+        if let Some(reach) = link.unsaid.take() {
+            self.fact(Fact::Reach { limb, reach });
+        }
+        self.include(record);
+    }
+
+    /// A link ended. If it was its limb's current one, and it had spoken,
+    /// the limb is lost until it connects again.
     fn left(&mut self, conn: Conn) {
         let Some(limb) = self
             .links
@@ -688,8 +686,11 @@ impl Brain {
         else {
             return;
         };
-        self.links.remove(&limb);
+        let link = self.links.remove(&limb).expect("found");
         errln!("limb {limb}: its link ended");
+        if link.unsaid.is_some() {
+            return;
+        }
         self.fact(Fact::Reach {
             limb,
             reach: Reach::Lost,
@@ -1558,10 +1559,7 @@ and you cannot finish until it has.",
             What::Link(conn, link::Said::Joined(hello, wire)) => self.joined(conn, hello, wire),
             What::Link(conn, link::Said::Up(up)) => match *up {
                 // Only the current link speaks for its limb.
-                Up::Record(record) if self.links.values().any(|l| l.conn == conn) => {
-                    self.include(record)
-                }
-                Up::Record(_) => {}
+                Up::Record(record) => self.heard(conn, record),
                 Up::Live(live) => self.feed.push(live.live),
             },
             What::Link(conn, link::Said::Left) => self.left(conn),
