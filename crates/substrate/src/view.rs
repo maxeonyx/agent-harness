@@ -84,6 +84,11 @@ impl<K: Ord, R, F> Default for Publisher<K, R, F> {
 }
 
 impl<K: Ord + Clone, R: Clone + PartialEq, F: Clone + PartialEq> Publisher<K, R, F> {
+    /// The view the follower holds: the last one published.
+    pub fn shipped(&self) -> Option<&View<K, R, F>> {
+        self.shipped.as_ref()
+    }
+
     /// What to ship for `view`, now true: the whole view the first time,
     /// then only what changed, or nothing.
     pub fn publish<L>(&mut self, view: View<K, R, F>) -> Option<Down<K, R, F, L>> {

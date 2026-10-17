@@ -1700,8 +1700,22 @@ and you cannot finish until it has.",
                 standing: self.decider.standing(link.replica),
                 rows,
             };
-            if let Some(down) = link.publisher.publish(view) {
-                let _ = link.wire.send(down);
+            // `Superseded` changes on a line of its own: a limb of a build
+            // before it cannot read it, and drops that line whole.
+            let mut before = view.clone();
+            let held = link
+                .publisher
+                .shipped()
+                .and_then(|v| v.rows.get(&LimbKey::Superseded))
+                .cloned();
+            match held {
+                Some(row) => before.rows.insert(LimbKey::Superseded, row),
+                None => before.rows.remove(&LimbKey::Superseded),
+            };
+            for view in [before, view] {
+                if let Some(down) = link.publisher.publish(view) {
+                    let _ = link.wire.send(down);
+                }
             }
         }
     }
@@ -1814,7 +1828,6 @@ pub fn now() -> Timestamp {
     )
 }
 
-/// A new replica, for a face or a co-hosted limb this launch: 64 random bits.
 /// The executable the brain starts for each kind of plugin limb: each
 /// `harness-limb-<kind>` beside its own, by digest. A limb connected with
 /// other bytes is superseded ([`harness_core::state::State::superseded`]).
@@ -1843,6 +1856,7 @@ fn limb_builds() -> BTreeMap<String, BuildId> {
         .collect()
 }
 
+/// A new replica, for a face or a co-hosted limb this launch: 64 random bits.
 fn mint_replica() -> ReplicaId {
     let mut bytes = [0; 8];
     std::fs::File::open("/dev/urandom")

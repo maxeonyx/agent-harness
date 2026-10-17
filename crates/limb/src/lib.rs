@@ -60,6 +60,11 @@ pub trait Kind: Sized + Send + Sync + 'static {
     /// to ship that the brain's standing does not cover.
     fn apply(&self, down: LimbDown) -> Result<Vec<Record>, Restored>;
 
+    /// Whether anything would die with the process: a running call, or what
+    /// one left running (a server, a browser and its tabs). A superseded
+    /// limb ([`harness_core::environment::LimbRow::Superseded`]) exits once nothing does.
+    fn holds(&self) -> bool;
+
     /// Stop everything running, to be gone `within` from now, and start
     /// nothing new. Asked again with less time, stop harder.
     fn stop_all(&self, within: Duration);
