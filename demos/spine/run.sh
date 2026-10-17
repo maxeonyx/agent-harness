@@ -4,4 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example spine
-exec target/release/examples/spine
+# Everything the demo starts carries this mark; its limbs outlive their
+# brains, so what is left is ended when it finishes.
+mark=HARNESS_OWNER_spine-demo-$$
+trap 'demos/end.sh "$mark"' EXIT
+env "$mark=1" target/release/examples/spine

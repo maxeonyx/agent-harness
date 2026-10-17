@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::build::BuildId;
 use crate::call::Call;
 use crate::id::{CallId, EnvironmentId, LimbId, ParseError, ReplicaId, Timestamp, ValueId};
 use crate::resource::Observation;
@@ -378,19 +379,23 @@ pub enum LimbKind {
     /// usage) is a call the brain runs off its thread, like a request; it
     /// only reads, so one an earlier brain was running is run again.
     Provider,
-    /// A workspace, a JavaScript process, or anything else: a process of
-    /// its own, started by the brain from its kind, so a brain relaunch does
-    /// not kill its builds. It keeps a durable record of its calls, so it can
-    /// say how one ended after the instance that ran it has gone. Its calls
-    /// are sent over a connection, again after every reconnection while
-    /// they are unsettled. A limb hosted elsewhere (in Max's page, on
-    /// another machine) is a new variant when the first one is built.
+    /// A workspace, a browser, a JavaScript sandbox, or anything else: a
+    /// server of its own, running where its [`Host`] says, which the brain
+    /// starts if it is not running and then connects to. It keeps a durable
+    /// record of its calls, so it can say how one ended after the instance
+    /// that ran it has gone, and after the brain that sent it has. Its calls
+    /// reach it as rows of its view, again on every connection while they
+    /// are unsettled.
     Plugin {
         kind: String,
         /// The plugin's own settings, as JSON, read by the plugin alone.
         /// Anything the harness or a face needs from a limb, it says in its
         /// [`Description`] or its name.
         config: String,
+        /// Where it runs, and so how the brain reaches it. Part of what the
+        /// limb is: a workspace on another machine is another limb.
+        #[serde(default)]
+        host: Host,
     },
 }
 
@@ -401,13 +406,121 @@ impl LimbKind {
         !matches!(self, LimbKind::Plugin { .. })
     }
 
-    /// Whether `other` is the same kind, which every version of a limb is.
+    /// Whether `other` is the same kind on the same host, which every
+    /// version of a limb is.
     pub fn same(&self, other: &LimbKind) -> bool {
         match (self, other) {
-            (LimbKind::Plugin { kind: a, .. }, LimbKind::Plugin { kind: b, .. }) => a == b,
+            (
+                LimbKind::Plugin {
+                    kind: a, host: h, ..
+                },
+                LimbKind::Plugin {
+                    kind: b, host: i, ..
+                },
+            ) => a == b && h == i,
             (a, b) => std::mem::discriminant(a) == std::mem::discriminant(b),
         }
     }
+}
+
+/// Where a plugin limb runs, and so how a link to it is made.
+///
+/// **Concept.** A plugin limb is a server: a process of its own (or a
+/// thread of the brain's) that exists apart from any brain, keeps its own
+/// records, and serves the brain that connects to it. The brain starts it
+/// when it needs it and finds it not running; after that the limb lives on
+/// its own, through the brain's restarts, relaunches onto a new build and
+/// lost connections, until no brain has been connected to it for a while
+/// (15 minutes). A brain going away, cleanly or not, is a link closing: it
+/// stops none of the limb's calls, since those are its tasks' work and the
+/// tasks have not stopped.
+///
+/// Which side connects is decided by which side can reach the other. The
+/// brain knows where every limb is (its definition is a fact the brain
+/// holds), and a limb on another machine often cannot reach the brain at
+/// all, so the brain dials and the limb listens. A limb that cannot listen
+/// (one living in Max's page) would arrive over a link its host already
+/// has; that is a new variant when the first one is built.
+///
+/// **Identity.** Three things, each named once:
+/// - the limb, [`LimbId`]: its definition, a fact in one brain's records.
+///   A limb serves the brain whose records define it; another domain's
+///   brain defines a limb of its own, even for the same directory on the
+///   same machine, so one domain's calls and files never reach another's
+///   limb process.
+/// - its instance, a [`ReplicaId`]: the timeline of records it keeps in its
+///   own state on its host. The same across restarts of its process, and a
+///   new one only if that state was lost ([`Reach::Connected`]).
+/// - its build, a [`BuildId`]: the executable it runs, which may be older
+///   than the brain's, since a limb outlives a relaunch.
+///
+/// A limb's state lives on its host, in one place named by its id
+/// (`$XDG_STATE_HOME/harness/limbs/<limb>`), and is its address and its
+/// lock at once: its records, the lock that lets one instance run at a
+/// time, and the socket it listens on. The brain reaches a limb by running
+/// one command on its host, `harness-limb-<kind> attach <limb>`, locally
+/// as it is and remotely through `ssh <destination>`: it starts the limb if
+/// no instance holds its state, then carries the link over its own stdin
+/// and stdout, and what it prints when it fails is the reason the brain
+/// records ([`Reach::Failed`]). So starting and reconnecting are one
+/// act, local and remote are one path, and the limb's definition reaches it
+/// in its view ([`LimbRow::Definition`]), not on a command line. Starting a
+/// limb that is already running does nothing; two brains of one domain (an
+/// old and a new build at a relaunch) reach the same instance; and the
+/// newest link to bring a view replaces an older one, so a link the network
+/// dropped silently is replaced the moment the brain dials again. Who may
+/// connect is whoever can run the command: the user on the limb's machine,
+/// and over SSH, whoever SSH lets in. The harness adds no keys of its own.
+///
+/// **Vision.** "The limb is the server ... the brain spawns the limb. And
+/// then the limb exists on its own and allows connections from the brain";
+/// remote limbs over SSH ("the remote server isn't necessarily able to
+/// connect back to the brain"); limbs that "should stick around" across a
+/// brain restart, for 15 minutes; a limb as a whole contained like a
+/// process group; domains whose data stays on their own machines; "remote
+/// [that is] really, really, really good and reliable".
+///
+/// **Existing harnesses.** Codex's exec-server is also a server the harness
+/// connects to (`ws://IP:PORT`), but it kills a connection's processes when
+/// the connection closes, and it reaches a machine the harness cannot dial
+/// through a registry's rendezvous relay with its own tokens
+/// (`ref-codex/codex-rs/exec-server/README.md:56,201`). OpenCode, Pi and
+/// Goose run tools in the agent's own process, so a remote tool means a
+/// remote agent.
+///
+/// **Different here.** The work outlives the connection and the brain: a
+/// call's outcome is a record in the limb's own timeline, shipped to
+/// whichever connection comes next, so a dropped link or a restarted brain
+/// loses nothing and runs nothing twice. Reaching another machine is the
+/// SSH Max already trusts, with no relay and no tokens.
+///
+/// **Bx.** Shared: what runs on a remote host is a build named by the hash
+/// of its executable, installed there once under that name and never
+/// overwritten; and trust is external, as Bx keeps "which builder
+/// signatures it accepts" out of the build: who may reach a limb is the
+/// host's own access control, never part of the limb's definition. Not
+/// shared: nothing is signed, and a limb's instance is a mutable timeline,
+/// not an artifact.
+///
+/// **Not built yet.** The brain still listens on a socket of its own, a
+/// limb's process dials it, and its state sits beside the brain's
+/// database; there is no lock on a limb's state; its definition reaches it
+/// on its command line, so a new version waits for a new process; an `Ssh`
+/// limb is never reached, and is shown unreachable saying so; and a limb
+/// started by a brain running as a service is in the service's process
+/// group, so restarting the service ends it. A brain shutting down already
+/// leaves its limbs' calls running.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Host {
+    /// A thread of the brain's own process, linked by a channel: the roles
+    /// limb, which reads role files so the brain reads none.
+    Brain,
+    /// A process on the brain's machine, reached on its socket.
+    #[default]
+    Local,
+    /// A process on another machine, started and reached through
+    /// `ssh <destination>`, as Max's own SSH configuration resolves it.
+    Ssh { destination: String },
 }
 
 /// What the brain knows of its connection to a plugin limb, and which replica
@@ -415,15 +528,28 @@ impl LimbKind {
 /// workspace's files outlive everything), the instance (a process: a replica,
 /// whose records are the limb's while it is connected) and the connection to
 /// it. A connection belongs to the brain that made it, so every limb is
-/// unreached from a [`crate::build::Launched`] until it connects to the new
-/// brain, and a record from a replica no longer connected is refused.
+/// unreached from a [`crate::build::Launched`] until the new brain connects
+/// to it, and a record from a replica no longer connected is refused.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Reach {
-    /// Connected as the replica `instance`: its records are the limb's.
-    Connected { instance: ReplicaId },
+    /// Connected as the replica `instance`, running `build`: its records
+    /// are the limb's. An instance other than the last one means the limb's
+    /// state was lost and it started again with no memory of its calls; a
+    /// build older than the brain's is a limb that outlived a relaunch.
+    Connected {
+        instance: ReplicaId,
+        #[serde(default)]
+        build: Option<BuildId>,
+    },
     /// The connection dropped. Calls sent to it stay sent; the throbber says
     /// "waiting on reconnect" rather than "running".
     Lost,
+    /// The brain could not reach it, saying why in the words of whatever
+    /// failed: its process could not start, or ended before it connected
+    /// (its directory could not be made, its clone failed, the program is
+    /// missing), or its host cannot be reached. The brain tries again while
+    /// a task needs it; a task starting on it shows why it is stuck.
+    Failed { why: String },
 }
 
 /// What a plugin limb says about itself, rendered into each root.
@@ -483,8 +609,8 @@ pub enum LimbKey {
     /// The bytes of a value a call row names.
     Value(ValueId),
     Watch,
+    Definition,
     Environment(EnvironmentId),
-    Shutdown,
 }
 
 /// One row of what a limb holds of the brain: what the brain wants of it,
@@ -506,22 +632,28 @@ pub enum LimbRow {
     /// command's processes) and kill what is left at this deadline
     /// ([`crate::cancel`]); it settles as interrupted once nothing it started
     /// is left. A deadline is only ever brought forward.
+    ///
+    /// `first_sent_to`: the instance it was first sent to. A limb that is
+    /// not that instance and has no record of the call treats it as cut off
+    /// mid-run (rerun if its tool may be, otherwise settled as unknown),
+    /// never as new: the limb's state was lost since, and the instance that
+    /// lost it may have run it.
     Call {
         call: Call,
         stopping: Option<Timestamp>,
+        first_sent_to: ReplicaId,
     },
     /// Watch these resources: what live contexts embody. `known` is every
     /// version the brain holds of each. Report, as a
     /// [`crate::resource::Change`], each resource whose version is none of
     /// these, and from then on each change as it happens.
     Watch { known: Vec<Observation> },
-    /// The brain is going away: stop every running call as a stopping
-    /// [`LimbRow::Call`] is stopped, then exit once nothing the limb started
-    /// is left, all by `by`. Its link closing means the same, with the limb's
-    /// own default.
-    Shutdown { by: Timestamp },
     /// A value's bytes.
     Value(Bytes),
+    /// The limb's current definition. A limb lives on through the brain's
+    /// restarts, so a new version reaches the running limb here, and
+    /// starting one needs nothing but its id.
+    Definition(Limb),
     /// The current version of an environment read from this limb's
     /// resources: what a limb holding role definitions restates only when
     /// its files differ.
@@ -534,8 +666,8 @@ impl std::fmt::Display for LimbKey {
             LimbKey::Call(id) => write!(f, "call:{id}"),
             LimbKey::Value(id) => write!(f, "value:{id}"),
             LimbKey::Watch => f.write_str("watch"),
+            LimbKey::Definition => f.write_str("definition"),
             LimbKey::Environment(id) => write!(f, "environment:{id}"),
-            LimbKey::Shutdown => f.write_str("shutdown"),
         }
     }
 }
@@ -545,11 +677,11 @@ impl std::str::FromStr for LimbKey {
 
     fn from_str(text: &str) -> Result<LimbKey, ParseError> {
         let invalid = ParseError {
-            expected: "a row: call:{id}, value:{id}, watch, environment:{id} or shutdown",
+            expected: "a row: call:{id}, value:{id}, watch, definition or environment:{id}",
         };
         Ok(match text.split_once(':') {
             None if text == "watch" => LimbKey::Watch,
-            None if text == "shutdown" => LimbKey::Shutdown,
+            None if text == "definition" => LimbKey::Definition,
             Some(("call", id)) => LimbKey::Call(id.parse()?),
             Some(("value", id)) => LimbKey::Value(id.parse()?),
             Some(("environment", id)) => LimbKey::Environment(id.parse()?),
@@ -579,12 +711,15 @@ pub type LimbDown = harness_substrate::Down<LimbKey, LimbRow, crate::fact::Refus
 /// running command's output so far.
 pub type LimbUp = harness_substrate::Up<crate::schema::Harness, crate::live::Live>;
 
-/// The first thing a limb says on connecting: which limb it is, and the
-/// replica its records are of. Then [`LimbUp`]s one way and [`LimbDown`]s the
-/// other. A limb reconnects with the same replica, to this brain or a
-/// restarted one, and is shipped a whole view.
+/// The first thing a limb says when a brain connects to it: which limb it
+/// is, the replica its records are of, and the build it runs. Then
+/// [`LimbUp`]s one way and [`LimbDown`]s the other. The brain checks the
+/// limb is the one it dialled, and ships it a whole view; a brain that
+/// connects again, restarted or rebuilt, is shipped one again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     pub limb: LimbId,
     pub replica: ReplicaId,
+    #[serde(default)]
+    pub build: Option<BuildId>,
 }

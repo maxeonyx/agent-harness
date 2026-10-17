@@ -11,6 +11,7 @@
   #map.grabbing { cursor: grabbing; }
   #map.grabbing #panel { user-select: none; -webkit-user-select: none; }
   #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #map.moving #world, #map.moving #panel { will-change: transform; }
   #nodes { user-select: none; -webkit-user-select: none; }
   #edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
   #empty { position: fixed; inset: 0; display: grid; place-content: center; color: var(--faint); font: 16px var(--serif); pointer-events: none; }

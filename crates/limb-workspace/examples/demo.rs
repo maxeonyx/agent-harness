@@ -258,6 +258,9 @@ struct Brain {
     rows: BTreeMap<LimbKey, LimbRow>,
     standing: Standing<Refusal>,
     link: Option<Link>,
+    /// The instance last connected: its state, and so its replica, outlive
+    /// its process.
+    instance: Option<ReplicaId>,
     /// Every value the limb has sent, as the brain's store would hold them.
     values: HashMap<ValueId, Vec<u8>>,
     /// Settlements taken and not yet shown.
@@ -283,6 +286,7 @@ impl Brain {
                 refused: BTreeMap::new(),
             },
             link: None,
+            instance: None,
             values: HashMap::new(),
             settled: HashMap::new(),
             description: None,
@@ -316,6 +320,7 @@ impl Brain {
             workspace.replica(),
             self.standing.upto
         );
+        self.instance = Some(workspace.replica());
         self.link = Some(Link {
             workspace,
             up,
@@ -348,8 +353,8 @@ impl Brain {
         let Some(down) = link.publisher.publish(view) else {
             return;
         };
-        let applied = link.workspace.apply(down).expect("the limb's log is whole");
-        for record in applied.ship {
+        let unsent = link.workspace.apply(down).expect("the limb's log is whole");
+        for record in unsent {
             self.include(record);
         }
     }
@@ -478,6 +483,7 @@ impl Brain {
             LimbRow::Call {
                 call,
                 stopping: None,
+                first_sent_to: self.instance.expect("an instance has connected"),
             },
         );
         self.publish();

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::delivery::Content;
-use harness_core::environment::LimbKind;
+use harness_core::environment::{LimbKind, Reach};
 use harness_core::fact::Fact;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
@@ -354,7 +354,8 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
         Waiting::Starting { limbs, since } => json!({
             "kind": "starting",
             "since": since.0,
-            "limbs": limbs.iter().map(|l| state.limb(*l).map_or_else(|| l.to_string(), |l| l.name.clone())).collect::<Vec<_>>(),
+            "limbs": limbs.iter().map(|(l, _)| limb_name(state, *l)).collect::<Vec<_>>(),
+            "failed": limbs.iter().filter_map(|(l, why)| Some(json!({"limb": limb_name(state, *l), "why": why.as_ref()?}))).collect::<Vec<_>>(),
         }),
         Waiting::Brain { since } => json!({"kind": "harness", "since": since.0}),
         Waiting::Paused { since } => json!({"kind": "held", "since": since.0}),
@@ -576,8 +577,11 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Reach { limb, reach } => {
             let limb = state.limb(*limb).map_or("?".into(), |l| l.name.clone());
             match reach {
-                harness_core::environment::Reach::Connected { .. } => format!("{limb} connected"),
-                harness_core::environment::Reach::Lost => format!("{limb} lost"),
+                Reach::Connected { .. } => format!("{limb} connected"),
+                Reach::Lost => format!("{limb} lost"),
+                Reach::Failed { why } => {
+                    format!("{limb} failed to start: {why}")
+                }
             }
         }
         Fact::Ranking(r) => format!("queue ranked: {} placed", r.order.len()),
@@ -613,4 +617,11 @@ fn outcome(o: &CallOutcome) -> &'static str {
         CallOutcome::Interrupted { .. } => "interrupted",
         CallOutcome::Unknown => "ended unknown",
     }
+}
+
+/// A limb's name, or its id if it has none here.
+fn limb_name(state: &State, limb: LimbId) -> String {
+    state
+        .limb(limb)
+        .map_or_else(|| limb.to_string(), |l| l.name.clone())
 }
