@@ -16,7 +16,7 @@ What it does, in order:
 - **D. Passed to Max.** The agent starts `./worker.sh` in the background under the name `worker`, and passes it to Max with `pass`, saying why: it is no longer the agent's, so Max pressing Done lets the agent finish while the worker runs on. The page shows it beside the task as "yours: worker". Max then stops it at a tab (`act PORT stop CALL`): SIGTERM, which the worker answers by saving its state; its escaped helper runs on, as in A.
 - **E. A service restart.** A brain runs as a systemd user service, as Max's brains do, and `systemctl --user restart` hits it while `./slow.sh` runs. systemd kills everything in the service's cgroup, but the limbs are in scopes of their own, so `./slow.sh` runs on; the restarted brain attaches to them, and the result reaches it.
 
-Max presses Abandon at a tab: `target/release/examples/act PORT abandon MS`, a replica on the face's link that says one fact and reads the brain's verdict from its standing. An abandon is a fact with a deadline, `within` milliseconds of the fact's time:
+Max presses Abandon at a tab: `target/release/examples/act PORT abandon CHAT MS`, a replica on the face's link that says one fact and reads the brain's verdict from its standing. An abandon is a fact with a deadline, `within` milliseconds of the fact's time:
 
 ```json
 {"Task": ["<task>", {"Drain": {"Abandon": {"by": "Max", "within": 120000}}}]}

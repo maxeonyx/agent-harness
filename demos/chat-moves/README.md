@@ -1,6 +1,6 @@
 # Moving a chat: retry, edit, back, versions
 
-`demos/chat-moves/run.sh` starts a test brain on the scripted model (no cost) on port 4362 (`PORT=…` for another) and drives two chats: one whose reply varies (`vary A four-word poem.`), retried to a second version (‹ 2/2 ›) and moved back to the first; and one that says `612` each time, retried to "said 2×". Open https://mx-hv-mj.local:4362/ and try the rest; `node dev/drive.mjs down 4362` ends it.
+`demos/chat-moves/run.sh` starts a test brain named `chat-moves` on the scripted model (no cost) and drives two chats: one whose reply varies (`vary A four-word poem.`), retried to a second version (‹ 2/2 ›) and moved back to the first; and one that says `612` each time, retried to "said 2×". Open the link it prints and try the rest; `node dev/drive.mjs down --brain chat-moves` ends it.
 
 Hover a message in the open card:
 

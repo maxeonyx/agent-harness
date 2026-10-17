@@ -7,15 +7,14 @@
 # and see README.md.
 set -eu
 cd "$(dirname "$0")/../.."
-port=${PORT:-4362}
 retry='.log button[title="Ask for this response again"]'
-node dev/drive.mjs down "$port" --wipe
-node dev/drive.mjs up "$port" scripted
-node dev/drive.mjs page "$port" \
+node dev/drive.mjs down --brain chat-moves --wipe
+node dev/drive.mjs up --brain chat-moves
+node dev/drive.mjs page --brain chat-moves \
   chat chat - "vary A four-word poem." reply \
   click "$retry" text "(try 2)" wait ".versions .n" shot demos/chat-moves/versions.ignore.png \
   click '.versions button[title="The version before"]' text "(try 1)" \
   chat chat - "say 612" reply \
   click "$retry" wait ".versions .tries" shot demos/chat-moves/same-words.ignore.png
-echo "open https://mx-hv-mj.local:$port/ (shots: demos/chat-moves/versions.ignore.png, same-words.ignore.png)"
-echo "end it with: node dev/drive.mjs down $port"
+echo "open its link above (shots: demos/chat-moves/versions.ignore.png, same-words.ignore.png)"
+echo "end it with: node dev/drive.mjs down --brain chat-moves"

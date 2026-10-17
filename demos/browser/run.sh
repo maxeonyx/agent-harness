@@ -26,7 +26,7 @@ echo "== Max asks a chat, in the chat role:"
 cat "$dir/mandate.md"
 echo
 env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" --model "${MODEL:-sonnet}" > "$dir/brain.log" 2>&1 &
-target/release/examples/act "$port" chat chat - "$(cat "$dir/mandate.md")" > /dev/null
+chat=$(target/release/examples/act "$port" chat chat - "$(cat "$dir/mandate.md")" | sed -n 's/^chat //p')
 until waits_on_max; do sleep 1; done
 grep -E 'browser|tab|passed|spawn|responded' "$dir/brain.log" | cut -c1-170
 echo
@@ -48,7 +48,7 @@ until [ -z "$(c /view | jq -c "$root | .handed[]")" ]; do sleep 0.5; done
 node demos/browser/look.mjs "$browser"
 echo
 echo "== Max presses Done, and the chat writes its result"
-target/release/examples/act "$port" done
+target/release/examples/act "$port" done "$chat"
 until grep -q 'the task is done' "$dir/brain.log"; do sleep 0.5; done
 sleep 0.5
 sed -n '/the task is done/,$p' "$dir/brain.log"
