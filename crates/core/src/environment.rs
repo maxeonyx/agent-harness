@@ -4,9 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::call::Call;
-use crate::id::{CallId, EnvironmentId, InstanceId, LimbId, ValueId};
-use crate::journal::Batch;
-use crate::live::Live;
+use crate::id::{CallId, EnvironmentId, LimbId, ParseError, PlaceId, Timestamp, ValueId};
 use crate::resource::Observation;
 use crate::value::Bytes;
 
@@ -25,7 +23,7 @@ use crate::value::Bytes;
 /// exactly one, for life.
 ///
 /// Each limb [describes](Description) its tools and the instructions for
-/// using them, as a fact in the journal, and the brain renders the role and
+/// using them, as a fact, and the brain renders the role and
 /// those descriptions into
 /// the [root](crate::context::Root) of each context it starts here. So tools
 /// and the knowledge to use them arrive together, are fixed together for
@@ -38,7 +36,7 @@ use crate::value::Bytes;
 /// attention scheduler's environment holds only the [`LimbKind::Attention`]
 /// limb, so it can reorder the queue and cannot spawn, read files or speak
 /// to Max: there is no permission check to get wrong. What a task can start
-/// fresh is its own environment's `starts`, checked by the journal against
+/// fresh is its own environment's `starts`, checked by the brain's fold against
 /// the task whose meta call creates it: an orchestrator's lists designers
 /// and engineers, a designer's and an engineer's list none, so "only the
 /// orchestrator launches designers" is the shape of each one's world, and a
@@ -79,7 +77,7 @@ use crate::value::Bytes;
 /// under them.
 ///
 /// **Different here.** The definition is a versioned fact, so what an agent
-/// could reach at any moment is in the journal; its reach is checked by the
+/// could reach at any moment is in the brain's facts; its reach is checked by the
 /// fold against the task that creates another, not by a filter in a tool; a
 /// clone of its own is a limb its environment names as a place, so the
 /// clone's instructions and file versions are its context; and a change
@@ -141,7 +139,7 @@ pub struct Environment {
 /// or route one it does not declare. Carried to every fork of the root, so
 /// the same bytes (the root's tool names) mean the same limbs. Every route
 /// goes to a limb of the task's environment or one of its places, which the
-/// journal checks, and only to a tool that limb's journaled description
+/// brain's fold checks, and only to a tool that limb's stated description
 /// offers agents. An agent's call names only its tool and is routed here,
 /// which is the whole of the harness's access control.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,16 +289,17 @@ impl LimbKind {
     }
 }
 
-/// What the brain knows of its connection to a plugin limb. Three lifetimes
-/// are distinct: the resources (a workspace's files outlive everything), the
-/// instance (a process) and the connection to it. A connection belongs to
-/// the brain that made it, so every limb is unreached from a
-/// [`crate::journal::Launched`] until it connects to the new brain.
+/// What the brain knows of its connection to a plugin limb, and which place
+/// speaks for it. Three lifetimes are distinct: the resources (a
+/// workspace's files outlive everything), the instance (a process: a place,
+/// whose records are the limb's while it is connected) and the connection to
+/// it. A connection belongs to the brain that made it, so every limb is
+/// unreached from a [`crate::fact::Launched`] until it connects to the new
+/// brain, and a record from a place no longer connected is refused.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Reach {
-    /// Connected to `instance`. Every unsettled call of the limb that was
-    /// last sent before this is sent again.
-    Connected { instance: InstanceId },
+    /// Connected as the place `instance`: its records are the limb's.
+    Connected { instance: PlaceId },
     /// The connection dropped. Calls sent to it stay sent; the throbber says
     /// "waiting on reconnect" rather than "running".
     Lost,
@@ -308,12 +307,12 @@ pub enum Reach {
 
 /// What a plugin limb says about itself, rendered into each root.
 ///
-/// A fact ([`crate::journal::Fact::Described`]), stated by the limb on each
-/// connection, after its hello. So the fold knows what every limb offers:
+/// A fact ([`crate::fact::Fact::Described`]), stated by the limb on each
+/// connection. So the fold knows what every limb offers:
 /// a root may route only tools its limbs offer agents, Max may call only
 /// tools offered him, a starting task is rooted once each of its limbs has
 /// described itself on its current connection, and a face shows a limb from
-/// the journal without reading its config. The brain's own limbs are
+/// the brain's facts without reading its config. The brain's own limbs are
 /// described by the brain's code at each root, since the meta limb's
 /// description depends on who holds it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -354,61 +353,117 @@ pub enum Audience {
     Both,
 }
 
-/// What the brain sends a limb.
+/// Which row of a limb's view of the brain.
 ///
-/// The protocol carries the journal's own vocabulary: a call is a
-/// [`Call`], and what comes back is facts. So there is nothing to
-/// translate, and a limb can say exactly what it knows (which call wrote a
-/// file) in the fact that records it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToLimb {
-    /// Run this call, at most once per id. It arrives again after every
-    /// reconnection while it is unsettled: answer from the durable record if
-    /// there is one, keep running it if it runs, otherwise run it if its
-    /// tool may be rerun, or settle it as unknown. A limb that can check
-    /// `call.expects` refuses the call when they have moved, before it has
-    /// any effect.
-    Run {
-        id: CallId,
-        call: Call,
-        /// The bytes of `call.input`.
-        input: Bytes,
-    },
-    /// Stop this call: ask it to stop gracefully (`SIGTERM` to a command's
-    /// processes), and kill what is left `within` milliseconds of receiving
-    /// this; it settles as interrupted once nothing it started is left.
-    /// Asked again after a reconnection while it is unsettled, and again with
-    /// less time to make the stop harder; a call the limb has no record of
-    /// settles as unknown.
-    Stop { call: CallId, within: u64 },
-    /// The brain is going away: stop every running call as [`ToLimb::Stop`]
-    /// does, then exit once nothing the limb started is left, all within
-    /// `within` milliseconds. Its input closing means the same, with the
-    /// limb's own default. Asked again with less time to make it harder.
-    Shutdown { within: u64 },
-    /// Watch these resources: what live contexts embody. `known` is every
-    /// version the journal holds of each: its current version where one is
-    /// recorded, otherwise each version a live context embodies. Report, as
-    /// a [`crate::resource::Change`], each resource whose version is none of
-    /// these, and from then on each change as it happens, so every change a
-    /// limb states is one.
-    Watch { known: Vec<Observation> },
+/// Written as a string (`call:{id}`), since a JSON object's keys are.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LimbKey {
+    Call(CallId),
+    /// The bytes of a value a call row names.
+    Value(ValueId),
+    Watch,
+    Environment(EnvironmentId),
+    Shutdown,
 }
 
-/// What a limb sends the brain.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum FromLimb {
-    /// Sent first on every connection, once the limb is ready to describe
-    /// itself (a clone it was configured to make is made). The brain records
-    /// it as [`Reach::Connected`], and sends again every unsettled call it
-    /// last sent before. The limb's first facts on the connection are its
-    /// [`crate::journal::Fact::Described`].
-    Hello { instance: InstanceId },
-    /// Facts about itself, its own calls and its own resources, with the
-    /// bytes they name: its description, a settlement with its output, a
-    /// change with the call that made it. The brain commits them as the
-    /// limb's, and the journal refuses any other fact.
-    Facts(Batch),
-    /// Output so far of a running call.
-    Live(Live),
+/// One row of what a limb holds of the brain: what the brain wants of it,
+/// as state, derived from the brain's facts ([`crate::state::State::limb_rows`]).
+///
+/// **Concept.** A limb is a follower like a face. It ships its own facts
+/// (its description, its settlements, the changes it saw) as records of its
+/// own place; the brain ships back the rows it should act on. There is no
+/// run message, so nothing is sent again after a reconnection: the limb
+/// gets its whole view on connecting and runs each call it holds a row for
+/// and has no record of, at most once per id. A call's input is a value,
+/// beside it as a [`LimbRow::Value`] row: the state names values, the
+/// brain's store holds their bytes, so the brain joins the two.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LimbRow {
+    /// Run this call: dispatched to this limb and not settled. A limb that
+    /// can check `call.expects` refuses it when they have moved, before it
+    /// has any effect. `stopping`: stop it gracefully (`SIGTERM` to a
+    /// command's processes) and kill what is left at this deadline
+    /// ([`crate::cancel`]); it settles as interrupted once nothing it started
+    /// is left. A deadline is only ever brought forward.
+    Call {
+        call: Call,
+        stopping: Option<Timestamp>,
+    },
+    /// Watch these resources: what live contexts embody. `known` is every
+    /// version the brain holds of each. Report, as a
+    /// [`crate::resource::Change`], each resource whose version is none of
+    /// these, and from then on each change as it happens.
+    Watch { known: Vec<Observation> },
+    /// The brain is going away: stop every running call as a stopping
+    /// [`LimbRow::Call`] is stopped, then exit once nothing the limb started
+    /// is left, all by `by`. Its link closing means the same, with the limb's
+    /// own default.
+    Shutdown { by: Timestamp },
+    /// A value's bytes.
+    Value(Bytes),
+    /// The current version of an environment read from this limb's
+    /// resources: what a limb holding role definitions restates only when
+    /// its files differ.
+    Environment(Environment),
+}
+
+impl std::fmt::Display for LimbKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LimbKey::Call(id) => write!(f, "call:{id}"),
+            LimbKey::Value(id) => write!(f, "value:{id}"),
+            LimbKey::Watch => f.write_str("watch"),
+            LimbKey::Environment(id) => write!(f, "environment:{id}"),
+            LimbKey::Shutdown => f.write_str("shutdown"),
+        }
+    }
+}
+
+impl std::str::FromStr for LimbKey {
+    type Err = ParseError;
+
+    fn from_str(text: &str) -> Result<LimbKey, ParseError> {
+        let invalid = ParseError {
+            expected: "a row: call:{id}, value:{id}, watch, environment:{id} or shutdown",
+        };
+        Ok(match text.split_once(':') {
+            None if text == "watch" => LimbKey::Watch,
+            None if text == "shutdown" => LimbKey::Shutdown,
+            Some(("call", id)) => LimbKey::Call(id.parse()?),
+            Some(("value", id)) => LimbKey::Value(id.parse()?),
+            Some(("environment", id)) => LimbKey::Environment(id.parse()?),
+            _ => return Err(invalid),
+        })
+    }
+}
+
+impl Serialize for LimbKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for LimbKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// What the brain ships a limb over its link.
+pub type LimbDown = harness_substrate::Down<LimbKey, LimbRow, crate::fact::Refusal, ()>;
+
+/// What a limb ships the brain over its link: its own records, and a
+/// running command's output so far.
+pub type LimbUp = harness_substrate::Up<crate::schema::Harness, crate::live::Live>;
+
+/// The first thing a limb says on connecting: which limb it is, and the
+/// place its records are of. Then [`LimbUp`]s one way and [`LimbDown`]s the
+/// other. A limb reconnects with the same place, to this brain or a
+/// restarted one, and is shipped a whole view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hello {
+    pub limb: LimbId,
+    pub place: PlaceId,
 }

@@ -288,6 +288,11 @@
   .compose .box { max-width: 48rem; margin: 0 auto; background: var(--white); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 2px 10px rgba(40, 30, 20, .06); padding: .55em .7em .5em .9em; }
   .compose .box:focus-within { border-color: #c9c4b4; box-shadow: 0 2px 14px rgba(40, 30, 20, .1); }
   .compose .box.drop { border-color: var(--ink); }
+  .compose .others:empty { display: none; }
+  .compose .other { display: flex; align-items: center; gap: .6em; max-width: 48rem; margin: 0 auto .35em; padding: .35em .6em; border: 1px dashed var(--line, #8884); border-radius: 8px; font-size: 13px; }
+  .compose .other .said { flex: 1; white-space: pre-wrap; }
+  .compose .other .why { color: var(--muted); font-size: 12px; }
+  .compose .other.held { border-style: solid; opacity: .85; }
   .compose .tray { display: flex; flex-wrap: wrap; gap: .4em; margin: .1em 0 .35em; }
   .compose .tray:empty { display: none; }
   .compose .att { display: inline-flex; align-items: center; gap: .35em; font-size: 12px; border: 1px solid var(--line); border-radius: 8px; padding: .15em .25em .15em .4em; background: var(--paper); max-width: 16em; }
@@ -382,7 +387,6 @@ const ago = (ms) => {
 };
 const kTokens = (n) => n == null ? "?" : n < 1000 ? `${n}` : n < 1e6 ? `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k` : `${+(n / 1e6).toFixed(1)}M`;
 const parse = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
-const mint = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const phone = () => matchMedia("(max-width: 760px)").matches;
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -404,44 +408,178 @@ function markdown(text) {
   return div;
 }
 
-// ─── This face ─────────────────────────────────────────────────────────────
-// Each tab is its own face, with an id it keeps across reloads; text Max is
-// writing is kept per task across tabs and reloads, so nothing he writes is
-// lost when the map changes under him or he goes somewhere else.
-const FACE = sessionStorage.getItem("face") || mint();
-sessionStorage.setItem("face", FACE);
+// ─── This tab: a place on the substrate ────────────────────────────────────
+// The tab is the wasm build of harness-face-tab: its own records, kept in
+// IndexedDB until the brain's standing covers them, and its replica of the
+// rows the brain derives for it. This script is glue: the DOM, the link and
+// IndexedDB. Whatever the tab says is parsed into core's facts by the wasm,
+// stored, and only then shipped; what became of it is read off the tab's
+// standing in a later view, so a refusal shows here, where it was made.
 let can = { act: false, dictation: false, sample: false };
 fetch("/wiring").then((r) => r.json()).then((c) => { can = c; render(); });
 
-const drafts = {
-  get: (key) => localStorage.getItem(`draft:${key}`) || "",
-  set: (key, text) => text ? localStorage.setItem(`draft:${key}`, text) : localStorage.removeItem(`draft:${key}`),
-};
-// A field that keeps what is typed in it.
-function kept(input, key) {
-  input.value = drafts.get(key);
-  input.addEventListener("input", () => drafts.set(key, input.value));
-  addEventListener("storage", (e) => { if (e.key === `draft:${key}` && document.activeElement !== input) input.value = e.newValue || ""; });
+const enc = new TextEncoder(), dec = new TextDecoder();
+let wasm = null;
+// One call into the tab: `input` (a string or bytes) in its I/O buffer,
+// the export's JSON output back.
+function tabCall(name, input, ...args) {
+  if (input !== undefined) {
+    const bytes = typeof input === "string" ? enc.encode(input) : input;
+    const at = wasm.io(bytes.length);
+    new Uint8Array(wasm.memory.buffer, at, bytes.length).set(bytes);
+  }
+  const ret = wasm[name](...args);
+  const out = new Uint8Array(wasm.memory.buffer, wasm.io_ptr(), wasm.io_len());
+  return { ret, out: out.length ? JSON.parse(dec.decode(out)) : null };
+}
+// What names a value in the facts: its digest, as the core computes it.
+const digest = (text) => tabCall("digest", text).out;
+
+// IndexedDB: every place's records this browser holds, by time.
+const db = new Promise((ok, fail) => {
+  const open = indexedDB.open("harness-tabs", 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("records", { keyPath: "at" }).createIndex("place", "place");
+  open.onsuccess = () => ok(open.result);
+  open.onerror = () => fail(open.error);
+});
+const done = (tx) => new Promise((ok, fail) => { tx.oncomplete = ok; tx.onerror = tx.onabort = () => fail(tx.error); });
+async function loadPlace(place) {
+  const store = (await db).transaction("records").objectStore("records");
+  const req = store.index("place").getAll(place);
+  return new Promise((ok, fail) => { req.onsuccess = () => ok(req.result.map((r) => r.record)); req.onerror = () => fail(req.error); });
+}
+async function placesHeld() {
+  const req = (await db).transaction("records").objectStore("records").index("place").getAllKeys();
+  const keys = await new Promise((ok, fail) => { req.onsuccess = () => ok(req.result); req.onerror = () => fail(req.error); });
+  return [...new Set(keys.map((at) => at.split(".")[0]))];
+}
+async function forget(place) {
+  const tx = (await db).transaction("records", "readwrite");
+  const store = tx.objectStore("records");
+  for (const at of await new Promise((ok) => { const r = store.index("place").getAllKeys(place); r.onsuccess = () => ok(r.result); })) store.delete(at);
+  await done(tx);
 }
 
-// Max's facts, with the text of each value they name, in one batch. A post
-// the connection dropped is sent again: what the page creates carries an id
-// it minted, so the core refuses a second copy, which means the first landed.
-async function act(facts, values = []) {
-  if (!can.act) return "this face is not wired to a brain";
-  const batch = { values, facts: Array.isArray(facts) ? facts : [facts] };
-  const body = JSON.stringify({ face: FACE, seen: view.seq, batch });
-  for (let attempt = 0; ; attempt++) {
-    let res;
-    try { res = await fetch("/act", { method: "POST", body }); }
-    catch { await sleep(1000 * Math.min(attempt + 1, 5)); continue; }
-    if (res.ok) return null;
-    const why = await res.text();
-    if (attempt > 0 && why === "creates something that already exists") return null;
-    return why || res.statusText;
+// A place: a tab's handle in the wasm and its link to the brain.
+class Place {
+  constructor(id, handle, onView) { this.id = id; this.h = handle; this.onView = onView; this.ws = null; this.waiting = []; this.flushing = Promise.resolve(); }
+  static async open(id, onView) {
+    const { ret, out } = tabCall("open", JSON.stringify({ place: id, records: await loadPlace(id) }));
+    if (ret === 0xffffffff) throw new Error(out.error);
+    return new Place(id, ret, onView);
+  }
+  // Make the tab's writes durable, in order.
+  persist() {
+    const writes = tabCall("writes", undefined, this.h).out;
+    if (!writes.length) return this.flushing;
+    this.flushing = this.flushing.then(async () => {
+      const tx = (await db).transaction("records", "readwrite");
+      const store = tx.objectStore("records");
+      for (const w of writes) {
+        if (w.Put) store.put({ at: w.Put.at, place: this.id, record: w.Put });
+        else store.delete(w.Drop);
+      }
+      await done(tx);
+    });
+    return this.flushing;
+  }
+  connect() {
+    const ws = this.ws = new WebSocket(`wss://${location.host}/link?place=${this.id}`);
+    ws.onopen = () => this.shipUnsent();
+    ws.onmessage = (m) => {
+      const { out } = tabCall("down", m.data, this.h);
+      if (out.error) return console.error(out.error);
+      if (out.live) return liveArrived(out.live.live);
+      const fresh = m.data.startsWith('{"View"');
+      this.persist();
+      this.waiting = this.waiting.filter((w) => {
+        const s = this.status(w.n);
+        if (s === "pending") return true;
+        w.ok(s === "included" ? null : s.refused);
+        return false;
+      });
+      this.onView?.(fresh);
+    };
+    ws.onclose = () => { if (this.ws === ws) { this.onView?.(null); setTimeout(() => this.connect(), 1000); } };
+  }
+  close() { const ws = this.ws; this.ws = null; ws?.close(); tabCall("close", undefined, this.h); }
+  shipUnsent() {
+    const { out } = tabCall("unsent", undefined, this.h);
+    if (out.restored) return restored(this);
+    for (const up of out.ups) this.ws?.send(JSON.stringify(up));
+  }
+  status(n) { return tabCall("status", undefined, this.h, n).out; }
+  view() { return tabCall("view", undefined, this.h).out; }
+  next() { return tabCall("next", undefined, this.h).out; }
+  records() { return tabCall("records", undefined, this.h).out; }
+  settled() { return wasm.settled(this.h) === 1; }
+  // Say a batch: stored, then shipped. Resolves with null once the brain
+  // includes it, or with why it refused it; until then it is pending.
+  async say(batch) {
+    const { out } = tabCall("say", JSON.stringify(batch), this.h, Date.now());
+    if (out.error) return out.error;
+    await this.persist();
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(out.up));
+    return new Promise((ok) => this.waiting.push({ n: out.n, ok }));
   }
 }
-const digest = async (bytes) => (await fetch("/digest", { method: "POST", body: bytes })).text();
+
+// This tab's place: kept in sessionStorage across reloads, and held by a
+// Web Lock, so a duplicated tab (which copies sessionStorage) becomes a
+// place of its own. A place is per tab per brain: IndexedDB is per origin.
+const mintPlace = () => [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
+function hold(id) {
+  return new Promise((ok) => navigator.locks.request(`place:${id}`, { ifAvailable: true }, (lock) => {
+    ok(!!lock);
+    return lock ? new Promise(() => {}) : null;
+  }));
+}
+let tab = null;
+async function start() {
+  wasm = (await WebAssembly.instantiateStreaming(fetch("/tab.wasm"))).instance.exports;
+  let id = sessionStorage.getItem("place");
+  if (!id || !(await hold(id))) { do id = mintPlace(); while (!(await hold(id))); }
+  sessionStorage.setItem("place", id);
+  tab = await Place.open(id, viewArrived);
+  restoreLocal();
+  tab.connect();
+  adoptOrphans();
+}
+// A closed tab's place, whose lock is free: ship what it had not, then
+// forget it, so nothing typed in a tab that was closed offline is lost.
+async function adoptOrphans() {
+  for (const id of await placesHeld()) {
+    if (id === tab.id || !(await hold(id))) continue;
+    const orphan = await Place.open(id, () => {
+      if (!orphan.settled()) return;
+      orphan.close();
+      forget(id);
+    });
+    orphan.connect();
+  }
+}
+// The brain holds more of this place than this browser does: its storage
+// was restored or lost. It goes on as a new place.
+async function restored(place) {
+  if (place !== tab) { place.close(); return forget(place.id); }
+  tab.close();
+  await forget(tab.id);
+  let id; do id = mintPlace(); while (!(await hold(id)));
+  sessionStorage.setItem("place", id);
+  tab = await Place.open(id, viewArrived);
+  tab.connect();
+}
+
+// Max's facts, in one record at this tab. `facts` may be a function of the
+// record's time, `place.n`, which names what the record creates
+// (`${at}.0`). Values are the texts the facts name. Resolves with null once
+// included, or the brain's reason for refusing it.
+async function act(facts, values = []) {
+  if (!tab) return "this tab has not started";
+  const at = tab.next();
+  const made = typeof facts === "function" ? facts(at) : facts;
+  return tab.say({ values, facts: Array.isArray(made) ? made : [made] });
+}
 
 // ─── The model: the view as a map ──────────────────────────────────────────
 // A node is a task. A scope (the spawn call that owns its members) is a
@@ -930,6 +1068,8 @@ function render() {
   $("#build").textContent = `${view.build || ""} · seq ${view.seq}`;
   if (openId) renderPanel();
   if (!$("#drawer").hidden) renderDrawer();
+  syncCompose();
+  renderOthers();
 }
 
 // ─── Max's queue ───────────────────────────────────────────────────────────
@@ -1055,7 +1195,7 @@ async function refreshNow() { await refresh(); while (busy) await sleep(20); }
 // The node opens into the panel: the panel is revealed from the node's dot.
 async function expand(id) {
   openId = id;
-  if (can.act && byId[id]) act({ Focus: { face: FACE, task: id } });
+  if (can.act && byId[id]) act({ Focus: { task: id } });
   for (const [nid, a] of nodeEls) a.classList.toggle("selected", nid === id);
   map.classList.add("dim");
   panel.hidden = false;
@@ -1213,8 +1353,8 @@ function renderControls(t) {
     b.onclick = async () => {
       if (confirm && !b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = `${label}?`; setTimeout(() => { b.classList.remove("armed"); b.textContent = label; }, 4000); return; }
       b.classList.remove("armed"); b.textContent = label;
-      answer.className = "answer"; answer.textContent = "…";
-      const why = await act(fact());
+      answer.className = "answer"; answer.textContent = "pending";
+      const why = await act(fact);
       answer.className = why ? "answer bad" : "answer";
       answer.textContent = why ? `refused: ${why}` : done;
       if (why && byId[t.id]?.scoped) { const a = el("button", "btn", "Open an aside"); a.onclick = () => aside(t, answer); answer.append(" ", a); }
@@ -1222,9 +1362,9 @@ function renderControls(t) {
     box.append(b);
   };
   if (t.scoped) { const a = el("button", "btn", "Aside"); a.title = "Talk to a fork of it while its agents work; it is told when they are done, and when you say Done its summary goes back with their results"; a.onclick = () => aside(t, answer); box.append(a); }
-  else if (t.waiting?.kind !== "max") button("Interrupt", "Stop at the next safe point and wait for you", () => ({ Task: [t.id, { Drain: "ToMax" }] }), "interrupted: your move once it stops");
+  else if (t.waiting?.kind !== "max" && t.turn) button("Interrupt", "Stop at the next safe point and wait for you", () => ({ Task: [t.id, { Drain: { ToMax: { turn: byId[t.id].turn } } }] }), "interrupted: your move once it stops");
   button(t.held ? "Release" : "Hold", "No new requests under it until released", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), t.held ? "released" : "held");
-  if (t.mode === "user-facing") button("Done", "It writes its result and finishes", () => ({ Delivery: { id: mint(), to: t.id, content: { Prompt: "Done" } } }), "done: its last turn writes the result", true);
+  if (t.mode === "user-facing") button("Done", "It writes its result and finishes", (at) => ({ Delivery: { id: `${at}.0`, to: t.id, content: { Prompt: "Done" } } }), "done: its last turn writes the result", true);
   // A stop gives it two minutes to stop what it started and tidy up; Kill
   // ends a stopping task now, with no tidy-up turn.
   if (!t.stop) button("Stop", "Cancel it and everything it started: it tidies up and reports, within two minutes", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 120000 } } }] }), "stopping: it tidies up, then reports", true);
@@ -1238,12 +1378,12 @@ function renderControls(t) {
 async function aside(t, answer) {
   const key = t.id;
   const said = drafts.get(key).trim() || "I want to talk while your work runs.";
-  const text = await digest(said);
-  const id = mint();
-  const why = await act({ Task: [id, { Created: {
+  const text = digest(said);
+  let id;
+  const why = await act((at) => ({ Task: [id = `${at}.0`, { Created: {
     name: `${t.name}-aside`, by: null, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } },
     mode: "UserFacing", mandate: { text, brief: null, quotes: [] },
-  } }] }, [said]);
+  } }] }), [said]);
   answer.className = why ? "answer bad" : "answer";
   answer.textContent = why ? `aside refused: ${why}` : "aside opened";
   if (why) return;
@@ -1621,46 +1761,47 @@ function stick(change) {
 scrollEl.addEventListener("scroll", () => { if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80) $(".jump", panel).hidden = true; });
 $(".jump", panel).onclick = () => { scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" }); };
 
-// A request streaming, or a command printing: neither is a fact, so each is
-// read from /live, which resumes from its last event after a reconnect.
+// A request streaming, or a command printing: neither is a fact. Each
+// arrives on the link as live pieces, all of them again after a reconnect.
+const live = new Map(), watchers = new Map();
+function liveArrived(l) {
+  const [kind] = Object.keys(l), key = `${kind}:${l[kind].call}`;
+  const text = (live.get(key) || "") + l[kind].chunk;
+  live.set(key, text);
+  watchers.get(key)?.(text);
+}
+function liveReset() { live.clear(); for (const f of watchers.values()) f(""); }
+function watch(key, f) { watchers.set(key, f); f(live.get(key) || ""); }
 let modelStream = null;
-const callStreams = new Map();
+const callStreams = new Set();
 function followModel(call) {
   if (modelStream?.call === call) return modelStream.holder;
   stopModel();
   const holder = el("div", "entry live-holder");
   const prose = el("div", "prose live-text");
   holder.append(prose);
-  const source = new EventSource(`/live?model=${call}`);
   let text = "", pendingDraw = null;
-  modelStream = { call, source, holder };
-  source.addEventListener("end", () => source.close());
-  source.onmessage = (m) => {
-    text += parse(m.data) ?? "";
+  modelStream = { call, holder };
+  watch(`Model:${call}`, (t) => {
+    text = t;
     if (pendingDraw) return;
     pendingDraw = setTimeout(() => {
       pendingDraw = null;
       stick(() => { if (window.marked && window.DOMPurify) prose.innerHTML = DOMPurify.sanitize(marked.parse(text)); else prose.textContent = text; });
     }, 80);
-  };
+  });
   return holder;
 }
-function stopModel() { if (modelStream) { modelStream.source.close(); modelStream = null; } }
+function stopModel() { if (modelStream) { watchers.delete(`Model:${modelStream.call}`); modelStream = null; } }
 function followCall(c, row) {
   if (callStreams.has(c.id)) return;
-  const source = new EventSource(`/live?call=${c.id}`);
   const out = el("div", "io");
   $(".detail", row).append(out);
   row.classList.add("expanded");
-  let raw = "";
-  callStreams.set(c.id, source);
-  source.addEventListener("end", () => { source.close(); callStreams.delete(c.id); });
-  source.onmessage = (m) => {
-    raw += parse(m.data) ?? "";
-    stick(() => { out.textContent = screen(raw); out.scrollTop = out.scrollHeight; });
-  };
+  callStreams.add(c.id);
+  watch(`Call:${c.id}`, (raw) => stick(() => { out.textContent = screen(raw); out.scrollTop = out.scrollHeight; }));
 }
-function stopFollowing() { stopModel(); for (const s of callStreams.values()) s.close(); callStreams.clear(); }
+function stopFollowing() { stopModel(); for (const id of callStreams) watchers.delete(`Call:${id}`); callStreams.clear(); }
 // A command's output as a terminal would leave it: only the last lines.
 function screen(raw) {
   const lines = raw.replace(/\r\n/g, "\n").split("\n").map((l) => l.slice(l.lastIndexOf("\r") + 1));
@@ -1680,14 +1821,132 @@ function screen(raw) {
 const compose = $(".compose", panel);
 let box = null, dictation = null;
 
-// Attachments: content blocks kept beside the draft text.
-const attached = {
-  get: (key) => parse(localStorage.getItem(`attach:${key}`) || "[]") || [],
-  set: (key, list) => {
-    try { list.length ? localStorage.setItem(`attach:${key}`, JSON.stringify(list)) : localStorage.removeItem(`attach:${key}`); return null; }
-    catch { return "too large to keep in this browser"; }
-  },
+// Max's drafts, held by the brain: a draft is a message from its first
+// pause in typing, so the phone shows what the PC typed and either can send
+// it. Its content is `{text, attached}`. This tab keeps what it typed until
+// the brain has included it; then the draft's row holds it.
+const local = new Map();  // draft id -> { text, attached, v }
+const bound = new Map();  // session -> the draft this tab writes to
+const saving = new Map(); // session -> pending save timer
+const rowsOf = (session) => (view?.drafts || []).filter((d) => d.session === session);
+function draftOf(session) {
+  const id = bound.get(session);
+  if (id && (local.has(id) || rowsOf(session).some((d) => d.id === id))) return id;
+  const open = rowsOf(session).filter((d) => !d.held);
+  const pick = open.length ? open[open.length - 1].id : null;
+  if (pick) bound.set(session, pick); else bound.delete(session);
+  return pick;
+}
+function contentOf(id) {
+  if (!id) return { text: "", attached: [] };
+  if (local.has(id)) return local.get(id);
+  const row = (view?.drafts || []).find((d) => d.id === id);
+  const said = parse(row?.text || "{}");
+  // A held Send's words are the content blocks it sent.
+  if (Array.isArray(said)) return {
+    text: said.filter((b) => b.type === "text").map((b) => b.text).join("\n\n"),
+    attached: said.filter((b) => b.type !== "text").map((block) => ({ name: block.type, block })),
+  };
+  return { text: "", attached: [], ...said };
+}
+function edit(session, change) {
+  const id = draftOf(session) || `new:${session}`;
+  const was = contentOf(id === `new:${session}` ? null : id);
+  local.set(id, { ...was, ...local.get(id), ...change, v: (local.get(id)?.v || 0) + 1 });
+  clearTimeout(saving.get(session));
+  saving.set(session, setTimeout(() => save(session), 600));
+}
+// One record per pause: the whole content, or the draft's discarding once
+// it is empty.
+async function save(session) {
+  saving.delete(session);
+  let id = draftOf(session) || `new:${session}`;
+  const c = local.get(id);
+  if (!c) return;
+  const value = JSON.stringify({ text: c.text, attached: c.attached });
+  const empty = !c.text && !c.attached.length;
+  if (id.startsWith("new:") && empty) return local.delete(id);
+  let raced = null;
+  const why = await act((at) => {
+    raced = `${at}.0`;
+    c.n = Number(at.split(".")[1]);
+    c.saved = c.v;
+    if (!id.startsWith("new:")) return { Draft: [id, empty ? "Discarded" : { Text: digest(value) }] };
+    local.delete(id);
+    id = `${at}.0`;
+    local.set(id, c);
+    bound.set(session, id);
+    return [{ Draft: [id, { Opened: { session } }] }, { Draft: [id, { Text: digest(value) }] }];
+  }, empty ? [] : [value]);
+  if (!why && empty && !local.has(id)) bound.delete(session);
+  // Another device edited it first: these words are a draft of their own
+  // now, and this box goes on with them.
+  if (why && rowsOf(session).some((d) => d.id === raced)) {
+    if (local.get(id) === c) { local.delete(id); local.set(raced, c); }
+    bound.set(session, raced);
+    if (box?.dataset.key === session) syncCompose();
+  }
+  if (box?.dataset.key === session) renderOthers();
+}
+// Forget what this tab typed once the brain holds it: then the draft's row
+// is the truth, whichever device typed last.
+function settleLocal() {
+  for (const [id, c] of local) if (c.n && c.saved === c.v && tab.status(c.n) !== "pending") local.delete(id);
+}
+// After a reload, what this tab typed that the brain has not yet included
+// is in its own records: back into the boxes.
+function restoreLocal() {
+  for (const r of tab.records()) {
+    const said = r.what.Said;
+    if (!said) continue;
+    const n = Number(r.at.split(".")[1]);
+    for (const f of said.facts) {
+      const [id, e] = f.Draft || [];
+      if (e?.Opened) bound.set(e.Opened.session, id);
+      if (e?.Text) {
+        const value = said.values.find((v) => typeof v === "string" && digest(v) === e.Text);
+        if (value) local.set(id, { text: "", attached: [], ...parse(value), v: 1, saved: 1, n });
+      }
+    }
+  }
+}
+// A chat not started yet, and its fields, have no session: theirs are
+// kept in this tab.
+const unborn = (key) => key === NEW || key.startsWith("new:");
+const keptHere = (key) => ({ text: "", attached: [], ...parse(sessionStorage.getItem(`draft:${key}`) || "{}") });
+const keepHere = (key, change) => sessionStorage.setItem(`draft:${key}`, JSON.stringify({ ...keptHere(key), ...change }));
+const drafts = {
+  get: (session) => unborn(session) ? keptHere(session).text : contentOf(draftOf(session) || `new:${session}`).text,
+  set: (session, text) => unborn(session) ? keepHere(session, { text }) : edit(session, { text }),
 };
+const attached = {
+  get: (session) => unborn(session) ? keptHere(session).attached : contentOf(draftOf(session) || `new:${session}`).attached,
+  set: (session, list) => { if (unborn(session)) keepHere(session, { attached: list }); else edit(session, { attached: list }); return null; },
+};
+// The brain's text for the draft in the box, if this tab has nothing of
+// its own unsaved: what another device typed.
+function syncCompose() {
+  if (!box || dictation) return;
+  const id = draftOf(box.dataset.key);
+  if (id && local.has(id)) return;
+  const text = drafts.get(box.dataset.key);
+  if (box.value !== text) { box.value = prev = text; autosize(); renderTray(); }
+}
+// The session's other drafts: words held when the session could not take
+// them, and drafts opened beside this one (a concurrent Send or edit).
+function renderOthers() {
+  const others = $(".others", compose);
+  if (!others || !box) return;
+  const session = box.dataset.key, mine = draftOf(session);
+  others.replaceChildren(...rowsOf(session).filter((d) => d.id !== mine).map((d) => {
+    const c = contentOf(d.id), card = el("div", `other${d.held ? " held" : ""}`);
+    card.append(el("span", "said", c.text.split("\n")[0].slice(0, 160) || `${c.attached.length} attached`));
+    card.append(el("span", "why", d.held ? `not heard: ${d.held}` : !d.from ? "another draft" : rowsOf(session).some((o) => o.id === d.from) ? "typed at the same time as another" : "typed after another was sent"));
+    if (!d.held) { const use = el("button", "btn", "Edit this"); use.onclick = () => { bound.set(session, d.id); box.value = prev = c.text; autosize(); renderTray(); renderOthers(); }; card.append(use); }
+    return card;
+  }));
+}
+
 const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 async function attach(key, files) {
   const list = attached.get(key);
@@ -1716,13 +1975,21 @@ function renderTray() {
     return chip;
   }));
 }
-addEventListener("storage", (e) => { if (box && e.key === `attach:${box.dataset.key}`) renderTray(); });
 
 function buildCompose(id) {
   compose.replaceChildren();
   box = null;
   const t = byId[id];
-  if (id !== NEW && (!t || isDone(t))) { compose.append(el("div", "closed", t && isDone(t) ? "Finished. Its log is read-only." : "")); return; }
+  if (id !== NEW && (!t || isDone(t))) {
+    compose.append(el("div", "closed", t && isDone(t) ? "Finished. Its log is read-only." : ""));
+    // Words he sent after it finished: kept, and shown as his, unheard.
+    for (const d of t ? rowsOf(id).filter((d) => d.held) : []) {
+      const c = contentOf(d.id), card = el("div", "other held");
+      card.append(el("span", "said", c.text), el("span", "why", `the agent did not hear this: ${d.held}`));
+      compose.append(card);
+    }
+    return;
+  }
   if (!can.act) { compose.append(el("div", "closed", "This face only watches.")); return; }
   const wrap = el("div", "box");
   const to = el("div", "to");
@@ -1743,7 +2010,8 @@ function buildCompose(id) {
   later.title = "It reads this once its turn ends, without cutting across its work (Ctrl+Shift+Enter)";
   const send = el("button", "btn primary send", "Send now"); send.type = "button";
   row.append(clip, file, mic, sample, status, later, send);
-  wrap.append(to, tray, box, row);
+  const others = el("div", "others");
+  wrap.append(to, others, tray, box, row);
   compose.append(wrap);
   clip.onclick = () => file.click();
   file.onchange = () => { attach(id, [...file.files]); file.value = ""; };
@@ -1764,6 +2032,7 @@ function buildCompose(id) {
   box.addEventListener("input", onInput);
   autosize();
   renderTray();
+  renderOthers();
   renderComposeState(t);
 }
 // Mid-turn, a message can go now or wait for the turn's end; between turns,
@@ -1776,6 +2045,8 @@ function renderComposeState(t) {
     $(".send", compose).textContent = "Start";
     return;
   }
+  // A finished chat's compose is only what it did not hear: drawn afresh.
+  if (t && isDone(t) && openId === t.id) return buildCompose(t.id);
   if (!box || box.dataset.key !== t.id) return;
   const to = $(".to", compose), ask = askOf(t), mid = midTurn(t) && !ask;
   to.className = `to${ask ? " answering" : ""}`;
@@ -1788,7 +2059,6 @@ function renderComposeState(t) {
 }
 const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = text; s.className = `status${bad ? " bad" : ""}`; } };
 function autosize() { if (!box) return; box.style.height = "auto"; box.style.height = `${Math.min(box.scrollHeight, innerHeight * .4)}px`; }
-addEventListener("storage", (e) => { if (box && e.key === `draft:${box.dataset.key}` && document.activeElement !== box && !dictation) { box.value = e.newValue || ""; prev = box.value; autosize(); } });
 
 async function submit(read) {
   if (!box) return;
@@ -1797,22 +2067,38 @@ async function submit(read) {
   if (!text.trim() && !files.length) return;
   if (dictation) return stopDictation();
   if (!t) return startNew(text, files);
-  say("sending");
+  say("pending");
   const ask = askOf(t);
   const blocks = [...files.map((a) => a.block), ...(text.trim() ? [{ type: "text", text }] : [])];
-  const words = JSON.stringify(blocks);
-  let why;
-  try {
-    const id = await digest(words);
-    // An answer settles the question; anything else is a delivery.
-    why = ask
-      ? await act({ Call: [ask.id, { Settled: { Completed: { model: id, full: null, observes: [] } } }] }, [words])
-      : await act({ Delivery: { id: mint(), to: t.id, content: { Words: id }, read } }, [words]);
-  } catch (e) { why = String(e); }
+  const words = JSON.stringify(blocks), id = digest(words);
+  clearTimeout(saving.get(t.id));
+  saving.delete(t.id);
+  let draft = draftOf(t.id), sent = null;
+  // An answer settles the question and discards the draft; anything else
+  // sends the draft, opening it first if no pause has yet.
+  const why = await act((at) => {
+    sent = `${at}.0`;
+    if (ask) return [{ Call: [ask.id, { Settled: { Completed: { model: id, full: null, observes: [] } } }] }, ...(draft ? [{ Draft: [draft, "Discarded"] }] : [])];
+    const facts = [];
+    if (!draft) { draft = sent; facts.push({ Draft: [draft, { Opened: { session: t.id } }] }); }
+    facts.push({ Draft: [draft, { Send: { text: id, read } }] });
+    return facts;
+  }, [words]);
   if (why) return say(`not sent: ${why}`, true);
-  if (box.value === text) { box.value = prev = ""; drafts.set(t.id, ""); autosize(); }
-  attached.set(t.id, []);
+  const rows = view.drafts;
+  const successor = !ask && rows.find((d) => d.id === sent && d.from === draft);
+  const held = !ask && rows.find((d) => d.id === draft && d.held);
+  local.delete(draft);
+  if (successor) {
+    bound.set(t.id, successor.id);
+    renderOthers();
+    return say("another device sent this draft first: your words are a new draft, beside it", true);
+  }
+  if (held) { bound.delete(t.id); renderOthers(); return say(`held, not heard: ${held.held}`, true); }
+  bound.delete(t.id);
+  if (box.value === text) { box.value = prev = ""; autosize(); }
   renderTray();
+  renderOthers();
   say(ask ? "answered" : read === "TurnEnd" ? `${t.name} reads it when its turn ends` : `sent to ${t.name}`);
 }
 
@@ -1932,9 +2218,10 @@ function finishDictation(l) {
 
 // ─── A new chat, in Max's own scope ───────────────────────────────────────
 // "+ New" opens the panel on a chat that does not exist yet: its role and
-// directory above, the same staging box as every chat below, its draft and
-// attachments kept like theirs. Sending starts it: the words are its
-// mandate, and what is attached reaches it with them.
+// directory above, the same staging box as every chat below. Sending
+// starts it: the words are its mandate, and what is attached reaches it
+// with them. Until then it has no session for a draft to belong to, so
+// what is typed for it is kept in this tab alone.
 $("#new").onclick = () => go(NEW);
 $("#empty-new").onclick = () => go(NEW);
 function buildNew() {
@@ -1976,26 +2263,31 @@ async function startNew(text, files) {
   if (env.places.length && !dir) return say(`it needs a directory for its ${env.places[0]}`, true);
   if (!text.trim()) return say("write what it is for", true);
   say("starting");
-  const facts = [], values = [text], places = {};
-  for (const place of env.places) {
-    const known = view.workspaces.find((w) => w.dir === dir);
-    const id = known ? known.id : mint();
-    if (!known) facts.push({ Limb: { id, name: dir, kind: { Plugin: { kind: place, config: JSON.stringify({ dir }) } } } });
-    places[place] = id;
-  }
-  const id = mint();
-  facts.push({ Task: [id, { Created: {
-    name: $("#n-name").value.trim() || title(text), by: null, scope: "Max",
-    origin: { Fresh: { environment: env.id, places } },
-    mode: "UserFacing",
-    mandate: { text: await digest(text), brief: null, quotes: [] },
-  } }] });
-  if (files.length) {
-    const words = JSON.stringify(files.map((a) => a.block));
-    values.push(words);
-    facts.push({ Delivery: { id: mint(), to: id, content: { Words: await digest(words) }, read: "Next" } });
-  }
-  const why = await act(facts, values);
+  const name = $("#n-name").value.trim() || title(text), mandate = digest(text);
+  const words = files.length ? JSON.stringify(files.map((a) => a.block)) : null;
+  let id;
+  // What the record creates: a limb for each new directory, the task, and
+  // what is attached as its first words.
+  const facts = (at) => {
+    let i = 0;
+    const out = [], places = {};
+    for (const place of env.places) {
+      const known = view.workspaces.find((w) => w.dir === dir);
+      const limb = known ? known.id : `${at}.${i++}`;
+      if (!known) out.push({ Limb: { id: limb, name: dir, kind: { Plugin: { kind: place, config: JSON.stringify({ dir }) } } } });
+      places[place] = limb;
+    }
+    id = `${at}.${i++}`;
+    out.push({ Task: [id, { Created: {
+      name, by: null, scope: "Max",
+      origin: { Fresh: { environment: env.id, places } },
+      mode: "UserFacing",
+      mandate: { text: mandate, brief: null, quotes: [] },
+    } }] });
+    if (words) out.push({ Delivery: { id: `${at}.${i}`, to: id, content: { Words: digest(words) }, read: "Next" } });
+    return out;
+  };
+  const why = await act(facts, words ? [text, words] : [text]);
   if (why) return say(`not started: ${why}`, true);
   box.value = prev = "";
   for (const k of [NEW, "new:name"]) drafts.set(k, "");
@@ -2006,18 +2298,31 @@ async function startNew(text, files) {
 $("#fit").onclick = () => fit(true);
 addEventListener("resize", () => { shape = ""; refresh(); });
 
-// ─── The stream ────────────────────────────────────────────────────────────
-// The event id is the journal position: the browser resends it on reconnect
-// and gets the next view after it.
-const source = new EventSource("/events");
-source.onopen = () => { $("#link").className = ""; $("#link").title = "live"; };
-source.onerror = () => { $("#link").className = "down"; $("#link").title = "reconnecting"; };
-source.onmessage = async (m) => {
-  view = JSON.parse(m.data);
+// ─── The view ──────────────────────────────────────────────────────────────
+// The tab's rows, one per object, as the page draws them.
+function assemble(v) {
+  const out = { as_of: v.as_of, seq: Number(v.as_of.split(".")[1]), tasks: [], scopes: {}, queue: [], drafts: [], environments: [], workspaces: [] };
+  for (const [key, row] of Object.entries(v.rows)) {
+    const id = key.slice(key.indexOf(":") + 1);
+    if (row.Task) out.tasks.push(row.Task);
+    else if (row.Scope) out.scopes[id] = row.Scope;
+    else if (row.Queue) out.queue = row.Queue;
+    else if (row.Harness) Object.assign(out, row.Harness);
+    else if (row.Draft) out.drafts.push({ id, ...row.Draft });
+  }
+  return out;
+}
+async function viewArrived(fresh) {
+  if (fresh === null) { $("#link").className = "down"; $("#link").title = "reconnecting"; return; }
+  $("#link").className = ""; $("#link").title = "live";
+  if (fresh) liveReset();
+  view = assemble(tab.view());
+  settleLocal();
   await refresh();
   if (pendingOpen && byId[pendingOpen]) { const id = pendingOpen; pendingOpen = null; history.replaceState({ node: id }, "", `#${id}`); route(); }
-  else if (!openId && location.hash.length > 1 && byId[location.hash.slice(1)] && !moving.started) { moving.started = true; route(); }
-};
+  else if (!openId && location.hash.length > 1 && (byId[location.hash.slice(1)] || location.hash === `#${NEW}`) && !moving.started) { moving.started = true; route(); }
+}
+start().catch((e) => { $("#link").className = "down"; $("#link").title = `this tab could not start: ${e}`; console.error(e); });
 // Waits grow between events.
 setInterval(() => { if (view) { drawMapText(); if (openId) renderPanel(); } }, 1000);
 function drawMapText() {

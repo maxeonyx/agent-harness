@@ -3,10 +3,12 @@ name = "harness-face-web"
 version = "0.0.0"
 edition.workspace = true
 license.workspace = true
-description = "The harness's web face: the task tree, live from the journal, and Max's compose box with dictation, over HTTPS."
+description = "The harness's web face: the task tree, a replica in every tab, and Max's compose box with dictation, over HTTPS."
 
 [dependencies]
 harness-core = { path = "../core" }
+harness-face-tab = { path = "../face-tab" }
+harness-substrate = { path = "../substrate" }
 harness-provider = { path = "../provider" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde_json = "1"

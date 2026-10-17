@@ -1,26 +1,39 @@
 //! Drives the workspace limb through a realistic sequence of calls in a
 //! scratch directory, playing the brain: two agents' contexts, a stale
 //! write refused, a command's write noticed, truncated output, a process
-//! tree cancelled, and a crash answered by re-sending calls. See
-//! `demos/limb-workspace`.
+//! tree stopped, and the limb killed mid-command. See `demos/limb-workspace`.
+//!
+//! The brain here keeps the limb's rows itself, a `BTreeMap` it ships with a
+//! [`Publisher`], and takes the limb's records by advancing its standing.
+//! The limb runs in this process, but for the instance that is killed: that
+//! one is this executable run as `demo crash`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 use std::{env, fs, thread};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
-use harness_core::environment::{Description, FromLimb, ToLimb};
-use harness_core::id::{CallId, LimbId, TaskId, ToolUseId, ValueId};
-use harness_core::journal::{Batch, Fact};
+use harness_core::environment::{Description, LimbDown, LimbKey, LimbRow, LimbUp};
+use harness_core::fact::{Batch, Fact, Refusal};
+use harness_core::id::{CallId, EventId, LimbId, TaskId, Time, Timestamp, ToolUseId, ValueId};
 use harness_core::live::Live;
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
-use harness_limb_workspace::{Config, Kind, Settings, Workspace};
+use harness_limb_workspace::{Config, Kind, Settings, Workspace, now};
+use harness_substrate::{PlaceId, Publisher, Standing, Up, View, What};
 use serde_json::{Value, json};
 
-const LIMB: LimbId = LimbId(1);
+/// The place the brain's ids are minted at.
+const BRAIN: PlaceId = PlaceId(0xb7a1);
+
+/// The limb, as the brain's first event.
+const LIMB: LimbId = LimbId(EventId {
+    at: Time { place: BRAIN, n: 1 },
+    i: 0,
+});
 
 fn main() {
     let scratch = env::current_dir().unwrap().join("demo-scratch.ignore");
@@ -31,10 +44,11 @@ fn main() {
     fs::create_dir_all(scratch.join("work")).unwrap();
     println!("scratch directory: {}\n", scratch.display());
 
-    let mut brain = Brain::open(&scratch);
+    let mut brain = Brain::new(&scratch);
+    brain.connect();
 
     title("The tools, as a context's root declares them");
-    let description = brain.description.clone();
+    let description = brain.description.clone().expect("described");
     for tool in &description.tools {
         let definition: Value = serde_json::from_str(&tool.definition).unwrap();
         let required = &definition["input_schema"]["required"];
@@ -50,8 +64,8 @@ fn main() {
         &text[..text.find(". ").unwrap() + 1]
     );
 
-    let mut a = Context::new("A", 1);
-    let mut b = Context::new("B", 2);
+    let mut a = Context::new("A", TaskId(brain.mint()));
+    let mut b = Context::new("B", TaskId(brain.mint()));
 
     title("A writes a file, B reads it and edits it");
     brain.call(&mut a, "write", json!({ "path": "src/lib.rs", "content": "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n" }));
@@ -77,7 +91,7 @@ fn main() {
     );
 
     title(
-        "A command changes a watched file: reported after the call, and B's next edit is refused",
+        "A command changes a watched file: reported in its settlement, and B's next edit is refused",
     );
     let key = ResourceKey {
         limb: LIMB,
@@ -85,7 +99,7 @@ fn main() {
         name: "src/lib.rs".into(),
     };
     println!(
-        "\n  → Watch src/lib.rs, giving the versions A and B have seen (the limb reports only a version that is neither)"
+        "\n  → Watch row: src/lib.rs, at the versions A and B have seen (the limb reports only a version that is neither)"
     );
     let known = [&a, &b]
         .iter()
@@ -95,7 +109,8 @@ fn main() {
             version: *version,
         })
         .collect();
-    brain.ws.handle(ToLimb::Watch { known });
+    brain.rows.insert(LimbKey::Watch, LimbRow::Watch { known });
+    brain.publish();
     brain.drain();
     brain.call(
         &mut a,
@@ -117,7 +132,7 @@ fn main() {
     );
     if let Some(id) = full.and_then(|o| o.full) {
         println!(
-            "  the full output came with the settlement, as value {id} ({} bytes)",
+            "  the full output came in the settlement's record, as value {id} ({} bytes)",
             brain.values[&id].len()
         );
     }
@@ -128,206 +143,342 @@ fn main() {
         json!({ "command": "seq 1 100", "grep": "" }),
     );
 
-    title("A long-running command is interrupted and its whole process tree reaped");
+    title("A long-running command is stopped and its whole process tree ended");
     let pids = scratch.join("work/tree.pids");
     let tree = "echo $$ > tree.pids; sleep 300 & echo $! >> tree.pids; (sleep 300 & echo $! >> tree.pids; wait) & sleep 0.2; echo started a tree; wait";
     let call = brain.dispatch(&mut a, "bash", json!({ "command": tree, "grep": "" }));
-    loop {
-        match brain.next() {
-            Some(FromLimb::Live(Live::Call { chunk, .. })) => {
-                println!("  live: {chunk:?}");
-                if chunk.contains("started") {
-                    break;
-                }
-            }
-            other => panic!("expected live output, got {other:?}"),
-        }
-    }
+    brain.live_until("started");
     let pids = read_pids(&pids);
     println!("  running: {}", alive(&pids));
-    println!("  → Stop");
-    brain.ws.handle(ToLimb::Stop { call, within: 2000 });
+    println!("  → the call's row now says stopping, by 2 s from now");
+    let Some(LimbRow::Call { stopping, .. }) = brain.rows.get_mut(&LimbKey::Call(call)) else {
+        unreachable!("the call is unsettled");
+    };
+    *stopping = Some(Timestamp(now().0 + 2000));
+    brain.publish();
     brain.settle(&mut a, call);
     println!("  afterwards: {}", after(&pids));
 
-    title(
-        "The limb crashes mid-command; a new instance reaps the orphan and answers the calls sent again",
+    title("The limb is killed mid-command; the next instance ends what it left and settles");
+    brain.disconnect();
+    println!("  (the in-process instance closed; the next calls go to one in a child process)");
+    let once = brain.dispatch(
+        &mut a,
+        "bash",
+        json!({ "command": "echo ran >> once.log", "grep": "" }),
     );
-    let first = brain.sent[&CallId(1)].clone();
-    drop(brain);
-    let status = std::process::Command::new(env::current_exe().unwrap())
+    let cut = brain.dispatch(
+        &mut a,
+        "bash",
+        json!({ "command": "echo $$ > crash.pid; echo running; sleep 300", "grep": "" }),
+    );
+    let orphan = scratch.join("work/crash.pid");
+    fs::write(
+        scratch.join("rows.json"),
+        serde_json::to_string(&(brain.standing.upto, Vec::from_iter(brain.rows.clone()))).unwrap(),
+    )
+    .unwrap();
+    println!("\n  a limb instance in a child process takes these rows, and is killed mid-command");
+    let mut child = Command::new(env::current_exe().unwrap())
         .arg("crash")
-        .status()
+        .spawn()
         .unwrap();
-    println!("  the crashed limb process exited with {status}");
-    let orphan = read_pids(&scratch.join("work/crash.pid"));
-    println!("  left behind: {}", alive(&orphan));
-    let mut brain = Brain::open(&scratch);
-    println!("  after the new instance opened: {}", after(&orphan));
-    let crashed = Brain::run(&mut Context::new("A", 1), "bash", crash_command(), 900).1;
-    for (why, message) in [
-        ("again: A's first write, settled before the crash", first),
-        ("again: the command the crash cut off", crashed),
-        (
-            "for a call this limb never received",
-            ToLimb::Stop {
-                call: CallId(901),
-                within: 2000,
-            },
-        ),
-    ] {
-        let call = match &message {
-            ToLimb::Run { id, .. } => *id,
-            ToLimb::Stop { call, .. } => *call,
-            _ => unreachable!(),
-        };
-        println!("\n  → {} call {} {why}", verb(&message), call.0);
-        brain.ws.handle(message);
-        let Some(FromLimb::Facts(batch)) = brain.next() else {
-            panic!("expected facts");
-        };
-        let outcome = brain.facts(batch).remove(&call).expect("a settlement");
-        println!("    {}", kind(&outcome));
-    }
-}
-
-fn verb(message: &ToLimb) -> &'static str {
-    match message {
-        ToLimb::Run { .. } => "Run",
-        _ => "Stop",
-    }
-}
-
-fn crash_command() -> Value {
-    json!({ "command": "echo $$ > crash.pid; echo running; sleep 300", "grep": "" })
-}
-
-/// The child process for the crash scene: start a command and die without
-/// any cleanup.
-fn crash(scratch: &Path) {
-    let mut brain = Brain::open(scratch);
-    let mut c = Context::new("A", 1);
-    brain.next_call = 900;
-    brain.dispatch(&mut c, "bash", crash_command());
-    let pid = scratch.join("work/crash.pid");
-    while !pid.exists() {
+    while !orphan.exists() || !scratch.join("work/once.log").exists() {
         thread::sleep(Duration::from_millis(10));
     }
-    thread::sleep(Duration::from_millis(100));
-    std::process::exit(9);
+    thread::sleep(Duration::from_millis(200));
+    child.kill().unwrap();
+    println!(
+        "  the brain kills it before taking what it said: {}",
+        child.wait().unwrap()
+    );
+    let orphan = read_pids(&orphan);
+    println!("  left behind: {}", alive(&orphan));
+    brain.connect();
+    println!("  after the new instance opened: {}", after(&orphan));
+    for (call, why) in [
+        (once, "settled before the kill"),
+        (cut, "the command the kill cut off"),
+    ] {
+        println!("\n  call {} ({why}):", call.0.at.n);
+        brain.settle(&mut a, call);
+    }
+    let ran = fs::read_to_string(scratch.join("work/once.log")).unwrap();
+    println!(
+        "\n  once.log has {} line: the settled call did not run again",
+        ran.lines().count()
+    );
 }
 
+/// The limb instance that is killed: it takes the brain's rows and runs
+/// their calls until the brain kills it.
+fn crash(scratch: &Path) {
+    let (upto, rows): (u64, Vec<(LimbKey, LimbRow)>) =
+        serde_json::from_slice(&fs::read(scratch.join("rows.json")).unwrap()).unwrap();
+    let workspace = Workspace::open(config(scratch), Box::new(|_| {})).unwrap();
+    let view = View {
+        as_of: Time {
+            place: BRAIN,
+            n: u64::MAX,
+        },
+        standing: Standing {
+            upto,
+            refused: BTreeMap::new(),
+        },
+        rows: rows.into_iter().collect(),
+    };
+    workspace.apply(LimbDown::View(view)).unwrap();
+    loop {
+        thread::park();
+    }
+}
+
+fn config(scratch: &Path) -> Config {
+    Config {
+        limb: LIMB,
+        kind: Kind::Workspace,
+        settings: Settings {
+            dir: scratch.join("work"),
+            clone: None,
+            skills: None,
+        },
+        state: scratch.join("state"),
+    }
+}
+
+/// The brain's side of one limb: the rows it wants of it, its standing, and
+/// the link to whichever instance is running.
 struct Brain {
-    ws: Workspace,
-    rx: Receiver<FromLimb>,
-    next_call: u128,
+    scratch: PathBuf,
+    /// The brain's clock: each id minted and each view shipped is a time.
+    n: u64,
+    rows: BTreeMap<LimbKey, LimbRow>,
+    standing: Standing<Refusal>,
+    link: Option<Link>,
     /// Every value the limb has sent, as the brain's store would hold them.
     values: HashMap<ValueId, Vec<u8>>,
-    /// Every call sent, to send again after the crash.
-    sent: HashMap<CallId, ToLimb>,
-    /// What the limb said about itself after its hello.
-    description: Description,
+    /// Settlements taken and not yet shown.
+    settled: HashMap<CallId, Outcome>,
+    description: Option<Description>,
+}
+
+/// One running instance and what the brain has shipped it.
+struct Link {
+    workspace: Workspace,
+    up: Receiver<LimbUp>,
+    publisher: Publisher<LimbKey, LimbRow, Refusal>,
 }
 
 impl Brain {
-    fn open(scratch: &Path) -> Brain {
-        let (tx, rx) = mpsc::channel();
-        let config = Config {
-            limb: LIMB,
-            kind: Kind::Workspace,
-            settings: Settings {
-                dir: scratch.join("work"),
-                clone: None,
-                skills: None,
-            },
-            state: scratch.join("state"),
-        };
-        let ws = Workspace::open(config, tx).unwrap();
-        let Ok(FromLimb::Hello { instance }) = rx.recv() else {
-            panic!("expected Hello first");
-        };
-        println!("  [limb instance {:08x}]", instance.0 as u32);
-        let description = match rx.recv() {
-            Ok(FromLimb::Facts(Batch { facts, .. })) => match facts.as_slice() {
-                [Fact::Described { description, .. }] => description.clone(),
-                _ => panic!("expected its description after Hello"),
-            },
-            _ => panic!("expected its description after Hello"),
-        };
+    fn new(scratch: &Path) -> Brain {
         Brain {
-            ws,
-            description,
-            rx,
-            next_call: 1,
+            scratch: scratch.into(),
+            n: 1,
+            rows: BTreeMap::new(),
+            standing: Standing {
+                upto: 0,
+                refused: BTreeMap::new(),
+            },
+            link: None,
             values: HashMap::new(),
-            sent: HashMap::new(),
+            settled: HashMap::new(),
+            description: None,
         }
     }
 
-    /// The Run message for one call by `context`.
-    fn run(context: &mut Context, tool: &str, input: Value, id: u128) -> (CallId, ToLimb) {
-        let id = CallId(id);
-        let input = Bytes::from(input.to_string());
-        let expects = context
-            .knows
-            .iter()
-            .map(|(resource, version)| Observation {
-                resource: resource.clone(),
-                version: *version,
-            })
-            .collect();
+    /// The next time of the brain's clock.
+    fn tick(&mut self) -> Time {
+        self.n += 1;
+        Time {
+            place: BRAIN,
+            n: self.n,
+        }
+    }
+
+    /// A new id: the event of the brain's next time.
+    fn mint(&mut self) -> EventId {
+        self.tick().event(0)
+    }
+
+    /// Open a limb instance on the state directory and ship it a whole
+    /// view; then wait for it to describe itself.
+    fn connect(&mut self) {
+        let (tx, up) = mpsc::channel();
+        let out = Box::new(move |up| {
+            let _ = tx.send(up);
+        });
+        let workspace = Workspace::open(config(&self.scratch), out).unwrap();
+        println!(
+            "  [a limb instance opened, at place {}; the brain holds its records up to {}]",
+            workspace.place(),
+            self.standing.upto
+        );
+        self.link = Some(Link {
+            workspace,
+            up,
+            publisher: Publisher::default(),
+        });
+        self.description = None;
+        self.publish();
+        while self.description.is_none() {
+            self.take();
+        }
+    }
+
+    /// Close the link: the instance stops its calls and is gone.
+    fn disconnect(&mut self) {
+        self.drain();
+        self.link = None;
+    }
+
+    /// Ship the rows, as of now: a whole view to a new link, then steps.
+    /// What the limb ships back first, it ships on its link.
+    fn publish(&mut self) {
+        let view = View {
+            as_of: self.tick(),
+            standing: self.standing.clone(),
+            rows: self.rows.clone(),
+        };
+        let Some(link) = &mut self.link else {
+            return;
+        };
+        let Some(down) = link.publisher.publish(view) else {
+            return;
+        };
+        let applied = link.workspace.apply(down).expect("the limb's log is whole");
+        for record in applied.ship {
+            self.include(record);
+        }
+    }
+
+    fn next(&mut self, wait: Duration) -> Option<LimbUp> {
+        self.link.as_ref().unwrap().up.recv_timeout(wait).ok()
+    }
+
+    /// Take the next record the limb ships.
+    fn take(&mut self) {
+        loop {
+            match self
+                .next(Duration::from_secs(10))
+                .expect("the limb went quiet")
+            {
+                Up::Record(record) => return self.include(record),
+                Up::Live(_) => {}
+            }
+        }
+    }
+
+    /// Include one of the limb's records: advance the standing, keep its
+    /// values and settlements, drop the rows of the calls it settles, and
+    /// add each version it reports to what the watch row knows.
+    fn include(&mut self, record: harness_core::schema::Record) {
+        if record.at.n <= self.standing.upto {
+            return;
+        }
+        self.standing.upto = record.at.n;
+        let What::Said(batch) = record.what else {
+            return;
+        };
+        let Batch { values, facts } = batch;
+        println!(
+            "    ← record {}: {}",
+            record.at.n,
+            summary(&facts, values.len())
+        );
+        for value in values {
+            self.values.insert(value.id(), value.0);
+        }
+        for fact in facts {
+            match fact {
+                Fact::Call(call, CallEvent::Settled(outcome)) => {
+                    if let Some(LimbRow::Call { call: c, .. }) =
+                        self.rows.remove(&LimbKey::Call(call))
+                    {
+                        self.rows.remove(&LimbKey::Value(c.input));
+                    }
+                    self.settled.insert(call, outcome);
+                }
+                Fact::Change(change) => {
+                    print_change(&change);
+                    if let Some(LimbRow::Watch { known }) = self.rows.get_mut(&LimbKey::Watch)
+                        && known.iter().any(|o| o.resource == change.resource)
+                    {
+                        known.push(Observation {
+                            resource: change.resource,
+                            version: change.version,
+                        });
+                    }
+                }
+                Fact::Described { description, .. } => self.description = Some(description),
+                other => println!("    {other:?}"),
+            }
+        }
+        self.publish();
+    }
+
+    /// Take what the limb says for a moment.
+    fn drain(&mut self) {
+        while self.link.is_some()
+            && let Some(up) = self.next(Duration::from_millis(100))
+        {
+            if let Up::Record(record) = up {
+                self.include(record);
+            }
+        }
+    }
+
+    /// Print the call's live output until a chunk holds `text`.
+    fn live_until(&mut self, text: &str) {
+        loop {
+            match self.next(Duration::from_secs(10)).expect("live output") {
+                Up::Live(live) => {
+                    let Live::Call { chunk, .. } = live.live else {
+                        continue;
+                    };
+                    println!("  live: {chunk:?}");
+                    if chunk.contains(text) {
+                        return;
+                    }
+                }
+                Up::Record(record) => {
+                    self.include(record);
+                }
+            }
+        }
+    }
+
+    /// Add the rows for one call by `context`: the call and its input.
+    fn dispatch(&mut self, context: &mut Context, tool: &str, input: Value) -> CallId {
+        println!("\n  {} → {tool} {input}", context.name);
+        let id = CallId(self.mint());
+        let bytes = Bytes::from(input.to_string());
         let call = Call {
             caller: Caller::Agent {
                 task: context.task,
-                tool_use: ToolUseId(format!("toolu_{}", id.0)),
+                tool_use: ToolUseId(format!("toolu_{}", id.0.at.n)),
             },
             tool: tool.into(),
-            input: input.id(),
-            expects,
+            input: bytes.id(),
+            expects: context
+                .knows
+                .iter()
+                .map(|(resource, version)| Observation {
+                    resource: resource.clone(),
+                    version: *version,
+                })
+                .collect(),
         };
-        (id, ToLimb::Run { id, call, input })
-    }
-
-    /// Keep a batch's values, print its changes, and return its settlements.
-    fn facts(&mut self, batch: Batch) -> HashMap<CallId, Outcome> {
-        for value in batch.values {
-            self.values.insert(value.id(), value.0);
-        }
-        let mut settled = HashMap::new();
-        for fact in batch.facts {
-            match fact {
-                Fact::Call(call, CallEvent::Settled(outcome)) => {
-                    settled.insert(call, outcome);
-                }
-                Fact::Change(change) => print_change(&change),
-                other => println!("    {other:?}"),
-            }
-        }
-        settled
-    }
-
-    fn next(&self) -> Option<FromLimb> {
-        self.rx.recv_timeout(Duration::from_secs(10)).ok()
-    }
-
-    fn drain(&mut self) {
-        while let Ok(message) = self.rx.recv_timeout(Duration::from_millis(50)) {
-            match message {
-                FromLimb::Facts(batch) => {
-                    self.facts(batch);
-                }
-                other => println!("    {other:?}"),
-            }
-        }
-    }
-
-    fn dispatch(&mut self, context: &mut Context, tool: &str, input: Value) -> CallId {
-        println!("\n  {} → {tool} {input}", context.name);
-        let (call, message) = Brain::run(context, tool, input, self.next_call);
-        self.next_call += 1;
-        self.sent.insert(call, message.clone());
-        self.ws.handle(message);
-        call
+        self.rows
+            .insert(LimbKey::Value(bytes.id()), LimbRow::Value(bytes));
+        self.rows.insert(
+            LimbKey::Call(id),
+            LimbRow::Call {
+                call,
+                stopping: None,
+            },
+        );
+        self.publish();
+        id
     }
 
     fn call(&mut self, context: &mut Context, tool: &str, input: Value) -> Option<Output> {
@@ -337,31 +488,39 @@ impl Brain {
 
     fn settle(&mut self, context: &mut Context, call: CallId) -> Option<Output> {
         loop {
-            match self.next() {
-                Some(FromLimb::Facts(batch)) => {
-                    if let Some(outcome) = self.facts(batch).remove(&call) {
-                        return self.show(context, outcome);
-                    }
-                }
-                Some(FromLimb::Live(_)) => {}
-                Some(other) => println!("    {other:?}"),
-                None => panic!("no settlement"),
+            if let Some(outcome) = self.settled.remove(&call) {
+                return show(context, outcome, &self.values);
             }
+            self.take();
         }
     }
+}
 
-    fn show(&self, context: &mut Context, outcome: Outcome) -> Option<Output> {
-        show(context, outcome, &self.values)
+fn summary(facts: &[Fact], values: usize) -> String {
+    let mut parts: Vec<String> = facts
+        .iter()
+        .map(|fact| match fact {
+            Fact::Call(call, CallEvent::Settled(outcome)) => {
+                format!("call {} settled {}", call.0.at.n, kind(outcome))
+            }
+            Fact::Change(_) => "a Change".into(),
+            Fact::Described { .. } => "its description".into(),
+            _ => "a fact".into(),
+        })
+        .collect();
+    if values > 0 {
+        parts.push(format!("{values} value(s) of bytes"));
     }
+    parts.join(", ")
 }
 
 fn print_change(change: &Change) {
     let by = match change.by {
-        Some(call) => format!("by call {}", call.0),
+        Some(call) => format!("by call {}", call.0.at.n),
         None => "from outside the harness".into(),
     };
     println!(
-        "    Change: {} {} is now {}, {by}",
+        "      Change: {} {} is now {}, {by}",
         change.resource.kind,
         change.resource.name,
         version(&change.version)
@@ -373,7 +532,6 @@ fn show(
     outcome: Outcome,
     values: &HashMap<ValueId, Vec<u8>>,
 ) -> Option<Output> {
-    println!("    {}", kind(&outcome));
     let output = match outcome {
         Outcome::Completed(o) | Outcome::Failed(o) => Some(o),
         Outcome::Interrupted { partial } => partial,
@@ -414,13 +572,13 @@ fn show(
     output
 }
 
-fn kind(outcome: &Outcome) -> String {
+fn kind(outcome: &Outcome) -> &'static str {
     match outcome {
-        Outcome::Completed(_) => "Completed".into(),
-        Outcome::Failed(_) => "Failed".into(),
-        Outcome::Refused { .. } => "Refused (no effect)".into(),
-        Outcome::Interrupted { .. } => "Interrupted".into(),
-        Outcome::Unknown => "Unknown".into(),
+        Outcome::Completed(_) => "Completed",
+        Outcome::Failed(_) => "Failed",
+        Outcome::Refused { .. } => "Refused (no effect)",
+        Outcome::Interrupted { .. } => "Interrupted",
+        Outcome::Unknown => "Unknown",
     }
 }
 
@@ -433,10 +591,10 @@ struct Context {
 }
 
 impl Context {
-    fn new(name: &'static str, task: u128) -> Context {
+    fn new(name: &'static str, task: TaskId) -> Context {
         Context {
             name,
-            task: TaskId(task),
+            task,
             knows: BTreeMap::new(),
         }
     }
@@ -453,7 +611,7 @@ fn title(text: &str) {
     println!("\n━━ {text}");
 }
 
-fn read_pids(path: &PathBuf) -> Vec<u32> {
+fn read_pids(path: &Path) -> Vec<u32> {
     fs::read_to_string(path)
         .unwrap()
         .split_whitespace()

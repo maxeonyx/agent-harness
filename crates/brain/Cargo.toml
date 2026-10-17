@@ -3,7 +3,7 @@ name = "harness-brain"
 version = "0.0.0"
 edition.workspace = true
 license.workspace = true
-description = "The brain: folds the journal, works through its to-do list, and serves the face over its own store."
+description = "The brain: decides what every place says, works through its to-do list, and serves the face."
 
 [dependencies]
 harness-core = { path = "../core" }
@@ -12,5 +12,12 @@ harness-limb-workspace = { path = "../limb-workspace" }
 harness-provider = { path = "../provider" }
 harness-runtime = { path = "../runtime" }
 harness-store = { path = "../store" }
+harness-substrate = { path = "../substrate" }
 libc = "0.2"
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+
+[dev-dependencies]
+harness-face-tab = { path = "../face-tab" }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }

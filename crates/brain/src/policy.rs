@@ -83,11 +83,6 @@ pub const MEMBER_STOP: Duration = Duration::from_secs(60);
 /// them now.
 pub const DRAIN: Duration = Duration::from_secs(300);
 
-/// How long the limbs have to stop their running commands when the brain
-/// shuts down: commands are started again from the journal, so they are
-/// not waited for.
-pub const LIMB_SHUTDOWN: Duration = Duration::from_secs(5);
-
 /// How long past a deadline the brain waits for a process it owns to
 /// confirm its exit before killing it.
 pub const HARD_WAIT: Duration = Duration::from_secs(2);

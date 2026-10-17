@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::{CallId, ModelCallId};
 
-/// Progress a face shows as it happens, sent beside the journal and never in
-/// it.
+/// Progress a face shows as it happens: the schema's
+/// [`harness_substrate::Live`] data, never stored.
 ///
 /// **Concept.** Streamed tokens and a command's output so far matter only
 /// while they arrive. Nothing acts on them (a tool use is acted on only when
@@ -14,12 +14,12 @@ use crate::id::{CallId, ModelCallId};
 /// What survives is what a participant acted on. When Max interrupts a
 /// response, the visible text he was reacting to is kept with the abandoned
 /// request ([`crate::model_call::Ending::Abandoned`]); a call's output is
-/// kept in its settlement. A limb sends it in the same stream as its facts
-/// ([`crate::environment::FromLimb::Live`]); the brain forwards it to faces
-/// beside the journal's records.
+/// kept in its settlement. A limb sends it on the link that carries its
+/// records ([`harness_substrate::Up::Live`]); the brain forwards it to faces
+/// on theirs ([`harness_substrate::Down::Live`]).
 ///
 /// **Vision.** The throbber ("streaming", "running, 40 lines so far"), and
-/// a journal small enough to replay and query.
+/// a log small enough to replay and query.
 ///
 /// **Existing harnesses.** OpenCode and Goose write streamed parts into
 /// their message rows as they arrive; Codex and Pi persist the completed

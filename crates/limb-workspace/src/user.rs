@@ -81,11 +81,23 @@ struct Skill {
 }
 
 impl Inner {
+    /// The skills offered, by name, as the skills file says now; every one
+    /// when there is no file.
+    pub(crate) fn offered(&self) -> Option<Vec<String>> {
+        let text = fs::read_to_string(self.skills.as_ref()?).ok()?;
+        let names = text
+            .lines()
+            .map(|l| l.split('#').next().unwrap_or("").trim())
+            .filter(|l| !l.is_empty())
+            .map(String::from);
+        Some(names.collect())
+    }
+
     pub(crate) fn skill(&self, input: &[u8], report: &mut Report) -> Outcome {
         let loaded = serde_json::from_slice::<Skill>(input)
             .map_err(|e| format!("invalid input: {e}"))
             .and_then(|Skill { name }| {
-                let offered = self.skills.as_ref().is_none_or(|s| s.contains(&name));
+                let offered = self.offered().is_none_or(|s| s.contains(&name));
                 if name.contains('/') || name.starts_with('.') || !offered {
                     return Err(format!("no skill `{name}`; the index lists them all"));
                 }

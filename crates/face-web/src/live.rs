@@ -1,10 +1,8 @@
-//! Live progress beside the journal: what a running request has streamed
-//! so far, kept until it ends so a page that reconnects loses none of it.
+//! Live progress beside the facts: what a running request has streamed so
+//! far, kept until it ends so a tab that reconnects loses none of it.
 
 use std::collections::HashMap;
-use std::io::{self, Write};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use harness_core::id::{CallId, ModelCallId};
 use harness_core::live::Live;
@@ -29,16 +27,10 @@ impl Running {
 ///
 /// The brain [starts](Feed::start) one before its first fact is appended,
 /// [pushes](Feed::push) each piece as it arrives, and [ends](Feed::end) it
-/// once the fact that completes it is appended, when the journal holds what
+/// once the record that completes it is stored, which holds what
 /// matters of it. Nothing here is a fact, and a restart loses it all.
 #[derive(Clone, Default)]
-pub struct Feed(Arc<Shared>);
-
-#[derive(Default)]
-struct Shared {
-    pieces: Mutex<HashMap<Running, Vec<String>>>,
-    grew: Condvar,
-}
+pub struct Feed(Arc<Mutex<HashMap<Running, Vec<String>>>>);
 
 impl Feed {
     pub fn start(&self, running: Running) {
@@ -50,57 +42,39 @@ impl Feed {
         let (Live::Model { chunk: piece, .. } | Live::Call { chunk: piece, .. }) = live;
         if let Some(pieces) = self.lock().get_mut(&running) {
             pieces.push(piece);
-            self.0.grew.notify_all();
         }
     }
 
     pub fn end(&self, running: Running) {
         self.lock().remove(&running);
-        self.0.grew.notify_all();
     }
 
-    /// Stream `running`'s pieces after the first `after`, each with its
-    /// count as the event id, until it ends; then an `end` event. Each
-    /// piece is sent as a JSON string, so a command's carriage returns and
-    /// a chunk's trailing newline arrive as they were.
-    pub(crate) fn stream(
-        &self,
-        stream: &mut impl Write,
-        running: Running,
-        mut after: usize,
-        heartbeat: Duration,
-    ) -> io::Result<()> {
-        loop {
-            let pieces = self.lock();
-            let (pieces, _) = self
-                .0
-                .grew
-                .wait_timeout_while(pieces, heartbeat, |p| {
-                    p.get(&running).is_some_and(|p| p.len() <= after)
-                })
-                .unwrap_or_else(|e| e.into_inner());
-            let Some(new) = pieces
-                .get(&running)
-                .map(|p| p[after.min(p.len())..].to_vec())
-            else {
-                drop(pieces);
-                stream.write_all(b"event: end\ndata:\n\n")?;
-                return stream.flush();
-            };
-            drop(pieces);
-            if new.is_empty() {
-                stream.write_all(b": heartbeat\n\n")?;
+    /// Every piece not yet in `shown`, which counts how many of each
+    /// running thing's pieces a link has shipped, and forgets what ended.
+    pub(crate) fn since(&self, shown: &mut HashMap<Running, usize>) -> Vec<Live> {
+        let pieces = self.lock();
+        shown.retain(|running, _| pieces.contains_key(running));
+        let mut new = Vec::new();
+        for (running, all) in pieces.iter() {
+            let after = shown.entry(*running).or_default();
+            for chunk in &all[(*after).min(all.len())..] {
+                new.push(match *running {
+                    Running::Model(call) => Live::Model {
+                        call,
+                        chunk: chunk.clone(),
+                    },
+                    Running::Call(call) => Live::Call {
+                        call,
+                        chunk: chunk.clone(),
+                    },
+                });
             }
-            for piece in new {
-                after += 1;
-                let piece = serde_json::Value::from(piece);
-                write!(stream, "id: {after}\ndata: {piece}\n\n")?;
-            }
-            stream.flush()?;
+            *after = all.len();
         }
+        new
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<Running, Vec<String>>> {
-        self.0.pieces.lock().unwrap_or_else(|e| e.into_inner())
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 }

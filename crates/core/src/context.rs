@@ -43,7 +43,7 @@ impl FromStr for EntryId {
 /// is named by its head's [`EntryId`].
 ///
 /// An entry is small structure; its bytes are [values](ValueId). So the
-/// tree is a Merkle tree over the value store, and it lives in the journal:
+/// tree is a Merkle tree over the value store, and it lives in the brain's facts:
 /// each entry arrives inside the fact that first sends or receives it (a
 /// root in [`crate::task::Start`], a request's messages in
 /// [`crate::model_call::ModelCall::appends`], a response in

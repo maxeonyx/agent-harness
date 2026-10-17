@@ -69,7 +69,7 @@ pub enum Read {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Content {
     /// Max's words: user content blocks (text, a pasted image, a dictated
-    /// passage), written having seen the journal up to his record's `seen`.
+    /// passage), written having seen the brain's view as of his record's [`crate::fact::Fact::Seen`].
     /// They end his turn and clear the task from his queue, and the task has
     /// heard them, so it can quote them on ([`crate::task::Mandate::quotes`]).
     Words(ValueId),

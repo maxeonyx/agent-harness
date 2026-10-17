@@ -1,19 +1,20 @@
-# Store: crash mid-commit, reopen, query
+# Store: kill a brain mid-commit, reopen it
 
 ```sh
 demos/store/run.sh
 ```
 
-A writer commits batches through the core's `Journal` to a fresh store at `target/store-demo/journal.sqlite`. Each batch is 500 one-turn tasks, in two commits: Max starts them (only he may start a task in his own scope), then the brain roots, sends and answers each, 2000 records, with the bytes they name (each question and answer) travelling in the batch; the system prompt, role, tools and request parameters are stored once, by the first batch, and named by every later one. The journal folds each batch first and then hands it to the store. After three batches commit, the demo `kill -9`s the writer a quarter of the way into the store's append of the brain's fourth.
+A writer opens a brain on a fresh store at `target/store-demo/brain.sqlite`; the file mints the brain's place id on first open. The brain launches, accepts Max's face and defines an environment, then includes one record of the face after another, each creating a task and carrying its mandate's bytes. Each include is one commit of two records: the face's record and the brain's receipt for it. Once the writer reports 300 tasks, the demo `kill -9`s it while it keeps committing.
 
-It then reopens the journal and folds it. The folded `State` must equal the writer's at a batch boundary, which the demo rebuilds from the same start time on a store in memory: the brain's batch 4 is wholly absent (or, if the kill landed after the commit, wholly present). Anything else prints `FAIL`.
+It then reopens the brain from the file and checks, printing `OK` or `FAIL` for each:
 
-Next it commits a fact naming a value that was never stored, and the journal refuses it.
+- the place id is the one the file minted;
+- every record folds as it did when written, and none of the face's was refused;
+- every task the writer reported is there, plus at most the one it was committing;
+- no commit is half there: the file holds exactly the brain's two records and two per task.
 
-Then a face that had seen seq 2 catches up one page, reading a response's bytes from the value store, and one SQL query over the journal reports the five tasks with the most output tokens. The store is a plain SQLite file, so the same query works from the shell while a brain is writing:
+It reads the newest task's mandate back by its value id through a second connection to the same file, and relaunches the brain, whose next record continues the count. The store is a plain SQLite file; the bytes of each batch are kept apart from its record, in `value`:
 
 ```sh
-sqlite3 target/store-demo/journal.sqlite
+sqlite3 target/store-demo/brain.sqlite "SELECT place, n, record FROM record LIMIT 4"
 ```
-
-Ids are hex strings in the JSON, so `->>` and `json_extract` read them exactly, and they equal the `subject` column.

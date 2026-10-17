@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CallId, FaceId, TaskId, Timestamp};
+use crate::id::{CallId, TaskId, Timestamp};
 
 /// The order in which waiting tasks should get Max's attention, as last
 /// decided, with a reason for each.
@@ -50,11 +50,13 @@ pub struct Ranked {
     pub why: String,
 }
 
-/// Which task one face shows Max, if any. Faces differ: the phone can be on
-/// the queue while the desktop is in a chat.
+/// Which task the face stating it shows Max, if any. Faces differ: the
+/// phone can be on the queue while the desktop is in a chat. The face is the
+/// place that states it, so no face can state another's. Only the newest per
+/// face is kept ([`crate::schema::Key::Focus`]): clicking around all day
+/// does not grow the database.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Focus {
-    pub face: FaceId,
     pub task: Option<TaskId>,
 }
 
