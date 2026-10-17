@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Expense claim</title>
+<style>body{font:15px system-ui;margin:2em}input{font:inherit;margin:.2em}#lines div{margin:.3em 0}#done{color:green;font-weight:bold}</style>
+<h1>Expense claim</h1>
+<form id="claim" onsubmit="event.preventDefault(); document.getElementById('done').textContent = 'Submitted: ' + lines().length + ' lines, $' + total();">
+  <label>Claim for <select name="period"><option value="">Choose…</option><option>September 2026</option><option>October 2026</option></select></label>
+  <div id="lines"></div>
+  <button type="button" id="add">Add line</button>
+  <p>Total: $<span id="total">0.00</span></p>
+  <button type="submit">Submit claim</button>
+</form>
+<p id="done"></p>
+<script>
+const lines = () => [...document.querySelectorAll('#lines .line')];
+const total = () => lines().reduce((s, l) => s + (parseFloat(l.querySelector('.amount').value) || 0), 0).toFixed(2);
+document.getElementById('add').onclick = () => {
+  const n = lines().length + 1;
+  const d = document.createElement('div');
+  d.className = 'line';
+  d.innerHTML = `${n}. <input class="date" type="date" aria-label="Date ${n}"> <input class="what" placeholder="Description" aria-label="Description ${n}"> <input class="amount" inputmode="decimal" placeholder="0.00" aria-label="Amount ${n}">`;
+  document.getElementById('lines').append(d);
+};
+document.addEventListener('input', () => document.getElementById('total').textContent = total());
+</script>
