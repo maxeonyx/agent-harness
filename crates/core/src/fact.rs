@@ -264,10 +264,13 @@ pub enum Rejected {
     /// its own does not start, a fork of another task, a resume of a task it
     /// did not own, an aside or a standing task.
     CannotStart,
-    /// A route to a limb outside its task's environment and places, an
-    /// attachment its context does not route, or a replica left empty or
-    /// filled by a limb of another kind.
+    /// A route to a limb outside its task's environment and places, or an
+    /// attachment its context does not route.
     WrongEnvironment,
+    /// A task started without each of its environment's places filled by
+    /// one limb of that kind: it carries the kinds the environment needs
+    /// (`workspace`), so whoever started it learns what to give.
+    Unplaced(Vec<String>),
     /// A route, or a call of Max's, naming a tool its limb's current
     /// description does not offer that caller, or a limb that has not
     /// described itself.
@@ -318,6 +321,16 @@ impl std::fmt::Display for Rejected {
             }
             Rejected::TooLarge(value) => {
                 return write!(f, "value {value} is larger than the limit");
+            }
+            Rejected::Unplaced(places) if places.is_empty() => {
+                "its environment has no places, so nothing may fill one"
+            }
+            Rejected::Unplaced(places) => {
+                return write!(
+                    f,
+                    "its environment needs each of its places filled, by a limb of that kind: {}",
+                    places.join(", ")
+                );
             }
             Rejected::Unknown => "names something the brain has never seen",
             Rejected::Exists => "creates something that already exists",
