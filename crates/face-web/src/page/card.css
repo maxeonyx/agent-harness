@@ -2,7 +2,7 @@
   #panel {
     position: absolute; left: 0; top: 0; z-index: 2; display: flex; flex-direction: column; background: var(--paper);
     border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 22px 60px rgba(40, 30, 20, .2); overflow: hidden;
-    cursor: auto; touch-action: pan-x pan-y; will-change: transform;
+    cursor: auto; touch-action: pan-x pan-y;
   }
   #panel > .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em 1em; border-bottom: 1px solid var(--line); min-height: 2.9em; cursor: grab; }
   .mini { cursor: pointer; position: relative; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; background: var(--paper); }
