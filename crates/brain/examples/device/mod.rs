@@ -65,14 +65,19 @@ pub fn blocks(text: &str) -> Bytes {
     Bytes::from(json!([{ "type": "text", "text": text }]).to_string())
 }
 
-/// A chat's name from the first words of its mandate, to its first
-/// clause's end, as the page names one.
+/// A chat's name from its mandate, by the page's rule (`nameFrom` in
+/// crates/face-web/src/page/newchat.js): its first line with words, as
+/// plain text, to its first clause's end, at most six words.
 pub fn name_from(text: &str) -> String {
-    let clause = text
-        .trim()
-        .split(['\n', '.', ',', ';', ':', '!', '?'])
-        .next()
-        .unwrap_or("");
+    let line = text.lines().map(plain).find(|l| !l.is_empty());
+    let line = line.unwrap_or_default();
+    let chars: Vec<char> = line.chars().collect();
+    let end = (0..chars.len())
+        .find(|&i| {
+            ".,;:!?".contains(chars[i]) && chars.get(i + 1).is_none_or(|c| c.is_whitespace())
+        })
+        .unwrap_or(chars.len());
+    let clause: String = chars[..end].iter().collect();
     let words = clause
         .split_whitespace()
         .take(6)
@@ -82,6 +87,53 @@ pub fn name_from(text: &str) -> String {
         true => format!("{}…", words.chars().take(39).collect::<String>()),
         false => words,
     }
+}
+
+/// A markdown line as plain text: no heading, quote or list mark, code
+/// ticks, emphasis or link target.
+fn plain(line: &str) -> String {
+    let line = line.trim_start();
+    let line = match line.split_once(char::is_whitespace) {
+        Some((mark, rest))
+            if mark.chars().all(|c| c == '#')
+                || [">", "-", "*", "+"].contains(&mark)
+                || mark
+                    .strip_suffix(['.', ')'])
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) =>
+        {
+            rest
+        }
+        _ => line,
+    };
+    // [text](target) as text.
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        let linked = rest[open + 1..].split_once("](").and_then(|(text, after)| {
+            let close = after.find(')')?;
+            (!text.contains(']')).then_some((text, &after[close + 1..]))
+        });
+        match linked {
+            Some((text, after)) => {
+                out.push_str(&rest[..open]);
+                out.push_str(text);
+                rest = after;
+            }
+            None => {
+                out.push_str(&rest[..=open]);
+                rest = &rest[open + 1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    let out = out.replace(['`'], "").replace("**", "").replace("__", "");
+    // Emphasis marks at a word's edge.
+    out.split(' ')
+        .map(|w| w.trim_matches(['*', '_']))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
 }
 
 pub fn status(device: &Device, n: u64) -> String {

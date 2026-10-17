@@ -44,9 +44,20 @@ function placeField(place) {
   f.setAttribute("list", list.id);
   return [f, list];
 }
-// A name from the first words of a mandate, to its first clause's end.
+// A name from a mandate: its first line with words, as plain text (no
+// heading, quote or list mark, code ticks, emphasis or link target), to its
+// first clause's end, at most six words. A clause ends at punctuation
+// before a space, so `./run.sh` and 3.5 stay whole. The test tab's
+// `name_from` (crates/brain/examples/device) is the same rule.
+const plain = (line) => line
+  .replace(/^\s*(#+|>|[-*+]|\d+[.)])\s+/, "")
+  .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+  .replace(/`|\*\*|__/g, "")
+  .replace(/(^|\s)[*_]+|[*_]+(?=\s|$)/g, "$1")
+  .trim();
 const nameFrom = (text) => {
-  const words = text.trim().split(/[\n.,;:!?]/)[0].split(/\s+/).slice(0, 6).join(" ");
+  const line = text.split("\n").map(plain).find((l) => l) ?? "";
+  const words = line.split(/[.,;:!?](?=\s|$)/)[0].split(/\s+/).filter(Boolean).slice(0, 6).join(" ");
   return words.length > 40 ? `${words.slice(0, 39)}…` : words;
 };
 export async function startNew(text, files) {
