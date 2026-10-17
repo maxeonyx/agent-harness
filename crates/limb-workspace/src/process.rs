@@ -9,6 +9,10 @@
 //! does not cover. Only a link gone for [`ABSENT`] means the brain is not
 //! coming back.
 //!
+//! A limb that cannot start (its directory cannot be made, its clone
+//! fails) exits saying why in the file [`FAILED`] in its state directory,
+//! which the brain records as why it never connected.
+//!
 //! It exits only once nothing it started is left: told to shut down
 //! ([`LimbRow::Shutdown`]), the link gone for good, or a signal, it stops
 //! every running call (`SIGTERM` to each command's processes, `SIGKILL` at
@@ -44,12 +48,20 @@ pub const ABSENT: Duration = Duration::from_secs(15 * 60);
 /// How often it tries to reconnect.
 const RETRY: Duration = Duration::from_millis(200);
 
+/// The file in a limb's state directory saying why its process ended
+/// before it connected.
+pub const FAILED: &str = "failed";
+
 /// Run as the limb of `kind` until it has shut down.
 pub fn main(kind: &str) -> ExitCode {
     match serve(kind) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("harness-limb-{kind}: {e}");
+            if let Some(state) = std::env::args().nth(1).map(PathBuf::from) {
+                let _ = std::fs::create_dir_all(&state)
+                    .and_then(|()| std::fs::write(state.join(FAILED), &e));
+            }
             ExitCode::FAILURE
         }
     }

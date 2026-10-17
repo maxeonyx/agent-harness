@@ -306,6 +306,10 @@ pub enum Reach {
     /// The connection dropped. Calls sent to it stay sent; the throbber says
     /// "waiting on reconnect" rather than "running".
     Lost,
+    /// Its process ended before it connected, saying why (its directory
+    /// could not be made, its clone failed). The brain tries again while a
+    /// task needs it; a task starting on it shows why it is stuck.
+    Failed { why: String },
 }
 
 /// What a plugin limb says about itself, rendered into each root.
