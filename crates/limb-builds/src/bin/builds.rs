@@ -18,7 +18,7 @@ fn main() -> ExitCode {
     let say = |line: &str| eprintln!("{line}");
     let done = match args.as_slice() {
         ["relaunch", unit, clone, rest @ ..] if rest.is_empty() || rest == ["--back"] => {
-            relaunch::take_over(unit, Path::new(clone), !rest.is_empty(), &say).map(|takeover| {
+            relaunch::take_over(unit, Path::new(clone), !rest.is_empty(), None, &say).map(|takeover| {
                 say(&format!(
                     "{unit} runs {}, on probation until it has a response and a limb's settlement",
                     takeover.new.commit
@@ -41,7 +41,7 @@ fn main() -> ExitCode {
         }),
         ["start", unit, argv @ ..] if !argv.is_empty() => {
             let argv: Vec<String> = argv.iter().map(|a| a.to_string()).collect();
-            relaunch::start(unit, &argv).map(|()| ExitCode::SUCCESS)
+            relaunch::start(unit, &argv, None).map(|()| ExitCode::SUCCESS)
         }
         ["relaunch" | "install" | "start", ..] => Err(
             "usage: harness-limb-builds relaunch UNIT CLONE [--back] | install CLONE | start UNIT ARGV..."

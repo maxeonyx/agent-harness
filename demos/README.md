@@ -7,13 +7,13 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | brain | an orchestrator, a fork and an engineer build a small repo; the brain is killed -9 mid-command and relaunched, and carries on with the same limbs | scripted (`MODEL=sonnet/low`: real agents) | free, 30 s (Sonnet: a few dozen requests, 2 min) |
 | browser | a chat hands a browser agent an expense claim in real pages; the tab is passed to Max, who stops it | Sonnet low | about 10 requests, under 1 min |
 | cancel | abandoning tasks (with time to tidy, and past a deadline), Ctrl-C once and twice, a worker passed to Max, a systemd restart, and what still runs after each | scripted (`MODEL=sonnet/low`) | free, 3 min |
-| chat-moves | retry, a reply's versions, going back, and a retry that gave the same words; leaves the brain up to try edit and back | relaunch | a session relaunches its own brain (`dev/serve`, a throwaway unit) onto a good commit, which is proven, then onto one whose brain dies 20 s in, and the harness goes back and tells the session why | scripted | free, 4 min (two incremental release builds) |
-| scripted | free, 30 s |
+| chat-moves | retry, a reply's versions, going back, and a retry that gave the same words; leaves the brain up to try edit and back | scripted | free, 30 s |
 | compaction | an agent compacts between steps and reports; Max's words and the reports are kept word for word | scripted (`MODEL=sonnet/low`) | free, 1 min (Sonnet: a few dozen requests, 2 min) |
 | dev-process | an orchestrator spawns an engineer and a designer in their own clones, decides the question left to Max, and reports; the brain serves on after | Sonnet low | about 12 requests, under 1 min to the report |
 | face-controls | pause, park, resume, interrupt, rank, focus and abandon on a live run, driven as a tab drives them (Rust example; it owns its brain process) | Sonnet low | a few dozen requests, 1.5 min |
 | home | Max's everyday harness: `dev/serve home 4320`, a long-lived brain on his home database | the roles' own | what he does in it |
 | limb-workspace | the workspace limb's tools run as calls, with the demo playing the brain (`cargo run -q -p harness-limb-workspace --example demo`) | none | free, seconds |
+| relaunch | a session relaunches its own brain (`dev/serve`, a throwaway unit) onto a good commit, which is proven; onto one that panics as it starts, refused by its rehearsal with the old build still serving; and onto one whose brain dies 20 s in, and the harness goes back and tells the session why | scripted (each rehearsal: a token count per live session and one short real response) | a few real requests, 6 min (three incremental release builds) |
 | own-calls | an agent's edits refused only for another's change, and shown that change | scripted | free, 30 s |
 | provider | a fork shares its parent's prompt cache on the provider (`examples/fork`) | Haiku | 4 small requests, seconds |
 | scripted | the scripted model: a tool call, a spawned child, a long streamed reply | scripted | free, 20 s |

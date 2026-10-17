@@ -53,6 +53,10 @@ pub const KIND: &str = "builds";
 pub const RELAUNCH: &str = "relaunch";
 /// The kind of its resource: the brain's service.
 const SERVICE: &str = "service";
+/// The environment variable that tells a brain the `relaunch` call that
+/// started it: `Launch::Relaunched`'s `by`. In the unit's environment, not
+/// its command line, which the way back starts again as it was.
+pub const RELAUNCHED_BY: &str = "HARNESS_RELAUNCHED_BY";
 
 /// A builds limb's own settings: the `config` of its [`Limb`] definition.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,7 +272,8 @@ impl Inner {
     fn relaunch(&self, id: CallId, unit: &str, request: &Request) {
         let say = |line: &str| eprintln!("{unit}: {line}");
         let mut report = Report::default();
-        let takeover = match relaunch::take_over(unit, &request.clone, request.back, &say) {
+        let takeover = match relaunch::take_over(unit, &request.clone, request.back, Some(id), &say)
+        {
             Ok(takeover) => takeover,
             Err(why) => {
                 let outcome = report.failed(&why);

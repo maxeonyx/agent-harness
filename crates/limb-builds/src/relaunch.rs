@@ -20,7 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::build::Verdict;
-use harness_core::id::Seq;
+use harness_core::id::{CallId, Seq};
 use harness_core::schema;
 use harness_store::Store;
 
@@ -116,6 +116,8 @@ pub struct Takeover {
     pub new: Running,
     /// The brain's last launch before the new one.
     before: Option<Seq>,
+    /// The `relaunch` call that started it, which the way back names too.
+    by: Option<CallId>,
     started: Instant,
 }
 
@@ -136,6 +138,7 @@ pub fn take_over(
     unit: &str,
     clone: &Path,
     back: bool,
+    by: Option<CallId>,
     say: &dyn Fn(&str),
 ) -> Result<Takeover, String> {
     let old = Running::of(unit)?;
@@ -150,7 +153,7 @@ pub fn take_over(
         ));
     }
     let build = install(clone, say)?;
-    rehearse(&build, &old)?;
+    rehearse(&build, &old, say)?;
     let before = fold_span(&old.db)?.0;
     say(&format!(
         "stopping {unit} on {}: its requests in flight drain first",
@@ -158,8 +161,8 @@ pub fn take_over(
     ));
     stop(unit)?;
     say(&format!("starting {unit} on {commit}"));
-    if let Err(why) = start(unit, &old.on(&build)) {
-        return Err(match start(unit, &old.argv) {
+    if let Err(why) = start(unit, &old.on(&build), by) {
+        return Err(match start(unit, &old.argv, by) {
             Ok(()) => format!(
                 "{commit} would not start ({why}), so {unit} runs {} again",
                 old.commit
@@ -183,14 +186,199 @@ pub fn take_over(
         old,
         new,
         before,
+        by,
         started: Instant::now(),
     })
 }
 
-/// Prove the new build beside the running brain without touching it.
-/// Nothing yet: what it is to do is in [`harness_core::build`].
-fn rehearse(_build: &Path, _running: &Running) -> Result<(), String> {
-    Ok(())
+/// Prove the new build beside the running brain without touching it, in
+/// `NAME/rehearsal/`, deleted after: why not, in the words of the program
+/// that failed.
+fn rehearse(build: &Path, running: &Running, say: &dyn Fn(&str)) -> Result<(), String> {
+    let dir = running.data().join("rehearsal");
+    remove(&dir);
+    std::fs::create_dir_all(dir.join("ws")).map_err(|e| format!("{}: {e}", dir.display()))?;
+    say(&format!(
+        "rehearsing {} beside {}",
+        name(build),
+        running.unit
+    ));
+    let done = rehearse_in(&dir, build, running);
+    remove(&dir);
+    done
+}
+
+fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<(), String> {
+    let commit = name(build);
+    // The new build reads a copy of the live database as if it took over:
+    // it folds every record, has the provider count each live session's
+    // next request, and streams one short response.
+    let copy = dir.join("copy.sqlite");
+    Store::open(&running.db)
+        .and_then(|store| store.copy_to(&copy))
+        .map_err(|e| format!("copying {}: {e}", running.db.display()))?;
+    let out = Command::new(build.join("bin/harness-brain"))
+        .arg("--check")
+        .arg(&copy)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{commit}'s harness-brain --check: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{commit} failed its check on a copy of the database: {}{}",
+            String::from_utf8_lossy(&out.stderr).trim(),
+            failures(&String::from_utf8_lossy(&out.stdout)),
+        ));
+    }
+    // The way back: this build, the old one, reads what the new one left.
+    fold_span(&copy).map_err(|e| {
+        format!(
+            "{}, which {} runs, could not read the copy once {commit} had: {e}",
+            running.commit, running.unit
+        )
+    })?;
+    // A scratch brain of the new build, on the scripted model, makes a
+    // round trip through a limb of the new build.
+    let mark = format!("HARNESS_OWNER_rehearsal_{}", std::process::id());
+    let done = scratch(dir, build, &mark);
+    end(&mark);
+    done.map_err(|why| format!("{commit}'s scratch brain {why}"))
+}
+
+/// What a `--check` report says failed, one line each.
+fn failures(report: &str) -> String {
+    let Ok(report) = serde_json::from_str::<serde_json::Value>(report) else {
+        return format!("\n{}", report.trim());
+    };
+    let skipped = report["skipped"].as_array().into_iter().flatten();
+    let sessions = report["sessions"].as_array().into_iter().flatten();
+    let said: Vec<String> = skipped
+        .map(|s| format!("\nit could not fold a record: {s}"))
+        .chain(
+            sessions
+                .filter(|s| s.get("tokens").is_none())
+                .map(|s| format!("\na session's next request: {s}")),
+        )
+        .chain(
+            report["ping"]
+                .get("failed")
+                .map(|f| format!("\nits streamed request: {f}")),
+        )
+        .collect();
+    said.concat()
+}
+
+/// Serve a scratch brain of `build` on a new database in `dir`, every
+/// process of it carrying `mark`, and have one chat make a tool call
+/// through a limb: why not, as the brain's own words end.
+fn scratch(dir: &Path, build: &Path, mark: &str) -> Result<(), String> {
+    const WITHIN: Duration = Duration::from_secs(90);
+    let db = dir.join("scratch.sqlite");
+    let log_path = dir.join("scratch.log");
+    let log = File::create(&log_path).map_err(|e| format!("{}: {e}", log_path.display()))?;
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map_err(|e| format!("found no free port: {e}"))?
+        .port()
+        .to_string();
+    let mut brain = Command::new(build.join("bin/harness-brain"))
+        .arg("--db")
+        .arg(&db)
+        .args(["--port", &port, "--model", "scripted", "--roles"])
+        .arg(build.join("roles"))
+        .env(mark, "1")
+        .env("XDG_STATE_HOME", dir.join("state"))
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(log.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log)
+        .spawn()
+        .map_err(|e| format!("would not start: {e}"))?;
+    let said = || std::fs::read_to_string(&log_path).unwrap_or_default();
+    let ended = |brain: &mut std::process::Child, what: &str| {
+        let lines: Vec<String> = said().lines().map(String::from).collect();
+        let tail = lines[lines.len().saturating_sub(5)..].join("\n");
+        match brain.try_wait() {
+            Ok(Some(status)) => Some(format!("exited ({status}) {what}, saying:\n{tail}")),
+            _ => None,
+        }
+    };
+    let until = Instant::now() + WITHIN;
+    while !said().contains("face: ") {
+        if let Some(why) = ended(&mut brain, "before it served") {
+            return Err(why);
+        }
+        if Instant::now() > until {
+            return Err(format!("did not serve in {}s", WITHIN.as_secs()));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    let chat = Command::new(build.join("bin/act"))
+        .args([&port, "chat", "engineer"])
+        .arg(dir.join("ws"))
+        .arg("tool bash {\"command\":\"echo a round trip\"}\nsay done")
+        .env(mark, "1")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("could not be acted on: {e}"))?;
+    let chatted = String::from_utf8_lossy(&chat.stdout);
+    if !chat.status.success() {
+        return Err(format!("refused a chat: {}", chatted.trim()));
+    }
+    loop {
+        thread::sleep(Duration::from_millis(500));
+        if let Some(why) = ended(&mut brain, "during a scripted round trip") {
+            return Err(why);
+        }
+        match fold_span(&db)?.1 {
+            Verdict::Proven { .. } => return Ok(()),
+            Verdict::Refused(r) => {
+                return Err(format!(
+                    "had its request refused with {}: {}",
+                    r.status, r.message
+                ));
+            }
+            Verdict::Proving { .. } if Instant::now() > until => {
+                return Err(format!(
+                    "made no scripted round trip through a limb in {}s; its log: {}",
+                    WITHIN.as_secs(),
+                    log_path.display()
+                ));
+            }
+            Verdict::Proving { .. } => {}
+        }
+    }
+}
+
+/// End every process carrying `mark`: SIGTERM, and SIGKILL to what is
+/// left after 10 s.
+fn end(mark: &str) {
+    let marked = || -> Vec<i32> {
+        let procs = std::fs::read_dir("/proc").into_iter().flatten().flatten();
+        procs
+            .filter_map(|e| {
+                let pid = e.file_name().to_str()?.parse().ok()?;
+                let environ = std::fs::read(e.path().join("environ")).ok()?;
+                let wanted = format!("{mark}=1");
+                environ
+                    .split(|b| *b == 0)
+                    .any(|v| v == wanted.as_bytes())
+                    .then_some(pid)
+            })
+            .collect()
+    };
+    let signal = |sig| {
+        marked().into_iter().for_each(|pid| {
+            // SAFETY: kill takes plain integers.
+            unsafe { libc::kill(pid, sig) };
+        })
+    };
+    signal(libc::SIGTERM);
+    let until = Instant::now() + Duration::from_secs(10);
+    while !marked().is_empty() && Instant::now() < until {
+        thread::sleep(Duration::from_millis(200));
+    }
+    signal(libc::SIGKILL);
 }
 
 impl Takeover {
@@ -256,7 +444,7 @@ impl Takeover {
         let unit = &self.new.unit;
         let _ = systemctl(&["kill", "-s", "SIGKILL", unit]);
         let _ = systemctl(&["stop", unit]);
-        let how = match start(unit, &self.old.argv) {
+        let how = match start(unit, &self.old.argv, self.by) {
             Ok(()) => format!("{unit} runs {} again", self.old.commit),
             Err(e) => format!("and {} would not start again: {e}", self.old.commit),
         };
@@ -449,10 +637,11 @@ fn remove(dir: &Path) {
     }
 }
 
-/// Start `unit` running `argv`, in the database's directory. Its stop
+/// Start `unit` running `argv`, in the database's directory, telling the
+/// brain the `relaunch` call `by` that started it, if one did. Its stop
 /// sends SIGTERM to the brain alone, which ends its links to limbs itself
 /// (the limbs run in units of their own), and gives it 330 s to drain.
-pub fn start(unit: &str, argv: &[String]) -> Result<(), String> {
+pub fn start(unit: &str, argv: &[String], by: Option<CallId>) -> Result<(), String> {
     let _ = systemctl(&["reset-failed", unit]);
     let exe = Path::new(argv.first().ok_or("nothing to start")?);
     let commit = exe
@@ -475,6 +664,7 @@ pub fn start(unit: &str, argv: &[String]) -> Result<(), String> {
         ))
         .arg(format!("--working-directory={}", dir.display()))
         .args(["-p", "KillMode=mixed", "-p", "TimeoutStopSec=330"])
+        .args(by.map(|call| format!("--setenv={}={call}", crate::RELAUNCHED_BY)))
         .args(argv))
     .map(|_| ())
 }
