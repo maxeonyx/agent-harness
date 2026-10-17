@@ -107,7 +107,15 @@ class Replica {
       });
       this.onView?.(fresh);
     };
-    ws.onclose = () => { if (this.ws === ws) { this.onView?.(null); setTimeout(() => this.connect(), 1000); } };
+    ws.onclose = () => { if (this.ws === ws) { this.onView?.(null); setTimeout(() => this.reconnect(), 1000); } };
+  }
+  // Behind a login such as Cloudflare Access, a link that drops may be a
+  // session that expired: the login redirects the brain's requests away.
+  // Then reload, so the page goes through the login; otherwise link again.
+  async reconnect() {
+    const probe = await fetch("/wiring", { redirect: "manual", cache: "no-store" }).catch(() => null);
+    if (probe?.type === "opaqueredirect" || probe?.status === 401 || probe?.status === 403) return location.reload();
+    if (this.ws) this.connect();
   }
   close() { const ws = this.ws; this.ws = null; ws?.close(); tabCall("close", undefined, this.h); }
   shipUnsent() {

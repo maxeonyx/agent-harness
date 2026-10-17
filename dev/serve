@@ -27,7 +27,9 @@
 # ~/.local/share/agent-harness/NAME/build links to the build a restart of
 # NAME runs, the last proven, so its `act` is
 # ~/.local/share/agent-harness/NAME/build/bin/act.
-# Its log: journalctl --user -u harness-NAME.
+# Its log: journalctl --user -u harness-NAME. The unit is transient: it
+# does not come back after a reboot. Reaching a brain through Cloudflare's
+# tunnel and Access, from a phone: demos/deploy/README.md.
 set -euo pipefail
 
 die() { echo "dev/serve: $*" >&2; exit 1; }

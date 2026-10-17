@@ -214,6 +214,7 @@ impl<S: Source> Face<S> {
                 Err(e) => http::refuse(&mut stream, "500 Internal Server Error", &e.to_string()),
             },
             "/tab.wasm" => http::respond(&mut stream, "application/wasm", TAB, false),
+            "/icon.png" => http::respond(&mut stream, "image/png", ICON, false),
             "/wiring" => {
                 let dictation = self.wiring.dictation.as_ref();
                 let can = json!({
@@ -247,6 +248,7 @@ impl<S: Source> Face<S> {
                     let kind = match name.rsplit_once('.') {
                         Some((_, "js")) => "text/javascript; charset=utf-8",
                         Some((_, "css")) => "text/css; charset=utf-8",
+                        Some((_, "webmanifest")) => "application/manifest+json",
                         _ => "text/html; charset=utf-8",
                     };
                     return match self.page_file(name) {
@@ -729,6 +731,8 @@ const DOCUMENT: &[&str] = &[
 ];
 /// The tab, as the page runs it.
 const TAB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tab.wasm"));
+/// The face's icon, for its web app manifest (`page/manifest.webmanifest`).
+const ICON: &[u8] = include_bytes!("icon.png");
 
 /// The TLS configuration for a PEM certificate chain and key.
 pub fn tls(cert: &Path, key: &Path) -> io::Result<Arc<rustls::ServerConfig>> {
