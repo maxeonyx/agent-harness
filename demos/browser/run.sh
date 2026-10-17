@@ -2,6 +2,7 @@
 # A chat starts a browser agent on a chore in real pages: an expense claim
 # filled in from a receipts page, left unsubmitted, its tab handed to Max.
 # Watch it at https://mx-hv-mj.local:4342 (PORT=… for another port).
+# Every role runs on Sonnet (MODEL=… for another; the effort is the role's).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 cargo build -q --release -p harness-brain -p harness-limb-workspace -p harness-limb-browser --bins --example act
@@ -24,7 +25,7 @@ waits_on_max() { [ "$(c /view 2>/dev/null | jq -r "$root | .waiting.kind")" = ma
 echo "== Max asks a chat, in the chat role:"
 cat "$dir/mandate.md"
 echo
-env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" > "$dir/brain.log" 2>&1 &
+env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" --model "${MODEL:-sonnet}" > "$dir/brain.log" 2>&1 &
 target/release/examples/act "$port" chat chat - "$(cat "$dir/mandate.md")" > /dev/null
 until waits_on_max; do sleep 1; done
 grep -E 'browser|tab|passed|spawn|responded' "$dir/brain.log" | cut -c1-170
