@@ -3,6 +3,7 @@ import { byId, derive, DOT, glyph, graph, isDone, layout, live, look, positions,
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setSeam, target } from "./camera.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
+import { renderBuilds } from "./builds.js";
 import { go, goStaying, moving, NEW, openId, renderPanel } from "./card.js";
 import { renderOthers, syncCompose } from "./compose.js";
 import { finding, found } from "./newchat.js";
@@ -156,6 +157,7 @@ export function render() {
   if (!view) return;
   $("#empty").hidden = view.tasks.length > 0 || !!openId;
   renderUsage();
+  renderBuilds();
   const q = view.queue || [];
   document.title = q.length ? `(${q.length}) harness` : "harness";
   notify(q);
