@@ -1,3 +1,8 @@
+import { render } from "./draw.js";
+import { liveArrived } from "./log.js";
+import { restoreLocal } from "./compose.js";
+import { viewArrived } from "./main.js";
+
 // ─── This tab: a replica on the substrate ────────────────────────────────────
 // The tab is the wasm build of harness-face-tab: its own records, kept in
 // IndexedDB until the brain's standing covers them, and its replica of the
@@ -5,7 +10,7 @@
 // IndexedDB. Whatever the tab says is parsed into core's facts by the wasm,
 // stored, and only then shipped; what became of it is read off the tab's
 // standing in a later view, so a refusal shows here, where it was made.
-let can = { act: false, dictation: false, sample: false };
+export let can = { act: false, dictation: false, sample: false };
 fetch("/wiring").then((r) => r.json()).then((c) => { can = c; render(); });
 
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -23,7 +28,7 @@ function tabCall(name, input, ...args) {
   return { ret, out: out.length ? JSON.parse(dec.decode(out)) : null };
 }
 // What names a value in the facts: its digest, as the core computes it.
-const digest = (text) => tabCall("digest", text).out;
+export const digest = (text) => tabCall("digest", text).out;
 
 // IndexedDB: every replica's records this browser holds, by time.
 const db = new Promise((ok, fail) => {
@@ -136,8 +141,8 @@ function hold(id) {
     return lock ? new Promise(() => {}) : null;
   }));
 }
-let tab = null;
-async function boot() {
+export let tab = null;
+export async function boot() {
   wasm = (await WebAssembly.instantiateStreaming(fetch("/tab.wasm"))).instance.exports;
   let id = sessionStorage.getItem("replica");
   if (!id || !(await hold(id))) { do id = mintPlace(); while (!(await hold(id))); }
@@ -176,7 +181,7 @@ async function restored(replica) {
 // record's time, `replica.n`, which names what the record creates
 // (`${at}.0`). Values are the texts the facts name. Resolves with null once
 // included, or the brain's reason for refusing it.
-async function act(facts, values = []) {
+export async function act(facts, values = []) {
   if (!tab) return "this tab has not started";
   const at = tab.next();
   const made = typeof facts === "function" ? facts(at) : facts;

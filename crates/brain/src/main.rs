@@ -12,17 +12,18 @@
 //! each unfinished request was lost, and each limb that reconnects is
 //! shipped the calls it holds rows for.
 //!
-//! Each plugin limb runs as a process of its own, `harness-limb-<kind>`
-//! from beside the brain's executable, linked to the brain over a Unix
-//! socket in its state directory ([`link`], [`process`]). A limb outlives
-//! the brain that started it, and reconnects to the next one. The roles
+//! Each plugin limb runs as a server of its own, which the brain reaches
+//! by running `harness-limb-<kind> attach <limb>` from beside its own
+//! executable: that starts the limb if it is not running, and its stdin and
+//! stdout are the link ([`link`], [`process`]). A limb outlives the brain
+//! that started it, and serves the next one. The roles
 //! limb, which states the environments read from role files, runs on a
 //! thread of the brain, linked by a channel ([`roles`]).
 //!
 //! Ctrl-C, `SIGTERM` or `SIGHUP` shuts the brain down: nothing new starts,
-//! the requests in flight have [`harness_program::policy::DRAIN`] to finish, the limbs stop
-//! their commands by the same deadline and exit, and the process exits
-//! once none of it is left. A second signal cuts everything now. Tasks are
+//! the requests in flight have [`harness_program::policy::DRAIN`] to finish, and the process
+//! exits once none of them is left. Its limbs run on, with their calls, for
+//! the next brain. A second signal cuts everything now. Tasks are
 //! not stopped: the next launch carries them on ([`harness_core::cancel`]).
 //!
 //! The face is served from the same process. After each change the brain
@@ -39,11 +40,11 @@
 //! limbs' tools, and the policy the core leaves open live in
 //! `harness-program`, which does no I/O and builds for wasm32; the brain
 //! only calls it. What is left here is I/O: the database, the provider,
-//! limb processes and sockets, the face, signals, and where a new clone
+//! limb links, the face, signals, and where a new clone
 //! goes on disk.
 //!
 //! ```text
-//! harness-brain --db DB [--port 4321] [--roles DIR] [--sample WAV]
+//! harness-brain --db DB --port PORT [--roles DIR] [--sample WAV]
 //!               [--workspace DIR --mandate FILE [--name NAME] [--role ROLE]]
 //! ```
 //! A new database needs `--roles`, the directory the roles limb reads; an
@@ -53,12 +54,31 @@
 //! so its briefs can quote it. `--sample` offers the page a recording to
 //! dictate, for a machine with no microphone.
 
+/// Print a line to stdout, dropping it once nothing reads it: `println!`
+/// panics on a closed pipe, and losing the reader of the brain's output
+/// must never stop the brain, least of all from shutting down.
+macro_rules! outln {
+    ($($line:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($line)*);
+    }};
+}
+
+/// Print a line to stderr, dropping it once nothing reads it, as `outln!`.
+macro_rules! errln {
+    ($($line:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($line)*);
+    }};
+}
+
 mod brain;
 mod link;
 mod process;
 mod roles;
 
 use std::net::{IpAddr, TcpListener};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Mutex, mpsc};
@@ -85,7 +105,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("harness-brain: {e}");
+            errln!("harness-brain: {e}");
             ExitCode::FAILURE
         }
     }
@@ -93,15 +113,14 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let (mut db, mut port, mut workspace, mut mandate, mut name) =
-        (None, 4321u16, None, None, None);
+    let (mut db, mut port, mut workspace, mut mandate, mut name) = (None, None, None, None, None);
     let (mut roles, mut role) = (None, "orchestrator".to_string());
     let mut sample = None;
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
             "--db" => db = Some(PathBuf::from(value()?)),
-            "--port" => port = value()?.parse().map_err(|e| format!("--port: {e}"))?,
+            "--port" => port = Some(value()?.parse().map_err(|e| format!("--port: {e}"))?),
             "--workspace" => workspace = Some(PathBuf::from(value()?)),
             "--mandate" => mandate = Some(PathBuf::from(value()?)),
             "--name" => name = Some(value()?),
@@ -112,6 +131,7 @@ fn run() -> Result<(), String> {
         }
     }
     let db = db.ok_or("--db is required")?;
+    let port: u16 = port.ok_or("--port is required")?;
     let start = match (workspace, mandate) {
         (Some(workspace), Some(mandate)) => Some(Start {
             workspace,
@@ -122,7 +142,6 @@ fn run() -> Result<(), String> {
         }),
         _ => None,
     };
-    let state_dir = db.with_extension("limbs");
 
     let store = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
     let values = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
@@ -155,28 +174,20 @@ fn run() -> Result<(), String> {
     // The Windows host, read again for each connection: DHCP can move it.
     let allow = |peer: IpAddr| Some(peer) == harness_face_web::default_gateway().map(IpAddr::V4);
     let client = Client::new(login()?);
-    let mut brain = Brain::launch(
-        store,
-        folds,
-        client,
-        state_dir,
-        roles.as_deref(),
-        start,
-        inbox,
-        feed,
-    )?;
-    // The face serves until the brain has shut down.
+    let mut brain = Brain::launch(store, folds, client, roles.as_deref(), start, inbox, feed)?;
+    // The face serves until the brain has shut down or panicked: the scope
+    // would wait for the face forever, so the process exits from inside it.
     thread::scope(|s| {
         s.spawn(|| face.follow(followed));
         s.spawn(|| {
             if let Err(e) = harness_face_web::serve(&face, listener, tls, allow) {
-                eprintln!("harness-brain: the face stopped serving: {e}");
+                errln!("harness-brain: the face stopped serving: {e}");
             }
         });
-        println!("face: https://mx-hv-mj.local:{port}");
-        brain.run();
-        eprintln!("harness-brain: shut down");
+        outln!("face: https://mx-hv-mj.local:{port}");
+        let ran = panic::catch_unwind(AssertUnwindSafe(|| brain.run()));
+        errln!("harness-brain: shut down");
         let _ = std::io::Write::flush(&mut std::io::stdout());
-        std::process::exit(0)
+        std::process::exit(if ran.is_ok() { 0 } else { 101 })
     })
 }

@@ -1,3 +1,10 @@
+import { $, el, icon, kTokens, panel, parse } from "./base.js";
+import { act, can, digest, tab } from "./tab.js";
+import { byId, isDone, view } from "./map.js";
+import { aside, NEW, resume } from "./card.js";
+import { unmovable } from "./log.js";
+import { startNew } from "./newchat.js";
+
 // ─── What Max writes ───────────────────────────────────────────────────────
 // One box per open node: a staging area, its text and attachments kept per
 // task across tabs and reloads. Nothing reaches the model until Max sends
@@ -11,8 +18,8 @@
 // Dictation streams into the box as edits to a live region, which Max can
 // edit too: an edit inside it pins the text up to the end of his edit, and
 // the words still coming go after it.
-const compose = $(".compose", panel);
-let box = null, dictation = null;
+export const compose = $(".compose", panel);
+export let box = null, dictation = null;
 // The send this tab's box is staged for, "Next" or "TurnEnd"; and until
 // when sending waits, after another device changed the words.
 let staged = null, lockedUntil = 0;
@@ -87,12 +94,12 @@ async function save(session) {
 }
 // Forget what this tab typed once the brain holds it: then the draft's row
 // is the truth, whichever device typed last.
-function settleLocal() {
+export function settleLocal() {
   for (const [id, c] of local) if (c.n && c.saved === c.v && tab.status(c.n) !== "pending") local.delete(id);
 }
 // After a reload, what this tab typed that the brain has not yet included
 // is in its own records: back into the boxes.
-function restoreLocal() {
+export function restoreLocal() {
   for (const r of tab.records()) {
     const said = r.what.Said;
     if (!said) continue;
@@ -115,7 +122,7 @@ const keepHere = (key, change) => {
   try { sessionStorage.setItem(`draft:${key}`, JSON.stringify({ ...keptHere(key), ...change })); return null; }
   catch { return "too big to keep in this tab"; }
 };
-const drafts = {
+export const drafts = {
   get: (session) => unborn(session) ? keptHere(session).text : contentOf(draftOf(session) || `new:${session}`).text,
   set: (session, text) => unborn(session) ? keepHere(session, { text }) : edit(session, { text }),
 };
@@ -125,7 +132,7 @@ const attached = {
 };
 // The brain's text for the draft in the box, if this tab has nothing of
 // its own unsaved: what another device typed.
-function syncCompose() {
+export function syncCompose() {
   if (!box || dictation || unborn(box.dataset.key)) return;
   const id = draftOf(box.dataset.key);
   if (id && local.has(id)) return;
@@ -142,7 +149,7 @@ function syncCompose() {
 }
 // The session's other drafts: words held when the session could not take
 // them, and drafts opened beside this one (a concurrent Send or edit).
-function renderOthers() {
+export function renderOthers() {
   const others = $(".others", compose);
   if (!others || !box) return;
   const session = box.dataset.key, mine = draftOf(session);
@@ -158,6 +165,42 @@ function renderOthers() {
     }
     return card;
   }));
+  // The box holds an edit of one of his messages: say so, and offer to drop it.
+  const row = (view?.drafts || []).find((d) => d.id === mine);
+  if (mine && (row?.at || editing.has(mine))) {
+    const bar = el("div", "other editing");
+    bar.append(el("span", "said", "Editing your message: sending it replaces that message and what followed, which stays as another version"));
+    const cancel = el("button", "btn", "Cancel edit");
+    cancel.onclick = async () => {
+      leaving.add(mine); editing.delete(mine); local.delete(mine);
+      box.value = prev = ""; autosize(); renderTray(); renderOthers();
+      await act({ Draft: [mine, "Discarded"] });
+      renderOthers(); syncCompose();
+    };
+    bar.append(cancel);
+    others.prepend(bar);
+  }
+}
+// Edit one of Max's messages: a draft at the entry before it, holding his
+// words, which becomes the box's. Its Send moves the chat back there and
+// says them, as one fact; what he was typing stays a draft beside it.
+const editing = new Set(); // edit drafts this tab opened, until their rows arrive
+export async function editMessage(session, at, text) {
+  if (box?.dataset.key !== session || !at) return;
+  const blocked = unmovable(byId[session]);
+  if (blocked) return say(`Edit: ${blocked}`, true);
+  const value = JSON.stringify({ text, attached: [] });
+  let id = null;
+  const why = await act((now) => {
+    id = `${now}.0`;
+    local.set(id, { text, attached: [], v: 1, saved: 1, n: Number(now.split(".")[1]) });
+    editing.add(id);
+    bound.set(session, id);
+    return [{ Draft: [id, { Opened: { session, at } }] }, { Draft: [id, { Text: digest(value) }] }];
+  }, [value]);
+  if (why) { local.delete(id); editing.delete(id); bound.delete(session); return say(`Edit: ${why}`, true); }
+  box.value = prev = text; unstage(); autosize(); renderTray(); renderOthers();
+  box.focus();
 }
 
 const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -190,7 +233,7 @@ function renderTray() {
   }));
 }
 
-function buildCompose(id) {
+export function buildCompose(id) {
   compose.replaceChildren();
   box = null;
   staged = null;
@@ -214,7 +257,7 @@ function buildCompose(id) {
   line.append(box, side);
   const row = el("div", "row2");
   const sample = el("button", "later sample", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
-  row.append(sample, el("span", "picks"), el("span", "status"));
+  row.append(sample, el("span", "picks"), el("span", "status"), el("span", "tune"));
   wrap.append(el("div", "others"), tray, line, row);
   // What Max can do to the task itself floats outside the card, beside it.
   compose.append(wrap, el("div", "acts"));
@@ -240,6 +283,63 @@ function buildCompose(id) {
   renderOthers();
   renderComposeState(t);
 }
+// ─── Model and effort ──────────────────────────────────────────────────────
+// The pill under the send: the model and effort the chat's next request
+// runs at, "Opus · high". Each is a choice of its own; choosing its role's
+// leaves it to the role. While its cache is warm, each other choice says
+// what it costs: the whole context read again without the cache. A new
+// chat's choice is kept with its draft and goes into the fact that starts
+// it.
+export const modelName = (id) => view.models?.find((m) => m.id === id)?.name || id;
+function tuneOf(t) {
+  if (t) return { env: view.environments.find((e) => e.name === t.environment), ...t.tuning };
+  const env = view.environments.find((e) => e.name === $("#n-role")?.value);
+  return { env, model: drafts.get("new:model") || env?.model, effort: drafts.get("new:effort") || env?.effort, warm: null };
+}
+export function renderTune(t) {
+  const pill = $(".tune", compose);
+  if (!pill || (t && isDone(t))) return pill?.replaceChildren();
+  const now = tuneOf(t);
+  if (!now.env || !now.model) return pill.replaceChildren();
+  const warm = now.warm && now.warm.until > Date.now() ? now.warm.tokens : 0;
+  const key = `${now.model}|${now.effort}|${warm}|${now.env.name}`;
+  if (pill.dataset.key === key) return;
+  pill.dataset.key = key;
+  const cost = warm ? ` · rereads ${kTokens(warm)}` : "";
+  const pick = (title, list, chosen, name, field) => {
+    const s = el("select", "pick"); s.title = title;
+    s.append(...list.map((v) => Object.assign(el("option", null, name(v) + (v === chosen ? "" : cost)), { value: v })));
+    s.value = chosen;
+    s.onchange = () => retune(t, now, field, s.value);
+    return s;
+  };
+  const models = view.models.map((m) => m.id);
+  if (!models.includes(now.model)) models.push(now.model);
+  pill.title = warm ? `Changing either reads the whole context again without the cache: ${kTokens(warm)} tokens` : "The model and effort its next request runs at";
+  pill.replaceChildren(
+    pick("Its model", models, now.model, modelName, "model"),
+    el("span", "dot", "·"),
+    pick("How hard it thinks", view.efforts, now.effort, (e) => e, "effort"),
+  );
+}
+// The whole setting at once, with what is its role's left to the role.
+async function retune(t, now, field, value) {
+  const next = { model: now.model, effort: now.effort, [field]: value };
+  if (!t) { drafts.set(`new:${field}`, value === now.env[field] ? "" : value); return renderTune(null); }
+  const tuning = {};
+  if (next.model !== now.env.model) tuning.model = next.model;
+  if (next.effort !== now.env.effort) tuning.effort = next.effort;
+  const why = await act({ Task: [t.id, { Tuned: tuning }] });
+  if (why) say(`not changed: ${why}`, true);
+}
+// What a new chat's Created says it runs at.
+export function newTuning() {
+  const now = tuneOf(null), tuning = {};
+  if (now.model && now.model !== now.env?.model) tuning.model = now.model;
+  if (now.effort && now.effort !== now.env?.effort) tuning.effort = now.effort;
+  return tuning;
+}
+
 // Send or Queue: its icon, and the word it shows once staged.
 function goButton(name, cls, word, tip) {
   const b = icon(name, `go ${cls}`, tip);
@@ -250,7 +350,7 @@ function goButton(name, cls, word, tip) {
 // Mid-turn, words can go now or wait for the turn's end; between turns, in
 // response to its question, or to a finished chat, there is only now.
 const midTurn = (t) => ["model", "calls", "harness", "held", "limited"].includes(t.waiting?.kind);
-function renderComposeState(t) {
+export function renderComposeState(t) {
   if (!box) return;
   const key = box.dataset.key, has = !!box.value.trim() || attached.get(key).length > 0;
   const send = $(".send", compose), queue = $(".queue", compose);
@@ -268,6 +368,7 @@ function renderComposeState(t) {
   send.classList.toggle("locked", locked);
   send.title = locked ? "Changed on another device a moment ago" : "Send (Enter, twice)";
   $(".box", compose).classList.toggle("staged", !!staged);
+  renderTune(t);
 }
 // The first press stages, the second sends; the other button restages as
 // itself. A press while dictating ends the dictation and stages, and a
@@ -291,7 +392,7 @@ function unstage() {
   renderComposeState(byId[box.dataset.key]);
 }
 // Only what went wrong is said; what went right shows as itself.
-const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`; } };
+export const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`; } };
 function autosize() {
   if (!box) return;
   box.style.height = "auto";
@@ -355,7 +456,7 @@ async function submit(read) {
 // What is in the box leaves it as it is sent: the box is empty at once, so
 // a second press sends nothing, and what Max types while it goes is a draft
 // of its own. The draft the words were in is the send's.
-function takeWords(key) {
+export function takeWords(key) {
   clearTimeout(saving.get(key));
   saving.delete(key);
   const draft = unborn(key) ? null : draftOf(key);
@@ -371,7 +472,7 @@ function returnWords(key, draft, text, files) {
   if (draft) { leaving.delete(draft); bound.set(key, draft); }
   giveBack(key, text, files);
 }
-function giveBack(key, text, files) {
+export function giveBack(key, text, files) {
   const now = drafts.get(key), more = attached.get(key);
   const back = now.trim() ? `${text}\n\n${now}` : text;
   drafts.set(key, back);
@@ -481,7 +582,7 @@ function releaseMic(l) {
   l.mic.ctx.close();
   l.mic = null;
 }
-function stopDictation() {
+export function stopDictation() {
   if (!dictation) return;
   dictation.stopping = true;
   releaseMic(dictation);

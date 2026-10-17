@@ -173,12 +173,22 @@ pub fn turn(state: &State, values: Values, task: &Task, first: bool, forked: &[C
     let mid_turn = !forked.is_empty()
         || task.pending.iter().any(|p| matches!(p, Input::Result(_)))
         || matches!(
-            state.last_turn(task.id).map(|e| &e.ending),
+            task.head()
+                .and_then(|h| state.response(h))
+                .and_then(|m| m.ended.as_ref())
+                .map(|e| &e.ending),
             Some(Ending::Responded {
                 stop: Stop::MaxTokens | Stop::PauseTurn,
                 ..
             })
         );
+    // Max moved the context here, off a path that changed the world.
+    if let Some(from) = task.context().and_then(|c| c.moved) {
+        texts.push(
+            Rendered::Note(Note::Moved { from }),
+            vec![text(&moved(state, task, from))],
+        );
+    }
     for pending in &task.pending {
         match *pending {
             Input::Result(call) => {
@@ -490,6 +500,51 @@ pub fn kept(state: &State, task: &Task, since: Option<EntryId>) -> Vec<ValueId> 
     }
     found.reverse();
     found
+}
+
+/// What Max moving a task back left standing: what the path it left did
+/// to the world, which the move did not undo.
+fn moved(state: &State, task: &Task, from: EntryId) -> String {
+    let Some(head) = task.head() else {
+        return String::new();
+    };
+    let left = state.left(task.id, from, head);
+    let tools = |calls: &[CallId]| {
+        let mut names: Vec<_> = calls
+            .iter()
+            .filter_map(|c| state.call(*c))
+            .map(|c| format!("`{}`", c.call.tool))
+            .collect();
+        names.dedup();
+        names.join(", ")
+    };
+    let mut said = vec![
+        "[harness] Max moved this conversation back to here. What followed is gone from your context, \
+but what it did to the world stays:"
+            .to_string(),
+    ];
+    if !left.wrote.is_empty() {
+        said.push(format!(
+            "- files changed by the tool calls {} are as those calls left them; read them again before relying on them",
+            tools(&left.wrote)
+        ));
+    }
+    if !left.running.is_empty() {
+        said.push(format!(
+            "- background work it started still runs: {}",
+            tools(&left.running)
+        ));
+    }
+    if !left.started.is_empty() {
+        let names: Vec<_> = left
+            .started
+            .iter()
+            .filter_map(|t| state.task(*t))
+            .map(|t| format!("`{}`", t.name))
+            .collect();
+        said.push(format!("- tasks it started: {}", names.join(", ")));
+    }
+    said.join("\n")
 }
 
 /// Whether a stale resource is one a call this request renders observed: a

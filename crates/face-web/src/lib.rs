@@ -197,10 +197,29 @@ impl<S: Source> Face<S> {
                     false,
                 )
             }
-            path => match path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
-                Some(head) => self.context(&mut stream, head),
-                None => http::not_found(&mut stream),
-            },
+            path => {
+                if let Some(script) = path
+                    .strip_prefix("/page/")
+                    .and_then(|name| SCRIPTS.iter().find(|(n, _)| *n == name))
+                {
+                    return http::respond(
+                        &mut stream,
+                        "text/javascript; charset=utf-8",
+                        script.1.as_bytes(),
+                        false,
+                    );
+                }
+                if let Some(head) = path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
+                    return self.context(&mut stream, head);
+                }
+                match path.strip_prefix("/versions/").and_then(|t| t.parse().ok()) {
+                    Some(task) => {
+                        let body = versions(&self.read(), task).to_string();
+                        http::respond(&mut stream, "application/json", body.as_bytes(), false)
+                    }
+                    None => http::not_found(&mut stream),
+                }
+            }
         }
     }
 
@@ -321,7 +340,7 @@ impl<S: Source> Face<S> {
         // is read with no lock held.
         let (chain, sent) = {
             let state = self.read();
-            let chain: Vec<(EntryId, Entry, Value)> = state
+            let chain: Vec<(EntryId, Entry, (Value, Option<ValueId>))> = state
                 .context(head)
                 .into_iter()
                 .map(|(id, entry)| (id, entry.clone(), response(&state, id)))
@@ -332,7 +351,7 @@ impl<S: Source> Face<S> {
         let mut by = authors(sent, &|id| self.source.value(id));
         let chain: Vec<Value> = chain
             .into_iter()
-            .map(|(id, entry, response)| match entry {
+            .map(|(id, entry, (mut response, params))| match entry {
                 Entry::Root(root) => json!({
                     "id": id.to_string(),
                     "role": "root",
@@ -340,13 +359,18 @@ impl<S: Source> Face<S> {
                     "system": text(root.system),
                     "tools": text(root.tools),
                 }),
-                Entry::Message { message, .. } => json!({
-                    "id": id.to_string(),
-                    "role": message.role.as_str(),
-                    "content": text(message.content),
-                    "response": response,
-                    "by": by.remove(&id),
-                }),
+                Entry::Message { message, .. } => {
+                    if let Some(params) = params.and_then(|p| self.source.value(p)) {
+                        response["effort"] = json!(harness_provider::effort(&params));
+                    }
+                    json!({
+                        "id": id.to_string(),
+                        "role": message.role.as_str(),
+                        "content": text(message.content),
+                        "response": response,
+                        "by": by.remove(&id),
+                    })
+                }
             })
             .collect();
         if chain.is_empty() {
@@ -391,7 +415,7 @@ struct Sent {
 }
 
 /// The requests and compactions that appended the messages of `chain`.
-fn sent(state: &State, chain: &[(EntryId, Entry, Value)]) -> Vec<Sent> {
+fn sent<T>(state: &State, chain: &[(EntryId, Entry, T)]) -> Vec<Sent> {
     let wanted: BTreeSet<EntryId> = chain.iter().map(|(id, _, _)| *id).collect();
     let carried = chain.iter().filter_map(|(id, entry, _)| {
         let compacted = state.compacted(*id)?;
@@ -533,20 +557,93 @@ fn authors(
     out
 }
 
-/// When an entry that is a response was sent and ended, and the context it
-/// was sent with: what it cost.
-fn response(state: &State, entry: EntryId) -> Value {
+/// Where a task's context has more than one version: for each entry with
+/// siblings it has been at, which of them it is (`n` of `of`, in the order
+/// they were first made), and where Max lands moving to the one before or
+/// after: the last response the task had on that path, or failing one, the
+/// last request. Read whole on every change of head, since a version is
+/// added by any request.
+fn versions(state: &State, task: TaskId) -> Value {
+    let Some(start) = state.task(task).and_then(|t| t.context()).map(|c| c.start) else {
+        return json!({});
+    };
+    let mut calls: Vec<_> = state
+        .model_calls()
+        .filter(|(_, m)| m.call.task == task && state.descends(m.call.base, start))
+        .map(|(_, m)| m)
+        .collect();
+    calls.sort_by_key(|m| m.sent.seq);
+    let mut children: BTreeMap<EntryId, Vec<EntryId>> = BTreeMap::new();
+    let mut landing: HashMap<EntryId, (bool, EntryId)> = HashMap::new();
+    for m in calls {
+        let ends = [Some((false, m.call.head())), m.response.map(|r| (true, r))];
+        for (responded, end) in ends.into_iter().flatten() {
+            let mut child = end;
+            while child != start {
+                let Some(parent) = state.entry(child).and_then(Entry::parent) else {
+                    break;
+                };
+                let siblings = children.entry(parent).or_default();
+                if !siblings.contains(&child) {
+                    siblings.push(child);
+                }
+                // A response outranks a request; a later one an earlier.
+                let best = landing.entry(child).or_insert((responded, end));
+                if responded || !best.0 {
+                    *best = (responded, end);
+                }
+                child = parent;
+            }
+        }
+    }
+    let mut out = serde_json::Map::new();
+    for siblings in children.values().filter(|s| s.len() > 1) {
+        let to = |i: Option<usize>| {
+            i.and_then(|i| siblings.get(i))
+                .and_then(|s| landing.get(s))
+                .map(|(_, e)| e.to_string())
+        };
+        for (i, child) in siblings.iter().enumerate() {
+            out.insert(
+                child.to_string(),
+                json!({
+                    "n": i + 1,
+                    "of": siblings.len(),
+                    "prev": to(i.checked_sub(1)),
+                    "next": to(Some(i + 1)),
+                }),
+            );
+        }
+    }
+    Value::Object(out)
+}
+
+/// When an entry that is a response was sent and ended, the context it was
+/// sent with (what it cost), and the model it ran at; with the parameters
+/// it was sent with, whose effort the caller reads from the store.
+fn response(state: &State, entry: EntryId) -> (Value, Option<ValueId>) {
     let Some(record) = state.response(entry) else {
-        return Value::Null;
+        return (Value::Null, None);
     };
     let ended = record.ended.as_ref();
     let usage = ended.and_then(|e| e.usage);
-    json!({
+    let model =
+        record
+            .call
+            .model
+            .clone()
+            .or_else(|| match state.context(record.call.base).first() {
+                Some((_, Entry::Root(root))) => Some(root.model.clone()),
+                _ => None,
+            });
+    let said = json!({
         "sent": record.sent.at.0,
+        "model": model,
         "ended": ended.map(|e| e.at.at.0),
         "context": usage.map(|u| u.input + u.cache_read + u.cache_write_short + u.cache_write_long),
         "output": usage.map(|u| u.output),
-    })
+    });
+    (said, Some(record.call.params))
 }
 
 fn now() -> Timestamp {
@@ -556,10 +653,10 @@ fn now() -> Timestamp {
     Timestamp(ms as i64)
 }
 
-/// The page: one document, one style sheet and one script, written as the
-/// pieces in `page/` and joined here in this order, so a piece runs exactly
-/// as if the whole were one file. Each piece is one area of the face; its
-/// first comment says which.
+/// The page: one document and its style sheet, joined from the pieces in
+/// `page/` in this order. Its script is the modules `page/*.js`, served at
+/// `/page/<name>`: `main.js` starts the page, and each module imports what
+/// it uses from the others, so a name lives in one module and says where.
 const PAGE: &str = concat!(
     include_str!("page/head.html"),
     include_str!("page/base.css"),
@@ -570,21 +667,10 @@ const PAGE: &str = concat!(
     include_str!("page/compose.css"),
     include_str!("page/phone.css"),
     include_str!("page/body.html"),
-    include_str!("page/base.js"),
-    include_str!("page/tab.js"),
-    include_str!("page/map.js"),
-    include_str!("page/camera.js"),
-    include_str!("page/draw.js"),
-    include_str!("page/hover.js"),
-    include_str!("page/chrome.js"),
-    include_str!("page/actions.js"),
-    include_str!("page/card.js"),
-    include_str!("page/log.js"),
-    include_str!("page/compose.js"),
-    include_str!("page/newchat.js"),
-    include_str!("page/main.js"),
     include_str!("page/tail.html"),
 );
+/// The page's modules, by name: every `page/*.js`, listed by `build.rs`.
+const SCRIPTS: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/scripts.rs"));
 /// The tab, as the page runs it.
 const TAB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tab.wasm"));
 

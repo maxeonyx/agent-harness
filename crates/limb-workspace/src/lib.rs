@@ -17,14 +17,13 @@
 //! included them: its [`Description`] on each connection; a settlement,
 //! with the bytes of its output, and a [`Change`] naming the call for each
 //! file the call wrote, in one batch. What it hears is the brain's rows for
-//! it ([`LimbRow`]): the calls to run, the resources to watch, and when to
-//! shut down.
+//! it ([`LimbRow`]): the calls to run and the resources to watch.
 //!
 //! Access control is the definition and nothing else: the limb has no
 //! prompts and no checks on what a command may touch. An environment either
 //! holds this limb or does not.
 //!
-//! The brain runs it as a process of its own, `harness-limb-workspace` or
+//! It runs as a server of its own ([`harness_limb`]), `harness-limb-workspace` or
 //! `harness-limb-user` ([`process`]).
 //!
 //! A call is run on its own thread, after the calls its task made before it
@@ -42,8 +41,9 @@
 //! **Vision.** No permission prompts; process trees owned by their call;
 //! interrupted calls whose outcome is unknown kept distinct from failed
 //! ones (critique §5); "trunc (head + tail + grep for avoiding context
-//! overload) [...] use it by default for commands", with the agent required
-//! to name what it greps for ([`trunc`]); the shared-workspace race.
+//! overload) [...] use it by default for commands", with what it leaves
+//! out kept where the agent can read it ([`trunc`]); the shared-workspace
+//! race.
 //!
 //! **Existing harnesses.** OpenCode cuts tool output at 2000 lines or
 //! 50 KiB and writes the rest to a file
@@ -78,7 +78,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::environment::{
-    Description, Host, Instruction, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp,
+    Description, Host, Instruction, Limb, LimbDown, LimbKey, LimbKind, LimbRow,
 };
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{CallId, Digest, LimbId, ReplicaId, TaskId, Timestamp, ValueId};
@@ -91,9 +91,10 @@ use harness_substrate::{Log, Mirror, Restored, Up};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use harness_limb::{Out, SHUTDOWN};
 use harness_runtime::Cancel;
 
-use crate::record::Marks;
+use crate::record::{Marks, Outputs};
 
 /// The resource kinds this limb owns.
 const FILE: &str = "file";
@@ -101,10 +102,6 @@ const INSTRUCTIONS: &str = "instructions";
 
 /// The plugin kind this limb is, which an environment's replica names.
 pub const KIND: &str = "workspace";
-
-/// How long its calls get to stop when the limb shuts down without being
-/// told how long: its link gone for good, or it was signalled.
-pub const SHUTDOWN: Duration = Duration::from_secs(5);
 
 /// A workspace's own settings: the `config` of its [`Limb`] definition.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,13 +201,10 @@ pub struct Config {
     pub limb: LimbId,
     pub kind: Kind,
     pub settings: Settings,
-    /// Where the limb keeps its log and its marks of calls. Outside the
+    /// Where the limb keeps its marks of calls: its state. Outside the
     /// directory, so the agents' files stay theirs.
     pub state: PathBuf,
 }
-
-/// What it ships, in order: to the link while there is one.
-pub type Out = Box<dyn Fn(LimbUp) + Send + Sync>;
 
 /// One running instance of the workspace limb.
 ///
@@ -233,6 +227,7 @@ struct Inner {
     skills: Option<PathBuf>,
     kind: Kind,
     marks: Marks,
+    outputs: Outputs,
     log: Mutex<Log<Harness, Store>>,
     out: Out,
     running: Mutex<HashMap<CallId, Running>>,
@@ -270,11 +265,11 @@ fn absolute(dir: &Path) -> io::Result<PathBuf> {
 }
 
 impl Workspace {
-    /// Start an instance: make its directory (its clone, if it has one to
-    /// make), open its log, and end what an earlier instance left running.
+    /// Start an instance on its records `log`: make its directory (its clone,
+    /// if it has one to make), and end what an earlier instance left running.
     /// Blocks while it clones. A directory given as `~/…` is in `$HOME`; any
     /// other must be absolute.
-    pub fn open(config: Config, out: Out) -> io::Result<Workspace> {
+    pub fn open(config: Config, log: Log<Harness, Store>, out: Out) -> io::Result<Workspace> {
         let Settings { dir, clone, skills } = config.settings;
         let dir = absolute(&dir)?;
         match &clone {
@@ -284,8 +279,6 @@ impl Workspace {
             })?,
         }
         std::fs::create_dir_all(&config.state)?;
-        let store = Store::open(config.state.join("limb.sqlite")).map_err(io::Error::other)?;
-        let log = Log::open(store.replica(), store).map_err(io::Error::other)?;
         let inner = Inner {
             limb: config.limb,
             root: dir.canonicalize()?,
@@ -293,6 +286,7 @@ impl Workspace {
             skills,
             kind: config.kind,
             marks: Marks::open(config.state.join("calls"))?,
+            outputs: Outputs::open(config.state.join("outputs"))?,
             log: Mutex::new(log),
             out,
             running: Mutex::default(),
@@ -459,11 +453,19 @@ impl Workspace {
             let call = call.clone();
             thread::spawn(move || {
                 let mut report = Report::new(Some(id));
-                let outcome = match after(before, &cancel) {
+                let mut outcome = match after(before, &cancel) {
                     Ok(()) => inner.execute(id, &call, &input.0, &cancel, &mut report),
                     Err(_) => Outcome::Interrupted { partial: None },
                 };
-                inner.rescan(&mut report, call.tool == "bash");
+                let made = inner.rescan(&mut report, call.tool == "bash");
+                if let Outcome::Completed(output)
+                | Outcome::Failed(output)
+                | Outcome::Interrupted {
+                    partial: Some(output),
+                } = &mut outcome
+                {
+                    output.observes.extend(made);
+                }
                 inner.settle(report, outcome);
                 drop(ended);
                 let mut running = lock(&inner.running);
@@ -792,8 +794,12 @@ impl Inner {
 
     /// After a call: add every watched resource that moved, which is how a
     /// command's writes reach the contexts that read them. Attributed to the
-    /// call when it was a command, whose writes the limb cannot see.
-    fn rescan(&self, report: &mut Report, command: bool) {
+    /// call when it was a command, whose writes the limb cannot see; and
+    /// returned, as what the command's caller has seen, since it made them:
+    /// its context is not told of its own writes. A sibling's command that
+    /// wrote the same file at the same moment is attributed to both.
+    fn rescan(&self, report: &mut Report, command: bool) -> Vec<Observation> {
+        let mut made = Vec::new();
         let mut watched = lock(&self.watched);
         for change in &report.changes {
             if let Some(known) = watched.get_mut(&change.resource) {
@@ -813,8 +819,15 @@ impl Inner {
                     by,
                     content: None,
                 });
+                if by.is_some() {
+                    made.push(Observation {
+                        resource: resource.clone(),
+                        version,
+                    });
+                }
             }
         }
+        made
     }
 }
 

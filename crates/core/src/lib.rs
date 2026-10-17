@@ -57,8 +57,9 @@
 //!   a compaction moves the head back to the task's latest checkpoint, or to
 //!   a new root, and appends what it carries forward, so the agent moves
 //!   between phases of its work without losing itself and nothing is
-//!   deleted; a resume starts on a finished task's last entry; a rewind moves back and restores what the
-//!   context embodied there; an aside is Max's fork of a task waiting on
+//!   deleted; a resume starts on a finished task's last entry; Max moving it
+//!   back puts it at an entry it has been at and restores what the context
+//!   embodied there; an aside is Max's fork of a task waiting on
 //!   its children, a member of the scope it waits on, so its result reaches
 //!   the task with theirs. A request's head is computed from its base
 //!   and its messages, so it cannot claim a context its task does not have.
@@ -97,6 +98,18 @@
 //!   edit reaches running tasks as a notice and takes effect at their next
 //!   root, and `params` (effort) at their next request, since they are not
 //!   part of the cached prefix.
+//! - **Max acting on a chat's turns.** Retry, edit, going back and
+//!   choosing between versions of a reply are one move: the task back at an
+//!   entry it has been at ([`task::Move::Back`]), what follows read off the
+//!   entry (a turn's end is his move; a request's head, a retry, is the
+//!   model's). Every version stays in the tree, so nothing he moves away
+//!   from is lost and a face shows the versions as the tree's branches. An
+//!   edit is a draft at an entry ([`draft::DraftEvent::Opened`]), staged
+//!   like any message and landing as move and words together. Only the
+//!   context moves: files stay as the path it left made them, and the
+//!   context is told ([`context::Note::Moved`]). The model and effort are a
+//!   setting of the task he turns while it works ([`environment::Tuning`]),
+//!   recorded on each request, so each response says what it ran at.
 //! - **Max as a participant.** His words are deliveries, his edits in a
 //!   chat are calls to the agent's own tools, his controls over the tree are
 //!   task events he authors, and each of his facts records how far his face
@@ -182,7 +195,11 @@
 //! encoding over those names (an [`context::EntryId`]); a request is a
 //! build record whose input is a content identity and whose output is a
 //! value; several records for one input expose nondeterminism instead of
-//! hiding it; provenance lives in the record, not in the value; and a
+//! hiding it, which is what Max's retry asks for, and a model or effort he
+//! changed between them is one input under two definitions; a task's head
+//! is a mutable name for an immutable node, as a branch names a commit, and
+//! its moves are that name's history; provenance lives in the record, not
+//! in the value; and a
 //! state, like a Bx snapshot, is an immutable value a reader holds while
 //! the writer moves on.
 //!
@@ -198,10 +215,13 @@
 //! the harness can neither address nor list, so warmth is inferred; nothing
 //! is signed; a state is not content-addressed or stored, only re-derived
 //! from the brain's records; tasks and calls are mutable identities with
-//! lifecycles, which Bx's artifacts are not; a limb on another machine runs
-//! a build installed there under its hash, as a Bx artifact is, but who may
-//! reach it is the host's own access control, outside any definition, as
-//! Bx keeps trust outside the build; a replica is a mutable timeline
+//! lifecycles, which Bx's artifacts are not; going back to an entry does
+//! not go back in the world, since the files a context's calls wrote are
+//! not versioned with it (restoring them would be an act of its workspace's
+//! limb); a limb on another machine runs a build installed there under its
+//! hash, as a Bx artifact is, but who may reach it is the host's own access
+//! control, outside any definition, as Bx keeps trust outside the build; a
+//! replica is a mutable timeline
 //! and a time is not a hash, so the same bytes said twice are two records;
 //! and records are collected by the durability their schema declares, not
 //! by what is still referenced.
@@ -213,6 +233,13 @@
 //! - Acting in a finished chat: Max's calls there are accepted and ride
 //!   into a resume of it; his words to it are refused, and the face resumes
 //!   with them as the new mandate.
+//! - Moving a task back leaves the files the path it left wrote as they
+//!   are, and tells the context; restoring them to the entry, or giving
+//!   each version a workspace of its own, waits on how often Max goes back
+//!   in a chat that writes files ([`task::Move::Back`]).
+//! - Moving a task back while a spawn on the path it leaves still runs
+//!   abandons that spawn's members, after the face names them and Max
+//!   confirms, rather than refusing until he abandons them himself.
 //! - What an environment says between turns is a resource change, never a
 //!   delivery ([`resource::Change`]).
 //! - A limb may state only its own description, how its own dispatched

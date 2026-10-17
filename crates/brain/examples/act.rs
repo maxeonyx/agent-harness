@@ -5,6 +5,9 @@
 //! act PORT done           Done on the task Max started
 //! act PORT abandon MS     Abandon it, with MS milliseconds to finish
 //! act PORT stop CALL      Stop a call, such as one passed to Max
+//! act PORT chat ENV DIR TEXT
+//!                         Start a chat in environment ENV, in a new
+//!                         workspace over DIR, with TEXT as its mandate
 //! ```
 //!
 //! It prints `included`, or `refused: <why>` and exits 1.
@@ -22,7 +25,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: act PORT done | act PORT say WORDS | act PORT abandon MS | act PORT stop CALL"
+            "usage: act PORT done | act PORT say WORDS | act PORT abandon MS | act PORT stop CALL | act PORT chat ENV DIR TEXT"
         );
         exit(2)
     };
@@ -30,20 +33,28 @@ fn main() {
         usage()
     };
     let mut tab = Device::connect("act", port);
-    tab.pump_until(|d| d.root().is_some());
-    let root = tab.root().expect("a root");
-    let n = match (args.get(1).map(String::as_str), args.get(2)) {
-        (Some("done"), None) => tab.done(root),
-        (Some("say"), Some(words)) => tab.message(root, words),
-        (Some("abandon"), Some(ms)) => match ms.parse() {
-            Ok(ms) => tab.abandon(root, Duration::from_millis(ms)),
-            Err(_) => usage(),
-        },
-        (Some("stop"), Some(call)) => match call.parse() {
-            Ok(call) => tab.stop(call),
-            Err(_) => usage(),
-        },
-        _ => usage(),
+    let n = if let [_, chat, env, dir, text] = &args[..]
+        && chat == "chat"
+    {
+        let Ok(env) = env.parse() else { usage() };
+        tab.pump_until(|d| d.tab.view().is_some());
+        tab.chat(env, dir, text)
+    } else {
+        tab.pump_until(|d| d.root().is_some());
+        let root = tab.root().expect("a root");
+        match (args.get(1).map(String::as_str), args.get(2)) {
+            (Some("done"), None) => tab.done(root),
+            (Some("say"), Some(words)) => tab.message(root, words),
+            (Some("abandon"), Some(ms)) => match ms.parse() {
+                Ok(ms) => tab.abandon(root, Duration::from_millis(ms)),
+                Err(_) => usage(),
+            },
+            (Some("stop"), Some(call)) => match call.parse() {
+                Ok(call) => tab.stop(call),
+                Err(_) => usage(),
+            },
+            _ => usage(),
+        }
     };
     tab.pump_until(|d| d.tab.status(n) != Status::Pending);
     match tab.tab.status(n) {

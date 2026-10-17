@@ -1,3 +1,10 @@
+import { $, el, logEl, panel } from "./base.js";
+import { byId, graph, live, view } from "./map.js";
+import { fit } from "./camera.js";
+import { drawMap } from "./draw.js";
+import { closeNode, go, logState, mini, NEW, openId, start, title } from "./card.js";
+import { compose, drafts, giveBack, newTuning, renderTune, say, takeWords } from "./compose.js";
+
 // ─── A new chat, in Max's own scope ───────────────────────────────────────
 // A double click on the ground, or +, opens a small card there on a chat
 // that does not exist yet: the same staging box as every chat, beside the
@@ -5,7 +12,7 @@
 // is its directory), its draft and attachments kept like theirs. Sending
 // starts it: the words are its mandate, what is attached reaches it with
 // them, and the card becomes the chat where it is.
-function buildNew() {
+export function buildNew() {
   title.textContent = "New chat";
   title.title = "";
   mini.className = "mini starting";
@@ -19,9 +26,10 @@ function buildNew() {
   const places = el("span");
   places.style.display = "contents";
   const fill = () => places.replaceChildren(...placesOf(role.value).flatMap(placeField));
-  role.onchange = () => { drafts.set("new:role", role.value); fill(); };
+  role.onchange = () => { drafts.set("new:role", role.value); fill(); renderTune(null); };
   fill();
   picks.replaceChildren(role, places);
+  renderTune(null);
 }
 const placesOf = (role) => view.environments.find((e) => e.name === role)?.places || [];
 // A place's field: a workspace's is a directory, offered from those known.
@@ -41,7 +49,7 @@ const nameFrom = (text) => {
   const words = text.trim().split(/[\n.,;:!?]/)[0].split(/\s+/).slice(0, 6).join(" ");
   return words.length > 40 ? `${words.slice(0, 39)}…` : words;
 };
-async function startNew(text, files) {
+export async function startNew(text, files) {
   const env = view.environments.find((e) => e.name === $("#n-role").value);
   if (!env) return say("choose a role", true);
   const given = Object.fromEntries([...compose.querySelectorAll(".place")].map((f) => [f.dataset.place, f.value.trim()]));
@@ -58,7 +66,7 @@ async function startNew(text, files) {
       if (!known) out.push({ Limb: { id: limb, name, kind: { Plugin: { kind: place, config: JSON.stringify({ dir: name }) } } } });
       places[place] = limb;
     }
-    return { name: nameFrom(text), scope: "Max", origin: { Fresh: { environment: env.id, places } } };
+    return { name: nameFrom(text), scope: "Max", origin: { Fresh: { environment: env.id, places } }, tuning: newTuning() };
   }, text, files);
   if (why) { giveBack(NEW, text, files); return say(`not started: ${why}`, true); }
 }
@@ -70,7 +78,7 @@ async function startNew(text, files) {
 // arrows choose; Esc lets it go. The words are searched by the face
 // (`/find`), which holds every context; the page holds only the open one.
 const findEl = $("#find"), foundEl = $("#found");
-let finding = "", found = new Set(), hits = [], chosen = 0, asking = 0;
+export let finding = "", found = new Set(), hits = [], chosen = 0, asking = 0;
 // The entry to bring into view once its chat's log has it.
 let reveal = null;
 function startFind() { findEl.hidden = false; findEl.focus(); findEl.select(); }
@@ -139,7 +147,7 @@ function open(i) {
   if (reveal && logState) revealIn(logState);
 }
 // Once the open log holds the found entry, it scrolls there and glows.
-function revealIn(s) {
+export function revealIn(s) {
   const at = reveal && $(`[data-entry="${reveal}"]`, logEl);
   if (!at || s !== logState) return;
   reveal = null;
@@ -164,19 +172,5 @@ addEventListener("keydown", (e) => {
   }
   if ((e.key === "k" && (e.ctrlKey || e.metaKey)) || (e.key === "/" && !typing)) { e.preventDefault(); startFind(); return; }
   if (!typing && (e.key === "f" || e.key === "F") && !e.ctrlKey && !e.metaKey && !openId) fit(true);
-});
-// The card fits the window it is in: a phone's keyboard opening shrinks it.
-addEventListener("resize", () => {
-  const next = openId && seam && seamFor(openId);
-  if (next) {
-    const was = cardShown;
-    seam = next;
-    const r = cardRect(seam);
-    placeCard(r);
-    cardShown = r;
-    cam = camFor(r, was && { x: r.x + r.w / 2, y: r.y, sx: cam.x + (was.x + was.w / 2) * cam.k, sy: cam.y + was.y * cam.k });
-    applyCamera();
-  }
-  refresh();
 });
 

@@ -48,12 +48,19 @@ pub fn breakpoints(
     at
 }
 
-/// Fan-out gating: hold a task's request while another task's request whose
-/// context contains this task's head has not had its first byte. Siblings
-/// over one cold prefix (forks at one response, fresh tasks on one brief)
-/// then pay one cache write between them instead of one each.
-pub fn hold<'a>(head: EntryId, cold: impl IntoIterator<Item = &'a HashSet<EntryId>>) -> bool {
-    cold.into_iter().any(|context| context.contains(&head))
+/// Fan-out gating: hold a task's request while another task's request on
+/// the same model whose context contains this task's head has not had its
+/// first byte. Siblings over one cold prefix (forks at one response, fresh
+/// tasks on one seed) then pay one cache write between them instead of one
+/// each. The provider caches per model, so a request on another model
+/// writes nothing this one could read, and is not waited for.
+pub fn hold<'a>(
+    head: EntryId,
+    model: &str,
+    cold: impl IntoIterator<Item = (&'a str, &'a HashSet<EntryId>)>,
+) -> bool {
+    cold.into_iter()
+        .any(|(on, context)| on == model && context.contains(&head))
 }
 
 /// How long a call has to stop when no task reading it has a deadline (Max

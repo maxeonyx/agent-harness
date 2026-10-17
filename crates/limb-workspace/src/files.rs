@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use harness_core::call::{Call, Outcome, Output};
-use harness_core::id::{CallId, Digest};
+use harness_core::id::{CallId, Digest, ValueId};
 use harness_core::live::Live;
 use harness_core::resource::{Observation, Version};
 use regex::Regex;
@@ -17,7 +17,7 @@ use harness_runtime::{Cancel, Ended as TreeEnded};
 
 use crate::record::replace;
 use crate::shell::{self, Ended};
-use crate::trunc::{Limits, Truncator};
+use crate::trunc::{Truncated, Truncator};
 use crate::{Inner, Report, lock};
 
 const DEFAULT_TIMEOUT: u64 = 120_000;
@@ -26,7 +26,7 @@ const MAX_TIMEOUT: u64 = 600_000;
 #[derive(Deserialize)]
 struct Bash {
     command: String,
-    grep: String,
+    grep: Option<String>,
     timeout_ms: Option<u64>,
 }
 
@@ -35,7 +35,6 @@ struct Read {
     path: String,
     offset: Option<usize>,
     limit: Option<usize>,
-    grep: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +57,14 @@ struct Grep {
     pattern: String,
     path: Option<String>,
 }
+
+/// The most text one `read` returns: whole lines, each numbered, until the
+/// next would pass it. The tool's description states it.
+pub(crate) const READ_BUDGET: usize = 64 * 1024;
+
+/// The largest image `read` shows: the provider's limit on an image, as
+/// base64, is 5 MB.
+const IMAGE_BUDGET: usize = 3 * 1024 * 1024;
 
 /// A path as the tools see it: where it is, and its resource name (relative
 /// to the root when inside it).
@@ -87,7 +94,7 @@ impl Inner {
             "read" => parse(input).and_then(|i| self.read(i, report)),
             "write" => parse(input).and_then(|i| self.write(i, expects, report)),
             "edit" => parse(input).and_then(|i| self.edit(i, expects, report)),
-            "grep" => parse(input).and_then(|i| self.grep(i, cancel, report)),
+            "grep" => parse(input).and_then(|i| self.grep(id, i, cancel, report)),
             other => Err(format!("this workspace has no tool `{other}`")),
         };
         result.unwrap_or_else(|message| report.failed(&message))
@@ -102,7 +109,7 @@ impl Inner {
     ) -> Result<Outcome, String> {
         let timeout =
             Duration::from_millis(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT));
-        let truncator = Truncator::new(Limits::default(), pattern(Some(&input.grep))?);
+        let truncator = Truncator::new(pattern(input.grep.as_deref())?);
         // A character split across two reads is held until it is whole.
         let mut tail = Vec::new();
         let progress = |bytes: &[u8]| {
@@ -135,13 +142,11 @@ impl Inner {
             self.marks.ran(call);
         }
         let shutdown = self.shutting_down.load(std::sync::atomic::Ordering::SeqCst);
+        let ended = shell::describe(&ran, timeout, shutdown);
+        let (view, full) = self.shown(call, ran.output, report);
         let output = Output {
-            model: report.text(&format!(
-                "{}{}",
-                ran.output.text,
-                shell::describe(&ran, timeout, shutdown)
-            )),
-            full: ran.full.map(|full| report.value(full)),
+            model: report.text(&format!("{view}{ended}")),
+            full,
             observes: Vec::new(),
         };
         Ok(match ran.ended {
@@ -169,26 +174,41 @@ impl Inner {
                 })
                 .collect();
             names.sort();
-            let mut truncator = Truncator::new(Limits::default(), None);
-            names.iter().for_each(|n| truncator.line(n));
-            return Ok(report.completed(&truncator.finish().text, Vec::new()));
+            return Ok(report.completed(
+                &budgeted(names.iter().map(String::as_str), 1, false),
+                Vec::new(),
+            ));
         }
         let bytes = fs::read(&place.path).map_err(|e| format!("cannot read {shown}: {e}"))?;
-        let version = Version::Is(Digest::of(&bytes));
+        let observes = self.observations(&place.name, Version::Is(Digest::of(&bytes)));
+        if let Some(media) = image(&bytes) {
+            if bytes.len() > IMAGE_BUDGET {
+                return Err(format!(
+                    "{shown} is a {} KiB image; an image is shown only up to {} KiB. Scale it down first.",
+                    bytes.len() / 1024,
+                    IMAGE_BUDGET / 1024
+                ));
+            }
+            let blocks = serde_json::json!([{
+                "type": "image",
+                "source": { "type": "base64", "media_type": media, "data": base64(&bytes) },
+            }]);
+            return Ok(Outcome::Completed(Output {
+                model: report.value(blocks.to_string().into_bytes()),
+                full: None,
+                observes,
+            }));
+        }
+        if bytes.is_empty() {
+            return Ok(report.completed("(empty file)", observes));
+        }
         let content = String::from_utf8_lossy(&bytes);
         let offset = input.offset.unwrap_or(1).max(1);
         let lines = content
             .lines()
             .skip(offset - 1)
             .take(input.limit.unwrap_or(usize::MAX));
-        let mut truncator =
-            Truncator::new(Limits::default(), pattern(input.grep.as_deref())?).numbered(offset);
-        lines.for_each(|l| truncator.line(l));
-        let mut shown = truncator.finish().text;
-        if bytes.is_empty() {
-            shown = "(empty file)".into();
-        }
-        Ok(report.completed(&shown, self.observations(&place.name, version)))
+        Ok(report.completed(&budgeted(lines, offset, true), observes))
     }
 
     fn write(
@@ -270,10 +290,16 @@ impl Inner {
         Ok(report.completed(&said, self.observations(&place.name, version)))
     }
 
-    fn grep(&self, input: Grep, cancel: &Cancel, report: &mut Report) -> Result<Outcome, String> {
+    fn grep(
+        &self,
+        call: CallId,
+        input: Grep,
+        cancel: &Cancel,
+        report: &mut Report,
+    ) -> Result<Outcome, String> {
         let regex = Regex::new(&input.pattern).map_err(|e| format!("invalid pattern: {e}"))?;
         let place = self.place(input.path.as_deref().unwrap_or("."));
-        let mut truncator = Truncator::new(Limits::default(), None);
+        let mut truncator = Truncator::matching(regex.clone());
         let mut found = 0;
         let mut pending = vec![place.path];
         while let Some(path) = pending.pop() {
@@ -310,15 +336,42 @@ impl Inner {
             for (n, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
                 if regex.is_match(line) {
                     found += 1;
-                    truncator.line(&format!("{name}:{}:{line}", n + 1));
+                    truncator.line(&format!("{name}:{}:", n + 1), line);
                 }
             }
         }
-        let said = match found {
-            0 => "No matches.".into(),
-            _ => truncator.finish().text,
+        if found == 0 {
+            return Ok(report.completed("No matches.", Vec::new()));
+        }
+        let (view, full) = self.shown(call, truncator.finish(), report);
+        Ok(Outcome::Completed(Output {
+            model: report.text(&view),
+            full,
+            observes: Vec::new(),
+        }))
+    }
+
+    /// The view of an output, and the whole of it when the view left some
+    /// out: kept as a file the agent can `read` or `grep`, which the view
+    /// names, and as a value for Max.
+    fn shown(
+        &self,
+        call: CallId,
+        output: Truncated,
+        report: &mut Report,
+    ) -> (String, Option<ValueId>) {
+        let Some(whole) = output.whole else {
+            return (output.text, None);
         };
-        Ok(report.completed(&said, Vec::new()))
+        let kept = self.outputs.keep(call, &whole);
+        let said = match kept {
+            Ok(path) => format!(
+                "[cut to fit; the whole output is in {}: `read` or `grep` it]\n",
+                path.display()
+            ),
+            Err(e) => format!("[cut to fit; the whole output could not be kept: {e}]\n"),
+        };
+        (output.text + &said, Some(report.value(whole)))
     }
 
     /// The refusal of a write or edit whose caller has not seen `current`.
@@ -383,6 +436,91 @@ fn pattern(grep: Option<&str>) -> Result<Option<Regex>, String> {
 
 /// Resolve `.` and `..` without touching the disk, since the path may not
 /// exist yet.
+/// `lines` from line `first` on, whole, until [`READ_BUDGET`]; then where
+/// to read on. A single line longer than the budget is shown up to it, and
+/// says how much of it is left out.
+fn budgeted<'a>(lines: impl Iterator<Item = &'a str>, first: usize, numbered: bool) -> String {
+    let mut text = String::new();
+    for (n, line) in (first..).zip(lines) {
+        let number = if numbered {
+            format!("{n:>6}\t")
+        } else {
+            String::new()
+        };
+        if text.len() + number.len() + line.len() + 1 > READ_BUDGET {
+            if text.is_empty() {
+                let end = (0..=READ_BUDGET - number.len())
+                    .rev()
+                    .find(|&i| line.is_char_boundary(i))
+                    .unwrap_or(0);
+                return format!(
+                    "{number}{}\n[line {n} goes on for {} more bytes than a read returns ({} KiB)]",
+                    &line[..end],
+                    line.len() - end,
+                    READ_BUDGET / 1024
+                );
+            }
+            let on = if numbered {
+                format!("; read on with offset {n}")
+            } else {
+                String::new()
+            };
+            return format!(
+                "{text}[stopped before line {n}: a read returns at most {} KiB{on}]",
+                READ_BUDGET / 1024
+            );
+        }
+        text.push_str(&number);
+        text.push_str(line);
+        text.push('\n');
+    }
+    text
+}
+
+/// The media type of an image the provider can be shown, by its first bytes.
+fn image(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
+        [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
+        [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
+        [
+            b'R',
+            b'I',
+            b'F',
+            b'F',
+            _,
+            _,
+            _,
+            _,
+            b'W',
+            b'E',
+            b'B',
+            b'P',
+            ..,
+        ] => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Standard base64, padded.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(match i <= chunk.len() {
+                true => ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char,
+                false => '=',
+            });
+        }
+    }
+    out
+}
+
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for part in path.components() {

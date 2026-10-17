@@ -2,7 +2,7 @@
 # The dev process on the harness: an orchestrator started from the role
 # files in roles/, on a small real mandate in a scratch repository, spawns a
 # designer and an engineer, each in its own clone. Watch the tree at
-# https://mx-hv-mj.local:4325. A new run starts from scratch (FRESH=1, or no
+# https://mx-hv-mj.local:4345. A new run starts from scratch (FRESH=1, or no
 # database yet); otherwise the brain carries on its database and serves it.
 set -eu
 cd "$(dirname "$0")/../.."
@@ -17,4 +17,4 @@ if [ -n "${FRESH:-}" ] || [ ! -e "$dir/brain.sqlite" ]; then
 fi
 # shellcheck disable=SC2086
 exec target/release/harness-brain --roles roles --db "$dir/brain.sqlite" \
-  --port "${PORT:-4325}" $start
+  --port "${PORT:-4345}" $start

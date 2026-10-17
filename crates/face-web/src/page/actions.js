@@ -1,3 +1,7 @@
+import { el, icon } from "./base.js";
+import { act, can } from "./tab.js";
+import { heldBy, isDone } from "./map.js";
+
 // ─── What Max can do to a task ─────────────────────────────────────────────
 // One list per task, in the order it shows: the card's controls, the hover
 // preview and the right-click menu all draw from it. Each is the facts it
@@ -10,7 +14,7 @@
 // before it, so a second press where Pause was is Stop. Abandon stops it
 // and what it started; while that tidies up, End now ends it at once. Done,
 // in a chat, has it write its result.
-function actionsOf(t) {
+export function actionsOf(t) {
   if (!can.act || !t || isDone(t)) return [];
   const out = [], holder = heldBy(t), stopping = !!t.stop;
   if (!stopping && holder) out.push(
@@ -25,7 +29,7 @@ function actionsOf(t) {
 }
 // What Max can do to background work: stop it. What an agent passed to him
 // is his to end; an agent's own he can stop too, and the agent is told.
-function callActionsOf(call) {
+export function callActionsOf(call) {
   if (!can.act || call.status === "settled" || call.abandoned) return [];
   const yours = call.owner === "max";
   return [{ icon: "stop", label: "Stop", confirm: !yours, title: yours ? "Stop it: it was passed to you, so it is yours to end" : "Stop it: the agent that owns it gets its outcome", facts: () => ({ Call: [call.id, "Abandon"] }) }];
@@ -36,12 +40,12 @@ const runsOnItsOwn = (t) => !["max", "held", "parked", "done"].includes(t.waitin
 // What Stop writes: park it and everything under it.
 const stopFacts = (t) => ({ Task: [t.id, { Pause: "Park" }] });
 // What an action list looks like, to know when to draw it again.
-const actionsKey = (list) => list.map((a) => `${a.label}:${a.title}`).join("|");
+export const actionsKey = (list) => list.map((a) => `${a.label}:${a.title}`).join("|");
 
 // An action's button: its icon, with its label beside it in a menu's rows.
 // One that asks first arms for 4 s, widened to show its word, and runs on
 // a second press. `report` hears a refusal.
-function actionButton(a, rows, report) {
+export function actionButton(a, rows, report) {
   const b = icon(a.icon, `act${rows ? " row" : ""}`, a.title);
   b.setAttribute("aria-label", a.label);
   const word = el("span", "word", rows ? a.label : "");

@@ -25,9 +25,11 @@ use crate::id::{TaskId, Timestamp, ValueId};
 /// It is Bx's build record. The task's environment and binding are the
 /// definition, the head's [`EntryId`] is the resolved input's content
 /// identity, the response is the output, and timing, usage and quota are
-/// the execution evidence. Several model calls on one head (a retry, a
-/// rewind, a resend after a crash) expose the model's nondeterminism instead
-/// of hiding it, as one Bx definition with several records does. Unlike Bx,
+/// the execution evidence. Several model calls on one head (Max's retry, a
+/// retry after a failure, a resend after a crash) expose the model's
+/// nondeterminism instead of hiding it, as one Bx definition with several
+/// records does; with Max's model or effort changed between them, they are
+/// one input under two definitions. Unlike Bx,
 /// the output can never be re-derived, so it *is* the history; and the
 /// provider's cache is a store the harness neither owns nor can address, so
 /// warmth is inferred from these records, not looked up.
@@ -69,6 +71,14 @@ pub struct ModelCall {
     pub task: TaskId,
     /// The context this request extends: its task's head.
     pub base: EntryId,
+    /// The model it named, when not the one its context's root names: Max
+    /// tuned the task to another since that root
+    /// ([`crate::environment::Tuning`]). A request on another model reads
+    /// none of its prefix's cache, so warmth is keyed by the model with the
+    /// entry; and the response's model is on its record, for a face to
+    /// show beside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// The messages this request appended to `base`, in order: the
     /// attachments' tool uses the harness writes, tool results, Max's words,
     /// notes. Empty for a retry of the same head.
@@ -129,6 +139,7 @@ impl ModelCall {
         let ModelCall {
             task: _,
             base: _,
+            model: _,
             appends,
             renders: _,
             params,

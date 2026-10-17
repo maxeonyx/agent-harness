@@ -11,10 +11,11 @@ use crate::resource::Observation;
 /// The identity of an entry, and so of the context that ends at it: the
 /// digest of the entry's fields, which name its parent and its bytes.
 ///
-/// It commits to the model and every byte from the root, and to nothing that
-/// was not sent. So two contexts with the same id are the same input to the
-/// same model and share the provider's cache, and a context's id is the key
-/// for "was this prefix sent with a breakpoint recently?".
+/// It commits to every byte from the root and the model the root names, and
+/// to nothing that was not sent. So two contexts with the same id are the
+/// same input, sharing the provider's cache when sent to the same model,
+/// and a context's id with a request's model is the key for "was this
+/// prefix sent with a breakpoint recently?".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EntryId(pub Digest);
 
@@ -51,16 +52,17 @@ impl FromStr for EntryId {
 /// tree and refuses a head that does not grow along it. Nothing else
 /// stores entries.
 ///
-/// Fork, fresh start, shared seed, compaction, resume, rewind and aside
-/// are all a task's head moving to an entry ([`crate::task::Move`]): to the
-/// parent's response (a fork), to a new root (a fresh start), to an earlier
-/// entry of its own chain with the carry of a compaction appended, or to a
-/// new root with that carry (a compaction onto a checkpoint or a fresh
-/// one), to a finished task's last entry (a resume), back along its own
-/// chain (a rewind). Fresh siblings given the same shared brief and
-/// attachments append the same messages to the same root, so the shared
-/// seed Max describes in `handoff-improvements.md` is one set of nodes and
-/// one cache prefix by construction, not by bookkeeping.
+/// Fork, fresh start, shared seed, compaction, resume, Max's retry, edit
+/// and going back, and aside are all a task's head moving to an entry
+/// ([`crate::task::Move`]): to the parent's response (a fork), to a new root
+/// (a fresh start), to the task's latest checkpoint or a new root with the
+/// carry of a compaction appended, to a finished task's last entry (a
+/// resume), to an entry it has been at ([`crate::task::Move::Back`]), the
+/// versions of a reply being the branches the tree already holds. Fresh
+/// siblings given the same shared brief and attachments append the same
+/// messages to the same root, so the shared seed Max describes in
+/// `handoff-improvements.md` is one set of nodes and one cache prefix by
+/// construction, not by bookkeeping.
 ///
 /// Why each entry exists is not in it. Provenance is in the request that
 /// first sent it ([`crate::model_call::ModelCall::renders`]), or the
@@ -115,11 +117,16 @@ pub enum Entry {
 
 /// What leads every request of a context, fixed for its life.
 ///
-/// The model is part of it because the provider's cache and its thinking
-/// signatures are per model. Changing the model, the tools, the role or the
-/// environment's instructions needs a new root: "append or rebuild?" is the
-/// choice between a [`Message`] and a [`Root`], and a context whose
-/// instructions changed in place cannot be expressed. The first block of
+/// Changing the tools, the role or the environment's instructions needs a
+/// new root: "append or rebuild?" is the choice between a [`Message`] and a
+/// [`Root`], and a context whose instructions changed in place cannot be
+/// expressed. The model is not like them: the provider takes the same
+/// messages on another model, rereading them without the cache (it caches
+/// per model) and dropping thinking blocks that model cannot read. So the
+/// model here is the one the context was rooted for, which its requests
+/// name unless Max has tuned the task to another since
+/// ([`crate::model_call::ModelCall::model`]); switching keeps the context
+/// and its versions in one tree, and the next root names the new one. The first block of
 /// `system` is the provider identity string the subscription requires.
 ///
 /// Which limb runs each tool is not here: it is the task's
@@ -327,6 +334,12 @@ pub enum Note {
     /// [said](crate::state::State::said) values: a message, a mandate or an
     /// answer.
     Kept { words: ValueId },
+    /// Max moved the context here from `from` ([`crate::task::Move::Back`]),
+    /// and the path it left changed the world: files its calls wrote, its
+    /// background work still running, tasks it started. Rendered before
+    /// anything else the next request says, and only when there is
+    /// something to say.
+    Moved { from: EntryId },
     /// The last response stopped short of ending its turn (its output limit,
     /// a provider pause): carry on. A response Max interrupted is quoted
     /// here too, from [`crate::model_call::Ending::Cut`].

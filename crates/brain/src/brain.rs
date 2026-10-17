@@ -45,12 +45,8 @@ use harness_program::{policy, render, web};
 /// and fan-out timing.
 const TICK: Duration = Duration::from_millis(250);
 
-/// How long after launch the brain waits for the limbs an earlier brain
-/// left running to reconnect, before starting its own.
-const REATTACH: Duration = Duration::from_secs(2);
-
-/// How long the brain waits before starting again a limb whose process
-/// ended without connecting.
+/// How long the brain waits before attaching again to a limb it could not
+/// reach.
 const RESTART: Duration = Duration::from_secs(30);
 
 /// What reaches the loop from the threads it started, from its limbs'
@@ -117,6 +113,10 @@ struct Link {
     replica: ReplicaId,
     wire: Wire,
     publisher: Publisher<LimbKey, LimbRow, Refusal>,
+    /// How it connected, until it first speaks: recorded then, so a limb
+    /// that says hello and fails before it can serve (its directory cannot
+    /// be made) leaves only why.
+    unsaid: Option<Reach>,
 }
 
 /// One brain: the decider of everything its replicas say.
@@ -137,20 +137,20 @@ pub struct Brain {
     web: LimbId,
     /// The roles limb, co-hosted.
     roles: Option<LimbId>,
-    /// The plugin limbs this brain has started, by id, until they exit.
+    /// The links to plugin limbs this brain is making or has, by id,
+    /// until their `attach` exits.
     limbs: HashMap<LimbId, Process>,
-    /// When a limb's process last ended without connecting.
+    /// When the brain last failed to reach a limb.
     failed: HashMap<LimbId, Instant>,
     /// The limbs connected now.
     links: HashMap<LimbId, Link>,
-    /// The next number for a co-hosted link: process links count up from
-    /// 1, these down from the top.
+    /// The next number for a process link, counting up from 1.
+    attached: Conn,
+    /// The next number for a co-hosted link, counting down from the top.
     hosted: Conn,
-    /// Where each limb keeps its log: `<state>/<limb>`, and the socket.
-    state_dir: PathBuf,
-    socket: PathBuf,
-    /// The context of each request without a first byte yet: fan-out gating.
-    cold: HashMap<ModelCallId, std::collections::HashSet<EntryId>>,
+    /// The model and context of each request without a first byte yet:
+    /// fan-out gating.
+    cold: HashMap<ModelCallId, (String, std::collections::HashSet<EntryId>)>,
     /// Each request in flight: the thread that sends it, joined when it
     /// reports how it ended, and its stop.
     requests: HashMap<ModelCallId, (Cancel, JoinHandle<()>)>,
@@ -171,7 +171,6 @@ impl Brain {
         store: Store,
         face: Sender<Folded>,
         client: Client,
-        state_dir: PathBuf,
         roles: Option<&Path>,
         start: Option<Start>,
         Inbox { events, inbox }: Inbox,
@@ -180,7 +179,7 @@ impl Brain {
         let (decider, divergences) = schema::Brain::open(store.replica(), store)
             .map_err(|e| format!("the database folds: {e}"))?;
         for d in &divergences {
-            eprintln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
+            errln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
         }
         let state = decider.state();
         let find =
@@ -192,8 +191,6 @@ impl Brain {
         let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let roles_limb =
             find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == roles::KIND));
-        std::fs::create_dir_all(&state_dir).map_err(|e| format!("{state_dir:?}: {e}"))?;
-        let socket = state_dir.join("limbs.sock");
         let at = decider.next();
         let exe = std::env::current_exe()
             .and_then(std::fs::read)
@@ -256,9 +253,8 @@ impl Brain {
             limbs: HashMap::new(),
             failed: HashMap::new(),
             links: HashMap::new(),
+            attached: 1,
             hosted: Conn::MAX,
-            state_dir,
-            socket,
             cold: HashMap::new(),
             requests: HashMap::new(),
             root: None,
@@ -269,11 +265,6 @@ impl Brain {
             values: Vec::new(),
             facts,
         });
-        let events = brain.events.clone();
-        link::listen(&brain.socket, move |conn, said| {
-            let _ = events.send(Event(What::Link(conn, said)));
-        })
-        .map_err(|e| format!("the limbs' socket {:?}: {e}", brain.socket))?;
         brain.host_roles();
         brain.root = match start {
             Some(start) => {
@@ -292,7 +283,7 @@ impl Brain {
     /// Start the roles limb on a thread of its own, linked by a channel.
     fn host_roles(&mut self) {
         let Some(id) = self.roles else {
-            return eprintln!("harness-brain: no roles limb: a new database needs --roles");
+            return errln!("harness-brain: no roles limb: a new database needs --roles");
         };
         let limb = self.state().limb(id).expect("the roles limb").clone();
         let (wire, down) = mpsc::channel();
@@ -367,6 +358,7 @@ impl Brain {
         let facts = vec![Fact::Task(
             id,
             TaskEvent::Created(Box::new(Created {
+                tuning: Default::default(),
                 name: start.name,
                 by: None,
                 scope: Scope::Max,
@@ -537,9 +529,9 @@ impl Brain {
         let within = if again { Duration::ZERO } else { policy::DRAIN };
         let name = signals::name(signal);
         if again {
-            eprintln!("harness-brain: {name} again: stopping now");
+            errln!("harness-brain: {name} again: stopping now");
         } else {
-            eprintln!(
+            errln!(
                 "harness-brain: {name}: shutting down; requests in flight have {}s to finish (again to stop now)",
                 within.as_secs()
             );
@@ -563,22 +555,20 @@ impl Brain {
 
     // Limbs.
 
-    /// Start a plugin limb's process, which connects back when it is ready:
-    /// that may take a while (a clone to make). Not while one is running,
-    /// nor just after launch, while the limbs an earlier brain left running
-    /// reconnect, nor soon after its process ended without connecting, nor
-    /// while the brain shuts down.
+    /// Attach to a plugin limb, starting it if it is not running: it says
+    /// hello once it is ready, which may take a while (a clone to make).
+    /// Not while a link to it is made or being made, nor soon after the
+    /// brain failed to reach it, nor while the brain shuts down.
     fn connect(&mut self, limb: LimbId) {
         let recently = |at: &Instant| at.elapsed() < RESTART;
         if self.links.contains_key(&limb)
             || self.limbs.contains_key(&limb)
-            || self.started.elapsed() < REATTACH
             || self.failed.get(&limb).is_some_and(recently)
             || self.state().shutdown().is_some()
         {
             return;
         }
-        let definition = self.state().limb(limb).expect("a limb to connect");
+        let definition = self.state().limb(limb).expect("a limb to connect").clone();
         match &definition.kind {
             LimbKind::Plugin {
                 host: Host::Local, ..
@@ -593,17 +583,19 @@ impl Brain {
             // Hosted in the brain's own process at launch.
             _ => return,
         }
-        match Process::start(
-            definition,
-            &self.state_dir.join(limb.to_string()),
-            &self.socket,
-        ) {
+        let conn = self.attached;
+        self.attached += 1;
+        let events = self.events.clone();
+        let said = move |conn, said| {
+            let _ = events.send(Event(What::Link(conn, said)));
+        };
+        match Process::attach(&definition, conn, said) {
             Ok(process) => {
                 self.limbs.insert(limb, process);
             }
             Err(e) => {
-                eprintln!("limb {limb}: its process cannot start: {e}");
-                self.unreached(limb, format!("its process cannot start: {e}"));
+                errln!("limb {limb}: cannot attach: {e}");
+                self.unreached(limb, format!("cannot attach: {e}"));
             }
         }
     }
@@ -620,21 +612,20 @@ impl Brain {
         }
     }
 
-    /// Let go of the limb processes that have exited.
+    /// Let go of the links whose `attach` has exited, recording why of
+    /// each that failed: the limb could not start, or ended.
     fn reap(&mut self) {
-        let exited: Vec<LimbId> = self
+        let exited: Vec<(LimbId, bool)> = self
             .limbs
             .iter_mut()
-            .filter_map(|(id, p)| p.exited().then_some(*id))
+            .filter_map(|(id, p)| p.exited().map(|status| (*id, status.success())))
             .collect();
-        for limb in exited {
+        for (limb, success) in exited {
             let Some(process) = self.limbs.remove(&limb) else {
                 continue;
             };
-            if !self.links.contains_key(&limb) && self.state().shutdown().is_none() {
-                let why = process.last_words();
-                eprintln!("limb {limb}: its process ended without connecting: {why}");
-                self.unreached(limb, why);
+            if !success && self.state().shutdown().is_none() {
+                self.unreached(limb, process.last_words());
             }
         }
     }
@@ -648,8 +639,13 @@ impl Brain {
             build,
         } = hello;
         if self.state().limb(limb).is_none_or(|l| l.kind.is_brains()) {
-            return eprintln!("a link said it is limb {limb}, which is no plugin limb here");
+            return errln!("a link said it is limb {limb}, which is no plugin limb here");
         }
+        let known = self.state().connected(limb).map(|(p, _)| p) == Some(replica);
+        let unsaid = (!known).then_some(Reach::Connected {
+            instance: replica,
+            build,
+        });
         self.links.insert(
             limb,
             Link {
@@ -657,22 +653,26 @@ impl Brain {
                 replica,
                 wire,
                 publisher: Publisher::default(),
+                unsaid,
             },
         );
-        if self.state().connected(limb).map(|(p, _)| p) == Some(replica) {
-            return self.publish();
-        }
-        self.fact(Fact::Reach {
-            limb,
-            reach: Reach::Connected {
-                instance: replica,
-                build,
-            },
-        });
+        self.publish();
     }
 
-    /// A link ended. If it was its limb's current one, the limb is lost
-    /// until it connects again.
+    /// A record from link `conn`: the limb's, if the link is its current
+    /// one, which is connected from its first record on.
+    fn heard(&mut self, conn: Conn, record: Record) {
+        let Some((&limb, link)) = self.links.iter_mut().find(|(_, l)| l.conn == conn) else {
+            return;
+        };
+        if let Some(reach) = link.unsaid.take() {
+            self.fact(Fact::Reach { limb, reach });
+        }
+        self.include(record);
+    }
+
+    /// A link ended. If it was its limb's current one, and it had spoken,
+    /// the limb is lost until it connects again.
     fn left(&mut self, conn: Conn) {
         let Some(limb) = self
             .links
@@ -681,8 +681,11 @@ impl Brain {
         else {
             return;
         };
-        self.links.remove(&limb);
-        eprintln!("limb {limb}: its link ended");
+        let link = self.links.remove(&limb).expect("found");
+        errln!("limb {limb}: its link ended");
+        if link.unsaid.is_some() {
+            return;
+        }
         self.fact(Fact::Reach {
             limb,
             reach: Reach::Lost,
@@ -742,7 +745,13 @@ impl Brain {
         let refs: Vec<(LimbId, &Description)> = described.iter().map(|(l, d)| (*l, d)).collect();
         let role = String::from_utf8_lossy(&self.value(env.role)).into_owned();
         Some(
-            render::root(harness_provider::IDENTITY, &env.model, &role, &refs).map(|new| {
+            render::root(
+                harness_provider::IDENTITY,
+                task.tuning.model(env),
+                &role,
+                &refs,
+            )
+            .map(|new| {
                 let start = TaskStart {
                     root: new.root,
                     binding: new.binding,
@@ -774,6 +783,7 @@ impl Brain {
             };
             let record = &self.state().call(call)?.call;
             if record.tool != meta::COMPACT
+                || self.state().has_compacted(call)
                 || !matches!(
                     self.state().call(call)?.outcome(),
                     Some(Outcome::Completed(_))
@@ -879,8 +889,8 @@ impl Brain {
                 return;
             }
         }
-        // What the last response said of the context, while it is the head:
-        // nothing has moved on from it but its calls' results.
+        // What follows is read off the head: the response it is, if any,
+        // while nothing has moved on from it but its calls' results.
         let state = self.state();
         let said = state
             .response(head)
@@ -938,12 +948,24 @@ impl Brain {
             }
             _ => {}
         }
-        if policy::hold(head, self.cold.values()) {
+        let env = self
+            .state()
+            .environment(task.environment)
+            .expect("the task's environment");
+        let model = task.tuning.model(env).to_owned();
+        let params = env.params;
+        if policy::hold(
+            head,
+            &model,
+            self.cold.values().map(|(m, c)| (m.as_str(), c)),
+        ) {
             return;
         }
 
-        // A context compacted onto a fresh root has its mandate in its carry.
-        let first = last.is_none();
+        // The first request of a context renders its beginning: at its
+        // start, however often it has been sent from there. A context
+        // compacted onto a fresh root has its mandate in its carry.
+        let first = task.context().is_some_and(|c| c.start == head);
         let mut values = Vec::new();
         let mut appends = Vec::new();
         let mut renders = Vec::new();
@@ -963,12 +985,29 @@ impl Brain {
             appends.push(user(render::blocks(&turn.blocks), &mut values));
         }
         renders.extend(turn.renders);
-        let params = self
-            .state()
-            .environment(task.environment)
-            .expect("the task's environment")
-            .params;
+        // Max's effort, when it is not the environment's, as parameters of
+        // its own.
+        let params = match task.tuning.effort {
+            Some(effort) => {
+                let named = self.value(params);
+                match harness_provider::with_effort(&named, effort) {
+                    Some(tuned) if harness_provider::effort(&named) != Some(effort) => {
+                        let tuned = Bytes::from(tuned);
+                        let id = tuned.id();
+                        values.push(tuned);
+                        id
+                    }
+                    _ => params,
+                }
+            }
+            None => params,
+        };
+        let rooted = match &self.state().context(head)[0].1 {
+            Entry::Root(root) => root.model != model,
+            Entry::Message { .. } => unreachable!("a context starts at a root"),
+        };
         let mut call = ModelCall {
+            model: rooted.then_some(model.clone()),
             task: id,
             base: head,
             appends,
@@ -1009,7 +1048,10 @@ impl Brain {
             named.into_iter().map(|v| (v, self.value(v))).collect();
         self.cold.insert(
             request,
-            base.iter().map(|(id, _)| *id).chain(appended).collect(),
+            (
+                model,
+                base.iter().map(|(id, _)| *id).chain(appended).collect(),
+            ),
         );
         let cancel = Cancel::new();
         let client = self.client.clone();
@@ -1091,7 +1133,7 @@ impl Brain {
         }
         batch.values.extend(value.map(Bytes));
         if quota.as_ref().is_some_and(|q| !q.on_plan) {
-            eprintln!("a response was billed outside the plan: sending nothing more");
+            errln!("a response was billed outside the plan: sending nothing more");
         }
         batch.facts.push(Fact::ModelCall(
             request,
@@ -1444,6 +1486,7 @@ and you cannot finish until it has.",
             let fresh = matches!(origin, Origin::Fresh { .. });
             let text = Bytes::from(member.mandate);
             let created = Created {
+                tuning: Default::default(),
                 name: format!("{}-{}", parent.name, member.name),
                 by: Some(call),
                 scope,
@@ -1604,10 +1647,7 @@ and you cannot finish until it has.",
             What::Link(conn, link::Said::Joined(hello, wire)) => self.joined(conn, hello, wire),
             What::Link(conn, link::Said::Up(up)) => match *up {
                 // Only the current link speaks for its limb.
-                Up::Record(record) if self.links.values().any(|l| l.conn == conn) => {
-                    self.include(record)
-                }
-                Up::Record(_) => {}
+                Up::Record(record) => self.heard(conn, record),
                 Up::Live(live) => self.feed.push(live.live),
             },
             What::Link(conn, link::Said::Left) => self.left(conn),
@@ -1648,7 +1688,7 @@ and you cannot finish until it has.",
         let facts = match &record.what {
             Said::Said(batch) => batch.facts.clone(),
             Said::Unread(unread) => {
-                println!(
+                outln!(
                     "{:>7.1}s {from}  held unread: {}",
                     self.elapsed(),
                     unread.why
@@ -1661,12 +1701,12 @@ and you cannot finish until it has.",
             Ok(None) => {}
             Ok(Some(_)) => match self.decider.standing(from.replica).refused.get(&from.n) {
                 Some(why) => {
-                    println!("{:>7.1}s {from}  refused: {why}", self.elapsed());
+                    outln!("{:>7.1}s {from}  refused: {why}", self.elapsed());
                     self.publish();
                 }
                 None => self.changed(from, &facts),
             },
-            Err(e) => eprintln!("harness-brain: cannot store the record at {from}: {e}"),
+            Err(e) => errln!("harness-brain: cannot store the record at {from}: {e}"),
         }
     }
 
@@ -1737,7 +1777,7 @@ and you cannot finish until it has.",
                 .collect::<String>();
             line = format!("{line} {input}");
         }
-        println!("{:>7.1}s {at}  {line}", self.elapsed());
+        outln!("{:>7.1}s {at}  {line}", self.elapsed());
     }
 
     /// Print the result of the task this launch started once it is done.
@@ -1757,7 +1797,7 @@ and you cannot finish until it has.",
             TaskOutcome::Abandoned { by, report } => self.cancelled(*by, *report),
             other => format!("{other:?}"),
         };
-        println!("\n== the task is done; its result:\n\n{said}\n");
+        outln!("\n== the task is done; its result:\n\n{said}\n");
         self.reported = true;
     }
 
