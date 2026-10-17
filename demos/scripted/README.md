@@ -11,7 +11,7 @@ What to look for:
 - The model pill lists the newest model of each family the provider returned, and `Scripted (no cost)`.
 - Send the chat a script of your own. Each line starting with a verb is one response; other text is echoed back:
   - `say TEXT`
-  - `tool NAME JSON`
+  - `tool NAME JSON` (more `tool NAME JSON` on the same line are in the same response)
   - `long N`
   - `error STATUS TEXT`
   - `limit SECONDS`
