@@ -203,6 +203,10 @@
   /* The log reads like Claude Desktop's chat, and is the exact context. */
   .entry { margin: 0 0 1.1em; }
   .prose { font: 16px/1.62 var(--serif); overflow-wrap: anywhere; }
+  .prose.entry { position: relative; }
+  .prose .copy { position: absolute; right: 0; bottom: -1.4em; font: 12px var(--sans); color: var(--muted); background: none; border: 0; cursor: pointer; opacity: 0; }
+  .prose:hover .copy, .prose .copy:focus { opacity: 1; }
+  @media (hover: none) { .prose .copy { opacity: .6; } }
   .prose > :first-child { margin-top: 0; } .prose > :last-child { margin-bottom: 0; }
   .prose p, .prose ul, .prose ol, .prose pre, .prose blockquote, .prose table { margin: .65em 0; }
   .prose h1, .prose h2, .prose h3, .prose h4 { font-family: var(--serif); line-height: 1.25; margin: 1.1em 0 .45em; }
@@ -936,6 +940,7 @@ function renderPill() {
   pill.replaceChildren();
   if (q.length) pill.append(el("span", "n", String(q.length)), q.length === 1 ? " needs you" : " need you");
   else pill.append("nothing needs you");
+  document.title = q.length ? `(${q.length}) harness` : "harness";
 }
 $("#pill").onclick = () => { const d = $("#drawer"); d.hidden = !d.hidden; if (!d.hidden) renderDrawer(); };
 function renderDrawer() {
@@ -1361,6 +1366,9 @@ function entry(s, into, e, index, t) {
       const p = markdown(b.text || "");
       p.classList.add("entry");
       for (const a of p.querySelectorAll('a[title^="cite: "]')) { a.className = "cite"; a.title = a.title.slice(6); }
+      const copy = el("button", "copy", "Copy"); copy.title = "Copy as markdown";
+      copy.onclick = () => navigator.clipboard.writeText(b.text || "").then(() => { copy.textContent = "Copied"; setTimeout(() => { copy.textContent = "Copy"; }, 1200); });
+      p.append(copy);
       if (t.outcome?.kind === "result" && isLast(s, e, t)) { const card = el("div", "card result"); card.append(el("div", "label", "Result"), p); into.append(card); }
       else into.append(p);
     } else if (b.type === "tool_use" || b.type === "server_tool_use") {
