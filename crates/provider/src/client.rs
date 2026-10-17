@@ -1,6 +1,6 @@
 //! Sending a request and reading its stream.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,8 +28,9 @@ const UNIFIED: &str = "anthropic-ratelimit-unified-";
 pub struct Client {
     tls: Arc<rustls::ClientConfig>,
     login: Login,
-    /// The requests the scripted model has answered, for its `flaky`.
-    seen: Mutex<HashSet<u64>>,
+    /// How many times the scripted model has been asked each request, for
+    /// its `flaky` and `vary`.
+    seen: Mutex<HashMap<u64, u32>>,
 }
 
 /// What a request reports while it runs.

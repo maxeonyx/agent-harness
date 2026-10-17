@@ -295,6 +295,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         },
         "mandate": text(value, t.mandate.text),
         "head": t.head().map(|h| h.to_string()),
+        // When its last request ended: a retry can end where it began.
+        "turn": last.map(|e| e.at.seq.n),
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
         "window": state.environment(t.environment).map(|e| harness_provider::context_window(t.tuning.model(e))),
         "tuning": state.environment(t.environment).map(|e| tuning(value, t, e, last)),

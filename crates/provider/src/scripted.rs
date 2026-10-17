@@ -14,6 +14,8 @@
 //! tool NAME [JSON]      a tool use, with that input (`{}` if none); more
 //!                       `tool NAME JSON` after it are in the same response
 //! long N                a reply of N lines
+//! vary TEXT             TEXT and which time this request was asked, so a
+//!                       retry gives other words; the turn ends
 //! error STATUS [TEXT]   the request is refused with that HTTP status
 //! limit SECONDS         the plan's limit, reset in SECONDS
 //! fail [TEXT]           the stream starts, then breaks with an error event
@@ -21,12 +23,12 @@
 //! ```
 //!
 //! A verb may follow `slow MS` (MS before each streamed piece) and
-//! `flaky STATUS` (the first time this client sees the exact request, it
-//! is refused with STATUS; a retry gets the step): `flaky 529 slow 200 say hi`.
+//! `flaky STATUS` (the first time this client sees the request, it is
+//! refused with STATUS; a retry gets the step): `flaky 529 slow 200 say hi`.
 //! Text without a verb is echoed. Once the script is used up, the reply
 //! quotes the tool results it was sent, and the turn ends.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Cursor, Read};
 use std::sync::Mutex;
@@ -50,36 +52,44 @@ pub fn scripted() -> Model {
 }
 
 /// The verbs a script line may start with.
-const VERBS: [&str; 7] = ["say", "tool", "long", "error", "limit", "fail", "drop"];
+const VERBS: [&str; 8] = [
+    "say", "tool", "long", "vary", "error", "limit", "fail", "drop",
+];
 
 /// How much of each tool result a used-up script's reply quotes.
 const QUOTED: usize = 4000;
 
-/// The response to the request `body`. `seen` holds the requests this
-/// client has answered, for `flaky`.
-pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashSet<u64>>) -> Response {
+/// The response to the request `body`. `seen` counts the times this
+/// client has been asked each request, by its messages without their cache
+/// breakpoints, which are placed anew on each send.
+pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashMap<u64, u32>>) -> Response {
     let request: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return refused(400, &format!("the request is not JSON: {e}")),
     };
     let messages = request["messages"].as_array().cloned().unwrap_or_default();
-    let step = step(&messages);
-    if let Some(status) = step.flaky {
+    let asked = {
         let mut hasher = DefaultHasher::new();
-        body.hash(&mut hasher);
-        if seen
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(hasher.finish())
-        {
-            return refused(status, "flaky: refused the first time");
-        }
+        let mut bare = Value::Array(messages.clone());
+        strip_breakpoints(&mut bare);
+        bare.to_string().hash(&mut hasher);
+        let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+        let n = seen.entry(hasher.finish()).or_default();
+        *n += 1;
+        *n
+    };
+    let step = step(&messages);
+    if let Some(status) = step.flaky
+        && asked == 1
+    {
+        return refused(status, "flaky: refused the first time");
     }
     let (verb, rest) = step.act.split_once(' ').unwrap_or((&step.act, ""));
     let rest = rest.trim();
     let mut events = Events::new(body.len());
     match verb {
         "say" => events.text(&rest.replace("\\n", "\n"), " ", "end_turn"),
+        "vary" => events.text(&format!("{rest} (try {asked})"), " ", "end_turn"),
         "tool" => match uses(rest) {
             Ok(uses) => events.tools(&uses, messages.len()),
             Err(name) => {
@@ -211,6 +221,18 @@ fn step(messages: &[Value]) -> Step {
             }
         })
     })
+}
+
+/// Remove every `cache_control` from a request's JSON.
+fn strip_breakpoints(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            o.remove("cache_control");
+            o.values_mut().for_each(strip_breakpoints);
+        }
+        Value::Array(a) => a.iter_mut().for_each(strip_breakpoints),
+        _ => {}
+    }
 }
 
 /// A script line as a step, if it starts with a verb.

@@ -46,6 +46,25 @@ pub fn blocks(text: &str) -> Bytes {
     Bytes::from(json!([{ "type": "text", "text": text }]).to_string())
 }
 
+/// A chat's name from the first words of its mandate, to its first
+/// clause's end, as the page names one.
+pub fn name_from(text: &str) -> String {
+    let clause = text
+        .trim()
+        .split(['\n', '.', ',', ';', ':', '!', '?'])
+        .next()
+        .unwrap_or("");
+    let words = clause
+        .split_whitespace()
+        .take(6)
+        .collect::<Vec<_>>()
+        .join(" ");
+    match words.chars().count() > 40 {
+        true => format!("{}…", words.chars().take(39).collect::<String>()),
+        false => words,
+    }
+}
+
 pub fn status(device: &Device, n: u64) -> String {
     match device.tab.status(n) {
         Status::Pending => "is pending".into(),
@@ -142,34 +161,74 @@ impl Device {
         })
     }
 
-    /// Max starts a chat in `environment`, with a new workspace limb over
-    /// `dir`, as the page's new-chat card does.
-    pub fn chat(&mut self, environment: EnvironmentId, dir: &str, text: &str) -> u64 {
+    /// The harness row's `list`, such as its environments or workspaces:
+    /// the `id` of the one whose `key` is `value`.
+    fn harness_id<T: std::str::FromStr>(&self, list: &str, key: &str, value: &str) -> Option<T> {
+        let Some(FaceRow::Harness(row)) = self.rows().get(&FaceKey::Harness) else {
+            return None;
+        };
+        row[list]
+            .as_array()?
+            .iter()
+            .find_map(|e| match e[key] == value {
+                true => e["id"].as_str()?.parse().ok(),
+                false => None,
+            })
+    }
+
+    /// The environment a role file named `name` defines.
+    pub fn environment(&self, name: &str) -> Option<EnvironmentId> {
+        self.harness_id("environments", "name", name)
+    }
+
+    /// Max starts a chat in `environment`, as the page's new-chat card
+    /// does: in the workspace over `dir` for an environment that names one,
+    /// a new workspace limb unless the harness has one there, and in no
+    /// place for an environment that names none.
+    pub fn chat(
+        &mut self,
+        environment: EnvironmentId,
+        dir: Option<&str>,
+        text: &str,
+    ) -> (u64, TaskId) {
+        // Each fact's id is the event of its own index in the batch.
         let at = self.tab.next();
-        let (limb, task) = (LimbId(at.event(0)), TaskId(at.event(1)));
-        let mandate = blocks(text);
-        println!("  {}: Max starts a chat in {dir}: {text:?}", self.name);
-        self.say(Batch {
+        let known = dir.and_then(|dir| self.harness_id::<LimbId>("workspaces", "dir", dir));
+        let new = dir.filter(|_| known.is_none()).map(|dir| Limb {
+            id: LimbId(at.event(0)),
+            name: dir.into(),
+            kind: LimbKind::Plugin {
+                kind: "workspace".into(),
+                config: json!({ "dir": dir }).to_string(),
+                host: Host::Local,
+            },
+        });
+        let task = TaskId(at.event(new.is_some() as u32));
+        let places = known
+            .or(new.as_ref().map(|l| l.id))
+            .map(|l| ("workspace".to_string(), l))
+            .into_iter()
+            .collect();
+        let mandate = Bytes::from(text.to_string());
+        println!(
+            "  {}: Max starts a chat in {}: {text:?}",
+            self.name,
+            dir.unwrap_or("no place")
+        );
+        let n = self.say(Batch {
             values: vec![mandate.clone()],
-            facts: vec![
-                Fact::Limb(Limb {
-                    id: limb,
-                    name: dir.into(),
-                    kind: LimbKind::Plugin {
-                        kind: "workspace".into(),
-                        config: json!({ "dir": dir }).to_string(),
-                        host: Host::Local,
-                    },
-                }),
-                Fact::Task(
+            facts: new
+                .into_iter()
+                .map(Fact::Limb)
+                .chain([Fact::Task(
                     task,
                     TaskEvent::Created(Box::new(Created {
-                        name: "act".into(),
+                        name: name_from(text),
                         by: None,
                         scope: Scope::Max,
                         origin: Origin::Fresh {
                             environment,
-                            places: BTreeMap::from([("workspace".into(), limb)]),
+                            places,
                         },
                         mode: Mode::UserFacing,
                         mandate: Mandate {
@@ -179,9 +238,10 @@ impl Device {
                         },
                         tuning: Default::default(),
                     })),
-                ),
-            ],
-        })
+                )])
+                .collect(),
+        });
+        (n, task)
     }
 
     /// Max abandons `task`, giving it `within` to finish.
