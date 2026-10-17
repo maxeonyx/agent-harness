@@ -21,7 +21,10 @@ use harness_core::id::{
     CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, ReplicaId, TaskId, Timestamp,
 };
 use harness_core::live::Live;
-use harness_core::task::{Abandoner, Created, Drain, Mandate, Mode, Origin, Scope, TaskEvent};
+use harness_core::context::EntryId;
+use harness_core::task::{
+    Abandoner, Created, Drain, Mandate, Mode, Move, Origin, Scope, TaskEvent,
+};
 use harness_core::value::Bytes;
 use harness_face_tab::{Down, FaceKey, FaceRow, Tab, Up};
 use harness_substrate::Status;
@@ -199,6 +202,15 @@ impl Device {
                     within: within.as_millis() as u64,
                 }),
             )],
+        })
+    }
+
+    /// Max moves `task` back to an entry it has been at.
+    pub fn back(&mut self, task: TaskId, to: EntryId) -> u64 {
+        println!("  {}: Max moves it back to {to}", self.name);
+        self.say(Batch {
+            values: Vec::new(),
+            facts: vec![Fact::Task(task, TaskEvent::Moved(Move::Back { to }))],
         })
     }
 

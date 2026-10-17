@@ -25,7 +25,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: act PORT done | act PORT say WORDS | act PORT abandon MS | act PORT stop CALL | act PORT chat ENV DIR TEXT"
+            "usage: act PORT done | act PORT say WORDS | act PORT back ENTRY | act PORT abandon MS | act PORT stop CALL | act PORT chat ENV DIR TEXT"
         );
         exit(2)
     };
@@ -51,6 +51,10 @@ fn main() {
             },
             (Some("stop"), Some(call)) => match call.parse() {
                 Ok(call) => tab.stop(call),
+                Err(_) => usage(),
+            },
+            (Some("back"), Some(entry)) => match entry.parse() {
+                Ok(entry) => tab.back(root, entry),
                 Err(_) => usage(),
             },
             _ => usage(),
