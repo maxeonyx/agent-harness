@@ -216,6 +216,7 @@
 //!   own pending acts as pending rather than predicting the brain's verdict.
 
 pub mod attention;
+pub mod build;
 pub mod call;
 pub mod context;
 pub mod delivery;
