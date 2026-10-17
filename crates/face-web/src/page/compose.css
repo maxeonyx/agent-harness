@@ -52,6 +52,10 @@
   .compose .pick { font: 12.5px var(--sans); color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 999px; padding: .25em .6em; max-width: 16em; outline: 0; }
   .compose .pick:hover, .compose .pick:focus { border-color: var(--line); color: var(--ink); }
   .compose input.pick { width: 13em; }
+  .compose .tune { display: inline-flex; align-items: center; margin-left: auto; border: 1px solid var(--line); border-radius: 999px; }
+  .compose .tune:empty { display: none; }
+  .compose .tune .pick { padding: .2em .35em; max-width: 12em; }
+  .compose .tune .dot { color: var(--faint); font-size: 12.5px; }
   /* An action, small: its icon; armed, its word too. In a menu, a row. */
   .act { width: 26px; height: 26px; }
   .act svg { width: 15px; height: 15px; }

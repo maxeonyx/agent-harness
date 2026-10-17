@@ -288,6 +288,7 @@ fn main() {
         facts: vec![Fact::Task(
             TaskId(PC.origin().event(0)),
             TaskEvent::Created(Box::new(Created {
+                tuning: Default::default(),
                 name: "substrate".into(),
                 by: None,
                 scope: Scope::Max,
@@ -320,6 +321,7 @@ fn main() {
         facts: vec![Fact::Task(
             TaskId(at.event(0)),
             TaskEvent::Created(Box::new(Created {
+                tuning: Default::default(),
                 name: "substrate".into(),
                 by: None,
                 scope: Scope::Max,
@@ -360,7 +362,10 @@ fn main() {
         values: vec![],
         facts: vec![Fact::Draft(
             DeliveryId(at.event(0)),
-            DraftEvent::Opened { session: task },
+            DraftEvent::Opened {
+                session: task,
+                at: None,
+            },
         )],
     });
     let draft = DeliveryId(opened.event(0));

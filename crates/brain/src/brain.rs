@@ -149,8 +149,9 @@ pub struct Brain {
     /// Where each limb keeps its log: `<state>/<limb>`, and the socket.
     state_dir: PathBuf,
     socket: PathBuf,
-    /// The context of each request without a first byte yet: fan-out gating.
-    cold: HashMap<ModelCallId, std::collections::HashSet<EntryId>>,
+    /// The model and context of each request without a first byte yet:
+    /// fan-out gating.
+    cold: HashMap<ModelCallId, (String, std::collections::HashSet<EntryId>)>,
     /// Each request in flight: the thread that sends it, joined when it
     /// reports how it ended, and its stop.
     requests: HashMap<ModelCallId, (Cancel, JoinHandle<()>)>,
@@ -367,6 +368,7 @@ impl Brain {
         let facts = vec![Fact::Task(
             id,
             TaskEvent::Created(Box::new(Created {
+                tuning: Default::default(),
                 name: start.name,
                 by: None,
                 scope: Scope::Max,
@@ -742,7 +744,13 @@ impl Brain {
         let refs: Vec<(LimbId, &Description)> = described.iter().map(|(l, d)| (*l, d)).collect();
         let role = String::from_utf8_lossy(&self.value(env.role)).into_owned();
         Some(
-            render::root(harness_provider::IDENTITY, &env.model, &role, &refs).map(|new| {
+            render::root(
+                harness_provider::IDENTITY,
+                task.tuning.model(env),
+                &role,
+                &refs,
+            )
+            .map(|new| {
                 let start = TaskStart {
                     root: new.root,
                     binding: new.binding,
@@ -848,7 +856,17 @@ impl Brain {
             }
             _ => {}
         }
-        if policy::hold(head, self.cold.values()) {
+        let env = self
+            .state()
+            .environment(task.environment)
+            .expect("the task's environment");
+        let model = task.tuning.model(env).to_owned();
+        let params = env.params;
+        if policy::hold(
+            head,
+            &model,
+            self.cold.values().map(|(m, c)| (m.as_str(), c)),
+        ) {
             return;
         }
 
@@ -898,12 +916,29 @@ impl Brain {
             appends.push(user(render::blocks(&turn.blocks), &mut values));
         }
         renders.extend(turn.renders);
-        let params = self
-            .state()
-            .environment(task.environment)
-            .expect("the task's environment")
-            .params;
+        // Max's effort, when it is not the environment's, as parameters of
+        // its own.
+        let params = match task.tuning.effort {
+            Some(effort) => {
+                let named = self.value(params);
+                match harness_provider::with_effort(&named, effort) {
+                    Some(tuned) if harness_provider::effort(&named) != Some(effort) => {
+                        let tuned = Bytes::from(tuned);
+                        let id = tuned.id();
+                        values.push(tuned);
+                        id
+                    }
+                    _ => params,
+                }
+            }
+            None => params,
+        };
+        let rooted = match &self.state().context(head)[0].1 {
+            Entry::Root(root) => root.model != model,
+            Entry::Message { .. } => unreachable!("a context starts at a root"),
+        };
         let mut call = ModelCall {
+            model: rooted.then_some(model.clone()),
             task: id,
             base: head,
             appends,
@@ -943,7 +978,10 @@ impl Brain {
             named.into_iter().map(|v| (v, self.value(v))).collect();
         self.cold.insert(
             request,
-            base.iter().map(|(id, _)| *id).chain(appended).collect(),
+            (
+                model,
+                base.iter().map(|(id, _)| *id).chain(appended).collect(),
+            ),
         );
         let cancel = Cancel::new();
         let client = self.client.clone();
@@ -1388,6 +1426,7 @@ and you cannot finish until it has.",
             let fresh = matches!(origin, Origin::Fresh { .. });
             let text = Bytes::from(member.mandate);
             let created = Created {
+                tuning: Default::default(),
                 name: format!("{}-{}", parent.name, member.name),
                 by: Some(call),
                 scope,

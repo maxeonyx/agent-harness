@@ -82,7 +82,7 @@ in as few words as you can. Now reply only `ready`, and end your turn.",
     phone.say(Batch {
         values: vec![dictated.clone()],
         facts: vec![
-            Fact::Draft(draft, DraftEvent::Opened { session }),
+            Fact::Draft(draft, DraftEvent::Opened { session, at: None }),
             Fact::Draft(draft, DraftEvent::Text(dictated.id())),
         ],
     });
