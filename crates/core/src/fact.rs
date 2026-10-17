@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::attention::{Focus, Ranking};
+use crate::build::Launched;
 use crate::call::CallEvent;
 use crate::delivery::{Content, Delivery};
 use crate::draft::DraftEvent;
@@ -147,7 +148,7 @@ impl Fact {
     pub fn values(&self) -> Vec<ValueId> {
         let mut values = Vec::new();
         match self {
-            Fact::Launched(Launched { build: _, by: _ }) | Fact::Shutdown { within: _ } => {}
+            Fact::Launched(Launched { build: _, how: _ }) | Fact::Shutdown { within: _ } => {}
             Fact::Task(_, event) => event.values(&mut values),
             Fact::ModelCall(_, event) => event.values(&mut values),
             Fact::Call(_, event) => event.values(&mut values),
@@ -197,22 +198,6 @@ impl Fact {
         }
         values
     }
-}
-
-/// The boundary between two processes of one brain replica.
-///
-/// After a crash, a relaunch onto a newer build, or the relaunch an agent
-/// asked for (`by`: the call that asked, which the new brain settles, so a
-/// self-upgrade has a real outcome). The brain has one process at a time;
-/// everything it writes after this record was written by `build`, which is how an
-/// operator links a stuck subtree to an upgrade and how a rolled-back build
-/// knows which facts are newer than it. It is also the whole of restart:
-/// what the earlier writer had in flight is what [`crate::state::State::todo`] says to
-/// redo.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Launched {
-    pub build: String,
-    pub by: Option<CallId>,
 }
 
 /// Facts one replica states together, with the bytes they name: what a

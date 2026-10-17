@@ -75,7 +75,7 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
     let harness = json!({
         "environments": environments,
         "workspaces": workspaces,
-        "build": state.launch().map(|(_, l)| l.build.clone()),
+        "build": state.launch().map(|(_, l)| format!("build {:.12}", l.build.to_string())),
         "limited": state.limited(now).map(|t| t.0),
         "usage": state.quota().map(usage),
     });
@@ -360,7 +360,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         )
     };
     match fact {
-        Fact::Launched(l) => format!("brain launched, build {}", l.build),
+        Fact::Launched(l) => format!("brain launched, build {:.12}", l.build.to_string()),
         Fact::Shutdown { within } => format!("brain shutting down, within {}s", within / 1000),
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {

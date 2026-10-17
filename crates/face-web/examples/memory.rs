@@ -11,8 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::environment::Environment;
-use harness_core::fact::{Batch, Fact, Launched};
+use harness_core::fact::{Batch, Fact};
 use harness_core::id::{EnvironmentId, ReplicaId, Timestamp, ValueId};
 use harness_core::schema::{Brain, Record};
 use harness_core::value::Bytes;
@@ -55,8 +56,8 @@ fn main() {
     let launched = Batch {
         values: vec![],
         facts: vec![Fact::Launched(Launched {
-            build: "memory".into(),
-            by: None,
+            build: BuildId::of(b"memory"),
+            how: Launch::Started,
         })],
     };
     brain.say(now(), |_| launched).unwrap();

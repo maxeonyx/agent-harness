@@ -7,3 +7,4 @@ description = "The data flow every part of the harness is a replica in: replicas
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }

@@ -9,11 +9,12 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Description, Hello, LimbKey, LimbKind, LimbRow, Reach};
-use harness_core::fact::{Batch, Fact, Launched, Refusal};
+use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{
     CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
 };
@@ -176,10 +177,7 @@ impl Brain {
         let (decider, divergences) = schema::Brain::open(store.replica(), store)
             .map_err(|e| format!("the database folds: {e}"))?;
         for d in &divergences {
-            eprintln!(
-                "harness-brain: the record at {} folds differently in this build, and is skipped: {}",
-                d.at, d.why
-            );
+            eprintln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
         }
         let state = decider.state();
         let find =
@@ -193,9 +191,12 @@ impl Brain {
         std::fs::create_dir_all(&state_dir).map_err(|e| format!("{state_dir:?}: {e}"))?;
         let socket = state_dir.join("limbs.sock");
         let at = decider.next();
+        let exe = std::env::current_exe()
+            .and_then(std::fs::read)
+            .map_err(|e| format!("the brain's own executable: {e}"))?;
         let mut facts = vec![Fact::Launched(Launched {
-            build: concat!("harness-brain ", env!("CARGO_PKG_VERSION")).into(),
-            by: None,
+            build: BuildId::of(&exe),
+            how: Launch::Started,
         })];
         let define =
             |facts: &mut Vec<Fact>,
@@ -1405,6 +1406,14 @@ and you cannot finish until it has.",
         let from = record.at;
         let facts = match &record.what {
             Said::Said(batch) => batch.facts.clone(),
+            Said::Unread(unread) => {
+                println!(
+                    "{:>7.1}s {from}  held unread: {}",
+                    self.elapsed(),
+                    unread.why
+                );
+                Vec::new()
+            }
             Said::Included(_) => Vec::new(),
         };
         match self.decider.include(now(), record) {

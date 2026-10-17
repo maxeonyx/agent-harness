@@ -294,7 +294,7 @@ impl LimbKind {
 /// workspace's files outlive everything), the instance (a process: a replica,
 /// whose records are the limb's while it is connected) and the connection to
 /// it. A connection belongs to the brain that made it, so every limb is
-/// unreached from a [`crate::fact::Launched`] until it connects to the new
+/// unreached from a [`crate::build::Launched`] until it connects to the new
 /// brain, and a record from a replica no longer connected is refused.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Reach {
