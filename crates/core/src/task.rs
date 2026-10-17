@@ -882,12 +882,12 @@ pub enum Move {
     /// background work runs on, the task's to keep or stop, as through a
     /// pause.
     ///
-    /// While a request or round is outstanding, the move first stops that
-    /// round as an interrupt does, a spawn included: its members are
-    /// abandoned by Max, since nothing will read their results. It lands
-    /// once the round has exited (the task drains towards it), and a cut
-    /// response on the left path is not quoted to the model. Refused while
-    /// the task is starting, abandoning or failing, and once it is done.
+    /// Refused while a request or round is outstanding
+    /// ([`Rejected::Busy`]): Max stops the task first. (The target is a
+    /// move that stops the round itself, as an interrupt does, and lands
+    /// once it has exited; it waits on the redesign of stopping.) Refused
+    /// too while the task is starting, abandoning or failing, and once it
+    /// is done.
     ///
     /// **Vision.** Max as a participant who "very, very frequently" changes
     /// his mind: retry, edit and revert as in other chat apps, with nothing
@@ -1809,15 +1809,15 @@ fn requeue(world: &State, rendered: &Rendered, to: EntryId, round: &[CallId]) ->
             if round.contains(call) {
                 return None;
             }
-            if world
-                .origin(*call)
-                .is_some_and(|response| !world.descends(to, response))
-            {
+            let origin = world.origin(*call);
+            if origin.is_some_and(|response| !world.descends(to, response)) {
                 return None;
             }
             Some(match world.call(*call)?.call.caller {
                 Caller::Max { .. } => Input::MaxAction(*call),
-                Caller::Agent { .. } => Input::Late(*call),
+                // A tool use on the path it lands on, whose real outcome
+                // came late.
+                Caller::Agent { .. } if origin.is_some() => Input::Late(*call),
                 Caller::Background { .. } => Input::Background(*call),
                 _ => return None,
             })
