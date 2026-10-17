@@ -25,7 +25,7 @@ const ICONS = {
   stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
   pause: '<path d="M9 5.5v13M15 5.5v13"/>',
   play: '<path d="M8 5.5v13l10-6.5z"/>',
-  cross: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  cancel: '<circle cx="12" cy="12" r="8"/><path d="M6.5 17.5l11-11"/>',
   tick: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   queue: '<path d="M4 6h11M4 11h11M4 16h5M17 13v7M14 17l3 3 3-3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
