@@ -7,6 +7,7 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | brain | an orchestrator, a fork and an engineer build a small repo; the brain is killed -9 mid-command and relaunched, and carries on with the same limbs | scripted (`MODEL=sonnet/low`: real agents) | free, 30 s (Sonnet: a few dozen requests, 2 min) |
 | browser | a chat hands a browser agent an expense claim in real pages; the tab is passed to Max, who stops it | Sonnet low | about 10 requests, under 1 min |
 | cancel | abandoning tasks (with time to tidy, and past a deadline), Ctrl-C once and twice, a worker passed to Max, a systemd restart, and what still runs after each | scripted (`MODEL=sonnet/low`) | free, 3 min |
+| chat-engineer | a chat in a workspace directory starts an engineer `from` the clone there, which commits in its own clone made beside it | Sonnet low | 3 requests, under 1 min |
 | chat-moves | retry, a reply's versions, going back, and a retry that gave the same words; leaves the brain up to try edit and back | scripted | free, 30 s |
 | compaction | an agent compacts between steps and reports; Max's words and the reports are kept word for word | scripted (`MODEL=sonnet/low`) | free, 1 min (Sonnet: a few dozen requests, 2 min) |
 | dev-process | an orchestrator spawns an engineer and a designer in their own clones, decides the question left to Max, and reports; the brain serves on after | Sonnet low | about 12 requests, under 1 min to the report |
