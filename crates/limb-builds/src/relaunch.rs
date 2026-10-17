@@ -170,7 +170,14 @@ pub fn take_over(
             ),
         });
     }
-    let new = Running::of(unit).map_err(|e| format!("the new build: {e}"))?;
+    let argv = old.on(&build);
+    let new = Running {
+        pid: started(unit, Path::new(&argv[0])),
+        argv,
+        build,
+        commit,
+        ..old.clone()
+    };
     Ok(Takeover {
         _lock: lock,
         old,
@@ -475,6 +482,21 @@ pub fn start(unit: &str, argv: &[String]) -> Result<(), String> {
 /// Stop `unit`: SIGTERM, and the brain drains.
 fn stop(unit: &str) -> Result<(), String> {
     systemctl(&["stop", unit]).map(|_| ())
+}
+
+/// The process `unit` runs once it has become `exe`, or 0 (no process)
+/// if it does not within 30 s: the watch then sees it gone.
+fn started(unit: &str, exe: &Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if let Ok(Some(pid)) = main_pid(unit)
+            && std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|e| e == exe)
+        {
+            return pid;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    0
 }
 
 fn main_pid(unit: &str) -> Result<Option<u32>, String> {
