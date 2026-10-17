@@ -153,10 +153,24 @@ impl Turn {
     }
 }
 
+/// When a request is rendered: the local time as the agent is told it, and
+/// how many tokens the task's model holds.
+pub struct Now<'a> {
+    pub time: &'a str,
+    pub window: u64,
+}
+
 /// Everything the task's next request includes, in the order the provider
 /// needs: tool results first, then text. `forked` are the calls of the
 /// response a fork's first request answers.
-pub fn turn(state: &State, values: Values, task: &Task, first: bool, forked: &[CallId]) -> Turn {
+pub fn turn(
+    state: &State,
+    values: Values,
+    task: &Task,
+    first: bool,
+    forked: &[CallId],
+    now: &Now,
+) -> Turn {
     let mut turn = Turn::default();
     let mut texts = Turn::default();
 
@@ -165,7 +179,7 @@ pub fn turn(state: &State, values: Values, task: &Task, first: bool, forked: &[C
     for call in forked {
         turn.push(
             Rendered::Note(Note::Elsewhere { call: *call }),
-            vec![elsewhere(state, values, *call)],
+            vec![elsewhere(state, values, task, *call)],
         );
     }
     // Does this request carry on the model's turn (a tool round's results,
@@ -238,14 +252,31 @@ pub fn turn(state: &State, values: Values, task: &Task, first: bool, forked: &[C
         .filter(|s| !observed_now(state, turn.rendered().chain(texts.rendered()), s))
         .collect();
     if !stale.is_empty() {
-        let (roles, names): (Vec<_>, Vec<_>) =
-            stale.iter().partition(|s| s.resource.kind == "role");
+        // A role and a limb's instructions are in the root: they change
+        // only when a fresh root is made.
+        let in_root = |s: &&Stale| s.resource.kind == "role" || s.resource.kind == "instructions";
+        let (rooted, names): (Vec<_>, Vec<_>) = stale.iter().partition(in_root);
         let mut said = Vec::new();
-        if !roles.is_empty() {
+        if rooted.iter().any(|s| s.resource.kind == "role") {
             said.push(text(
                 "[harness] Your role's definition changed. Your request parameters follow it now; \
 its prompt and tools take effect when you next compact with `fresh: true`.",
             ));
+        }
+        let limbs: Vec<_> = rooted
+            .iter()
+            .filter(|s| s.resource.kind == "instructions")
+            .map(|s| {
+                state
+                    .limb(s.resource.limb)
+                    .map_or_else(|| s.resource.limb.to_string(), |l| format!("`{}`", l.name))
+            })
+            .collect();
+        if !limbs.is_empty() {
+            said.push(text(&format!(
+                "[harness] The instructions of {} changed. They take effect when you next compact with `fresh: true`.",
+                limbs.join(", ")
+            )));
         }
         if !names.is_empty() {
             let names: Vec<_> = names.iter().map(|s| s.resource.name.as_str()).collect();
@@ -255,7 +286,7 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
             )));
         }
         // What a limb said to show of a change, rather than announce it.
-        for s in stale.iter().filter(|s| s.resource.kind != "role") {
+        for s in stale.iter().filter(|s| !in_root(s)) {
             if let Some(content) = s.content {
                 said.push(text(&format!(
                     "[harness] {}: {}",
@@ -298,8 +329,42 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
             vec![text("[harness] Your response was cut off. Carry on.")],
         );
     }
+    if !texts.blocks.is_empty() {
+        turn.push(
+            Rendered::Note(Note::Now),
+            vec![text(&clock(state, task, now))],
+        );
+    }
     turn.extend(texts);
     turn
+}
+
+/// The time, and how full the context was at the task's last response,
+/// unless a compaction has replaced that context since.
+fn clock(state: &State, task: &Task, now: &Now) -> String {
+    let used = state
+        .last_turn(task.id)
+        .and_then(|e| e.usage)
+        .filter(|_| !task.head().is_some_and(|h| state.compacted(h).is_some()))
+        .map(|u| u.input + u.cache_read + u.cache_write_short + u.cache_write_long + u.output);
+    match used {
+        Some(used) => format!(
+            "[harness] {}. Your context: {} of {} tokens.",
+            now.time,
+            tokens(used),
+            tokens(now.window)
+        ),
+        None => format!("[harness] {}.", now.time),
+    }
+}
+
+/// A token count, short: `48k`, `1M`.
+fn tokens(n: u64) -> String {
+    if n >= 1_000_000 && n.is_multiple_of(1_000_000) {
+        format!("{}M", n / 1_000_000)
+    } else {
+        format!("{}k", (n + 500) / 1000)
+    }
 }
 
 /// The task's mandate as its first request says it, or as a carry onto a
@@ -319,7 +384,7 @@ goes back to the context you were forked from with their results. He wrote (`{}`
             label(task.mandate.text)
         )),
         (_, Scope::Max) => Some(format!(
-            "[harness] Max's mandate to you (`{}` quotes it in a brief):",
+            "[harness] Max wrote this (`{}` quotes it in a brief):",
             label(task.mandate.text)
         )),
         (_, Scope::Spawn(_)) => None,
@@ -793,7 +858,7 @@ fn words_of(values: Values, id: ValueId) -> Vec<String> {
 }
 
 /// The neutral answer, in a fork, to one tool use of the forked response.
-fn elsewhere(state: &State, values: Values, call: CallId) -> String {
+fn elsewhere(state: &State, values: Values, task: &Task, call: CallId) -> String {
     let record = state.call(call).expect("a forked response's call is known");
     let Caller::Agent { tool_use, .. } = &record.call.caller else {
         unreachable!("a response's call answers a tool use")
@@ -803,7 +868,13 @@ fn elsewhere(state: &State, values: Values, call: CallId) -> String {
         let names = crate::meta::names(tool, &values(record.call.input));
         format!("Started {}.", names.join(", "))
     } else {
-        "Done by the agent this context was forked from; the result went to it.".into()
+        let parent = state
+            .owner(task.id)
+            .and_then(|o| state.task(o))
+            .map_or("the agent you were forked from", |o| o.name.as_str());
+        format!(
+            "Not run by you: `{parent}` made this call, and its result went to `{parent}` only, so it is not in your copy of the context."
+        )
     };
     json!({
         "type": "tool_result",
@@ -857,8 +928,13 @@ fn mandate(state: &State, values: Values, task: &Task, carried: bool) -> String 
             siblings.join(", ")
         ));
     }
+    // A root made before `compact` existed does not bind it.
+    let compact = task
+        .context()
+        .is_some_and(|c| c.binding.limb(crate::meta::COMPACT).is_some());
+    let then = if compact { "`compact`, then " } else { "" };
     said_.push_str(&format!(
-        "\n\nWhen your part is done, `compact`, then end your turn. Your last message is your result, and it goes \
+        "\n\nWhen your part is done, {then}end your turn. Your last message is your result, and it goes \
 to `{owner_name}`."
     ));
     said_

@@ -1822,7 +1822,19 @@ pub fn next(
             .collect(),
         _ => Vec::new(),
     };
-    let turn = render::turn(state, value, task, first, &forked);
+    let time = local(now());
+    let window = harness_provider::context_window(&model);
+    let turn = render::turn(
+        state,
+        value,
+        task,
+        first,
+        &forked,
+        &render::Now {
+            time: &time,
+            window,
+        },
+    );
     if !turn.blocks.is_empty() {
         appends.push(user(render::blocks(&turn.blocks), &mut values));
     }
@@ -1880,6 +1892,27 @@ fn user(content: Bytes, values: &mut Vec<Bytes>) -> Message {
     };
     values.push(content);
     message
+}
+
+/// A time in the machine's own zone, as an agent is told it: `Sun 18 Oct
+/// 2026 10:42 NZDT`.
+fn local(at: Timestamp) -> String {
+    let secs = (at.0 / 1000) as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let mut out = [0u8; 64];
+    // SAFETY: `tm` and `out` outlive the calls, and `out`'s length is passed.
+    let n = unsafe {
+        if libc::localtime_r(&secs, &mut tm).is_null() {
+            return format!("{} ms after the epoch", at.0);
+        }
+        libc::strftime(
+            out.as_mut_ptr().cast(),
+            out.len(),
+            c"%a %-d %b %Y %H:%M %Z".as_ptr(),
+            &tm,
+        )
+    };
+    String::from_utf8_lossy(&out[..n]).into_owned()
 }
 
 pub fn now() -> Timestamp {
