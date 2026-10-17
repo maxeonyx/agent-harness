@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # One agent works in two steps and compacts between them, then compacts and
 # reports; Max answers, and it compacts and reports again.
-# Watch it at https://mx-hv-mj.local:4321 (another port: PORT=4400).
+# Watch it at https://mx-hv-mj.local:4410 (another port: PORT=4400).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example act
-port=${PORT:-4321}
+port=${PORT:-4410}
 dir=target/compaction-demo
 brain=target/release/harness-brain
 rm -rf "$dir"
@@ -16,12 +16,14 @@ trap 'demos/end.sh "$mark"' EXIT
 c() { curl -sS --resolve "mx-hv-mj.local:$port:127.0.0.1" "https://mx-hv-mj.local:$port$1"; }
 root='.rows[] | .Task // empty | select(.owner == null)'
 waits() { [ "$(c /view 2>/dev/null | jq -r "$root | .waiting.kind")" = max ]; }
+# Until the agent waits on Max; if the brain has exited (its port taken, say), say why and stop.
+await() { until waits; do kill -0 "$pid" 2>/dev/null || { cat "$dir/brain.log"; exit 1; }; sleep 1; done; }
 
 echo "== the agent starts on demos/compaction/mandate.md"
 env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" \
   --workspace "$dir/repo" --mandate demos/compaction/mandate.md > "$dir/brain.log" 2>&1 &
 pid=$!
-until waits; do sleep 1; done
+await
 grep -E 'compacted|Max sends' "$dir/brain.log" || true
 echo
 echo "== its context now: its first message and each carry are kept; the steps' tool calls are gone"
@@ -31,7 +33,7 @@ echo
 echo "== Max answers"
 target/release/examples/act "$port" say "Thanks. Add \`textstats.wordcount.unique(text: str) -> int\`, the number of distinct words, with a test, run the check, commit, and report again."
 sleep 2
-until waits; do sleep 1; done
+await
 echo
 echo "== its context now: Max's words and both reports are kept verbatim"
 demos/compaction/context.sh "$port"

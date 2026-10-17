@@ -1,10 +1,10 @@
 # compaction: one agent works in steps, compacting between them
 
 ```sh
-PORT=4400 demos/compaction/run.sh
+demos/compaction/run.sh
 ```
 
-Watch https://mx-hv-mj.local:4400 while it runs. It takes about two minutes on Opus and a few dozen requests on the subscription.
+Watch https://mx-hv-mj.local:4410 while it runs (another port: `PORT=4400`). It takes about two minutes on Opus and a few dozen requests on the subscription.
 
 What it does:
 
