@@ -10,7 +10,7 @@ use crate::context::{Entry, EntryId, Note, Rendered, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
-use crate::build::{BuildId, Launch, Launched, Probation, Verdict};
+use crate::build::{BuildId, Glimpsed, Launch, Launched, Probation, Trial, Verdict};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::environment::{
     Audience, Description, Environment, Limb, LimbKey, LimbKind, LimbRow, Reach,
@@ -614,6 +614,18 @@ impl State {
             .extend(said.values.iter().map(Bytes::id).filter(|v| v == text));
     }
 
+    /// Fold what this build can read of a record it skips: only what the
+    /// build's [`Probation`] reads, so a build is judged by the one before
+    /// it even when its records hold words that one does not know. Who
+    /// connected a limb may be in a record it skipped too, so a limb is any
+    /// replica that is neither this brain nor one of Max's faces.
+    pub(crate) fn glimpse(&mut self, here: Time, at: Time, glimpse: &Glimpsed) {
+        let by_limb = at.replica != here.replica && !self.faces.contains(&at.replica);
+        for trial in glimpse.trials() {
+            self.probation.see(by_limb, trial);
+        }
+    }
+
     /// Who speaks from `from` to the brain at `here`: the brain itself, the
     /// limb the brain last connected as that replica, or Max at a face.
     fn author(&self, here: ReplicaId, from: ReplicaId) -> Option<Author> {
@@ -780,7 +792,10 @@ impl State {
             return Err(Rejected::Author);
         }
         let mark = Mark::of(record);
-        self.probation.see(record);
+        if let Some(trial) = Trial::of(record.fact) {
+            self.probation
+                .see(matches!(record.by, Author::Limb(_)), trial);
+        }
         match record.fact {
             Fact::Launched(launched) => {
                 if let Launch::Relaunched { by: Some(call), .. } = launched.how

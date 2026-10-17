@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::record::{Durability, Folding, Included, Record, Schema, What};
+use crate::record::{Durability, Folding, Included, Record, Schema, Unread, What, glimpse};
 use crate::storage::Storage;
 use crate::time::{ReplicaId, Time, Timestamp};
 
@@ -162,11 +162,11 @@ fn unread<R>(at: Time, why: &str) -> Divergence<R> {
     }
 }
 
-/// What a follower's record says, if this build can read it.
-fn said<S: Schema>(what: &What<S>) -> Option<Result<&S::Said, &String>> {
+/// What a follower's record says, or what this build cannot read of it.
+fn said<S: Schema>(what: &What<S>) -> Option<Result<&S::Said, &Unread>> {
     match what {
         What::Said(said) => Some(Ok(said)),
-        What::Unread(unread) if unread.of.is_none() => Some(Err(&unread.why)),
+        What::Unread(unread) if unread.of.is_none() => Some(Err(unread)),
         What::Included(_) | What::Unread(_) => None,
     }
 }
@@ -174,7 +174,9 @@ fn said<S: Schema>(what: &What<S>) -> Option<Result<&S::Said, &String>> {
 impl<S: Schema, St: Storage<S>> Decider<S, St> {
     /// The decider at `here`, folding everything `storage` holds. A record
     /// this build cannot read, or folds differently from the build that
-    /// included it, is skipped and returned, for the embedding to surface.
+    /// included it, is skipped and returned, for the embedding to surface,
+    /// and glimpsed ([`Schema::glimpse`]): it was accepted, and what follows
+    /// a record this build skipped is often refused by this build for that.
     #[allow(clippy::type_complexity)]
     pub fn open(
         here: ReplicaId,
@@ -205,7 +207,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
             let read;
             let (at, what, included) = match &record.what {
                 What::Said(said) => (record.at, Some(Ok(said)), None),
-                What::Unread(u) if u.of.is_none() => (record.at, Some(Err(&u.why)), None),
+                What::Unread(u) if u.of.is_none() => (record.at, Some(Err(u)), None),
                 What::Included(included) => {
                     let what = held.get(&included.of).map(|r| &r.what);
                     (included.of, what.and_then(said), Some(included))
@@ -219,8 +221,11 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
             };
             let said = match what {
                 Some(Ok(said)) => Some(said),
-                Some(Err(why)) => {
-                    divergences.push(unread(at, why));
+                Some(Err(u)) => {
+                    divergences.push(unread(at, &u.why));
+                    if let Some(glimpse) = u.glimpse::<S>() {
+                        S::glimpse(&mut decider.state, record.at, at, &glimpse);
+                    }
                     None
                 }
                 None => None,
@@ -243,10 +248,15 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                                 decider.state = state;
                                 durability = Some(S::durability(at, said));
                             }
-                            Err(why) => divergences.push(Divergence {
-                                at,
-                                why: Diverged::Refused(why),
-                            }),
+                            Err(why) => {
+                                divergences.push(Divergence {
+                                    at,
+                                    why: Diverged::Refused(why),
+                                });
+                                if let Some(glimpse) = glimpse::<S>(said) {
+                                    S::glimpse(&mut decider.state, record.at, at, &glimpse);
+                                }
+                            }
                         }
                     }
                 }
@@ -385,9 +395,16 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                     }
                 }
             }
-            // Another decider's receipt, or what this build cannot read:
-            // held as a fact, folded by nobody here.
-            What::Included(_) | What::Unread(_) => (None, Some(Durability::Kept)),
+            // What this build cannot read: held as a fact, and only
+            // glimpsed here.
+            What::Unread(u) => {
+                if let Some(glimpse) = u.glimpse::<S>() {
+                    S::glimpse(&mut state, here, record.at, &glimpse);
+                }
+                (None, Some(Durability::Kept))
+            }
+            // Another decider's receipt: held as a fact, folded by nobody here.
+            What::Included(_) => (None, Some(Durability::Kept)),
         };
         let holder = Holder {
             at: record.at,

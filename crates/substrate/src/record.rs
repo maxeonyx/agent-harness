@@ -35,7 +35,7 @@ pub struct Record<S: Schema> {
 /// payload (what was said, or why a receipt refused) is the schema's, and a
 /// newer build may say something an older one has no word for. Such a
 /// record is [`What::Unread`] in the build that cannot read it: held as it
-/// was written, never rewritten, never folded. So no build fails to open a
+/// was written, never rewritten, never folded whole. So no build fails to open a
 /// replica's records because of what another build wrote; only a change
 /// to the envelope, or to how a storage lays it out, is a boundary between
 /// builds.
@@ -64,7 +64,8 @@ pub enum What<S: Schema> {
 ///
 /// **Concept.** Kept and skipped. A decider keeps it whatever durability
 /// its writer declared (this build cannot tell what supersedes it), counts
-/// its time, and never folds it; a receipt it cannot read still includes
+/// its time, and never folds it, though its schema may glimpse the part it
+/// can read ([`Schema::glimpse`]); a receipt it cannot read still includes
 /// the record it names, so the follower's standing moves on, and the
 /// record it names is not folded. A decider includes a follower's unread
 /// record without folding it. A build that reads it folds it in its place
@@ -82,6 +83,25 @@ pub struct Unread {
     pub what: Box<RawValue>,
     /// Why this build's schema does not parse it.
     pub why: String,
+}
+
+impl Unread {
+    /// What this build's schema can read of a record whose payload it cannot
+    /// parse ([`Schema::Glimpse`]), if anything. A receipt's refusal is not
+    /// glimpsed: the verdict it holds is not this build's to know.
+    pub fn glimpse<S: Schema>(&self) -> Option<S::Glimpse> {
+        match serde_json::from_str(self.what.get()).ok()? {
+            Envelope::Said(said) => serde_json::from_str(said.get()).ok(),
+            Envelope::Included { .. } => None,
+        }
+    }
+}
+
+/// What a build's schema glimpses of a record it reads but folds
+/// differently from the build that accepted it: the same as of a record it
+/// cannot read, so a glimpse never depends on which of the two it is.
+pub(crate) fn glimpse<S: Schema>(said: &S::Said) -> Option<S::Glimpse> {
+    serde_json::from_str(&serde_json::to_string(said).ok()?).ok()
 }
 
 impl PartialEq for Unread {
@@ -243,6 +263,19 @@ pub trait Schema: Clone + fmt::Debug + PartialEq + 'static {
     /// Fold one record into `state`, or refuse it. On a refusal `state` may
     /// be part way through the record; the decider discards it.
     fn fold(state: &mut Self::State, folding: Folding<'_, Self>) -> Result<(), Self::Refusal>;
+
+    /// The part of a payload a build can read even where its [`Self::Said`]
+    /// does not parse: what a newer build wrote that this one must still
+    /// judge, decoded so that a word this build does not know inside it is
+    /// passed over.
+    type Glimpse: DeserializeOwned;
+
+    /// Fold what [`Self::Glimpse`] read of a record the build that wrote or
+    /// included it accepted, but this build cannot read or would refuse
+    /// (a fact about something it skipped), at the decider's time `here`;
+    /// `at` is the record's own. Never a refusal: the record is not this
+    /// build's to judge. It runs where [`Schema::fold`] would.
+    fn glimpse(state: &mut Self::State, here: Time, at: Time, glimpse: &Self::Glimpse);
 
     /// Fold a record the rules refused, as refused: an invalid act is still
     /// a fact, and the state may say so (a draft edit that raced another

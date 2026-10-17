@@ -69,10 +69,11 @@ use std::fmt;
 use std::str::FromStr;
 
 use imbl::OrdSet;
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use crate::call::CallEvent;
-use crate::fact::{Author, Fact, Stated};
+use crate::fact::Fact;
 use crate::id::{CallId, ModelCallId, ParseError, ValueId};
 use crate::model_call::{Ending, ModelCallEvent};
 
@@ -257,44 +258,29 @@ pub struct Probation {
 }
 
 impl Probation {
-    /// Fold one record of the span. Records of other spans are not shown it.
-    pub fn see(&mut self, record: &Stated) {
+    /// Fold one fact of the span, said by a limb if `by_limb`. Facts of
+    /// other spans are not shown it.
+    pub fn see(&mut self, by_limb: bool, trial: Trial) {
         if self.refused.is_some() || self.proven().is_some() {
             return;
         }
-        match record.fact {
-            Fact::ModelCall(id, ModelCallEvent::Sent(_)) => {
-                self.sent.insert(*id);
+        match trial {
+            Trial::Sent(id) => {
+                self.sent.insert(id);
             }
-            Fact::ModelCall(id, ModelCallEvent::Ended { ending, .. }) if self.sent.contains(id) => {
-                match ending {
-                    Ending::Responded { .. } => {
-                        self.responded.get_or_insert(*id);
-                    }
-                    Ending::Failed {
-                        status: Some(status),
-                        message,
-                        ..
-                    } if blames_build(*status) => {
-                        self.refused = Some(Refused {
-                            request: *id,
-                            status: *status,
-                            message: message.clone(),
-                        });
-                    }
-                    Ending::Failed { .. }
-                    | Ending::Limited { .. }
-                    | Ending::Cut { .. }
-                    | Ending::Lost => {}
-                }
+            Trial::Responded(id) if self.sent.contains(&id) => {
+                self.responded.get_or_insert(id);
             }
-            Fact::Call(id, CallEvent::Made(_)) => {
-                self.made.insert(*id);
-            }
-            Fact::Call(id, CallEvent::Settled(_))
-                if matches!(record.by, Author::Limb(_)) && self.made.contains(id) =>
+            Trial::Failed(refused)
+                if self.sent.contains(&refused.request) && blames_build(refused.status) =>
             {
-                self.round_trip.get_or_insert(*id);
+                self.refused = Some(refused);
+            }
+            Trial::Made(id) => {
+                self.made.insert(id);
+            }
+            Trial::Settled(id) if by_limb && self.made.contains(&id) => {
+                self.round_trip.get_or_insert(id);
             }
             _ => {}
         }
@@ -341,6 +327,130 @@ pub enum Verdict {
     /// the builds limb goes back, and the build before it sends that
     /// request again ([`crate::state::State::todo`]).
     Refused(Refused),
+}
+
+/// A fact a [`Probation`] reads: what a span's requests and calls did.
+///
+/// **Concept.** The judge of a build is the build before it, which may not
+/// know every word the new build's records hold: a request carries every
+/// span it rendered, a response its content. So what the trial reads is
+/// only kinds and ids, and how a request ended, read either from a fact
+/// this build folds ([`Trial::of`]) or from the [`Glimpsed`] record of one
+/// it skips: one it cannot parse, or one its rules refuse because it is
+/// about something it skipped (a response to a request it could not read).
+/// So a record whose payload names a variant this build does not know
+/// still shows a request sent, answered or refused, and a call made or
+/// settled; a settlement it skips counts as a limb's when it came from
+/// neither the brain nor one of Max's faces. Not covered: a new kind of
+/// fact, a new way for a request to end, a change to an id's form, or a
+/// [`Launched`] this build cannot read (the span itself is then unseen).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Trial {
+    Sent(ModelCallId),
+    Responded(ModelCallId),
+    /// The provider failed the request with a status.
+    Failed(Refused),
+    Made(CallId),
+    Settled(CallId),
+}
+
+impl Trial {
+    pub fn of(fact: &Fact) -> Option<Trial> {
+        Some(match fact {
+            Fact::ModelCall(id, ModelCallEvent::Sent(_)) => Trial::Sent(*id),
+            Fact::ModelCall(id, ModelCallEvent::Ended { ending, .. }) => match ending {
+                Ending::Responded { .. } => Trial::Responded(*id),
+                Ending::Failed {
+                    status: Some(status),
+                    message,
+                    ..
+                } => Trial::Failed(Refused {
+                    request: *id,
+                    status: *status,
+                    message: message.clone(),
+                }),
+                _ => return None,
+            },
+            Fact::Call(id, CallEvent::Made(_)) => Trial::Made(*id),
+            Fact::Call(id, CallEvent::Settled(_)) => Trial::Settled(*id),
+            _ => return None,
+        })
+    }
+}
+
+/// What any build reads of a [`crate::fact::Batch`] it cannot parse: the
+/// harness's [`harness_substrate::Schema::Glimpse`]. Each fact is read on
+/// its own, so one this build has no word for hides only itself.
+#[derive(Debug, Deserialize)]
+pub struct Glimpsed {
+    facts: Vec<Glance>,
+}
+
+impl Glimpsed {
+    pub fn trials(&self) -> impl Iterator<Item = Trial> + '_ {
+        self.facts.iter().filter_map(|glance| match glance {
+            Glance::Trial(fact) => fact.trial(),
+            Glance::Other(IgnoredAny) => None,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Glance {
+    Trial(GlancedFact),
+    Other(IgnoredAny),
+}
+
+/// [`Fact`]'s shape, keeping only what a trial reads; any other content of
+/// the variants it names is passed over unread.
+#[derive(Debug, Deserialize)]
+enum GlancedFact {
+    ModelCall(ModelCallId, GlancedModelCall),
+    Call(CallId, GlancedCall),
+}
+
+#[derive(Debug, Deserialize)]
+enum GlancedModelCall {
+    Sent(IgnoredAny),
+    Ended { ending: GlancedEnding },
+}
+
+#[derive(Debug, Deserialize)]
+enum GlancedEnding {
+    Responded(IgnoredAny),
+    Failed {
+        status: Option<u16>,
+        message: String,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+enum GlancedCall {
+    Made(IgnoredAny),
+    Settled(IgnoredAny),
+}
+
+impl GlancedFact {
+    fn trial(&self) -> Option<Trial> {
+        Some(match self {
+            GlancedFact::ModelCall(id, GlancedModelCall::Sent(_)) => Trial::Sent(*id),
+            GlancedFact::ModelCall(id, GlancedModelCall::Ended { ending }) => match ending {
+                GlancedEnding::Responded(_) => Trial::Responded(*id),
+                GlancedEnding::Failed {
+                    status: Some(status),
+                    message,
+                } => Trial::Failed(Refused {
+                    request: *id,
+                    status: *status,
+                    message: message.clone(),
+                }),
+                GlancedEnding::Failed { status: None, .. } => return None,
+            },
+            GlancedFact::Call(id, GlancedCall::Made(_)) => Trial::Made(*id),
+            GlancedFact::Call(id, GlancedCall::Settled(_)) => Trial::Settled(*id),
+        })
+    }
 }
 
 /// A request of a span on probation that the provider refused, in its
