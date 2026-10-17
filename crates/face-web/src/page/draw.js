@@ -24,7 +24,7 @@ export function drawMap() {
     if (!a) {
       a = el(n.kind === "task" ? "a" : "div", "node");
       a.append(el("span", "dot"), el("span", "name"));
-      $(".dot", a).append(el("span", "g"), el("span", "ring"));
+      $(".dot", a).append(el("span", "g"), el("span", "ring"), el("span", "phases"));
       if (n.kind === "task") {
         a.href = `#${id}`;
         a.addEventListener("click", (e) => { if (e.button || e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); if (!drag?.moved) go(id); });
@@ -50,9 +50,10 @@ export function drawMap() {
     if (n.kind === "task") {
       const t = n.t, l = look(t), root = roots.has(id), fc = folded.get(id), q = queue.indexOf(id);
       a.className = fc ? `node archived${l.cls.includes("failed") ? " failed" : ""}${faded}`
-        : `node ${l.cls}${t.origin === "fork" ? " fork" : ""}${q >= 0 ? " needs" : ""}${q === 0 ? " next" : ""}${trouble(t) ? " trouble" : ""}${root ? " root" : ""}${id === openId ? " selected" : ""}${faded}`;
+        : `node ${l.cls}${q >= 0 ? " needs" : ""}${q === 0 ? " next" : ""}${trouble(t) ? " trouble" : ""}${root ? " root" : ""}${id === openId ? " selected" : ""}${faded}`;
       a.style.setProperty("--d", `${root ? ROOT_DOT : DOT}px`);
       mark($(".g", a), l.cls === "paused" ? "pause" : glyph(t));
+      phases($(".phases", a), t.compactions || 0);
       $(".name", a).textContent = shortName(t);
       let more = $(".more", a);
       if (fc && fc.tasks.length > 1) {
@@ -66,6 +67,13 @@ export function drawMap() {
     }
   }
   if (tipFor) fillTip();
+}
+// The phases a context compacted away, as a trail of fading pips beside its
+// dot, the latest nearest: the same agent, earlier. A few say "several".
+function phases(p, n) {
+  n = Math.min(n, 4);
+  if (p.childElementCount === n) return;
+  p.replaceChildren(...Array.from({ length: n }, () => el("i")));
 }
 // What a dot shows: a letter, or one of the icons by its name.
 function mark(g, what) {
@@ -101,10 +109,16 @@ export function drawEdges() {
     // Out of the bottom of the source's dot, below its name, into the top of the target's.
     const sx = a.x, sy = shown.get(e.from).y + shown.get(e.from).h - 4;
     const dy = Math.max(18, (b.y - sy) / 2);
-    const path = svgEl("path");
-    path.setAttribute("d", b.y > sy ? `M${sx},${sy} C${sx},${sy + dy} ${b.x},${b.y - dy} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x + 60},${a.y} ${b.x + 60},${b.y} ${b.x},${b.y}`);
-    path.setAttribute("class", `edge ${e.kind}${e.flow ? " flow" : ""}${e.max ? " max" : ""}`);
-    paths.push(path);
+    const d = b.y > sy ? `M${sx},${sy} C${sx},${sy + dy} ${b.x},${b.y - dy} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x + 60},${a.y} ${b.x + 60},${b.y} ${b.x},${b.y}`;
+    const cls = `edge ${e.kind}${e.flow ? " flow" : ""}${e.max ? " max" : ""}`;
+    // A fork's edge is hollow: its owner's context, carried down into it.
+    // A fresh agent's is a line: it starts from its mandate alone.
+    for (const part of graph.nodes.get(e.to)?.t?.origin === "fork" ? [" tube", " core"] : [""]) {
+      const path = svgEl("path");
+      path.setAttribute("d", d);
+      path.setAttribute("class", cls + part);
+      paths.push(path);
+    }
   }
   edgesLayer.replaceChildren(...paths);
 }

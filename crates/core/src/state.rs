@@ -1410,6 +1410,16 @@ impl State {
         self.compactions.get(&entry)
     }
 
+    /// How many of `task`'s own compactions its context at `head` came
+    /// through: the phases before its current one. A fork's copy of its
+    /// parent's context does not count its parent's.
+    pub fn compactions_on(&self, task: TaskId, head: EntryId) -> usize {
+        self.compactions
+            .iter()
+            .filter(|(carry, c)| c.task == task && self.descends(head, **carry))
+            .count()
+    }
+
     /// Whether `call` has compacted its task: moving back to the head it
     /// replaced undoes it, and does not compact again.
     pub fn has_compacted(&self, call: CallId) -> bool {

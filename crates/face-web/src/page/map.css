@@ -21,6 +21,12 @@
   path.edge.continues { stroke-dasharray: 1.5 4.5; stroke-linecap: round; stroke: rgba(20, 20, 19, .28); }
   path.edge.flow { stroke: rgba(20, 20, 19, .62); stroke-dasharray: 2 7; stroke-linecap: round; stroke-width: 2; animation: flow .9s linear infinite; }
   path.edge.flow.max { stroke: var(--maroon); }
+  /* A fork's edge, hollow: a wide stroke with the ground down its middle,
+     or, while it is awaited, what flows along it. */
+  path.edge.tube { stroke-width: 5; stroke: rgba(20, 20, 19, .26); }
+  path.edge.tube.flow { stroke-dasharray: none; animation: none; }
+  path.edge.core { stroke-width: 2; stroke: var(--ground); }
+  path.edge.core.flow { stroke: rgba(20, 20, 19, .62); }
   @keyframes flow { to { stroke-dashoffset: 18; } }
 
   /* A node: a dot and its name. Its colour and motion say what it is doing;
@@ -36,8 +42,12 @@
   }
   .node:hover .dot { transform: scale(1.1); }
   .node .g svg { display: block; width: 1.3em; height: 1.3em; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
-  /* A fork: its owner's context, copied. Its dot is a copy, offset from the one behind it. */
-  .node.fork .dot { box-shadow: 4px -4px 0 -1.5px var(--paper), 4px -4px 0 0 rgba(20, 20, 19, .5); }
+  /* The phases it compacted away: fading pips beside the dot, the latest nearest. */
+  .node .phases { position: absolute; right: calc(100% + 9px); top: 50%; display: flex; flex-direction: row-reverse; gap: 3px; transform: translateY(-50%); pointer-events: none; }
+  .node .phases i { width: 5px; height: 5px; border-radius: 50%; background: rgba(20, 20, 19, .45); }
+  .node .phases i:nth-child(2) { opacity: .7; }
+  .node .phases i:nth-child(3) { opacity: .45; }
+  .node .phases i:nth-child(4) { opacity: .25; }
   .node .name { margin-top: 5px; font: 600 13.5px/1.2 var(--serif); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .node.root .name { font-size: 15.5px; }
   .node .ring { position: absolute; inset: -5px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
