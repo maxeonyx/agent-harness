@@ -73,8 +73,11 @@ async function transition(to) {
   const was = cardShown, keep = stay && was;
   stay = false;
   openId = to;
+  // Built before it is sized: a new chat's card is as tall as what it holds.
+  panel.hidden = false;
+  buildPanel(to);
   setSeam(seamFor(to));
-  if (!seam) { openId = null; return; }
+  if (!seam) { openId = null; panel.hidden = true; return; }
   const r = cardRect(seam);
   // Opened from the map, the card holds the node where it was on screen; a
   // task made from the open card (a new chat started, a chat continued, an
@@ -82,8 +85,6 @@ async function transition(to) {
   const at = keep ? { x: r.x + r.w / 2, y: r.y, sx: cam.x + (was.x + was.w / 2) * cam.k, sy: cam.y + was.y * cam.k }
     : to === NEW ? { x: newPoint.x, y: newPoint.y - 14, sx: newPoint.sx, sy: newPoint.sy - 14 } : heldAt(to);
   setFramed(false);
-  panel.hidden = false;
-  buildPanel(to);
   $("#empty").hidden = true;
   if (from) nodeEls.get(from)?.classList.remove("selected");
   nodeEls.get(to)?.classList.add("selected");

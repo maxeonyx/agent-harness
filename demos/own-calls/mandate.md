@@ -1,3 +1,4 @@
+Agent A: each line below is one response.
 tool read {"path": "shared.txt"}
 slow 1500 tool edit {"path": "shared.txt", "old": "draft", "new": "A's draft"} tool edit {"path": "shared.txt", "old": "draft\n", "new": "draft, by A\n"}
 tool edit {"path": "shared.txt", "old": "draft", "new": "A's draft"}

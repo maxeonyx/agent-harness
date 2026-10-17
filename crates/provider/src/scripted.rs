@@ -324,7 +324,7 @@ impl Events {
     fn new(request: usize) -> Events {
         let mut events = Events(VecDeque::new());
         let usage = json!({
-            "input_tokens": request / 4,
+            "input_tokens": request.div_ceil(4),
             "output_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
@@ -369,7 +369,7 @@ impl Events {
     /// A whole reply of one text block.
     fn text(&mut self, text: &str, split: &str, stop: &str) {
         self.text_block(text, split);
-        self.end(stop, text.len() / 4);
+        self.end(stop, text.len().div_ceil(4));
     }
 
     /// A whole reply of tool uses, each id unique in its conversation of
@@ -391,7 +391,11 @@ impl Events {
                 json!({"type": "content_block_stop", "index": index}),
             );
         }
-        let output = uses.iter().map(|(_, input)| input.len()).sum::<usize>() / 4;
+        let output = uses
+            .iter()
+            .map(|(name, input)| name.len() + input.len())
+            .sum::<usize>()
+            .div_ceil(4);
         self.end("tool_use", output);
     }
 

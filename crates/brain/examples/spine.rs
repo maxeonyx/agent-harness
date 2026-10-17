@@ -48,29 +48,22 @@ fn main() {
         .status()
         .unwrap();
     assert!(made.success(), "the scratch repo");
-    fs::write(
-        dir.join("mandate.md"),
-        "This chat is a demonstration of the harness. Max sends short messages: do exactly what each asks, \
-in as few words as you can. Now reply only `ready`, and end your turn.",
-    )
-    .unwrap();
     let db = dir.join("brain.sqlite");
-    let first = [
-        "--workspace",
-        "target/spine-demo/repo",
-        "--mandate",
-        "target/spine-demo/mandate.md",
-        "--role",
-        "engineer",
-        "--name",
-        "chat",
-    ];
 
     title("launch 1: a new database, and a chat with Max");
-    let mut brain = Brain::launch(&db, port, &first, 1);
-    brain.wait("responded, EndTurn");
+    let mut brain = Brain::launch(&db, port, 1);
     let mut pc = Device::connect("pc", port);
     let mut phone = Device::connect("phone", port);
+    pc.pump_until(|d| d.environment("engineer").is_some());
+    let engineer = pc.environment("engineer").unwrap();
+    let repo = fs::canonicalize(dir.join("repo")).unwrap();
+    pc.chat(
+        engineer,
+        repo.to_str(),
+        "This chat is a demonstration of the harness. Max sends short messages: do exactly what each asks, \
+in as few words as you can. Now reply only `ready`, and end your turn.",
+    );
+    brain.wait("responded, EndTurn");
     pc.pump_until(|d| d.session().is_some());
     phone.pump_until(|d| d.session().is_some());
     let session = pc.session().unwrap();
@@ -144,7 +137,7 @@ in as few words as you can. Now reply only `ready`, and end your turn.",
     thread::sleep(Duration::from_secs(1));
     brain.signal("INT");
     brain.wait_exit();
-    let mut brain = Brain::launch(&db, port, &[], 2);
+    let mut brain = Brain::launch(&db, port, 2);
     pc.reconnect(port);
     phone.reconnect(port);
     let after = brain.wait("responded");
@@ -161,7 +154,7 @@ in as few words as you can. Now reply only `ready`, and end your turn.",
     thread::sleep(Duration::from_millis(100));
     brain.signal("INT");
     brain.wait_exit();
-    let mut brain = Brain::launch(&db, port, &[], 3);
+    let mut brain = Brain::launch(&db, port, 3);
     pc.reconnect(port);
     phone.reconnect(port);
     println!("  agent, after the restart: {}", brain.wait("responded"));
@@ -200,12 +193,11 @@ struct Brain {
 }
 
 impl Brain {
-    fn launch(db: &Path, port: u16, extra: &[&str], n: u32) -> Brain {
+    fn launch(db: &Path, port: u16, n: u32) -> Brain {
         let mut child = Command::new("target/release/harness-brain")
             .args(["--roles", "roles", "--db"])
             .arg(db)
             .args(["--port", &port.to_string()])
-            .args(extra)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

@@ -120,7 +120,7 @@ export function trouble(t) {
 }
 
 // ─── The whole page, from the view ─────────────────────────────────────────
-let busy = false, again = false, shownBefore = false;
+let shownBefore = false;
 // The view folded into the map: what it is, where everything goes.
 export async function rebuild() {
   derive();
@@ -129,22 +129,27 @@ export async function rebuild() {
   drawMap();
   return changed;
 }
-export async function refresh() {
-  if (!view) return;
-  if (busy) { again = true; return; }
-  busy = true;
-  try {
-    // A card opening or closing finishes before the map moves under it.
-    await moving;
-    const changed = await rebuild();
-    glide(null, { T: shownBefore ? 420 : 0 });
-    if (changed && framed && !openId) fit(shownBefore);
-    shownBefore = true;
-    render();
-  } finally {
-    busy = false;
-    if (again) { again = false; refresh(); }
-  }
+// The map redrawn from the view. It resolves once a layout that began after
+// the call has landed, so a caller can rely on what this view put there:
+// a call while one runs waits for the one after it, which all such calls share.
+let running = null, queued = null;
+export function refresh() {
+  if (!view) return Promise.resolve();
+  if (running) return queued ??= running.catch(() => {}).then(() => { queued = null; return refresh(); });
+  running = (async () => {
+    try {
+      // A card opening or closing finishes before the map moves under it.
+      await moving;
+      const changed = await rebuild();
+      glide(null, { T: shownBefore ? 420 : 0 });
+      if (changed && framed && !openId) fit(shownBefore);
+      shownBefore = true;
+      render();
+    } finally {
+      running = null;
+    }
+  })();
+  return running;
 }
 
 export function render() {

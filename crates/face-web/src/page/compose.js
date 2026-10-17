@@ -398,10 +398,6 @@ function autosize() {
   box.style.height = "auto";
   const h = Math.min(box.scrollHeight, innerHeight * .4);
   box.style.height = `${h}px`;
-  // A new chat's card keeps its size: the box scrolls rather than push the
-  // buttons under it out of the card.
-  const over = box.dataset.key === NEW ? panel.scrollHeight - panel.clientHeight : 0;
-  if (over > 0) box.style.height = `${Math.max(h - over, 40)}px`;
 }
 
 // Sending: to a task working or between turns, the draft's Send; to a task

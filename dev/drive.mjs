@@ -492,4 +492,6 @@ try {
   console.error(e.message);
   process.exitCode = 1;
 }
-process.exit();
+// Exit once what was printed has been written: a pipe takes it in
+// asynchronously, and exiting at once would cut a long log short.
+process.stdout.write("", () => process.exit());
