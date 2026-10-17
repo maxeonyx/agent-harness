@@ -118,23 +118,23 @@ impl<K: Ord + Clone, R: Clone + PartialEq, F: Clone + PartialEq> Publisher<K, R,
 
 /// A follower's side of its view: the rows it holds, as of the decider's
 /// time it last heard of.
-pub struct Replica<K: Ord, R, F> {
+pub struct Mirror<K: Ord, R, F> {
     view: Option<View<K, R, F>>,
 }
 
-impl<K: Ord, R, F> Default for Replica<K, R, F> {
+impl<K: Ord, R, F> Default for Mirror<K, R, F> {
     fn default() -> Self {
-        Replica { view: None }
+        Mirror { view: None }
     }
 }
 
-impl<K: Ord, R, F> Replica<K, R, F> {
+impl<K: Ord, R, F> Mirror<K, R, F> {
     /// The view held, once one has arrived.
     pub fn view(&self) -> Option<&View<K, R, F>> {
         self.view.as_ref()
     }
 
-    /// Take in what the decider shipped. A step for a view this replica
+    /// Take in what the decider shipped. A step for a view this mirror
     /// does not hold is ignored: the decider ships a whole view on connect.
     pub fn apply<L>(&mut self, down: Down<K, R, F, L>) {
         match down {

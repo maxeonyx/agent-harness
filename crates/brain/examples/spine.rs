@@ -1,5 +1,5 @@
 //! The spine, end to end: real brains on one database, and two of Max's
-//! tabs (his PC and his phone) as places on the face's link, played by the
+//! tabs (his PC and his phone) as replicas on the face's link, played by the
 //! same `Tab` the page runs as wasm. See `demos/spine`.
 //!
 //! 1. The phone dictates a draft; the PC finishes it and sends it. Both

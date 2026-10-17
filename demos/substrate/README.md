@@ -4,7 +4,7 @@
 demos/substrate/run.sh
 ```
 
-The brain, Max's PC and his phone are three places, each with its own storage (in memory, cloned to simulate a crash). Each device writes its own records first and ships them up; the brain decides them in its own order and ships each device the rows it shows, with its standing: which of the device's records the brain has included, and which it refused and why. Nothing else crosses a link: no request, no reply, no acknowledgement.
+The brain, Max's PC and his phone are three replicas, each with its own storage (in memory, cloned to simulate a crash). Each device writes its own records first and ships them up; the brain decides them in its own order and ships each device the rows it shows, with its standing: which of the device's records the brain has included, and which it refused and why. Nothing else crosses a link: no request, no reply, no acknowledgement.
 
 What it shows, in order:
 
@@ -17,6 +17,6 @@ What it shows, in order:
 7. A hundred clicks between sessions add two records to the brain, since only the newest focus per face is kept.
 8. Streamed tokens ride the same link, take no time and are never stored.
 9. The brain crashes and restarts from what it stored. Its replayed state equals its state before the crash. A record the PC sends again is skipped, and the PC reconnects to a whole view.
-10. The phone's storage is wiped and it opens with its old place id. The brain holds more of the phone than the phone does, so the phone continues as a new place instead of reusing times the brain already holds.
+10. The phone's storage is wiped and it opens with its old replica id. The brain holds more of the phone than the phone does, so the phone continues as a new replica instead of reusing times the brain already holds.
 
 Anything wrong fails an assertion.

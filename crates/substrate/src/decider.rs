@@ -4,15 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::record::{Durability, Folding, Included, Record, Schema, What};
 use crate::storage::Storage;
-use crate::time::{PlaceId, Time, Timestamp};
+use crate::time::{ReplicaId, Time, Timestamp};
 
-/// The place that decides: it folds its own records and its followers'
+/// The replica that decides: it folds its own records and its followers'
 /// into one state, in one order of its own, and records that order.
 ///
-/// **Concept.** On main, the brain. Every rule that two places could
+/// **Concept.** On main, the brain. Every rule that two replicas could
 /// otherwise break concurrently (a task ends once, a draft is delivered
 /// once, a limb settles only its own calls) is checked here, in the order
-/// this place includes records, so concurrent acts never need merging: the
+/// this replica includes records, so concurrent acts never need merging: the
 /// first included wins and the second is refused in band. A decider
 /// holds what it includes for as long as its schema's [`Durability`] says,
 /// and reopening folds exactly what it holds, following the verdicts it
@@ -22,17 +22,17 @@ use crate::time::{PlaceId, Time, Timestamp};
 /// **Vision.** One decider per object (the overview's aspect 3), and on
 /// main the brain owns every shared object; a brain that "picks up where it
 /// left off"; Bailis's invariant confluence: what merges needs no decider,
-/// and what does not is decided by the one place that owns it.
+/// and what does not is decided by the one replica that owns it.
 pub struct Decider<S: Schema, St: Storage<S>> {
-    here: PlaceId,
+    here: ReplicaId,
     next: u64,
     state: S::State,
-    standing: BTreeMap<PlaceId, Standing<S::Refusal>>,
+    standing: BTreeMap<ReplicaId, Standing<S::Refusal>>,
     /// The record holding each [`Durability::Latest`] key.
     latest: BTreeMap<S::Key, Holder>,
     /// Each follower's newest [`Included`], which says how far it was
     /// included, so it is kept even once its record is collected.
-    last: BTreeMap<PlaceId, Last>,
+    last: BTreeMap<ReplicaId, Last>,
     storage: St,
 }
 
@@ -110,8 +110,8 @@ struct Last {
 struct Plan<K> {
     drop: Vec<Time>,
     latest: Option<(K, Holder)>,
-    orphan: Option<PlaceId>,
-    last: Option<(PlaceId, Last)>,
+    orphan: Option<ReplicaId>,
+    last: Option<(ReplicaId, Last)>,
 }
 
 impl<R> Default for Standing<R> {
@@ -142,13 +142,13 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
     /// and returned, for the embedding to surface.
     #[allow(clippy::type_complexity)]
     pub fn open(
-        here: PlaceId,
+        here: ReplicaId,
         storage: St,
     ) -> Result<(Self, Vec<Divergence<S::Refusal>>), St::Error> {
         let mut held = BTreeMap::new();
         let mut own = BTreeMap::new();
         for record in storage.load()? {
-            if record.at.place == here {
+            if record.at.replica == here {
                 own.insert(record.at.n, record);
             } else {
                 held.insert(record.at, record);
@@ -202,13 +202,13 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                 at,
                 included: included.map(|_| record.at.n),
             };
-            let include = included.map(|i| (i.of.place, i.refused.is_some()));
+            let include = included.map(|i| (i.of.replica, i.refused.is_some()));
             let plan = decider.plan(durability, holder, include);
             decider.settle(plan);
             if let Some(included) = included {
                 decider.stand(included);
                 if !held.contains_key(&included.of)
-                    && let Some(last) = decider.last.get_mut(&included.of.place)
+                    && let Some(last) = decider.last.get_mut(&included.of.replica)
                 {
                     last.held = false;
                 }
@@ -217,14 +217,14 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
         Ok((decider, divergences))
     }
 
-    pub fn here(&self) -> PlaceId {
+    pub fn here(&self) -> ReplicaId {
         self.here
     }
 
-    /// This place's newest time: what a view of it is as of.
+    /// This replica's newest time: what a view of it is as of.
     pub fn head(&self) -> Time {
         Time {
-            place: self.here,
+            replica: self.here,
             n: self.next - 1,
         }
     }
@@ -233,7 +233,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
     /// creates can be named before it is said.
     pub fn next(&self) -> Time {
         Time {
-            place: self.here,
+            replica: self.here,
             n: self.next,
         }
     }
@@ -247,18 +247,18 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
         &self.storage
     }
 
-    /// How far this decider has included every place it has included
+    /// How far this decider has included every replica it has included
     /// anything of.
-    pub fn standings(&self) -> &BTreeMap<PlaceId, Standing<S::Refusal>> {
+    pub fn standings(&self) -> &BTreeMap<ReplicaId, Standing<S::Refusal>> {
         &self.standing
     }
 
-    /// How far this decider has included `place`, and what it refused.
-    pub fn standing(&self, place: PlaceId) -> Standing<S::Refusal> {
-        self.standing.get(&place).cloned().unwrap_or_default()
+    /// How far this decider has included `replica`, and what it refused.
+    pub fn standing(&self, replica: ReplicaId) -> Standing<S::Refusal> {
+        self.standing.get(&replica).cloned().unwrap_or_default()
     }
 
-    /// Write this place's own next record: `said` is given the record's time,
+    /// Write this replica's own next record: `said` is given the record's time,
     /// so what it creates is named by it. Refused records are not written:
     /// the decider's own refusal is a bug in its writer, not a race.
     pub fn say(
@@ -267,7 +267,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
         said: impl FnOnce(Time) -> S::Said,
     ) -> Result<Time, Error<S::Refusal, St::Error>> {
         let at = Time {
-            place: self.here,
+            replica: self.here,
             n: self.next,
         };
         let said = said(at);
@@ -296,7 +296,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
     }
 
     /// Include a follower's record: fold it, or record why not, in a record
-    /// of this place's own at the returned time. A record already included
+    /// of this replica's own at the returned time. A record already included
     /// (a resend after a reconnect) is skipped and returns `None`. A gap
     /// before it (records the follower collapsed, or a decider restored
     /// from a backup) is not waited on: the follower's own [`crate::Log`]
@@ -306,12 +306,12 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
         clock: Timestamp,
         record: Record<S>,
     ) -> Result<Option<Time>, St::Error> {
-        let from = record.at.place;
+        let from = record.at.replica;
         if from == self.here || record.at.n <= self.standing(from).upto {
             return Ok(None);
         }
         let here = Time {
-            place: self.here,
+            replica: self.here,
             n: self.next,
         };
         let mut state = self.state.clone();
@@ -358,7 +358,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
     }
 
     fn stand(&mut self, included: &Included<S::Refusal>) {
-        let standing = self.standing.entry(included.of.place).or_default();
+        let standing = self.standing.entry(included.of.replica).or_default();
         standing.upto = included.of.n;
         if let Some(why) = &included.refused {
             standing.refused.insert(included.of.n, why.clone());
@@ -371,7 +371,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
         &self,
         durability: Option<Durability<S::Key>>,
         holder: Holder,
-        include: Option<(PlaceId, bool)>,
+        include: Option<(ReplicaId, bool)>,
     ) -> Plan<S::Key> {
         let mut plan = Plan {
             drop: Vec::new(),
@@ -383,9 +383,9 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
             if let Some(old) = self.latest.get(&key) {
                 plan.drop.push(old.at);
                 if let Some(m) = old.included {
-                    let place = old.at.place;
-                    if self.last.get(&place).is_some_and(|l| l.n == m) {
-                        plan.orphan = Some(place);
+                    let replica = old.at.replica;
+                    if self.last.get(&replica).is_some_and(|l| l.n == m) {
+                        plan.orphan = Some(replica);
                     } else {
                         plan.drop.push(self.time(m));
                     }
@@ -393,12 +393,12 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
             }
             plan.latest = Some((key, holder));
         }
-        if let (Some((place, refused)), Some(n)) = (include, holder.included) {
-            if let Some(last) = self.last.get(&place) {
-                let orphaned = plan.orphan == Some(place) || !last.held;
+        if let (Some((replica, refused)), Some(n)) = (include, holder.included) {
+            if let Some(last) = self.last.get(&replica) {
+                let orphaned = plan.orphan == Some(replica) || !last.held;
                 if orphaned && !last.refused {
                     plan.drop.push(self.time(last.n));
-                    if plan.orphan == Some(place) {
+                    if plan.orphan == Some(replica) {
                         plan.orphan = None;
                     }
                 }
@@ -408,28 +408,28 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                 held: true,
                 refused,
             };
-            plan.last = Some((place, last));
+            plan.last = Some((replica, last));
         }
         plan
     }
 
     fn settle(&mut self, plan: Plan<S::Key>) {
-        if let Some(place) = plan.orphan
-            && let Some(last) = self.last.get_mut(&place)
+        if let Some(replica) = plan.orphan
+            && let Some(last) = self.last.get_mut(&replica)
         {
             last.held = false;
         }
         if let Some((key, holder)) = plan.latest {
             self.latest.insert(key, holder);
         }
-        if let Some((place, last)) = plan.last {
-            self.last.insert(place, last);
+        if let Some((replica, last)) = plan.last {
+            self.last.insert(replica, last);
         }
     }
 
     fn time(&self, n: u64) -> Time {
         Time {
-            place: self.here,
+            replica: self.here,
             n,
         }
     }

@@ -4,7 +4,7 @@
 demos/face-controls/run.sh
 ```
 
-It starts a real brain run (Sonnet and Opus) on the brain demo's scratch repo and mandate (`demos/brain/scratch.sh`, `demos/brain/mandate.md`), then drives it as Max, only from one tab: a place on the face's link, `wss://…/link?place=<id>`, played by the same `Tab` the page runs as wasm. Watch it at https://mx-hv-mj.local:4400 while it runs (another port: `PORT=…`). It takes a minute or two and ends when the root has its result. The script is `crates/brain/examples/face_controls.rs`; its files are in `target/face-controls-demo`.
+It starts a real brain run (Sonnet and Opus) on the brain demo's scratch repo and mandate (`demos/brain/scratch.sh`, `demos/brain/mandate.md`), then drives it as Max, only from one tab: a replica on the face's link, `wss://…/link?replica=<id>`, played by the same `Tab` the page runs as wasm. Watch it at https://mx-hv-mj.local:4400 while it runs (another port: `PORT=…`). It takes a minute or two and ends when the root has its result. The script is `crates/brain/examples/face_controls.rs`; its files are in `target/face-controls-demo`.
 
 What it does, in order:
 

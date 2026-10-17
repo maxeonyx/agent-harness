@@ -16,7 +16,7 @@ use crate::environment::{
 };
 use crate::fact::{Author, Fact, Launched, Refusal, Rejected, Stated};
 use crate::id::{
-    CallId, DeliveryId, EnvironmentId, EventId, LimbId, ModelCallId, PlaceId, Seq, TaskId, Time,
+    CallId, DeliveryId, EnvironmentId, EventId, LimbId, ModelCallId, ReplicaId, Seq, TaskId, Time,
     Timestamp, ValueId,
 };
 use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
@@ -113,9 +113,9 @@ pub struct State {
     /// context (a fork, resume or aside) starts with its source's set, shared.
     heard: OrdMap<TaskId, OrdSet<ValueId>>,
     ranking: Ranking,
-    focus: OrdMap<PlaceId, TaskId>,
-    /// The places the brain accepted as Max's faces.
-    faces: OrdSet<PlaceId>,
+    focus: OrdMap<ReplicaId, TaskId>,
+    /// The replicas the brain accepted as Max's faces.
+    faces: OrdSet<ReplicaId>,
     drafts: OrdMap<DeliveryId, Draft>,
     /// Every value a kept record carried, so a later fact may name it
     /// without carrying it again. A value only a collected record carried
@@ -213,9 +213,9 @@ pub struct Dispatch {
     pub first: Mark,
     /// The latest dispatch.
     pub last: Mark,
-    /// The place (the limb's running instance) it was last sent to; `None`
+    /// The replica (the limb's running instance) it was last sent to; `None`
     /// for a limb the brain runs.
-    pub instance: Option<PlaceId>,
+    pub instance: Option<ReplicaId>,
 }
 
 /// How a call ended, and when.
@@ -429,7 +429,7 @@ impl State {
     }
 
     /// Fold one record of the brain's, or refuse it: who stated it, from
-    /// the place it came from; the values its facts name, each carried with
+    /// the replica it came from; the values its facts name, each carried with
     /// it or by a kept record; then each fact, in order. On a refusal this
     /// state may be part way through the record, and the decider drops it.
     pub(crate) fn fold(&mut self, folding: Folding<'_, Harness>) -> Result<(), Refusal> {
@@ -447,14 +447,14 @@ impl State {
         for (i, fact) in said.facts.iter().enumerate() {
             if let Fact::Seen(time) = fact {
                 // A view of this brain, as of a time it has written.
-                if seen.is_some() || time.place != here.place || time.n >= here.n {
+                if seen.is_some() || time.replica != here.replica || time.n >= here.n {
                     return Err(refuse(i, Rejected::Author));
                 }
                 seen = Some(*time);
             }
         }
         let by = self
-            .author(here.place, at.place)
+            .author(here.replica, at.replica)
             .ok_or(refuse(0, Rejected::Author))?;
         let given: BTreeMap<ValueId, usize> =
             said.values.iter().map(|v| (v.id(), v.len())).collect();
@@ -520,8 +520,8 @@ impl State {
     }
 
     /// Who speaks from `from` to the brain at `here`: the brain itself, the
-    /// limb the brain last connected as that place, or Max at a face.
-    fn author(&self, here: PlaceId, from: PlaceId) -> Option<Author> {
+    /// limb the brain last connected as that replica, or Max at a face.
+    fn author(&self, here: ReplicaId, from: ReplicaId) -> Option<Author> {
         if from == here {
             return Some(Author::Brain);
         }
@@ -567,7 +567,7 @@ impl State {
             }
             DraftEvent::Text(text) => {
                 let draft = self.drafts.get_mut(&id).ok_or(Rejected::Unknown)?;
-                let face = record.event.at.place;
+                let face = record.event.at.replica;
                 if let Some(typed) = draft.typed
                     && typed.by != face
                     && record.seen.is_none_or(|seen| seen.n < typed.at.seq.n)
@@ -613,7 +613,7 @@ impl State {
                         };
                         draft.text = Some(*text);
                         draft.typed = Some(Typed {
-                            by: record.event.at.place,
+                            by: record.event.at.replica,
                             at: Mark::of(record),
                         });
                         match self.deliver(&delivery, &as_delivery) {
@@ -730,8 +730,8 @@ impl State {
                 );
             }
             Fact::Ranking(ranking) => self.ranking = ranking.clone(),
-            Fact::Face(place) => {
-                self.faces.insert(*place);
+            Fact::Face(replica) => {
+                self.faces.insert(*replica);
             }
             Fact::Seen(_) => {}
             Fact::Draft(id, event) => self.fold_draft(*id, event, record)?,
@@ -739,7 +739,7 @@ impl State {
                 let Author::Max = record.by else {
                     return Err(Rejected::Author);
                 };
-                let face = record.event.at.place;
+                let face = record.event.at.replica;
                 match focus.task {
                     Some(task) => {
                         self.focus.insert(face, task);
@@ -1783,8 +1783,8 @@ impl State {
         rows
     }
 
-    /// The place a limb is connected as under this brain, and since when.
-    pub fn connected(&self, limb: LimbId) -> Option<(PlaceId, Mark)> {
+    /// The replica a limb is connected as under this brain, and since when.
+    pub fn connected(&self, limb: LimbId) -> Option<(ReplicaId, Mark)> {
         match self.reach.get(&limb)? {
             Reached {
                 reach: Reach::Connected { instance },
@@ -1805,13 +1805,13 @@ impl State {
     }
 
     /// The task a face shows Max.
-    pub fn focus(&self, face: PlaceId) -> Option<TaskId> {
+    pub fn focus(&self, face: ReplicaId) -> Option<TaskId> {
         self.focus.get(&face).copied()
     }
 
-    /// Whether the brain accepted `place` as one of Max's faces.
-    pub fn is_face(&self, place: PlaceId) -> bool {
-        self.faces.contains(&place)
+    /// Whether the brain accepted `replica` as one of Max's faces.
+    pub fn is_face(&self, replica: ReplicaId) -> bool {
+        self.faces.contains(&replica)
     }
 
     pub fn draft(&self, id: DeliveryId) -> Option<&Draft> {

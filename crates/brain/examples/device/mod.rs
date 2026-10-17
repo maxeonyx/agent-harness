@@ -1,5 +1,5 @@
 //! One of Max's devices, played by the same `Tab` the page runs as wasm:
-//! a place on the face's link, over TLS checked against the dev CA.
+//! a replica on the face's link, over TLS checked against the dev CA.
 
 // Shared by the examples; each uses part of it.
 #![allow(dead_code)]
@@ -15,7 +15,7 @@ use std::{env, fs, thread};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::draft::DraftEvent;
 use harness_core::fact::{Batch, Fact};
-use harness_core::id::{DeliveryId, ModelCallId, PlaceId, TaskId, Timestamp};
+use harness_core::id::{DeliveryId, ModelCallId, ReplicaId, TaskId, Timestamp};
 use harness_core::live::Live;
 use harness_core::task::{Drain, Stopper, TaskEvent};
 use harness_core::value::Bytes;
@@ -52,7 +52,7 @@ pub fn status(device: &Device, n: u64) -> String {
 
 type Tls = StreamOwned<ClientConnection, TcpStream>;
 
-/// One of Max's devices: a tab, as a place, on its own link.
+/// One of Max's devices: a tab, as a replica, on its own link.
 pub struct Device {
     pub name: &'static str,
     pub tab: Tab,
@@ -61,10 +61,10 @@ pub struct Device {
 
 impl Device {
     pub fn connect(name: &'static str, port: u16) -> Device {
-        let place = PlaceId(u64::from_le_bytes(random()));
-        let tab = Tab::open(place, Vec::new());
-        let socket = link(place, port).expect("the face links");
-        println!("  {name}: tab {place} linked");
+        let replica = ReplicaId(u64::from_le_bytes(random()));
+        let tab = Tab::open(replica, Vec::new());
+        let socket = link(replica, port).expect("the face links");
+        println!("  {name}: tab {replica} linked");
         Device { name, tab, socket }
     }
 
@@ -242,7 +242,7 @@ fn random() -> [u8; 8] {
 }
 
 /// A tab's link to the face at `port`, over TLS checked against the dev CA.
-fn link(place: PlaceId, port: u16) -> Result<WebSocket<Tls>, String> {
+fn link(replica: ReplicaId, port: u16) -> Result<WebSocket<Tls>, String> {
     let home = env::var("HOME").unwrap();
     let ca = Path::new(&home).join(".config/dev-certs/shared-local/ca/dev-ca.crt");
     let mut roots = RootCertStore::empty();
@@ -260,7 +260,7 @@ fn link(place: PlaceId, port: u16) -> Result<WebSocket<Tls>, String> {
         .unwrap();
     let name = ServerName::try_from(HOST).unwrap();
     let tls = StreamOwned::new(ClientConnection::new(Arc::new(config), name).unwrap(), tcp);
-    let url = format!("wss://{HOST}:{port}/link?place={place}");
+    let url = format!("wss://{HOST}:{port}/link?replica={replica}");
     let mut attempt = tungstenite::client::client(url.as_str(), tls);
     loop {
         match attempt {

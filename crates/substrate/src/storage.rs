@@ -5,13 +5,13 @@ use std::fmt;
 use crate::record::{Record, Schema};
 use crate::time::Time;
 
-/// Where a place keeps the records it holds: its own, and those it has
+/// Where a replica keeps the records it holds: its own, and those it has
 /// included. The brain's is SQLite, a limb's its state directory, a tab's
 /// IndexedDB.
 ///
 /// **Concept.** A set of records keyed by time, changed atomically. The
 /// substrate decides what to keep and calls [`Storage::commit`] before it
-/// lets anything take effect, so a place never acts on a record it has not
+/// lets anything take effect, so a replica never acts on a record it has not
 /// stored, and a crash at any point leaves storage as of a whole commit.
 pub trait Storage<S: Schema> {
     type Error: fmt::Debug;
@@ -23,9 +23,9 @@ pub trait Storage<S: Schema> {
     fn commit(&mut self, put: &[Record<S>], drop: &[Time]) -> Result<(), Self::Error>;
 }
 
-/// Storage in memory: a place's storage for a demonstration, and a place
+/// Storage in memory: a replica's storage for a demonstration, and a replica
 /// that is gone when its process is (a tab without IndexedDB). Cloning it
-/// is a crash: the clone opens as the place would after a restart.
+/// is a crash: the clone opens as the replica would after a restart.
 #[derive(Clone, Debug)]
 pub struct Memory<S: Schema> {
     records: BTreeMap<Time, Record<S>>,

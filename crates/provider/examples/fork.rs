@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::context::{Entry, EntryId, Message, Role, Root};
-use harness_core::id::{ModelCallId, PlaceId, TaskId, ValueId};
+use harness_core::id::{ModelCallId, ReplicaId, TaskId, ValueId};
 use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall};
 use harness_provider::{Client, Finished, IDENTITY, Login, Progress};
@@ -17,8 +17,8 @@ use serde_json::json;
 
 /// What the journal and the value store hold, in miniature: the entries the
 /// fold has learnt and the bytes they name.
-/// The place this example's ids are of: it records nothing.
-const EXAMPLE: PlaceId = PlaceId(1);
+/// The replica this example's ids are of: it records nothing.
+const EXAMPLE: ReplicaId = ReplicaId(1);
 
 #[derive(Default)]
 struct Store {

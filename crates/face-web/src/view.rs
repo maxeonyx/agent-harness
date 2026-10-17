@@ -470,7 +470,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         }
         Fact::Ranking(r) => format!("queue ranked: {} placed", r.order.len()),
         Fact::Focus(_) => "a face changed focus".into(),
-        Fact::Face(place) => format!("tab {place} is Max's"),
+        Fact::Face(replica) => format!("tab {replica} is Max's"),
         Fact::Seen(at) => format!("as seen at {at}"),
         Fact::Draft(id, event) => {
             use harness_core::draft::DraftEvent as E;

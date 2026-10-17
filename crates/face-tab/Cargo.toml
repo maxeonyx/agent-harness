@@ -3,7 +3,7 @@ name = "harness-face-tab"
 version = "0.0.0"
 edition.workspace = true
 license.workspace = true
-description = "A browser tab as a place on the substrate: the rows a tab is shown, and the tab itself, built for wasm32 and run in the page."
+description = "A browser tab as a replica on the substrate: the rows a tab is shown, and the tab itself, built for wasm32 and run in the page."
 
 [lib]
 crate-type = ["rlib", "cdylib"]

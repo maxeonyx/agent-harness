@@ -1,9 +1,9 @@
 //! The harness's web face: Max's work as a map of tasks, each opening into
-//! the log of what it did, served to every tab as a place on the substrate.
+//! the log of what it did, served to every tab as a replica on the substrate.
 //!
-//! **Each tab is a place.** The page runs `harness-face-tab` as wasm: the
+//! **Each tab is a replica.** The page runs `harness-face-tab` as wasm: the
 //! tab's own log, kept in IndexedDB, and its replica of the rows this face
-//! derives for it. One WebSocket per tab, `/link?place=<id>`, carries the
+//! derives for it. One WebSocket per tab, `/link?replica=<id>`, carries the
 //! substrate's [`Up`] and [`Down`] as JSON. What Max does is a record at his
 //! tab: every [`Up::Record`] goes to the brain ([`Wiring::include`]), which
 //! answers only with what it folds. So a refusal is in band, in the tab's
@@ -11,7 +11,7 @@
 //! to a request, because there is no request.
 //!
 //! **Rows.** After every fold the brain hands the face a [`Folded`]: the
-//! state, the brain time it is as of, and every place's standing. The face
+//! state, the brain time it is as of, and every replica's standing. The face
 //! derives the rows once ([`view::rows`]: each task, each scope, the queue,
 //! the harness, Max's drafts), and each link's [`Publisher`] ships its tab
 //! what changed: a whole [`View`] on connecting, then steps. Nothing about
@@ -56,7 +56,7 @@ use harness_core::call::Caller;
 use harness_core::context::{Entry, EntryId, Note, Rendered};
 use harness_core::delivery::{Content, Delivery};
 use harness_core::fact::Refusal;
-use harness_core::id::{PlaceId, Time, Timestamp, ValueId};
+use harness_core::id::{ReplicaId, Time, Timestamp, ValueId};
 use harness_core::schema::Record;
 use harness_core::state::{Delivered, State};
 use harness_face_tab::{Down, FaceKey, FaceRow, Up, View};
@@ -91,8 +91,8 @@ pub struct Folded {
     pub state: State,
     /// The brain's time the state is as of: its head.
     pub as_of: Time,
-    /// How far the brain has included each place it holds records of.
-    pub standing: BTreeMap<PlaceId, Standing<Refusal>>,
+    /// How far the brain has included each replica it holds records of.
+    pub standing: BTreeMap<ReplicaId, Standing<Refusal>>,
 }
 
 /// A face over one brain: follows its folds and serves the page.
@@ -110,7 +110,7 @@ pub struct Face<S> {
 struct Shown {
     as_of: Time,
     rows: BTreeMap<FaceKey, FaceRow>,
-    standing: BTreeMap<PlaceId, Standing<Refusal>>,
+    standing: BTreeMap<ReplicaId, Standing<Refusal>>,
 }
 
 /// How long a link waits for its tab before looking for something to
@@ -188,14 +188,14 @@ impl<S: Source> Face<S> {
         }
     }
 
-    /// A tab's link: `?place=<id>`. Its records go to the brain; its view,
+    /// A tab's link: `?replica=<id>`. Its records go to the brain; its view,
     /// and live progress, come back.
     fn link(&self, mut stream: impl Socket, request: &http::Request) -> io::Result<()> {
-        let place = request
-            .query("place")
-            .and_then(|p| p.parse::<PlaceId>().ok());
-        let (Some(place), Some(key)) = (place, &request.websocket_key) else {
-            return http::refuse(&mut stream, "400 Bad Request", "expected ?place=<id>");
+        let replica = request
+            .query("replica")
+            .and_then(|p| p.parse::<ReplicaId>().ok());
+        let (Some(replica), Some(key)) = (replica, &request.websocket_key) else {
+            return http::refuse(&mut stream, "400 Bad Request", "expected ?replica=<id>");
         };
         http::accept_websocket(&mut stream, key)?;
         stream.set_read_timeout(Some(TURN))?;
@@ -207,13 +207,13 @@ impl<S: Source> Face<S> {
         loop {
             match tab.read() {
                 Ok(Message::Text(text)) => match serde_json::from_str::<Up>(&text) {
-                    Ok(Up::Record(record)) if record.at.place == place => {
+                    Ok(Up::Record(record)) if record.at.replica == replica => {
                         if let Some(include) = &self.wiring.include {
                             include(record);
                         }
                     }
                     Ok(Up::Live(_)) => {}
-                    // A link speaks for its own place, in the schema's words.
+                    // A link speaks for its own replica, in the schema's words.
                     _ => return Ok(()),
                 },
                 Ok(Message::Close(_)) => return Ok(()),
@@ -228,7 +228,7 @@ impl<S: Source> Face<S> {
             {
                 let view = View {
                     as_of: shown.as_of,
-                    standing: shown.standing.get(&place).cloned().unwrap_or_default(),
+                    standing: shown.standing.get(&replica).cloned().unwrap_or_default(),
                     rows: shown.rows.clone(),
                 };
                 if let Some(down) = publisher.publish(view) {

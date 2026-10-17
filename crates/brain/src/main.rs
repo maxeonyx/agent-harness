@@ -1,7 +1,7 @@
 //! The brain: what makes the harness's crates a harness.
 //!
 //! It is the decider of the substrate ([`harness_core::schema::Brain`]):
-//! every place's records reach it, and it folds each into its state or
+//! every replica's records reach it, and it folds each into its state or
 //! records why not. It works through
 //! [`State::todo`](harness_core::state::State::todo): it sends requests
 //! through the provider, dispatches calls to limbs, runs the meta limb's
@@ -26,9 +26,9 @@
 //!
 //! The face is served from the same process. After each change the brain
 //! hands it the state, a persistent value it holds while the brain moves
-//! on, with how far the brain has included each place; the bytes facts
+//! on, with how far the brain has included each replica; the bytes facts
 //! name it reads over a connection of its own, since a stored value never
-//! changes. Each of Max's tabs is a place: its records reach the brain,
+//! changes. Each of Max's tabs is a replica: its records reach the brain,
 //! which states that the tab is his the first time, and includes them.
 //! Each request's streamed events and each command's output as it prints
 //! go to the face's live feed, never to the database.

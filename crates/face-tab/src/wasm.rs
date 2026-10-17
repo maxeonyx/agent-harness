@@ -8,13 +8,13 @@
 //! the page asks [`io`] for room, writes its input there (UTF-8 JSON, or a
 //! value's bytes), calls an export, and reads the export's output from
 //! [`io_ptr`] and [`io_len`]. An export that fails writes `{"error": why}`.
-//! Several tabs may be open in one page (a closed tab's place, taken over
+//! Several tabs may be open in one page (a closed tab's replica, taken over
 //! to ship what it had not), each by the handle [`open`] returned.
 
 use std::cell::RefCell;
 
 use harness_core::id::{Timestamp, ValueId};
-use harness_substrate::{PlaceId, Status};
+use harness_substrate::{ReplicaId, Status};
 use serde_json::{Value, json};
 
 use crate::{Down, Tab, Up};
@@ -68,18 +68,18 @@ fn with_tab(handle: u32, f: impl FnOnce(&mut Tab) -> Value) {
     }
 }
 
-/// Open a tab from `{"place", "records"}`: its place id and what its
+/// Open a tab from `{"replica", "records"}`: its replica id and what its
 /// storage holds. Returns its handle, or `u32::MAX` with the error.
 #[unsafe(no_mangle)]
 pub extern "C" fn open() -> u32 {
     #[derive(serde::Deserialize)]
     struct Opening {
-        place: PlaceId,
+        replica: ReplicaId,
         records: Vec<harness_core::schema::Record>,
     }
     match serde_json::from_slice::<Opening>(&input()) {
         Ok(o) => TABS.with_borrow_mut(|tabs| {
-            tabs.push(Some(Tab::open(o.place, o.records)));
+            tabs.push(Some(Tab::open(o.replica, o.records)));
             output(Value::Null);
             (tabs.len() - 1) as u32
         }),
@@ -135,8 +135,8 @@ pub extern "C" fn down(handle: u32) {
 }
 
 /// What to ship on connecting: `{"ups"}`, or `{"restored"}` if the brain
-/// holds more of this place than its storage does, and the tab must
-/// continue as a new place.
+/// holds more of this replica than its storage does, and the tab must
+/// continue as a new replica.
 #[unsafe(no_mangle)]
 pub extern "C" fn unsent(handle: u32) {
     with_tab(handle, |tab| match tab.unsent() {

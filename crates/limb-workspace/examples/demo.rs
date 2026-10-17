@@ -23,15 +23,18 @@ use harness_core::live::Live;
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
 use harness_limb_workspace::{Config, Kind, Settings, Workspace, now};
-use harness_substrate::{PlaceId, Publisher, Standing, Up, View, What};
+use harness_substrate::{Publisher, ReplicaId, Standing, Up, View, What};
 use serde_json::{Value, json};
 
-/// The place the brain's ids are minted at.
-const BRAIN: PlaceId = PlaceId(0xb7a1);
+/// The replica the brain's ids are minted at.
+const BRAIN: ReplicaId = ReplicaId(0xb7a1);
 
 /// The limb, as the brain's first event.
 const LIMB: LimbId = LimbId(EventId {
-    at: Time { place: BRAIN, n: 1 },
+    at: Time {
+        replica: BRAIN,
+        n: 1,
+    },
     i: 0,
 });
 
@@ -218,7 +221,7 @@ fn crash(scratch: &Path) {
     let workspace = Workspace::open(config(scratch), Box::new(|_| {})).unwrap();
     let view = View {
         as_of: Time {
-            place: BRAIN,
+            replica: BRAIN,
             n: u64::MAX,
         },
         standing: Standing {
@@ -290,7 +293,7 @@ impl Brain {
     fn tick(&mut self) -> Time {
         self.n += 1;
         Time {
-            place: BRAIN,
+            replica: BRAIN,
             n: self.n,
         }
     }
@@ -309,8 +312,8 @@ impl Brain {
         });
         let workspace = Workspace::open(config(&self.scratch), out).unwrap();
         println!(
-            "  [a limb instance opened, at place {}; the brain holds its records up to {}]",
-            workspace.place(),
+            "  [a limb instance opened, at replica {}; the brain holds its records up to {}]",
+            workspace.replica(),
             self.standing.upto
         );
         self.link = Some(Link {

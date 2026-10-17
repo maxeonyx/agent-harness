@@ -14,7 +14,7 @@ What it does, in order:
 - **C2. Ctrl-C twice.** The same database again. The relaunched brain sends the request the interrupted call left, and Ctrl-C comes twice before its first byte: the first gives requests in flight 5 minutes to finish, the second abandons them now.
 - **C3. Carrying on.** The same database again, and the cut request is sent again with the same bytes, so it reads the prompt cache (every breakpoint's cache lasts an hour). Ctrl-C after it responds.
 
-Max presses Stop at a tab: `target/release/examples/act PORT stop MS`, a place on the face's link that says one fact and reads the brain's verdict from its standing. A stop is a fact with a deadline, `within` milliseconds of the fact's time:
+Max presses Stop at a tab: `target/release/examples/act PORT stop MS`, a replica on the face's link that says one fact and reads the brain's verdict from its standing. A stop is a fact with a deadline, `within` milliseconds of the fact's time:
 
 ```json
 {"Task": ["<task>", {"Drain": {"Stop": {"by": "Max", "within": 120000}}}]}

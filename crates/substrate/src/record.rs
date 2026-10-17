@@ -5,18 +5,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::time::{Time, Timestamp};
 
-/// One thing that happened at one place: a time, the place's clock, and
+/// One thing that happened at one replica: a time, the replica's clock, and
 /// what happened.
 ///
-/// **Concept.** The only thing that crosses between places, and the atom:
-/// what one place says together is one record, taken whole or refused
+/// **Concept.** The only thing that crosses between replicas, and the atom:
+/// what one replica says together is one record, taken whole or refused
 /// whole (a response and the calls of its tool uses, a spawn's dispatch
 /// and its members, a settlement and the changes it made). A record is
 /// never changed. It keeps its time wherever it is held, so a resend is
 /// known as a resend, and a record that is no longer needed is collected,
 /// never rewritten.
 ///
-/// **Vision.** "A time and a place, and a fact"; filtered sub-histories
+/// **Vision.** "a time and a place, and a fact" (Max's place is a replica); filtered sub-histories
 /// that keep event identity (CloneX).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -30,9 +30,9 @@ pub struct Record<S: Schema> {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub enum What<S: Schema> {
-    /// The place's own facts, in its schema's vocabulary.
+    /// The replica's own facts, in its schema's vocabulary.
     Said(S::Said),
-    /// That this place included another place's record.
+    /// That this replica included another replica's record.
     Included(Included<S::Refusal>),
 }
 
@@ -47,7 +47,7 @@ pub enum What<S: Schema> {
 /// with `refused` saying why: the act stays a fact, folded as refused
 /// ([`Schema::refused`]), and the follower reads both in its
 /// [`crate::Standing`]. Including a follower's record `m` includes every
-/// earlier record of that place too, since a place's records arrive in its
+/// earlier record of that replica too, since a replica's records arrive in its
 /// own order.
 ///
 /// Only deciders write these. A follower's knowledge of its decider is the
@@ -62,11 +62,11 @@ pub struct Included<R> {
     pub refused: Option<R>,
 }
 
-/// How long a record is kept by the places that hold it.
+/// How long a record is kept by the replicas that hold it.
 ///
 /// **Concept.** Declared per record by its schema, so it is in band: every
-/// place that holds the record agrees, and a store can keep the
-/// declaration beside the bytes. A place keeps its own records only until
+/// replica that holds the record agrees, and a store can keep the
+/// declaration beside the bytes. A replica keeps its own records only until
 /// its decider has included them (that is "stored until processed", for
 /// every record); this says what the decider keeps after that.
 ///
@@ -93,7 +93,7 @@ pub enum Durability<K> {
 /// command output, text mid-dictation.
 ///
 /// **Concept.** Takes no time of its own: it follows the record at `after`,
-/// on the link that carries the place's records, in order, and is gone when
+/// on the link that carries the replica's records, in order, and is gone when
 /// the connection is. The record that ends it (the response, the
 /// settlement) supersedes it, so a follower that missed some never needs
 /// them resent.
@@ -106,17 +106,17 @@ pub struct Live<L> {
     pub live: L,
 }
 
-/// The vocabulary and rules of one kind of data flow: what places say, how
+/// The vocabulary and rules of one kind of data flow: what replicas say, how
 /// it folds, and how long it lasts. `harness-core` is one.
 ///
 /// **Concept.** The substrate's only dependency on what the records mean.
 /// [`Schema::fold`] decides: it folds one record into the state or refuses
 /// it, deterministically from the state and the record, and is the only
-/// place rules live. It runs where the decider includes a record, and
+/// replica rules live. It runs where the decider includes a record, and
 /// again only when a decider reopens, following the verdicts it recorded,
 /// so the past is never judged again by a newer build.
 pub trait Schema: Clone + fmt::Debug + PartialEq + 'static {
-    /// What a place says in one record.
+    /// What a replica says in one record.
     type Said: Clone + fmt::Debug + PartialEq + Serialize + DeserializeOwned;
     /// Why the fold refused a record.
     type Refusal: Clone + fmt::Debug + PartialEq + Serialize + DeserializeOwned;

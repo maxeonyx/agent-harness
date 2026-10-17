@@ -2,14 +2,14 @@
 //!
 //! Three kinds of name. Things that change over time (a task, a call, a
 //! request, a delivery, an environment, a limb) are named by the event that
-//! made them ([`EventId`]): the place and time of the record that created
+//! made them ([`EventId`]): the replica and time of the record that created
 //! them, so federated brains hold each other's records without renaming
 //! anything and nothing generates an id apart from a fact. Immutable bytes
 //! are named by their digest, a [`ValueId`]. A context entry is named by the
 //! digest of its fields, which are value ids ([`crate::context::EntryId`]),
 //! so the context tree is a Merkle tree over stored values.
 //!
-//! An event id is written `{place}.{n}.{i}` and a digest as 64 lowercase hex
+//! An event id is written `{replica}.{n}.{i}` and a digest as 64 lowercase hex
 //! digits. In JSON each is a string, because readers that take every number
 //! as a double (a browser's `JSON.parse`, SQLite's `->>`) would round one.
 //! Every one parses back with [`FromStr`], so no other crate writes its own
@@ -20,7 +20,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub use harness_substrate::{EventId, ParseError, PlaceId, Time, Timestamp};
+pub use harness_substrate::{EventId, ParseError, ReplicaId, Time, Timestamp};
 
 macro_rules! id {
     ($(#[$doc:meta])* $name:ident) => {
