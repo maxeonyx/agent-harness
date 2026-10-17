@@ -21,6 +21,7 @@ async function renderLog(t) {
     stick(() => appendChain(s, chain, t));
   }
   stick(() => renderTail(s, t));
+  revealIn(s);
 }
 
 // New entries append; an entry no longer in the chain (a rewind, a new root)
