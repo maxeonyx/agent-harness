@@ -222,6 +222,11 @@ impl Tab {
         }
     }
 
+    /// The records held: those not yet included, and the newest.
+    pub fn records(&self) -> impl Iterator<Item = &Record> {
+        self.log.records()
+    }
+
     pub fn view(&self) -> Option<&View> {
         self.replica.view()
     }

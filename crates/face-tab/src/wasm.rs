@@ -148,6 +148,12 @@ pub extern "C" fn unsent(handle: u32) {
     });
 }
 
+/// The records the tab holds: those not yet included, and its newest.
+#[unsafe(no_mangle)]
+pub extern "C" fn records(handle: u32) {
+    with_tab(handle, |tab| json!(tab.records().collect::<Vec<_>>()));
+}
+
 /// The writes to make durable, in order: `[{"Put": record} | {"Drop": time}]`.
 #[unsafe(no_mangle)]
 pub extern "C" fn writes(handle: u32) {
