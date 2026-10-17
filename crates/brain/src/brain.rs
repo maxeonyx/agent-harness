@@ -578,18 +578,29 @@ impl Brain {
             return;
         }
         let definition = self.state().limb(limb).expect("a limb to connect");
-        match Process::start(
-            definition,
-            &self.state_dir.join(limb.to_string()),
-            &self.socket,
-        ) {
+        let state = self.state_dir.join(limb.to_string());
+        let _ = std::fs::remove_file(state.join(harness_limb_workspace::process::FAILED));
+        match Process::start(definition, &state, &self.socket) {
             Ok(process) => {
                 self.limbs.insert(limb, process);
             }
             Err(e) => {
                 eprintln!("limb {limb}: its process cannot start: {e}");
-                self.failed.insert(limb, Instant::now());
+                self.unreached(limb, format!("its process cannot start: {e}"));
             }
+        }
+    }
+
+    /// A limb's process ended, or could not start, before it connected:
+    /// try again after [`RESTART`], and record why, unless that is already
+    /// the last thing recorded of it.
+    fn unreached(&mut self, limb: LimbId, why: String) {
+        self.failed.insert(limb, Instant::now());
+        if self.state().failed(limb) != Some(why.as_str()) {
+            self.fact(Fact::Reach {
+                limb,
+                reach: Reach::Failed { why },
+            });
         }
     }
 
@@ -604,7 +615,13 @@ impl Brain {
             self.limbs.remove(&limb);
             if !self.links.contains_key(&limb) && self.state().shutdown().is_none() {
                 eprintln!("limb {limb}: its process ended without connecting (its error is above)");
-                self.failed.insert(limb, Instant::now());
+                let said = self
+                    .state_dir
+                    .join(limb.to_string())
+                    .join(harness_limb_workspace::process::FAILED);
+                let why = std::fs::read_to_string(said)
+                    .unwrap_or_else(|_| "its process ended without connecting".into());
+                self.unreached(limb, why);
             }
         }
     }
