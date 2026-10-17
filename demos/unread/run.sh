@@ -3,27 +3,22 @@
 # it has no word for. See README.md.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain -p harness-limb-workspace --bins
-dir=target/unread-demo
-port=${PORT:-4396}
-rm -rf "$dir" && mkdir -p "$dir"
-db=$dir/brain.sqlite
-# Everything the demo starts carries this mark; its limbs outlive their
-# brains, so what is left is ended when it finishes.
-mark=HARNESS_OWNER_unread-demo-$$
-trap 'demos/end.sh "$mark"' EXIT
+drive() { node dev/drive.mjs "$1" --brain unread "${@:2}" >/dev/null; }
+at=.drive.ignore/unread
+db=$at/brain.sqlite
+trap 'drive down' EXIT
+drive down --wipe
 
-# Run the brain until it has launched, then stop it as Ctrl-C would.
+# Run the brain until it serves, then stop it, and show what it logged.
 launch() {
-  env "$mark=1" target/release/harness-brain --db "$db" --port "$port" "$@" > "$dir/launch$n.log" 2>&1 &
-  local pid=$!
-  until grep -q '^face:' "$dir/launch$n.log"; do sleep 0.1; done
-  kill -INT $pid && wait $pid
-  sed 's/^/  | /' "$dir/launch$n.log"
+  local from=$(( $( [ -f "$at/brain.log" ] && stat -c %s "$at/brain.log" || echo 0) + 1 ))
+  drive up
+  drive down
+  tail -c "+$from" "$at/brain.log" | sed 's/^/  | /'
 }
 
 echo "1. A new brain launches on a fresh database, and stops."
-n=1 launch --roles roles
+launch
 
 brain=$(sqlite3 "$db" "SELECT replica FROM meta")
 next=$(( $(sqlite3 "$db" "SELECT max(n) FROM record WHERE replica = '$brain'") + 1 ))
@@ -35,7 +30,7 @@ echo "  $later"
 
 echo
 echo "3. This build launches on that database, and stops."
-n=2 launch
+launch
 
 echo
 echo "4. The database afterwards:"
