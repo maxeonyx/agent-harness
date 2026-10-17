@@ -8,7 +8,7 @@ Then open https://mx-hv-mj.local:4320 (another port: `PORT=4400`). It is one bra
 
 What to do:
 
-1. **+ New** (bottom left) opens a new chat. Pick its role (`chat` is the everyday one) and the directory it works in, then write, dictate or attach in the box as in any chat. **Start** (Ctrl+Enter) starts it: your words are what it is for, and it is named from its first words unless you name it.
+1. **+** (bottom right; or double-click anywhere) opens a new chat. Pick its role (`chat` is the everyday one) and the directory it works in, then write, dictate or attach in the box as in any chat. **Start** (Ctrl+Enter) starts it: your words are what it is for, and it is named from its first words unless you name it.
 2. The chat opens and the agent works. It searches the web itself when the answer depends on anything current; each search shows as a step with what it found, and its answer links each source.
 3. The box is a staging area: Enter is a new line, and nothing is sent until you send it. While the agent works, **Send now** (Ctrl+Enter) reaches it at its next request and **At turn end** (Ctrl+Shift+Enter) waits for its turn to end. Either way it is told how far into its work you wrote.
 4. A chat is done when you press **Done**. Until then it waits on you, and the **needs you** pill at the top right lists every chat whose move is yours.
@@ -26,7 +26,7 @@ On a machine with no microphone, `SAMPLE=1 demos/home/run.sh` offers **Dictate t
 
 ## A real run
 
-A fresh database, a chat started from **+ New** in a scratch directory, asked: "Use your web_search tool to find what happened in New Zealand news this week: three items with sources. Then, in one response, write them to news2.md and commit that file, as two tool calls." The brain's log, trimmed:
+A fresh database, a chat started from **+** in a scratch directory, asked: "Use your web_search tool to find what happened in New Zealand news this week: three items with sources. Then, in one response, write them to news2.md and commit that file, as two tool calls." The brain's log, trimmed:
 
 ```
    17.4s    25  words delivered to try

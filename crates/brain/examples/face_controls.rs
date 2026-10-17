@@ -28,7 +28,7 @@ use serde_json::Value;
 
 mod device;
 
-use device::{Device, blocks, status};
+use device::{Device, blocks, role_args, status};
 
 fn main() {
     let port: u16 = env::var("PORT")
@@ -45,7 +45,10 @@ fn main() {
         .unwrap();
     assert!(made.success(), "the scratch repo");
     let db = dir.join("brain.sqlite");
-    let mut brain = Brain::launch(&db, port);
+    // Its children must be mid-request when parked and interrupted, which a
+    // real model's work gives: Sonnet at low effort unless `MODEL` says.
+    let roles = role_args(&dir, &device::model("sonnet"));
+    let mut brain = Brain::launch(&db, &roles, port);
     brain.serving();
     println!("  watch it at https://mx-hv-mj.local:{port}");
     let mut max = Device::connect("tab", port);
@@ -474,9 +477,10 @@ struct Brain {
 }
 
 impl Brain {
-    fn launch(db: &Path, port: u16) -> Brain {
+    fn launch(db: &Path, roles: &[String], port: u16) -> Brain {
         let mut child = Command::new("target/release/harness-brain")
-            .args(["--roles", "roles", "--db"])
+            .args(roles)
+            .arg("--db")
             .arg(db)
             .args(["--port", &port.to_string()])
             .stdout(Stdio::piped())

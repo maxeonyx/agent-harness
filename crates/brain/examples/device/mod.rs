@@ -41,6 +41,36 @@ pub fn now() -> Timestamp {
     )
 }
 
+/// The model a demo runs every role on: `MODEL` if set (`sonnet`,
+/// `haiku`, `scripted`), else `default`.
+pub fn model(default: &str) -> String {
+    env::var("MODEL").unwrap_or_else(|_| default.into())
+}
+
+/// The brain's `--roles` and `--model` for a demo in `dir` on `model`. A
+/// real model runs at low effort, from a copy of `roles/` that says so, to
+/// keep a demo cheap.
+pub fn role_args(dir: &Path, model: &str) -> Vec<String> {
+    let mut roles = "roles".to_string();
+    if model != "scripted" {
+        let copy = dir.join("roles");
+        fs::create_dir_all(&copy).unwrap();
+        for file in fs::read_dir("roles").unwrap().map(Result::unwrap) {
+            let text = fs::read_to_string(file.path()).unwrap();
+            let low: Vec<&str> = text
+                .lines()
+                .map(|l| match l.starts_with("effort:") {
+                    true => "effort: low",
+                    false => l,
+                })
+                .collect();
+            fs::write(copy.join(file.file_name()), low.join("\n") + "\n").unwrap();
+        }
+        roles = copy.to_str().unwrap().into();
+    }
+    vec!["--roles".into(), roles, "--model".into(), model.into()]
+}
+
 /// A user message's content blocks: one text block.
 pub fn blocks(text: &str) -> Bytes {
     Bytes::from(json!([{ "type": "text", "text": text }]).to_string())
@@ -167,7 +197,7 @@ impl Device {
     /// The harness row's `list`, such as its environments or workspaces:
     /// the `id` of the one whose `key` is `value`.
     fn harness_id<T: std::str::FromStr>(&self, list: &str, key: &str, value: &str) -> Option<T> {
-        let Some(FaceRow::Harness(row)) = self.rows().get(&FaceKey::Harness) else {
+        let Some(FaceRow::Harness(row)) = self.tab.view()?.rows.get(&FaceKey::Harness) else {
             return None;
         };
         row[list]
