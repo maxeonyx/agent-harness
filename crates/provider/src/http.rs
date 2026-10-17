@@ -40,11 +40,12 @@ fn find<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// Send `body` to `https://{host}{path}` with `headers`, and read the
-/// response's head. Every wait ends in [`harness_runtime::Cancelled`] once
-/// `cancel` is requested, and so does every read of the body.
-pub fn post(
+/// Send `method` with `body` to `https://{host}{path}` with `headers`, and
+/// read the response's head. Every wait ends in [`harness_runtime::Cancelled`]
+/// once `cancel` is requested, and so does every read of the body.
+pub fn exchange(
     tls: &Arc<ClientConfig>,
+    method: &str,
     host: &str,
     path: &str,
     headers: &[(&str, &str)],
@@ -56,7 +57,7 @@ pub fn post(
     let connection = ClientConnection::new(Arc::clone(tls), name).map_err(io::Error::other)?;
     let mut stream = StreamOwned::new(connection, socket);
     let mut head = format!(
-        "POST {path} HTTP/1.1\r\nhost: {host}\r\ncontent-length: {}\r\nconnection: close\r\n",
+        "{method} {path} HTTP/1.1\r\nhost: {host}\r\ncontent-length: {}\r\nconnection: close\r\n",
         body.len()
     );
     for (name, value) in headers {

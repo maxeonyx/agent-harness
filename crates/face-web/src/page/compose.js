@@ -1,15 +1,21 @@
 // ─── What Max writes ───────────────────────────────────────────────────────
 // One box per open node: a staging area, its text and attachments kept per
-// task across tabs and reloads. Enter is a new line; nothing reaches the
-// model until Max sends it, one of two ways: now (Ctrl+Enter), read with the
-// task's next request even mid-turn, or at the end of its turn
-// (Ctrl+Shift+Enter), so it does not cut across the work. Either way the
-// harness tells the model how far into its work he wrote.
+// task across tabs and reloads. Nothing reaches the model until Max sends
+// it, one of two ways: Send, read with the task's next request even
+// mid-turn, or Queue, at the end of its turn, so it does not cut across the
+// work. Either way the harness tells the model how far into its work he
+// wrote. Each takes two presses: the first stages it, the second sends what
+// he has seen staged; any change to the words lets the stage go. With a
+// keyboard, Enter stages and sends (Alt+Enter, Queue), and Shift+Enter is a
+// new line; on a phone Enter is a new line and the buttons send.
 // Dictation streams into the box as edits to a live region, which Max can
 // edit too: an edit inside it pins the text up to the end of his edit, and
 // the words still coming go after it.
 const compose = $(".compose", panel);
 let box = null, dictation = null;
+// The send this tab's box is staged for, "Next" or "TurnEnd"; and until
+// when sending waits, after another device changed the words.
+let staged = null, lockedUntil = 0;
 
 // Max's drafts, held by the brain: a draft is a message from its first
 // pause in typing, so the phone shows what the PC typed and either can send
@@ -124,7 +130,15 @@ function syncCompose() {
   const id = draftOf(box.dataset.key);
   if (id && local.has(id)) return;
   const text = drafts.get(box.dataset.key);
-  if (box.value !== text) { box.value = prev = text; autosize(); renderTray(); }
+  if (box.value === text) return;
+  box.value = prev = text; autosize(); renderTray();
+  // Another device changed the words: what was staged is not what is here,
+  // and sending waits a moment for Max to see them.
+  staged = null;
+  lockedUntil = Date.now() + 2000;
+  const key = box.dataset.key;
+  setTimeout(() => { if (box?.dataset.key === key) renderComposeState(byId[key]); }, 2000);
+  renderComposeState(byId[key]);
 }
 // The session's other drafts: words held when the session could not take
 // them, and drafts opened beside this one (a concurrent Send or edit).
@@ -136,7 +150,7 @@ function renderOthers() {
     const c = contentOf(d.id), card = el("div", `other${d.held ? " held" : ""}`);
     card.append(el("span", "said", c.text.split("\n")[0].slice(0, 160) || `${c.attached.length} attached`));
     card.append(el("span", "why", d.held ? `not heard: ${d.held}` : !d.from ? "another draft" : rowsOf(session).some((o) => o.id === d.from) ? "typed at the same time as another" : "typed after another was sent"));
-    if (!d.held) { const use = el("button", "btn", "Edit this"); use.onclick = () => { bound.set(session, d.id); box.value = prev = c.text; autosize(); renderTray(); renderOthers(); }; card.append(use); }
+    if (!d.held) { const use = el("button", "btn", "Edit this"); use.onclick = () => { bound.set(session, d.id); box.value = prev = c.text; unstage(); autosize(); renderTray(); renderOthers(); }; card.append(use); }
     else {
       const use = el("button", "btn", "Use these words");
       use.onclick = async () => { giveBack(session, c.text, c.attached); leaving.add(d.id); renderOthers(); await act({ Draft: [d.id, "Discarded"] }); renderOthers(); };
@@ -159,6 +173,7 @@ async function attach(key, files) {
   }
   const why = attached.set(key, list);
   if (why) say(`not attached: ${why}`, true);
+  if (box?.dataset.key === key) unstage();
   renderTray();
 }
 function renderTray() {
@@ -169,7 +184,7 @@ function renderTray() {
     const chip = el("span", "att");
     if (a.block.type === "image") { const img = el("img"); img.src = `data:${a.block.source.media_type};base64,${a.block.source.data}`; chip.append(img); }
     const x = el("button", null, "×"); x.type = "button"; x.title = "Remove";
-    x.onclick = () => { const list = attached.get(key); list.splice(i, 1); attached.set(key, list); renderTray(); };
+    x.onclick = () => { const list = attached.get(key); list.splice(i, 1); attached.set(key, list); unstage(); renderTray(); };
     chip.append(el("span", null, a.name), x);
     return chip;
   }));
@@ -178,6 +193,7 @@ function renderTray() {
 function buildCompose(id) {
   compose.replaceChildren();
   box = null;
+  staged = null;
   const t = byId[id];
   if (id !== NEW && !t) return;
   if (!can.act) { compose.append(el("div", "closed", "This face only watches.")); return; }
@@ -188,18 +204,20 @@ function buildCompose(id) {
   box.dataset.key = id;
   box.spellcheck = true;
   box.value = drafts.get(id);
-  const row = el("div", "row2");
+  // Beside the box: what Max can do to the task, small; then the two he
+  // presses most, dictate and send, large.
+  const side = el("div", "side");
   const mic = icon("mic", "mic", "Dictate"); mic.hidden = !can.dictation;
+  const queue = goButton("queue", "queue", "Queue", "It reads this when its turn ends, without cutting across its work (Alt+Enter, twice)");
+  const send = goButton("send", "send", "Send", "Send (Enter, twice)");
+  side.append(el("div", "acts"), mic, queue, send);
+  const line = el("div", "line");
+  line.append(box, side);
+  const row = el("div", "row2");
   const sample = el("button", "later sample", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
-  const picks = el("span", "picks");
-  const status = el("span", "status");
-  const later = el("button", "later after", "After this turn"); later.type = "button";
-  later.title = "It reads this when its turn ends, without cutting across its work (Ctrl+Shift+Enter)";
-  const halt = icon("stop", "halt", "Interrupt: it stops at the next safe point, and waits for you");
-  const send = icon("send", "send", "Send (Ctrl+Enter)");
-  row.append(mic, sample, picks, status, later, halt, send);
-  wrap.append(el("div", "others"), tray, box, row);
-  compose.append(wrap, el("div", "acts"));
+  row.append(sample, el("span", "picks"), el("span", "status"));
+  wrap.append(el("div", "others"), tray, line, row);
+  compose.append(wrap);
   // What is pasted or dropped in is attached.
   box.addEventListener("paste", (e) => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); attach(id, fs); } });
   wrap.addEventListener("dragover", (e) => { e.preventDefault(); wrap.classList.add("drop"); });
@@ -207,14 +225,14 @@ function buildCompose(id) {
   wrap.addEventListener("drop", (e) => { e.preventDefault(); wrap.classList.remove("drop"); attach(id, [...e.dataTransfer.files]); });
   mic.onclick = () => dictate(false);
   sample.onclick = () => dictate(true);
-  send.onclick = () => submit("Next");
-  later.onclick = () => submit("TurnEnd");
-  halt.onclick = async () => { const why = await act({ Task: [id, { Drain: { ToMax: { turn: byId[id].turn } } }] }); if (why) say(`not interrupted: ${why}`, true); };
+  send.onclick = () => press("Next");
+  queue.onclick = () => press("TurnEnd");
   box.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
+    if (e.key === "Escape" && staged) { e.preventDefault(); e.stopPropagation(); return unstage(); }
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+    if (matchMedia("(pointer: coarse)").matches) return;
     e.preventDefault();
-    if (dictation) return stopDictation();
-    submit(e.shiftKey && !later.hidden ? "TurnEnd" : "Next");
+    press(e.altKey && !queue.hidden ? "TurnEnd" : "Next");
   });
   box.addEventListener("input", onInput);
   autosize();
@@ -222,26 +240,55 @@ function buildCompose(id) {
   renderOthers();
   renderComposeState(t);
 }
+// Send or Queue: its icon, and the word it shows once staged.
+function goButton(name, cls, word, tip) {
+  const b = icon(name, `go ${cls}`, tip);
+  b.dataset.word = word;
+  b.append(el("span", "word"));
+  return b;
+}
 // Mid-turn, words can go now or wait for the turn's end; between turns, in
 // response to its question, or to a finished chat, there is only now.
 const midTurn = (t) => ["model", "calls", "harness", "held", "limited"].includes(t.waiting?.kind);
-// Working on its own, not waiting on agents it started: what an interrupt stops.
-const working = (t) => !t.scoped && !!t.turn && (["model", "harness"].includes(t.waiting?.kind) || (t.waiting?.kind === "calls" && !t.waiting.calls.some((c) => c.children.length)));
 function renderComposeState(t) {
   if (!box) return;
   const key = box.dataset.key, has = !!box.value.trim() || attached.get(key).length > 0;
-  $(".send", compose).disabled = !has;
-  if (key === NEW) {
-    box.placeholder = "New chat";
-    $(".after", compose).hidden = true;
-    $(".halt", compose).hidden = true;
-    return;
+  const send = $(".send", compose), queue = $(".queue", compose);
+  const mine = t && key === t.id;
+  if (key === NEW) box.placeholder = "New chat";
+  else if (mine) box.placeholder = isDone(t) ? "Continue this chat" : "Reply";
+  queue.hidden = !mine || !midTurn(t) || isDone(t);
+  if (!has || (staged === "TurnEnd" && queue.hidden)) staged = null;
+  const locked = lockedUntil > Date.now();
+  for (const [b, read] of [[send, "Next"], [queue, "TurnEnd"]]) {
+    b.disabled = !has || locked;
+    b.classList.toggle("staged", staged === read);
+    $(".word", b).textContent = staged === read ? `${b.dataset.word}?` : "";
   }
-  if (!t || key !== t.id) return;
-  const mid = midTurn(t) && !isDone(t);
-  box.placeholder = isDone(t) ? "Continue this chat" : "Reply";
-  $(".after", compose).hidden = !(mid && has);
-  $(".halt", compose).hidden = !can.act || isDone(t) || !working(t);
+  send.classList.toggle("locked", locked);
+  send.title = locked ? "Changed on another device a moment ago" : "Send (Enter, twice)";
+  $(".box", compose).classList.toggle("staged", !!staged);
+}
+// The first press stages, the second sends; the other button restages as
+// itself. A press while dictating ends the dictation and stages, and a
+// second press sends once its last words are in.
+function press(read) {
+  if (!box) return;
+  if (dictation) {
+    if (!dictation.stopping) { stopDictation(); staged = read; }
+    else if (staged === read) dictation.then = read;
+    else staged = read;
+    return renderComposeState(byId[box.dataset.key]);
+  }
+  if (staged === read) return submit(read);
+  staged = read;
+  renderComposeState(byId[box.dataset.key]);
+}
+function unstage() {
+  if (!staged || !box) return;
+  staged = null;
+  if (dictation) dictation.then = null;
+  renderComposeState(byId[box.dataset.key]);
 }
 // Only what went wrong is said; what went right shows as itself.
 const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`; } };
@@ -255,13 +302,16 @@ async function submit(read) {
   const key = box.dataset.key, t = byId[key];
   const text = box.value, files = attached.get(key);
   if (!text.trim() && !files.length) return;
-  if (dictation) return stopDictation();
+  staged = null;
+  renderComposeState(t);
   if (!t) return startNew(text, files);
   say("");
   const continues = isDone(t) || (t.scoped && read === "Next");
   if (continues && !text.trim()) return say("write something to go with what is attached", true);
   let draft = takeWords(key);
-  const discard = draft ? [{ Draft: [draft, "Discarded"] }] : [];
+  // Words to a task Max paused carry it on.
+  const release = t.held && !isDone(t) ? [{ Task: [t.id, { Held: false }] }] : [];
+  const discard = [...(draft ? [{ Draft: [draft, "Discarded"] }] : []), ...release];
   // A new task whose mandate is these words; the draft goes with them.
   if (continues) {
     const why = isDone(t) ? await resume(t, text, files, discard) : await aside(t, text, files, discard);
@@ -276,7 +326,7 @@ async function submit(read) {
     sent = `${at}.0`;
     const facts = [];
     if (!draft) { draft = sent; facts.push({ Draft: [draft, { Opened: { session: t.id } }] }); }
-    facts.push({ Draft: [draft, { Send: { text: id, read } }] });
+    facts.push({ Draft: [draft, { Send: { text: id, read } }] }, ...release);
     return facts;
   }, [words]);
   if (why) { returnWords(key, draft === sent ? null : draft, text, files); return say(`not sent: ${why}`, true); }
@@ -336,6 +386,7 @@ function onInput() {
   }
   prev = now;
   drafts.set(box.dataset.key, now);
+  staged = null;
   autosize();
   renderComposeState(byId[box.dataset.key]);
 }
@@ -357,7 +408,8 @@ function applyEdits(edits) {
   }
   if (following) target.setSelectionRange(end(), end());
   drafts.set(l.key, target.value);
-  if (shown) { prev = box.value; autosize(); renderComposeState(byId[l.key]); }
+  // Words still coming after Max pressed were said before he pressed.
+  if (shown) { prev = box.value; if (!l.stopping) staged = null; autosize(); renderComposeState(byId[l.key]); }
 }
 
 // The microphone as 16-bit PCM, in chunks of a tenth of a second.
@@ -422,6 +474,7 @@ function releaseMic(l) {
 }
 function stopDictation() {
   if (!dictation) return;
+  dictation.stopping = true;
   releaseMic(dictation);
   if (dictation.ws.readyState === 1) dictation.ws.send(JSON.stringify({ type: "stop" }));
   say("finishing");
@@ -433,5 +486,6 @@ function finishDictation(l) {
   l.ws.close();
   const b = $(".mic", compose); if (b) { b.classList.remove("on"); b.title = "Dictate"; }
   if (!$(".status", compose)?.classList.contains("bad")) say("");
+  if (l.then && staged === l.then && box?.dataset.key === l.key) submit(l.then);
 }
 

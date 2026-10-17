@@ -165,7 +165,7 @@ function said(text, when, cls = "") {
 // A standard prompt, as the act it is: Max's Done; a cancel, his or the
 // agent's owner's. The harness's instruction is a line under it, in full
 // when clicked. Other standard prompts are the harness's notes.
-const PROMPTS = { Done: "Done", Stopping: "Cancel" };
+const PROMPTS = { Done: "Done", Stopping: "Abandon" };
 function prompted(prompt, text) {
   if (!PROMPTS[prompt]) return note(text);
   const d = said(PROMPTS[prompt], null, "prompt");
