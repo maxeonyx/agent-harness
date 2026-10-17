@@ -30,10 +30,11 @@ sleep 3
 until waits_on_max; do sleep 1; done
 grep -E 'browser|tab|passed|spawn|responded' "$dir/brain.log" | cut -c1-170
 echo
-profile=$(ls -d "$XDG_STATE_HOME"/harness/limbs/*/profile)
+# The browser: the one HARNESS_BROWSER names, or the one the limb launched.
+browser=${HARNESS_BROWSER:-$(ls -d "$XDG_STATE_HOME"/harness/limbs/*/profile)}
 echo
 echo "== What the browser shows, read over DevTools"
-node demos/browser/look.mjs "$profile"
+node demos/browser/look.mjs "$browser"
 
 echo
 echo "== Handed to Max: the tab, still open"
@@ -44,7 +45,7 @@ echo
 echo "== Max has checked it and closes the tab: Stop on the call"
 target/release/examples/act "$port" stop "$call"
 until [ -z "$(c /view | jq -c "$root | .handed[]")" ]; do sleep 0.5; done
-node demos/browser/look.mjs "$profile"
+node demos/browser/look.mjs "$browser"
 echo
 echo "== Max presses Done, and the chat writes its result"
 target/release/examples/act "$port" done

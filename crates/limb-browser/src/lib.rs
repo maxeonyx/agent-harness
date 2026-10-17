@@ -151,7 +151,8 @@ pub struct Browser {
 
 struct Inner {
     limb: LimbId,
-    settings: Settings,
+    /// Its definition's settings: the latest the brain shipped.
+    settings: Mutex<Settings>,
     state: PathBuf,
     log: Mutex<Log<Harness, Store>>,
     out: Out,
@@ -211,7 +212,7 @@ impl harness_limb::Kind for Browser {
         let (events, inbox) = mpsc::channel();
         let inner = Arc::new(Inner {
             limb: definition.id,
-            settings,
+            settings: Mutex::new(settings),
             state: state.to_path_buf(),
             log: Mutex::new(log),
             out,
@@ -262,6 +263,9 @@ impl harness_limb::Kind for Browser {
             if let Err(e) = log.cover(&view.standing) {
                 eprintln!("cannot collect the log: {e}");
             }
+        }
+        if let Some(LimbRow::Definition(definition)) = view.rows.get(&LimbKey::Definition) {
+            inner.define(definition);
         }
         if connected {
             inner.say(Batch {
@@ -449,6 +453,26 @@ impl Inner {
             .unwrap_or_default()
     }
 
+    /// Take a new version of the definition: a browser elsewhere is
+    /// reached from the next call on, and the tabs in the old one are gone.
+    fn define(&self, definition: &Limb) {
+        let Some(settings) = Settings::of(definition) else {
+            return;
+        };
+        let mut current = lock(&self.settings);
+        if *current == settings {
+            return;
+        }
+        eprintln!("the browser is now {}", settings.place());
+        *current = settings;
+        drop(current);
+        *lock(&self.cdp) = None;
+        if let Some(mut old) = lock(&self.process).take() {
+            let _ = old.kill();
+            let _ = old.wait();
+        }
+    }
+
     /// The browser's connection, made (and the browser found or launched)
     /// if there is none.
     fn connect(&self) -> Result<Arc<cdp::Cdp>, String> {
@@ -461,7 +485,7 @@ impl Inner {
             let _ = old.kill();
             let _ = old.wait();
         }
-        let browser = chrome::open(&self.settings, &self.state)?;
+        let browser = chrome::open(&lock(&self.settings), &self.state)?;
         *process = browser.process;
         let events = self.events.clone();
         let connection = Arc::new(cdp::Cdp::connect(&browser.url, move |e| {
@@ -608,7 +632,7 @@ impl Inner {
     }
 
     fn describe(&self) -> Description {
-        let text = tools::instructions(&self.settings.place());
+        let text = tools::instructions(&lock(&self.settings).place());
         Description {
             instructions: vec![Instruction {
                 observes: Observation {

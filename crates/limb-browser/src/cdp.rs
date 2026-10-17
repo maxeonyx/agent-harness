@@ -4,7 +4,7 @@
 //! `sessionId`.
 
 use std::collections::HashMap;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -150,17 +150,33 @@ pub fn discover(endpoint: &str) -> Result<String, String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| fail(&e))?;
+    // Chrome answers only HTTP/1.1, and may keep the connection open, so
+    // the body is read to its length.
     write!(
         stream,
-        "GET /json/version HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        "GET /json/version HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
     )
     .map_err(|e| fail(&e))?;
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .map_err(|e: io::Error| fail(&e))?;
-    let body = response.split("\r\n\r\n").nth(1).unwrap_or_default();
-    let version: Json = serde_json::from_str(body).map_err(|e| fail(&e))?;
+    let mut reader = io::BufReader::new(stream);
+    let mut length = 0;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).map_err(|e| fail(&e))? == 0 {
+            return Err(fail(&"it closed the connection before answering"));
+        }
+        let line = line.trim_end();
+        if line.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse().map_err(|e| fail(&e))?;
+        }
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).map_err(|e| fail(&e))?;
+    let version: Json = serde_json::from_slice(&body).map_err(|e| fail(&e))?;
     let url = version["webSocketDebuggerUrl"]
         .as_str()
         .ok_or_else(|| fail(&"its /json/version names no webSocketDebuggerUrl"))?;

@@ -229,13 +229,24 @@ impl Brain {
             Settings::user(id, config.clone(), skills.clone())
         });
         // The harness's browser: `$HARNESS_BROWSER` names one to attach to
-        // or launch, as the limb's settings say; Playwright's headless
-        // shell otherwise.
+        // or launch, as the limb's settings say (empty for Playwright's
+        // headless shell), and a new value is a new version of the limb.
+        // Unset, the definition stays as it is.
+        let wanted = std::env::var("HARNESS_BROWSER")
+            .ok()
+            .map(|word| harness_limb_browser::Settings::parse(&word));
+        if let Some(id) = browser_limb
+            && let Some(wanted) = &wanted
+            && state
+                .limb(id)
+                .and_then(harness_limb_browser::Settings::of)
+                .as_ref()
+                != Some(wanted)
+        {
+            facts.push(Fact::Limb(wanted.definition(id)));
+        }
         let browser = define(&mut facts, browser_limb, &|id| {
-            harness_limb_browser::Settings::parse(
-                &std::env::var("HARNESS_BROWSER").unwrap_or_default(),
-            )
-            .definition(id)
+            wanted.clone().unwrap_or_default().definition(id)
         });
         let shared: std::collections::BTreeMap<String, LimbId> = [
             ("meta", meta),

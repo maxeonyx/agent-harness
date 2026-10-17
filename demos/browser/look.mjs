@@ -1,10 +1,14 @@
 // What the harness's browser shows, read over DevTools as Max's own
 // browser would show it: each tab's address, and the claim form's lines.
-// Usage: node look.mjs PROFILE (the launched browser's profile directory)
-import { readFileSync } from 'node:fs';
+// Usage: node look.mjs PROFILE|HOST:PORT (the launched browser's profile
+// directory, or the endpoint of the one the harness attached to)
+import { existsSync, readFileSync } from 'node:fs';
 
-const [port, path] = readFileSync(`${process.argv[2]}/DevToolsActivePort`, 'utf8').split('\n');
-const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+const where = process.argv[2];
+const host = existsSync(where)
+  ? `127.0.0.1:${readFileSync(`${where}/DevToolsActivePort`, 'utf8').split('\n')[0]}`
+  : where;
+const tabs = await (await fetch(`http://${host}/json/list`)).json();
 const pages = tabs.filter(t => t.type === 'page');
 if (pages.length === 0) console.log('  no tabs open');
 for (const t of pages) {
