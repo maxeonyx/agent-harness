@@ -1171,6 +1171,25 @@ Finish tidying up and end your turn with your report.",
             ));
             return self.append(batch);
         }
+        if call.tool == meta::ATTACH {
+            let said = meta::attach(self.state(), &|v| self.value(v), &parent, &input);
+            let (model, outcome) = match said {
+                Ok(said) => {
+                    let output = Output {
+                        model: said.id(),
+                        full: None,
+                        observes: Vec::new(),
+                    };
+                    (said, Outcome::Completed(output))
+                }
+                Err(message) => render::failed(&message),
+            };
+            batch.values.push(model);
+            batch
+                .facts
+                .push(Fact::Call(id, CallEvent::Settled(outcome)));
+            return self.append(batch);
+        }
         if call.tool == meta::BACKGROUND {
             match meta::background_call(self.state(), &parent, id, self.meta, &input) {
                 Ok((started, input)) => {
@@ -1456,7 +1475,8 @@ and you cannot finish until it has.",
     }
 
     /// The calls a member's result carries: those of the compaction it
-    /// carries on from, if no response of its own came between.
+    /// carries on from, if no response of its own came between, or else the
+    /// `attach` calls of its last response before the report.
     fn attached(&self, result: EntryId) -> Vec<CallId> {
         let state = self.state();
         let mut at = state.entry(result).and_then(Entry::parent);
@@ -1470,6 +1490,26 @@ and you cannot finish until it has.",
                         _ => None,
                     })
                     .collect();
+            }
+            if let Some(request) = state.request(entry) {
+                let attached: Vec<CallId> = request
+                    .call
+                    .renders
+                    .iter()
+                    .filter_map(|span| match span.from {
+                        Rendered::Call(call)
+                            if state
+                                .call(call)
+                                .is_some_and(|c| c.call.tool == meta::ATTACH) =>
+                        {
+                            Some(call)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if !attached.is_empty() {
+                    return attached;
+                }
             }
             at = match state.entry(entry) {
                 Some(Entry::Message { parent, message }) if message.role == Role::User => {
