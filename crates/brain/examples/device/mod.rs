@@ -16,6 +16,7 @@ use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::draft::DraftEvent;
 use harness_core::fact::{Batch, Fact};
 use harness_core::id::{DeliveryId, ModelCallId, PlaceId, TaskId, Timestamp};
+use harness_core::live::Live;
 use harness_core::task::{Drain, Stopper, TaskEvent};
 use harness_core::value::Bytes;
 use harness_face_tab::{Down, FaceKey, FaceRow, Tab, Up};
@@ -171,6 +172,26 @@ impl Device {
                 Err(e) => panic!("{}: the link: {e}", self.name),
             }
         }
+    }
+
+    /// Take in what the brain ships for up to `time`, or until `done` holds:
+    /// the live progress that came meanwhile, which the tab only hands on.
+    pub fn listen(&mut self, time: Duration, done: impl Fn(&Device) -> bool) -> Vec<Live> {
+        let until = Instant::now() + time;
+        let mut live = Vec::new();
+        while Instant::now() < until && !done(self) {
+            match self.socket.read() {
+                Ok(Message::Text(text)) => {
+                    let down: Down = serde_json::from_str(&text).expect("the brain's rows");
+                    live.extend(self.tab.down(down).map(|l| l.live));
+                }
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                Err(e) => panic!("{}: the link: {e}", self.name),
+            }
+        }
+        live
     }
 
     pub fn rows(&self) -> &BTreeMap<FaceKey, FaceRow> {
