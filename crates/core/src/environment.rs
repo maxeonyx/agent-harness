@@ -369,10 +369,18 @@ pub enum ToLimb {
         /// The bytes of `call.input`.
         input: Bytes,
     },
-    /// Stop this call as soon as it safely can; it settles as interrupted.
-    /// Asked again after a reconnection while it is unsettled; a call the
-    /// limb has no record of settles as unknown.
-    Stop { call: CallId },
+    /// Stop this call: ask it to stop gracefully (`SIGTERM` to a command's
+    /// processes), and kill what is left `within` milliseconds of receiving
+    /// this; it settles as interrupted once nothing it started is left.
+    /// Asked again after a reconnection while it is unsettled, and again with
+    /// less time to make the stop harder; a call the limb has no record of
+    /// settles as unknown.
+    Stop { call: CallId, within: u64 },
+    /// The brain is going away: stop every running call as [`ToLimb::Stop`]
+    /// does, then exit once nothing the limb started is left, all within
+    /// `within` milliseconds. Its input closing means the same, with the
+    /// limb's own default. Asked again with less time to make it harder.
+    Shutdown { within: u64 },
     /// Watch these resources: what live contexts embody. `known` is every
     /// version the journal holds of each: its current version where one is
     /// recorded, otherwise each version a live context embodies. Report, as

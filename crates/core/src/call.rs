@@ -129,10 +129,14 @@ pub enum CallEvent {
     /// Sent to its limb's current connection. Sent again, as another
     /// dispatch, after every reconnection while it is unsettled.
     Dispatched,
-    /// Its limb was asked to stop it, because every task reading it is
-    /// stopping (why is in their [`crate::task::Drain`] facts). Asked again
-    /// after a reconnection, like a dispatch.
-    Stopping,
+    /// Its limb was asked to stop it within `within` milliseconds of this
+    /// fact ([`crate::cancel`]), because every task reading it is stopping
+    /// (why is in their [`crate::task::Drain`] facts). Asked again after a
+    /// reconnection, like a dispatch, and again with less time when a reader's
+    /// deadline comes sooner; a deadline is only ever brought forward.
+    Stopping {
+        within: u64,
+    },
     /// How it ended, stated by the limb that ran it (or by the brain, for a
     /// call that never reached one). A second settlement is accepted only
     /// after [`Outcome::Unknown`]: the real outcome of a remote command that
@@ -145,7 +149,7 @@ impl CallEvent {
     pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
         match self {
             CallEvent::Made(call) => call.values(out),
-            CallEvent::Dispatched | CallEvent::Stopping => {}
+            CallEvent::Dispatched | CallEvent::Stopping { .. } => {}
             CallEvent::Settled(outcome) => outcome.values(out),
         }
     }
