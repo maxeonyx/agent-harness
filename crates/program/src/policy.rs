@@ -1,9 +1,7 @@
-//! The brain's policy: every decision the core leaves open, apart from what
-//! a request renders and how it is worded ([`crate::render`]).
+//! Policy: every decision the core leaves open, apart from what a request
+//! renders and how it is worded ([`crate::render`]).
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use harness_core::context::EntryId;
@@ -43,29 +41,6 @@ pub fn breakpoints(root: EntryId, shared: &[EntryId], tail: EntryId) -> Vec<Entr
 /// then pay one cache write between them instead of one each.
 pub fn hold<'a>(head: EntryId, cold: impl IntoIterator<Item = &'a HashSet<EntryId>>) -> bool {
     cold.into_iter().any(|context| context.contains(&head))
-}
-
-/// A new clone for an agent started from a workspace at `dir`: cloned from
-/// what `dir` itself was cloned from (or `dir`, if it has no `origin`), into
-/// a sibling directory named for the repository and the branch, the way
-/// Max names his (`agent-harness` on `dev-x` is `agent-harness-dev-x`).
-pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
-    let from = Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "remote", "get-url", "origin"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| dir.to_string_lossy().into_owned());
-    let repo = from
-        .trim_end_matches('/')
-        .rsplit(['/', ':'])
-        .next()
-        .unwrap_or("clone")
-        .trim_end_matches(".git");
-    let name = format!("{repo}-{}", branch.replace('/', "-"));
-    let parent = dir.parent().unwrap_or(dir);
-    (from, parent.join(name))
 }
 
 /// How long a call has to stop when no task reading it has a deadline (Max
