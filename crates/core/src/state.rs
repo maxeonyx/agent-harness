@@ -614,15 +614,15 @@ impl State {
             .extend(said.values.iter().map(Bytes::id).filter(|v| v == text));
     }
 
-    /// Fold what this build can read of a record it cannot parse: only what
-    /// the build's [`Probation`] reads, so a build is judged by the one
-    /// before it even when its records hold words that one does not know.
+    /// Fold what this build can read of a record it skips: only what the
+    /// build's [`Probation`] reads, so a build is judged by the one before
+    /// it even when its records hold words that one does not know. Who
+    /// connected a limb may be in a record it skipped too, so a limb is any
+    /// replica that is neither this brain nor one of Max's faces.
     pub(crate) fn glimpse(&mut self, here: Time, at: Time, glimpse: &Glimpsed) {
-        let Some(by) = self.author(here.replica, at.replica) else {
-            return;
-        };
+        let by_limb = at.replica != here.replica && !self.faces.contains(&at.replica);
         for trial in glimpse.trials() {
-            self.probation.see(&by, trial);
+            self.probation.see(by_limb, trial);
         }
     }
 
@@ -793,7 +793,8 @@ impl State {
         }
         let mark = Mark::of(record);
         if let Some(trial) = Trial::of(record.fact) {
-            self.probation.see(&record.by, trial);
+            self.probation
+                .see(matches!(record.by, Author::Limb(_)), trial);
         }
         match record.fact {
             Fact::Launched(launched) => {

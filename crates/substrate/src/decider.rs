@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::record::{Durability, Folding, Included, Record, Schema, Unread, What};
+use crate::record::{Durability, Folding, Included, Record, Schema, Unread, What, glimpse};
 use crate::storage::Storage;
 use crate::time::{ReplicaId, Time, Timestamp};
 
@@ -174,7 +174,9 @@ fn said<S: Schema>(what: &What<S>) -> Option<Result<&S::Said, &Unread>> {
 impl<S: Schema, St: Storage<S>> Decider<S, St> {
     /// The decider at `here`, folding everything `storage` holds. A record
     /// this build cannot read, or folds differently from the build that
-    /// included it, is skipped and returned, for the embedding to surface.
+    /// included it, is skipped and returned, for the embedding to surface,
+    /// and glimpsed ([`Schema::glimpse`]): it was accepted, and what follows
+    /// a record this build skipped is often refused by this build for that.
     #[allow(clippy::type_complexity)]
     pub fn open(
         here: ReplicaId,
@@ -246,10 +248,15 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                                 decider.state = state;
                                 durability = Some(S::durability(at, said));
                             }
-                            Err(why) => divergences.push(Divergence {
-                                at,
-                                why: Diverged::Refused(why),
-                            }),
+                            Err(why) => {
+                                divergences.push(Divergence {
+                                    at,
+                                    why: Diverged::Refused(why),
+                                });
+                                if let Some(glimpse) = glimpse::<S>(said) {
+                                    S::glimpse(&mut decider.state, record.at, at, &glimpse);
+                                }
+                            }
                         }
                     }
                 }

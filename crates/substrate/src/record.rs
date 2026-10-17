@@ -97,6 +97,13 @@ impl Unread {
     }
 }
 
+/// What a build's schema glimpses of a record it reads but folds
+/// differently from the build that accepted it: the same as of a record it
+/// cannot read, so a glimpse never depends on which of the two it is.
+pub(crate) fn glimpse<S: Schema>(said: &S::Said) -> Option<S::Glimpse> {
+    serde_json::from_str(&serde_json::to_string(said).ok()?).ok()
+}
+
 impl PartialEq for Unread {
     fn eq(&self, other: &Unread) -> bool {
         self.of == other.of && self.what.get() == other.what.get()
@@ -263,10 +270,11 @@ pub trait Schema: Clone + fmt::Debug + PartialEq + 'static {
     /// passed over.
     type Glimpse: DeserializeOwned;
 
-    /// Fold what [`Self::Glimpse`] read of a record this build cannot read,
-    /// at the decider's time `here`; `at` is the record's own. Never a
-    /// refusal: the record is not this build's to judge. It runs where
-    /// [`Schema::fold`] would.
+    /// Fold what [`Self::Glimpse`] read of a record the build that wrote or
+    /// included it accepted, but this build cannot read or would refuse
+    /// (a fact about something it skipped), at the decider's time `here`;
+    /// `at` is the record's own. Never a refusal: the record is not this
+    /// build's to judge. It runs where [`Schema::fold`] would.
     fn glimpse(state: &mut Self::State, here: Time, at: Time, glimpse: &Self::Glimpse);
 
     /// Fold a record the rules refused, as refused: an invalid act is still

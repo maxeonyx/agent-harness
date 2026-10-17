@@ -73,7 +73,7 @@ use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use crate::call::CallEvent;
-use crate::fact::{Author, Fact};
+use crate::fact::Fact;
 use crate::id::{CallId, ModelCallId, ParseError, ValueId};
 use crate::model_call::{Ending, ModelCallEvent};
 
@@ -258,9 +258,9 @@ pub struct Probation {
 }
 
 impl Probation {
-    /// Fold one fact of the span, said by `by`. Facts of other spans are
-    /// not shown it.
-    pub fn see(&mut self, by: &Author, trial: Trial) {
+    /// Fold one fact of the span, said by a limb if `by_limb`. Facts of
+    /// other spans are not shown it.
+    pub fn see(&mut self, by_limb: bool, trial: Trial) {
         if self.refused.is_some() || self.proven().is_some() {
             return;
         }
@@ -279,7 +279,7 @@ impl Probation {
             Trial::Made(id) => {
                 self.made.insert(id);
             }
-            Trial::Settled(id) if matches!(by, Author::Limb(_)) && self.made.contains(&id) => {
+            Trial::Settled(id) if by_limb && self.made.contains(&id) => {
                 self.round_trip.get_or_insert(id);
             }
             _ => {}
@@ -335,12 +335,15 @@ pub enum Verdict {
 /// know every word the new build's records hold: a request carries every
 /// span it rendered, a response its content. So what the trial reads is
 /// only kinds and ids, and how a request ended, read either from a fact
-/// this build parses ([`Trial::of`]) or from the [`Glimpsed`] record of one
-/// it does not. A record whose payload names a variant this build does not
-/// know still shows a request sent, answered or refused, and a call made
-/// or settled. Not covered: a new kind of fact, a new way for a request to
-/// end, a change to an id's form, or a [`Launched`] this build cannot read
-/// (the span itself is then unseen).
+/// this build folds ([`Trial::of`]) or from the [`Glimpsed`] record of one
+/// it skips: one it cannot parse, or one its rules refuse because it is
+/// about something it skipped (a response to a request it could not read).
+/// So a record whose payload names a variant this build does not know
+/// still shows a request sent, answered or refused, and a call made or
+/// settled; a settlement it skips counts as a limb's when it came from
+/// neither the brain nor one of Max's faces. Not covered: a new kind of
+/// fact, a new way for a request to end, a change to an id's form, or a
+/// [`Launched`] this build cannot read (the span itself is then unseen).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Trial {
     Sent(ModelCallId),
