@@ -38,7 +38,7 @@
   .compose .go.staged { width: auto; display: inline-flex; gap: .3em; padding: 0 .9em 0 .6em; border-radius: 999px; font-weight: 600; background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
   .compose .go.staged:hover { background: var(--maroon); color: var(--paper); }
   .compose .go:disabled { opacity: .4; cursor: default; }
-  .compose .row2 { display: flex; align-items: center; gap: .3em; margin-top: .2em; margin-left: -.45em; }
+  .compose .row2 { display: flex; flex-wrap: wrap; align-items: center; gap: .3em; margin-top: .2em; margin-left: -.45em; }
   .compose .row2:not(:has(:not(:empty):not([hidden]))) { display: none; }
   .compose .status { flex: 1; min-width: 0; font-size: 12px; color: var(--red); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .compose .mic.on { background: var(--maroon); color: var(--paper); animation: breathe 1.6s infinite; }
