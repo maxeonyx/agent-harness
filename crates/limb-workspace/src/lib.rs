@@ -98,6 +98,10 @@ pub struct Settings {
     /// Made before the limb first says hello, if `dir` does not exist yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clone: Option<Clone>,
+    /// A user limb's set of Max's skills, by name: the index lists only
+    /// these and `skill` loads only these. Every skill when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
 }
 
 /// A clone of a repository, made for one agent: its own directory and its
@@ -129,8 +133,13 @@ impl Settings {
     }
 
     /// The definition of a user limb over Max's config directory `dir`.
-    pub fn user(id: LimbId, dir: PathBuf) -> Limb {
-        Settings { dir, clone: None }.limb(id, "user", Kind::User)
+    pub fn user(id: LimbId, dir: PathBuf, skills: Option<Vec<String>>) -> Limb {
+        Settings {
+            dir,
+            clone: None,
+            skills,
+        }
+        .limb(id, "user", Kind::User)
     }
 
     fn limb(&self, id: LimbId, name: &str, kind: Kind) -> Limb {
@@ -198,6 +207,8 @@ struct Inner {
     /// The clone it was made as, which its instructions say is the agent's
     /// own.
     clone: Option<Clone>,
+    /// The skills a user limb offers; every one when `None`.
+    skills: Option<Vec<String>>,
     kind: Kind,
     calls: Calls,
     out: Sender<FromLimb>,
@@ -223,7 +234,7 @@ impl Workspace {
     /// earlier instance left running, say hello, and describe itself. Blocks
     /// while it clones.
     pub fn open(config: Config, out: Sender<FromLimb>) -> io::Result<Workspace> {
-        let Settings { dir, clone } = config.settings;
+        let Settings { dir, clone, skills } = config.settings;
         if let Some(clone) = &clone {
             git::clone(clone, &dir)?;
         }
@@ -232,6 +243,7 @@ impl Workspace {
             instance: InstanceId::generate(),
             root: dir.canonicalize()?,
             clone,
+            skills,
             kind: config.kind,
             calls: Calls::open(config.state.join("calls"))?,
             out,
@@ -516,7 +528,7 @@ impl Inner {
                 text: format!("Max's own instructions, for every agent:\n\n{own}"),
             });
         }
-        let index = user::index(&self.root);
+        let index = user::index(&self.root, self.skills.as_deref());
         instructions.push(Instruction {
             observes: Observation {
                 resource: self.key(INSTRUCTIONS, user::INDEX),
@@ -560,7 +572,9 @@ impl Inner {
     fn version_of(&self, resource: &ResourceKey) -> Option<Version> {
         match resource.kind.as_str() {
             INSTRUCTIONS if self.kind == Kind::User && resource.name == user::INDEX => {
-                Some(Version::Is(Digest::of(user::index(&self.root).as_bytes())))
+                Some(Version::Is(Digest::of(
+                    user::index(&self.root, self.skills.as_deref()).as_bytes(),
+                )))
             }
             FILE | INSTRUCTIONS if !resource.name.is_empty() => {
                 files::version(&self.root.join(&resource.name)).ok()
