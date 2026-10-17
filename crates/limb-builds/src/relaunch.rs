@@ -153,7 +153,12 @@ pub fn take_over(
         ));
     }
     let build = install(clone, say)?;
-    rehearse(&build, &old, say)?;
+    rehearse(&build, &old, say).map_err(|why| {
+        format!(
+            "{why}\n{unit} runs {} still: it was never stopped.",
+            old.commit
+        )
+    })?;
     let before = fold_span(&old.db)?.0;
     say(&format!(
         "stopping {unit} on {}: its requests in flight drain first",

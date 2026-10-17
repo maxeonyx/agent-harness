@@ -20,7 +20,7 @@ unit=harness-$name.service
 home=${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness
 work=$repo/.demo-relaunch.ignore
 step() { printf '\n== %s\n' "$*"; }
-view() { curl -sk "https://localhost:$port/view" | jq -c '.rows.harness.Harness | {source, probation}'; }
+view() { curl -sk "https://localhost:$port/view" | jq -c '.rows.harness.Harness | {source, how: .launch.how, probation}'; }
 
 systemctl --user -q is-active "$unit" && systemctl --user stop "$unit"
 rm -rf "$work" "$home/$name"
@@ -69,7 +69,7 @@ done
 printf '%b\n' "$said"
 view
 echo "the brain's process: $pid before, $(systemctl --user show -p MainPID --value "$unit") now"
-git -C "$work/clone" revert -q --no-edit HEAD
+git -C "$work/clone" revert --no-edit HEAD >/dev/null
 
 step "relaunch onto a brain that exits 20 s after it starts"
 sed -i 's/^fn main() -> ExitCode {$/fn main() -> ExitCode {\n    if !std::env::args().any(|a| a == "--version") {\n        std::thread::spawn(|| {\n            std::thread::sleep(std::time::Duration::from_secs(20));\n            std::process::exit(3);\n        });\n    }/' "$work/clone/crates/brain/src/main.rs"
