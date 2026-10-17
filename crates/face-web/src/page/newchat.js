@@ -64,28 +64,93 @@ async function startNew(text, files) {
 }
 
 // ─── Finding a chat ────────────────────────────────────────────────────────
-// Ctrl+K, or /: what matches by its name or what it was for stays, the rest
-// of the map fades; Enter opens the newest match, Esc lets it go.
-const findEl = $("#find");
-let finding = "", found = new Set();
+// Ctrl+K, or /: the chats whose name, mandate or words match are listed
+// under the box, newest first, each with what matched, and stay lit on the
+// map while the rest fades. Enter or a click opens one at the match; the
+// arrows choose; Esc lets it go. The words are searched by the face
+// (`/find`), which holds every context; the page holds only the open one.
+const findEl = $("#find"), foundEl = $("#found");
+let finding = "", found = new Set(), hits = [], chosen = 0, asking = 0;
+// The entry to bring into view once its chat's log has it.
+let reveal = null;
 function startFind() { findEl.hidden = false; findEl.focus(); findEl.select(); }
-function endFind() { findEl.hidden = true; findEl.value = ""; finding = ""; found = new Set(); findEl.blur(); if (view) drawMap(); }
+function endFind() {
+  findEl.hidden = foundEl.hidden = true; findEl.value = ""; finding = ""; found = new Set(); hits = [];
+  findEl.blur(); if (view) drawMap();
+}
 findEl.addEventListener("input", () => {
   finding = findEl.value.trim().toLowerCase();
-  found = new Set();
-  if (finding) {
-    for (const t of view.tasks) if (`${t.name}\n${t.mandate || ""}`.toLowerCase().includes(finding)) found.add(live(t.id));
-    // A folded project matches through what it folds.
-    for (const c of graph.comps) if (c.folded && c.tasks.some((t) => found.has(t.id))) found.add(c.root.id);
-  }
-  drawMap();
+  const q = finding, ask = ++asking;
+  // Names and mandates are in the view: they list at once, words follow.
+  hits = q ? [...view.tasks].filter((t) => `${t.name}\n${t.mandate || ""}`.toLowerCase().includes(q))
+    .map((t) => ({ task: t.id })) : [];
+  showFound();
+  if (!q) return;
+  setTimeout(() => {
+    if (ask !== asking) return;
+    fetch(`/find?q=${encodeURIComponent(q)}`).then((r) => r.ok ? r.json() : []).catch(() => []).then((said) => {
+      if (ask !== asking) return;
+      const named = new Map(hits.map((h) => [h.task, h]));
+      for (const h of said) named.set(h.task, { ...named.get(h.task), ...h });
+      hits = [...named.values()];
+      showFound();
+    });
+  }, 150);
 });
+function showFound() {
+  const seq = (h) => byId[h.task]?.created.seq ?? -1;
+  hits = hits.filter((h) => byId[h.task]).sort((a, b) => seq(b) - seq(a));
+  chosen = 0;
+  found = new Set(hits.map((h) => live(h.task)));
+  // A folded project matches through what it folds.
+  for (const c of graph.comps) if (c.folded && c.tasks.some((t) => found.has(t.id))) found.add(c.root.id);
+  foundEl.replaceChildren(...hits.map((h, i) => {
+    const row = el("button", "hit");
+    row.type = "button";
+    row.append(el("span", "name", byId[h.task].name));
+    if (h.hits > 1) row.append(el("span", "count", `${h.hits} places`));
+    if (h.snippet) {
+      const words = el("span", "said", h.snippet.before);
+      words.append(el("mark", "", h.snippet.match), h.snippet.after);
+      row.append(words);
+    }
+    row.onmousedown = (e) => e.preventDefault();
+    row.onclick = () => open(i);
+    return row;
+  }));
+  foundEl.hidden = !finding;
+  if (finding && !hits.length) foundEl.append(el("div", "none", "Nothing said matches"));
+  choose(0);
+  drawMap();
+}
+function choose(i) {
+  const rows = foundEl.querySelectorAll(".hit");
+  if (!rows.length) return;
+  chosen = (i + rows.length) % rows.length;
+  rows.forEach((r, k) => r.classList.toggle("chosen", k === chosen));
+  rows[chosen].scrollIntoView({ block: "nearest" });
+}
+function open(i) {
+  const h = hits[i];
+  endFind();
+  if (!h) return;
+  reveal = h.entry || null;
+  go(h.task);
+  if (reveal && logState) revealIn(logState);
+}
+// Once the open log holds the found entry, it scrolls there and glows.
+function revealIn(s) {
+  const at = reveal && $(`[data-entry="${reveal}"]`, logEl);
+  if (!at || s !== logState) return;
+  reveal = null;
+  s.follow = false;
+  at.scrollIntoView({ block: "center" });
+  at.classList.remove("revealed"); void at.offsetWidth; at.classList.add("revealed");
+}
 findEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    const first = [...view.tasks].sort((a, b) => b.created.seq - a.created.seq).find((t) => found.has(live(t.id)));
-    endFind();
-    if (first) go(first.id);
-  } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); endFind(); }
+  if (e.key === "Enter") { e.preventDefault(); open(chosen); }
+  else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); choose(chosen + (e.key === "ArrowDown" ? 1 : -1)); }
+  else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); endFind(); }
 });
 findEl.addEventListener("blur", () => { if (!finding) endFind(); });
 

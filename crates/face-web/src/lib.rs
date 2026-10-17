@@ -30,6 +30,9 @@
 //! the browser caches it forever and refetches only when the task's head
 //! moves.
 //!
+//! A chat is found by what was said in it (`/find?q=<words>`), read off
+//! the fold the same way.
+//!
 //! The box takes dictation too ([`Dictation`]): the page's microphone,
 //! relayed to Anthropic's speech-to-text endpoint, the transcript arriving in
 //! the box as editable text.
@@ -39,6 +42,7 @@
 //! sockets are WebSockets (tungstenite, without its TLS).
 
 mod dictation;
+mod find;
 mod http;
 mod live;
 mod view;
@@ -103,6 +107,7 @@ pub struct Face<S> {
     wiring: Wiring,
     state: RwLock<State>,
     shown: Mutex<Option<Arc<Shown>>>,
+    said: find::Said,
 }
 
 /// What every link publishes from: the rows, derived once per fold.
@@ -132,6 +137,7 @@ impl<S: Source> Face<S> {
             wiring,
             state: RwLock::new(State::default()),
             shown: Mutex::new(None),
+            said: find::Said::default(),
         })
     }
 
@@ -180,6 +186,17 @@ impl<S: Source> Face<S> {
             "/view" => self.view(&mut stream),
             "/link" => self.link(stream, &request),
             "/dictation" => self.dictate(stream, &request),
+            "/find" => {
+                let query = find::decode(request.query("q").unwrap_or(""));
+                let tasks = find::own_entries(&self.read());
+                let found = self.said.find(tasks, &query, |id| self.source.value(id));
+                http::respond(
+                    &mut stream,
+                    "application/json",
+                    found.to_string().as_bytes(),
+                    false,
+                )
+            }
             path => match path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
                 Some(head) => self.context(&mut stream, head),
                 None => http::not_found(&mut stream),
