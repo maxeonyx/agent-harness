@@ -17,7 +17,7 @@ use harness_core::draft::DraftEvent;
 use harness_core::fact::{Batch, Fact};
 use harness_core::id::{DeliveryId, ModelCallId, ReplicaId, TaskId, Timestamp};
 use harness_core::live::Live;
-use harness_core::task::{Drain, Stopper, TaskEvent};
+use harness_core::task::{Abandoner, Drain, TaskEvent};
 use harness_core::value::Bytes;
 use harness_face_tab::{Down, FaceKey, FaceRow, Tab, Up};
 use harness_substrate::Status;
@@ -138,18 +138,18 @@ impl Device {
         })
     }
 
-    /// Max stops `task`, giving it `within` to finish.
-    pub fn stop(&mut self, task: TaskId, within: Duration) -> u64 {
+    /// Max abandons `task`, giving it `within` to finish.
+    pub fn abandon(&mut self, task: TaskId, within: Duration) -> u64 {
         println!(
-            "  {}: Max presses Stop, with {within:?} to finish",
+            "  {}: Max presses Abandon, with {within:?} to finish",
             self.name
         );
         self.say(Batch {
             values: Vec::new(),
             facts: vec![Fact::Task(
                 task,
-                TaskEvent::Drain(Drain::Stop {
-                    by: Stopper::Max,
+                TaskEvent::Drain(Drain::Abandon {
+                    by: Abandoner::Max,
                     within: within.as_millis() as u64,
                 }),
             )],

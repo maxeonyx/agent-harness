@@ -23,8 +23,8 @@ use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
 use harness_core::schema::{self, Record};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
-    Created, Drain, Draining, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome, Scope,
-    Start as TaskStart, Stopper, Task, TaskEvent,
+    Abandoner, Created, Drain, Draining, Input, Mandate, Mode, Move, Origin,
+    Outcome as TaskOutcome, Scope, Start as TaskStart, Task, TaskEvent,
 };
 use harness_core::value::Bytes;
 use harness_face_web::{Feed, Folded, Running};
@@ -476,16 +476,18 @@ impl Brain {
                 self.fail(call, &said);
             }
             Todo::Interrupt(call) => self.interrupt(call),
-            Todo::Abandon(request) => {
+            Todo::Cut(request) => {
                 if let Some((cancel, _)) = self.requests.get(&request) {
                     cancel.now();
                 }
             }
-            Todo::Stop(task) => self.stop_member(task),
-            Todo::Tidy(task) => self.prompt(task, Prompt::Stopping),
+            Todo::Abandon(task) => self.stop_member(task),
+            Todo::Tidy(task) => self.prompt(task, Prompt::Tidy),
             Todo::Expire(task) => self.fact(Fact::Task(task, TaskEvent::Expired)),
             Todo::Settle(call) => self.settle_scope(call),
             Todo::Linger(task) => self.prompt(task, Prompt::Lingering),
+            Todo::Park(task) => self.prompt(task, Prompt::Park),
+            Todo::Resume(task) => self.prompt(task, Prompt::Resume),
             Todo::Unblock(aside) => self.prompt(aside, Prompt::Unblocked),
         }
     }
@@ -507,12 +509,12 @@ impl Brain {
         let state = self.state();
         let owner = state.owner(task).and_then(|o| state.task(o));
         let within = match owner.and_then(Task::drain) {
-            Some(Draining::Stopping(s)) if s.hard => 0,
-            Some(Draining::Stopping(s)) => policy::share(now(), s.deadline),
+            Some(Draining::Abandoning(s)) if s.hard => 0,
+            Some(Draining::Abandoning(s)) => policy::share(now(), s.deadline),
             _ => policy::ms(policy::MEMBER_STOP),
         };
-        let stop = Drain::Stop {
-            by: Stopper::Owner,
+        let stop = Drain::Abandon {
+            by: Abandoner::Owner,
             within,
         };
         self.fact(Fact::Task(task, TaskEvent::Drain(stop)));
@@ -1320,7 +1322,7 @@ and you cannot finish until it has.",
                 let said = match t.outcome() {
                     Some(TaskOutcome::Result { entry }) => self.visible(*entry),
                     Some(TaskOutcome::Failed { reason }) => format!("Failed: {reason}"),
-                    Some(TaskOutcome::Cancelled { by, report }) => self.cancelled(*by, *report),
+                    Some(TaskOutcome::Abandoned { by, report }) => self.cancelled(*by, *report),
                     None => unreachable!("a scope settles when every member is done"),
                 };
                 (t.name.clone(), said)
@@ -1342,10 +1344,10 @@ and you cannot finish until it has.",
     }
 
     /// What a cancelled member says to the task that reads its result.
-    fn cancelled(&self, by: Stopper, report: Option<EntryId>) -> String {
+    fn cancelled(&self, by: Abandoner, report: Option<EntryId>) -> String {
         let by = match by {
-            Stopper::Max => "Cancelled by Max",
-            Stopper::Owner => "Cancelled, because you are being stopped",
+            Abandoner::Max => "Abandoned by Max",
+            Abandoner::Owner => "Abandoned, because you are being abandoned",
         };
         match report {
             Some(entry) => format!("{by}. Its report:\n\n{}", self.visible(entry)),
@@ -1555,7 +1557,7 @@ and you cannot finish until it has.",
         };
         let said = match outcome {
             TaskOutcome::Result { entry } => self.visible(*entry),
-            TaskOutcome::Cancelled { by, report } => self.cancelled(*by, *report),
+            TaskOutcome::Abandoned { by, report } => self.cancelled(*by, *report),
             other => format!("{other:?}"),
         };
         println!("\n== the task is done; its result:\n\n{said}\n");

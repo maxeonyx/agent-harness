@@ -162,10 +162,10 @@ function said(text, when, cls = "") {
   d.append(bubble);
   return d;
 }
-// A standard prompt, as the act it is: Max's Done; a cancel, his or the
-// agent's owner's. The harness's instruction is a line under it, in full
+// A standard prompt, as the act it is: Max's Done; an abandon, his or the
+// agent's owner's; his Stop, which parks it. The harness's instruction is a line under it, in full
 // when clicked. Other standard prompts are the harness's notes.
-const PROMPTS = { Done: "Done", Stopping: "Abandon" };
+const PROMPTS = { Done: "Done", Tidy: "Abandon", Park: "Stop" };
 function prompted(prompt, text) {
   if (!PROMPTS[prompt]) return note(text);
   const d = said(PROMPTS[prompt], null, "prompt");

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Stopping work, end to end, on real brains: Max stops a task whose
-# background worker saves its state; Max stops one whose process ignores
+# Stopping work, end to end, on real brains: Max abandons a task whose
+# background worker saves its state; Max abandons one whose process ignores
 # SIGTERM, with a deadline too short for it; and Ctrl-C, once and then
 # twice, on a brain in a terminal, then once more to see it carry on from
 # the cache. After each, every process the brain started is looked for.
@@ -38,8 +38,8 @@ c() { curl -sS --resolve "mx-hv-mj.local:$port:127.0.0.1" "$@"; }
 say() { printf "%6.1fs  %s\n" "$(awk "BEGIN { print $(date +%s.%N) - $start }")" "$*"; }
 q() { c "$url/view" | jq -r "$1"; }
 root='.rows[] | .Task // empty | select(.owner == null)'
-# Max stops the root at a tab, with $1 ms to finish.
-stop() { target/release/examples/act "$port" stop "$1" | sed 's/^/          the brain: /'; }
+# Max abandons the root at a tab, with $1 ms to finish.
+abandon() { target/release/examples/act "$port" abandon "$1" | sed 's/^/          the brain: /'; }
 until_root() { # jq condition on the root task, seconds
   for _ in $(seq $(($2 * 2))); do
     [ "$(q "$root | $1" 2>/dev/null)" = true ] && return 0
@@ -68,23 +68,23 @@ finish() { # name
   sed 's/^/          /' "$dir/$1.log"
 }
 
-say "== A. Max stops a task whose background worker saves its state on SIGTERM"
+say "== A. Max abandons a task whose background worker saves its state on SIGTERM"
 launch a "Start \`./worker.sh\` in the background: call the \`background\` tool to run \`bash\` with the command \`./worker.sh\` and \`timeout_ms\` 600000. Then say in one line that it is running, and end your turn."
-say "Max presses Stop: two minutes to stop and tidy up"
-stop 120000
+say "Max presses Abandon: two minutes to stop and tidy up"
+abandon 120000
 until_root '.outcome != null' 180
-say "cancelled; worker.log:"
+say "abandoned; worker.log:"
 sed 's/^/          /' "$dir/repo/worker.log"
 say "left running:"
 left
 finish a
 
-say "== B. Max stops a task whose process ignores SIGTERM, with 6 seconds to do it"
+say "== B. Max abandons a task whose process ignores SIGTERM, with 6 seconds to do it"
 launch b "Start \`./stubborn.sh\` in the background: call the \`background\` tool to run \`bash\` with the command \`./stubborn.sh\` and \`timeout_ms\` 600000. Then say in one line that it is running, and end your turn."
-say "Max stops it with 6 s: its call gets three quarters of that, then SIGKILL"
-stop 6000
+say "Max abandons it with 6 s: its call gets three quarters of that, then SIGKILL"
+abandon 6000
 until_root '.outcome != null' 60
-say "cancelled: $(q "$root"' | .outcome | "by \(.by), \(if .report then "with" else "without" end) a report"')"
+say "abandoned: $(q "$root"' | .outcome | "by \(.by), \(if .report then "with" else "without" end) a report"')"
 say "left running:"
 left
 finish b

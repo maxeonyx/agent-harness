@@ -5,5 +5,5 @@
 # https://mx-hv-mj.local:4400 (another port: PORT=...).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain -p harness-limb-workspace --example face_controls
+cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example face_controls
 exec target/release/examples/face_controls

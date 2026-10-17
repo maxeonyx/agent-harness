@@ -11,7 +11,7 @@ use harness_core::id::{CallId, LimbId, Timestamp, ValueId};
 use harness_core::model_call::{Ending, Stop};
 use harness_core::resource::Observation;
 use harness_core::state::{Delivered, Stale, State};
-use harness_core::task::{Draining, Input, Origin, Scope, Stopper, Task};
+use harness_core::task::{Abandoner, Draining, Input, Origin, Scope, Task};
 use harness_core::value::Bytes;
 use serde_json::{Value, json};
 
@@ -424,44 +424,66 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
 /// What a delivery made `at` says.
 fn delivery(values: Values, task: &Task, content: &Content, at: Timestamp) -> Vec<String> {
     let aside = matches!(task.origin, Origin::Aside { .. });
-    let stopping;
+    // A fork works in the same directory as the agent it was forked from.
+    let shared = match task.origin {
+        Origin::Fork { .. } | Origin::Aside { .. } => {
+            " You share your working directory with the agent you were forked from and its other forks: \
+change back only what you changed yourself."
+        }
+        Origin::Fresh { .. } | Origin::Resume { .. } => "",
+    };
     let said = match content {
         Content::Words(words) => return words_of(values, *words),
         Content::Prompt(Prompt::Done) if aside => {
             "Max has marked this aside done. Summarise what came of your talk with him since it was opened, \
 for the context it was opened on: what he said, what was decided, and what must now be done differently. \
 This is your last message here."
+                .to_owned()
         }
         Content::Prompt(Prompt::Done) => {
             "Max has marked this chat done. Write your result: what you did, what you learned, and what is \
 left undone. This is your last message here."
+                .to_owned()
         }
         Content::Prompt(Prompt::Lingering) => {
-            "Your turn ended, but work you started in the background is still running (a question to Max \
-included). Its result wakes you when it settles, and you cannot finish before then. If there is nothing \
-else to do meanwhile, end your turn to wait."
+            "Your turn ended, but work you started in the background is still running. Its result wakes you \
+when it settles, and you cannot finish before then. If there is nothing else to do meanwhile, end your turn \
+to wait."
+                .to_owned()
         }
-        Content::Prompt(Prompt::Stopping) => {
+        Content::Prompt(Prompt::Tidy) => {
             let (by, left) = match task.drain() {
-                Some(Draining::Stopping(s)) => (s.by, (s.deadline.0 - at.0).max(0) / 1000),
-                _ => (Stopper::Max, 0),
+                Some(Draining::Abandoning(s)) => (s.by, (s.deadline.0 - at.0).max(0) / 1000),
+                _ => (Abandoner::Max, 0),
             };
             let by = match by {
-                Stopper::Max => "Max has stopped you",
-                Stopper::Owner => "The agent that started you is being stopped, so you are too",
+                Abandoner::Max => "Max has abandoned this task: the work is no longer needed",
+                Abandoner::Owner => {
+                    "The agent that started you has been abandoned, so this task is too: the work is no longer needed"
+                }
             };
-            stopping = format!(
+            format!(
                 "{by}. Everything you had running, and every agent you started, has been stopped. \
 You have about {left} seconds before you are killed. Use them to leave your work safe and understandable \
-to whoever picks it up: nothing half-written, nothing left running. Then end your turn with a short report \
-of where things stand: what is done, what is not, and anything left that someone must know about. \
+to whoever picks it up: nothing half-written, nothing left running.{shared} Then end your turn with a short \
+report of where things stand: what is done, what is not, and anything left that someone must know about. \
 Start nothing new. This is your last turn."
-            );
-            &stopping
+            )
+        }
+        Content::Prompt(Prompt::Park) => format!(
+            "Max is pausing this work for now. Bring it to a safe point: finish or undo what is half done, so \
+nothing is left broken or half-written, and start nothing new.{shared} Work you have running in the \
+background is yours to keep or stop: keep what should still be running when Max comes back. Then end your \
+turn with a short note of where things stand and what you will do next. You will wait, paused, until Max \
+resumes you; this is not the end of your task."
+        ),
+        Content::Prompt(Prompt::Resume) => {
+            "Max has resumed you. Carry on from where you left off.".to_owned()
         }
         Content::Prompt(Prompt::Unblocked) => {
             "Every other agent the context you were forked from started is done, and its results wait on this \
 aside. Tell Max; he decides when this aside is done."
+                .to_owned()
         }
     };
     vec![text(&format!("[harness] {said}"))]

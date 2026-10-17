@@ -313,6 +313,6 @@ pub enum Note {
     Boundary { from: Option<EntryId> },
     /// The last response stopped short of ending its turn (its output limit,
     /// a provider pause): carry on. A response Max interrupted is quoted
-    /// here too, from [`crate::model_call::Ending::Abandoned`].
+    /// here too, from [`crate::model_call::Ending::Cut`].
     Continue,
 }

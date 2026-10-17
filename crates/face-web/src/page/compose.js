@@ -319,7 +319,7 @@ async function submit(read) {
   if (continues && !text.trim()) return say("write something to go with what is attached", true);
   let draft = takeWords(key);
   // Words to a task Max paused carry it on.
-  const release = t.held && !isDone(t) ? [{ Task: [t.id, { Held: false }] }] : [];
+  const release = t.pause?.by === t.id && !isDone(t) ? [{ Task: [t.id, { Pause: "Off" }] }] : [];
   const discard = [...(draft ? [{ Draft: [draft, "Discarded"] }] : []), ...release];
   // A new task whose mandate is these words; the draft goes with them.
   if (continues) {
