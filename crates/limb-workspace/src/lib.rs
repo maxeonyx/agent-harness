@@ -853,6 +853,10 @@ struct Own {
 /// Commands remembered for each task.
 const COMMANDS: usize = 50;
 
+/// How far a file's time may lag the clock: the kernel stamps files from
+/// a coarse clock, a tick behind the one a command's start is read from.
+const COARSE: Duration = Duration::from_millis(20);
+
 impl Inner {
     /// `call` as its caller wrote it: one response's tool uses run in the
     /// order written (see the crate docs), so each was written knowing what
@@ -916,7 +920,7 @@ impl Inner {
         lock(&self.own).get(task).is_some_and(|own| {
             own.commands
                 .iter()
-                .any(|(start, end)| (*start..=*end).contains(&modified))
+                .any(|(start, end)| (*start - COARSE..=*end).contains(&modified))
         })
     }
 }
