@@ -96,8 +96,10 @@ for _ in $(seq 240); do
 done
 echo "${said%%\\n*}"
 
-step "end: stop the brain and delete the demo's builds"
-systemctl --user stop "$unit"
+step "end: retire the brain's unit and delete the demo's builds"
+systemctl --user disable --now --quiet "$unit"
+rm "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
+systemctl --user daemon-reload
 for build in "$good" "$panics" "$bad"; do
     [[ -d $home/builds/$build ]] && chmod -R u+w "$home/builds/$build" && rm -rf "$home/builds/$build"
 done

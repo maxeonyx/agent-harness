@@ -3,7 +3,7 @@
 //!   harness-limb-builds attach|serve LIMB     the limb (harness_limb)
 //!   harness-limb-builds relaunch UNIT CLONE [--back]
 //!   harness-limb-builds install CLONE         prints the build's directory
-//!   harness-limb-builds start UNIT HARNESS-BRAIN ARG...
+//!   harness-limb-builds start UNIT HARNESS-BRAIN ARG...   durably, see relaunch::start
 //!
 //! `relaunch` runs until the new build is proven (exit 0) or has gone back
 //! (exit 1), saying each step on stderr.
