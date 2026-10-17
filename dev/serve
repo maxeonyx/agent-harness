@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# A long-lived brain on an installed build of a commit.
+#
+#   dev/serve NAME PORT [HARNESS-BRAIN FLAG...]
+#
+# Builds this clone's HEAD (a tree with uncommitted changes is refused)
+# and installs its executables and roles/ into
+# ~/.local/share/agent-harness/builds/COMMIT/, once, read-only: every
+# brain of that commit runs from there, and so do the limbs it starts,
+# which it finds beside its own executable. Then it starts the user unit
+# harness-NAME.service on ~/.local/share/agent-harness/NAME/brain.sqlite
+# with that build's roles, or, if the unit runs, stops it first: SIGTERM,
+# and the brain drains (its requests in flight get up to five minutes)
+# before the new build starts on the same database. Any further flags go
+# to harness-brain (`--model scripted`, `--sample WAV`); a relaunch takes
+# only the flags it is given. It prints the commit and the URL once the
+# new brain serves its face.
+#
+# ~/.local/share/agent-harness/NAME/build links to the build NAME runs, so
+# its `act` is ~/.local/share/agent-harness/NAME/build/bin/act.
+# Its log: journalctl --user -u harness-NAME.
+set -euo pipefail
+
+die() { echo "dev/serve: $*" >&2; exit 1; }
+
+[[ $# -ge 2 ]] || die "usage: dev/serve NAME PORT [HARNESS-BRAIN FLAG...]"
+name=$1 port=$2
+shift 2
+[[ $name =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "NAME is lowercase letters, digits and -: $name"
+[[ $port =~ ^[0-9]+$ ]] || die "PORT is a number: $port"
+
+repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+cd "$repo"
+# The same test as the brain's own `+dirty` (crates/brain/build.rs).
+[[ -z $(git status --porcelain --untracked-files=no) ]] ||
+    die "$repo has uncommitted changes; commit them, or stash them"
+commit=$(git rev-parse --short=12 HEAD)
+
+home=${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness
+build=$home/builds/$commit
+if [[ ! -d $build ]]; then
+    echo "building $commit"
+    staging=$home/builds/.$commit.$$
+    trap '[[ ! -d $staging ]] || { chmod -R u+w "$staging"; rm -rf "$staging"; }' EXIT
+    mkdir -p "$staging/bin"
+    cargo build --release --workspace --bins --example act \
+        --message-format=json-render-diagnostics |
+        jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
+        xargs -r cp -t "$staging/bin"
+    git archive HEAD roles | tar -x -C "$staging"
+    built=$("$staging/bin/harness-brain" --version)
+    [[ $built == "harness-brain $commit" ]] || die "the build says it is $built, not $commit"
+    chmod -R a-w "$staging"
+    # Another serve may have installed it meanwhile: the first one stands.
+    mv -T "$staging" "$build" 2>/dev/null || true
+fi
+
+unit=harness-$name.service
+data=$home/$name
+mkdir -p "$data"
+if systemctl --user -q is-active "$unit"; then
+    echo "stopping $unit: its requests in flight drain first"
+    systemctl --user stop "$unit"
+fi
+systemctl --user reset-failed "$unit" 2>/dev/null || true
+[[ -z $(ss -Hltn "sport = :$port") ]] || die "something else listens on port $port"
+ln -sfn "$build" "$data/build"
+
+# KillMode=mixed: the stop's SIGTERM goes to the brain alone, which ends
+# its links to limbs itself; the limbs run in units of their own.
+systemd-run --user --quiet --collect --unit="$unit" \
+    --description="agent-harness brain $name ($commit)" \
+    --working-directory="$data" \
+    -p KillMode=mixed -p TimeoutStopSec=330 \
+    "$build/bin/harness-brain" --db "$data/brain.sqlite" --port "$port" \
+    --roles "$build/roles" "$@"
+
+url=https://mx-hv-mj.local:$port/
+for _ in $(seq 120); do
+    source=$(curl -sk --max-time 2 "https://localhost:$port/view" | jq -r .rows.harness.Harness.source 2>/dev/null) || true
+    if [[ $source == "$commit" ]]; then
+        echo "$name runs $commit at $url"
+        exit 0
+    fi
+    systemctl --user -q is-active "$unit" || break
+    sleep 0.5
+done
+journalctl --user -u "$unit" -n 20 --no-pager >&2
+die "$unit did not serve $commit at $url"

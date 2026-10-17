@@ -112,7 +112,7 @@ usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model M
   --db DB          the database; a new one is made if none is there
   --port PORT      where the face is served, over HTTPS
   --roles DIR      the role files the roles limb reads; a new database needs
-                   it, an existing one keeps the roles limb it has
+                   it, and on an existing one it moves the limb to DIR
   --model MODEL[/EFFORT]
                    run every role on MODEL (and at EFFORT) over its file's:
                    `sonnet/low`; `scripted` costs nothing (it answers from a
