@@ -329,26 +329,27 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
             vec![text("[harness] Your response was cut off. Carry on.")],
         );
     }
-    if !texts.blocks.is_empty() {
-        turn.push(
-            Rendered::Note(Note::Now),
-            vec![text(&clock(state, task, now))],
-        );
+    // The clock starts what the harness says; mid-turn, it comes alone
+    // only to warn of a context nearly full.
+    let (clock, full) = clock(state, task, now);
+    if !texts.blocks.is_empty() || full {
+        turn.push(Rendered::Note(Note::Now), vec![text(&clock)]);
     }
     turn.extend(texts);
     turn
 }
 
 /// The time, and how full the context was at the task's last response,
-/// unless a compaction has replaced that context since.
-fn clock(state: &State, task: &Task, now: &Now) -> String {
+/// unless a compaction has replaced that context since; and whether it
+/// is full enough to warn the agent to compact ([`crate::policy::WARN_AT`]).
+fn clock(state: &State, task: &Task, now: &Now) -> (String, bool) {
     let used = state
         .last_turn(task.id)
         .and_then(|e| e.usage)
         .filter(|_| !task.head().is_some_and(|h| state.compacted(h).is_some()))
         .map(|u| u.input + u.cache_read + u.cache_write_short + u.cache_write_long + u.output);
     let Some(used) = used else {
-        return format!("[harness] {}.", now.time);
+        return (format!("[harness] {}.", now.time), false);
     };
     let mut said = format!(
         "[harness] {}. Your context: {} of {} tokens.",
@@ -356,7 +357,8 @@ fn clock(state: &State, task: &Task, now: &Now) -> String {
         tokens(used),
         tokens(now.window)
     );
-    if used * 100 >= now.window * crate::policy::WARN_AT {
+    let full = used * 100 >= now.window * crate::policy::WARN_AT;
+    if full {
         let tool = if crate::meta::two_tools() {
             "`compact_and_continue`, or `compact_and_report` if you are done"
         } else {
@@ -368,7 +370,7 @@ harness compacts it for you, with no summary of yours, and what is only in your 
             used * 100 / now.window
         ));
     }
-    said
+    (said, full)
 }
 
 /// A token count, short: `48k`, `1M`.
