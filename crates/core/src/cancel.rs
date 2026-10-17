@@ -17,10 +17,10 @@
 //! | Level | Asked by | Cleans up | Confirms | Hard kill |
 //! |---|---|---|---|---|
 //! | Task | [`Drain::Stop`] | Its request is cut and its calls and members are stopped, then it takes one tidy-up turn ([`Prompt::Stopping`]) | [`Outcome::Cancelled`], with that turn's report | [`TaskEvent::Expired`]: no more requests, everything it owns stopped now |
-//! | Call | [`CallEvent::Stopping`], sent as [`ToLimb::Stop`] | Its limb's: `SIGTERM` to its processes | Settled, interrupted, once its processes are gone | `SIGKILL` |
+//! | Call | [`CallEvent::Stopping`], a stopping [`LimbRow::Call`] in its limb's view | Its limb's: `SIGTERM` to its processes | Settled, interrupted, once its processes are gone | `SIGKILL` |
 //! | Request | [`Todo::Abandon`] | none: its socket is cut at once | [`ModelCallEvent::Ended`] | (the same) |
-//! | Limb process | [`ToLimb::Shutdown`], or its input closing | Stops every call | Exits once nothing it started is left | Its owner kills its whole tree |
-//! | Brain process | `SIGINT`, `SIGTERM`, `SIGHUP`: [`Fact::Shutdown`] | Starts nothing; lets requests finish; shuts its limbs down | Exits once every request and limb has | A second signal: the deadline is now |
+//! | Limb process | A signal, or no brain connected for 15 minutes | Stops every call | Exits once nothing it started is left | A second signal |
+//! | Brain process | `SIGINT`, `SIGTERM`, `SIGHUP`: [`Fact::Shutdown`] | Starts nothing; lets requests finish; closes its links, leaving its limbs' calls running | Exits once every request has | A second signal: the deadline is now |
 //!
 //! Two kinds of stop differ in whether the work is still wanted. A
 //! **cancel** ([`Drain::Stop`]) is an owner who no longer wants it: Max's
@@ -28,7 +28,9 @@
 //! ([`Fact::Shutdown`]) is a replica going away while its work is still
 //! wanted: Ctrl-C on the brain. Tasks are not stopped at all; what was
 //! running in the process is cut, recorded as such, and the next launch
-//! carries every task on from the journal.
+//! carries every task on from the journal. A limb is a process of its own
+//! ([`Host`]), so the calls running in it are not cut: they settle in the
+//! limb's records and reach the next brain that connects.
 //!
 //! Durable work (tasks, calls, requests) is stopped by facts the brain
 //! acts on from [`State::todo`]; work that lives only in a process (a
@@ -53,11 +55,11 @@
 //! [`Outcome::Cancelled`]: crate::task::Outcome::Cancelled
 //! [`TaskEvent::Expired`]: crate::task::TaskEvent::Expired
 //! [`CallEvent::Stopping`]: crate::call::CallEvent::Stopping
-//! [`ToLimb::Stop`]: crate::environment::ToLimb::Stop
-//! [`ToLimb::Shutdown`]: crate::environment::ToLimb::Shutdown
+//! [`LimbRow::Call`]: crate::environment::LimbRow::Call
+//! [`Host`]: crate::environment::Host
 //! [`Todo::Abandon`]: crate::state::Todo::Abandon
 //! [`ModelCallEvent::Ended`]: crate::model_call::ModelCallEvent::Ended
-//! [`Fact::Shutdown`]: crate::journal::Fact::Shutdown
+//! [`Fact::Shutdown`]: crate::fact::Fact::Shutdown
 //! [`State::todo`]: crate::state::State::todo
 
 use crate::id::Timestamp;

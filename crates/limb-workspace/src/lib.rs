@@ -78,7 +78,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::environment::{
-    Description, Instruction, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp,
+    Description, Host, Instruction, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp,
 };
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{CallId, Digest, LimbId, ReplicaId, TaskId, Timestamp, ValueId};
@@ -137,7 +137,7 @@ impl Settings {
     /// The settings a limb definition holds.
     pub fn of(limb: &Limb) -> Option<Settings> {
         match &limb.kind {
-            LimbKind::Plugin { kind, config } if Kind::of(kind).is_some() => {
+            LimbKind::Plugin { kind, config, .. } if Kind::of(kind).is_some() => {
                 serde_json::from_str(config).ok()
             }
             _ => None,
@@ -166,6 +166,7 @@ impl Settings {
             kind: LimbKind::Plugin {
                 kind: kind.name().into(),
                 config: serde_json::to_string(self).expect("settings are JSON"),
+                host: Host::Local,
             },
         }
     }
@@ -220,14 +221,6 @@ pub type Out = Box<dyn Fn(LimbUp) + Send + Sync>;
 pub struct Workspace {
     inner: Arc<Inner>,
     rows: Mutex<Mirror<LimbKey, LimbRow, Refusal>>,
-}
-
-/// What applying a view asks of the link.
-pub struct Applied {
-    /// Ship these first: what the brain had not included when it connected.
-    pub ship: Vec<Record>,
-    /// The brain asks the limb to be gone by then.
-    pub shutdown: Option<Timestamp>,
 }
 
 struct Inner {
@@ -319,17 +312,14 @@ impl Workspace {
     /// stop, watch what it asks. A whole view begins a connection: the
     /// limb ships what the brain has not included, then describes itself.
     /// Never blocks on a call.
-    pub fn apply(&self, down: LimbDown) -> Result<Applied, Restored> {
+    pub fn apply(&self, down: LimbDown) -> Result<Vec<Record>, Restored> {
         let inner = &self.inner;
         let mut ship = Vec::new();
         let connected = matches!(down, LimbDown::View(_));
         let mut replica = lock(&self.rows);
         replica.apply(down);
         let Some(view) = replica.view() else {
-            return Ok(Applied {
-                ship,
-                shutdown: None,
-            });
+            return Ok(ship);
         };
         {
             let mut log = lock(&inner.log);
@@ -352,18 +342,24 @@ impl Workspace {
                 }],
             });
         }
-        let mut shutdown = None;
         for (key, row) in &view.rows {
             match (key, row) {
-                (LimbKey::Call(id), LimbRow::Call { call, stopping }) => {
+                (
+                    LimbKey::Call(id),
+                    LimbRow::Call {
+                        call,
+                        stopping,
+                        first_sent_to,
+                    },
+                ) => {
                     let input = match &view.rows.get(&LimbKey::Value(call.input)) {
                         Some(LimbRow::Value(bytes)) => Some(bytes),
                         _ => None,
                     };
-                    self.call(*id, call, input, *stopping);
+                    let earlier = *first_sent_to != self.replica();
+                    self.call(*id, call, input, *stopping, earlier);
                 }
                 (LimbKey::Watch, LimbRow::Watch { known }) => inner.watch(known),
-                (LimbKey::Shutdown, LimbRow::Shutdown { by }) => shutdown = Some(*by),
                 _ => {}
             }
         }
@@ -374,12 +370,20 @@ impl Workspace {
                 inner.marks.forget(call);
             }
         }
-        Ok(Applied { ship, shutdown })
+        Ok(ship)
     }
 
     /// One call row: run it at most once, however often it arrives, and
-    /// stop it when the row says so.
-    fn call(&self, id: CallId, call: &Call, input: Option<&Bytes>, stopping: Option<Timestamp>) {
+    /// stop it when the row says so. `earlier`: it was first sent to an
+    /// instance of this limb whose state is lost, which may have run it.
+    fn call(
+        &self,
+        id: CallId,
+        call: &Call,
+        input: Option<&Bytes>,
+        stopping: Option<Timestamp>,
+        earlier: bool,
+    ) {
         let inner = &self.inner;
         let mut running = lock(&inner.running);
         if let Some(running) = running.get(&id) {
@@ -393,7 +397,7 @@ impl Workspace {
         if inner.settled(id) {
             return;
         }
-        let started = inner.marks.is_started(id);
+        let started = earlier || inner.marks.is_started(id);
         if stopping.is_some() {
             let outcome = if started {
                 Outcome::Unknown

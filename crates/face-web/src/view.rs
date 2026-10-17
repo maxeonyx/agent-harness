@@ -469,6 +469,9 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             match reach {
                 harness_core::environment::Reach::Connected { .. } => format!("{limb} connected"),
                 harness_core::environment::Reach::Lost => format!("{limb} lost"),
+                harness_core::environment::Reach::Unreachable { why } => {
+                    format!("{limb} unreachable: {why}")
+                }
             }
         }
         Fact::Ranking(r) => format!("queue ranked: {} placed", r.order.len()),

@@ -14,7 +14,7 @@ use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
-use harness_core::environment::{Description, Hello, LimbKey, LimbKind, LimbRow, Reach};
+use harness_core::environment::{Description, Hello, Host, LimbKey, LimbKind, LimbRow, Reach};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{
     CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
@@ -297,7 +297,13 @@ impl Brain {
         self.hosted -= 1;
         let replica = mint_replica();
         let events = self.events.clone();
-        self.joined(conn, Hello { limb: id, replica }, wire);
+        let build = self.state().launch().map(|(_, launched)| launched.build);
+        let hello = Hello {
+            limb: id,
+            replica,
+            build,
+        };
+        self.joined(conn, hello, wire);
         thread::spawn(move || {
             let up = |up| {
                 let said = link::Said::Up(Box::new(up));
@@ -533,27 +539,21 @@ impl Brain {
                 within.as_secs()
             );
         }
-        // The limbs see it in their rows, and stop by its deadline.
         self.fact(Fact::Shutdown {
             within: policy::ms(within),
         });
     }
 
-    /// Whether the brain has shut down: no request, limb or link is left.
-    /// At its deadline, and the grace after it, what is left is killed,
-    /// and a request that will not end is left to the process's exit.
+    /// Whether the brain has shut down: no request is left, or its
+    /// deadline and the grace after it have passed, leaving a request that
+    /// will not end to the process's exit. Its limbs are not waited for:
+    /// exiting closes their links, and their calls run on for the next
+    /// brain.
     fn down(&mut self) -> bool {
         let Some(deadline) = self.state().shutdown() else {
             return false;
         };
-        let killed = now().0 >= deadline.0 + policy::ms(policy::HARD_WAIT) as i64;
-        if killed {
-            for (limb, mut process) in self.limbs.drain() {
-                eprintln!("harness-brain: limb {limb} did not exit in time: killed");
-                process.kill();
-            }
-        }
-        killed || (self.requests.is_empty() && self.limbs.is_empty() && self.links.is_empty())
+        now().0 >= deadline.0 + policy::ms(policy::HARD_WAIT) as i64 || self.requests.is_empty()
     }
 
     // Limbs.
@@ -561,18 +561,33 @@ impl Brain {
     /// Start a plugin limb's process, which connects back when it is ready:
     /// that may take a while (a clone to make). Not while one is running,
     /// nor just after launch, while the limbs an earlier brain left running
-    /// reconnect, nor soon after its process ended without connecting.
+    /// reconnect, nor soon after its process ended without connecting, nor
+    /// while the brain shuts down.
     fn connect(&mut self, limb: LimbId) {
         let recently = |at: &Instant| at.elapsed() < RESTART;
         if self.links.contains_key(&limb)
             || self.limbs.contains_key(&limb)
             || self.started.elapsed() < REATTACH
             || self.failed.get(&limb).is_some_and(recently)
-            || Some(limb) == self.roles
+            || self.state().shutdown().is_some()
         {
             return;
         }
         let definition = self.state().limb(limb).expect("a limb to connect");
+        match &definition.kind {
+            LimbKind::Plugin {
+                host: Host::Local, ..
+            } => {}
+            LimbKind::Plugin {
+                host: Host::Ssh { destination },
+                ..
+            } => {
+                let why = format!("on {destination}: limbs on other machines are not built yet");
+                return self.unreachable(limb, why);
+            }
+            // Hosted in the brain's own process at launch.
+            _ => return,
+        }
         match Process::start(
             definition,
             &self.state_dir.join(limb.to_string()),
@@ -584,8 +599,19 @@ impl Brain {
             Err(e) => {
                 eprintln!("limb {limb}: its process cannot start: {e}");
                 self.failed.insert(limb, Instant::now());
+                self.unreachable(limb, format!("its process cannot start: {e}"));
             }
         }
+    }
+
+    /// The brain could not reach `limb`, for this reason: stated when the
+    /// reason is new, so a task waiting on it shows why.
+    fn unreachable(&mut self, limb: LimbId, why: String) {
+        let reach = Reach::Unreachable { why };
+        if self.state().reach(limb).is_some_and(|r| r.reach == reach) {
+            return;
+        }
+        self.fact(Fact::Reach { limb, reach });
     }
 
     /// Let go of the limb processes that have exited.
@@ -596,10 +622,14 @@ impl Brain {
             .filter_map(|(id, p)| p.exited().then_some(*id))
             .collect();
         for limb in exited {
-            self.limbs.remove(&limb);
+            let Some(process) = self.limbs.remove(&limb) else {
+                continue;
+            };
             if !self.links.contains_key(&limb) && self.state().shutdown().is_none() {
-                eprintln!("limb {limb}: its process ended without connecting (its error is above)");
+                let why = process.last_words();
+                eprintln!("limb {limb}: its process ended without connecting: {why}");
                 self.failed.insert(limb, Instant::now());
+                self.unreachable(limb, why);
             }
         }
     }
@@ -607,7 +637,11 @@ impl Brain {
     /// A limb connected as `hello.replica`: its records are the limb's from
     /// now on, and it is shipped a whole view.
     fn joined(&mut self, conn: Conn, hello: Hello, wire: Wire) {
-        let Hello { limb, replica } = hello;
+        let Hello {
+            limb,
+            replica,
+            build,
+        } = hello;
         if self.state().limb(limb).is_none_or(|l| l.kind.is_brains()) {
             return eprintln!("a link said it is limb {limb}, which is no plugin limb here");
         }
@@ -625,7 +659,10 @@ impl Brain {
         }
         self.fact(Fact::Reach {
             limb,
-            reach: Reach::Connected { instance: replica },
+            reach: Reach::Connected {
+                instance: replica,
+                build,
+            },
         });
     }
 

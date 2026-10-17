@@ -214,9 +214,10 @@ pub struct Dispatch {
     pub first: Mark,
     /// The latest dispatch.
     pub last: Mark,
-    /// The replica (the limb's running instance) it was last sent to; `None`
-    /// for a limb the brain runs.
-    pub instance: Option<ReplicaId>,
+    /// The replica (the limb's instance) it was first sent to; `None` for a
+    /// limb the brain runs. A later instance with no record of it knows its
+    /// state was lost since ([`LimbRow::Call`]).
+    pub first_to: Option<ReplicaId>,
 }
 
 /// How a call ended, and when.
@@ -527,7 +528,7 @@ impl State {
             return Some(Author::Brain);
         }
         let limb = self.reach.iter().find_map(|(limb, reached)| {
-            matches!(reached.reach, Reach::Connected { instance } if instance == from)
+            matches!(reached.reach, Reach::Connected { instance, .. } if instance == from)
                 .then_some(*limb)
         });
         match limb {
@@ -1336,12 +1337,14 @@ impl State {
                 if interrupts(id, &made.call, &readers) {
                     return Err(Rejected::Draining);
                 }
-                let first = made.dispatched.map_or(mark, |d| d.first);
+                let (first, first_to) = made
+                    .dispatched
+                    .map_or((mark, instance), |d| (d.first, d.first_to));
                 if let Some(made) = self.calls.get_mut(&id) {
                     made.dispatched = Some(Dispatch {
                         first,
                         last: mark,
-                        instance,
+                        first_to,
                     });
                 }
                 Ok(())
@@ -1745,15 +1748,19 @@ impl State {
             .calls
             .iter()
             .filter_map(|id| Some((*id, self.calls.get(id)?)))
-            .filter(|(_, c)| c.limb == Some(limb) && c.dispatched.is_some())
-            .map(|(id, c)| {
+            .filter(|(_, c)| c.limb == Some(limb))
+            .filter_map(|(id, c)| {
                 let row = LimbRow::Call {
                     call: c.call.clone(),
                     stopping: c.stopping.map(|s| s.deadline),
+                    first_sent_to: c.dispatched?.first_to?,
                 };
-                (LimbKey::Call(id), row)
+                Some((LimbKey::Call(id), row))
             })
             .collect();
+        if let Some(definition) = self.limbs.get(&limb) {
+            rows.insert(LimbKey::Definition, LimbRow::Definition(definition.clone()));
+        }
         let mut known: Vec<Observation> = Vec::new();
         for context in self.live().filter_map(Task::context) {
             for (resource, embodied) in context.knows.iter().filter(|(r, _)| r.limb == limb) {
@@ -1778,9 +1785,6 @@ impl State {
                 );
             }
         }
-        if let Some(by) = self.shutdown {
-            rows.insert(LimbKey::Shutdown, LimbRow::Shutdown { by });
-        }
         rows
     }
 
@@ -1788,11 +1792,12 @@ impl State {
     pub fn connected(&self, limb: LimbId) -> Option<(ReplicaId, Mark)> {
         match self.reach.get(&limb)? {
             Reached {
-                reach: Reach::Connected { instance },
+                reach: Reach::Connected { instance, .. },
                 at,
             } => Some((*instance, *at)),
             Reached {
-                reach: Reach::Lost, ..
+                reach: Reach::Lost | Reach::Unreachable { .. },
+                ..
             } => None,
         }
     }
