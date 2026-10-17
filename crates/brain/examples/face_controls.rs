@@ -47,7 +47,7 @@ fn main() {
     let db = dir.join("brain.sqlite");
     // Its children must be mid-request when parked and interrupted, which a
     // real model's work gives: Sonnet at low effort unless `MODEL` says.
-    let roles = role_args(&dir, &device::model("sonnet"));
+    let roles = role_args(&device::model("sonnet/low"));
     let mut brain = Brain::launch(&db, &roles, port);
     brain.serving();
     println!("  watch it at https://mx-hv-mj.local:{port}");

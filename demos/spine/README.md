@@ -16,7 +16,7 @@ What it shows, in order:
 
 The brain reads nothing from disk but its database and its flags: the roles and the workspace limb are defined in it at launch 1, and launches 2 and 3 keep them.
 
-`MODEL=sonnet demos/spine/run.sh` runs every role on Sonnet at low effort instead, each message asking in words: then the requests after each restart read the prompt cache (`cache_read`), which the scripted model does not report. It costs a few cents of usage and takes about a minute.
+`MODEL=sonnet/low demos/spine/run.sh` runs every role on Sonnet at low effort instead, each message asking in words: then the requests after each restart read the prompt cache (`cache_read`), which the scripted model does not report. It costs a few cents of usage and takes about a minute.
 
 ## Real output
 
