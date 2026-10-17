@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::decider::Standing;
 use crate::record::{Durability, Record, Schema, What};
 use crate::storage::Storage;
-use crate::time::{PlaceId, Time, Timestamp};
+use crate::time::{ReplicaId, Time, Timestamp};
 
 /// A follower's own records, kept until its decider has included them.
 ///
@@ -20,30 +20,30 @@ use crate::time::{PlaceId, Time, Timestamp};
 /// and survives a closed laptop; a limb whose settlements survive a brain
 /// restart; no resend protocol.
 pub struct Log<S: Schema, St: Storage<S>> {
-    here: PlaceId,
+    here: ReplicaId,
     next: u64,
     records: BTreeMap<u64, Record<S>>,
     storage: St,
 }
 
-/// The decider holds records of this place that this place does not: its
+/// The decider holds records of this replica that this replica does not: its
 /// storage was restored from a backup or lost. It must continue as a new
-/// place, or its new records would reuse times the decider already holds.
+/// replica, or its new records would reuse times the decider already holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Restored {
-    /// How far the decider had included this place.
+    /// How far the decider had included this replica.
     pub upto: u64,
-    /// This place's next time, as its storage says.
+    /// This replica's next time, as its storage says.
     pub next: u64,
 }
 
 impl<S: Schema, St: Storage<S>> Log<S, St> {
     /// The log of `here`, from what `storage` holds.
-    pub fn open(here: PlaceId, storage: St) -> Result<Self, St::Error> {
+    pub fn open(here: ReplicaId, storage: St) -> Result<Self, St::Error> {
         let records: BTreeMap<u64, Record<S>> = storage
             .load()?
             .into_iter()
-            .filter(|r| r.at.place == here)
+            .filter(|r| r.at.replica == here)
             .map(|r| (r.at.n, r))
             .collect();
         Ok(Log {
@@ -54,7 +54,7 @@ impl<S: Schema, St: Storage<S>> Log<S, St> {
         })
     }
 
-    pub fn here(&self) -> PlaceId {
+    pub fn here(&self) -> ReplicaId {
         self.here
     }
 
@@ -62,7 +62,7 @@ impl<S: Schema, St: Storage<S>> Log<S, St> {
     /// can be named before it is said.
     pub fn next(&self) -> Time {
         Time {
-            place: self.here,
+            replica: self.here,
             n: self.next,
         }
     }
@@ -75,7 +75,7 @@ impl<S: Schema, St: Storage<S>> Log<S, St> {
         said: impl FnOnce(Time) -> S::Said,
     ) -> Result<Record<S>, St::Error> {
         let at = Time {
-            place: self.here,
+            replica: self.here,
             n: self.next,
         };
         let said = said(at);
@@ -118,7 +118,7 @@ impl<S: Schema, St: Storage<S>> Log<S, St> {
     }
 
     /// Collect what the decider has included. The newest record stays,
-    /// whatever it is, so this place's count of its own times survives a
+    /// whatever it is, so this replica's count of its own times survives a
     /// restart.
     pub fn cover(&mut self, standing: &Standing<S::Refusal>) -> Result<(), St::Error> {
         let newest = self.next - 1;

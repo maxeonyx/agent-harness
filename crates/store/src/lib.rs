@@ -1,5 +1,5 @@
-//! A place's [`Storage`] in one SQLite file: the records it holds, the
-//! values they name, and the place's own [`PlaceId`].
+//! A replica's [`Storage`] in one SQLite file: the records it holds, the
+//! values they name, and the replica's own [`ReplicaId`].
 //!
 //! The brain keeps its records here, and so does a limb process for its
 //! own [`harness_substrate::Log`]. The substrate decides what to keep; the
@@ -9,13 +9,13 @@
 //! # Schema
 //!
 //! ```sql
-//! meta(place)                       -- this place's id, minted on first open
-//! record(place, n, clock, vals, record)
+//! meta(replica)                     -- this replica's id, minted on first open
+//! record(replica, n, clock, vals, record)
 //! value(id, bytes)                  -- every byte a record names
 //! ```
 //!
-//! `place` is the 16-hex [`PlaceId`] and `n` the record's number there, so
-//! `(place, n)` is its [`Time`]. `record` is the substrate's JSON of the
+//! `replica` is the 16-hex [`ReplicaId`] and `n` the record's number there, so
+//! `(replica, n)` is its [`Time`]. `record` is the substrate's JSON of the
 //! [`Record`], without the bytes of a [`Batch`]'s `values`: those go to
 //! `value` by [`ValueId`], and `vals` lists their ids in order (32 bytes
 //! each), so the batch is put back whole on load. Values sit apart from the
@@ -35,7 +35,7 @@ use std::io::Read;
 use std::path::Path;
 
 use harness_core::fact::Batch;
-use harness_core::id::{Digest, PlaceId, Time, ValueId};
+use harness_core::id::{Digest, ReplicaId, Time, ValueId};
 use harness_core::schema::{Harness, Record};
 use harness_core::value::Bytes;
 use harness_substrate::{Storage, What};
@@ -43,20 +43,20 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 /// Bumped by any change to the tables below; a file written by another
 /// version is refused rather than misread.
-const VERSION: i64 = 5;
+const VERSION: i64 = 6;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
-    place TEXT NOT NULL
+    replica TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE record (
-    place TEXT NOT NULL,
+    replica TEXT NOT NULL,
     n INTEGER NOT NULL CHECK (n > 0),
     clock INTEGER NOT NULL,
     vals BLOB NOT NULL,
     record TEXT NOT NULL,
-    PRIMARY KEY (place, n)
+    PRIMARY KEY (replica, n)
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE value (
@@ -65,11 +65,11 @@ CREATE TABLE value (
 ) STRICT;
 ";
 
-/// One place's storage. Opened by the one process of that place; other
+/// One replica's storage. Opened by the one process of that replica; other
 /// connections to the file only read.
 pub struct Store {
     db: Connection,
-    place: PlaceId,
+    replica: ReplicaId,
 }
 
 impl Store {
@@ -85,21 +85,34 @@ impl Store {
         match version {
             0 => {
                 tx.execute_batch(SCHEMA)?;
-                tx.execute("INSERT INTO meta (place) VALUES (?)", [mint()?.to_string()])?;
+                tx.execute(
+                    "INSERT INTO meta (replica) VALUES (?)",
+                    [mint()?.to_string()],
+                )?;
                 tx.pragma_update(None, "user_version", VERSION)?;
             }
             VERSION => {}
+            // Version 5 called a replica a place.
+            5 => {
+                tx.execute_batch(
+                    "ALTER TABLE meta RENAME COLUMN place TO replica;
+                     ALTER TABLE record RENAME COLUMN place TO replica;",
+                )?;
+                tx.pragma_update(None, "user_version", VERSION)?;
+            }
             found => return Err(Error::Version { found }),
         }
-        let place: String = tx.query_row("SELECT place FROM meta", [], |row| row.get(0))?;
+        let replica: String = tx.query_row("SELECT replica FROM meta", [], |row| row.get(0))?;
         tx.commit()?;
-        let place = place.parse().map_err(|_| Error::Corrupt("meta.place"))?;
-        Ok(Store { db, place })
+        let replica = replica
+            .parse()
+            .map_err(|_| Error::Corrupt("meta.replica"))?;
+        Ok(Store { db, replica })
     }
 
-    /// The place whose records this is.
-    pub fn place(&self) -> PlaceId {
-        self.place
+    /// The replica whose records this is.
+    pub fn replica(&self) -> ReplicaId {
+        self.replica
     }
 
     /// The bytes named `id`, if they are stored.
@@ -115,11 +128,11 @@ impl Store {
 impl Storage<Harness> for Store {
     type Error = Error;
 
-    /// Every record, in `(place, n)` order.
+    /// Every record, in `(replica, n)` order.
     fn load(&self) -> Result<Vec<Record>, Error> {
         let mut select = self
             .db
-            .prepare_cached("SELECT vals, record FROM record ORDER BY place, n")?;
+            .prepare_cached("SELECT vals, record FROM record ORDER BY replica, n")?;
         let mut rows = select.query([])?;
         let mut records = Vec::new();
         while let Some(row) = rows.next()? {
@@ -144,14 +157,14 @@ impl Storage<Harness> for Store {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut remove = tx.prepare_cached("DELETE FROM record WHERE place = ? AND n = ?")?;
+        let mut remove = tx.prepare_cached("DELETE FROM record WHERE replica = ? AND n = ?")?;
         for time in drop {
-            remove.execute(params![time.place.to_string(), time.n])?;
+            remove.execute(params![time.replica.to_string(), time.n])?;
         }
         let mut value = tx
             .prepare_cached("INSERT INTO value (id, bytes) VALUES (?, ?) ON CONFLICT DO NOTHING")?;
         let mut insert = tx.prepare_cached(
-            "INSERT INTO record (place, n, clock, vals, record) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO record (replica, n, clock, vals, record) VALUES (?, ?, ?, ?, ?)",
         )?;
         for record in put {
             let mut vals = Vec::new();
@@ -173,7 +186,7 @@ impl Storage<Harness> for Store {
                 What::Included(_) => serde_json::to_string(record)?,
             };
             insert.execute(params![
-                record.at.place.to_string(),
+                record.at.replica.to_string(),
                 record.at.n,
                 record.clock.0,
                 vals,
@@ -186,11 +199,11 @@ impl Storage<Harness> for Store {
     }
 }
 
-/// A new place's id, from the OS's entropy.
-fn mint() -> Result<PlaceId, Error> {
+/// A new replica's id, from the OS's entropy.
+fn mint() -> Result<ReplicaId, Error> {
     let mut bytes = [0; 8];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    Ok(PlaceId(u64::from_le_bytes(bytes)))
+    Ok(ReplicaId(u64::from_le_bytes(bytes)))
 }
 
 /// Why the store could not do what was asked.
@@ -201,7 +214,7 @@ pub enum Error {
     /// A stored record is not JSON the substrate can read: written by a
     /// build whose facts this one does not know.
     Json(serde_json::Error),
-    /// The OS gave no entropy to mint the place's id.
+    /// The OS gave no entropy to mint the replica's id.
     Entropy(std::io::Error),
     /// The file was written by another version of this schema.
     Version { found: i64 },
@@ -216,7 +229,7 @@ impl fmt::Display for Error {
         match self {
             Error::Sqlite(error) => write!(f, "store database: {error}"),
             Error::Json(error) => write!(f, "stored record unreadable: {error}"),
-            Error::Entropy(error) => write!(f, "no entropy for a new place id: {error}"),
+            Error::Entropy(error) => write!(f, "no entropy for a new replica id: {error}"),
             Error::Version { found } => {
                 write!(f, "store schema version {found}, expected {VERSION}")
             }

@@ -15,7 +15,7 @@ use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Description, Hello, LimbKey, LimbKind, LimbRow, Reach};
 use harness_core::fact::{Batch, Fact, Launched, Refusal};
 use harness_core::id::{
-    CallId, DeliveryId, LimbId, ModelCallId, PlaceId, TaskId, Time, Timestamp, ToolUseId, ValueId,
+    CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
 };
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop};
 use harness_core::resource::Observation;
@@ -111,12 +111,12 @@ pub struct Start {
 /// One limb's link, while it is connected.
 struct Link {
     conn: Conn,
-    place: PlaceId,
+    replica: ReplicaId,
     wire: Wire,
     publisher: Publisher<LimbKey, LimbRow, Refusal>,
 }
 
-/// One brain: the decider of everything its places say.
+/// One brain: the decider of everything its replicas say.
 pub struct Brain {
     decider: schema::Brain<Store>,
     /// The face, handed the state after each change.
@@ -173,7 +173,7 @@ impl Brain {
         Inbox { events, inbox }: Inbox,
         feed: Feed,
     ) -> Result<Brain, String> {
-        let (decider, divergences) = schema::Brain::open(store.place(), store)
+        let (decider, divergences) = schema::Brain::open(store.replica(), store)
             .map_err(|e| format!("the database folds: {e}"))?;
         for d in &divergences {
             eprintln!(
@@ -294,15 +294,15 @@ impl Brain {
         let (wire, down) = mpsc::channel();
         let conn = self.hosted;
         self.hosted -= 1;
-        let place = mint_place();
+        let replica = mint_replica();
         let events = self.events.clone();
-        self.joined(conn, Hello { limb: id, place }, Wire::Channel(wire));
+        self.joined(conn, Hello { limb: id, replica }, Wire::Channel(wire));
         thread::spawn(move || {
             let up = |up| {
                 let said = link::Said::Up(Box::new(up));
                 let _ = events.send(Event(What::Link(conn, said)));
             };
-            roles::run(&limb, place, down, up);
+            roles::run(&limb, replica, down, up);
             let _ = events.send(Event(What::Link(conn, link::Said::Left)));
         });
     }
@@ -319,7 +319,7 @@ impl Brain {
     }
 
     /// Start a task in Max's scope, as Max: through the command line, a
-    /// face with no page, which is a place of its own.
+    /// face with no page, which is a replica of its own.
     fn start(&mut self, start: Start) -> Result<TaskId, String> {
         let env = self
             .state()
@@ -342,14 +342,17 @@ impl Brain {
             let limb = self.workspace_limb(&dir, None, at, &mut defined);
             places.insert(kind.clone(), limb);
         }
-        let face = mint_place();
+        let face = mint_replica();
         defined.push(Fact::Face(face));
         self.append(Batch {
             values: Vec::new(),
             facts: defined,
         });
         let mandate = Bytes::from(start.mandate);
-        let said = Time { place: face, n: 1 };
+        let said = Time {
+            replica: face,
+            n: 1,
+        };
         let id = TaskId(said.event(0));
         let facts = vec![Fact::Task(
             id,
@@ -600,10 +603,10 @@ impl Brain {
         }
     }
 
-    /// A limb connected as `hello.place`: its records are the limb's from
+    /// A limb connected as `hello.replica`: its records are the limb's from
     /// now on, and it is shipped a whole view.
     fn joined(&mut self, conn: Conn, hello: Hello, wire: Wire) {
-        let Hello { limb, place } = hello;
+        let Hello { limb, replica } = hello;
         if self.state().limb(limb).is_none_or(|l| l.kind.is_brains()) {
             return eprintln!("a link said it is limb {limb}, which is no plugin limb here");
         }
@@ -611,17 +614,17 @@ impl Brain {
             limb,
             Link {
                 conn,
-                place,
+                replica,
                 wire,
                 publisher: Publisher::default(),
             },
         );
-        if self.state().connected(limb).map(|(p, _)| p) == Some(place) {
+        if self.state().connected(limb).map(|(p, _)| p) == Some(replica) {
             return self.publish();
         }
         self.fact(Fact::Reach {
             limb,
-            reach: Reach::Connected { instance: place },
+            reach: Reach::Connected { instance: replica },
         });
     }
 
@@ -1350,9 +1353,9 @@ and you cannot finish until it has.",
             What::Signal(signal) => self.signal(signal),
             What::Tab(record) => {
                 // A tab new to the brain is one of Max's faces.
-                let place = record.at.place;
-                if !self.state().is_face(place) {
-                    self.fact(Fact::Face(place));
+                let replica = record.at.replica;
+                if !self.state().is_face(replica) {
+                    self.fact(Fact::Face(replica));
                 }
                 self.include(*record);
             }
@@ -1396,7 +1399,7 @@ and you cannot finish until it has.",
         self.changed(at, &facts);
     }
 
-    /// Include a record from a limb or a tab. A refusal is the place's to
+    /// Include a record from a limb or a tab. A refusal is the replica's to
     /// see, in its standing; it is not a bug.
     fn include(&mut self, record: Record) {
         let from = record.at;
@@ -1406,7 +1409,7 @@ and you cannot finish until it has.",
         };
         match self.decider.include(now(), record) {
             Ok(None) => {}
-            Ok(Some(_)) => match self.decider.standing(from.place).refused.get(&from.n) {
+            Ok(Some(_)) => match self.decider.standing(from.replica).refused.get(&from.n) {
                 Some(why) => {
                     println!("{:>7.1}s {from}  refused: {why}", self.elapsed());
                     self.publish();
@@ -1456,7 +1459,7 @@ and you cannot finish until it has.",
             }
             let view = View {
                 as_of,
-                standing: self.decider.standing(link.place),
+                standing: self.decider.standing(link.replica),
                 rows,
             };
             if let Some(down) = link.publisher.publish(view) {
@@ -1643,11 +1646,11 @@ fn quoted(state: &State, parent: &Task, label: &str) -> Result<ValueId, String> 
         ))
 }
 
-/// A new place, for a face or a co-hosted limb this launch: 64 random bits.
-fn mint_place() -> PlaceId {
+/// A new replica, for a face or a co-hosted limb this launch: 64 random bits.
+fn mint_replica() -> ReplicaId {
     let mut bytes = [0; 8];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut bytes))
         .expect("/dev/urandom reads");
-    PlaceId(u64::from_le_bytes(bytes))
+    ReplicaId(u64::from_le_bytes(bytes))
 }

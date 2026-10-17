@@ -1,4 +1,4 @@
-//! What Max does at a tab, for a script: a new tab place on the face at
+//! What Max does at a tab, for a script: a new tab replica on the face at
 //! `PORT`, one act, and how the brain took it.
 //!
 //! ```text

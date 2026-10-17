@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::delivery::Read;
 use crate::fact::Rejected;
-use crate::id::{DeliveryId, EventId, PlaceId, TaskId, ValueId};
+use crate::id::{DeliveryId, EventId, ReplicaId, TaskId, ValueId};
 use crate::state::Mark;
 
 /// What Max does to a draft, from any of his faces.
@@ -73,7 +73,7 @@ pub struct Draft {
 /// Who typed a draft's newest text, and when the brain took it in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Typed {
-    pub by: PlaceId,
+    pub by: ReplicaId,
     pub at: Mark,
 }
 

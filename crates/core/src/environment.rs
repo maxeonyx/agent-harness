@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::call::Call;
-use crate::id::{CallId, EnvironmentId, LimbId, ParseError, PlaceId, Timestamp, ValueId};
+use crate::id::{CallId, EnvironmentId, LimbId, ParseError, ReplicaId, Timestamp, ValueId};
 use crate::resource::Observation;
 use crate::value::Bytes;
 
@@ -289,17 +289,17 @@ impl LimbKind {
     }
 }
 
-/// What the brain knows of its connection to a plugin limb, and which place
+/// What the brain knows of its connection to a plugin limb, and which replica
 /// speaks for it. Three lifetimes are distinct: the resources (a
-/// workspace's files outlive everything), the instance (a process: a place,
+/// workspace's files outlive everything), the instance (a process: a replica,
 /// whose records are the limb's while it is connected) and the connection to
 /// it. A connection belongs to the brain that made it, so every limb is
 /// unreached from a [`crate::fact::Launched`] until it connects to the new
-/// brain, and a record from a place no longer connected is refused.
+/// brain, and a record from a replica no longer connected is refused.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Reach {
-    /// Connected as the place `instance`: its records are the limb's.
-    Connected { instance: PlaceId },
+    /// Connected as the replica `instance`: its records are the limb's.
+    Connected { instance: ReplicaId },
     /// The connection dropped. Calls sent to it stay sent; the throbber says
     /// "waiting on reconnect" rather than "running".
     Lost,
@@ -371,7 +371,7 @@ pub enum LimbKey {
 ///
 /// **Concept.** A limb is a follower like a face. It ships its own facts
 /// (its description, its settlements, the changes it saw) as records of its
-/// own place; the brain ships back the rows it should act on. There is no
+/// own replica; the brain ships back the rows it should act on. There is no
 /// run message, so nothing is sent again after a reconnection: the limb
 /// gets its whole view on connecting and runs each call it holds a row for
 /// and has no record of, at most once per id. A call's input is a value,
@@ -459,11 +459,11 @@ pub type LimbDown = harness_substrate::Down<LimbKey, LimbRow, crate::fact::Refus
 pub type LimbUp = harness_substrate::Up<crate::schema::Harness, crate::live::Live>;
 
 /// The first thing a limb says on connecting: which limb it is, and the
-/// place its records are of. Then [`LimbUp`]s one way and [`LimbDown`]s the
-/// other. A limb reconnects with the same place, to this brain or a
+/// replica its records are of. Then [`LimbUp`]s one way and [`LimbDown`]s the
+/// other. A limb reconnects with the same replica, to this brain or a
 /// restarted one, and is shipped a whole view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     pub limb: LimbId,
-    pub place: PlaceId,
+    pub replica: ReplicaId,
 }

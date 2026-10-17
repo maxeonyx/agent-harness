@@ -100,7 +100,7 @@ fn serve(kind: &str) -> Result<(), String> {
     let workspace = Arc::new(Workspace::open(config, out).map_err(|e| e.to_string())?);
     let hello = Hello {
         limb: workspace.limb(),
-        place: workspace.place(),
+        replica: workspace.replica(),
     };
     connect(PathBuf::from(socket), hello, events.clone());
 
@@ -148,7 +148,7 @@ fn serve(kind: &str) -> Result<(), String> {
                 Err(restored) => {
                     return Err(format!(
                         "the brain holds this limb's records up to {}, past its log's {}: \
-                         its state was restored or lost, so it must start as a new place",
+                         its state was restored or lost, so it must start as a new replica",
                         restored.upto, restored.next
                     ));
                 }

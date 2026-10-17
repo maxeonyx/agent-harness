@@ -25,7 +25,7 @@
 //! Two kinds of stop differ in whether the work is still wanted. A
 //! **cancel** ([`Drain::Stop`]) is an owner who no longer wants it: Max's
 //! Stop, or a stopping owner's. The task ends. A **shutdown**
-//! ([`Fact::Shutdown`]) is a place going away while its work is still
+//! ([`Fact::Shutdown`]) is a replica going away while its work is still
 //! wanted: Ctrl-C on the brain. Tasks are not stopped at all; what was
 //! running in the process is cut, recorded as such, and the next launch
 //! carries every task on from the journal.

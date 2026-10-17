@@ -1,9 +1,9 @@
-//! A browser tab as a place on the substrate.
+//! A browser tab as a replica on the substrate.
 //!
-//! Each tab of Max's face is a follower of the brain: a [`PlaceId`] with a
+//! Each tab of Max's face is a follower of the brain: a [`ReplicaId`] with a
 //! timeline of its own. What he does there is a record at the tab, written
 //! to the tab's own storage first and shipped to the brain until the
-//! brain's standing covers it; what he sees is a [`Replica`] of the rows the
+//! brain's standing covers it; what he sees is a [`Mirror`] of the rows the
 //! brain derives for the tab. This crate is that tab, the same code in the
 //! page (built for `wasm32`, [`wasm`]) and in anything else that speaks for
 //! Max over the link (a demo's script, [`Tab`] natively).
@@ -16,7 +16,7 @@
 //!   page cannot ship a malformed fact. Whether the brain accepts it is the
 //!   brain's to say, in the tab's [`Standing`].
 //! - **Storage.** The page's storage is IndexedDB, which is asynchronous,
-//!   and [`Storage`] is not. So a tab's storage is [`Mirror`]: the records
+//!   and [`Storage`] is not. So a tab's storage is [`TabStore`]: the records
 //!   in memory, and every change also queued as a [`Write`] for the
 //!   embedding to make durable. The page stores the writes, waits for the
 //!   transaction, and only then ships the record.
@@ -36,7 +36,7 @@ use harness_core::fact::{Batch, Refusal};
 use harness_core::id::{CallId, DeliveryId, ParseError, TaskId, Timestamp};
 use harness_core::live::Live;
 use harness_core::schema::{Harness, Record};
-use harness_substrate::{Log, PlaceId, Replica, Restored, Standing, Status, Storage, Time};
+use harness_substrate::{Log, Mirror, ReplicaId, Restored, Standing, Status, Storage, Time};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
@@ -108,22 +108,22 @@ pub enum Write {
 /// A tab's storage: its records in memory, each change queued for the
 /// embedding to make durable before it ships anything.
 #[derive(Clone, Default)]
-pub struct Mirror {
+pub struct TabStore {
     records: BTreeMap<Time, Record>,
     writes: Rc<RefCell<Vec<Write>>>,
 }
 
-impl Mirror {
+impl TabStore {
     /// Storage holding what the embedding loaded.
-    pub fn of(records: Vec<Record>) -> Mirror {
-        Mirror {
+    pub fn of(records: Vec<Record>) -> TabStore {
+        TabStore {
             records: records.into_iter().map(|r| (r.at, r)).collect(),
             writes: Rc::default(),
         }
     }
 }
 
-impl Storage<Harness> for Mirror {
+impl Storage<Harness> for TabStore {
     type Error = Infallible;
 
     fn load(&self) -> Result<Vec<Record>, Infallible> {
@@ -146,25 +146,25 @@ impl Storage<Harness> for Mirror {
 
 /// One tab: its log and its replica of the brain's rows.
 pub struct Tab {
-    log: Log<Harness, Mirror>,
-    replica: Replica<FaceKey, FaceRow, Refusal>,
+    log: Log<Harness, TabStore>,
+    mirror: Mirror<FaceKey, FaceRow, Refusal>,
     writes: Rc<RefCell<Vec<Write>>>,
 }
 
 impl Tab {
     /// The tab at `here`, from what its storage held.
-    pub fn open(here: PlaceId, records: Vec<Record>) -> Tab {
-        let storage = Mirror::of(records);
+    pub fn open(here: ReplicaId, records: Vec<Record>) -> Tab {
+        let storage = TabStore::of(records);
         let writes = Rc::clone(&storage.writes);
         let Ok(log) = Log::open(here, storage);
         Tab {
             log,
-            replica: Replica::default(),
+            mirror: Mirror::default(),
             writes,
         }
     }
 
-    pub fn here(&self) -> PlaceId {
+    pub fn here(&self) -> ReplicaId {
         self.log.here()
     }
 
@@ -173,7 +173,7 @@ impl Tab {
     pub fn next(&self) -> Time {
         let n = self.log.records().last().map_or(0, |r| r.at.n);
         Time {
-            place: self.here(),
+            replica: self.here(),
             n: n + 1,
         }
     }
@@ -183,7 +183,7 @@ impl Tab {
     /// core's encoding; a [`harness_core::fact::Fact::Seen`] is added.
     pub fn say(&mut self, clock: Timestamp, batch: &str) -> Result<Record, serde_json::Error> {
         let mut batch: Batch = serde_json::from_str(batch)?;
-        if let Some(view) = self.replica.view() {
+        if let Some(view) = self.mirror.view() {
             batch.facts.push(harness_core::fact::Fact::Seen(view.as_of));
         }
         let Ok(record) = self.log.say(clock, |_| batch);
@@ -196,8 +196,8 @@ impl Tab {
         if let harness_substrate::Down::Live(live) = down {
             return Some(live);
         }
-        self.replica.apply::<Live>(down);
-        if let Some(view) = self.replica.view() {
+        self.mirror.apply::<Live>(down);
+        if let Some(view) = self.mirror.view() {
             let standing = view.standing.clone();
             let Ok(()) = self.log.cover(&standing);
         }
@@ -208,7 +208,7 @@ impl Tab {
     /// as of the view held, does not include.
     pub fn unsent(&self) -> Result<Vec<Record>, Restored> {
         let standing = self
-            .replica
+            .mirror
             .view()
             .map_or_else(Standing::default, |v| v.standing.clone());
         self.log.unsent(&standing)
@@ -216,7 +216,7 @@ impl Tab {
 
     /// Where this tab's record `n` stands with the brain.
     pub fn status(&self, n: u64) -> Status<'_, Refusal> {
-        match self.replica.view() {
+        match self.mirror.view() {
             Some(view) => view.standing.status(n),
             None => Status::Pending,
         }
@@ -228,7 +228,7 @@ impl Tab {
     }
 
     pub fn view(&self) -> Option<&View> {
-        self.replica.view()
+        self.mirror.view()
     }
 
     /// The writes made since the last call, for the embedding to make
@@ -241,7 +241,7 @@ impl Tab {
     /// from a closed one is retired once it is.
     pub fn settled(&self) -> bool {
         let newest = self.next().n - 1;
-        matches!(self.replica.view(), Some(v) if v.standing.upto >= newest)
+        matches!(self.mirror.view(), Some(v) if v.standing.upto >= newest)
     }
 }
 

@@ -1,10 +1,10 @@
-# spine: the brain on its database, Max's tabs as places, and three restarts
+# spine: the brain on its database, Max's tabs as replicas, and three restarts
 
 ```sh
 demos/spine/run.sh
 ```
 
-It runs real brains (Opus, on the subscription) on one database, `target/spine-demo/brain.sqlite`, on port 4398 (`PORT=` for another), and plays two of Max's tabs, his PC and his phone, with the same `harness-face-tab` the page runs as wasm. Each tab is a place with its own log: it says records, ships them over `wss://…/link?place=<id>` (TLS checked against the dev CA, no bypass), and reads the brain's verdict on each from its own standing, in the view the brain ships it. It takes about a minute and a half.
+It runs real brains (Opus, on the subscription) on one database, `target/spine-demo/brain.sqlite`, on port 4398 (`PORT=` for another), and plays two of Max's tabs, his PC and his phone, with the same `harness-face-tab` the page runs as wasm. Each tab is a replica with its own log: it says records, ships them over `wss://…/link?replica=<id>` (TLS checked against the dev CA, no bypass), and reads the brain's verdict on each from its own standing, in the view the brain ships it. It takes about a minute and a half.
 
 What it shows, in order:
 
