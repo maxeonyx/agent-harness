@@ -459,11 +459,19 @@ impl Workspace {
             let call = call.clone();
             thread::spawn(move || {
                 let mut report = Report::new(Some(id));
-                let outcome = match after(before, &cancel) {
+                let mut outcome = match after(before, &cancel) {
                     Ok(()) => inner.execute(id, &call, &input.0, &cancel, &mut report),
                     Err(_) => Outcome::Interrupted { partial: None },
                 };
-                inner.rescan(&mut report, call.tool == "bash");
+                let made = inner.rescan(&mut report, call.tool == "bash");
+                if let Outcome::Completed(output)
+                | Outcome::Failed(output)
+                | Outcome::Interrupted {
+                    partial: Some(output),
+                } = &mut outcome
+                {
+                    output.observes.extend(made);
+                }
                 inner.settle(report, outcome);
                 drop(ended);
                 let mut running = lock(&inner.running);
@@ -792,8 +800,12 @@ impl Inner {
 
     /// After a call: add every watched resource that moved, which is how a
     /// command's writes reach the contexts that read them. Attributed to the
-    /// call when it was a command, whose writes the limb cannot see.
-    fn rescan(&self, report: &mut Report, command: bool) {
+    /// call when it was a command, whose writes the limb cannot see; and
+    /// returned, as what the command's caller has seen, since it made them:
+    /// its context is not told of its own writes. A sibling's command that
+    /// wrote the same file at the same moment is attributed to both.
+    fn rescan(&self, report: &mut Report, command: bool) -> Vec<Observation> {
+        let mut made = Vec::new();
         let mut watched = lock(&self.watched);
         for change in &report.changes {
             if let Some(known) = watched.get_mut(&change.resource) {
@@ -813,8 +825,15 @@ impl Inner {
                     by,
                     content: None,
                 });
+                if by.is_some() {
+                    made.push(Observation {
+                        resource: resource.clone(),
+                        version,
+                    });
+                }
             }
         }
+        made
     }
 }
 

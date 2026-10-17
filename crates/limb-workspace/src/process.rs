@@ -114,9 +114,17 @@ fn serve(kind: &str) -> Result<(), String> {
     connect(PathBuf::from(socket), hello, events.clone());
 
     let signalled = events.clone();
-    signals::forward(&[libc::SIGINT, libc::SIGTERM, libc::SIGHUP], move |s| {
-        let _ = signalled.send(Event::Signal(s));
-    })
+    // A server a command started with `setsid` and that has since been
+    // stopped is the limb's to reap, at once, so a `kill -0` sees it gone.
+    signals::forward(
+        &[libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGCHLD],
+        move |s| match s {
+            libc::SIGCHLD => harness_runtime::reap_detached(),
+            _ => {
+                let _ = signalled.send(Event::Signal(s));
+            }
+        },
+    )
     .map_err(|e| format!("signals: {e}"))?;
 
     // The shutdown's own stop: requested once it begins.

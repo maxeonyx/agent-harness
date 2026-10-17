@@ -70,7 +70,7 @@ pub fn run(
         .stdin(Stdio::null())
         .stdout(writer.try_clone()?)
         .stderr(writer);
-    let mut group = Group::spawn(&mut builder, &mark(call))?;
+    let mut group = Group::spawn(&mut builder, &mark(call))?.detachable();
     // The builder holds the pipe's write end; the output ends only once
     // every holder has closed it.
     drop(builder);
