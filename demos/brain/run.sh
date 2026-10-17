@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # The harness on a root task in a scratch git repo, killed -9 mid-run and
 # relaunched onto the same database. Watch it at https://mx-hv-mj.local:4341.
+# Every role runs on the scripted model, from demos/brain/script.md, unless
+# MODEL names another (MODEL=sonnet: real agents on mandate.md).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example act
@@ -9,16 +11,19 @@ brain=target/release/harness-brain
 rm -rf "$dir"
 mkdir -p "$dir"
 demos/brain/scratch.sh "$dir/repo"
-args=(--roles roles --db "$dir/brain.sqlite" --port "${PORT:-4341}")
+model=${MODEL:-scripted}
+mandate=demos/brain/mandate.md
+[ "$model" = scripted ] && mandate=demos/brain/script.md
+args=(--roles roles --db "$dir/brain.sqlite" --port "${PORT:-4341}" --model "$model")
 # Everything the demo starts carries this mark; its limbs outlive their
 # brains, so what is left is ended when it finishes.
 mark=HARNESS_OWNER_brain-demo-$$
 trap 'demos/end.sh "$mark"' EXIT
 
-echo "== launch 1: the orchestrator starts on demos/brain/mandate.md"
+echo "== launch 1: the orchestrator starts on $mandate, every role on $model"
 env "$mark=1" "$brain" "${args[@]}" > "$dir/launch1.log" 2>&1 &
 pid=$!
-target/release/examples/act "${PORT:-4341}" chat orchestrator "$PWD/$dir/repo" "$(cat demos/brain/mandate.md)" >> "$dir/launch1.log"
+target/release/examples/act "${PORT:-4341}" chat orchestrator "$PWD/$dir/repo" "$(cat "$mandate")" >> "$dir/launch1.log"
 # Kill it while a check.sh is running: a bash call, which may not be rerun.
 # The face's view, read as the page reads it.
 running_check() {

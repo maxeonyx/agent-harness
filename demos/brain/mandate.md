@@ -1,3 +1,5 @@
+Build textstats with two agents.
+
 This repository is a tiny Python package with no code yet; `README.md` says what it should become.
 
 Build it with two agents working in parallel, in one `spawn` call:

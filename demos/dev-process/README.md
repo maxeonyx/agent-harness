@@ -4,7 +4,7 @@
 demos/dev-process/run.sh
 ```
 
-Then open https://mx-hv-mj.local:4345 and watch the map (another port: `PORT=4400`; a new run: `FRESH=1`). It takes about three minutes on Opus and spends a few dozen requests of the subscription. The face keeps serving the finished run until you stop it.
+Then open https://mx-hv-mj.local:4345 and watch the map (another port: `PORT=4400`; a new run: `FRESH=1`). Each role runs on its file's model and effort; it takes about three minutes and spends a few dozen requests of the subscription. `MODEL=sonnet` runs every role on Sonnet instead, which is cheaper; `MODEL=scripted` costs nothing but only shows the page, since the orchestrator then just echoes its mandate. The face keeps serving the finished run until you stop it (Ctrl-C, which also ends the workspaces it started).
 
 What it does:
 
@@ -26,92 +26,111 @@ What to do on the page:
 
 ## Real output
 
-A run at 22:36 NZDT on 2026-10-17, with nobody at the page. The brain's log, with request, dispatch and completion lines dropped, paths made relative and lines cut at 170 characters:
+A run on Sonnet (`MODEL=sonnet`) at 04:12 NZDT on 2026-10-18, with nobody at the page: 12 requests, two minutes to the report. The brain's log, with request, first-byte, dispatch and completion lines dropped, paths made relative and lines cut at 170 characters:
 
 ```
-    0.0s c0e3a6c19daaae21.1  brain launched, build f7a8d454f0db
-    0.0s c0e3a6c19daaae21.1  limb meta defined
-    0.0s c0e3a6c19daaae21.1  limb web defined
-    0.0s c0e3a6c19daaae21.1  limb user defined
-    0.0s c0e3a6c19daaae21.1  limb roles defined
-    0.0s c0e3a6c19daaae21.2  roles connected
-    0.0s aecdcc4ed5c49611.1  environment chat defined
-    0.0s aecdcc4ed5c49611.1  environment designer defined
-    0.0s aecdcc4ed5c49611.1  environment engineer defined
-    0.0s aecdcc4ed5c49611.1  environment orchestrator defined
-    0.0s aecdcc4ed5c49611.1  role roles/chat.md changed
-    0.0s aecdcc4ed5c49611.1  role roles/designer.md changed
-    0.0s aecdcc4ed5c49611.1  role roles/engineer.md changed
-    0.0s aecdcc4ed5c49611.1  role roles/orchestrator.md changed
-    0.0s c0e3a6c19daaae21.4  limb target/dev-process-run/textstats defined
-    0.0s c0e3a6c19daaae21.4  tab 72fa185e50198ffc is Max's
-    0.0s 72fa185e50198ffc.1  orchestrator created (orchestrator)
-    2.0s c0e3a6c19daaae21.6  user connected
-    2.0s c0e3a6c19daaae21.7  target/dev-process-run/textstats connected
-    2.0s 97ed02c0c459ea48.1  user described: 1 tools
-    2.0s 4921a4031e635d54.1  target/dev-process-run/textstats described: 5 tools
-    2.0s c0e3a6c19daaae21.10  orchestrator has a new root, on claude-opus-5-5
-    4.9s c0e3a6c19daaae21.13  orchestrator's bash made {"command": "cat README.md; ls -R | head -30; cat check.sh; git log --oneline | head", "grep": ""}
-    4.9s c0e3a6c19daaae21.13  orchestrator: responded, ToolUse, 1 calls (4 in, 0 cached, 117 out)
-   15.4s c0e3a6c19daaae21.18  orchestrator's spawn made
-   15.4s c0e3a6c19daaae21.18  orchestrator: responded, ToolUse, 1 calls (2 in, 9862 cached, 1079 out)
-   15.4s c0e3a6c19daaae21.19  limb target/dev-process-run/textstats-wordcount defined
-   15.4s c0e3a6c19daaae21.19  orchestrator-wordcount created (engineer)
-   15.4s c0e3a6c19daaae21.19  limb target/dev-process-run/textstats-unicode-design defined
-   15.4s c0e3a6c19daaae21.19  orchestrator-unicode created (designer)
-   15.7s c0e3a6c19daaae21.20  target/dev-process-run/textstats-unicode-design connected
-   15.7s c0e3a6c19daaae21.21  target/dev-process-run/textstats-wordcount connected
-   15.7s aad7265dabad7823.1  target/dev-process-run/textstats-unicode-design described: 5 tools
-   15.7s 2b9502312b25d502.1  target/dev-process-run/textstats-wordcount described: 5 tools
-   15.7s c0e3a6c19daaae21.24  orchestrator-wordcount has a new root, on claude-opus-5-5
-   15.7s c0e3a6c19daaae21.25  orchestrator-unicode has a new root, on claude-opus-5-5
-   18.7s c0e3a6c19daaae21.30  orchestrator-wordcount's bash made {"command": "ls -R | head -30; cat check.sh README* 2>/dev/null; ls tests textstats 2>/dev/null; git log 
-   18.7s c0e3a6c19daaae21.30  orchestrator-wordcount: responded, ToolUse, 1 calls (4 in, 0 cached, 116 out)
-   20.4s c0e3a6c19daaae21.35  orchestrator-unicode's bash made {"command": "git log --oneline -5; ls -R | grep -v '^\\.' | head -50; cat README.md; cat check.sh; ls docs 
-   20.4s c0e3a6c19daaae21.35  orchestrator-unicode's skill made {"name": "design"}
-   20.4s c0e3a6c19daaae21.35  orchestrator-unicode: responded, ToolUse, 2 calls (4 in, 0 cached, 385 out)
-   20.4s aad7265dabad7823.2  orchestrator-unicode's bash failed
-   25.8s c0e3a6c19daaae21.42  orchestrator-wordcount's write made {"path": "textstats/wordcount.py", "content": "\"\"\"Word counts: a word is a run of letters, digits or 
-   25.8s c0e3a6c19daaae21.42  orchestrator-wordcount's write made {"path": "tests/test_wordcount.py", "content": "import unittest\n\nfrom textstats.wordcount import count
-   25.8s c0e3a6c19daaae21.42  orchestrator-wordcount's bash made {"command": "./check.sh", "grep": ""}
-   25.8s c0e3a6c19daaae21.42  orchestrator-wordcount: responded, ToolUse, 3 calls (2 in, 11180 cached, 804 out)
-   25.8s 2b9502312b25d502.3  file textstats/wordcount.py changed by orchestrator-wordcount's write
-   25.8s 2b9502312b25d502.4  file tests/test_wordcount.py changed by orchestrator-wordcount's write
-   29.2s c0e3a6c19daaae21.51  orchestrator-wordcount's bash made {"command": "git status --short && git add textstats/wordcount.py tests/test_wordcount.py && git commit -
-   29.2s c0e3a6c19daaae21.51  orchestrator-wordcount: responded, ToolUse, 1 calls (2 in, 11596 cached, 225 out)
-   34.3s c0e3a6c19daaae21.56  orchestrator-wordcount: responded, EndTurn, 0 calls (2 in, 12780 cached, 444 out)
-  121.8s c0e3a6c19daaae21.57  orchestrator-unicode's bash made {"command": "./check.sh; echo \"exit $?\"; python3 --version; python3 - <<'EOF'\nimport re, unicodedata as 
-  121.8s c0e3a6c19daaae21.57  orchestrator-unicode: responded, ToolUse, 1 calls (2 in, 12533 cached, 9235 out)
-  161.8s c0e3a6c19daaae21.62  orchestrator-unicode's write made {"path": "docs/unicode.md", "content": "# How `count_words` treats non-ASCII text\n\n## Decision\n\n`count
-  161.8s c0e3a6c19daaae21.62  orchestrator-unicode's bash made {"command": "cat > rule-check.ignore.py <<'EOF'\nimport unicodedata as u\nfrom collections import Counter\n
-  161.8s c0e3a6c19daaae21.62  orchestrator-unicode: responded, ToolUse, 2 calls (2 in, 17216 cached, 4578 out)
-  161.8s aad7265dabad7823.4  file docs/unicode.md changed by orchestrator-unicode's write
-  165.4s c0e3a6c19daaae21.69  orchestrator-unicode's bash made {"command": "git add docs/unicode.md && git diff --cached --stat && git commit -q -m \"Decide how count_wor
-  165.4s c0e3a6c19daaae21.69  orchestrator-unicode: responded, ToolUse, 1 calls (2 in, 26943 cached, 298 out)
-  177.0s c0e3a6c19daaae21.74  orchestrator-unicode: responded, EndTurn, 0 calls (2 in, 31850 cached, 1170 out)
-  180.3s c0e3a6c19daaae21.78  orchestrator's bash made {"command": "git fetch -q && git log --oneline origin/wordcount -2 && git log --oneline origin/unicode-design -2", 
-  180.3s c0e3a6c19daaae21.78  orchestrator: responded, ToolUse, 1 calls (2 in, 10258 cached, 193 out)
-  188.4s c0e3a6c19daaae21.83  orchestrator: responded, EndTurn, 0 calls (2 in, 12917 cached, 664 out)
-  247.0s c0e3a6c19daaae21.84  brain shutting down, within 300s
-  247.0s c0e3a6c19daaae21.85  roles lost
-  247.0s c0e3a6c19daaae21.86  target/dev-process-run/textstats-unicode-design lost
-  247.0s c0e3a6c19daaae21.87  target/dev-process-run/textstats lost
-  247.0s c0e3a6c19daaae21.88  user lost
-  247.0s c0e3a6c19daaae21.89  target/dev-process-run/textstats-wordcount lost
+harness-brain 65a3d6fdc6dd+dirty
+    0.0s 66ea5088543990a4.1  brain launched, build 279bba386ad5
+    0.0s 66ea5088543990a4.1  limb meta defined
+    0.0s 66ea5088543990a4.1  limb web defined
+    0.0s 66ea5088543990a4.1  limb user defined
+    0.0s 66ea5088543990a4.1  limb browser defined
+    0.0s 66ea5088543990a4.1  limb roles defined
+face: https://mx-hv-mj.local:4375
+    0.0s 66ea5088543990a4.2  roles connected
+    0.0s 5b58d3333c201891.1  environment browser defined
+    0.0s 5b58d3333c201891.1  environment chat defined
+    0.0s 5b58d3333c201891.1  environment designer defined
+    0.0s 5b58d3333c201891.1  environment engineer defined
+    0.0s 5b58d3333c201891.1  environment orchestrator defined
+    0.0s 5b58d3333c201891.1  role roles/browser.md changed
+    0.0s 5b58d3333c201891.1  role roles/chat.md changed
+    0.0s 5b58d3333c201891.1  role roles/designer.md changed
+    0.0s 5b58d3333c201891.1  role roles/engineer.md changed
+    0.0s 5b58d3333c201891.1  role roles/orchestrator.md changed
+    0.0s 66ea5088543990a4.4  tab 16cf324d6ae80bdd is Max's
+    0.0s 16cf324d6ae80bdd.1  limb target/dev-process/textstats defined
+    0.0s 16cf324d6ae80bdd.1  textstats needs two things created (orchestrator)
+    0.0s 16cf324d6ae80bdd.1  as seen at 66ea5088543990a4.3
+    0.1s 66ea5088543990a4.6  target/dev-process/textstats connected
+    0.1s 98a37fe7dc62ff54.1  target/dev-process/textstats described: 5 tools
+    0.1s 66ea5088543990a4.8  user connected
+    0.1s 51d2669dd7475440.1  user described: 1 tools
+    0.1s 66ea5088543990a4.10  textstats needs two things has a new root, on claude-sonnet-5-5
+    2.2s 66ea5088543990a4.13  textstats needs two things's bash made {"command": "cat README.md; ls; cat check.sh; git branch -a"}
+    2.2s 66ea5088543990a4.13  textstats needs two things: responded, ToolUse, 1 calls (4 in, 0 cached, 66 out)
+    9.7s 66ea5088543990a4.18  textstats needs two things's spawn made
+    9.7s 66ea5088543990a4.18  textstats needs two things: responded, ToolUse, 1 calls (2 in, 10775 cached, 909 out)
+    9.7s 66ea5088543990a4.19  limb target/dev-process/textstats-wordcount defined
+    9.7s 66ea5088543990a4.19  textstats needs two things-wordcount created (engineer)
+    9.7s 66ea5088543990a4.19  limb target/dev-process/textstats-unicode-design defined
+    9.7s 66ea5088543990a4.19  textstats needs two things-unicode created (designer)
+   10.1s 66ea5088543990a4.20  target/dev-process/textstats-unicode-design connected
+   10.1s 0667cc533db3e133.1  target/dev-process/textstats-unicode-design described: 5 tools
+   10.1s 66ea5088543990a4.22  target/dev-process/textstats-wordcount connected
+   10.1s a2241d057bc1fe91.1  target/dev-process/textstats-wordcount described: 5 tools
+   10.1s 66ea5088543990a4.24  textstats needs two things-wordcount has a new root, on claude-sonnet-5-5
+   10.1s 66ea5088543990a4.25  textstats needs two things-unicode has a new root, on claude-sonnet-5-5
+   11.6s 66ea5088543990a4.29  textstats needs two things-wordcount's bash made {"command": "cat README.md check.sh; ls -R . | grep -v .git | head -30"}
+   11.6s 66ea5088543990a4.29  textstats needs two things-wordcount: responded, ToolUse, 1 calls (4 in, 0 cached, 71 out)
+   14.9s 66ea5088543990a4.35  textstats needs two things-unicode's bash made {"command": "cd target/dev-process/textstats-unicode-design && git log --oneline | head; ls …
+   14.9s 66ea5088543990a4.35  textstats needs two things-unicode's skill made {"name": "design"}
+   14.9s 66ea5088543990a4.35  textstats needs two things-unicode: responded, ToolUse, 2 calls (4 in, 0 cached, 276 out)
+   16.6s 66ea5088543990a4.42  textstats needs two things-wordcount's bash made {"command": "cat > textstats/wordcount.py <<'E'\nfrom collections import Counter\n\n\ndef …
+   16.6s 66ea5088543990a4.42  textstats needs two things-wordcount: responded, ToolUse, 1 calls (2 in, 11900 cached, 776 out)
+   18.4s 66ea5088543990a4.47  textstats needs two things-wordcount: responded, EndTurn, 0 calls (2 in, 12239 cached, 125 out)
+   90.3s 66ea5088543990a4.48  textstats needs two things-unicode's bash made {"command": "cd target/dev-process/textstats-unicode-design && grep -rIl \"Bx\" . --exclude-…
+   90.3s 66ea5088543990a4.48  textstats needs two things-unicode: responded, ToolUse, 1 calls (2 in, 13381 cached, 9367 out)
+  106.4s 66ea5088543990a4.53  textstats needs two things-unicode's bash made {"command": "cd target/dev-process/textstats-unicode-design && rm /tmp/ref_unicode.py && mkd…
+  106.4s 66ea5088543990a4.53  textstats needs two things-unicode: responded, ToolUse, 1 calls (2 in, 18320 cached, 2055 out)
+  109.4s 66ea5088543990a4.58  textstats needs two things-unicode's bash made {"command": "cd target/dev-process/textstats-unicode-design && git add docs/unicode.md && gi…
+  109.4s 66ea5088543990a4.58  textstats needs two things-unicode: responded, ToolUse, 1 calls (2 in, 28023 cached, 326 out)
+  117.9s 66ea5088543990a4.63  textstats needs two things-unicode: responded, EndTurn, 0 calls (2 in, 30121 cached, 1123 out)
+  119.5s 66ea5088543990a4.67  textstats needs two things's bash made {"command": "git fetch -q; git log --oneline origin/wordcount origin/unicode-design | head"}
+  119.5s 66ea5088543990a4.67  textstats needs two things: responded, ToolUse, 1 calls (2 in, 11115 cached, 75 out)
+  123.7s 66ea5088543990a4.72  textstats needs two things: responded, EndTurn, 0 calls (2 in, 13338 cached, 554 out)
+  166.1s 66ea5088543990a4.73  tab b724e86d79a84904 is Max's
+  166.1s b724e86d79a84904.1  Done prompt delivered to textstats needs two things
+  166.1s b724e86d79a84904.1  as seen at 66ea5088543990a4.72
+  170.0s 66ea5088543990a4.77  textstats needs two things: responded, EndTurn, 0 calls (4 in, 13469 cached, 510 out)
+
+== the task is done; its result:
+
+**Done**
+- I ran both tasks in one scope. An engineer built `textstats/wordcount.py` (`count_words`, `top`) and `tests/test_wordcount.py`. `./check.sh` passed with 5 tests. It is…
+- A designer wrote `docs/unicode.md` with the decision, the rejected alternatives and what is unsupported. It is on origin `unicode-design` at `9d5838d`. I confirmed bot…
+- **Your choice:** a lone apostrophe is not a word, because a word must contain a letter or digit. To overturn it, drop the "no letter or digit left" clause.
+
+**Learned**
+- The designer amended the engineer's plan after the engineer had already built from it. It added NFC normalisation, counting combining marks as word characters, and tri…
+- Running the two tasks in parallel meant the design landed after the build. It also reached me as a different plan from the one I had given the engineer.
+
+**Left undone**
+- `wordcount` still has the plain version. It needs the designer's change, about 15 lines: the doc's snippet as the tokenizer, tests for the cases in the doc, and the RE…
+- Neither branch is merged to `main`. I did not open PRs.
+- Chinese, Japanese and Thai are deliberately unsupported. Say if you need them counted.
+
+harness-brain: SIGINT: shutting down; requests in flight have 300s to finish (again to stop now)
+  186.2s 66ea5088543990a4.78  brain shutting down, within 300s
+harness-brain: shut down
 ```
 
-The orchestrator's report, which it ended its turn with and now waits on you:
+The orchestrator's report, which it ended its turn with and waited on you:
 
 ```
-I've confirmed both branches are on origin.
+Both branches are on origin. `wordcount` is at `af46176` and `unicode-design` is at `9d5838d`.
 
-- **`wordcount`** (`69f1559`): adds `textstats/wordcount.py` and 4 tests, and `./check.sh` passes. Words can contain letters and digits from any language. “don’t” and "don't" both count as the single word `don't`.
-- **`unicode-design`** (`139fdf6`): adds `docs/unicode.md`.
-  - It recommends normalising text so an accented letter counts the same however it was typed (NFC normalisation), letting words contain accent marks and vowel signs, and using `lower()`.
-  - Chinese, Japanese and Thai are not split into words, because the standard library has nothing that can do it.
-  - It lists the rejected alternatives: ASCII-only words, the regex `[\w']+`, NFKC normalisation, `casefold()`, and one word per Chinese character. `./check.sh` on that branch says "NO TESTS RAN", which only means the branch has no tests yet; `main` gives the same result.
+- **`wordcount`:** the engineer built `textstats/wordcount.py` (`count_words`, `top`) and `tests/test_wordcount.py`. `./check.sh` passes with 5 tests, including “don’t” and `don't` counting as the same single word.
+- **`unicode-design`:** the designer wrote `docs/unicode.md`, with the decision, the rejected alternatives and what is unsupported.
 
-**Decision for you to overturn — the lone apostrophe:** I decided a lone `'` or `’` is not a word, because a word must contain at least one letter or digit. A stray apostrophe is punctuation, and counting it as a word helps nobody. The cost is that the README's "a run of letters, digits or apostrophes" now has an unwritten extra condition.
+**Your choice, a lone apostrophe: I decided it is not a word.** A word must contain at least one letter or digit. Counting it would put stray quote marks and `''` into `top()`. The cost is that apostrophes get trimmed from the ends of a word, so `dogs'` counts as `dogs` and `'tis` as `tis`. To overturn it, drop the "no letter or digit left" clause; the doc says this too.
 
-**Needs you — the two branches disagree:** the designer also recommends trimming apostrophes from the ends of words. Your curly ’ is also the closing single quote, so without trimming, ‘yes’ counts as `yes'`, separately from `yes`. Trimming costs `dogs'` becoming `dogs` and `'em` becoming `em`. The `wordcount` code doesn't trim, as the README is written. I'd adopt trimming, since you type curly quotes. That means a small follow-up on `wordcount`: the trim step, a test for it, and a change to that README line. I left it out to keep this run small; say yes and I'll have it done.
+**The two branches don't match yet.** The designer amended the plan the engineer built from, in three ways:
+- NFC normalisation, and combining marks count as word characters. Without this, `हिन्दी` splits into pieces.
+- Apostrophes are trimmed from both ends of a run.
+- The README sentence needs updating to match.
+
+The engineer built the plain version, so a follow-up task is needed on `wordcount`. It is about 15 lines, using the doc's snippet and new tests. I haven't launched it, since you asked for a report once both were back.
+
+Chinese, Japanese and Thai are deliberately unsupported: a run between spaces and punctuation counts as one "word". Say if you need to count those scripts.
 ```
