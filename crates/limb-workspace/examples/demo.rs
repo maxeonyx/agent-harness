@@ -285,7 +285,7 @@ fn main() {
 fn crash(scratch: &Path) {
     let (upto, rows): (u64, Vec<(LimbKey, LimbRow)>) =
         serde_json::from_slice(&fs::read(scratch.join("rows.json")).unwrap()).unwrap();
-    let workspace = Workspace::open(config(scratch), Box::new(|_| {})).unwrap();
+    let workspace = Workspace::open(config(scratch), records(scratch), Box::new(|_| {})).unwrap();
     let view = View {
         as_of: Time {
             replica: BRAIN,
@@ -301,6 +301,15 @@ fn crash(scratch: &Path) {
     loop {
         thread::park();
     }
+}
+
+/// The limb's records, as its server opens them.
+fn records(
+    scratch: &Path,
+) -> harness_substrate::Log<harness_core::schema::Harness, harness_store::Store> {
+    fs::create_dir_all(scratch.join("state")).unwrap();
+    let store = harness_store::Store::open(scratch.join("state/limb.sqlite")).unwrap();
+    harness_substrate::Log::open(store.replica(), store).unwrap()
 }
 
 fn config(scratch: &Path) -> Config {
@@ -381,7 +390,8 @@ impl Brain {
         let out = Box::new(move |up| {
             let _ = tx.send(up);
         });
-        let workspace = Workspace::open(config(&self.scratch), out).unwrap();
+        let workspace =
+            Workspace::open(config(&self.scratch), records(&self.scratch), out).unwrap();
         println!(
             "  [a limb instance opened, at replica {}; the brain holds its records up to {}]",
             workspace.replica(),
