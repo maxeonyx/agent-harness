@@ -606,7 +606,13 @@ fn stage(clone: &Path, commit: &str, staging: &Path) -> Result<(), String> {
     }
     let built = run(Command::new(bin.join("harness-brain")).arg("--version"))?;
     if built != format!("harness-brain {commit}") {
-        return Err(format!("the build says it is {built}, not {commit}"));
+        // Cargo judges freshness by paths relative to the package and by
+        // mtimes, so a target directory another clone built into last can
+        // look fresh here and hold that clone's binary.
+        return Err(format!(
+            "the build says it is {built}, not {commit}: does another clone share {}'s target directory?",
+            clone.display()
+        ));
     }
     run(Command::new("chmod").arg("-R").arg("a-w").arg(staging)).map(|_| ())
 }
