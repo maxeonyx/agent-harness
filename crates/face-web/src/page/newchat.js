@@ -33,12 +33,15 @@ export function buildNew() {
   picks.replaceChildren(role, places);
   renderTune(null);
 }
+const newest = (place) => view.tasks.filter((t) => (t.scope ?? "Max") === "Max" && t.places?.[place])
+  .reduce((a, t) => !a || t.created.at > a.created.at ? t : a, null)?.places[place] || "";
 const placesOf = (role) => view.environments.find((e) => e.name === role)?.places || [];
-// A place's field: a workspace's is a directory, offered from those known.
+// A place's field: a workspace's is a directory, offered from those known,
+// and starting as the newest chat's, so a chat from a phone needs no typing.
 function placeField(place) {
   const f = el("input", "pick place"); f.dataset.place = place;
   f.placeholder = place === "workspace" ? "directory" : place; f.title = `Its ${place}`;
-  f.value = drafts.get(`new:${place}`) || "";
+  f.value = drafts.get(`new:${place}`) || newest(place);
   f.oninput = () => drafts.set(`new:${place}`, f.value);
   if (place !== "workspace") return [f];
   const list = el("datalist"); list.id = `n-${place}`;
