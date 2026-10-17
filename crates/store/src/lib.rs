@@ -116,6 +116,13 @@ impl Store {
         self.replica
     }
 
+    /// Copy the store as it is now to a new file at `path`: one consistent
+    /// snapshot, while the writer goes on.
+    pub fn copy_to(&self, path: &Path) -> Result<(), Error> {
+        self.db.execute("VACUUM INTO ?", [path.to_string_lossy()])?;
+        Ok(())
+    }
+
     /// The bytes named `id`, if they are stored.
     pub fn value(&self, id: ValueId) -> Result<Option<Vec<u8>>, Error> {
         Ok(self
