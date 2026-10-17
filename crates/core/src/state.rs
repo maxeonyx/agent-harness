@@ -798,7 +798,7 @@ impl State {
                         match &limb.kind {
                             // Max's answer is his; the brain only withdraws the question.
                             LimbKind::Max => matches!(outcome, CallOutcome::Interrupted { .. }),
-                            LimbKind::Meta | LimbKind::Attention => true,
+                            LimbKind::Meta | LimbKind::Attention | LimbKind::Provider => true,
                             // A plugin's outcome is its own, unless it was never
                             // sent, or the brain gives up on it while the limb is
                             // unreached; the limb's real outcome is still taken
@@ -1318,6 +1318,7 @@ impl State {
                 let limb = self.limbs.get(&limb).ok_or(Rejected::Unknown)?;
                 let instance = match &limb.kind {
                     LimbKind::Max => return Err(Rejected::ForMax),
+                    LimbKind::Provider => return Err(Rejected::Unroutable),
                     // Run once, with its effects, so never twice.
                     LimbKind::Meta | LimbKind::Attention if made.dispatched.is_some() => {
                         return Err(Rejected::Exists);
@@ -2126,10 +2127,13 @@ impl State {
                 todo.push(Todo::Expire(task.id));
             }
         }
-        for id in &self.open.calls {
-            let Some(record) = self.calls.get(id) else {
-                continue;
-            };
+        // In the order they were made, so a limb is sent one response's
+        // calls in the order the model wrote them.
+        let mut open: Vec<(&CallId, &CallRecord)> = (self.open.calls.iter())
+            .filter_map(|id| self.calls.get(id).map(|record| (id, record)))
+            .collect();
+        open.sort_by_key(|(_, record)| record.made.seq);
+        for (id, record) in open {
             if self.open.scopes.contains_key(&Scope::Spawn(*id)) {
                 let owner = self
                     .call_owner(*id)
@@ -2181,7 +2185,7 @@ impl State {
                 continue;
             }
             let due = match &limb.kind {
-                LimbKind::Max => false,
+                LimbKind::Max | LimbKind::Provider => false,
                 LimbKind::Meta | LimbKind::Attention => record.dispatched.is_none(),
                 LimbKind::Plugin { .. } => connection.is_some() && record.dispatched.is_none(),
             };

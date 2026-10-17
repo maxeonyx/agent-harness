@@ -240,6 +240,7 @@ fn config(scratch: &Path) -> Config {
         settings: Settings {
             dir: scratch.join("work"),
             clone: None,
+            skills: None,
         },
         state: scratch.join("state"),
     }

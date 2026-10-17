@@ -45,8 +45,8 @@ pub fn tools() -> Vec<Tool> {
 }
 
 /// The skills index: each skill's name and when to load it, from its
-/// `SKILL.md` frontmatter.
-pub fn index(root: &Path) -> String {
+/// `SKILL.md` frontmatter; only those of `only`, if it is given.
+pub fn index(root: &Path, only: Option<&[String]>) -> String {
     let mut skills: Vec<(String, String)> = fs::read_dir(root.join("skills"))
         .into_iter()
         .flatten()
@@ -62,6 +62,7 @@ pub fn index(root: &Path) -> String {
             };
             Some((field("name")?, field("description").unwrap_or_default()))
         })
+        .filter(|(name, _)| only.is_none_or(|only| only.contains(name)))
         .collect();
     skills.sort();
     let lines: Vec<String> = skills
@@ -80,12 +81,25 @@ struct Skill {
 }
 
 impl Inner {
+    /// The skills offered, by name, as the skills file says now; every one
+    /// when there is no file.
+    pub(crate) fn offered(&self) -> Option<Vec<String>> {
+        let text = fs::read_to_string(self.skills.as_ref()?).ok()?;
+        let names = text
+            .lines()
+            .map(|l| l.split('#').next().unwrap_or("").trim())
+            .filter(|l| !l.is_empty())
+            .map(String::from);
+        Some(names.collect())
+    }
+
     pub(crate) fn skill(&self, input: &[u8], report: &mut Report) -> Outcome {
         let loaded = serde_json::from_slice::<Skill>(input)
             .map_err(|e| format!("invalid input: {e}"))
             .and_then(|Skill { name }| {
-                if name.contains('/') || name.starts_with('.') {
-                    return Err(format!("no skill `{name}`"));
+                let offered = self.offered().is_none_or(|s| s.contains(&name));
+                if name.contains('/') || name.starts_with('.') || !offered {
+                    return Err(format!("no skill `{name}`; the index lists them all"));
                 }
                 let file = format!("skills/{name}/SKILL.md");
                 let bytes = fs::read(self.root.join(&file))

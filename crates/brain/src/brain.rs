@@ -36,8 +36,8 @@ use harness_provider::{Client, Finished, Progress};
 use harness_runtime::{Cancel, signals};
 use harness_store::Store;
 
-use crate::max;
 use crate::meta::{self, How};
+use crate::{max, web};
 use crate::{policy, render, roles};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
@@ -129,6 +129,8 @@ pub struct Brain {
     meta: LimbId,
     /// Max's limb: his answers to `ask`.
     max: LimbId,
+    /// The provider's web search and fetch.
+    web: LimbId,
     /// The roles limb, co-hosted.
     roles: Option<LimbId>,
     /// The plugin limbs this brain has started, by id, until they exit.
@@ -184,6 +186,7 @@ impl Brain {
             |is: &dyn Fn(&LimbKind) -> bool| state.limbs().find(|l| is(&l.kind)).map(|l| l.id);
         let meta = find(&|k| *k == LimbKind::Meta);
         let max = find(&|k| *k == LimbKind::Max);
+        let web = find(&|k| *k == LimbKind::Provider);
         let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let roles_limb =
             find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == roles::KIND));
@@ -206,20 +209,27 @@ impl Brain {
             };
         let meta = define(&mut facts, meta, &meta::definition);
         let max = define(&mut facts, max, &max::definition);
+        let web = define(&mut facts, web, &web::definition);
+        let roles_dir = roles
+            .map(|dir| {
+                dir.canonicalize()
+                    .map_err(|e| format!("the roles {dir:?}: {e}"))
+            })
+            .transpose()?;
         let home = std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?;
         let config = PathBuf::from(home).join(".claude");
+        // The skills it offers are named in `skills.txt` beside the role
+        // files, which the limb reads.
+        let skills = roles_dir.as_ref().map(|dir| dir.join("skills.txt"));
         let user = define(&mut facts, user_limb, &|id| {
-            Settings::user(id, config.clone())
+            Settings::user(id, config.clone(), skills.clone())
         });
-        let roles = match (roles_limb, roles) {
+        let roles = match (roles_limb, roles_dir) {
             (Some(id), _) => Some(id),
             (None, Some(dir)) => {
-                let dir = dir
-                    .canonicalize()
-                    .map_err(|e| format!("the roles {dir:?}: {e}"))?;
                 let settings = roles::Settings {
                     dir,
-                    limbs: [("meta", meta), ("max", max), ("user", user)]
+                    limbs: [("meta", meta), ("max", max), ("user", user), ("web", web)]
                         .into_iter()
                         .map(|(n, l)| (n.to_string(), l))
                         .collect(),
@@ -237,6 +247,7 @@ impl Brain {
             feed,
             meta,
             max,
+            web,
             roles,
             limbs: HashMap::new(),
             failed: HashMap::new(),
@@ -395,6 +406,7 @@ impl Brain {
         let settings = Settings {
             dir: dir.to_path_buf(),
             clone,
+            skills: None,
         };
         facts.push(Fact::Limb(settings.definition(id, &name)));
         id
@@ -636,6 +648,9 @@ impl Brain {
     fn description(&self, task: &Task, limb: LimbId) -> Option<Description> {
         if limb == self.max {
             return Some(max::description(limb));
+        }
+        if limb == self.web {
+            return Some(web::description());
         }
         if limb != self.meta {
             return self.state().described(limb).map(|d| d.description.clone());

@@ -59,6 +59,7 @@ mod policy;
 mod process;
 mod render;
 mod roles;
+mod web;
 
 use std::net::{IpAddr, TcpListener};
 use std::path::PathBuf;
