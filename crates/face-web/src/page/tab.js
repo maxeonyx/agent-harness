@@ -117,6 +117,8 @@ class Replica {
     if (probe?.type === "opaqueredirect" || probe?.status === 401 || probe?.status === 403) return location.reload();
     if (this.ws) this.connect();
   }
+  // Link afresh, without waiting for the old link to be seen to drop.
+  relink() { const old = this.ws; old.onclose = null; this.connect(); old.close(); }
   close() { const ws = this.ws; this.ws = null; ws?.close(); tabCall("close", undefined, this.h); }
   shipUnsent() {
     const { out } = tabCall("unsent", undefined, this.h);
@@ -160,6 +162,14 @@ export async function boot() {
   tab.connect();
   adoptOrphans();
 }
+// A phone that slept, or moved between networks, can come back with a link
+// that looks open while nothing reaches it. Back after a while, the page
+// links afresh rather than trust it.
+let hiddenAt = 0;
+addEventListener("visibilitychange", () => {
+  if (document.hidden) hiddenAt = Date.now();
+  else if (tab?.ws && Date.now() - hiddenAt > 30_000) tab.relink();
+});
 // A closed tab's replica, whose lock is free: ship what it had not, then
 // forget it, so nothing typed in a tab that was closed offline is lost.
 async function adoptOrphans() {
