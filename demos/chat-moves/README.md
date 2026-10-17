@@ -1,6 +1,6 @@
 # Moving a chat: retry, edit, back, versions
 
-`demos/chat-moves/run.sh` starts a test brain on port 4362 (`PORT=…` for another), starts a chat ("Write a new four-word poem."), and retries its reply, so it has two versions. Open https://mx-hv-mj.local:4362/ and try the rest; `node dev/drive.mjs down 4362` ends it.
+`demos/chat-moves/run.sh` starts a test brain on port 4362 (`PORT=…` for another) on the scripted model, which costs nothing, starts a chat, and prints its transcript and link. Open it and try the moves below; on the scripted model a retry says the same words again, so for a second version run it with `MODEL=sonnet`, or edit your message. `node dev/drive.mjs down 4362` ends it.
 
 Hover a message in the open card:
 
