@@ -1,6 +1,5 @@
 //! Trees of processes an owner started, and ending them.
 
-use std::collections::HashSet;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -139,10 +138,15 @@ pub struct Process {
     pub start: u64,
 }
 
-/// End a tree of processes by a deadline: ask each member once with `ask`
-/// (a signal; `None` where the owner asked in band), wait until none is
-/// left, and at the deadline (or the earlier one the waiter's cancel is
+/// End a tree of processes by a deadline: ask the tree as it stands with
+/// `ask` (a signal; `None` where the owner asked in band), wait until none
+/// is left, and at the deadline (or the earlier one the waiter's cancel is
 /// brought forward to) kill each one left.
+///
+/// Only the processes there when it asks are asked. What starts after is
+/// the cleanup's own work (a trap's `sleep`, a build tool reaping its
+/// jobs), its to finish: asking it too would cut the cleanup short. It is
+/// killed at the deadline with the rest.
 ///
 /// `members` lists the tree's live processes, reaping what it must first;
 /// it is called again on every wake, since members start others and adopted
@@ -158,7 +162,7 @@ pub fn end(
     mut members: impl FnMut() -> Vec<Process>,
     mut serve: impl FnMut() -> Option<RawFd>,
 ) -> io::Result<Ended> {
-    let mut asked: HashSet<(libc::pid_t, u64)> = HashSet::new();
+    let mut ask = ask;
     let mut killed: Option<Instant> = None;
     loop {
         let watch = serve();
@@ -190,11 +194,9 @@ pub fn end(
             }
             (now + RESCAN).min(since + KILL_WAIT)
         } else {
-            if let Some(ask) = ask {
-                for (p, fd) in &pinned {
-                    if asked.insert((p.pid, p.start)) {
-                        signal(fd, ask);
-                    }
+            if let Some(ask) = ask.take() {
+                for (_, fd) in &pinned {
+                    signal(fd, ask);
                 }
             }
             (now + RESCAN).min(deadline)

@@ -78,8 +78,10 @@ pub const CALL_GRACE: Duration = Duration::from_secs(10);
 pub const MEMBER_STOP: Duration = Duration::from_secs(60);
 
 /// How long Ctrl-C (or `SIGTERM`) gives the requests in flight to finish
-/// before they are cut and the brain exits. A second signal cuts them now.
-pub const DRAIN: Duration = Duration::from_secs(30);
+/// before they are cut and the brain exits: long enough for nearly any
+/// response, since a cut one is paid for and lost. A second signal cuts
+/// them now.
+pub const DRAIN: Duration = Duration::from_secs(300);
 
 /// How long the limbs have to stop their running commands when the brain
 /// shuts down: commands are started again from the journal, so they are
