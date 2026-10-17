@@ -4,11 +4,27 @@
     padding: .55em .9em max(.55em, env(safe-area-inset-bottom)); pointer-events: none; color: var(--muted); font-size: 12.5px;
   }
   #bottom > * { pointer-events: auto; }
-  body.covered #bottom { display: none; }
+  /* Over the open card, only the usage stays, compact and on a ground of its own. */
+  body.covered #bottom > :not(#usage) { display: none; }
+  body.covered #usage { padding: .2em .7em; border-radius: 999px; background: rgba(250, 249, 245, .92); backdrop-filter: blur(6px); border: 1px solid var(--line); }
+  body.covered #usage .gauge i { width: 2em; }
   .spacer { flex: 1; pointer-events: none !important; }
   #bottom .icon { background: rgba(250, 249, 245, .88); backdrop-filter: blur(6px); border: 1px solid var(--line); }
   #bottom #new { width: 2.7em; height: 2.7em; background: var(--ink); border-color: var(--ink); color: var(--paper); }
-  #usage { display: inline-flex; gap: 1.1em; align-items: center; }
+  #usage { position: relative; display: inline-flex; gap: 1.1em; align-items: center; }
+  #usage .gauges { display: inline-flex; gap: 1.1em; align-items: center; padding: .25em .1em; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+  #usage.busy .gauges { cursor: progress; }
+  #usage .alarms { display: inline-flex; gap: 1.1em; }
+  .usage-card {
+    position: absolute; left: 0; bottom: calc(100% + .5em); display: none; min-width: 17em; max-width: 24em; padding: .55em .75em; border-radius: 10px;
+    background: var(--white); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(40, 30, 20, .14); color: var(--muted); white-space: nowrap;
+  }
+  #usage:hover .usage-card, #usage:focus-within .usage-card { display: block; }
+  .usage-card .row { display: grid; grid-template-columns: 1fr auto auto; gap: .9em; padding: .1em 0; }
+  .usage-card .row b { color: var(--ink); font-weight: 600; text-align: right; }
+  .usage-card .row + .as-of { margin-top: .35em; padding-top: .35em; border-top: 1px solid var(--line); }
+  .usage-card .stale { color: var(--faint); }
+  .usage-card .failed { margin-top: .2em; color: var(--maroon); white-space: normal; }
   .gauge { display: inline-flex; gap: .4em; align-items: center; }
   .gauge i { display: inline-block; width: 3.4em; height: .32em; border-radius: 1em; background: var(--line); overflow: hidden; }
   .gauge i b { display: block; height: 100%; background: var(--muted); }
