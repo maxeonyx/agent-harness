@@ -4,16 +4,20 @@
 # model call, no cost. Prints each call's outcome and the files it left.
 set -eu
 cd "$(dirname "$0")/../.."
-cargo build -q -p harness-brain -p harness-limb-workspace
+cargo build -q -p harness-brain -p harness-limb-workspace --bins --example act
 dir=target/own-calls
 rm -rf "$dir"
 mkdir -p "$dir/ws"
 printf 'one\ntwo\n' > "$dir/ws/f.txt"
 echo theirs > "$dir/ws/other.txt"
-target/debug/harness-brain --roles roles --db "$dir/brain.sqlite" --port "${PORT:-4391}" \
-  --model scripted --role engineer --workspace "$dir/ws" \
-  --mandate demos/own-calls/mandate.md > "$dir/brain.log" 2>&1 &
+# The limbs outlive the brain: everything it starts carries this mark, and
+# what is left is ended when the demo finishes.
+mark=HARNESS_OWNER_own_calls_$$
+trap 'demos/end.sh "$mark"' EXIT
+env "$mark=1" target/debug/harness-brain --roles roles --db "$dir/brain.sqlite" --port "${PORT:-4391}" \
+  --model scripted > "$dir/brain.log" 2>&1 &
 brain=$!
+target/debug/examples/act "${PORT:-4391}" chat engineer "$PWD/$dir/ws" "$(cat demos/own-calls/mandate.md)" > /dev/null
 until grep -q "EndTurn" "$dir/brain.log" 2>/dev/null; do
   kill -0 "$brain" 2>/dev/null || { cat "$dir/brain.log"; exit 1; }
   sleep 0.2

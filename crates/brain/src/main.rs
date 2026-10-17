@@ -85,7 +85,7 @@ use harness_provider::{Client, Login};
 use harness_runtime::Cancel;
 use harness_store::Store;
 
-use crate::brain::{Brain, Inbox, Start};
+use crate::brain::{Brain, Inbox};
 
 /// The values the face shows, read over its own connection to the store.
 struct Values(Mutex<Store>);
@@ -97,11 +97,15 @@ impl Source for Values {
     }
 }
 
+/// The commit this brain was built from, `+dirty` if the tree had
+/// changes: what `--version`, the launch and the face say.
+const SOURCE: &str = env!("HARNESS_SOURCE");
+
 /// What `harness-brain --help` prints. `--model scripted` is
 /// [`harness_provider::SCRIPTED`].
 const USAGE: &str = "\
 usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL]
-                     [--workspace DIR --mandate FILE [--name NAME] [--role ROLE]]
+       harness-brain --version
 
   --db DB          the database; a new one is made if none is there
   --port PORT      where the face is served, over HTTPS
@@ -111,11 +115,11 @@ usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model M
                    nothing (it answers from a script in the chat)
   --sample WAV     a recording the page offers to dictate, for a machine with
                    no microphone
-  --workspace DIR  with --mandate, start a task in Max's scope as his: a chat
-  --mandate FILE   with him in DIR, whose mandate is FILE's words
-  --name NAME      that task's name (default: its role)
-  --role ROLE      that task's role (default: orchestrator)
+  --version        print the commit it was built from
   --help           print this
+
+Max starts a chat as he does at a tab: at the page, or from a script with
+`target/release/examples/act PORT chat ROLE DIR|- TEXT`.
 ";
 
 fn main() -> ExitCode {
@@ -130,21 +134,19 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let (mut db, mut port, mut workspace, mut mandate, mut name) = (None, None, None, None, None);
-    let (mut roles, mut role) = (None, "orchestrator".to_string());
-    let (mut sample, mut model) = (None, None);
+    let (mut db, mut port, mut roles, mut sample, mut model) = (None, None, None, None, None);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
             "--db" => db = Some(PathBuf::from(value()?)),
             "--port" => port = Some(value()?.parse().map_err(|e| format!("--port: {e}"))?),
-            "--workspace" => workspace = Some(PathBuf::from(value()?)),
-            "--mandate" => mandate = Some(PathBuf::from(value()?)),
-            "--name" => name = Some(value()?),
             "--roles" => roles = Some(PathBuf::from(value()?)),
-            "--role" => role = value()?,
             "--sample" => sample = Some(PathBuf::from(value()?)),
             "--model" => model = Some(value()?),
+            "--version" => {
+                outln!("harness-brain {SOURCE}");
+                return Ok(());
+            }
             "--help" | "-h" => {
                 outln!("{}", USAGE.trim_end());
                 return Ok(());
@@ -153,18 +155,8 @@ fn run() -> Result<(), String> {
         }
     }
     let db = db.ok_or("--db is required")?;
+    outln!("harness-brain {SOURCE}");
     let port: u16 = port.ok_or("--port is required")?;
-    let start = match (workspace, mandate) {
-        (Some(workspace), Some(mandate)) => Some(Start {
-            workspace,
-            name: name.unwrap_or_else(|| role.clone()),
-            role,
-            mandate: std::fs::read_to_string(&mandate)
-                .map_err(|e| format!("the mandate {mandate:?}: {e}"))?,
-        }),
-        _ => None,
-    };
-
     let store = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
     let values = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
     let (folds, followed) = mpsc::channel();
@@ -197,6 +189,7 @@ fn run() -> Result<(), String> {
             dictation: Some(dictation),
             feed: feed.clone(),
             models: offered.clone(),
+            source: SOURCE.into(),
         },
     );
     // The Windows host, read again for each connection: DHCP can move it.
@@ -210,7 +203,6 @@ fn run() -> Result<(), String> {
             every: model,
         },
         roles.as_deref(),
-        start,
         inbox,
         feed,
     )?;

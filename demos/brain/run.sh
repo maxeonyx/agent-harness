@@ -16,8 +16,9 @@ mark=HARNESS_OWNER_brain-demo-$$
 trap 'demos/end.sh "$mark"' EXIT
 
 echo "== launch 1: the orchestrator starts on demos/brain/mandate.md"
-env "$mark=1" "$brain" "${args[@]}" --workspace "$dir/repo" --mandate demos/brain/mandate.md > "$dir/launch1.log" 2>&1 &
+env "$mark=1" "$brain" "${args[@]}" > "$dir/launch1.log" 2>&1 &
 pid=$!
+target/release/examples/act "${PORT:-4341}" chat orchestrator "$PWD/$dir/repo" "$(cat demos/brain/mandate.md)" >> "$dir/launch1.log"
 # Kill it while a check.sh is running: a bash call, which may not be rerun.
 # The face's view, read as the page reads it.
 running_check() {

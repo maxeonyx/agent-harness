@@ -1,3 +1,4 @@
+Own calls: each line below is one call.
 tool bash {"command": "cat other.txt"}
 tool write {"path": "other.txt", "content": "mine\n"}
 tool read {"path": "f.txt"}

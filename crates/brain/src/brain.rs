@@ -97,16 +97,6 @@ impl Inbox {
     }
 }
 
-/// A task the command line starts in Max's scope, as his: a role, a
-/// directory to work in, and a mandate. Like every task he starts, it is a
-/// chat with him, done when he says.
-pub struct Start {
-    pub role: String,
-    pub workspace: PathBuf,
-    pub name: String,
-    pub mandate: String,
-}
-
 /// One limb's link, while it is connected.
 struct Link {
     conn: Conn,
@@ -156,8 +146,8 @@ pub struct Brain {
     /// Each request in flight: the thread that sends it, joined when it
     /// reports how it ended, and its stop.
     requests: HashMap<ModelCallId, (Cancel, JoinHandle<()>)>,
-    /// The task this launch started, or else the first of Max's it found
-    /// unfinished: the one whose result it prints.
+    /// The first of Max's tasks this launch found unfinished: the one
+    /// whose result it prints.
     root: Option<TaskId>,
     started: Instant,
     reported: bool,
@@ -165,17 +155,14 @@ pub struct Brain {
 
 impl Brain {
     /// Fold what the database holds, define the brain's own limbs if it is
-    /// new (the roles limb over `roles`), listen for limbs, and start the
-    /// command line's task. What the last brain left in flight is on the
-    /// to-do list.
-    #[allow(clippy::too_many_arguments)]
+    /// new (the roles limb over `roles`), and listen for limbs. What the
+    /// last brain left in flight is on the to-do list.
     pub fn launch(
         store: Store,
         face: Sender<Folded>,
         client: Client,
         models: roles::Models,
         roles: Option<&Path>,
-        start: Option<Start>,
         Inbox { events, inbox }: Inbox,
         feed: Feed,
     ) -> Result<Brain, String> {
@@ -270,17 +257,6 @@ impl Brain {
             facts,
         });
         brain.host_roles();
-        brain.root = match start {
-            Some(start) => {
-                brain.await_role(&start.role);
-                Some(brain.start(start)?)
-            }
-            None => brain
-                .state()
-                .tasks()
-                .find(|t| t.scope == Scope::Max && !t.is_done())
-                .map(|t| t.id),
-        };
         Ok(brain)
     }
 
@@ -311,87 +287,6 @@ impl Brain {
             roles::run(&limb, replica, down, up, &models);
             let _ = events.send(Event(What::Link(conn, link::Said::Left)));
         });
-    }
-
-    /// Take in what arrives until the roles limb has stated `role`, for a
-    /// while: on a new database, it has only just started reading.
-    fn await_role(&mut self, role: &str) {
-        let until = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < until && !self.state().environments().any(|e| e.name == role) {
-            if let Ok(event) = self.inbox.recv_timeout(TICK) {
-                self.handle(event);
-            }
-        }
-    }
-
-    /// Start a task in Max's scope, as Max: through the command line, a
-    /// face with no page, which is a replica of its own.
-    fn start(&mut self, start: Start) -> Result<TaskId, String> {
-        let env = self
-            .state()
-            .environments()
-            .find(|e| e.name == start.role)
-            .ok_or(format!(
-                "no role `{}` (the roles limb states them once it has read its files)",
-                start.role
-            ))?
-            .clone();
-        let dir = start
-            .workspace
-            .canonicalize()
-            .map_err(|e| format!("the workspace {:?}: {e}", start.workspace))?;
-        // The workspace limbs are the brain's to define, in its own record.
-        let at = self.decider.next();
-        let mut defined = Vec::new();
-        let mut places = BTreeMap::new();
-        for kind in &env.places {
-            let limb = self.workspace_limb(&dir, None, at, &mut defined);
-            places.insert(kind.clone(), limb);
-        }
-        let face = mint_replica();
-        defined.push(Fact::Face(face));
-        self.append(Batch {
-            values: Vec::new(),
-            facts: defined,
-        });
-        let mandate = Bytes::from(start.mandate);
-        let said = Time {
-            replica: face,
-            n: 1,
-        };
-        let id = TaskId(said.event(0));
-        let facts = vec![Fact::Task(
-            id,
-            TaskEvent::Created(Box::new(Created {
-                tuning: Default::default(),
-                name: start.name,
-                by: None,
-                scope: Scope::Max,
-                origin: Origin::Fresh {
-                    environment: env.id,
-                    places,
-                },
-                mode: Mode::UserFacing,
-                mandate: Mandate {
-                    text: mandate.id(),
-                    brief: None,
-                    quotes: Vec::new(),
-                },
-            })),
-        )];
-        let record = Record {
-            at: said,
-            clock: now(),
-            what: Said::Said(Batch {
-                values: vec![mandate],
-                facts,
-            }),
-        };
-        self.include(record);
-        match self.decider.standing(face).refused.get(&1) {
-            Some(why) => Err(format!("the task is refused: {why}")),
-            None => Ok(id),
-        }
     }
 
     /// The workspace limb for `dir`, which is its name: the one already
@@ -1696,6 +1591,13 @@ and you cannot finish until it has.",
     fn report(&mut self) {
         if self.reported {
             return;
+        }
+        if self.root.is_none() {
+            let unfinished = self
+                .state()
+                .tasks()
+                .find(|t| t.scope == Scope::Max && !t.is_done());
+            self.root = unfinished.map(|t| t.id);
         }
         let Some(outcome) = self
             .root

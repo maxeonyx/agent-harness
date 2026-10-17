@@ -45,19 +45,15 @@ fn main() {
         .unwrap();
     assert!(made.success(), "the scratch repo");
     let db = dir.join("brain.sqlite");
-    let mut brain = Brain::launch(
-        &db,
-        port,
-        &[
-            "--workspace",
-            "target/face-controls-demo/repo",
-            "--mandate",
-            "demos/brain/mandate.md",
-        ],
-    );
+    let mut brain = Brain::launch(&db, port);
     brain.serving();
     println!("  watch it at https://mx-hv-mj.local:{port}");
     let mut max = Device::connect("tab", port);
+    max.pump_until(|d| d.environment("orchestrator").is_some());
+    let orchestrator = max.environment("orchestrator").unwrap();
+    let repo = fs::canonicalize(dir.join("repo")).unwrap();
+    let mandate = fs::read_to_string("demos/brain/mandate.md").unwrap();
+    max.chat(orchestrator, repo.to_str(), &mandate);
     max.pump_until(|d| d.root().is_some());
     let root = max.root().unwrap();
     say(&format!("the root task is {}", name(&max, root)));
@@ -478,12 +474,11 @@ struct Brain {
 }
 
 impl Brain {
-    fn launch(db: &Path, port: u16, extra: &[&str]) -> Brain {
+    fn launch(db: &Path, port: u16) -> Brain {
         let mut child = Command::new("target/release/harness-brain")
             .args(["--roles", "roles", "--db"])
             .arg(db)
             .args(["--port", &port.to_string()])
-            .args(extra)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
