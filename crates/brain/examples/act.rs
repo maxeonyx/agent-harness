@@ -10,6 +10,8 @@
 //!                         workspace over DIR (`-` for a role with none),
 //!                         with TEXT as its mandate
 //! act PORT say CHAT TEXT  Send TEXT to the chat CHAT, as its next words
+//! act PORT back CHAT ENTRY
+//!                         Move the chat CHAT back to ENTRY, where it has been
 //! ```
 //!
 //! It prints `included` (for a chat, `chat <id>`), or `refused: <why>` and
@@ -28,7 +30,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: act PORT done | act PORT abandon MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT | act PORT say CHAT TEXT"
+            "usage: act PORT done | act PORT abandon MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT | act PORT say CHAT TEXT | act PORT back CHAT ENTRY"
         );
         exit(2)
     };
@@ -54,6 +56,14 @@ fn main() {
         let Ok(chat) = chat.parse() else { usage() };
         tab.pump_until(|d| d.tab.view().is_some());
         tab.message(chat, text)
+    } else if let [_, back, chat, entry] = &args[..]
+        && back == "back"
+    {
+        let (Ok(chat), Ok(entry)) = (chat.parse(), entry.parse()) else {
+            usage()
+        };
+        tab.pump_until(|d| d.tab.view().is_some());
+        tab.back(chat, entry)
     } else {
         tab.pump_until(|d| d.root().is_some());
         let root = tab.root().expect("a root");

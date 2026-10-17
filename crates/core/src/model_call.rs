@@ -13,8 +13,7 @@ use crate::id::{TaskId, Timestamp, ValueId};
 /// [appended](ModelCall::appends), whose last is its [head](ModelCall::head)),
 /// what those messages were rendered from ([`ModelCall::renders`]), where it
 /// asked the provider to cache, when the response began and ended, how it
-/// ended, and what the provider reported. Every turn, retry and handover
-/// turn is one. A keep-alive (a request that only refreshes a prefix's
+/// ended, and what the provider reported. Every turn and retry is one. A keep-alive (a request that only refreshes a prefix's
 /// lifetime and moves no task) is a new kind of request when the brain's
 /// policy first sends one; it will need a purpose here and a fold rule that
 /// lets its base trail its task's head.
@@ -51,7 +50,7 @@ use crate::id::{TaskId, Timestamp, ValueId};
 ///   claim; the provider turns a claim other than a plan window into
 ///   `on_plan: false` ([`Quota`]).
 ///
-/// **Vision.** Cache-aware forking; keep-alive vs cache-expiry handover as
+/// **Vision.** Cache-aware forking; keep-alive vs cache-expiry compaction as
 /// an expected-value decision (critique §4); analytics and timesheets; the
 /// throbber's "sent, no first byte yet" vs "streaming"; restart (a request
 /// sent by an earlier brain with no end was lost and is sent again, since
@@ -65,7 +64,7 @@ use crate::id::{TaskId, Timestamp, ValueId};
 /// (`ref-pi/packages/coding-agent/src/core/cache-warmer.ts:27`); OpenCode
 /// and Goose place breakpoints and count usage afterwards. Here the prefix,
 /// not the session, is the thing that is warm, so the same decision sees
-/// every task sharing it, and has two more options: hand over now, or let a
+/// every task sharing it, and has two more options: compact now, or let a
 /// fork's reads keep it warm.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCall {

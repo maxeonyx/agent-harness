@@ -27,7 +27,7 @@ use crate::id::{DeliveryId, TaskId, ValueId};
 ///
 /// **Vision.** The user turn; "what drives API requests" (exactly: a
 /// settled tool round, Max ending his turn, a harness prompt such as the
-/// cache-expiry handover, a standing task's event, a background result);
+/// cache-expiry compaction, a standing task's event, a background result);
 /// "most other events only piggyback" (`context-and-agent-loop.md`).
 ///
 /// **Existing harnesses.** OpenCode by default, Pi and Goose put a message
@@ -79,9 +79,9 @@ pub enum Content {
 
 /// Why the harness asks for a turn the model did not otherwise have.
 ///
-/// Only prompts something produces are here. A cache-expiry handover and a
-/// two-stage handover are each a new variant when the brain's policy first
-/// asks for one.
+/// Only prompts something produces are here. A compaction the harness asks
+/// for (the cache is about to expire, Max asks from his face) is a new
+/// variant when the brain's policy first asks for one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Prompt {
     /// Max marked a task done: write the result for the owner (for an

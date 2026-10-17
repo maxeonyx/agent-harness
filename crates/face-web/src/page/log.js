@@ -41,8 +41,8 @@ export async function renderLog(t) {
 }
 
 // New entries append; entries no longer in the chain (Max moved it back, to
-// another version, or to a new root) go, and the chain is drawn on from
-// where the two share their prefix.
+// another version, or a compaction replaced them) go, and the chain is drawn
+// on from where the two share their prefix.
 function appendChain(s, chain, t) {
   const ids = chain.map((e) => e.id);
   let keep = s.rendered.findIndex((r, i) => r.id !== ids[i]);
@@ -112,6 +112,11 @@ function entry(s, into, e, index, t, parent) {
         into.append(run.el);
       } else if (who.by === "prompt") {
         into.append(prompted(who.prompt, text));
+      } else if (who.by === "compacted") {
+        if (!run) {
+          run = { by: who.by, el: compacted(s, parent, who.from, t, text) };
+          into.append(run.el);
+        } else run.el.append(markdown(text));
       } else if (who.by === "brief" || who.by === "mandate") {
         if (!run) {
           run = { by: who.by, el: el("div", "entry card mandate") };
@@ -183,6 +188,29 @@ function rootEntry(e) {
   }
   d.append(prompt, defs);
   return d;
+}
+
+// A compaction, where it happened: the summary the agent carried on with,
+// and what it replaced (the work after `parent`, up to `from`), folded
+// until opened.
+function compacted(s, parent, from, t, framing) {
+  const card = el("div", "entry card compacted");
+  const replaced = el("details", "replaced");
+  replaced.append(el("summary", "more-link", "What it replaced"));
+  replaced.ontoggle = async () => {
+    if (!replaced.open || replaced.dataset.done) return;
+    replaced.dataset.done = "1";
+    const chain = (await contextOf(from)) || [];
+    // A fresh compaction's new root is not on the old chain: all of it
+    // after its root was replaced.
+    const at = Math.max(chain.findIndex((e) => e.id === parent), 0);
+    const sub = { rows: new Map(), group: null, rendered: chain.slice(0, at + 1).map((e) => ({ id: e.id })), exact: false };
+    const body = el("div", "chunk");
+    for (let i = at + 1; i < chain.length; i++) entry(sub, body, chain[i], i, t, chain[i - 1].id);
+    replaced.append(body);
+  };
+  card.append(el("div", "framing", framing.replace(/^\[harness\] /, "")), replaced);
+  return card;
 }
 
 // Words in a bubble on the right: Max's, or what his user is to an agent.
@@ -269,9 +297,9 @@ function toolRow(s, b, t) {
     row.insertBefore(chips, detail);
     row.chips = chips;
   }
-  if (b.name === "handover") {
+  if (b.name === "compact") {
     const q = el("div", "card");
-    q.append(el("div", "label", "Handed over to a fresh context"), markdown(input.note || ""));
+    q.append(el("div", "label", input.fresh ? "Compacting into a new context" : "Compacting"), markdown(input.summary || ""));
     row.insertBefore(q, detail);
   }
   s.rows.set(b.id, { row, b, inner });

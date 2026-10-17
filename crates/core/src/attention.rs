@@ -12,7 +12,7 @@ use crate::id::{TaskId, Timestamp};
 /// word ([`crate::task::Task::owed_since`]: a user-facing turn ended, or he
 /// interrupted). An agent facing him says what it needs from him in its
 /// message; a question is not a separate item. Each keeps the time it started waiting, so a task keeps its place
-/// through a harness turn (a handover before its cache expires) and leaves
+/// through a harness turn (a compaction before its cache expires) and leaves
 /// only when Max answers.
 ///
 /// The ranking only orders. It is keyed by task, so a ranked task that no longer
