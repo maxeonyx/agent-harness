@@ -1165,8 +1165,9 @@ impl State {
             .environments
             .get(&environment)
             .ok_or(Rejected::Unknown)?;
+        let unfilled = || Rejected::Unplaced(environment.places.clone());
         if places.len() != environment.places.len() {
-            return Err(Rejected::WrongEnvironment);
+            return Err(unfilled());
         }
         for kind in &environment.places {
             let fits = places
@@ -1174,7 +1175,7 @@ impl State {
                 .and_then(|l| self.limbs.get(l))
                 .is_some_and(|l| matches!(&l.kind, LimbKind::Plugin { kind: k, .. } if k == kind));
             if !fits {
-                return Err(Rejected::WrongEnvironment);
+                return Err(unfilled());
             }
         }
         Ok(())
