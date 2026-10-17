@@ -15,10 +15,13 @@ use std::{env, fs, thread};
 use harness_core::call::CallEvent;
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::draft::DraftEvent;
+use harness_core::environment::{Host, Limb, LimbKind};
 use harness_core::fact::{Batch, Fact};
-use harness_core::id::{CallId, DeliveryId, ModelCallId, ReplicaId, TaskId, Timestamp};
+use harness_core::id::{
+    CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, ReplicaId, TaskId, Timestamp,
+};
 use harness_core::live::Live;
-use harness_core::task::{Abandoner, Drain, TaskEvent};
+use harness_core::task::{Abandoner, Created, Drain, Mandate, Mode, Origin, Scope, TaskEvent};
 use harness_core::value::Bytes;
 use harness_face_tab::{Down, FaceKey, FaceRow, Tab, Up};
 use harness_substrate::Status;
@@ -136,6 +139,48 @@ impl Device {
                 content: Content::Prompt(Prompt::Done),
                 read: Read::Next,
             })],
+        })
+    }
+
+    /// Max starts a chat in `environment`, with a new workspace limb over
+    /// `dir`, as the page's new-chat card does.
+    pub fn chat(&mut self, environment: EnvironmentId, dir: &str, text: &str) -> u64 {
+        let at = self.tab.next();
+        let (limb, task) = (LimbId(at.event(0)), TaskId(at.event(1)));
+        let mandate = blocks(text);
+        println!("  {}: Max starts a chat in {dir}: {text:?}", self.name);
+        self.say(Batch {
+            values: vec![mandate.clone()],
+            facts: vec![
+                Fact::Limb(Limb {
+                    id: limb,
+                    name: dir.into(),
+                    kind: LimbKind::Plugin {
+                        kind: "workspace".into(),
+                        config: json!({ "dir": dir }).to_string(),
+                        host: Host::Local,
+                    },
+                }),
+                Fact::Task(
+                    task,
+                    TaskEvent::Created(Box::new(Created {
+                        name: "act".into(),
+                        by: None,
+                        scope: Scope::Max,
+                        origin: Origin::Fresh {
+                            environment,
+                            places: BTreeMap::from([("workspace".into(), limb)]),
+                        },
+                        mode: Mode::UserFacing,
+                        mandate: Mandate {
+                            text: mandate.id(),
+                            brief: None,
+                            quotes: Vec::new(),
+                        },
+                        tuning: Default::default(),
+                    })),
+                ),
+            ],
         })
     }
 
