@@ -39,7 +39,8 @@ When anything is cut, the view ends by naming a file that holds the whole output
 
 This directory is shared: forks of your context and other agents may work in it too. \
 When a file you have read changes, you are told at your next turn. \
-A `write` or `edit` is refused, with no effect, if the file has changed since you last saw it (or exists and you have never seen it): read it and try again. \
+A `write` or `edit` is refused, with no effect, if the file has changed since you last saw it through `read`, `write` or `edit`, or exists and you have never seen it so: read it and try again. \
+Your own calls never cause a refusal: the earlier calls of the same response, and files your commands changed. Seeing a file in a command's output does not count as seeing it. \
 Changes made by commands are not checked in advance.
 
 `AGENTS.md` files below this directory apply to the work inside their own directory: read one before working there.";

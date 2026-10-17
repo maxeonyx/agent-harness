@@ -82,7 +82,6 @@ impl Inner {
         cancel: &Cancel,
         report: &mut Report,
     ) -> Outcome {
-        let expects = &call.expects;
         if self.kind == crate::Kind::User {
             return match call.tool.as_str() {
                 "skill" => self.skill(input, report),
@@ -92,8 +91,8 @@ impl Inner {
         let result = match call.tool.as_str() {
             "bash" => parse(input).and_then(|i| self.bash(id, i, cancel, report)),
             "read" => parse(input).and_then(|i| self.read(i, report)),
-            "write" => parse(input).and_then(|i| self.write(i, expects, report)),
-            "edit" => parse(input).and_then(|i| self.edit(i, expects, report)),
+            "write" => parse(input).and_then(|i| self.write(i, call, report)),
+            "edit" => parse(input).and_then(|i| self.edit(i, call, report)),
             "grep" => parse(input).and_then(|i| self.grep(id, i, cancel, report)),
             other => Err(format!("this workspace has no tool `{other}`")),
         };
@@ -211,12 +210,7 @@ impl Inner {
         Ok(report.completed(&budgeted(lines, offset, true), observes))
     }
 
-    fn write(
-        &self,
-        input: Write,
-        expects: &[Observation],
-        report: &mut Report,
-    ) -> Result<Outcome, String> {
+    fn write(&self, input: Write, call: &Call, report: &mut Report) -> Result<Outcome, String> {
         let place = self.place(&input.path);
         let _files = lock(&self.files);
         let current =
@@ -228,7 +222,7 @@ impl Inner {
             let said = format!("{} already has this content.", input.path);
             return Ok(report.completed(&said, self.observations(&place.name, target)));
         }
-        if let Some(refused) = self.refuse(&place, current, expects) {
+        if let Some(refused) = self.refuse(&place, current, call) {
             return Ok(refused);
         }
         if let Some(parent) = place.path.parent() {
@@ -246,17 +240,12 @@ impl Inner {
         Ok(report.completed(&said, self.observations(&place.name, target)))
     }
 
-    fn edit(
-        &self,
-        input: Edit,
-        expects: &[Observation],
-        report: &mut Report,
-    ) -> Result<Outcome, String> {
+    fn edit(&self, input: Edit, call: &Call, report: &mut Report) -> Result<Outcome, String> {
         let place = self.place(&input.path);
         let _files = lock(&self.files);
         let current =
             version(&place.path).map_err(|e| format!("cannot read {}: {e}", input.path))?;
-        if let Some(refused) = self.refuse(&place, current, expects) {
+        if let Some(refused) = self.refuse(&place, current, call) {
             return Ok(refused);
         }
         let bytes =
@@ -374,14 +363,17 @@ impl Inner {
         (output.text + &said, Some(report.value(whole)))
     }
 
-    /// The refusal of a write or edit whose caller has not seen `current`.
-    fn refuse(&self, place: &Place, current: Version, expects: &[Observation]) -> Option<Outcome> {
+    /// The refusal of a write or edit whose caller has not seen `current`,
+    /// unless its own command made it.
+    fn refuse(&self, place: &Place, current: Version, call: &Call) -> Option<Outcome> {
         let key = &self.keys(&place.name)[0];
-        let expected = expects
+        let expected = call
+            .expects
             .iter()
             .find(|o| &o.resource == key)
             .map_or(Version::Gone, |o| o.version);
-        (expected != current).then(|| Outcome::Refused {
+        let refused = expected != current && !self.made_by(&call.caller, &place.path);
+        refused.then(|| Outcome::Refused {
             current: vec![Observation {
                 resource: key.clone(),
                 version: current,
