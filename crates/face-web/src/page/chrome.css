@@ -30,3 +30,6 @@
   .gauge i b { display: block; height: 100%; background: var(--muted); }
   .gauge.high i b { background: var(--maroon); }
   .alarm { color: var(--maroon); font-weight: 600; }
+  /* Which build runs: a quiet line, red only when a relaunch went back. */
+  #bottom .build { color: var(--faint); max-width: 40em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #bottom .build.back { color: var(--maroon); }
