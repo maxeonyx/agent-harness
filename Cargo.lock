@@ -251,6 +251,8 @@ version = "0.0.0"
 dependencies = [
  "harness-core",
  "harness-runtime",
+ "harness-store",
+ "harness-substrate",
  "libc",
  "regex",
  "serde",
