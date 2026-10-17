@@ -151,7 +151,7 @@
   #panel {
     position: absolute; left: 0; top: 0; z-index: 2; display: flex; flex-direction: column; background: var(--paper);
     border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 22px 60px rgba(40, 30, 20, .2); overflow: hidden;
-    cursor: auto; touch-action: auto; will-change: transform;
+    cursor: auto; touch-action: pan-x pan-y; will-change: transform;
   }
   #panel > .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em 1em; border-bottom: 1px solid var(--line); min-height: 2.9em; cursor: grab; }
   .bar .mini { position: relative; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; background: var(--paper); }
@@ -1006,7 +1006,8 @@ function seamFor(id) {
   const { W, H } = cardSize(id);
   return { id, o, W, H, sx: Math.max(0, (W - o.w) / 2) + SEAM, sy: Math.max(0, H - o.h) + SEAM };
 }
-const cardRect = (s) => ({ x: s.o.x + s.o.w / 2 - s.W / 2, y: s.o.y, w: s.W, h: s.H });
+// On whole pixels, so its text is sharp where it rests.
+const cardRect = (s) => ({ x: Math.round(s.o.x + s.o.w / 2 - s.W / 2), y: Math.round(s.o.y), w: s.W, h: s.H });
 // Where a node goes with the card open.
 function target(id) {
   const p = positions.get(id);
@@ -1079,6 +1080,7 @@ const anims = new Map();
 let raf = 0;
 function animate(name, T, step) {
   anims.get(name)?.done();
+  if (document.hidden) { anims.delete(name); step(1); drawEdges(); applyCamera(); return Promise.resolve(); }
   return new Promise((done) => {
     anims.set(name, { t0: performance.now(), T: reduced() ? 0 : T, step, done });
     if (!raf) raf = requestAnimationFrame(frame);
@@ -1096,6 +1098,7 @@ function frame(now) {
   if (anims.size) raf = requestAnimationFrame(frame);
 }
 // Everything that is moving, where it is going, now.
+document.addEventListener("visibilitychange", () => { if (document.hidden) settle(); });
 function settle() {
   for (const a of anims.values()) { a.step(1); a.done(); }
   anims.clear();
@@ -1278,7 +1281,8 @@ function render() {
   const q = view.queue || [];
   document.title = q.length ? `(${q.length}) harness` : "harness";
   notify(q);
-  if (openId) renderPanel();
+  if (openId && openId !== NEW && live(openId) !== openId) { stay = true; go(live(openId)); }
+  else if (openId) renderPanel();
   syncCompose();
   renderOthers();
   placeMarks();
@@ -1318,7 +1322,7 @@ function placeMarks() {
     a.hidden = !!card && cx > card.left - 12 && cx < card.right + 12 && cy > card.top - 12 && cy < card.bottom + 12;
     a.style.left = `${cx}px`;
     a.style.top = `${cy}px`;
-    $("svg", a).style.transform = `rotate(${Math.atan2(y - innerHeight / 2, x - innerWidth / 2)}rad)`;
+    $("svg", a).style.transform = `rotate(${Math.atan2(y - cy, x - cx)}rad)`;
   });
   for (const [id, a] of markEls) if (!seen.has(id)) { a.remove(); markEls.delete(id); }
 }
@@ -1423,16 +1427,25 @@ let openId = null, saved = null, moving = Promise.resolve(), stay = false;
 // The card's id for a chat not started yet.
 const NEW = "new";
 
+// Each entry this document pushes is marked as its own: back from it stays
+// in this page. Back from one it did not push (the page reloaded on a card)
+// would leave it, so closing that card replaces the entry instead.
+const DOC = Math.random().toString(36).slice(2);
+function show(id) {
+  if (location.hash === `#${id}`) return route();
+  if (history.state?.node) history.replaceState({ node: id, doc: history.state.doc }, "", `#${id}`);
+  else history.pushState({ node: id, doc: DOC }, "", `#${id}`);
+  route();
+}
 function go(id) {
+  clearTimeout(closing);
   if (id !== NEW) id = live(id);
   if (id === openId) return;
-  if (history.state?.node) history.replaceState({ node: id }, "", `#${id}`);
-  else history.pushState({ node: id }, "", `#${id}`);
-  route();
+  show(id);
 }
 function closeNode() {
   if (!openId) return;
-  if (history.state?.node) history.back();
+  if (history.state?.node && history.state.doc === DOC) history.back();
   else { history.replaceState(null, "", location.pathname); route(); }
 }
 addEventListener("popstate", route);
@@ -1486,7 +1499,7 @@ async function transition(to) {
   nodeEls.get(to)?.classList.add("selected");
   await fly(camFor(r, at), { T: 260, cardFrom: from && was ? { ...was } : dotRect(to), cardTo: r, box: r });
   if (openId === to) { panel.style.clipPath = ""; panel.style.transform = ""; }
-  if (!phone()) $(".compose textarea", panel)?.focus({ preventScroll: true });
+  if (!matchMedia("(pointer: coarse)").matches) $(".compose textarea", panel)?.focus({ preventScroll: true });
 }
 let pendingOpen = null;
 async function fly(to, opts) {
@@ -1683,7 +1696,11 @@ const resume = (t, text, files) => start({ name: t.name, scope: "Max", origin: {
 // ─── The log: the context, exactly as sent, rendered ──────────────────────
 const contexts = new Map();
 async function contextOf(head) {
-  if (!contexts.has(head)) contexts.set(head, fetch(`/context/${head}`).then((r) => r.ok ? r.json() : null).catch(() => null));
+  if (!contexts.has(head)) {
+    contexts.set(head, fetch(`/context/${head}`).then((r) => r.ok ? r.json() : null).catch(() => null)
+      .then((c) => { if (!c) contexts.delete(head); return c; }));
+    while (contexts.size > 20) contexts.delete(contexts.keys().next().value);
+  }
   return contexts.get(head);
 }
 
@@ -1695,7 +1712,7 @@ async function renderLog(t) {
     s.head = head;
     const chain = head ? await contextOf(head) : [];
     if (logState !== s || s.head !== head) return;
-    if (!chain) return;
+    if (!chain) { s.head = undefined; return; }
     stick(() => appendChain(s, chain, t));
   }
   stick(() => renderTail(s, t));
@@ -1954,8 +1971,11 @@ function joined(blocks) {
 function fillChips(s, toolUse) {
   const r = s.rows.get(toolUse);
   if (!r?.row.chips) return;
-  const members = view.tasks.filter((x) => x.started_by === toolUse);
-  r.row.chips.replaceChildren(...members.sort(order).map(chip));
+  const members = view.tasks.filter((x) => x.started_by === toolUse).sort(order);
+  const key = JSON.stringify(members.map((m) => [m.id, look(m).cls, glyph(m), shortName(m)]));
+  if (r.row.chips.dataset.key === key) return;
+  r.row.chips.dataset.key = key;
+  r.row.chips.replaceChildren(...members.map(chip));
 }
 function chip(m) {
   const l = look(m);
@@ -2027,7 +2047,7 @@ function renderTail(s, t) {
   // Running calls of the round: their rows show them running.
   for (const c of t.waiting?.kind === "calls" ? t.waiting.calls : []) {
     if (c.children.length) continue;
-    const r = [...s.rows.values()].find((r) => r.b.name === c.tool && JSON.stringify(r.b.input) === JSON.stringify(parse(c.input)));
+    const r = [...s.rows.values()].findLast((r) => r.b.name === c.tool && JSON.stringify(r.b.input) === JSON.stringify(parse(c.input)));
     if (r && c.status === "running") followCall(c, r.row);
   }
   const parts = [];
@@ -2631,9 +2651,10 @@ addEventListener("keydown", (e) => {
 });
 // The card fits the window it is in: a phone's keyboard opening shrinks it.
 addEventListener("resize", () => {
-  if (openId && seam) {
+  const next = openId && seam && seamFor(openId);
+  if (next) {
     const was = cardShown;
-    seam = seamFor(openId);
+    seam = next;
     const r = cardRect(seam);
     placeCard(r);
     cardShown = r;
@@ -2664,7 +2685,7 @@ async function viewArrived(fresh) {
   view = assemble(tab.view());
   settleLocal();
   await refresh();
-  if (pendingOpen && byId[pendingOpen]) { const id = pendingOpen; pendingOpen = null; history.replaceState({ node: id }, "", `#${id}`); route(); }
+  if (pendingOpen && byId[pendingOpen]) { const id = pendingOpen; pendingOpen = null; show(id); }
   else if (!openId && location.hash.length > 1 && (byId[location.hash.slice(1)] || location.hash === `#${NEW}`) && !moving.started) { moving.started = true; route(); }
 }
 boot().catch((e) => { $("#link").className = "down"; $("#link").title = `this tab could not start: ${e}`; console.error(e); });
