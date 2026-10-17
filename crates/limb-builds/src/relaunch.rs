@@ -695,7 +695,7 @@ pub fn start(unit: &str, argv: &[String], by: Option<CallId>) -> Result<(), Stri
              [Service]\nWorkingDirectory={}\nExecStart={}\n\
              KillMode=mixed\nTimeoutStopSec=330\nRestart=on-failure\nRestartSec=5\n\n\
              [Install]\nWantedBy=default.target\n",
-            exec_quote(&data.to_string_lossy()),
+            data.to_string_lossy().replace('%', "%%"),
             exec_line(&linked),
         ),
     )?;
@@ -719,6 +719,7 @@ pub fn start(unit: &str, argv: &[String], by: Option<CallId>) -> Result<(), Stri
             systemctl(&["start", unit])
         });
     let _ = std::fs::remove_file(&once);
+    let _ = once.parent().map(std::fs::remove_dir);
     systemctl(&["daemon-reload"])?;
     started.map(|_| ())
 }
