@@ -77,7 +77,7 @@ systemd-run --user --quiet --collect --unit="$unit" \
 
 url=https://mx-hv-mj.local:$port/
 for _ in $(seq 120); do
-    source=$(curl -sk --max-time 2 "https://localhost:$port/view" | jq -r .source 2>/dev/null) || true
+    source=$(curl -sk --max-time 2 "https://localhost:$port/view" | jq -r .rows.harness.Harness.source 2>/dev/null) || true
     if [[ $source == "$commit" ]]; then
         echo "$name runs $commit at $url"
         exit 0
