@@ -197,8 +197,9 @@ pub fn take_over(
 }
 
 /// Prove the new build beside the running brain without touching it, in
-/// `NAME/rehearsal/`, deleted after: why not, in the words of the program
-/// that failed.
+/// `NAME/rehearsal/`: why not, in the words of the program that failed.
+/// The directory is deleted once the build passes; when it fails it is kept,
+/// with the logs its words name, until the next rehearsal.
 fn rehearse(build: &Path, running: &Running, say: &dyn Fn(&str)) -> Result<(), String> {
     let dir = running.data().join("rehearsal");
     remove(&dir);
@@ -209,7 +210,9 @@ fn rehearse(build: &Path, running: &Running, say: &dyn Fn(&str)) -> Result<(), S
         running.unit
     ));
     let done = rehearse_in(&dir, build, running);
-    remove(&dir);
+    if done.is_ok() {
+        remove(&dir);
+    }
     done
 }
 
