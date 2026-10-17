@@ -1,22 +1,20 @@
-//! What the limb keeps on disk: its record of calls.
+//! What the limb keeps on disk beside its log: marks of its calls.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use harness_core::id::CallId;
-use harness_core::journal::Batch;
-use serde::{Deserialize, Serialize};
 
-/// The limb's durable record of its calls, so that it can say how one ended
-/// after the brain, or the instance that ran it, has gone.
+/// Marks of the limb's calls, so that an instance can tell a call an
+/// earlier one was cut off running from one never run.
 ///
-/// A call is recorded as started before it has any effect, and as settled,
-/// with the whole batch that says so, before that batch is sent. So a call
-/// recorded as started that no instance is running was cut off part way:
+/// A call is marked started before it has any effect, and its settlement is
+/// in the log before it stops running. So a call marked started that no
+/// instance is running and the log has not settled was cut off part way:
 /// nobody knows what it did.
-pub struct Calls {
-    dir: PathBuf,
+pub struct Marks {
+    started: PathBuf,
     /// A file per call whose command may be running, made before the
     /// command starts and removed once nothing it started is left: so an
     /// instance that starts after one was killed finds every command it left
@@ -24,38 +22,30 @@ pub struct Calls {
     running: PathBuf,
 }
 
-/// What the record says of one call.
-#[derive(Serialize, Deserialize)]
-pub enum Recorded {
-    Started,
-    /// The facts that settled it and the bytes they name, exactly as sent.
-    Settled(Batch),
-}
-
-impl Calls {
-    pub fn open(dir: PathBuf) -> io::Result<Calls> {
+impl Marks {
+    pub fn open(dir: PathBuf) -> io::Result<Marks> {
+        let started = dir.join("started");
         let running = dir.join("running");
+        fs::create_dir_all(&started)?;
         fs::create_dir_all(&running)?;
-        Ok(Calls { dir, running })
+        Ok(Marks { started, running })
     }
 
-    pub fn get(&self, call: CallId) -> io::Result<Option<Recorded>> {
-        match fs::read(self.path(call)) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(io::Error::other),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
-        }
+    pub fn start(&self, call: CallId) -> io::Result<()> {
+        replace(&self.started.join(call.to_string()), &[])
     }
 
-    pub fn put(&self, call: CallId, recorded: &Recorded) -> io::Result<()> {
-        let bytes = serde_json::to_vec(recorded).map_err(io::Error::other)?;
-        replace(&self.path(call), &bytes)
+    pub fn is_started(&self, call: CallId) -> bool {
+        self.started.join(call.to_string()).exists()
     }
 
-    fn path(&self, call: CallId) -> PathBuf {
-        self.dir.join(format!("{call}.json"))
+    pub fn started(&self) -> Vec<CallId> {
+        calls(&self.started).unwrap_or_default()
+    }
+
+    /// The brain has the call's settlement.
+    pub fn forget(&self, call: CallId) {
+        let _ = fs::remove_file(self.started.join(call.to_string()));
     }
 
     /// The call's command is about to start.
@@ -71,15 +61,18 @@ impl Calls {
     /// The calls whose commands may still be running: called when an
     /// instance starts, so each belongs to an instance that has gone.
     pub fn orphans(&self) -> io::Result<Vec<CallId>> {
-        let mut calls = Vec::new();
-        for entry in fs::read_dir(&self.running)? {
-            let entry = entry?;
-            if let Some(call) = entry.file_name().to_str().and_then(|n| n.parse().ok()) {
-                calls.push(call);
-            }
-        }
-        Ok(calls)
+        calls(&self.running)
     }
+}
+
+fn calls(dir: &Path) -> io::Result<Vec<CallId>> {
+    let mut calls = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        if let Some(call) = entry?.file_name().to_str().and_then(|n| n.parse().ok()) {
+            calls.push(call);
+        }
+    }
+    Ok(calls)
 }
 
 /// Replace a file's content all at once: a reader sees the old bytes or the
