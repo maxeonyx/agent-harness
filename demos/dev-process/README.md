@@ -4,7 +4,7 @@
 demos/dev-process/run.sh
 ```
 
-It runs on the test brain `dev-process` (`dev/drive.mjs`): open the link it prints and watch the map (a new run: `FRESH=1`). Every role runs on Sonnet at low effort, about a dozen requests on the subscription and under a minute to the report (`MODEL=…` for another; `MODEL=scripted` only shows the page). Once the orchestrator waits on you it prints its chat, then keeps serving the run, printing the brain's log, until you stop it (Ctrl-C, which also ends the workspaces it started).
+It runs on the test brain `dev-process` (`dev/drive.mjs`): open the link it prints and watch the map (a new run: `FRESH=1`). Every role runs on Sonnet at low effort, about a dozen requests on the subscription and under a minute to the report (`MODEL=…` for another; `MODEL=scripted` only shows the page). It finishes once the orchestrator waits on you and leaves the brain serving the run; `node dev/drive.mjs down --brain dev-process` ends it and the workspaces it started.
 
 What it does:
 
@@ -60,5 +60,6 @@ state: Max's turn since 04:32:24
 child 6fd3711b01abcb1b.19.2 "textstats needs two things-wordcount": result since 04:32:16
 child 6fd3711b01abcb1b.19.4 "textstats needs two things-unicode": result since 04:32:19
 
-== serving until Ctrl-C; the brain's log:
+== the brain serves on; its log is .drive.ignore/dev-process/brain.log
+end it with: node dev/drive.mjs down --brain dev-process
 ```

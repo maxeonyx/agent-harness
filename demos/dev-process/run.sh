@@ -6,15 +6,14 @@
 # Sonnet at low effort unless MODEL names another (MODEL=scripted only shows
 # the page). A new run starts from scratch (FRESH=1, or no database yet);
 # otherwise the brain carries on its database. It shows the orchestrator's
-# chat once it waits on you, then serves, printing the brain's log, until
-# Ctrl-C, which also ends the workspaces it started.
+# chat once it waits on you, and finishes, leaving the brain serving for
+# you to look at the run: `node dev/drive.mjs down --brain dev-process`
+# ends it and the workspaces it started.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 drive() { node dev/drive.mjs "$1" --brain dev-process "${@:2}"; }
 at=.drive.ignore/dev-process
 dir=target/dev-process
-trap 'drive down' EXIT
-trap 'exit 130' INT TERM
 fresh=
 if [ -n "${FRESH:-}" ] || [ ! -e "$at/brain.sqlite" ]; then
   fresh=1
@@ -31,5 +30,5 @@ if [ -n "$fresh" ]; then
   drive log "$chat"
 fi
 echo
-echo "== serving until Ctrl-C; the brain's log:"
-tail -n 0 -f "$at/brain.log"
+echo "== the brain serves on; its log is $at/brain.log"
+echo "end it with: node dev/drive.mjs down --brain dev-process"
