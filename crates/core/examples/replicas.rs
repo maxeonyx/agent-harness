@@ -256,6 +256,8 @@ fn main() {
         facts: vec![
             Fact::Launched(Launched {
                 build: BuildId::of(b"demo"),
+                source: None,
+                limbs: Default::default(),
                 how: Launch::Started,
             }),
             Fact::Face(PC),

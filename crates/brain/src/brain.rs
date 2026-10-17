@@ -190,6 +190,8 @@ impl Brain {
             .map_err(|e| format!("the brain's own executable: {e}"))?;
         let mut facts = vec![Fact::Launched(Launched {
             build: BuildId::of(&exe),
+            source: crate::SOURCE.parse().ok(),
+            limbs: limb_builds(),
             how: Launch::Started,
         })];
         let define =
@@ -1813,6 +1815,34 @@ pub fn now() -> Timestamp {
 }
 
 /// A new replica, for a face or a co-hosted limb this launch: 64 random bits.
+/// The executable the brain starts for each kind of plugin limb: each
+/// `harness-limb-<kind>` beside its own, by digest. A limb connected with
+/// other bytes is superseded ([`harness_core::state::State::superseded`]).
+fn limb_builds() -> BTreeMap<String, BuildId> {
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf))
+    else {
+        return BTreeMap::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return BTreeMap::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            // Not cargo's `.d` files beside them in a target directory.
+            let kind = name
+                .strip_prefix("harness-limb-")
+                .filter(|k| !k.contains('.'))?;
+            let kind = kind.to_owned();
+            let bytes = std::fs::read(entry.path()).ok()?;
+            Some((kind, BuildId::of(&bytes)))
+        })
+        .collect()
+}
+
 fn mint_replica() -> ReplicaId {
     let mut bytes = [0; 8];
     std::fs::File::open("/dev/urandom")

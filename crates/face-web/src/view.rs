@@ -489,7 +489,10 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         )
     };
     match fact {
-        Fact::Launched(l) => format!("brain launched, build {:.12}", l.build.to_string()),
+        Fact::Launched(l) => match &l.source {
+            Some(source) => format!("brain launched, {source}"),
+            None => format!("brain launched, build {:.12}", l.build.to_string()),
+        },
         Fact::Shutdown { within } => format!("brain shutting down, within {}s", within / 1000),
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {

@@ -148,7 +148,13 @@ impl Fact {
     pub fn values(&self) -> Vec<ValueId> {
         let mut values = Vec::new();
         match self {
-            Fact::Launched(Launched { build: _, how: _ }) | Fact::Shutdown { within: _ } => {}
+            Fact::Launched(Launched {
+                build: _,
+                source: _,
+                limbs: _,
+                how: _,
+            })
+            | Fact::Shutdown { within: _ } => {}
             Fact::Task(_, event) => event.values(&mut values),
             Fact::ModelCall(_, event) => event.values(&mut values),
             Fact::Call(_, event) => event.values(&mut values),
