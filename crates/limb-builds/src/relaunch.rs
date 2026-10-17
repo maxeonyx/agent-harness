@@ -2,14 +2,15 @@
 //! that goes back when the new build fails: the procedure the `relaunch`
 //! tool and the command line share.
 //!
-//! A brain runs as the systemd user unit `harness-NAME.service`, from an
-//! installed build: `$XDG_DATA_HOME/agent-harness/builds/COMMIT/`, its
-//! executables and `roles/`, read-only and never overwritten. What the
-//! unit runs is read off its process: its command line names the build's
-//! directory, the database (`--db`), the port and its flags, and a
-//! relaunch starts the same command line in another build's directory.
-//! `NAME/build` beside the database links to the build a restart runs: the
-//! last one proven.
+//! A brain runs as the durable systemd user unit `harness-NAME.service`
+//! (see [`start`]), from an installed build:
+//! `$XDG_DATA_HOME/agent-harness/builds/COMMIT/`, its executables and
+//! `roles/`, read-only and never overwritten. What the unit runs is read
+//! off its process: its command line names the build's directory, the
+//! database (`--db`), the port and its flags, and a relaunch starts the
+//! same command line in another build's directory. `NAME/build` beside
+//! the database links to the build a restart or a reboot runs: the last
+//! one proven.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -64,10 +65,8 @@ impl Running {
             .filter(|a| !a.is_empty())
             .map(|a| String::from_utf8_lossy(a).into_owned())
             .collect();
-        let exe = Path::new(
-            argv.first()
-                .ok_or_else(|| format!("{unit} has no command line"))?,
-        );
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
+            .map_err(|e| format!("{unit}'s process {pid}: {e}"))?;
         let build = exe
             .parent()
             .and_then(Path::parent)
@@ -81,6 +80,12 @@ impl Running {
             .nth(1)
             .map(PathBuf::from)
             .ok_or_else(|| format!("{unit}'s command line names no --db"))?;
+        // Started by the unit file, it names its build through the link.
+        let link = db.with_file_name("build");
+        let argv = argv
+            .iter()
+            .map(|a| rebase(a, &link.to_string_lossy(), &build.to_string_lossy()))
+            .collect();
         Ok(Running {
             unit: unit.into(),
             pid,
@@ -94,13 +99,7 @@ impl Running {
     /// The same command line in another build's directory.
     fn on(&self, build: &Path) -> Vec<String> {
         let (old, new) = (self.build.to_string_lossy(), build.to_string_lossy());
-        self.argv
-            .iter()
-            .map(|a| match a.strip_prefix(&*old) {
-                Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{new}{rest}"),
-                _ => a.clone(),
-            })
-            .collect()
+        self.argv.iter().map(|a| rebase(a, &old, &new)).collect()
     }
 
     fn data(&self) -> PathBuf {
@@ -651,36 +650,125 @@ fn remove(dir: &Path) {
     }
 }
 
-/// Start `unit` running `argv`, in the database's directory, telling the
-/// brain the `relaunch` call `by` that started it, if one did. Its stop
-/// sends SIGTERM to the brain alone, which ends its links to limbs itself
-/// (the limbs run in units of their own), and gives it 330 s to drain.
+/// Start `unit` running `argv`, an installed build's brain, telling it the
+/// `relaunch` call `by` that started it, if one did.
+///
+/// The unit is durable: `$XDG_CONFIG_HOME/systemd/user/UNIT`, enabled for
+/// `default.target`, so it starts at boot (with lingering, before a login)
+/// and again after a crash. Its command line runs the build `NAME/build`
+/// links to, the last proven, so it is the same file whatever build
+/// `argv` names. This one start runs `argv` itself, with `by` in its
+/// environment, through a drop-in in `$XDG_RUNTIME_DIR` that is deleted
+/// once it has started: a restart or a reboot runs the link again.
+///
+/// Its stop sends SIGTERM to the brain alone, which ends its links to
+/// limbs itself (the limbs run in units of their own), and gives it 330 s
+/// to drain.
 pub fn start(unit: &str, argv: &[String], by: Option<CallId>) -> Result<(), String> {
-    let _ = systemctl(&["reset-failed", unit]);
-    let exe = Path::new(argv.first().ok_or("nothing to start")?);
-    let commit = exe
+    let build = Path::new(argv.first().ok_or("nothing to start")?)
         .parent()
         .and_then(Path::parent)
-        .map(name)
-        .unwrap_or_default();
-    let db = argv.iter().skip_while(|a| *a != "--db").nth(1);
-    let dir = db
+        .ok_or("the command line names no installed build")?;
+    let data = argv
+        .iter()
+        .skip_while(|a| *a != "--db")
+        .nth(1)
         .and_then(|db| Path::new(db).parent())
         .ok_or("the command line names no --db")?;
+    let linked: Vec<String> = argv
+        .iter()
+        .map(|a| {
+            rebase(
+                a,
+                &build.to_string_lossy(),
+                &data.join("build").to_string_lossy(),
+            )
+        })
+        .collect();
     let name = unit
         .trim_start_matches("harness-")
         .trim_end_matches(".service");
-    run(Command::new("systemd-run")
-        .args(["--user", "--quiet", "--collect"])
-        .arg(format!("--unit={unit}"))
-        .arg(format!(
-            "--description=agent-harness brain {name} ({commit})"
-        ))
-        .arg(format!("--working-directory={}", dir.display()))
-        .args(["-p", "KillMode=mixed", "-p", "TimeoutStopSec=330"])
-        .args(by.map(|call| format!("--setenv={}={call}", crate::RELAUNCHED_BY)))
-        .args(argv))
-    .map(|_| ())
+    write(
+        &config().join("systemd/user").join(unit),
+        &format!(
+            "[Unit]\nDescription=agent-harness brain {name}\n\n\
+             [Service]\nWorkingDirectory={}\nExecStart={}\n\
+             KillMode=mixed\nTimeoutStopSec=330\nRestart=on-failure\nRestartSec=5\n\n\
+             [Install]\nWantedBy=default.target\n",
+            exec_quote(&data.to_string_lossy()),
+            exec_line(&linked),
+        ),
+    )?;
+    let once = runtime().join(format!("systemd/user/{unit}.d/start.conf"));
+    write(
+        &once,
+        &format!(
+            "[Service]\nExecStart=\nExecStart={}\n{}",
+            exec_line(argv),
+            by.map(|call| format!(
+                "Environment={}\n",
+                exec_quote(&format!("{}={call}", crate::RELAUNCHED_BY))
+            ))
+            .unwrap_or_default()
+        ),
+    )?;
+    let started = systemctl(&["daemon-reload"])
+        .and_then(|_| systemctl(&["enable", "--quiet", unit]))
+        .and_then(|_| {
+            let _ = systemctl(&["reset-failed", unit]);
+            systemctl(&["start", unit])
+        });
+    let _ = std::fs::remove_file(&once);
+    systemctl(&["daemon-reload"])?;
+    started.map(|_| ())
+}
+
+/// `arg` with the leading directory `from` replaced by `to`.
+fn rebase(arg: &str, from: &str, to: &str) -> String {
+    match arg.strip_prefix(from) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{to}{rest}"),
+        _ => arg.to_string(),
+    }
+}
+
+/// A command line as systemd reads `ExecStart=`.
+fn exec_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| exec_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One word, quoted for a unit file: no specifier, variable or escape in
+/// it is expanded.
+fn exec_quote(word: &str) -> String {
+    let escaped = word
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%")
+        .replace('$', "$$");
+    format!("\"{escaped}\"")
+}
+
+fn write(path: &Path, text: &str) -> Result<(), String> {
+    path.parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(path, text))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn config() -> PathBuf {
+    match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"),
+    }
+}
+
+fn runtime() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        // SAFETY: getuid has no preconditions.
+        .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })))
 }
 
 /// Stop `unit`: SIGTERM, and the brain drains.

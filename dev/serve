@@ -4,7 +4,7 @@
 #   dev/serve NAME PORT [HARNESS-BRAIN FLAG...]
 #
 # Runs this clone's HEAD (a tree with uncommitted changes is refused) as
-# the user unit harness-NAME.service on
+# the durable user unit harness-NAME.service on
 # ~/.local/share/agent-harness/NAME/brain.sqlite. The builds limb does the
 # work (crates/limb-builds), so there is one way to install and relaunch:
 #
@@ -27,8 +27,13 @@
 # ~/.local/share/agent-harness/NAME/build links to the build a restart of
 # NAME runs, the last proven, so its `act` is
 # ~/.local/share/agent-harness/NAME/build/bin/act.
-# Its log: journalctl --user -u harness-NAME. The unit is transient: it
-# does not come back after a reboot. Reaching a brain through Cloudflare's
+# The unit file, ~/.config/systemd/user/harness-NAME.service, runs that
+# link with the brain's flags; it is enabled, so the brain comes back after
+# a crash and at boot (lingering starts it before a login). Its log:
+# journalctl --user -u harness-NAME. To retire a brain:
+#   systemctl --user disable --now harness-NAME
+#   rm ~/.config/systemd/user/harness-NAME.service
+# Reaching a brain through Cloudflare's
 # tunnel and Access, from a phone: demos/deploy/README.md.
 set -euo pipefail
 
