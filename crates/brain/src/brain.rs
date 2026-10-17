@@ -801,22 +801,20 @@ impl Brain {
                 }
             },
         };
-        let calls: Vec<CallId> = task
-            .pending
-            .iter()
-            .filter_map(|p| match *p {
-                Input::Result(c) if c != call => Some(c),
-                _ => None,
-            })
-            .collect();
+        let calls = round(task, Some(call));
         let carry = render::Carry {
             summary: ask.summary.as_deref(),
             why,
             words: &[],
             calls: &calls,
-            report: ask.report.is_some(),
+            report: ask.report,
         };
-        self.compacted(task, Some(call), onto, carry, ask.report.as_deref(), values);
+        // The report is the message the response that asked wrote.
+        let report = ask
+            .report
+            .then(|| task.head().map(|h| self.visible(h)))
+            .flatten();
+        self.compacted(task, Some(call), onto, carry, report.as_deref(), values);
         true
     }
 
@@ -832,8 +830,8 @@ impl Brain {
         mut values: Vec<Bytes>,
     ) {
         let since = match &onto {
-            Onto::Checkpoint(at) => *at,
-            Onto::Fresh(_) => task.context().expect("a live task's context").start,
+            Onto::Checkpoint(at) => Some(*at),
+            Onto::Fresh(_) => None,
         };
         let words = render::kept(self.state(), task, since);
         let carry = render::Carry {
@@ -891,26 +889,38 @@ impl Brain {
                 return;
             }
         }
-        match last.as_ref().map(|e| &e.ending) {
-            Some(Ending::Responded {
-                stop: Stop::Refused,
-                ..
-            }) => {
+        // What the last response said of the context, while it is the head:
+        // nothing has moved on from it but its calls' results.
+        let state = self.state();
+        let said = state
+            .response(head)
+            .and_then(|m| Some((m, &m.ended.as_ref()?.ending)));
+        match said {
+            Some((
+                _,
+                Ending::Responded {
+                    stop: Stop::Refused,
+                    ..
+                },
+            )) => {
                 let reason = "the model declined to go on".to_string();
                 return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
             }
             // A context the provider no longer accepts starts again from a
-            // new root, with the mandate and Max's words.
-            Some(Ending::Responded {
-                stop: Stop::ContextWindow,
-                ..
-            }) => {
-                let state = self.state();
-                let afresh = state
-                    .response(head)
-                    .filter(|m| state.compacted(m.call.base).is_some())
-                    .and_then(|m| state.entry(m.call.base)?.parent())
-                    .is_some_and(|p| matches!(state.entry(p), Some(Entry::Root(_))));
+            // new root, with the mandate, Max's words and its calls' results.
+            Some((
+                overflowed,
+                Ending::Responded {
+                    stop: Stop::ContextWindow,
+                    ..
+                },
+            )) => {
+                let base = overflowed.call.base;
+                let afresh = state.compacted(base).is_some()
+                    && state
+                        .entry(base)
+                        .and_then(Entry::parent)
+                        .is_some_and(|p| matches!(state.entry(p), Some(Entry::Root(_))));
                 if ending || afresh {
                     let reason = if ending {
                         "its context filled during its tidy-up turn"
@@ -924,11 +934,12 @@ impl Brain {
                     None => {}
                     Some(Err(why)) => self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
                     Some(Ok((start, values))) => {
+                        let calls = round(&task, None);
                         let carry = render::Carry {
                             summary: None,
                             why: render::Why::Full,
                             words: &[],
-                            calls: &[],
+                            calls: &calls,
                             report: false,
                         };
                         let onto = Onto::Fresh(Box::new(start));
@@ -947,21 +958,7 @@ impl Brain {
         let mut values = Vec::new();
         let mut appends = Vec::new();
         let mut renders = Vec::new();
-        if first
-            && matches!(task.origin, Origin::Fresh { .. })
-            && (task.mandate.brief.is_some() || !task.mandate.quotes.is_empty())
-        {
-            let said = task
-                .mandate
-                .brief
-                .map(|b| String::from_utf8_lossy(&self.value(b)).into_owned());
-            let quotes: Vec<_> = task
-                .mandate
-                .quotes
-                .iter()
-                .map(|q| (*q, render::words(&self.value(*q))))
-                .collect();
-            let brief = render::brief(said.as_deref(), &quotes);
+        if first && let Some(brief) = render::briefing(&|v| self.value(v), &task) {
             appends.push(user(render::blocks(&brief), &mut values));
             renders.push(Span {
                 from: Rendered::Note(Note::Brief),
@@ -1227,7 +1224,19 @@ Finish tidying up and end your turn with your report.",
         let input = self.value(call.input);
         // A compaction happens once its round is over ([`Brain::compact`]).
         if meta::compacts(&call.tool) {
+            let wrote = parent
+                .head()
+                .is_some_and(|h| !self.visible(h).trim().is_empty());
             let said = match meta::compaction(&call.tool, &input) {
+                Ok(ask) if ask.report && !wrote => {
+                    let (model, failed) = render::failed(
+                        "Not compacted: write your report as your message in the same response, before calling \
+`compact_and_report`.",
+                    );
+                    batch.values.push(model);
+                    batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
+                    return self.append(batch);
+                }
                 Ok(_) => "Compacting once this round is over.".to_string(),
                 Err(why) => {
                     let (model, failed) = render::failed(&format!("Not compacted: {why}."));
@@ -1296,6 +1305,14 @@ and you cannot finish until it has.",
             batch
                 .facts
                 .push(Fact::Call(id, CallEvent::Settled(outcome)));
+            return self.append(batch);
+        }
+        // A tool an older root declared that the harness no longer has.
+        if call.tool != meta::SPAWN && call.tool != meta::ADD_SIBLING {
+            let said = format!("The harness no longer has `{}`.", call.tool);
+            let (model, failed) = render::failed(&said);
+            batch.values.push(model);
+            batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
             return self.append(batch);
         }
         match self.members(id, &call.tool, &parent, &input, &mut batch) {
@@ -1477,17 +1494,20 @@ and you cannot finish until it has.",
     /// them, then each sibling added.
     fn settle_scope(&mut self, id: CallId) {
         let mut observes = Vec::new();
-        let results: Vec<(String, String)> = self
+        let results: Vec<(String, Vec<String>)> = self
             .state()
             .members(Scope::Spawn(id))
             .map(|t| {
                 let said = match t.outcome() {
                     Some(TaskOutcome::Result { entry }) => {
-                        let mut said = self.visible(*entry);
+                        let mut said = vec![render::text(&self.visible(*entry))];
                         for call in self.attached(*entry) {
-                            let carried =
-                                render::carried(self.state(), &|v| self.value(v), "Its", call);
-                            said.push_str(&format!("\n\n{carried}"));
+                            said.extend(render::carried(
+                                self.state(),
+                                &|v| self.value(v),
+                                "Its",
+                                call,
+                            ));
                             if let Some(output) =
                                 self.state().call(call).and_then(|c| c.outcome()?.output())
                             {
@@ -1496,8 +1516,12 @@ and you cannot finish until it has.",
                         }
                         said
                     }
-                    Some(TaskOutcome::Failed { reason }) => format!("Failed: {reason}"),
-                    Some(TaskOutcome::Abandoned { by, report }) => self.cancelled(*by, *report),
+                    Some(TaskOutcome::Failed { reason }) => {
+                        vec![render::text(&format!("Failed: {reason}"))]
+                    }
+                    Some(TaskOutcome::Abandoned { by, report }) => {
+                        vec![render::text(&self.cancelled(*by, *report))]
+                    }
                     None => unreachable!("a scope settles when every member is done"),
                 };
                 (t.name.clone(), said)
@@ -1849,4 +1873,16 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
     let name = format!("{repo}-{}", branch.replace('/', "-"));
     let parent = dir.parent().unwrap_or(dir);
     (from, parent.join(name))
+}
+
+/// The results of a task's round that have not reached it, but `except`'s:
+/// what a compaction carries.
+fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
+    task.pending
+        .iter()
+        .filter_map(|p| match *p {
+            Input::Result(c) if Some(c) != except => Some(c),
+            _ => None,
+        })
+        .collect()
 }

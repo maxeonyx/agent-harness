@@ -78,7 +78,8 @@ the step: what you did, what you found and decided and why, what is left, and an
 again. Max's words after the checkpoint, the results of the other calls in the same response, and your running \
 background work are carried with it as they are, so do not retell them: to take a file into the compacted context as \
 it is now, read it in the same response. `compact_and_report` does the same and ends \
-your turn with your report, which reads as your message: Max reads it, or, if you were started by another agent, it \
+your turn: write your report as your message in the same response, before the call, and it stays as your message \
+after the compaction. Max reads it, or, if you were started by another agent, it \
 is your result and you are done, and what you read in the same response reaches that agent with it. Its summary is \
 optional when the report says all you need to remember.\n\n\
 With `fresh: true` either one starts a new context instead, from your role, your mandate, Max's words and your summary \
@@ -146,15 +147,13 @@ and returns at once: the agent that started you gets its result with yours.",
     });
     let compact_and_report = json!({
         "name": COMPACT_AND_REPORT,
-        "description": "Replace your work since your latest checkpoint with your summary of it, and end your turn with your report, as your message. If another agent started you, the report is your result and you are done. The results of other calls in the same response are carried with it, and reach that agent with your report.",
+        "description": "End your turn: replace your work since your latest checkpoint with your summary of it, keeping the message you wrote in this response, before this call, as your report. If another agent started you, the report is your result and you are done. The results of other calls in the same response are carried with it, and reach that agent with your report.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "report": { "type": "string", "description": "Your message: what Max, or the agent that started you, needs to read." },
-                "summary": { "type": "string", "description": "What you need to remember beyond the report, if anything." },
+                "summary": { "type": "string", "description": "What you need to remember beyond your report, if anything." },
                 "fresh": fresh
-            },
-            "required": ["report"]
+            }
         }
     });
     let background = json!({
@@ -244,8 +243,9 @@ fn tool(name: &str, definition: Value) -> Tool {
 /// What a compaction call asks for.
 pub struct Compact {
     pub summary: Option<String>,
-    /// Ends the turn with this, as the agent's message.
-    pub report: Option<String>,
+    /// It ends the turn, keeping the message its response wrote as the
+    /// report.
+    pub report: bool,
     pub fresh: bool,
 }
 
@@ -266,17 +266,11 @@ pub fn compaction(tool: &str, input: &[u8]) -> Result<Compact, String> {
     };
     let compact = Compact {
         summary: field("summary"),
-        report: field("report"),
+        report: tool == COMPACT_AND_REPORT,
         fresh: value["fresh"].as_bool().unwrap_or(false),
     };
-    if tool == COMPACT_AND_CONTINUE && compact.summary.is_none() {
+    if !compact.report && compact.summary.is_none() {
         return Err("`summary` must say what you need to carry on".into());
-    }
-    if tool == COMPACT_AND_REPORT && compact.report.is_none() {
-        return Err("`report` must be your message".into());
-    }
-    if tool == COMPACT_AND_CONTINUE && value.get("report").is_some() {
-        return Err("`compact_and_continue` carries on: to end your turn with a report, use `compact_and_report`".into());
     }
     Ok(compact)
 }
@@ -412,12 +406,14 @@ pub fn names(tool: &str, input: &[u8]) -> Vec<String> {
 
 /// A scope's result: each member's outcome under its name, as a tool
 /// result's content.
-pub fn result(members: &[(String, String)]) -> Bytes {
-    let body: Vec<_> = members
+pub fn result(members: &[(String, Vec<String>)]) -> Bytes {
+    let body: Vec<String> = members
         .iter()
-        .map(|(name, said)| format!("## {name}\n\n{said}"))
+        .flat_map(|(name, said)| {
+            std::iter::once(text(&format!("## {name}"))).chain(said.iter().cloned())
+        })
         .collect();
-    blocks(&[text(&body.join("\n\n"))])
+    blocks(&body)
 }
 
 /// What a call to `limb` expects: the versions the context knows of its

@@ -263,7 +263,7 @@ impl Context {
             Onto::Checkpoint(_) => self.clone(),
             Onto::Fresh(start) => {
                 let mut rooted = Context::rooted(start);
-                rooted.knows = self.knows.clone().union(rooted.knows);
+                rooted.knows = rooted.knows.union(self.knows.clone());
                 rooted
             }
         };
@@ -856,9 +856,10 @@ pub enum Move {
 /// Max's words from what it replaced, verbatim, the output of every call of
 /// the round whose tool uses it replaced, and the background work the task
 /// still owns. Optionally an assistant message follows, the report, which
-/// ends the turn as if the agent had just said it: Max reads it as the
-/// first message of the compacted context, and an autonomous task's result
-/// is it. Nothing is deleted: what was replaced is the branch that ended at
+/// ends the turn: the text the agent wrote in the response that asked for
+/// the compaction, kept as its message with the tool use dropped. Max reads
+/// it as it streams and as the last message before the compacted work, and
+/// an autonomous task's result is it. Nothing is deleted: what was replaced is the branch that ended at
 /// the old head, still in the tree for Max and the face to read, and the
 /// carry's renders say where each block came from.
 ///
@@ -908,7 +909,7 @@ pub struct Compaction {
     /// What `carry`'s blocks were rendered from, in block order.
     pub renders: Vec<Span>,
     /// The content of an assistant message appended after the carry, which
-    /// ends the model turn.
+    /// ends the model turn: the text blocks of the response that asked.
     pub report: Option<ValueId>,
 }
 

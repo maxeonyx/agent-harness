@@ -340,6 +340,9 @@ pub fn carry(state: &State, values: Values, task: &Task, carry: &Carry) -> Turn 
             ],
             Scope::Spawn(_) => vec![text(&mandate(state, values, task, true))],
         };
+        if let Some(brief) = briefing(values, task) {
+            turn.push(Rendered::Note(Note::Brief), brief);
+        }
         turn.push(Rendered::Note(Note::Mandate), said);
     }
     let mut framing = match carry.why {
@@ -388,60 +391,88 @@ carrying on."
         turn.push(Rendered::Note(Note::Kept { words: *words }), said);
     }
     for call in carry.calls {
-        let said = format!("[harness] {}", carried(state, values, "Your", *call));
-        turn.push(Rendered::Call(*call), vec![text(&said)]);
+        turn.push(
+            Rendered::Call(*call),
+            carried(state, values, "[harness] Your", *call),
+        );
     }
     turn
 }
 
-/// The output of a call whose tool use a compaction replaced, as text, since
-/// a tool result needs its tool use: in the carry, or after the report of a
-/// member whose last compaction carried it.
-pub fn carried(state: &State, values: Values, whose: &str, call: CallId) -> String {
+/// The brief and Max's quoted words a fresh agent starts with, if its
+/// spawner gave any.
+pub fn briefing(values: Values, task: &Task) -> Option<Vec<String>> {
+    if !matches!(task.origin, Origin::Fresh { .. })
+        || (task.mandate.brief.is_none() && task.mandate.quotes.is_empty())
+    {
+        return None;
+    }
+    let said = task
+        .mandate
+        .brief
+        .map(|b| String::from_utf8_lossy(&values(b)).into_owned());
+    let quotes: Vec<_> = task
+        .mandate
+        .quotes
+        .iter()
+        .map(|q| (*q, words(&values(*q))))
+        .collect();
+    Some(brief(said.as_deref(), &quotes))
+}
+
+/// The output of a call whose tool use a compaction replaced, as blocks
+/// headed by what the call was, since a tool result needs its tool use: in
+/// the carry, or after the report of a member whose last compaction carried
+/// it.
+pub fn carried(state: &State, values: Values, whose: &str, call: CallId) -> Vec<String> {
     let record = state.call(call).expect("a carried call is known");
     let outcome = record.outcome().expect("a carried call is settled");
     let (content, error) = outcome_content(values, outcome);
-    let said: Vec<_> = content
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|b| b["text"].as_str())
-        .collect();
     let mut input = String::from_utf8_lossy(&values(record.call.input)).into_owned();
     if let Some((cut, _)) = input.char_indices().nth(300) {
         input.truncate(cut);
         input.push('…');
     }
     let failed = if error { " failed" } else { "" };
-    format!(
-        "{whose} `{}` call {input}{failed}:\n{}",
-        record.call.tool,
-        said.join("\n")
-    )
+    let mut said = vec![text(&format!(
+        "{whose} `{}` call {input}{failed}:",
+        record.call.tool
+    ))];
+    said.extend(
+        content
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(Value::to_string),
+    );
+    said
 }
 
 /// Max's words in what a compaction replaces, in the order he said them:
-/// what the task's requests after `since` rendered of his (messages and
-/// answers), and what compactions there carried. Everything up to `since`
-/// is kept, and his words with it.
-pub fn kept(state: &State, task: &Task, since: EntryId) -> Vec<ValueId> {
+/// what the requests on the task's chain after `since` rendered of his
+/// (messages and answers), and what compactions there carried. Everything
+/// up to `since` is kept, and his words with it; with no `since` (a new
+/// root) nothing is, back to the chain's root, through the context a fork
+/// or a resumed chat began with.
+pub fn kept(state: &State, task: &Task, since: Option<EntryId>) -> Vec<ValueId> {
     let Some(head) = task.head() else {
         return Vec::new();
     };
     let mut found = Vec::new();
-    let mut later: Option<EntryId> = None;
     let mut next = Some(head);
     while let Some(id) = next
-        && id != since
+        && Some(id) != since
     {
         let mut spans: Vec<&Rendered> = Vec::new();
-        if let Some(request) = later.and_then(|r| state.response(r))
-            && state.descends(request.call.base, since)
-        {
-            spans.extend(request.call.renders.iter().map(|s| &s.from).rev());
-        }
+        next = state.entry(id).and_then(Entry::parent);
         if let Some(compacted) = state.compacted(id) {
             spans.extend(compacted.renders.iter().map(|s| &s.from).rev());
+        }
+        if let Some(request) = state.request(id)
+            && request.call.base != id
+        {
+            spans.extend(request.call.renders.iter().map(|s| &s.from).rev());
+            next = Some(request.call.base);
         }
         for from in spans {
             let words = match from {
@@ -462,8 +493,6 @@ pub fn kept(state: &State, task: &Task, since: EntryId) -> Vec<ValueId> {
                 found.push(words);
             }
         }
-        later = Some(id);
-        next = state.entry(id).and_then(Entry::parent);
     }
     found.reverse();
     found

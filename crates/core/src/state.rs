@@ -142,6 +142,7 @@ pub struct Compacted {
     pub renders: Vec<Span>,
     /// The report entry after the carry, if it ended the turn with one.
     pub report: Option<EntryId>,
+    pub at: Mark,
 }
 
 /// What is still in motion, kept as the fold goes, so the views over live
@@ -160,6 +161,9 @@ struct Open {
     scopes: OrdMap<Scope, Vec<TaskId>>,
     /// The model call each response came from.
     responses: OrdMap<EntryId, ModelCallId>,
+    /// The first request sent with each head: the one that appended it,
+    /// whether or not it got a response.
+    requests: OrdMap<EntryId, ModelCallId>,
     /// Each task's last model call to end.
     last_turn: OrdMap<TaskId, ModelCallId>,
     /// Tasks told they are lingering ([`Prompt::Lingering`]).
@@ -1165,7 +1169,7 @@ impl State {
                 root = Some(&start.root);
             }
             TaskEvent::Moved(Move::Compact(compaction)) => {
-                compacted = Some(self.check_compaction(id, task, compaction)?);
+                compacted = Some(self.check_compaction(id, task, compaction, record)?);
                 if let Onto::Fresh(start) = &compaction.onto {
                     root = Some(&start.root);
                 }
@@ -1183,6 +1187,7 @@ impl State {
                 if named.call.task != id {
                     return Err(Rejected::NotForTask);
                 }
+                // A turn ends with an answer, or with a compaction's report.
                 let ended = self.model_calls.values().any(|m| {
                     m.call.task == id
                         && m.sent.seq >= named.sent.seq
@@ -1193,7 +1198,10 @@ impl State {
                                 ..
                             })
                         )
-                });
+                }) || self
+                    .compactions
+                    .values()
+                    .any(|c| c.task == id && c.report.is_some() && c.at.seq >= named.sent.seq);
                 if ended {
                     return Err(Rejected::Finished);
                 }
@@ -1241,6 +1249,7 @@ impl State {
         id: TaskId,
         task: &Task,
         compaction: &Compaction,
+        record: &Stated,
     ) -> Result<(Vec<(EntryId, Entry)>, Compacted), Rejected> {
         let context = task.context().ok_or(Rejected::Starting)?;
         if let Some(call) = compaction.by {
@@ -1275,7 +1284,9 @@ impl State {
                         return Err(Rejected::NotForTask);
                     }
                 }
-                Rendered::Note(Note::Compacted | Note::Kept { .. } | Note::Mandate) => {}
+                Rendered::Note(
+                    Note::Compacted | Note::Kept { .. } | Note::Mandate | Note::Brief,
+                ) => {}
                 Rendered::Delivery(_) | Rendered::Note(_) => return Err(Rejected::NotForTask),
             }
         }
@@ -1286,6 +1297,7 @@ impl State {
             by: compaction.by,
             renders: compaction.renders.clone(),
             report: entries.get(1).map(|(e, _)| *e),
+            at: Mark::of(record),
         };
         Ok((entries, kept))
     }
@@ -1302,7 +1314,6 @@ impl State {
     /// `None` until the context's first request has been sent.
     pub fn checkpoint(&self, task: &Task) -> Option<EntryId> {
         let context = task.context()?;
-        let mut later: Option<EntryId> = None;
         let mut next = Some(context.head);
         while let Some(id) = next {
             if self
@@ -1313,8 +1324,7 @@ impl State {
             {
                 return Some(id);
             }
-            // A request's head is the parent of its response.
-            if let Some(request) = later.and_then(|r| self.response(r))
+            if let Some(request) = self.request(id)
                 && (request.call.base == context.start || self.ended_turn(request.call.base))
             {
                 return Some(id);
@@ -1322,7 +1332,6 @@ impl State {
             if id == context.start {
                 return None;
             }
-            later = Some(id);
             next = self.entries.get(&id).and_then(Entry::parent);
         }
         None
@@ -1365,6 +1374,13 @@ impl State {
         self.model_calls.get(self.open.responses.get(&entry)?)
     }
 
+    /// The request that sent `entry` as its head first: the one that
+    /// appended it, even if it failed, was cut or was lost, since its
+    /// retries send the same head with nothing appended.
+    pub fn request(&self, entry: EntryId) -> Option<&ModelCallRecord> {
+        self.model_calls.get(self.open.requests.get(&entry)?)
+    }
+
     fn fold_model_call(
         &mut self,
         id: ModelCallId,
@@ -1395,6 +1411,7 @@ impl State {
                 for (entry_id, entry) in entries {
                     self.entries.insert(entry_id, entry);
                 }
+                self.open.requests.entry(call.head()).or_insert(id);
                 self.open.model_calls.insert(id);
                 self.model_calls.insert(
                     id,
