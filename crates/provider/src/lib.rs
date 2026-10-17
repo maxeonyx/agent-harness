@@ -14,6 +14,15 @@
 //! written once, when it is assembled from the stream; a tool use's input
 //! is kept as the model streamed it. Nothing is parsed and written again.
 //!
+//! **Models.** [`Client::models`] reads the models on offer from the
+//! provider (`/v1/models`, newest first); an alias as in Claude Code
+//! (`opus`) means the newest of its [`family`] ([`resolve`]). One more
+//! model is served by the client itself: [`SCRIPTED`], which answers from a
+//! script in the conversation, at no cost and with no call, in the
+//! provider's wire format, so the rest of the harness runs as it does for
+//! a real model. [`Client::exchange`] is one call on the login, for
+//! whatever the harness has no call for (`harness-api`, a binary here).
+//!
 //! **Usage.** [`Client::usage`] reads the plan's usage windows from the
 //! subscription's own endpoint (`/api/oauth/usage`), for Max's call to the
 //! provider limb; every response's headers report the 5-hour and 7-day
@@ -49,53 +58,54 @@ mod http;
 mod login;
 pub mod request;
 mod response;
+mod scripted;
 
 pub use client::{Client, Finished, Progress};
+pub use http::{Body, Response};
 pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};
+pub use scripted::{SCRIPTED, scripted};
 
 use harness_core::environment::Effort;
 
-/// A model the subscription offers, as a face lists it and a role file may
-/// name it.
-#[derive(Clone, Copy, Debug)]
+/// A model on offer, as a face lists it and a role file may name it.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Model {
-    /// The role file's name for it, as in Claude Code: `opus`.
-    pub alias: &'static str,
-    /// The provider's name for it, as a root names it.
-    pub id: &'static str,
-    /// What a face calls it: `Opus`.
-    pub name: &'static str,
+    /// The provider's name for it, as a root names it: `claude-opus-5-5`.
+    pub id: String,
+    /// What a face calls it: the provider's display name.
+    pub name: String,
 }
 
-/// The current model of each family, most capable first: what Max chooses
-/// a chat's model from. The provider lists more (`GET /v1/models`, read
-/// 2026-10-18 NZT): older versions, and families the harness does not use.
-pub const MODELS: [Model; 3] = [
-    Model {
-        alias: "opus",
-        id: "claude-opus-5-5",
-        name: "Opus",
-    },
-    Model {
-        alias: "sonnet",
-        id: "claude-sonnet-5-5",
-        name: "Sonnet",
-    },
-    Model {
-        alias: "haiku",
-        id: "claude-haiku-5-5",
-        name: "Haiku",
-    },
-];
+/// A model's family, which an alias as in Claude Code names: `opus` for
+/// `claude-opus-4-5-20251101`; a model outside the provider's naming is a
+/// family of its own.
+pub fn family(id: &str) -> &str {
+    id.strip_prefix("claude-")
+        .and_then(|rest| rest.split('-').next())
+        .unwrap_or(id)
+}
 
-/// The provider's name for a model a role file names: its alias's id, or
-/// the name as given.
-pub fn model_id(name: &str) -> &str {
-    MODELS
+/// The model a role file's `name` means, from `ids` in order: the id
+/// itself, or for an alias (`opus`, `sonnet`, `haiku`) the first id of its
+/// [`family`]. The provider lists its models newest first
+/// ([`Client::models`]), so an alias means the newest.
+pub fn resolve<'a>(name: &str, mut ids: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    ids.find(|id| *id == name || family(id) == name)
+}
+
+/// The newest model of each family, in the provider's order: what Max
+/// chooses a chat's model from.
+pub fn current(models: &[Model]) -> Vec<&Model> {
+    let mut seen = Vec::new();
+    models
         .iter()
-        .find(|m| m.alias == name)
-        .map_or(name, |m| m.id)
+        .filter(|m| {
+            let new = !seen.contains(&family(&m.id));
+            seen.push(family(&m.id));
+            new
+        })
+        .collect()
 }
 
 /// The effort request parameters ask for (`output_config.effort`), if they
@@ -133,6 +143,8 @@ pub fn context_window(model: &str) -> u64 {
 pub enum Error {
     Login(LoginError),
     Request(RequestError),
+    /// The exchange broke, or was cut ([`harness_runtime::Cancelled`]).
+    Io(std::io::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -140,6 +152,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::Login(e) => e.fmt(f),
             Error::Request(e) => write!(f, "request: {}", e.0),
+            Error::Io(e) => write!(f, "the exchange: {e}"),
         }
     }
 }

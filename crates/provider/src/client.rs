@@ -1,8 +1,8 @@
 //! Sending a request and reading its stream.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, BufReader, Read};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use harness_core::context::{Entry, EntryId};
@@ -11,13 +11,16 @@ use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall, Quota, Usage, Window};
 use harness_runtime::{Cancel, Cancelled};
 
+use crate::http::Response;
 use crate::login::Login;
 use crate::response::Assembly;
-use crate::{Error, http, request};
+use crate::scripted::{self, SCRIPTED, scripted};
+use crate::{Error, Model, http, request};
 
 const HOST: &str = "api.anthropic.com";
 const PATH: &str = "/v1/messages";
 const USAGE: &str = "/api/oauth/usage";
+const MODELS: &str = "/v1/models?limit=1000";
 const UNIFIED: &str = "anthropic-ratelimit-unified-";
 
 /// The Messages API on the subscription login. Blocking, and shareable
@@ -25,6 +28,8 @@ const UNIFIED: &str = "anthropic-ratelimit-unified-";
 pub struct Client {
     tls: Arc<rustls::ClientConfig>,
     login: Login,
+    /// The requests the scripted model has answered, for its `flaky`.
+    seen: Mutex<HashSet<u64>>,
 }
 
 /// What a request reports while it runs.
@@ -63,7 +68,71 @@ impl Client {
         Client {
             tls: Arc::new(tls),
             login,
+            seen: Mutex::default(),
         }
+    }
+
+    /// One exchange with the provider on the login: `method` on `path`
+    /// (`/v1/models`) with `body`, and the headers every call carries. The
+    /// response's head has arrived; its body streams. For anything the
+    /// harness has no call for: probing an endpoint, a parameter, a model.
+    pub fn exchange(
+        &self,
+        method: &str,
+        path: &str,
+        body: &[u8],
+        cancel: &Cancel,
+    ) -> Result<Response, Error> {
+        let token = self.login.token()?;
+        let bearer = token.bearer();
+        let headers = [
+            ("authorization", bearer.as_str()),
+            ("anthropic-version", "2023-06-01"),
+            ("anthropic-beta", "oauth-2025-04-20"),
+            ("content-type", "application/json"),
+            ("user-agent", concat!("harness/", env!("CARGO_PKG_VERSION"))),
+        ];
+        http::exchange(&self.tls, method, HOST, path, &headers, body, cancel).map_err(Error::Io)
+    }
+
+    /// A GET of `path`, its body as JSON. `Err` says why there is none; it
+    /// never contains the token.
+    fn get(&self, path: &str, cancel: &Cancel) -> Result<serde_json::Value, String> {
+        let mut response = self
+            .exchange("GET", path, b"", cancel)
+            .map_err(|e| e.to_string())?;
+        let mut text = String::new();
+        response
+            .body
+            .read_to_string(&mut text)
+            .map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|_| format!("{}: not JSON: {text:.200}", response.status))?;
+        if response.status != 200 {
+            let message = parsed["error"]["message"].as_str().unwrap_or(&text);
+            return Err(format!("{}: {message:.200}", response.status));
+        }
+        Ok(parsed)
+    }
+
+    /// The models on offer: the provider's (`/v1/models`), newest first,
+    /// then the [scripted](crate::SCRIPTED) one this client serves itself.
+    pub fn models(&self, cancel: &Cancel) -> Result<Vec<Model>, String> {
+        let listed = self.get(MODELS, cancel)?;
+        let listed = listed["data"]
+            .as_array()
+            .ok_or("no `data` in the model list")?;
+        Ok(listed
+            .iter()
+            .filter_map(|m| {
+                let id = m["id"].as_str()?;
+                Some(Model {
+                    id: id.to_owned(),
+                    name: m["display_name"].as_str().unwrap_or(id).to_owned(),
+                })
+            })
+            .chain([scripted()])
+            .collect())
     }
 
     /// Sends `call`, built by [`request::body`] from `base` (the context it
@@ -91,7 +160,7 @@ impl Client {
         mut on: impl FnMut(Progress),
     ) -> Result<Finished, Error> {
         let body = request::body(call, base, value)?;
-        let token = self.login.token()?;
+        let local = request::model(call, base) == Some(SCRIPTED);
         let end = |ending, usage, quota| Finished {
             ending,
             value: None,
@@ -103,18 +172,14 @@ impl Client {
             false => failed(status, e.to_string(), None),
         };
 
-        let bearer = token.bearer();
-        let headers = [
-            ("authorization", bearer.as_str()),
-            ("anthropic-version", "2023-06-01"),
-            ("anthropic-beta", "oauth-2025-04-20"),
-            ("content-type", "application/json"),
-            ("user-agent", concat!("harness/", env!("CARGO_PKG_VERSION"))),
-        ];
-        let response = match http::exchange(&self.tls, "POST", HOST, PATH, &headers, &body, cancel)
-        {
+        let response = match local {
+            true => Ok(scripted::respond(&body, cancel, &self.seen)),
+            false => self.exchange("POST", PATH, &body, cancel),
+        };
+        let response = match response {
             Ok(response) => response,
-            Err(e) => return Ok(end(cut(e, None), None, None)),
+            Err(Error::Io(e)) => return Ok(end(cut(e, None), None, None)),
+            Err(e) => return Err(e),
         };
         let status = response.status;
         let header = |name: &str| response.header(name).map(str::to_owned);
@@ -132,7 +197,9 @@ impl Client {
         };
         let claim = header(&format!("{UNIFIED}representative-claim"));
         let on_plan = on_plan(claim.as_deref());
-        let quota = Some(Quota {
+        // The scripted model is on no plan: it reports no quota, and is
+        // not billed.
+        let quota = (!local).then(|| Quota {
             on_plan,
             five_hour: window("5h"),
             seven_day: window("7d"),
@@ -164,7 +231,7 @@ impl Client {
             };
             return Ok(end(ending, None, quota));
         }
-        if !on_plan {
+        if !local && !on_plan {
             let message =
                 format!("billed as {claim:?}, not to the plan; the response was not read");
             return Ok(end(failed(Some(status), message, None), None, quota));
@@ -239,26 +306,7 @@ impl Client {
     /// left out, as is any field it adds. `Err` says why there is no
     /// reading; it never contains the token.
     pub fn usage(&self, cancel: &Cancel) -> Result<BTreeMap<String, Window>, String> {
-        let token = self.login.token().map_err(|e| e.to_string())?;
-        let bearer = token.bearer();
-        let headers = [
-            ("authorization", bearer.as_str()),
-            ("anthropic-beta", "oauth-2025-04-20"),
-            ("user-agent", concat!("harness/", env!("CARGO_PKG_VERSION"))),
-        ];
-        let mut response = http::exchange(&self.tls, "GET", HOST, USAGE, &headers, b"", cancel)
-            .map_err(|e| e.to_string())?;
-        let mut text = String::new();
-        response
-            .body
-            .read_to_string(&mut text)
-            .map_err(|e| e.to_string())?;
-        let parsed: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|_| format!("{}: not JSON: {text:.200}", response.status))?;
-        if response.status != 200 {
-            let message = parsed["error"]["message"].as_str().unwrap_or(&text);
-            return Err(format!("{}: {message:.200}", response.status));
-        }
+        let parsed = self.get(USAGE, cancel)?;
         let windows = parsed.as_object().into_iter().flatten();
         Ok(windows
             .filter_map(|(name, w)| {
