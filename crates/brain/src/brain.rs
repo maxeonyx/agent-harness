@@ -19,7 +19,7 @@ use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{
     CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
 };
-use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop};
+use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
 use harness_core::schema::{self, Record};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
@@ -61,6 +61,8 @@ enum What {
     Link(Conn, link::Said),
     FirstByte(ModelCallId),
     Finished(ModelCallId, Result<Finished, harness_provider::Error>),
+    /// A reading of the plan's usage, for Max's call.
+    Usage(CallId, Result<BTreeMap<String, Window>, String>),
     /// A signal asking the brain's process to stop.
     Signal(libc::c_int),
     /// A record from one of Max's tabs.
@@ -131,7 +133,7 @@ pub struct Brain {
     /// Max's limb, in a journal that has one: described as offering
     /// nothing ([`LimbKind::Max`]).
     max: Option<LimbId>,
-    /// The provider's web search and fetch.
+    /// The provider: web search and fetch, and Max's usage reading.
     web: LimbId,
     /// The roles limb, co-hosted.
     roles: Option<LimbId>,
@@ -1068,8 +1070,41 @@ Check your workspace for what you had already done before carrying on."
         if limb == self.meta {
             return self.spawn(id, &call);
         }
+        if limb == self.web {
+            return self.read_usage(id, &call);
+        }
         // The limb runs it from its row.
         self.fact(Fact::Call(id, CallEvent::Dispatched));
+    }
+
+    /// Run Max's call to the provider off the loop's thread, the way a
+    /// request runs, and settle it when it reports. It only reads, so it is
+    /// not stopped at shutdown: a later brain runs it again.
+    fn read_usage(&mut self, id: CallId, call: &Call) {
+        if call.tool != web::USAGE {
+            let said = format!("The provider offers Max no tool `{}`.", call.tool);
+            return self.fail(id, &said);
+        }
+        self.fact(Fact::Call(id, CallEvent::Dispatched));
+        let client = self.client.clone();
+        let events = self.events.clone();
+        thread::spawn(move || {
+            let reading = client.usage(&Cancel::new());
+            let _ = events.send(Event(What::Usage(id, reading)));
+        });
+    }
+
+    fn read(&mut self, id: CallId, reading: Result<BTreeMap<String, Window>, String>) {
+        match reading {
+            Ok(reading) => {
+                let (values, outcome) = web::usage(&reading, now());
+                self.append(Batch {
+                    values,
+                    facts: vec![Fact::Call(id, CallEvent::Settled(outcome))],
+                });
+            }
+            Err(why) => self.fail(id, &format!("Could not read the plan's usage: {why}")),
+        }
     }
 
     /// Run a meta call: its members are created in the same batch as its
@@ -1359,6 +1394,7 @@ and you cannot finish until it has.",
         match event {
             What::FirstByte(request) => self.first_byte(request),
             What::Finished(request, finished) => self.finished(request, finished),
+            What::Usage(call, reading) => self.read(call, reading),
             What::Signal(signal) => self.signal(signal),
             What::Tab(record) => {
                 // A tab new to the brain is one of Max's faces.

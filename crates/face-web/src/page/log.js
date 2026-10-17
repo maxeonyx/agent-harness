@@ -1,4 +1,4 @@
-// ─── The log: the context, exactly as sent, rendered ──────────────────────
+// ─── The log: the context, marked up, or exactly as sent ─────────────────
 const contexts = new Map();
 async function contextOf(head) {
   if (!contexts.has(head)) {
@@ -60,14 +60,7 @@ function blocksOf(e) {
 }
 
 function entry(s, into, e, index, t) {
-  if (e.role === "root") {
-    const d = el("details", "thought");
-    const tools = (parse(e.tools) || []).map((x) => x.name);
-    d.append(el("summary", null, `${e.model} · system prompt and ${tools.length} tools`));
-    d.append(el("div", "io", e.system || ""), el("div", "io", JSON.stringify(parse(e.tools), null, 2) || ""));
-    into.append(d);
-    return;
-  }
+  if (e.role === "root") { into.append(rootEntry(e)); return; }
   const blocks = blocksOf(e);
   // What the harness sent: each block as whoever wrote it, by the face's
   // account of the request that sent it. Max's words are his bubbles; the
@@ -137,6 +130,27 @@ function entry(s, into, e, index, t) {
   }
 }
 
+// The root, marked up: the system prompt as it reads, and each tool by its
+// name and what it says it does, its schema folded.
+function rootEntry(e) {
+  const d = el("details", "thought root");
+  const system = parse(e.system), tools = parse(e.tools) || [];
+  d.append(el("summary", null, `${e.model} · system prompt and ${tools.length} tools`));
+  const prompt = el("div", "card system");
+  for (const b of Array.isArray(system) ? system : [{ text: e.system || "" }]) prompt.append(markdown(b.text || ""));
+  const defs = el("div", "tool-defs");
+  for (const { name, description, input_schema, ...rest } of tools) {
+    const def = el("div", "tool-def");
+    def.append(el("div", "tool", name), markdown(description || ""));
+    const schema = el("details", "schema");
+    schema.append(el("summary", null, "schema"), el("div", "io", JSON.stringify(input_schema || rest, null, 2)));
+    def.append(schema);
+    defs.append(def);
+  }
+  d.append(prompt, defs);
+  return d;
+}
+
 // Words in a bubble on the right: Max's, or what his user is to an agent.
 // When and how they were sent is on hover.
 function said(text, when, cls = "") {
@@ -148,10 +162,10 @@ function said(text, when, cls = "") {
   d.append(bubble);
   return d;
 }
-// A standard prompt, as the act it is: Max's Done; a cancel, his or the
-// agent's owner's. The harness's instruction is a line under it, in full
+// A standard prompt, as the act it is: Max's Done; an abandon, his or the
+// agent's owner's; his Stop, which parks it. The harness's instruction is a line under it, in full
 // when clicked. Other standard prompts are the harness's notes.
-const PROMPTS = { Done: "Done", Stopping: "Cancel" };
+const PROMPTS = { Done: "Done", Tidy: "Abandon", Park: "Stop" };
 function prompted(prompt, text) {
   if (!PROMPTS[prompt]) return note(text);
   const d = said(PROMPTS[prompt], null, "prompt");
@@ -206,7 +220,7 @@ function toolRow(s, b, t) {
   const name = b.name === "background" ? `${input.tool} ↷` : b.name;
   line.append(el("span", "tool", name), el("span", "gist", gist(inner)), el("span", "st run", ""));
   const detail = el("div", "detail");
-  detail.append(el("div", "io", fields(input)));
+  detail.append(readable(input));
   row.append(line, detail);
   line.onclick = () => row.classList.toggle("expanded");
   const path = inner.path;
@@ -292,7 +306,9 @@ function result(s, b) {
   st.className = `st${b.is_error ? " bad" : ""}`;
   st.textContent = b.is_error ? "failed" : "✓";
   const detail = $(".detail", r.row);
-  const out = el("div", `io${b.is_error ? " err" : ""}`, text);
+  const fields = parse(text);
+  const out = fields && typeof fields === "object" ? readable(fields) : el("div", "io", text);
+  if (b.is_error) out.classList.add("err");
   const path = r.inner.path;
   if (r.b.name === "read" && path && /\.(md|markdown|svg|html?)$/i.test(path) && !b.is_error) {
     const raw = text.split("\n").map((l) => l.replace(/^\s*\d+[\t│|:] ?/, "")).join("\n");
@@ -309,8 +325,27 @@ function result(s, b) {
   for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") { const img = el("img"); img.src = `data:${x.source?.media_type};base64,${x.source?.data}`; img.style.maxWidth = "100%"; detail.append(img); }
   detail.append(out);
 }
-// A tool's input as its fields, each string as it reads.
-const fields = (input) => Object.entries(input || {}).map(([k, v]) => `${k}: ${typeof v === "string" && v.includes("\n") ? "\n" + v : typeof v === "string" ? v : JSON.stringify(v, null, 2)}`).join("\n");
+// A tool's input, or a result that is data, as it reads: each field by its
+// name, an empty one left out; a string as text (an agent's own words as
+// markdown), code as a block; a list or a record as fields of its own.
+const CODE = new Set(["command", "content", "code", "script", "patch", "old", "new", "old_string", "new_string"]);
+const WORDS = new Set(["mandate", "brief", "note", "text", "message", "question", "prompt", "description"]);
+function readable(value, key) {
+  if (typeof value === "string") {
+    if (CODE.has(key)) return el("div", "io", value);
+    if (WORDS.has(key)) { const m = markdown(value); m.classList.add("v"); return m; }
+    return el("div", value.includes("\n") ? "v long" : "v", value);
+  }
+  if (!value || typeof value !== "object") return el("div", "v code", JSON.stringify(value));
+  const d = el("div", "args");
+  for (const [k, v] of Object.entries(value)) {
+    if (v === "" || v == null) continue;
+    const f = el("div", "arg");
+    f.append(el("span", "k", Array.isArray(value) ? `${+k + 1}` : k), readable(v, k));
+    d.append(f);
+  }
+  return d;
+}
 
 // A file an agent wrote or read, shown as itself beside the log.
 function viewFile(path, content) {

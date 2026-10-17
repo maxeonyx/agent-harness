@@ -1,5 +1,6 @@
 //! Sending a request and reading its stream.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +17,7 @@ use crate::{Error, http, request};
 
 const HOST: &str = "api.anthropic.com";
 const PATH: &str = "/v1/messages";
+const USAGE: &str = "/api/oauth/usage";
 const UNIFIED: &str = "anthropic-ratelimit-unified-";
 
 /// The Messages API on the subscription login. Blocking, and shareable
@@ -109,7 +111,8 @@ impl Client {
             ("content-type", "application/json"),
             ("user-agent", concat!("harness/", env!("CARGO_PKG_VERSION"))),
         ];
-        let response = match http::post(&self.tls, HOST, PATH, &headers, &body, cancel) {
+        let response = match http::exchange(&self.tls, "POST", HOST, PATH, &headers, &body, cancel)
+        {
             Ok(response) => response,
             Err(e) => return Ok(end(cut(e, None), None, None)),
         };
@@ -227,6 +230,76 @@ impl Client {
         };
         Ok(end(ending, assembly.usage(), quota))
     }
+}
+
+impl Client {
+    /// The plan's usage, read from its own endpoint: each window it reports,
+    /// by name (`five_hour`, `seven_day`, `seven_day_opus`, ...), as a
+    /// fraction used and when it resets. A window it reports as `null` is
+    /// left out, as is any field it adds. `Err` says why there is no
+    /// reading; it never contains the token.
+    pub fn usage(&self, cancel: &Cancel) -> Result<BTreeMap<String, Window>, String> {
+        let token = self.login.token().map_err(|e| e.to_string())?;
+        let bearer = token.bearer();
+        let headers = [
+            ("authorization", bearer.as_str()),
+            ("anthropic-beta", "oauth-2025-04-20"),
+            ("user-agent", concat!("harness/", env!("CARGO_PKG_VERSION"))),
+        ];
+        let mut response = http::exchange(&self.tls, "GET", HOST, USAGE, &headers, b"", cancel)
+            .map_err(|e| e.to_string())?;
+        let mut text = String::new();
+        response
+            .body
+            .read_to_string(&mut text)
+            .map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|_| format!("{}: not JSON: {text:.200}", response.status))?;
+        if response.status != 200 {
+            let message = parsed["error"]["message"].as_str().unwrap_or(&text);
+            return Err(format!("{}: {message:.200}", response.status));
+        }
+        let windows = parsed.as_object().into_iter().flatten();
+        Ok(windows
+            .filter_map(|(name, w)| {
+                let used = w["utilization"].as_f64()? / 100.0;
+                let resets = w["resets_at"].as_str().and_then(iso_ms).map(Timestamp);
+                Some((name.clone(), Window { used, resets }))
+            })
+            .collect())
+    }
+}
+
+/// Milliseconds since the epoch of an RFC 3339 time
+/// (`2026-10-17T05:00:00.123+00:00`, or ending `Z`).
+fn iso_ms(s: &str) -> Option<i64> {
+    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (h, mi, sec) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    let rest = s.get(19..)?;
+    let zone = rest.find(['Z', 'z', '+', '-'])?;
+    let millis = match rest[..zone].strip_prefix('.') {
+        Some(f) => format!("{f:0<3}").get(..3)?.parse::<i64>().ok()?,
+        None => 0,
+    };
+    let offset = match &rest[zone..] {
+        "Z" | "z" => 0,
+        o => {
+            let sign = if o.starts_with('-') { -1 } else { 1 };
+            let oh: i64 = o.get(1..3)?.parse().ok()?;
+            let om: i64 = o.get(4..6)?.parse().ok()?;
+            sign * (oh * 60 + om)
+        }
+    };
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let y = if mo <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((mo + 9) % 12) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let seconds = days * 86_400 + h * 3600 + mi * 60 + sec - offset * 60;
+    Some(seconds * 1000 + millis)
 }
 
 /// A plan window (`five_hour`, `seven_day`, ...). Anything else, including

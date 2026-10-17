@@ -22,7 +22,12 @@ const lerp = (a, b, e) => a + (b - a) * e;
 const ICONS = {
   mic: '<path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
   send: '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>',
-  stop: '<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
+  pause: '<path d="M9 5.5v13M15 5.5v13"/>',
+  play: '<path d="M8 5.5v13l10-6.5z"/>',
+  cross: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  tick: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  queue: '<path d="M4 6h11M4 11h11M4 16h5M17 13v7M14 17l3 3 3-3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   toward: '<path d="M9 5l7 7-7 7"/>',
