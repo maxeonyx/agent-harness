@@ -30,6 +30,7 @@ export const ICONS = {
   tick: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   queue: '<path d="M4 6h11M4 11h11M4 16h5M17 13v7M14 17l3 3 3-3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  find: '<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   toward: '<path d="M9 5l7 7-7 7"/>',
 };

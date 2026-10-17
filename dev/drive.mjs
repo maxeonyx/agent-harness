@@ -2,7 +2,7 @@
 // Throwaway test brains by name, their chats, and their pages driven the
 // way Max drives them. Every command takes `--brain NAME` (default `test`):
 //
-//   node dev/drive.mjs up [MODEL]
+//   node dev/drive.mjs up [MODEL] [--sample WAV]
 //   node dev/drive.mjs chat ROLE DIR|- WORDS
 //   node dev/drive.mjs say CHAT WORDS
 //   node dev/drive.mjs settle CHAT [--timeout S]
@@ -28,6 +28,7 @@
 // relaunch; `down` ends everything of the brain's, and `down --wipe` forgets
 // it. The face serves the page from crates/face-web/src/page as it is on disk
 // (`--page`), so an edit to the page shows on reload, with no rebuild.
+// `--sample WAV` gives the page a recording to dictate (the brain's flag).
 //
 // `chat` starts a chat as Max does at a tab, with no browser (the `act`
 // example): in ROLE, in a workspace over DIR or in no place, with WORDS as
@@ -138,7 +139,9 @@ function* candidates(brain) {
 }
 
 async function up(brain, args) {
-  if (args.length > 1) fail("usage: up [MODEL]");
+  const at = args.indexOf("--sample");
+  const sample = at < 0 ? [] : ["--sample", path.resolve(args.splice(at, 2)[1] ?? fail("--sample needs a WAV"))];
+  if (args.length > 1) fail("usage: up [MODEL] [--sample WAV]");
   const model = args[0] ?? "scripted";
   execFileSync("cargo", ["build", "-q", "--release", "--bins", "--example", "act"], { cwd: repo, stdio: "inherit" });
   await stop(brain);
@@ -148,7 +151,7 @@ async function up(brain, args) {
   for (const port of candidates(brain)) {
     if (tried.has(port) || !(await free(port))) continue;
     tried.add(port);
-    const launched = await launch(brain, model, port, log);
+    const launched = await launch(brain, model, port, log, sample);
     if (launched === "taken") continue;
     fs.writeFileSync(brain.file("port"), `${port}\n`);
     fs.writeFileSync(brain.file("pid"), `${launched}\n`);
@@ -160,12 +163,12 @@ async function up(brain, args) {
 
 // Start the brain on `port`: its pid once this launch's log says it
 // serves, or "taken" if another process bound the port first.
-async function launch(brain, model, port, log) {
+async function launch(brain, model, port, log, sample) {
   const from = fs.existsSync(log) ? fs.statSync(log).size : 0;
   const out = fs.openSync(log, "a");
   const child = spawn(path.join(repo, "target/release/harness-brain"),
     ["--roles", path.join(repo, "roles"), "--db", brain.file("brain.sqlite"), "--port", String(port), "--model", model,
-      "--page", path.join(repo, "crates/face-web/src/page")],
+      "--page", path.join(repo, "crates/face-web/src/page"), ...sample],
     { detached: true, stdio: ["ignore", out, out], env: { ...process.env, [brain.mark]: "1", XDG_STATE_HOME: brain.file("state") } });
   child.unref();
   fs.closeSync(out);

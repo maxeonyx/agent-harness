@@ -85,7 +85,7 @@ export async function startNew(text, files) {
 }
 
 // ─── Finding a chat ────────────────────────────────────────────────────────
-// Ctrl+K, or /: the chats whose name, mandate or words match are listed
+// Ctrl+K, /, or the find button: the chats whose name, mandate or words match are listed
 // under the box, newest first, each with what matched, and stay lit on the
 // map while the rest fades. Enter or a click opens one at the match; the
 // arrows choose; Esc lets it go. The words are searched by the face
@@ -94,7 +94,7 @@ const findEl = $("#find"), foundEl = $("#found");
 export let finding = "", found = new Set(), hits = [], chosen = 0, asking = 0;
 // The entry to bring into view once its chat's log has it.
 let reveal = null;
-function startFind() { findEl.hidden = false; findEl.focus(); findEl.select(); }
+export function startFind() { findEl.hidden = false; findEl.focus(); findEl.select(); }
 function endFind() {
   findEl.hidden = foundEl.hidden = true; findEl.value = ""; finding = ""; found = new Set(); hits = [];
   findEl.blur(); if (view) drawMap();
