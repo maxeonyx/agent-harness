@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::build::BuildId;
-use crate::call::Call;
+use crate::call::{Call, Owner};
 use crate::id::{CallId, EnvironmentId, LimbId, ParseError, ReplicaId, Timestamp, ValueId};
 use crate::resource::Observation;
 use crate::value::Bytes;
@@ -640,10 +640,17 @@ pub enum LimbRow {
     /// mid-run (rerun if its tool may be, otherwise settled as unknown),
     /// never as new: the limb's state was lost since, and the instance that
     /// lost it may have run it.
+    ///
+    /// `owner`: who the call is for now ([`crate::call::Owner`]), which
+    /// moves when it is passed up the tree. A limb whose calls hold
+    /// resources (a browser's tabs) reads it to say whose each one is.
+    /// `None` from a brain that did not say.
     Call {
         call: Call,
         stopping: Option<Timestamp>,
         first_sent_to: ReplicaId,
+        #[serde(default)]
+        owner: Option<Owner>,
     },
     /// Watch these resources: what live contexts embody. `known` is every
     /// version the brain holds of each. Report, as a

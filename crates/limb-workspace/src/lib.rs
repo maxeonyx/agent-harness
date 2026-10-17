@@ -367,6 +367,7 @@ impl Workspace {
                         call,
                         stopping,
                         first_sent_to,
+                        ..
                     },
                 ) => {
                     let input = match &view.rows.get(&LimbKey::Value(call.input)) {

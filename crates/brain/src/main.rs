@@ -120,6 +120,11 @@ usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model M
   --name NAME      that task's name (default: its role)
   --role ROLE      that task's role (default: orchestrator)
   --help           print this
+
+HARNESS_BROWSER    the harness's browser: an endpoint to attach to
+                   (host:port, http://… or ws://…) or a browser to launch;
+                   empty for Playwright's headless shell. A changed value is a
+                   new version of the browser limb; unset keeps the one it has
 ";
 
 fn main() -> ExitCode {
