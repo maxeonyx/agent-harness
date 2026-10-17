@@ -1,29 +1,40 @@
 #!/usr/bin/env node
-// A throwaway test brain, and its page driven the way Max drives it.
+// A throwaway test brain, its chats, and its page driven the way Max drives it.
 //
-//   node dev/drive.mjs up PORT [MODEL[:EFFORT]] [ROLE=MODEL[:EFFORT]]...
+//   node dev/drive.mjs up PORT [MODEL]
+//   node dev/drive.mjs chat PORT ROLE DIR|- WORDS
+//   node dev/drive.mjs settle PORT CHAT [--timeout S]
+//   node dev/drive.mjs log PORT CHAT [--full]
 //   node dev/drive.mjs page PORT [--size WxH[@DPR] | --size phone] [--timeout S] STEP...
 //   node dev/drive.mjs down PORT [--wipe]
 //
 // `up` builds the harness, ends whatever this clone left on PORT (the
-// brain and its limbs), and starts a brain there on its own database and
-// a copy of roles/ in .drive.ignore/PORT/. Every role runs on Sonnet at
-// low effort unless told otherwise: `haiku:low` sets every role, and
-// `engineer=opus:high` one. Its database outlives `up`, so the next `up`
+// brain and its limbs), and starts a brain there on its own database in
+// .drive.ignore/PORT/ and this clone's roles/, every role on MODEL: the
+// scripted model, which costs nothing, unless told (`sonnet`; a role's
+// effort stays its file's). Its database outlives `up`, so the next `up`
 // relaunches a rebuilt brain on the same chats; `down --wipe` forgets them.
+//
+// `chat` starts a chat as Max does at a tab, with no browser (the `act`
+// example): in ROLE, in a workspace over DIR or in no place, with WORDS as
+// its mandate, and prints its id. On the scripted model the words are the
+// script (crates/provider/src/scripted.rs). `settle` waits until the chat
+// waits on Max or is done (a limb that cannot start fails it at once), and
+// `log` prints its transcript: what each said, each tool call with its
+// result cut short (all of it with --full), its state and its children's.
 //
 // `page` opens the face in a fresh headless Chromium at 1920x1080 (or a
 // phone: 390x844, touch, twice the pixels) and runs the steps in order:
 //
-//   chat ROLE DIR WORDS  start a chat as Max does: +, its role, its
-//                        workspace directory (- for none), the words,
-//                        send twice; prints its id
+//   chat ROLE DIR WORDS  start a chat by the clicks Max makes: +, its
+//                        role, its workspace directory (- for none), the
+//                        words, send twice; prints its id
 //   open ID              open a chat by its link
 //   click CSS / hover CSS / type CSS TEXT / key KEY (Enter, Escape, Tab, a letter)
 //   wait CSS             until something it matches is visible
 //   gone CSS             until nothing it matches is visible
 //   text WORDS           until the page shows the words
-//   reply                until the open chat waits on Max, or is done
+//   reply                until the open chat settles, as `settle`
 //   shot FILE            a PNG, for `read`
 //   eval JS              prints what the expression comes to
 //   sleep MS
@@ -35,6 +46,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import https from "node:https";
 import net from "node:net";
 import path from "node:path";
 
@@ -53,32 +65,17 @@ function end(port) {
   execFileSync(path.join(repo, "demos/end.sh"), [markOf(port)], { stdio: "inherit" });
 }
 
-async function up(port, picks) {
-  const tunings = { "": { model: "sonnet", effort: "low" } };
-  for (const pick of picks) {
-    const [, role = "", model, effort] = pick.match(/^(?:([\w-]+)=)?([\w.-]+)(?::(\w+))?$/) ?? fail(`not MODEL[:EFFORT] or ROLE=MODEL[:EFFORT]: ${pick}`);
-    if (role !== "" && !fs.existsSync(path.join(repo, "roles", `${role}.md`))) fail(`no role ${role} in roles/`);
-    tunings[role] = { model, effort: effort ?? "low" };
-  }
-  execFileSync("cargo", ["build", "-q", "--release", "--bins"], { cwd: repo, stdio: "inherit" });
+async function up(port, args) {
+  if (args.length > 1) fail("usage: up PORT [MODEL]");
+  const model = args[0] ?? "scripted";
+  execFileSync("cargo", ["build", "-q", "--release", "--bins", "--example", "act"], { cwd: repo, stdio: "inherit" });
   end(port);
   const place = placeOf(port);
-  const roles = path.join(place, "roles");
-  fs.rmSync(roles, { recursive: true, force: true });
-  fs.cpSync(path.join(repo, "roles"), roles, { recursive: true });
-  for (const file of fs.readdirSync(roles).filter((f) => f.endsWith(".md"))) {
-    const role = path.basename(file, ".md");
-    const { model, effort } = tunings[role] ?? tunings[""];
-    const text = fs.readFileSync(path.join(roles, file), "utf8")
-      .replace(/^model: .*$/m, `model: ${model}`)
-      .replace(/^effort: .*$/m, `effort: ${effort}`);
-    fs.writeFileSync(path.join(roles, file), text);
-  }
-
+  fs.mkdirSync(place, { recursive: true });
   const log = path.join(place, "brain.log");
   const out = fs.openSync(log, "a");
   const brain = spawn(path.join(repo, "target/release/harness-brain"),
-    ["--roles", roles, "--db", path.join(place, "brain.sqlite"), "--port", String(port)],
+    ["--roles", path.join(repo, "roles"), "--db", path.join(place, "brain.sqlite"), "--port", String(port), "--model", model],
     { detached: true, stdio: ["ignore", out, out], env: { ...process.env, [markOf(port)]: "1" } });
   brain.unref();
   let exited = null;
@@ -88,8 +85,7 @@ async function up(port, picks) {
     await sleep(100);
   }
   if (!(await listening(port))) fail(`the brain is not listening on ${port} after 30 s:\n${tail(log, 20)}`);
-  const tuned = Object.entries(tunings).map(([r, t]) => `${r || "every role"} ${t.model}:${t.effort}`).join(", ");
-  console.log(`brain on https://mx-hv-mj.local:${port}/ (pid ${brain.pid}; ${tuned})\nlog ${log}\nend it with: node dev/drive.mjs down ${port}`);
+  console.log(`brain on https://mx-hv-mj.local:${port}/ (pid ${brain.pid}; every role on ${model})\nlog ${log}\nend it with: node dev/drive.mjs down ${port}`);
 }
 
 const tail = (file, n) => fs.readFileSync(file, "utf8").trimEnd().split("\n").slice(-n).join("\n");
@@ -101,6 +97,102 @@ const listening = (port) => new Promise((r) => {
 function down(port, wipe) {
   end(port);
   if (wipe) fs.rmSync(placeOf(port), { recursive: true, force: true });
+}
+
+// ─── A chat, from the brain ───────────────────────────────────────────────
+
+// Max starts a chat as a tab does, with no browser: `act`, a tab replica.
+function chat(port, [role, dir, words, ...more]) {
+  if (words === undefined || more.length > 0) fail("usage: chat PORT ROLE DIR|- WORDS");
+  const out = execFileSync(path.join(repo, "target/release/examples/act"),
+    [String(port), "chat", role, dir === "-" ? "-" : path.resolve(dir), words], { encoding: "utf8" });
+  const id = out.match(/^chat (\S+)$/m)?.[1] ?? fail(out.trim().split("\n").pop());
+  console.log(`chat ${id}`);
+  return id;
+}
+
+// What the face serves: the view (every task's state) and a context's chain.
+function get(port, route) {
+  return new Promise((resolve, reject) => {
+    https.get({ host: "127.0.0.1", port, path: route, servername: "mx-hv-mj.local", rejectUnauthorized: false }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => { body += d; });
+      res.on("end", () => res.statusCode === 200 ? resolve(JSON.parse(body)) : reject(new Failed(`${route}: ${res.statusCode} ${body}`)));
+    }).on("error", (e) => reject(new Failed(`nothing answers on ${port} (${e.message}): node dev/drive.mjs up ${port}`)));
+  });
+}
+
+async function task(port, id) {
+  const { rows } = await get(port, "/view");
+  return { task: rows[`task:${id}`]?.Task ?? fail(`no chat ${id} on ${port}`), rows };
+}
+
+const clock = (ms) => new Date(ms).toLocaleTimeString("en-NZ", { timeZone: "Pacific/Auckland", hour12: false });
+
+// What a task waits on, in a line.
+function state(t) {
+  const w = t.waiting ?? {};
+  const since = w.since === undefined ? "" : ` since ${clock(w.since)}`;
+  const why = {
+    max: () => "Max's turn",
+    done: () => t.outcome?.kind === "failed" ? `failed: ${t.outcome.reason}` : (t.outcome?.kind ?? "done"),
+    model: () => w.streaming ? "the model is writing" : "the model is thinking",
+    calls: () => `running ${w.calls.map((c) => c.tool ?? "a call").join(", ")}`,
+    starting: () => `starting ${w.limbs.join(", ")}${w.failed.map((f) => `; ${f.limb} failed: ${f.why}`).join("")}`,
+    limited: () => `limited until ${clock(w.until)}`,
+  }[w.kind]?.() ?? w.kind ?? "unknown";
+  return `${why}${since}${t.trouble ? ` (trouble: ${JSON.stringify(t.trouble)})` : ""}`;
+}
+
+const settled = (t) => t.waiting?.kind === "max" || t.waiting?.kind === "done";
+
+// Until the chat waits on Max or is done; a limb that cannot start fails it.
+async function settle(port, id) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const { task: t } = await task(port, id);
+    if (settled(t)) return t;
+    if (t.waiting?.failed?.length > 0) fail(`${id}: ${state(t)}`);
+    if (Date.now() > deadline) fail(`waited ${timeout / 1000} s for ${id} to settle: ${state(t)}`);
+    await sleep(200);
+  }
+}
+
+// A chat's transcript: who said what, each tool call with its result, cut
+// short unless `full`; then its state, and its children's.
+async function log(port, id, full) {
+  const { task: t, rows } = await task(port, id);
+  const cut = (text, lines, chars) => {
+    if (full) return text;
+    const all = text.split("\n");
+    let kept = all.slice(0, lines).join("\n");
+    if (kept.length > chars) kept = kept.slice(0, chars);
+    return kept.length < text.length ? `${kept} … (${all.length} lines, ${text.length} chars)` : kept;
+  };
+  const indent = (text) => text.replaceAll("\n", "\n    ");
+  const place = Object.values(t.places ?? {}).join(", ");
+  console.log(`${t.id} "${t.name}": ${t.environment} on ${t.tuning?.model ?? "?"}${place ? ` in ${place}` : ""}`);
+  const chain = t.head ? await get(port, `/context/${t.head}`) : [];
+  for (const entry of chain.slice(1)) {
+    const blocks = JSON.parse(entry.content);
+    blocks.forEach((b, i) => {
+      const by = entry.by?.[i]?.by ?? entry.by?.at(-1)?.by;
+      const who = entry.role === "assistant" ? "agent" : by === "max" ? "max" : "harness";
+      if (b.type === "text") console.log(`${who}: ${indent(cut(b.text, 6, 400))}`);
+      else if (b.type === "thinking") console.log(`${who}: (thinking, ${b.thinking.length} chars)`);
+      else if (b.type === "tool_use" || b.type === "server_tool_use") console.log(`  → ${b.name} ${cut(JSON.stringify(b.input), 1, 200)}`);
+      else if (b.type === "tool_result") {
+        const text = typeof b.content === "string" ? b.content : (b.content ?? []).map((c) => c.type === "text" ? c.text : `[${c.type}]`).join("\n");
+        console.log(`  ← ${b.is_error ? "error " : ""}${indent(cut(text, 3, 300))}`);
+      } else console.log(`${who}: [${b.type}]`);
+    });
+  }
+  console.log(`state: ${state(t)}`);
+  for (const [key, row] of Object.entries(rows)) {
+    const c = row.Task;
+    if (key.startsWith("task:") && c.owner === t.id) console.log(`child ${c.id} "${c.name}": ${state(c)}`);
+  }
 }
 
 // ─── The page ──────────────────────────────────────────────────────────────
@@ -310,8 +402,7 @@ const steps = {
   wait: (b, css) => b.until(css, visible(css)),
   gone: (b, css) => b.until(`${css} to go`, `!${visible(css)}`),
   text: (b, words) => b.until(JSON.stringify(words), `document.body.innerText.includes(${JSON.stringify(words)})`),
-  // The open chat's dot says what it waits on first: Max, or nothing.
-  reply: (b) => b.until("the open chat to wait on Max or be done", visible(`#panel .mini[class^="mini needs"], #panel .mini[class^="mini done"]`)),
+  reply: async (b) => { await settle(b.port, (await b.eval("location.hash")).slice(1)); b.check(); },
   shot: async (b, file) => { await b.shot(file); console.log(`shot ${path.resolve(file)}`); },
   eval: async (b, js) => console.log(JSON.stringify(await b.eval(js)) ?? "undefined"),
   sleep: (b, ms) => sleep(Number(ms)).then(() => b.check()),
@@ -322,8 +413,7 @@ async function page(port, args) {
   while (args[0]?.startsWith("--")) {
     const [flag, value] = args.splice(0, 2);
     if (value === undefined) fail(`${flag} needs a value`);
-    if (flag === "--timeout") timeout = Number(value) * 1000;
-    else if (flag === "--size" && value === "phone") size = { width: 390, height: 844, dpr: 2, phone: true };
+    if (flag === "--size" && value === "phone") size = { width: 390, height: 844, dpr: 2, phone: true };
     else if (flag === "--size") {
       const [, w, h, dpr = "1"] = value.match(/^(\d+)x(\d+)(?:@([\d.]+))?$/) ?? fail(`--size: not WxH[@DPR] or phone: ${value}`);
       size = { width: Number(w), height: Number(h), dpr: Number(dpr), phone: false };
@@ -341,6 +431,7 @@ async function page(port, args) {
   fs.mkdirSync(place, { recursive: true });
   if (!(await listening(port))) fail(`nothing listens on ${port}: node dev/drive.mjs up ${port}`);
   const b = await Browser.open(place, size);
+  b.port = port;
   let at = "loading the page";
   try {
     await b.send("Page.navigate", { url: `https://mx-hv-mj.local:${port}/` });
@@ -365,12 +456,18 @@ async function page(port, args) {
 }
 
 const [command, port, ...rest] = process.argv.slice(2);
+const at = rest.indexOf("--timeout");
+if (at >= 0) timeout = Number(rest.splice(at, 2)[1]) * 1000;
 try {
-  if (!/^\d+$/.test(port ?? "")) fail("usage: node dev/drive.mjs up|page|down PORT ... (see the top of dev/drive.mjs)");
-  if (command === "up") await up(Number(port), rest);
-  else if (command === "down") down(Number(port), rest[0] === "--wipe");
-  else if (command === "page") await page(Number(port), rest);
-  else fail(`unknown command ${command}; up, page or down`);
+  if (!/^\d+$/.test(port ?? "")) fail("usage: node dev/drive.mjs up|chat|settle|log|page|down PORT ... (see the top of dev/drive.mjs)");
+  const n = Number(port);
+  if (command === "up") await up(n, rest);
+  else if (command === "chat") chat(n, rest);
+  else if (command === "settle") console.log(state(await settle(n, rest[0] ?? fail("usage: settle PORT CHAT"))));
+  else if (command === "log") await log(n, rest[0] ?? fail("usage: log PORT CHAT [--full]"), rest[1] === "--full");
+  else if (command === "down") down(n, rest[0] === "--wipe");
+  else if (command === "page") await page(n, rest);
+  else fail(`unknown command ${command}; up, chat, settle, log, page or down`);
 } catch (e) {
   if (!(e instanceof Failed)) throw e;
   console.error(e.message);
