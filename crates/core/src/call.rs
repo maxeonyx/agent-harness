@@ -24,8 +24,8 @@ use crate::resource::Observation;
 /// Every harness action an agent takes is a call too, to a limb the brain
 /// itself implements ([`crate::environment::LimbKind`]): a spawn opens a
 /// scope and settles when its last task is done, so a parent waiting on its
-/// children is a task with an outstanding call and nothing more; a handover
-/// moves its caller to a new context. Their
+/// children is a task with an outstanding call and nothing more; a
+/// compaction call compacts its caller's context once its round is over. Their
 /// effects are appended in the same batch as the call's own events, so a
 /// crash leaves all of them or none, and a restart never spawns twice.
 ///
@@ -130,8 +130,8 @@ pub enum Caller {
     /// request), or from the tree, outside any context.
     Max { limb: LimbId, chat: Option<TaskId> },
     /// The harness, while running `call`: the attachments of a spawn's shared
-    /// brief or of a handover. Owned by that call, and shown to each
-    /// receiving task as a tool call it made.
+    /// brief or of a compaction. Owned by that call, and shown to each
+    /// receiving task as its own.
     Meta { call: CallId, limb: LimbId },
 }
 

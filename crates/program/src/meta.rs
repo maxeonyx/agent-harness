@@ -4,8 +4,8 @@
 //! fresh agents in the roles its environment starts, or resumes of its
 //! finished children, and which settles with every member's result once
 //! the last is done. `add_sibling` adds one task to the caller's own scope
-//! and returns at once. `handover` moves the caller to a new root once its
-//! round is over, carrying only its note. `background` makes a named call
+//! and returns at once. `compact` compacts the caller's context once its
+//! round is over ([`harness_core::task::Compaction`]). `background` makes a named call
 //! to one of the caller's other tools that no round waits on: its result
 //! arrives as a message, and its owner cannot finish until it has. `stop`
 //! abandons one of those calls, and `pass` hands one up the tree
@@ -28,7 +28,7 @@ use crate::render::{blocks, text};
 
 pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
-pub const HANDOVER: &str = "handover";
+pub const COMPACT: &str = "compact";
 pub const BACKGROUND: &str = "background";
 pub const STOP: &str = "stop";
 pub const PASS: &str = "pass";
@@ -48,9 +48,9 @@ pub fn description(limb: LimbId, roles: &[&str], member: bool) -> Description {
         "You can start other agents with `spawn`. One call starts a scope: a list of tasks that run at the same time, \
 and returns when every one of them has finished, with each one's result (its last message). \
 While they run you wait, so put everything that can run in parallel into one call.\n\n\
-Do your own work by forking: give each part of it to a fork, which does it and returns a summary, so your context \
-keeps the results without the tool calls that produced them. Fork one part at a time when each depends on the \
-last. Start a fresh agent for a larger task, or for work in another role.\n\n\
+Do the steps of your own work yourself, one after another, and compact between them (below). Fork for parts that \
+can run at the same time, or to explore something whose details you will not need afterwards. Start a fresh agent \
+for a larger task, or for work in another role.\n\n\
 Each task is a fork of you, a fresh agent, or a resume of an agent you started before that has finished. \
 A fork continues from this exact point of your context: it knows everything you know, so its mandate can be short, \
 and it shares your cache, so it is cheap. It works in your directory with you. \
@@ -68,9 +68,19 @@ Each of Max's messages, mandates and answers is labelled `max-…`: name it in `
         ));
     }
     said.push_str(
-        "\n\n`handover` replaces your context with a fresh one that starts from your role, your mandate and the note \
-you write: use it when your context has grown long, or before a new phase of the work. The note is all you keep, so \
-write what the next context needs: where the work stands, what you decided and why, what is next, and Max's words verbatim.",
+        "\n\nYour context keeps checkpoints: its first message, each message that began one of your turns (Max's \
+words, or whatever woke you), and each compaction. `compact` replaces everything after the latest checkpoint with a \
+summary you write, and you carry on from it in the same turn. Use it whenever you finish a step of your work, before \
+the next, and when your work is done, before your report: your context stays short and cheap, and nothing up to the \
+checkpoint is lost, so summarise only the step: what you did, what you found and decided and why, what is left, and \
+anything you will need to look at again or report. Max's words after the checkpoint, the results of the other calls \
+in the same response, and your running background work are carried with it as they are, so do not retell them: to \
+take a file into the compacted context as it is now, read it in the same response. Your report is then your last \
+message, after the summary: Max reads it, or, if you were started by another agent, it is your result, and what you \
+read alongside that last `compact` reaches that agent with it.\n\n\
+With `fresh: true` it starts a new context instead, from your role, your mandate, Max's words and your summary alone. \
+Use it when even your checkpoints have grown long; the summary must then carry everything else you need. A change to \
+your role's definition takes effect then.",
     );
     said.push_str(
         "\n\n`background` runs one of your other tools without waiting for it, under a `name` you give it: it returns \
@@ -115,15 +125,16 @@ and returns at once: the agent that started you gets its result with yours.",
             "required": ["tasks"]
         }
     });
-    let handover = json!({
-        "name": HANDOVER,
-        "description": "Continue in a fresh context that starts from your role, your mandate and this note. Call it alone, as the last thing in a turn.",
+    let compact = json!({
+        "name": COMPACT,
+        "description": "Replace your work since your latest checkpoint with your summary of it, and carry on from the summary in the same turn: with your next step, or, if your work is done, with your report as your last message. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "note": { "type": "string", "description": "Everything the next context needs to carry on." }
+                "summary": { "type": "string", "description": "What you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, or to report." },
+                "fresh": { "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and your summary alone." }
             },
-            "required": ["note"]
+            "required": ["summary"]
         }
     });
     let background = json!({
@@ -164,7 +175,7 @@ and returns at once: the agent that started you gets its result with yours.",
     });
     let mut tools = vec![
         tool(SPAWN, spawn),
-        tool(HANDOVER, handover),
+        tool(COMPACT, compact),
         tool(BACKGROUND, background),
         tool(STOP, stop),
         tool(PASS, pass),
@@ -209,12 +220,24 @@ fn tool(name: &str, definition: Value) -> Tool {
     }
 }
 
-/// A handover call's note.
-pub fn note(input: &[u8]) -> String {
-    serde_json::from_slice::<Value>(input)
-        .ok()
-        .and_then(|v| v["note"].as_str().map(str::to_owned))
-        .unwrap_or_default()
+/// What a `compact` call asks for.
+pub struct Compact {
+    pub summary: String,
+    pub fresh: bool,
+}
+
+/// A `compact` call's input, or why it cannot compact.
+pub fn compaction(input: &[u8]) -> Result<Compact, String> {
+    let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
+    let summary = value["summary"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("`summary` must say what you need to carry on")?;
+    Ok(Compact {
+        summary: summary.to_owned(),
+        fresh: value["fresh"].as_bool().unwrap_or(false),
+    })
 }
 
 /// A background call's name, its tool and its input.
@@ -348,12 +371,14 @@ pub fn names(tool: &str, input: &[u8]) -> Vec<String> {
 
 /// A scope's result: each member's outcome under its name, as a tool
 /// result's content.
-pub fn result(members: &[(String, String)]) -> Bytes {
-    let body: Vec<_> = members
+pub fn result(members: &[(String, Vec<String>)]) -> Bytes {
+    let body: Vec<String> = members
         .iter()
-        .map(|(name, said)| format!("## {name}\n\n{said}"))
+        .flat_map(|(name, said)| {
+            std::iter::once(text(&format!("## {name}"))).chain(said.iter().cloned())
+        })
         .collect();
-    blocks(&[text(&body.join("\n\n"))])
+    blocks(&body)
 }
 
 /// What a call to `limb` expects: the versions the context knows of its

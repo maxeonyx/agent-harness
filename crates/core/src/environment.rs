@@ -92,8 +92,8 @@ use crate::value::Bytes;
 /// role file, the instructions and the tool schemas it was made from, and
 /// the context grown from it is the artifact. Not shared: a changed input
 /// does not rebuild anything, because a context cannot be rebuilt without
-/// losing what the model did in it; it becomes a notice, and the next root
-/// picks it up.
+/// losing what the model did in it; it becomes a notice, and the task's
+/// next compaction onto a fresh root picks it up.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Environment {
     pub id: EnvironmentId,

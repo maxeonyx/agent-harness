@@ -153,24 +153,10 @@ impl Turn {
     }
 }
 
-/// What a new context after a handover begins with: the old context's last
-/// entry, and the note it handed over with.
-pub struct Seed {
-    pub from: Option<EntryId>,
-    pub note: String,
-}
-
 /// Everything the task's next request includes, in the order the provider
 /// needs: tool results first, then text. `forked` are the calls of the
 /// response a fork's first request answers.
-pub fn turn(
-    state: &State,
-    values: Values,
-    task: &Task,
-    first: bool,
-    forked: &[CallId],
-    seed: Option<Seed>,
-) -> Turn {
+pub fn turn(state: &State, values: Values, task: &Task, first: bool, forked: &[CallId]) -> Turn {
     let mut turn = Turn::default();
     let mut texts = Turn::default();
 
@@ -184,8 +170,10 @@ pub fn turn(
     }
     // Does this request carry on the model's turn (a tool round's results,
     // or a response cut short) rather than start a new one?
+    // A carry carries on the turn of the compaction it ends.
     let mid_turn = !forked.is_empty()
         || task.pending.iter().any(|p| matches!(p, Input::Result(_)))
+        || task.head().is_some_and(|h| state.compacted(h).is_some())
         || matches!(
             task.head()
                 .and_then(|h| state.response(h))
@@ -206,7 +194,10 @@ pub fn turn(
     for pending in &task.pending {
         match *pending {
             Input::Result(call) => {
-                turn.push(Rendered::Call(call), vec![result(state, values, call)]);
+                turn.push(
+                    Rendered::Call(call),
+                    vec![result(state, values, task, call)],
+                );
             }
             Input::Background(call) | Input::Late(call) | Input::MaxAction(call) => {
                 texts.push(Rendered::Call(call), vec![activity(state, values, call)]);
@@ -253,7 +244,7 @@ pub fn turn(
         if !roles.is_empty() {
             said.push(text(
                 "[harness] Your role's definition changed. Your request parameters follow it now; \
-its prompt and tools take effect from your next `handover`.",
+its prompt and tools take effect when you next compact with `fresh: true`.",
             ));
         }
         if !names.is_empty() {
@@ -280,37 +271,9 @@ its prompt and tools take effect from your next `handover`.",
     }
 
     if first {
-        // Max's words are a block of their own after the harness's framing,
-        // so a face shows them as he wrote them.
-        let framing = match (task.origin.clone(), task.scope) {
-            (Origin::Aside { .. }, _) => Some(format!(
-                "[harness] This is an aside: Max forked you to talk while the agents you started work. You are \
-told when they are all done. When Max marks this aside done, you summarise what came of the talk, and that \
-goes back to the context you were forked from with their results. He wrote (`{}` quotes it in a brief):",
-                label(task.mandate.text)
-            )),
-            (Origin::Resume { .. }, Scope::Max) if task.by.is_none() => Some(format!(
-                "[harness] Max has reopened this chat after it finished. He wrote (`{}` quotes it in a brief):",
-                label(task.mandate.text)
-            )),
-            (_, Scope::Max) => Some(format!(
-                "[harness] Max's mandate to you (`{}` quotes it in a brief):",
-                label(task.mandate.text)
-            )),
-            (_, Scope::Spawn(_)) => None,
-        };
-        let said = match framing {
-            Some(framing) => vec![text(&framing), text(&said(values, task.mandate.text))],
-            None => vec![text(&mandate(state, values, task))],
-        };
-        texts.push(Rendered::Note(Note::Mandate), said);
-    }
-    if let Some(Seed { from, note }) = seed {
         texts.push(
-            Rendered::Note(Note::Boundary { from }),
-            vec![text(&format!(
-                "[harness] This is a new context: your previous one handed over to it with this note.\n\n{note}"
-            ))],
+            Rendered::Note(Note::Mandate),
+            mandated(state, values, task, false),
         );
     }
 
@@ -327,6 +290,220 @@ goes back to the context you were forked from with their results. He wrote (`{}`
     }
     turn.extend(texts);
     turn
+}
+
+/// The task's mandate as its first request says it, or as a carry onto a
+/// fresh root says it again (`carried`).
+fn mandated(state: &State, values: Values, task: &Task, carried: bool) -> Vec<String> {
+    // Max's words are a block of their own after the harness's framing,
+    // so a face shows them as he wrote them.
+    let framing = match (task.origin.clone(), task.scope) {
+        (Origin::Aside { .. }, _) => Some(format!(
+            "[harness] This is an aside: Max forked you to talk while the agents you started work. You are \
+told when they are all done. When Max marks this aside done, you summarise what came of the talk, and that \
+goes back to the context you were forked from with their results. He wrote (`{}` quotes it in a brief):",
+            label(task.mandate.text)
+        )),
+        (Origin::Resume { .. }, Scope::Max) if task.by.is_none() => Some(format!(
+            "[harness] Max has reopened this chat after it finished. He wrote (`{}` quotes it in a brief):",
+            label(task.mandate.text)
+        )),
+        (_, Scope::Max) => Some(format!(
+            "[harness] Max's mandate to you (`{}` quotes it in a brief):",
+            label(task.mandate.text)
+        )),
+        (_, Scope::Spawn(_)) => None,
+    };
+    match framing {
+        Some(framing) => vec![text(&framing), text(&said(values, task.mandate.text))],
+        None => vec![text(&mandate(state, values, task, carried))],
+    }
+}
+
+/// What a compaction carries forward, and why.
+pub struct Carry<'a> {
+    /// The agent's summary; `None` for a compaction the harness made.
+    pub summary: Option<&'a str>,
+    /// Who compacted, and onto what.
+    pub why: Why,
+    /// Max's words from what it replaced ([`kept`]).
+    pub words: &'a [ValueId],
+    /// Settled calls whose tool uses it replaced: the round's other results.
+    pub calls: &'a [CallId],
+}
+
+/// Who compacted, and onto what.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Why {
+    /// The agent, onto its latest checkpoint.
+    Checkpoint,
+    /// The agent, onto a fresh root.
+    Fresh,
+    /// The harness: the context no longer fit the model's window.
+    Full,
+}
+
+/// A compaction's carry: one user message, in the agent's own story. On a
+/// fresh root it opens with the mandate; then the framing and the summary,
+/// with the background work the task still owns; then Max's words verbatim;
+/// then the outputs of the calls whose tool uses it replaced.
+pub fn carry(state: &State, values: Values, task: &Task, carry: &Carry) -> Turn {
+    let mut turn = Turn::default();
+    if carry.why != Why::Checkpoint {
+        let said = mandated(state, values, task, true);
+        if let Some(brief) = briefing(values, task) {
+            turn.push(Rendered::Note(Note::Brief), brief);
+        }
+        turn.push(Rendered::Note(Note::Mandate), said);
+    }
+    let mut framing = match carry.why {
+        Why::Checkpoint => "[harness] You compacted your work after this point.".to_owned(),
+        Why::Fresh => "[harness] You compacted your work into this new context.".to_owned(),
+        Why::Full => "[harness] Your context no longer fit the model's window, so the harness started it \
+again from your role and your mandate, without a summary. Check your workspace for what you had already done before \
+carrying on."
+            .to_owned(),
+    };
+    if !carry.words.is_empty() {
+        framing.push_str(" Max's words from that work follow, as he wrote them.");
+    }
+    if !carry.calls.is_empty() {
+        framing.push_str(" Then the results of your calls that had not yet reached you.");
+    }
+    let mut said = vec![text(&framing)];
+    if let Some(summary) = carry.summary {
+        said.push(text(&format!("Your summary:\n\n{summary}")));
+    }
+    let running: Vec<String> = task
+        .background
+        .iter()
+        .filter_map(|c| state.call(*c))
+        .map(|c| match &c.call.caller {
+            Caller::Background { name, .. } => format!("`{name}` (`{}`)", c.call.tool),
+            _ => format!("`{}`", c.call.tool),
+        })
+        .collect();
+    if !running.is_empty() {
+        said.push(text(&format!(
+            "[harness] Still running in the background, yours to `stop` or `pass`: {}.",
+            running.join(", ")
+        )));
+    }
+    turn.push(Rendered::Note(Note::Compacted), said);
+    for words in carry.words {
+        let mut said = vec![text(&format!(
+            "[harness] Max wrote this (`{}` quotes it in a brief):",
+            label(*words)
+        ))];
+        said.extend(self::words(&values(*words)));
+        turn.push(Rendered::Note(Note::Kept { words: *words }), said);
+    }
+    for call in carry.calls {
+        turn.push(
+            Rendered::Call(*call),
+            carried(state, values, "[harness] Your", *call),
+        );
+    }
+    turn
+}
+
+/// The brief and Max's quoted words a fresh agent starts with, if its
+/// spawner gave any.
+pub fn briefing(values: Values, task: &Task) -> Option<Vec<String>> {
+    if !matches!(task.origin, Origin::Fresh { .. })
+        || (task.mandate.brief.is_none() && task.mandate.quotes.is_empty())
+    {
+        return None;
+    }
+    let said = task
+        .mandate
+        .brief
+        .map(|b| String::from_utf8_lossy(&values(b)).into_owned());
+    let quotes: Vec<_> = task
+        .mandate
+        .quotes
+        .iter()
+        .map(|q| (*q, words(&values(*q))))
+        .collect();
+    Some(brief(said.as_deref(), &quotes))
+}
+
+/// The output of a call whose tool use a compaction replaced, as blocks
+/// headed by what the call was, since a tool result needs its tool use: in
+/// the carry, or after the report of a member whose last compaction carried
+/// it.
+pub fn carried(state: &State, values: Values, whose: &str, call: CallId) -> Vec<String> {
+    let record = state.call(call).expect("a carried call is known");
+    let outcome = record.outcome().expect("a carried call is settled");
+    let (content, error) = outcome_content(values, outcome);
+    let mut input = String::from_utf8_lossy(&values(record.call.input)).into_owned();
+    if let Some((cut, _)) = input.char_indices().nth(300) {
+        input.truncate(cut);
+        input.push('…');
+    }
+    let failed = if error { " failed" } else { "" };
+    let mut said = vec![text(&format!(
+        "{whose} `{}` call {input}{failed}:",
+        record.call.tool
+    ))];
+    said.extend(
+        content
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(Value::to_string),
+    );
+    said
+}
+
+/// Max's words in what a compaction replaces, in the order he said them:
+/// what the requests on the task's chain after `since` rendered of his
+/// (messages and answers), and what compactions there carried. Everything
+/// up to `since` is kept, and his words with it; with no `since` (a new
+/// root) nothing is, back to the chain's root, through the context a fork
+/// or a resumed chat began with.
+pub fn kept(state: &State, task: &Task, since: Option<EntryId>) -> Vec<ValueId> {
+    let Some(head) = task.head() else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let mut next = Some(head);
+    while let Some(id) = next
+        && Some(id) != since
+    {
+        let mut spans: Vec<&Rendered> = Vec::new();
+        next = state.entry(id).and_then(Entry::parent);
+        if let Some(compacted) = state.compacted(id) {
+            spans.extend(compacted.renders.iter().map(|s| &s.from).rev());
+        }
+        if let Some(request) = state.request(id)
+            && request.call.base != id
+        {
+            spans.extend(request.call.renders.iter().map(|s| &s.from).rev());
+            next = Some(request.call.base);
+        }
+        for from in spans {
+            let words = match from {
+                Rendered::Delivery(d) => match state.delivery(*d).map(|d| &d.delivery.content) {
+                    Some(Content::Words(words)) => Some(*words),
+                    _ => None,
+                },
+                Rendered::Call(c) => state
+                    .call(*c)
+                    .and_then(|c| c.outcome())
+                    .and_then(Outcome::output)
+                    .map(|o| o.model)
+                    .filter(|m| state.said(*m).is_some()),
+                Rendered::Note(Note::Kept { words }) => Some(*words),
+                Rendered::Note(_) => None,
+            };
+            if let Some(words) = words.filter(|w| !found.contains(w)) {
+                found.push(words);
+            }
+        }
+    }
+    found.reverse();
+    found
 }
 
 /// What Max moving a task back left standing: what the path it left did
@@ -397,14 +574,26 @@ fn observed_now<'a>(
     })
 }
 
-/// A tool result for one of the task's own tool uses.
-fn result(state: &State, values: Values, call: CallId) -> String {
+/// A tool result for one of the task's own tool uses. A `compact` call's
+/// result reaches the model only when the compaction did not happen: the
+/// task is stopping, or Max moved it back to before it.
+fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
     let record = state.call(call).expect("a pending result is a known call");
     let Caller::Agent { tool_use, .. } = &record.call.caller else {
         unreachable!("a round's result answers a tool use")
     };
     let outcome = record.outcome().expect("a pending result is settled");
     let (mut content, error) = outcome_content(values, outcome);
+    if record.call.tool == crate::meta::COMPACT && matches!(outcome, Outcome::Completed(_)) {
+        let said = if state.has_compacted(call) {
+            "Max moved you back to before this compaction, so your context is as it was here. Carry on from here."
+        } else if task.ends() {
+            "Not compacted: you are being stopped, and this is your last turn."
+        } else {
+            "Not compacted."
+        };
+        content = json!([{ "type": "text", "text": said }]);
+    }
     if let (Some(output), Value::Array(blocks)) = (outcome.output(), &mut content)
         && state.said(output.model).is_some()
     {
@@ -572,8 +761,9 @@ Start nothing new. This is your last turn."
         Content::Prompt(Prompt::Park) => format!(
             "Max is pausing this work for now. Bring it to a safe point: finish or undo what is half done, so \
 nothing is left broken or half-written, and start nothing new.{shared} Work you have running in the \
-background is yours to keep or stop: keep what should still be running when Max comes back. Then end your \
-turn with a short note of where things stand and what you will do next. You will wait, paused, until Max \
+background is yours to keep or stop: keep what should still be running when Max comes back. If you have \
+done much since your last checkpoint, `compact` first, so you resume from a short context. Then end your turn with a \
+short note of where things stand and what you will do next. You will wait, paused, until Max \
 resumes you; this is not the end of your task."
         ),
         Content::Prompt(Prompt::Resume) => {
@@ -615,7 +805,7 @@ fn elsewhere(state: &State, values: Values, call: CallId) -> String {
 
 /// A spawned task's mandate, as user text: its place in the work, its part,
 /// whose its siblings' parts are, and when to stop.
-fn mandate(state: &State, values: Values, task: &Task) -> String {
+fn mandate(state: &State, values: Values, task: &Task, carried: bool) -> String {
     let owner = state.owner(task.id).and_then(|o| state.task(o));
     let owner_name = owner.map_or("your owner", |o| o.name.as_str());
     let siblings: Vec<_> = state
@@ -625,6 +815,10 @@ fn mandate(state: &State, values: Values, task: &Task) -> String {
         .collect();
     let part = said(values, task.mandate.text);
     let mut said_ = match task.origin {
+        Origin::Fork { .. } if carried => format!(
+            "You are `{}`, forked from `{owner_name}` to do one part of its work, and only that part.\n\nYour part:\n{part}",
+            task.name
+        ),
         Origin::Fork { .. } => format!(
             "You are now `{}`, a fork of `{owner_name}`. Everything above is `{owner_name}`'s context; \
              from here you do one part of its work, and only that part.\n\nYour part:\n{part}",
@@ -654,7 +848,8 @@ fn mandate(state: &State, values: Values, task: &Task) -> String {
         ));
     }
     said_.push_str(&format!(
-        "\n\nWhen your part is done, end your turn. Your last message is your result, and it goes to `{owner_name}`."
+        "\n\nWhen your part is done, `compact`, then end your turn. Your last message is your result, and it goes \
+to `{owner_name}`."
     ));
     said_
 }

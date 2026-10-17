@@ -6,7 +6,7 @@ use imbl::{OrdMap, OrdSet};
 
 use crate::attention::{Queued, Ranking};
 use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome, Owner};
-use crate::context::{Entry, EntryId};
+use crate::context::{Entry, EntryId, Note, Rendered, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
@@ -24,8 +24,8 @@ use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
 use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::schema::Harness;
 use crate::task::{
-    Abandoner, Created, Drain, Draining, Life, Mode, Move, Origin, Pause, Paused, Phase, Scope,
-    Start, Task, TaskEvent, ends,
+    Abandoner, Compaction, Created, Drain, Draining, Life, Mode, Move, Onto, Origin, Pause, Paused,
+    Phase, Scope, Start, Task, TaskEvent, ends,
 };
 use crate::value::Bytes;
 
@@ -70,7 +70,7 @@ use crate::value::Bytes;
 /// seen, through the face he used.
 ///
 /// What it leaves to the brain, as policy over these views: what to render
-/// and when (notes, wording, breakpoints), handover timing, retry and
+/// and when (notes, wording, breakpoints), compaction timing, retry and
 /// give-up thresholds, what to do after a stop short of a turn's end,
 /// holding siblings until the first one's first byte, and the scheduler's
 /// ranking.
@@ -99,6 +99,8 @@ pub struct State {
     /// When the current launch must have exited, once it is shutting down.
     shutdown: Option<Timestamp>,
     entries: OrdMap<EntryId, Entry>,
+    /// Every compaction, by its carry's entry.
+    compactions: OrdMap<EntryId, Compacted>,
     tasks: OrdMap<TaskId, Task>,
     calls: OrdMap<CallId, CallRecord>,
     model_calls: OrdMap<ModelCallId, ModelCallRecord>,
@@ -126,6 +128,20 @@ pub struct State {
     open: Open,
 }
 
+/// A compaction as the fold keeps it: the provenance of the entries it
+/// appended, which no request did, and what they replaced.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Compacted {
+    pub task: TaskId,
+    /// The task's head before it: the branch ending here is what it
+    /// replaced, from where it resumed ([`Onto`]) on.
+    pub from: EntryId,
+    /// The agent's compaction call; `None` when the harness compacted.
+    pub by: Option<CallId>,
+    /// What the carry's blocks were rendered from.
+    pub renders: Vec<Span>,
+}
+
 /// What is still in motion, kept as the fold goes, so the views over live
 /// work ([`State::todo`], settlement, the members of a scope) cost what
 /// live work costs rather than what all history costs. Derived from the
@@ -147,6 +163,9 @@ struct Open {
     requests: OrdMap<EntryId, ModelCallId>,
     /// The model call whose response made each agent call.
     made_in: OrdMap<CallId, ModelCallId>,
+    /// The heads at which an interrupt ended a task's turn: where Max's
+    /// next words begin a turn, as after an answer.
+    interrupted: OrdSet<EntryId>,
     /// The agent calls whose work changed a resource: each change's call,
     /// or the agent call its background work runs under.
     changed: OrdSet<CallId>,
@@ -477,6 +496,13 @@ pub enum Todo {
 impl State {
     /// Store a task's new state, and whether it is still open.
     fn put(&mut self, task: Task) {
+        if let Some(old) = self.tasks.get(&task.id)
+            && matches!(old.drain(), Some(Draining::ToMax))
+            && task.drain().is_none()
+            && let Some(head) = task.head()
+        {
+            self.open.interrupted.insert(head);
+        }
         if task.is_done() {
             self.open.tasks.remove(&task.id);
         } else {
@@ -1212,18 +1238,17 @@ impl State {
     ) -> Result<(), Rejected> {
         let task = self.tasks.get(&id).ok_or(Rejected::Unknown)?;
         let mut root = None;
+        let mut compacted = None;
         match event {
-            TaskEvent::Moved(Move::Handover { call, start }) => {
-                let made = self.calls.get(call).ok_or(Rejected::Unknown)?;
-                if !matches!(made.call.caller, Caller::Agent { task, .. } if task == id) {
-                    return Err(Rejected::NotForTask);
-                }
-                self.check_start(task, start)?;
-                root = Some(&start.root);
-            }
             TaskEvent::Moved(Move::Root(start)) => {
                 self.check_start(task, start)?;
                 root = Some(&start.root);
+            }
+            TaskEvent::Moved(Move::Compact(compaction)) => {
+                compacted = Some(self.check_compaction(id, task, compaction)?);
+                if let Onto::Fresh(start) = &compaction.onto {
+                    root = Some(&start.root);
+                }
             }
             TaskEvent::Moved(Move::Back { to }) => {
                 if !self.been_at(task, *to) {
@@ -1277,8 +1302,168 @@ impl State {
         if let Some(root) = root {
             self.entries.insert(root.id(), Entry::Root(root.clone()));
         }
+        if let Some((carry, kept)) = compacted {
+            self.compactions.insert(carry.id(), kept);
+            self.entries.insert(carry.id(), carry);
+        }
         self.put(task);
         Ok(())
+    }
+
+    /// A compaction is the task's own: by its own call, onto its latest
+    /// checkpoint or a root it may have, carrying only the outputs of its
+    /// own calls and Max's words. Its entries, and how the fold keeps it.
+    fn check_compaction(
+        &self,
+        id: TaskId,
+        task: &Task,
+        compaction: &Compaction,
+    ) -> Result<(Entry, Compacted), Rejected> {
+        let context = task.context().ok_or(Rejected::Starting)?;
+        if let Some(call) = compaction.by {
+            let made = self.calls.get(&call).ok_or(Rejected::Unknown)?;
+            if !matches!(made.call.caller, Caller::Agent { task, .. } if task == id) {
+                return Err(Rejected::NotForTask);
+            }
+        }
+        match &compaction.onto {
+            Onto::Checkpoint(at) => {
+                if self.checkpoint(task) != Some(*at) {
+                    return Err(Rejected::Detached);
+                }
+            }
+            Onto::Fresh(start) => {
+                self.check_start(task, start)?;
+                if !start.awaits.is_empty() {
+                    return Err(Rejected::NotForTask);
+                }
+            }
+        }
+        for Span { from, .. } in &compaction.renders {
+            match from {
+                Rendered::Call(call) => {
+                    let made = self.calls.get(call).ok_or(Rejected::Unknown)?;
+                    let own = match made.call.caller {
+                        Caller::Agent { task, .. } | Caller::Background { task, .. } => task == id,
+                        Caller::Meta { call, .. } => Some(call) == compaction.by,
+                        Caller::Max { .. } => false,
+                    };
+                    if !own {
+                        return Err(Rejected::NotForTask);
+                    }
+                }
+                Rendered::Note(
+                    Note::Compacted | Note::Kept { .. } | Note::Mandate | Note::Brief,
+                ) => {}
+                Rendered::Delivery(_) | Rendered::Note(_) => return Err(Rejected::NotForTask),
+            }
+        }
+        let kept = Compacted {
+            task: id,
+            from: context.head,
+            by: compaction.by,
+            renders: compaction.renders.clone(),
+        };
+        Ok((compaction.carry_entry(), kept))
+    }
+
+    /// The task's latest checkpoint: the last entry on its chain since its
+    /// context's start that a compaction keeps, and so where it resumes.
+    ///
+    /// **Concept.** A checkpoint is an entry worth keeping verbatim: the
+    /// head of the context's first request (its mandate, or a fork's), the
+    /// head of each request that began a model turn (Max's message, or
+    /// whatever woke it), and each compaction's carry. Derived from the tree and the requests, never
+    /// stated, so a fork, a move back or a restart needs nothing kept for it.
+    /// `None` until the context's first request has been sent.
+    pub fn checkpoint(&self, task: &Task) -> Option<EntryId> {
+        let context = task.context()?;
+        let mut next = Some(context.head);
+        while let Some(id) = next {
+            if self.compactions.contains_key(&id) {
+                return Some(id);
+            }
+            if let Some(request) = self.request(id)
+                && (request.call.base == context.start || self.ended_turn(request.call.base))
+            {
+                return Some(id);
+            }
+            if id == context.start {
+                return None;
+            }
+            next = self.entries.get(&id).and_then(Entry::parent);
+        }
+        None
+    }
+
+    /// The compaction whose carry is `entry`.
+    pub fn compacted(&self, entry: EntryId) -> Option<&Compacted> {
+        self.compactions.get(&entry)
+    }
+
+    /// Whether `call` has compacted its task: moving back to the head it
+    /// replaced undoes it, and does not compact again.
+    pub fn has_compacted(&self, call: CallId) -> bool {
+        self.compactions.values().any(|c| c.by == Some(call))
+    }
+
+    /// The entries on `task`'s chain from `head` back to where `stop` first
+    /// holds, latest first, each with the entry of that chain it counts as:
+    /// itself, or the carry of the task's compaction that replaced the
+    /// branch it is on. A carry stands for the branch it replaced, since
+    /// the summary was written from it, so the walk goes through that
+    /// branch too, back to its checkpoint.
+    pub fn path(
+        &self,
+        task: TaskId,
+        head: EntryId,
+        stop: &dyn Fn(EntryId) -> bool,
+    ) -> Vec<(EntryId, EntryId)> {
+        let mut out = Vec::new();
+        let mut at = Some(head);
+        while let Some(entry) = at.filter(|e| !stop(*e)) {
+            out.push((entry, entry));
+            at = self.entry(entry).and_then(Entry::parent);
+            if let (Some(c), Some(checkpoint)) =
+                (self.compactions.get(&entry).filter(|c| c.task == task), at)
+                && !matches!(self.entry(checkpoint), Some(Entry::Root(_)))
+            {
+                let within = |e: EntryId| stop(e) || self.descends(checkpoint, e);
+                let branch = self.path(task, c.from, &within);
+                out.extend(branch.into_iter().map(|(e, _)| (e, entry)));
+            }
+        }
+        out
+    }
+
+    /// What `task` rendered to reach `entry`: the spans of its request that
+    /// appended up to it, or of its compaction whose carry it is.
+    pub fn rendered(&self, task: TaskId, entry: EntryId) -> Option<&[Span]> {
+        match self.compactions.get(&entry) {
+            Some(c) => (c.task == task).then_some(c.renders.as_slice()),
+            None => self
+                .request(entry)
+                .filter(|m| m.call.task == task)
+                .map(|m| m.call.renders.as_slice()),
+        }
+    }
+
+    /// Whether a model turn ended at `entry`: a response that ended it, or
+    /// the head an interrupt left.
+    pub fn ended_turn(&self, entry: EntryId) -> bool {
+        self.open.interrupted.contains(&entry)
+            || self.response(entry).is_some_and(|m| {
+                matches!(
+                    &m.ended,
+                    Some(Ended {
+                        ending: Ending::Responded {
+                            stop: Stop::EndTurn,
+                            ..
+                        },
+                        ..
+                    })
+                )
+            })
     }
 
     /// The model call a response came from.
@@ -1286,7 +1471,9 @@ impl State {
         self.model_calls.get(self.open.responses.get(&entry)?)
     }
 
-    /// The first model call whose request ended at `entry`.
+    /// The first request that ended at `entry` having appended it, even if
+    /// it failed, was cut or was lost: its retries send the same head with
+    /// nothing appended, and are not one.
     pub fn request(&self, entry: EntryId) -> Option<&ModelCallRecord> {
         self.model_calls.get(self.open.requests.get(&entry)?)
     }
@@ -1311,17 +1498,16 @@ impl State {
     }
 
     /// Whether `task` has been at `entry`, so Max can move it back there
-    /// ([`Move::Back`]): its context's start, or a request or response of
-    /// its own since.
+    /// ([`Move::Back`]): its context's start, or a request, response or
+    /// compaction of its own since. Back to the head a compaction replaced
+    /// undoes it.
     pub fn been_at(&self, task: &Task, entry: EntryId) -> bool {
         task.live().is_some_and(|live| {
             let start = live.context.start;
             entry == start
                 || (self.descends(entry, start)
-                    && self
-                        .request(entry)
-                        .or_else(|| self.response(entry))
-                        .is_some_and(|m| m.call.task == task.id))
+                    && (self.rendered(task.id, entry).is_some()
+                        || self.response(entry).is_some_and(|m| m.call.task == task.id)))
         })
     }
 
@@ -1329,9 +1515,7 @@ impl State {
     /// changed in the world, which the move does not undo.
     pub fn left(&self, task: TaskId, from: EntryId, to: EntryId) -> Left {
         let mut left = Left::default();
-        let mut at = Some(from);
-        while let Some(entry) = at.filter(|e| !self.descends(to, *e)) {
-            at = self.entry(entry).and_then(Entry::parent);
+        for (entry, _) in self.path(task, from, &|e| self.descends(to, e)) {
             let Some(response) = self.response(entry).filter(|m| m.call.task == task) else {
                 continue;
             };

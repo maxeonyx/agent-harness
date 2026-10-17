@@ -23,7 +23,7 @@ use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
 use harness_core::schema::{self, Record};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
-    Abandoner, Created, Drain, Draining, Input, Mandate, Mode, Move, Origin,
+    Abandoner, Compaction, Created, Drain, Draining, Input, Mandate, Mode, Move, Onto, Origin,
     Outcome as TaskOutcome, Scope, Start as TaskStart, Task, TaskEvent,
 };
 use harness_core::value::Bytes;
@@ -702,8 +702,8 @@ impl Brain {
         )
     }
 
-    /// Say a move to a new root. Its limbs watch what it embodies through
-    /// their rows.
+    /// Say a move of a task's head. Its limbs watch what it embodies
+    /// through their rows.
     fn moved(&mut self, id: TaskId, movement: Move, values: Vec<Bytes>) {
         self.append(Batch {
             values,
@@ -711,24 +711,85 @@ impl Brain {
         });
     }
 
-    /// The task's handover call, if the round that made it is over: the next
-    /// request starts a new context instead.
-    fn handover(&mut self, task: &Task) -> bool {
-        let Some(call) = task.pending.iter().find_map(|p| match *p {
-            Input::Result(call) if self.call(call).tool == meta::HANDOVER => Some(call),
-            _ => None,
-        }) else {
+    /// Compact the task if the round of its compaction call is over: what
+    /// it did since its latest checkpoint, or its whole context when it
+    /// asks for a fresh one or has no checkpoint, is replaced by what it
+    /// carries. False when it asked for none.
+    fn compact(&mut self, task: &Task) -> bool {
+        let asked = task.pending.iter().find_map(|p| {
+            let Input::Result(call) = *p else {
+                return None;
+            };
+            let record = &self.state().call(call)?.call;
+            if record.tool != meta::COMPACT
+                || self.state().has_compacted(call)
+                || !matches!(
+                    self.state().call(call)?.outcome(),
+                    Some(Outcome::Completed(_))
+                )
+            {
+                return None;
+            }
+            let ask = meta::compaction(&self.value(record.input)).ok()?;
+            Some((call, ask))
+        });
+        let Some((call, ask)) = asked else {
             return false;
         };
-        match self.start_of(task.id) {
-            None => {}
-            Some(Err(why)) => self.fact(Fact::Task(task.id, TaskEvent::Drain(Drain::Fail(why)))),
-            Some(Ok((start, values))) => {
-                let start = Box::new(start);
-                self.moved(task.id, Move::Handover { call, start }, values);
-            }
-        }
+        let checkpoint = self.state().checkpoint(task).filter(|_| !ask.fresh);
+        let (onto, values, why) = match checkpoint {
+            Some(at) => (Onto::Checkpoint(at), Vec::new(), render::Why::Checkpoint),
+            None => match self.start_of(task.id) {
+                None => return true,
+                Some(Err(why)) => {
+                    self.fact(Fact::Task(task.id, TaskEvent::Drain(Drain::Fail(why))));
+                    return true;
+                }
+                Some(Ok((start, values))) => {
+                    (Onto::Fresh(Box::new(start)), values, render::Why::Fresh)
+                }
+            },
+        };
+        let calls = round(task, Some(call));
+        let carry = render::Carry {
+            summary: Some(&ask.summary),
+            why,
+            words: &[],
+            calls: &calls,
+        };
+        self.compacted(task, Some(call), onto, carry, values);
         true
+    }
+
+    /// State a compaction of `task` onto `onto`, carrying `carry` with Max's
+    /// words from what it replaces.
+    fn compacted(
+        &mut self,
+        task: &Task,
+        by: Option<CallId>,
+        onto: Onto,
+        carry: render::Carry,
+        mut values: Vec<Bytes>,
+    ) {
+        let since = match &onto {
+            Onto::Checkpoint(at) => Some(*at),
+            Onto::Fresh(_) => None,
+        };
+        let words = render::kept(self.state(), task, since);
+        let carry = render::Carry {
+            words: &words,
+            ..carry
+        };
+        let turn = render::carry(self.state(), &|v| self.value(v), task, &carry);
+        let content = render::blocks(&turn.blocks);
+        let compaction = Compaction {
+            by,
+            onto,
+            carry: content.id(),
+            renders: turn.renders,
+        };
+        values.push(content);
+        self.moved(task.id, Move::Compact(Box::new(compaction)), values);
     }
 
     // Requests.
@@ -741,10 +802,9 @@ impl Brain {
             return;
         }
         let task = self.state().task(id).expect("a task to send for").clone();
-        // A stopping task's tidy-up turn is its last: there is no next
-        // context to hand over to.
+        // A stopping task's tidy-up turn is its last: it does not compact.
         let ending = task.ends();
-        if !ending && self.handover(&task) {
+        if !ending && self.compact(&task) {
             return;
         }
         let head = task.head().expect("a ready task has a context");
@@ -768,35 +828,60 @@ impl Brain {
                 return;
             }
         }
-        // What follows is read off the head: the response it is, if any.
-        let at_head = self
-            .state()
+        // What follows is read off the head: the response it is, if any,
+        // while nothing has moved on from it but its calls' results.
+        let state = self.state();
+        let said = state
             .response(head)
-            .and_then(|m| m.ended.as_ref())
-            .map(|e| e.ending.clone());
-        match &at_head {
-            Some(Ending::Responded {
-                stop: Stop::Refused,
-                ..
-            }) => {
+            .and_then(|m| Some((m, &m.ended.as_ref()?.ending)));
+        match said {
+            Some((
+                _,
+                Ending::Responded {
+                    stop: Stop::Refused,
+                    ..
+                },
+            )) => {
                 let reason = "the model declined to go on".to_string();
                 return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
             }
             // A context the provider no longer accepts starts again from a
-            // new root, with a note of where the old one ended.
-            Some(Ending::Responded {
-                stop: Stop::ContextWindow,
-                ..
-            }) if !matches!(self.state().entry(head), Some(Entry::Root(_))) => {
-                if ending {
-                    let reason = "its context filled during its tidy-up turn".to_string();
+            // new root, with the mandate, Max's words and its calls' results.
+            Some((
+                overflowed,
+                Ending::Responded {
+                    stop: Stop::ContextWindow,
+                    ..
+                },
+            )) => {
+                let base = overflowed.call.base;
+                let afresh = state.compacted(base).is_some()
+                    && state
+                        .entry(base)
+                        .and_then(Entry::parent)
+                        .is_some_and(|p| matches!(state.entry(p), Some(Entry::Root(_))));
+                if ending || afresh {
+                    let reason = if ending {
+                        "its context filled during its tidy-up turn"
+                    } else {
+                        "its context does not fit the model's window even started afresh"
+                    };
+                    let reason = reason.to_string();
                     return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
                 }
                 return match self.start_of(id) {
                     None => {}
                     Some(Err(why)) => self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
                     Some(Ok((start, values))) => {
-                        self.moved(id, Move::Root(Box::new(start)), values)
+                        let calls = round(&task, None);
+                        let carry = render::Carry {
+                            summary: None,
+                            why: render::Why::Full,
+                            words: &[],
+                            calls: &calls,
+                        };
+                        let onto = Onto::Fresh(Box::new(start));
+                        self.compacted(&task, None, onto, carry, values);
                     }
                 };
             }
@@ -817,31 +902,13 @@ impl Brain {
         }
 
         // The first request of a context renders its beginning: at its
-        // start, however often it has been sent from there. A root after
-        // an earlier context also says where that one ended.
+        // start, however often it has been sent from there. A context
+        // compacted onto a fresh root has its mandate in its carry.
         let first = task.context().is_some_and(|c| c.start == head);
-        let seed = match self.state().entry(head) {
-            Some(Entry::Root(_)) => self.seed(id, head),
-            _ => None,
-        };
         let mut values = Vec::new();
         let mut appends = Vec::new();
         let mut renders = Vec::new();
-        if first
-            && matches!(task.origin, Origin::Fresh { .. })
-            && (task.mandate.brief.is_some() || !task.mandate.quotes.is_empty())
-        {
-            let said = task
-                .mandate
-                .brief
-                .map(|b| String::from_utf8_lossy(&self.value(b)).into_owned());
-            let quotes: Vec<_> = task
-                .mandate
-                .quotes
-                .iter()
-                .map(|q| (*q, render::words(&self.value(*q))))
-                .collect();
-            let brief = render::brief(said.as_deref(), &quotes);
+        if first && let Some(brief) = render::briefing(&|v| self.value(v), &task) {
             appends.push(user(render::blocks(&brief), &mut values));
             renders.push(Span {
                 from: Rendered::Note(Note::Brief),
@@ -852,14 +919,7 @@ impl Brain {
             Origin::Fork { .. } | Origin::Aside { .. } if first => self.response_calls(head),
             _ => Vec::new(),
         };
-        let turn = render::turn(
-            self.state(),
-            &|v| self.value(v),
-            &task,
-            first,
-            &forked,
-            seed,
-        );
+        let turn = render::turn(self.state(), &|v| self.value(v), &task, first, &forked);
         if !turn.blocks.is_empty() {
             appends.push(user(render::blocks(&turn.blocks), &mut values));
         }
@@ -900,7 +960,8 @@ impl Brain {
             .into_iter()
             .chain(appended.iter().rev().skip(1).copied())
             .collect();
-        call.breakpoints = policy::breakpoints(root, &shared, call.head());
+        let checkpoint = self.state().checkpoint(&task);
+        call.breakpoints = policy::breakpoints(root, checkpoint, &shared, call.head());
 
         let request = ModelCallId(self.decider.next().event(0));
         self.append(Batch {
@@ -954,32 +1015,6 @@ impl Brain {
             let _ = events.send(Event(What::Finished(request, finished)));
         });
         self.requests.insert(request, (cancel, thread));
-    }
-
-    /// Where the task's old context ended, and the note it handed over
-    /// with, or why it ended without one: what a new root after earlier
-    /// requests begins with.
-    fn seed(&self, task: TaskId, root: EntryId) -> Option<render::Seed> {
-        let (_, last) = self
-            .state()
-            .model_calls()
-            .filter(|(_, m)| m.call.task == task && !self.state().descends(m.call.base, root))
-            .max_by_key(|(_, m)| m.sent.seq)?;
-        let handover = last
-            .calls
-            .iter()
-            .map(|c| &self.state().call(*c).expect("a response's call").call)
-            .find(|c| c.tool == meta::HANDOVER);
-        let note = match handover {
-            Some(call) => meta::note(&self.value(call.input)),
-            None => "Your previous context no longer fit the model's window, so it ended without a handover. \
-Check your workspace for what you had already done before carrying on."
-                .into(),
-        };
-        Some(render::Seed {
-            from: last.response.or(Some(last.call.head())),
-            note,
-        })
     }
 
     /// The calls a response made, in order: what a fork of it must answer.
@@ -1157,10 +1192,18 @@ Finish tidying up and end your turn with your report.",
             return self.append(batch);
         }
         let input = self.value(call.input);
-        if call.tool == meta::HANDOVER {
-            let said = render::blocks(&[render::text(
-                "Handed over: your next request starts a new context from your note.",
-            )]);
+        // A compaction happens once its round is over ([`Brain::compact`]).
+        if call.tool == meta::COMPACT {
+            let said = match meta::compaction(&input) {
+                Ok(_) => "Compacting once this round is over.".to_string(),
+                Err(why) => {
+                    let (model, failed) = render::failed(&format!("Not compacted: {why}."));
+                    batch.values.push(model);
+                    batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
+                    return self.append(batch);
+                }
+            };
+            let said = render::blocks(&[render::text(&said)]);
             let output = Output {
                 model: said.id(),
                 full: None,
@@ -1220,6 +1263,14 @@ and you cannot finish until it has.",
             batch
                 .facts
                 .push(Fact::Call(id, CallEvent::Settled(outcome)));
+            return self.append(batch);
+        }
+        // A tool an older root declared that the harness no longer has.
+        if call.tool != meta::SPAWN && call.tool != meta::ADD_SIBLING {
+            let said = format!("The harness no longer has `{}`.", call.tool);
+            let (model, failed) = render::failed(&said);
+            batch.values.push(model);
+            batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
             return self.append(batch);
         }
         match self.members(id, &call.tool, &parent, &input, &mut batch) {
@@ -1401,14 +1452,35 @@ and you cannot finish until it has.",
     /// in the order they were created, which is the order the spawn named
     /// them, then each sibling added.
     fn settle_scope(&mut self, id: CallId) {
-        let results: Vec<(String, String)> = self
+        let mut observes = Vec::new();
+        let results: Vec<(String, Vec<String>)> = self
             .state()
             .members(Scope::Spawn(id))
             .map(|t| {
                 let said = match t.outcome() {
-                    Some(TaskOutcome::Result { entry }) => self.visible(*entry),
-                    Some(TaskOutcome::Failed { reason }) => format!("Failed: {reason}"),
-                    Some(TaskOutcome::Abandoned { by, report }) => self.cancelled(*by, *report),
+                    Some(TaskOutcome::Result { entry }) => {
+                        let mut said = vec![render::text(&self.visible(*entry))];
+                        for call in self.attached(*entry) {
+                            said.extend(render::carried(
+                                self.state(),
+                                &|v| self.value(v),
+                                "Its",
+                                call,
+                            ));
+                            if let Some(output) =
+                                self.state().call(call).and_then(|c| c.outcome()?.output())
+                            {
+                                observes.extend(output.observes.iter().cloned());
+                            }
+                        }
+                        said
+                    }
+                    Some(TaskOutcome::Failed { reason }) => {
+                        vec![render::text(&format!("Failed: {reason}"))]
+                    }
+                    Some(TaskOutcome::Abandoned { by, report }) => {
+                        vec![render::text(&self.cancelled(*by, *report))]
+                    }
                     None => unreachable!("a scope settles when every member is done"),
                 };
                 (t.name.clone(), said)
@@ -1418,7 +1490,7 @@ and you cannot finish until it has.",
         let output = Output {
             model: model.id(),
             full: None,
-            observes: Vec::new(),
+            observes,
         };
         self.append(Batch {
             values: vec![model],
@@ -1427,6 +1499,32 @@ and you cannot finish until it has.",
                 CallEvent::Settled(Outcome::Completed(output)),
             )],
         });
+    }
+
+    /// The calls a member's result carries: those of the compaction it
+    /// carries on from, if no response of its own came between.
+    fn attached(&self, result: EntryId) -> Vec<CallId> {
+        let state = self.state();
+        let mut at = state.entry(result).and_then(Entry::parent);
+        while let Some(entry) = at {
+            if let Some(compacted) = state.compacted(entry) {
+                return compacted
+                    .renders
+                    .iter()
+                    .filter_map(|span| match span.from {
+                        Rendered::Call(call) => Some(call),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            at = match state.entry(entry) {
+                Some(Entry::Message { parent, message }) if message.role == Role::User => {
+                    Some(*parent)
+                }
+                _ => None,
+            };
+        }
+        Vec::new()
     }
 
     /// What a cancelled member says to the task that reads its result.
@@ -1742,6 +1840,18 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
     let name = format!("{repo}-{}", branch.replace('/', "-"));
     let parent = dir.parent().unwrap_or(dir);
     (from, parent.join(name))
+}
+
+/// The results of a task's round that have not reached it, but `except`'s:
+/// what a compaction carries.
+fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
+    task.pending
+        .iter()
+        .filter_map(|p| match *p {
+            Input::Result(c) if Some(c) != except => Some(c),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A new version of `limb` with `settings` as its config: the same kind on
