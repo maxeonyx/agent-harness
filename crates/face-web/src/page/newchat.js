@@ -3,7 +3,7 @@ import { byId, graph, live, view } from "./map.js";
 import { fit } from "./camera.js";
 import { drawMap } from "./draw.js";
 import { closeNode, go, logState, mini, NEW, openId, start, title } from "./card.js";
-import { compose, drafts, giveBack, newTuning, renderTune, say, takeWords } from "./compose.js";
+import { compose, drafts, giveBack, menu, newTuning, renderTune, say, takeWords } from "./compose.js";
 
 // ─── A new chat, in Max's own scope ───────────────────────────────────────
 // A double click on the ground, or +, opens a small card there on a chat
@@ -19,14 +19,16 @@ export function buildNew() {
   $(".ctx", panel).hidden = true;
   const picks = $(".picks", compose);
   if (!picks) return;
-  const role = el("select", "pick"); role.id = "n-role"; role.title = "Its role";
-  role.append(...view.environments.map((e) => Object.assign(el("option", null, e.name), { value: e.name })));
-  role.value = drafts.get("new:role") || (view.environments.some((e) => e.name === "chat") ? "chat" : view.environments[0]?.name);
+  const role = el("button", "pick"); role.type = "button"; role.id = "n-role"; role.title = "Its role";
+  role.value = role.textContent = drafts.get("new:role") || (view.environments.some((e) => e.name === "chat") ? "chat" : view.environments[0]?.name);
   role.hidden = view.environments.length < 2;
   const places = el("span");
   places.style.display = "contents";
   const fill = () => places.replaceChildren(...placesOf(role.value).flatMap(placeField));
-  role.onchange = () => { drafts.set("new:role", role.value); fill(); renderTune(null); };
+  role.onclick = () => menu(role, view.environments.map((e) => ({ v: e.name, name: e.name, on: e.name === role.value })), (name) => {
+    role.value = role.textContent = name;
+    drafts.set("new:role", name); fill(); renderTune(null);
+  });
   fill();
   picks.replaceChildren(role, places);
   renderTune(null);
