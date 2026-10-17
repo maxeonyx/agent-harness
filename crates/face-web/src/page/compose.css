@@ -42,7 +42,7 @@
   .compose .go:disabled { opacity: .4; cursor: default; }
   .compose .row2 { display: flex; flex-wrap: wrap; align-items: center; gap: .3em; margin-top: .2em; margin-left: -.45em; }
   .compose .row2:not(:has(:not(:empty):not([hidden]))) { display: none; }
-  .compose .status { flex: 1; min-width: 0; font-size: 12px; color: var(--red); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compose .status { flex: 1 1 9em; font-size: 12px; color: var(--red); }
   .compose .mic.on { background: var(--maroon); color: var(--paper); animation: breathe 1.6s infinite; }
   .compose .later { font-size: 12.5px; color: var(--muted); padding: .25em .6em; border-radius: 999px; white-space: nowrap; }
   .compose .later:hover { background: var(--hover); color: var(--ink); }
@@ -53,7 +53,7 @@
   .compose .picks { display: inline-flex; gap: .3em; min-width: 0; }
   .compose .pick { font: 12.5px var(--sans); color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 999px; padding: .25em .6em; max-width: 16em; outline: 0; cursor: pointer; }
   .compose .pick:hover, .compose .pick:focus { border-color: var(--line); color: var(--ink); }
-  .compose input.pick { width: 13em; }
+  .compose input.pick { field-sizing: content; min-width: 7em; max-width: 30em; text-overflow: ellipsis; }
   /* Model and effort: one pill, split in two, each half its own menu. */
   .compose .tune { display: inline-flex; align-items: stretch; margin-left: auto; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
   .compose .tune:empty { display: none; }

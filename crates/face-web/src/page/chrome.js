@@ -3,6 +3,7 @@ import { act, digest } from "./tab.js";
 import { byId, view } from "./map.js";
 import { fit, setNewPoint, setUsageRight } from "./camera.js";
 import { go, NEW } from "./card.js";
+import { startFind } from "./newchat.js";
 
 // ─── Telling Max when he is not looking ───────────────────────────────────
 // When something newly waits on him and this tab is not in front, the
@@ -81,9 +82,11 @@ export function renderUsage() {
   if (view.limited) usageAlarms.append(el("span", "alarm", `limited until ${clock(view.limited)} · carries on by itself`));
   setUsageRight(span.getBoundingClientRect().right);
 }
+const findButton = icon("find", "", "Find a chat (Ctrl+K or /)");
 const fitButton = icon("fit", "", "Fit the map (F)"), newButton = icon("plus", "", "New chat (or double-click the map)");
 newButton.id = "new";
 fitButton.onclick = () => fit(true);
+findButton.onclick = startFind;
 newButton.onclick = () => { setNewPoint(null); go(NEW); };
-$("#bottom").append(fitButton, newButton);
+$("#bottom").append(findButton, fitButton, newButton);
 

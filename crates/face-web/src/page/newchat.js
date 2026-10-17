@@ -33,12 +33,15 @@ export function buildNew() {
   picks.replaceChildren(role, places);
   renderTune(null);
 }
+const newest = (place) => view.tasks.filter((t) => (t.scope ?? "Max") === "Max" && t.places?.[place])
+  .reduce((a, t) => !a || t.created.at > a.created.at ? t : a, null)?.places[place] || "";
 const placesOf = (role) => view.environments.find((e) => e.name === role)?.places || [];
-// A place's field: a workspace's is a directory, offered from those known.
+// A place's field: a workspace's is a directory, offered from those known,
+// and starting as the newest chat's, so a chat from a phone needs no typing.
 function placeField(place) {
   const f = el("input", "pick place"); f.dataset.place = place;
   f.placeholder = place === "workspace" ? "directory" : place; f.title = `Its ${place}`;
-  f.value = drafts.get(`new:${place}`) || "";
+  f.value = drafts.get(`new:${place}`) || newest(place);
   f.oninput = () => drafts.set(`new:${place}`, f.value);
   if (place !== "workspace") return [f];
   const list = el("datalist"); list.id = `n-${place}`;
@@ -85,7 +88,7 @@ export async function startNew(text, files) {
 }
 
 // ─── Finding a chat ────────────────────────────────────────────────────────
-// Ctrl+K, or /: the chats whose name, mandate or words match are listed
+// Ctrl+K, /, or the find button: the chats whose name, mandate or words match are listed
 // under the box, newest first, each with what matched, and stay lit on the
 // map while the rest fades. Enter or a click opens one at the match; the
 // arrows choose; Esc lets it go. The words are searched by the face
@@ -94,7 +97,7 @@ const findEl = $("#find"), foundEl = $("#found");
 export let finding = "", found = new Set(), hits = [], chosen = 0, asking = 0;
 // The entry to bring into view once its chat's log has it.
 let reveal = null;
-function startFind() { findEl.hidden = false; findEl.focus(); findEl.select(); }
+export function startFind() { findEl.hidden = false; findEl.focus(); findEl.select(); }
 function endFind() {
   findEl.hidden = foundEl.hidden = true; findEl.value = ""; finding = ""; found = new Set(); hits = [];
   findEl.blur(); if (view) drawMap();
