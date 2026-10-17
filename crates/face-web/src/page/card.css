@@ -1,7 +1,7 @@
   /* An open node: a card in the map where the node is. */
   #panel {
     position: absolute; left: 0; top: 0; z-index: 2; display: flex; flex-direction: column; background: var(--paper);
-    border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 22px 60px rgba(40, 30, 20, .2); overflow: hidden;
+    border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 22px 60px rgba(40, 30, 20, .2);
     cursor: auto; touch-action: pan-x pan-y; will-change: transform;
   }
   #panel > .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em 1em; border-bottom: 1px solid var(--line); min-height: 2.9em; cursor: grab; }
@@ -19,7 +19,7 @@
   #panel > .wake { display: none; }
   #panel.asleep { touch-action: none; box-shadow: 0 0 0 2px var(--ink), 0 22px 60px rgba(40, 30, 20, .2); }
   #panel.asleep > :not(.wake) { visibility: hidden; }
-  #panel.asleep > .wake { display: block; position: absolute; inset: 0; background: var(--paper); cursor: pointer; }
+  #panel.asleep > .wake { display: block; position: absolute; inset: 0; border-radius: inherit; background: var(--paper); cursor: pointer; }
   #panel.asleep > .wake:hover { background: var(--white); }
   .wake > span { position: absolute; display: flex; align-items: center; gap: .5em; max-width: 90%; transform: translate(-50%, -50%); font-weight: 600; font-family: var(--serif); white-space: nowrap; }
   .wake .mini { font-size: .8em; }

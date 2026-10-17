@@ -151,9 +151,12 @@ let cardShown = null;  // the card's visible rect in the world, now
 let newPoint = null;   // where a new chat's card opens, in the world
 const centrePoint = () => ({ x: (innerWidth / 2 - cam.x) / cam.k, y: (innerHeight * .3 - cam.y) / cam.k, sx: innerWidth / 2, sy: innerHeight * .3 });
 
+// Room kept right of the card for the task's controls, which float there
+// (on a phone they float inside it).
+const controlsRoom = () => phone() ? 0 : 48;
 function cardSize(id) {
   const m = phone() ? 6 : 16;
-  const W = Math.min(id === NEW ? 640 : 880, innerWidth - 2 * m - (phone() ? 0 : 32));
+  const W = Math.min(id === NEW ? 640 : 880, innerWidth - 2 * m - controlsRoom());
   const H = id === NEW ? 168 : innerHeight - 2 * m;
   return { W, H };
 }
@@ -187,11 +190,12 @@ function dotRect(id) {
 }
 // The camera that shows a card at its own size, moved as little as it takes
 // for all of it to show; `at` is a point of the world held where it is on
-// screen, so the card opens where Max was looking.
-function camFor(r, at) {
+// screen, so the card opens where Max was looking. Its controls show too.
+function camFor(card, at) {
   const m = phone() ? 6 : 16;
-  const p = at || { x: r.x + r.w / 2, y: r.y, sx: innerWidth / 2, sy: m };
+  const p = at || { x: card.x + card.w / 2, y: card.y, sx: innerWidth / 2, sy: m };
   const c = { k: 1, x: p.sx - p.x, y: p.sy - p.y };
+  const r = { ...card, w: card.w + controlsRoom() };
   const left = c.x + r.x, top = c.y + r.y;
   if (r.w > innerWidth - 2 * m) c.x = (innerWidth - r.w) / 2 - r.x;
   else if (left < m) c.x += m - left;

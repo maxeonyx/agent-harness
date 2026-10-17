@@ -226,7 +226,7 @@ async function renderMix(t) {
 }
 $(".ctx", panel).onclick = () => { const m = $(".mix", panel); m.hidden = !m.hidden; m.dataset.key = ""; if (!m.hidden && byId[openId]) renderMix(byId[openId]); };
 
-// What Max can do to the task itself, as small icons beside the box.
+// What Max can do to the task itself, as icons floating beside the card.
 function renderControls(t) {
   const row = $(".acts", compose);
   if (!row) return;
