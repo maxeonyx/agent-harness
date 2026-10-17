@@ -55,6 +55,8 @@
 //   reply                until the open chat settles, as `settle`
 //   shot FILE            a PNG, for `read`
 //   eval JS              prints what the expression comes to
+//   cdp METHOD JSON      prints what a DevTools Protocol command returns:
+//                        cdp Page.getInstallabilityErrors {}
 //   sleep MS
 //
 // CSS means the first visible match; `CSS @N` the Nth (from 1), and
@@ -584,6 +586,7 @@ const steps = {
   reply: async (b) => { await settle(b.brain, (await b.eval("location.hash")).slice(1)); b.check(); },
   shot: async (b, file) => { await b.shot(file); console.log(`shot ${path.resolve(file)}`); },
   eval: async (b, js) => console.log(JSON.stringify(await b.eval(js)) ?? "undefined"),
+  cdp: async (b, method, params) => console.log(JSON.stringify(await b.send(method, JSON.parse(params)))),
   sleep: (b, ms) => sleep(Number(ms)).then(() => b.check()),
 };
 

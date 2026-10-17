@@ -1,0 +1,11 @@
+{
+  "name": "harness",
+  "short_name": "harness",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f0eee6",
+  "theme_color": "#f0eee6",
+  "icons": [{ "src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
+}
