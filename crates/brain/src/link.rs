@@ -9,9 +9,10 @@
 //! each time. So a limb outlives the brain that started it.
 
 use std::io::{self, BufRead, BufReader, Write};
+use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use harness_core::environment::{Hello, LimbDown, LimbUp};
@@ -20,27 +21,11 @@ use harness_core::environment::{Hello, LimbDown, LimbUp};
 /// from the current one's.
 pub type Conn = u64;
 
-/// How the brain ships one limb what it holds of the brain.
-pub enum Wire {
-    Socket(UnixStream),
-    Channel(Sender<LimbDown>),
-}
-
-impl Wire {
-    /// Ship one value. A link that has gone is noticed by its reader.
-    pub fn ship(&mut self, down: LimbDown) {
-        match self {
-            Wire::Socket(stream) => {
-                let mut line = serde_json::to_vec(&down).expect("a link value serialises");
-                line.push(b'\n');
-                let _ = stream.write_all(&line);
-            }
-            Wire::Channel(sender) => {
-                let _ = sender.send(down);
-            }
-        }
-    }
-}
+/// How the brain ships one limb what it holds of the brain: a channel to
+/// the limb's thread, or to the thread writing the limb's socket. So a
+/// slow or stuck limb never holds up the brain; what it has not read
+/// waits in the channel. A link that has gone is noticed by its reader.
+pub type Wire = Sender<LimbDown>;
 
 /// What a link says to the brain.
 pub enum Said {
@@ -74,13 +59,24 @@ pub fn listen(
 }
 
 fn follow(conn: Conn, stream: UnixStream, said: &impl Fn(Conn, Said)) -> io::Result<()> {
-    let writer = stream.try_clone()?;
+    let mut writer = stream.try_clone()?;
     let mut lines = BufReader::new(stream).lines();
     let Some(first) = lines.next() else {
         return Ok(());
     };
     let hello: Hello = serde_json::from_str(&first?).map_err(io::Error::other)?;
-    said(conn, Said::Joined(hello, Wire::Socket(writer)));
+    let (wire, down) = mpsc::channel::<LimbDown>();
+    thread::spawn(move || {
+        for down in down {
+            let mut line = serde_json::to_vec(&down).expect("a link value serialises");
+            line.push(b'\n');
+            if writer.write_all(&line).is_err() {
+                let _ = writer.shutdown(Shutdown::Both);
+                return;
+            }
+        }
+    });
+    said(conn, Said::Joined(hello, wire));
     for line in lines {
         let line = line?;
         match serde_json::from_str(&line) {
