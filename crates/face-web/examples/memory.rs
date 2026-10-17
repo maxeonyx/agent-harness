@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use harness_core::environment::Environment;
 use harness_core::fact::{Batch, Fact, Launched};
-use harness_core::id::{EnvironmentId, PlaceId, Timestamp, ValueId};
+use harness_core::id::{EnvironmentId, ReplicaId, Timestamp, ValueId};
 use harness_core::schema::{Brain, Record};
 use harness_core::value::Bytes;
 use harness_face_web::{Face, Folded, Source, Wiring};
@@ -51,7 +51,7 @@ fn main() {
         .nth(1)
         .map_or(4329, |p| p.parse().expect("a port"));
     let values = Values::default();
-    let (mut brain, _) = Brain::open(PlaceId(0xb4a1), Memory::default()).unwrap();
+    let (mut brain, _) = Brain::open(ReplicaId(0xb4a1), Memory::default()).unwrap();
     let launched = Batch {
         values: vec![],
         facts: vec![Fact::Launched(Launched {
@@ -89,12 +89,12 @@ fn main() {
     let keeping = values.clone();
     thread::spawn(move || {
         for record in inbox {
-            let place = record.at.place;
-            if !brain.state().is_face(place) {
+            let replica = record.at.replica;
+            if !brain.state().is_face(replica) {
                 brain
                     .say(now(), |_| Batch {
                         values: vec![],
-                        facts: vec![Fact::Face(place)],
+                        facts: vec![Fact::Face(replica)],
                     })
                     .unwrap();
             }

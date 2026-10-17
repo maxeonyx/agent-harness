@@ -1,12 +1,12 @@
 //! The data flow substrate: the one way state moves between the parts of
 //! the harness.
 //!
-//! The brain, every limb process and every browser tab is a [`PlaceId`]: a
-//! replica with one timeline of its own. What a place says is a
-//! [`Record`]: a time at that place, its clock, and what happened. Nothing
-//! else crosses between places. There are no requests, replies or
-//! refusals on a wire: a place ships its own records to the place that
-//! decides what they are about, and that place ships back a view of what
+//! The brain, every limb and every browser tab is a replica, named by a
+//! [`ReplicaId`]: one timeline of its own, in its own storage. What a replica says is a
+//! [`Record`]: a time at that replica, its clock, and what happened. Nothing
+//! else crosses between replicas. There are no requests, replies or
+//! refusals on a wire: a replica ships its own records to the replica that
+//! decides what they are about, and that replica ships back a view of what
 //! they amount to.
 //!
 //! - **Up: facts go to whoever decides.** A follower (a tab, a limb) keeps
@@ -22,7 +22,7 @@
 //! - **Down: views go to whoever looks.** The decider derives, for each
 //!   follower, the rows it wants, as of one of the decider's times, with the
 //!   follower's [`Standing`]: how far the decider has included it and what
-//!   it refused. A [`Publisher`] ships the rows that changed; a [`Replica`]
+//!   it refused. A [`Publisher`] ships the rows that changed; a [`Mirror`]
 //!   holds them. So a follower knows its own act is in when it holds a view
 //!   as of a decider time that includes it: "sent" is derived, never told.
 //! - **Never-stored data takes no time.** Streamed tokens and command
@@ -35,18 +35,18 @@
 //!   follower that returns gets a whole view.
 //!
 //! The substrate knows nothing of tasks or calls: a [`Schema`] supplies what
-//! a place says, how it folds, why a fold refuses, and how long a record
+//! a replica says, how it folds, why a fold refuses, and how long a record
 //! lasts. `harness-core` is one schema. The crate uses no threads, files,
 //! clocks, randomness or database, so it builds for `wasm32` and anything
 //! may embed it: the embedding supplies the clock, the entropy for a new
-//! place, the transport and the [`Storage`].
+//! replica, the transport and the [`Storage`].
 //!
 //! # Vision
 //!
 //! "A and B contain filtered replicas of each other [...] unidirectionally
 //! synced and then A can do a reduction or derivation over both"; no message
 //! protocol between processes; the browser is a replica; a record is "a
-//! time and a place, and a fact"; which times include which is in band;
+//! time and a place, and a fact" (a replica); which times include which is in band;
 //! invalid actions stay facts; durability kinds declared in band; a draft
 //! has identity from its creation in the browser and its sent status is
 //! derived from causality. From Max's database notes: "derived views run on
@@ -78,5 +78,5 @@ pub use decider::{Decider, Divergence, Error, Standing, Status};
 pub use log::{Log, Restored};
 pub use record::{Durability, Folding, Included, Live, Record, Schema, What};
 pub use storage::{Memory, Storage};
-pub use time::{EventId, ParseError, PlaceId, Time, Timestamp};
-pub use view::{Down, Publisher, Replica, Step, Up, View};
+pub use time::{EventId, ParseError, ReplicaId, Time, Timestamp};
+pub use view::{Down, Mirror, Publisher, Step, Up, View};

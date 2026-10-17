@@ -4,7 +4,7 @@
 //! is a process of its own.
 //!
 //! A process limb connects to the socket and says [`Hello`]: which limb it
-//! is and the place its records are of. It can connect again, to this
+//! is and the replica its records are of. It can connect again, to this
 //! brain or a restarted one on the same socket, and is shipped a whole view
 //! each time. So a limb outlives the brain that started it.
 

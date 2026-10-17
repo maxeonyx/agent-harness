@@ -1,4 +1,4 @@
-//! Facts: what the harness's places say, who said it, and why the brain
+//! Facts: what the harness's replicas say, who said it, and why the brain
 //! refuses what it refuses.
 
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use crate::delivery::{Content, Delivery};
 use crate::draft::DraftEvent;
 use crate::environment::{Description, Environment, Limb, Reach};
 use crate::id::{
-    CallId, DeliveryId, EventId, LimbId, ModelCallId, PlaceId, Seq, TaskId, Time, Timestamp,
+    CallId, DeliveryId, EventId, LimbId, ModelCallId, ReplicaId, Seq, TaskId, Time, Timestamp,
     ValueId,
 };
 use crate::model_call::ModelCallEvent;
@@ -51,7 +51,7 @@ use crate::value::Bytes;
 /// against its child's first request, and none records what the environment
 /// did between turns or what Max had seen when he acted.
 ///
-/// **Different here.** Every participant is a place with its own records;
+/// **Different here.** Every participant is a replica with its own records;
 /// the brain includes them into one order of its own, and folds each fact
 /// with who stated it, which it derives from where the record came from.
 #[derive(Clone, Debug)]
@@ -60,7 +60,7 @@ pub struct Stated<'a> {
     pub at: Timestamp,
     pub by: Author,
     pub fact: &'a Fact,
-    /// The fact's identity, and the id of whatever it creates. Its place is
+    /// The fact's identity, and the id of whatever it creates. Its replica is
     /// where it was said: for Max's, the face.
     pub event: EventId,
     /// The brain time the view on Max's screen was as of: the record's
@@ -68,16 +68,16 @@ pub struct Stated<'a> {
     pub seen: Option<Time>,
 }
 
-/// Who stated a fact, derived from the place its record came from: never
+/// Who stated a fact, derived from the replica its record came from: never
 /// stated, so never forged.
 ///
-/// The brain states what it decides and observes: its own place. A limb
+/// The brain states what it decides and observes: its own replica. A limb
 /// states facts about its own calls and resources, and no others: the
-/// place the brain last connected it as ([`crate::environment::Reach`]).
+/// replica the brain last connected it as ([`crate::environment::Reach`]).
 /// Max states his words, his calls, his answers to asks and his controls
-/// over the tree, from a place the brain accepted as one of his faces
-/// ([`Fact::Face`]). A record from any other place is refused
-/// ([`Rejected::Author`]). Which face is the record's own place, and what
+/// over the tree, from a replica the brain accepted as one of his faces
+/// ([`Fact::Face`]). A record from any other replica is refused
+/// ([`Rejected::Author`]). Which face is the record's own replica, and what
 /// it had shown him is the record's [`Fact::Seen`]: both are in
 /// [`Stated`], neither here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,15 +119,15 @@ pub enum Fact {
         limb: LimbId,
         description: Description,
     },
-    /// What the brain knows of its connection to a limb, and which place
+    /// What the brain knows of its connection to a limb, and which replica
     /// speaks for it.
     Reach {
         limb: LimbId,
         reach: Reach,
     },
-    /// That a place is one of Max's faces: a tab or a phone the brain
+    /// That a replica is one of Max's faces: a tab or a phone the brain
     /// accepted. Stated by the brain.
-    Face(PlaceId),
+    Face(ReplicaId),
     /// The brain time the view on Max's screen was as of when he did what
     /// the rest of this record says. A face puts one in every record it acts
     /// in, so what he had seen is a fact, kept with the act.
@@ -199,7 +199,7 @@ impl Fact {
     }
 }
 
-/// The boundary between two processes of one brain place.
+/// The boundary between two processes of one brain replica.
 ///
 /// After a crash, a relaunch onto a newer build, or the relaunch an agent
 /// asked for (`by`: the call that asked, which the new brain settles, so a
@@ -215,7 +215,7 @@ pub struct Launched {
     pub by: Option<CallId>,
 }
 
-/// Facts one place states together, with the bytes they name: what a
+/// Facts one replica states together, with the bytes they name: what a
 /// record of the harness says ([`crate::schema::Harness`]).
 ///
 /// **Concept.** The unit of atomicity: folded whole or refused whole. A response and the calls of its tool uses; a
@@ -280,7 +280,7 @@ pub enum Rejected {
     /// did not own, an aside or a standing task.
     CannotStart,
     /// A route to a limb outside its task's environment and places, an
-    /// attachment its context does not route, or a place left empty or
+    /// attachment its context does not route, or a replica left empty or
     /// filled by a limb of another kind.
     WrongEnvironment,
     /// A route, or a call of Max's, naming a tool its limb's current
@@ -305,7 +305,7 @@ pub enum Rejected {
     NotForTask,
     /// A quote that is not Max's words heard by the task quoting them.
     Unheard,
-    /// Its author may not state it, or it comes from a place that is no
+    /// Its author may not state it, or it comes from a replica that is no
     /// one's, or claims Max had seen a view the brain has not yet shown.
     Author,
     /// Creates something under an id its own event did not mint.

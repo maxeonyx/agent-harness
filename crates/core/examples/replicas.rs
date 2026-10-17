@@ -1,4 +1,4 @@
-//! Three places on the data flow substrate: the brain, Max's PC tab and his
+//! Three replicas on the data flow substrate: the brain, Max's PC tab and his
 //! phone, linked in memory. Run it with `demos/substrate/run.sh`.
 //!
 //! The PC and the phone never talk to each other, and nothing they send is
@@ -11,7 +11,7 @@ use harness_core::delivery::Read;
 use harness_core::draft::{DraftEvent, Fate};
 use harness_core::environment::Environment;
 use harness_core::fact::{Batch, Fact, Launched, Refusal};
-use harness_core::id::{DeliveryId, EnvironmentId, PlaceId, TaskId, Time, Timestamp, ValueId};
+use harness_core::id::{DeliveryId, EnvironmentId, ReplicaId, TaskId, Time, Timestamp, ValueId};
 use harness_core::live::Live;
 use harness_core::schema::{Brain, Harness};
 use harness_core::state::State;
@@ -19,11 +19,11 @@ use harness_core::task::{
     Created, Drain, Life, Mandate, Mode, Origin, Outcome, Scope, Stopper, TaskEvent,
 };
 use harness_core::value::Bytes;
-use harness_substrate::{Down, Log, Memory, Publisher, Replica, Status, View, What};
+use harness_substrate::{Down, Log, Memory, Mirror, Publisher, Status, View, What};
 
-const BRAIN: PlaceId = PlaceId(0xb4a1_0000_0000_0001);
-const PC: PlaceId = PlaceId(0x9c00_0000_0000_0002);
-const PHONE: PlaceId = PlaceId(0xf0e0_0000_0000_0003);
+const BRAIN: ReplicaId = ReplicaId(0xb4a1_0000_0000_0001);
+const PC: ReplicaId = ReplicaId(0x9c00_0000_0000_0002);
+const PHONE: ReplicaId = ReplicaId(0xf0e0_0000_0000_0003);
 
 /// Which row of a face's view.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -43,7 +43,7 @@ enum Row {
         /// The newest words, sent or not.
         text: Option<ValueId>,
         /// The words sent, and the face that sent them.
-        sent: Option<(ValueId, PlaceId)>,
+        sent: Option<(ValueId, ReplicaId)>,
         held: Option<String>,
         from: Option<DeliveryId>,
     },
@@ -107,7 +107,7 @@ fn rows(state: &State) -> BTreeMap<Key, Row> {
     let drafts = state.drafts().filter(|d| !d.discarded).map(|d| {
         let row = Row::Draft {
             text: d.text,
-            sent: d.sent.map(|s| (s.text, s.by.at.place)),
+            sent: d.sent.map(|s| (s.text, s.by.at.replica)),
             held: d.held.as_ref().map(|why| why.to_string()),
             from: d.from,
         };
@@ -120,25 +120,25 @@ fn rows(state: &State) -> BTreeMap<Key, Row> {
 struct Face {
     name: &'static str,
     log: Log<Harness, Memory<Harness>>,
-    replica: Replica<Key, Row, Refusal>,
+    mirror: Mirror<Key, Row, Refusal>,
 }
 
 impl Face {
-    fn new(name: &'static str, place: PlaceId) -> Face {
+    fn new(name: &'static str, replica: ReplicaId) -> Face {
         Face {
             name,
-            log: Log::open(place, Memory::default()).unwrap(),
-            replica: Replica::default(),
+            log: Log::open(replica, Memory::default()).unwrap(),
+            mirror: Mirror::default(),
         }
     }
 
     fn view(&self) -> &FaceView {
-        self.replica.view().expect("a view arrives on connecting")
+        self.mirror.view().expect("a view arrives on connecting")
     }
 
     /// Max acts: one record, carrying what his screen showed.
     fn act(&mut self, clock: Timestamp, act: impl FnOnce(Time) -> Batch) -> Time {
-        let seen = self.replica.view().map(|v| v.as_of);
+        let seen = self.mirror.view().map(|v| v.as_of);
         let record = self
             .log
             .say(clock, |at| {
@@ -163,7 +163,7 @@ impl Face {
 /// shipped, which is nothing it stores.
 struct Hub {
     brain: Brain<Memory<Harness>>,
-    publishers: BTreeMap<PlaceId, Publisher<Key, Row, Refusal>>,
+    publishers: BTreeMap<ReplicaId, Publisher<Key, Row, Refusal>>,
     clock: i64,
 }
 
@@ -181,19 +181,19 @@ impl Hub {
     /// The face connects or is connected: it ships what the brain has not
     /// included, and the brain ships it what changed in its view.
     fn sync(&mut self, face: &mut Face) {
-        let place = face.log.here();
-        for record in face.log.unsent(&self.brain.standing(place)).unwrap() {
+        let replica = face.log.here();
+        for record in face.log.unsent(&self.brain.standing(replica)).unwrap() {
             let clock = self.tick();
             self.brain.include(clock, record).unwrap();
         }
         let view = View {
             as_of: self.brain.head(),
-            standing: self.brain.standing(place),
+            standing: self.brain.standing(replica),
             rows: rows(self.brain.state()),
         };
-        let publisher = self.publishers.entry(place).or_default();
+        let publisher = self.publishers.entry(replica).or_default();
         if let Some(down) = publisher.publish::<Live>(view) {
-            face.replica.apply(down);
+            face.mirror.apply(down);
         }
         face.log.cover(&face.view().standing.clone()).unwrap();
     }
@@ -206,12 +206,12 @@ impl Hub {
         if let Down::Live(l) = &down {
             println!("  {} shows live, never stored: {:?}", face.name, l.live);
         }
-        face.replica.apply(down);
+        face.mirror.apply(down);
     }
 }
 
-fn name(place: PlaceId) -> &'static str {
-    match place {
+fn name(replica: ReplicaId) -> &'static str {
+    match replica {
         BRAIN => "brain",
         PC => "pc",
         PHONE => "phone",
@@ -220,7 +220,7 @@ fn name(place: PlaceId) -> &'static str {
 }
 
 fn show(time: Time) -> String {
-    format!("{}.{}", name(time.place), time.n)
+    format!("{}.{}", name(time.replica), time.n)
 }
 
 fn words(text: &str) -> (ValueId, Bytes) {
@@ -458,7 +458,7 @@ fn main() {
         .unwrap()
         .by
         .at
-        .place;
+        .replica;
     println!(
         "  the delivery has the draft's id {}, by Max at the {}, who had seen the brain's view as of {}",
         show(draft.0.at),
@@ -559,15 +559,15 @@ fn main() {
         show(pc.view().as_of)
     );
 
-    println!("10. The phone's storage is wiped, and it opens with the same place id.");
+    println!("10. The phone's storage is wiped, and it opens with the same replica id.");
     let restored: Log<Harness, Memory<Harness>> = Log::open(PHONE, Memory::default()).unwrap();
     match restored.unsent(&hub.brain.standing(PHONE)) {
         Err(restored) => println!(
-            "  the brain holds the phone up to {}, the phone's storage only to {}: it continues as a new place",
+            "  the brain holds the phone up to {}, the phone's storage only to {}: it continues as a new replica",
             restored.upto,
             restored.next - 1
         ),
-        Ok(_) => panic!("a restored place must not reuse its times"),
+        Ok(_) => panic!("a restored replica must not reuse its times"),
     }
 
     let kept = hub

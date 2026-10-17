@@ -7,8 +7,8 @@
 //! written in terms of these types. Each concept exists once here; a second
 //! mechanism for one of them is a sign the model is wrong.
 //!
-//! The brain, every limb process and every browser tab is a place
-//! ([`id::PlaceId`]) with records of its own. A limb or a face ships its
+//! The brain, every limb process and every browser tab is a replica
+//! ([`id::ReplicaId`]) with records of its own. A limb or a face ships its
 //! records to the brain; the brain, the one decider, includes each into its
 //! own timeline, folds it into [`state::State`] or records in band why not,
 //! and ships each follower a view derived from that state
@@ -19,7 +19,7 @@
 //!
 //! | Identity | Type | Its facts | What is true now |
 //! |---|---|---|---|
-//! | A place: the brain, a limb's instance, a face | [`id::PlaceId`] | its own records ([`schema::Record`]); the brain includes the others' | the brain's [`state::State`], a persistent value any reader can hold; a follower's view of it |
+//! | A replica: the brain, a limb's instance, a face | [`id::ReplicaId`] | its own records ([`schema::Record`]); the brain includes the others' | the brain's [`state::State`], a persistent value any reader can hold; a follower's view of it |
 //! | A brain process | [`fact::Launched`] | [`fact::Fact::Launched`], [`fact::Fact::Shutdown`] | [`state::State::launch`], [`state::State::shutdown`] |
 //! | A value | [`id::ValueId`] | none: immutable [`value::Bytes`], arriving in the [`fact::Batch`] that first names them | itself |
 //! | Max's words | a value he said | the delivery, mandate or answer that carried them | [`state::State::said`], [`state::State::heard`] |
@@ -29,10 +29,10 @@
 //! | A call | [`call::Call`] | [`call::CallEvent`] | [`state::CallRecord`] |
 //! | Max's message | [`id::DeliveryId`]: a [`draft::Draft`], then the [`delivery::Delivery`] it becomes | [`draft::DraftEvent`], from any of his faces | [`state::State::draft`], [`state::State::fate`], the task's pending inputs |
 //! | An environment: a role | [`environment::Environment`] | each new version | [`state::State::environment`] |
-//! | A limb | [`environment::Limb`], unique by name | each new version, never of another kind; [`fact::Fact::Described`]; [`environment::Reach`], which names the place speaking for it | [`state::State::limb`], [`state::State::limb_named`], [`state::State::described`], [`state::State::connected`], [`state::State::limb_rows`] |
+//! | A limb | [`environment::Limb`], unique by name | each new version, never of another kind; [`fact::Fact::Described`]; [`environment::Reach`], which names the replica speaking for it | [`state::State::limb`], [`state::State::limb_named`], [`state::State::described`], [`state::State::connected`], [`state::State::limb_rows`] |
 //! | A resource | [`resource::ResourceKey`] | [`resource::Change`] | [`state::State::resource`], [`state::State::stale`] |
 //! | Max's attention | [`attention::Ranking`], [`attention::Focus`] (the newest per face is kept) | each new one | [`state::State::queue`] |
-//! | Max's faces | [`fact::Fact::Face`] | the brain accepting each place | [`state::State::is_face`]; what each showed him is [`fact::Fact::Seen`] |
+//! | Max's faces | [`fact::Fact::Face`] | the brain accepting each replica | [`state::State::is_face`]; what each showed him is [`fact::Fact::Seen`] |
 //!
 //! A scope is not an identity: it is the spawn call that owns it
 //! ([`task::Scope`]). Max's queue, the throbber, who reads a call, what each
@@ -42,9 +42,9 @@
 //! (a system prompt, a tool result, a response, Max's pasted image) is a
 //! value; entries, calls and settlements are small structure that names
 //! values. A limb states the same facts as anyone, in records of its own
-//! place, its description included, so nothing translates between a
+//! replica, its description included, so nothing translates between a
 //! protocol and the model, and the fold checks a limb's facts as it checks
-//! anyone's. Who stated a fact is derived from the place its record came
+//! anyone's. Who stated a fact is derived from the replica its record came
 //! from ([`fact::Author`]), and what it creates is named by the fact
 //! itself ([`id::EventId`]), so neither can be forged.
 //!
@@ -174,7 +174,7 @@
 //! the harness can neither address nor list, so warmth is inferred; nothing
 //! is signed; a state is not content-addressed or stored, only re-derived
 //! from the brain's records; tasks and calls are mutable identities with
-//! lifecycles, which Bx's artifacts are not; a place is a mutable timeline
+//! lifecycles, which Bx's artifacts are not; a replica is a mutable timeline
 //! and a time is not a hash, so the same bytes said twice are two records;
 //! and records are collected by the durability their schema declares, not
 //! by what is still referenced.

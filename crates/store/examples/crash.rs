@@ -17,7 +17,7 @@ use std::time::SystemTime;
 
 use harness_core::environment::Environment;
 use harness_core::fact::{Batch, Fact, Launched};
-use harness_core::id::{EnvironmentId, PlaceId, TaskId, Time, Timestamp};
+use harness_core::id::{EnvironmentId, ReplicaId, TaskId, Time, Timestamp};
 use harness_core::schema::{Brain, Record};
 use harness_core::task::{Created, Mandate, Mode, Origin, Scope, TaskEvent};
 use harness_core::value::Bytes;
@@ -25,7 +25,7 @@ use harness_store::Store;
 use harness_substrate::{Storage, What};
 
 /// Max's tab: a follower whose records the writer makes up.
-const FACE: PlaceId = PlaceId(0xface_0000_0000_0001);
+const FACE: ReplicaId = ReplicaId(0xface_0000_0000_0001);
 /// Tasks the writer reports created before it is killed.
 const BEFORE_KILL: u64 = 300;
 
@@ -51,26 +51,26 @@ fn watch(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
         .stdout(Stdio::piped())
         .spawn()?;
     let mut lines = BufReader::new(writer.stdout.take().ok_or("no stdout")?).lines();
-    let mut place = String::new();
+    let mut replica = String::new();
     let mut created = 0;
     while created < BEFORE_KILL {
         let line = lines.next().ok_or("writer exited early")??;
         match line.split_once(' ') {
-            Some(("place", id)) => place = id.to_string(),
+            Some(("replica", id)) => replica = id.to_string(),
             Some(("created", k)) => created = k.parse()?,
             _ => return Err(format!("writer said {line:?}").into()),
         }
     }
     writer.kill()?;
     writer.wait()?;
-    println!("writer: brain {place} on {file}, reported {created} tasks created");
+    println!("writer: brain {replica} on {file}, reported {created} tasks created");
     println!(
         "** kill -9 the writer while it commits task {}",
         created + 1
     );
 
     let store = Store::open(&file)?;
-    let here = store.place();
+    let here = store.replica();
     let records = store.load()?.len();
     let (brain, divergences) = Brain::open(here, store)?;
     let state = brain.state();
@@ -88,8 +88,8 @@ fn watch(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
         ok &= good;
     };
     check(
-        here.to_string() == place,
-        "the place id is the one the file minted",
+        here.to_string() == replica,
+        "the replica id is the one the file minted",
     );
     check(
         divergences.is_empty(),
@@ -136,8 +136,8 @@ fn watch(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
 /// The writer: a brain including Max's face's tasks until it is killed.
 fn write(file: &str) -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open(file)?;
-    let here = store.place();
-    println!("place {here}");
+    let here = store.replica();
+    println!("replica {here}");
     let (mut brain, _) = Brain::open(here, store)?;
     let fail = |e| format!("{e:?}");
     brain
@@ -168,7 +168,10 @@ fn write(file: &str) -> Result<(), Box<dyn std::error::Error>> {
     let environment = EnvironmentId(defined.event(0));
 
     for k in 1.. {
-        let at = Time { place: FACE, n: k };
+        let at = Time {
+            replica: FACE,
+            n: k,
+        };
         let mandate = Bytes::from(format!("Count to {k}."));
         let record = Record {
             at,

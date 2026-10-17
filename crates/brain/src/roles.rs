@@ -41,11 +41,11 @@ use std::time::Duration;
 
 use harness_core::environment::{Environment, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp};
 use harness_core::fact::{Batch, Fact, Refusal};
-use harness_core::id::{Digest, EnvironmentId, LimbId, PlaceId, Time};
+use harness_core::id::{Digest, EnvironmentId, LimbId, ReplicaId, Time};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::schema::Harness;
 use harness_core::value::Bytes;
-use harness_substrate::{Log, Memory, Replica, Up};
+use harness_substrate::{Log, Memory, Mirror, Up};
 use serde::{Deserialize, Serialize};
 
 /// The plugin kind it is.
@@ -82,18 +82,18 @@ impl Settings {
     }
 }
 
-/// Run the roles limb `limb` as the place `here`, on a link: what the brain
+/// Run the roles limb `limb` as the replica `here`, on a link: what the brain
 /// ships arrives on `down`, and what it says goes to `up`. Its log is in
-/// memory, so each run is a new place: everything it says, it derives
+/// memory, so each run is a new replica: everything it says, it derives
 /// again from its files. Returns once the brain shuts down or lets go of
 /// the link.
-pub fn run(limb: &Limb, here: PlaceId, down: Receiver<LimbDown>, up: impl Fn(LimbUp)) {
+pub fn run(limb: &Limb, here: ReplicaId, down: Receiver<LimbDown>, up: impl Fn(LimbUp)) {
     let Some(settings) = Settings::of(limb) else {
         return eprintln!("the roles limb's settings do not parse");
     };
     let mut log: Log<Harness, Memory<Harness>> =
         Log::open(here, Memory::default()).expect("memory opens");
-    let mut rows: Replica<LimbKey, LimbRow, Refusal> = Replica::default();
+    let mut rows: Mirror<LimbKey, LimbRow, Refusal> = Mirror::default();
     let mut error: Option<String> = None;
     loop {
         match down.recv_timeout(EVERY) {

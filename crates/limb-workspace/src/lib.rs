@@ -12,7 +12,7 @@
 //! nothing is overwritten blind. Forks share their source's workspace; the
 //! notices and refusals are how siblings coordinate in it.
 //!
-//! Everything it says is records of its own place, about itself, its own
+//! Everything it says is records of its own replica, about itself, its own
 //! calls and its files, kept in its own [`Log`] until the brain has
 //! included them: its [`Description`] on each connection; a settlement,
 //! with the bytes of its output, and a [`Change`] naming the call for each
@@ -81,13 +81,13 @@ use harness_core::environment::{
     Description, Instruction, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp,
 };
 use harness_core::fact::{Batch, Fact, Refusal};
-use harness_core::id::{CallId, Digest, LimbId, PlaceId, TaskId, Timestamp, ValueId};
+use harness_core::id::{CallId, Digest, LimbId, ReplicaId, TaskId, Timestamp, ValueId};
 use harness_core::live::Live;
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::schema::{Harness, Record};
 use harness_core::value::Bytes;
 use harness_store::Store;
-use harness_substrate::{Log, Replica, Restored, Up};
+use harness_substrate::{Log, Mirror, Restored, Up};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -99,7 +99,7 @@ use crate::record::Marks;
 const FILE: &str = "file";
 const INSTRUCTIONS: &str = "instructions";
 
-/// The plugin kind this limb is, which an environment's place names.
+/// The plugin kind this limb is, which an environment's replica names.
 pub const KIND: &str = "workspace";
 
 /// How long its calls get to stop when the limb shuts down without being
@@ -219,7 +219,7 @@ pub type Out = Box<dyn Fn(LimbUp) + Send + Sync>;
 /// [`SHUTDOWN`], and waits until each has settled.
 pub struct Workspace {
     inner: Arc<Inner>,
-    rows: Mutex<Replica<LimbKey, LimbRow, Refusal>>,
+    rows: Mutex<Mirror<LimbKey, LimbRow, Refusal>>,
 }
 
 /// What applying a view asks of the link.
@@ -272,7 +272,7 @@ impl Workspace {
         }
         std::fs::create_dir_all(&config.state)?;
         let store = Store::open(config.state.join("limb.sqlite")).map_err(io::Error::other)?;
-        let log = Log::open(store.place(), store).map_err(io::Error::other)?;
+        let log = Log::open(store.replica(), store).map_err(io::Error::other)?;
         let inner = Inner {
             limb: config.limb,
             root: dir.canonicalize()?,
@@ -304,9 +304,9 @@ impl Workspace {
         })
     }
 
-    /// The place its records are of, the same across instances on one
+    /// The replica its records are of, the same across instances on one
     /// state directory.
-    pub fn place(&self) -> PlaceId {
+    pub fn replica(&self) -> ReplicaId {
         lock(&self.inner.log).here()
     }
 
@@ -597,7 +597,7 @@ impl Report {
 }
 
 impl Inner {
-    /// Say a batch at this limb's place: stored, then shipped.
+    /// Say a batch at this limb's replica: stored, then shipped.
     fn say(&self, batch: Batch) {
         let record = lock(&self.log).say(now(), |_| batch);
         match record {

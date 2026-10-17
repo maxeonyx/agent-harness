@@ -408,7 +408,7 @@ function markdown(text) {
   return div;
 }
 
-// ─── This tab: a place on the substrate ────────────────────────────────────
+// ─── This tab: a replica on the substrate ────────────────────────────────────
 // The tab is the wasm build of harness-face-tab: its own records, kept in
 // IndexedDB until the brain's standing covers them, and its replica of the
 // rows the brain derives for it. This script is glue: the DOM, the link and
@@ -435,38 +435,50 @@ function tabCall(name, input, ...args) {
 // What names a value in the facts: its digest, as the core computes it.
 const digest = (text) => tabCall("digest", text).out;
 
-// IndexedDB: every place's records this browser holds, by time.
+// IndexedDB: every replica's records this browser holds, by time.
 const db = new Promise((ok, fail) => {
-  const open = indexedDB.open("harness-tabs", 1);
-  open.onupgradeneeded = () => open.result.createObjectStore("records", { keyPath: "at" }).createIndex("place", "place");
+  const open = indexedDB.open("harness-tabs", 2);
+  open.onupgradeneeded = (e) => {
+    if (!e.oldVersion) return open.result.createObjectStore("records", { keyPath: "at" }).createIndex("replica", "replica");
+    // Version 1 called a record's replica its place.
+    const store = open.transaction.objectStore("records");
+    store.deleteIndex("place");
+    store.createIndex("replica", "replica");
+    store.openCursor().onsuccess = ({ target: { result: c } }) => {
+      if (!c) return;
+      const { place, ...rest } = c.value;
+      c.update({ ...rest, replica: place });
+      c.continue();
+    };
+  };
   open.onsuccess = () => ok(open.result);
   open.onerror = () => fail(open.error);
 });
 const done = (tx) => new Promise((ok, fail) => { tx.oncomplete = ok; tx.onerror = tx.onabort = () => fail(tx.error); });
-async function loadPlace(place) {
+async function loadReplica(replica) {
   const store = (await db).transaction("records").objectStore("records");
-  const req = store.index("place").getAll(place);
+  const req = store.index("replica").getAll(replica);
   return new Promise((ok, fail) => { req.onsuccess = () => ok(req.result.map((r) => r.record)); req.onerror = () => fail(req.error); });
 }
-async function placesHeld() {
-  const req = (await db).transaction("records").objectStore("records").index("place").getAllKeys();
+async function replicasHeld() {
+  const req = (await db).transaction("records").objectStore("records").index("replica").getAllKeys();
   const keys = await new Promise((ok, fail) => { req.onsuccess = () => ok(req.result); req.onerror = () => fail(req.error); });
   return [...new Set(keys.map((at) => at.split(".")[0]))];
 }
-async function forget(place) {
+async function forget(replica) {
   const tx = (await db).transaction("records", "readwrite");
   const store = tx.objectStore("records");
-  for (const at of await new Promise((ok) => { const r = store.index("place").getAllKeys(place); r.onsuccess = () => ok(r.result); })) store.delete(at);
+  for (const at of await new Promise((ok) => { const r = store.index("replica").getAllKeys(replica); r.onsuccess = () => ok(r.result); })) store.delete(at);
   await done(tx);
 }
 
-// A place: a tab's handle in the wasm and its link to the brain.
-class Place {
+// A replica: a tab's handle in the wasm and its link to the brain.
+class Replica {
   constructor(id, handle, onView) { this.id = id; this.h = handle; this.onView = onView; this.ws = null; this.waiting = []; this.flushing = Promise.resolve(); }
   static async open(id, onView) {
-    const { ret, out } = tabCall("open", JSON.stringify({ place: id, records: await loadPlace(id) }));
+    const { ret, out } = tabCall("open", JSON.stringify({ replica: id, records: await loadReplica(id) }));
     if (ret === 0xffffffff) throw new Error(out.error);
-    return new Place(id, ret, onView);
+    return new Replica(id, ret, onView);
   }
   // Make the tab's writes durable, in order.
   persist() {
@@ -476,7 +488,7 @@ class Place {
       const tx = (await db).transaction("records", "readwrite");
       const store = tx.objectStore("records");
       for (const w of writes) {
-        if (w.Put) store.put({ at: w.Put.at, place: this.id, record: w.Put });
+        if (w.Put) store.put({ at: w.Put.at, replica: this.id, record: w.Put });
         else store.delete(w.Drop);
       }
       await done(tx);
@@ -484,7 +496,7 @@ class Place {
     return this.flushing;
   }
   connect() {
-    const ws = this.ws = new WebSocket(`wss://${location.host}/link?place=${this.id}`);
+    const ws = this.ws = new WebSocket(`wss://${location.host}/link?replica=${this.id}`);
     ws.onopen = () => this.shipUnsent();
     ws.onmessage = (m) => {
       const { out } = tabCall("down", m.data, this.h);
@@ -524,12 +536,12 @@ class Place {
   }
 }
 
-// This tab's place: kept in sessionStorage across reloads, and held by a
+// This tab's replica: kept in sessionStorage across reloads, and held by a
 // Web Lock, so a duplicated tab (which copies sessionStorage) becomes a
-// place of its own. A place is per tab per brain: IndexedDB is per origin.
+// replica of its own. A replica is per tab per brain: IndexedDB is per origin.
 const mintPlace = () => [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
 function hold(id) {
-  return new Promise((ok) => navigator.locks.request(`place:${id}`, { ifAvailable: true }, (lock) => {
+  return new Promise((ok) => navigator.locks.request(`replica:${id}`, { ifAvailable: true }, (lock) => {
     ok(!!lock);
     return lock ? new Promise(() => {}) : null;
   }));
@@ -537,20 +549,20 @@ function hold(id) {
 let tab = null;
 async function start() {
   wasm = (await WebAssembly.instantiateStreaming(fetch("/tab.wasm"))).instance.exports;
-  let id = sessionStorage.getItem("place");
+  let id = sessionStorage.getItem("replica");
   if (!id || !(await hold(id))) { do id = mintPlace(); while (!(await hold(id))); }
-  sessionStorage.setItem("place", id);
-  tab = await Place.open(id, viewArrived);
+  sessionStorage.setItem("replica", id);
+  tab = await Replica.open(id, viewArrived);
   restoreLocal();
   tab.connect();
   adoptOrphans();
 }
-// A closed tab's place, whose lock is free: ship what it had not, then
+// A closed tab's replica, whose lock is free: ship what it had not, then
 // forget it, so nothing typed in a tab that was closed offline is lost.
 async function adoptOrphans() {
-  for (const id of await placesHeld()) {
+  for (const id of await replicasHeld()) {
     if (id === tab.id || !(await hold(id))) continue;
-    const orphan = await Place.open(id, () => {
+    const orphan = await Replica.open(id, () => {
       if (!orphan.settled()) return;
       orphan.close();
       forget(id);
@@ -558,20 +570,20 @@ async function adoptOrphans() {
     orphan.connect();
   }
 }
-// The brain holds more of this place than this browser does: its storage
-// was restored or lost. It goes on as a new place.
-async function restored(place) {
-  if (place !== tab) { place.close(); return forget(place.id); }
+// The brain holds more of this replica than this browser does: its storage
+// was restored or lost. It goes on as a new replica.
+async function restored(replica) {
+  if (replica !== tab) { replica.close(); return forget(replica.id); }
   tab.close();
   await forget(tab.id);
   let id; do id = mintPlace(); while (!(await hold(id)));
-  sessionStorage.setItem("place", id);
-  tab = await Place.open(id, viewArrived);
+  sessionStorage.setItem("replica", id);
+  tab = await Replica.open(id, viewArrived);
   tab.connect();
 }
 
 // Max's facts, in one record at this tab. `facts` may be a function of the
-// record's time, `place.n`, which names what the record creates
+// record's time, `replica.n`, which names what the record creates
 // (`${at}.0`). Values are the texts the facts name. Resolves with null once
 // included, or the brain's reason for refusing it.
 async function act(facts, values = []) {
