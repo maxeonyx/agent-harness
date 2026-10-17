@@ -172,6 +172,7 @@ impl Fact {
                 version: _,
                 by: _,
                 content,
+                wakes: _,
             }) => values.extend(*content),
             Fact::Environment(Environment {
                 id: _,

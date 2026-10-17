@@ -1212,15 +1212,7 @@ impl Task {
                 self.deliver(delivery, &record.by, at)
             }
             Fact::Change(change) => {
-                // Read off the change itself, so the fold of a change never
-                // depends on whether the world has recorded it yet.
-                let wakes = self.mode == Mode::Standing
-                    && self.live().is_some_and(|l| {
-                        l.phase == Phase::Listening
-                            && l.drain.is_none()
-                            && l.context.moved_by(change)
-                    });
-                if wakes {
+                if self.woken_by(change) {
                     self.enter(Phase::Ready, at);
                 }
                 Ok(())
@@ -1685,6 +1677,33 @@ impl Task {
         self.pending.iter().any(Input::wakes)
     }
 
+    /// Whether `change` ends this task's wait: a standing task listens to
+    /// everything its context embodies, any task to news
+    /// ([`Change::wakes`]). Read off the change itself, so the fold of a
+    /// change never depends on whether the world has recorded it yet.
+    pub(crate) fn woken_by(&self, change: &Change) -> bool {
+        self.live().is_some_and(|l| {
+            let waiting = match l.phase {
+                Phase::Listening => true,
+                Phase::AwaitingMax => change.wakes,
+                _ => false,
+            };
+            waiting
+                && (change.wakes || self.mode == Mode::Standing)
+                && l.drain.is_none()
+                && l.context.moved_by(change)
+        })
+    }
+
+    /// Whether something its context embodies has moved in a way that ends
+    /// a wait: news, or anything for a standing task.
+    fn news(&self, world: &State) -> bool {
+        world
+            .stale(self)
+            .iter()
+            .any(|s| s.wakes || self.mode == Mode::Standing)
+    }
+
     /// The model ended its turn at `entry`: complete, wait, or carry on.
     fn turn_ended(&mut self, entry: EntryId, at: Timestamp, world: &State) {
         match self.drain() {
@@ -1707,8 +1726,8 @@ impl Task {
             live.parking = None;
             return self.enter(Phase::Parked, at);
         }
-        if self.wakes() {
-            // Max's words, or a prompt, arrived during the turn.
+        if self.wakes() || self.news(world) {
+            // Max's words, a prompt, or news arrived during the turn.
             return self.enter(Phase::Ready, at);
         }
         if self.mode == Mode::Autonomous && self.background.is_empty() {
@@ -1719,11 +1738,13 @@ impl Task {
 
     /// Enter the wait the mode asks for, unless something already ends it.
     fn wait(&mut self, at: Timestamp, world: &State) {
+        if self.news(world) {
+            return self.enter(Phase::Ready, at);
+        }
         if self.mode == Mode::UserFacing {
             return self.await_max(at);
         }
-        let woken = self.wakes() || (self.mode == Mode::Standing && !world.stale(self).is_empty());
-        let phase = if woken {
+        let phase = if self.wakes() {
             Phase::Ready
         } else {
             Phase::Listening

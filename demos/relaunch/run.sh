@@ -8,7 +8,7 @@
 # on into a tool round trip, and the face's view says it is proven. Then
 # onto a commit whose brain exits 20 s after it starts: the old build's
 # builds limb sees it die, starts the old bytes again, and the session
-# reads why at its next turn.
+# is woken to read why.
 set -euo pipefail
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 name=${NAME:-relaunch-demo} port=${PORT:-4392}
@@ -66,8 +66,7 @@ for _ in $(seq 300); do
 done
 view
 echo "NAME/build -> $(readlink "$home/$name/build")"
-step "the session's next turn reads why"
-"$act" "$port" say "$chat" "say read it" | tail -1
+step "the session wakes, unasked, and reads why"
 for _ in $(seq 240); do
     said=$(sqlite3 "$home/$name/brain.sqlite" "select cast(bytes as text) from value" |
         grep -a '(scripted) Noted' | grep -a -o "\[harness\] $unit: [^\"]*" | tail -1) || true

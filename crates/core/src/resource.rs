@@ -26,7 +26,8 @@ use crate::id::{CallId, Digest, LimbId, ValueId};
 ///
 /// This is also how an environment speaks between turns. A standing task
 /// listening for its environment is woken by a change to anything its
-/// context embodies, and its next request is that notice: the attention
+/// context embodies, and any task by a change its limb calls news
+/// ([`Change::wakes`]); its next request is that notice: the attention
 /// scheduler embodies Max's queue, so a change to the queue is its next
 /// turn, and changes that arrive while it thinks fold into the one after.
 ///
@@ -105,4 +106,12 @@ pub struct Change {
     /// 9". The limb decides, as the owner of what the change means; the
     /// renderer may still only announce it.
     pub content: Option<ValueId>,
+    /// It is news for a context that embodies an earlier version: it wakes
+    /// the task as Max's words do, rather than riding on its next request.
+    /// The limb decides, as the owner of what the change means. A file a
+    /// sibling wrote is not news, or every edit would wake every reader;
+    /// the brain going back from the build a session relaunched it onto is,
+    /// since that session waits to be told whether it took.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wakes: bool,
 }
