@@ -1,20 +1,21 @@
-//! What the page is sent: the folded state's views as JSON, and one line
-//! per fact.
+//! What a tab is shown: the folded state as one row per object, and one
+//! line per fact for the brain's log.
 //!
-//! Ids are sent as hex strings: JSON numbers cannot hold a u128.
+//! Ids are sent as strings: JSON numbers cannot hold them.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use harness_core::call::{Caller, Outcome as CallOutcome};
 use harness_core::delivery::Content;
 use harness_core::environment::LimbKind;
+use harness_core::fact::Fact;
 use harness_core::id::{CallId, TaskId, Timestamp, ToolUseId, ValueId};
-use harness_core::journal::{Fact, Record};
 use harness_core::model_call::{Ending, ModelCallEvent};
 use harness_core::state::{Ended, State, Waiting};
 use harness_core::task::{
     Drain, Draining, Input, Mode, Move, Origin, Outcome, Phase, Scope, Task, TaskEvent,
 };
+use harness_face_tab::{DraftRow, FaceKey, FaceRow};
 use serde_json::{Value, json};
 
 /// A stored value as text, for the page: a mandate, a call's input.
@@ -24,14 +25,22 @@ fn text(value: Text, id: ValueId) -> Option<String> {
     value(id).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The tasks, the scopes that own them, what each waits on, Max's queue and
-/// his subscription, as of the last fold.
-pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
-    let quota = state.quota();
-    let tasks: Vec<Value> = state
-        .tasks()
-        .map(|t| task(state, value, t, state.last_turn(t.id), now))
-        .collect();
+/// Every tab's rows, as of the state: each task, each spawn's scope, Max's
+/// queue, the harness as a whole, and his drafts that can still be sent or
+/// were held.
+pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, FaceRow> {
+    let mut rows = BTreeMap::new();
+    // Each task's newest request: what an interrupt names.
+    let mut turns = BTreeMap::new();
+    for (id, record) in state.model_calls() {
+        let newest = turns.entry(record.call.task).or_insert(id);
+        *newest = (*newest).max(id);
+    }
+    for t in state.tasks() {
+        let mut row = task(state, value, t, state.last_turn(t.id), now);
+        row["turn"] = json!(turns.get(&t.id).map(|id| id.to_string()));
+        rows.insert(FaceKey::Task(t.id), FaceRow::Task(row));
+    }
     let queue: Vec<Value> = state
         .queue()
         .iter()
@@ -44,6 +53,7 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
             })
         })
         .collect();
+    rows.insert(FaceKey::Queue, FaceRow::Queue(Value::Array(queue)));
     // The workspaces, by directory, which is a workspace limb's name: what a
     // new task can be given, or a new limb made for.
     let workspaces: Vec<Value> = state
@@ -62,6 +72,14 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
             })
         })
         .collect();
+    let harness = json!({
+        "environments": environments,
+        "workspaces": workspaces,
+        "build": state.launch().map(|(_, l)| l.build.clone()),
+        "limited": state.limited(now).map(|t| t.0),
+        "usage": state.quota().map(usage),
+    });
+    rows.insert(FaceKey::Harness, FaceRow::Harness(harness));
     // Each scope: the spawn call that opened it, and the tool use it
     // answers, so a page can put a scope's members beside the spawn in its
     // owner's context.
@@ -72,35 +90,40 @@ pub fn view(state: &State, value: Text, now: Timestamp) -> Value {
             Scope::Max => None,
         })
         .collect();
-    let scopes: serde_json::Map<String, Value> = spawns
-        .into_iter()
-        .filter_map(|id| {
-            let record = state.call(id)?;
-            let (task, background) = match record.call.caller {
-                Caller::Agent { task, .. } => (task, false),
-                Caller::Background { task, .. } => (task, true),
-                Caller::Max { .. } | Caller::Meta { .. } => return None,
-            };
-            let scope = json!({
-                "owner": task.to_string(),
-                "background": background,
-                "made": record.made.seq.0,
-                "settled": record.settled.is_some(),
-            });
-            Some((id.to_string(), scope))
-        })
-        .collect();
-    json!({
-        "seq": state.last().map_or(0, |s| s.0),
-        "scopes": scopes,
-        "environments": environments,
-        "workspaces": workspaces,
-        "build": state.launch().map(|(_, l)| l.build.clone()),
-        "limited": state.limited(now).map(|t| t.0),
-        "usage": quota.map(usage),
-        "tasks": tasks,
-        "queue": queue,
-    })
+    for id in spawns {
+        let Some(record) = state.call(id) else {
+            continue;
+        };
+        let (task, background) = match record.call.caller {
+            Caller::Agent { task, .. } => (task, false),
+            Caller::Background { task, .. } => (task, true),
+            Caller::Max { .. } | Caller::Meta { .. } => continue,
+        };
+        let scope = json!({
+            "owner": task.to_string(),
+            "background": background,
+            "made": record.made.seq.n,
+            "settled": record.settled.is_some(),
+        });
+        rows.insert(FaceKey::Scope(id), FaceRow::Scope(scope));
+    }
+    // A sent draft is a delivery in its session; a discarded one is gone.
+    // What is left can still be sent, or was held with its words kept.
+    for d in state.drafts() {
+        let open = d.sent.is_none() && !d.discarded;
+        let live = state.task(d.session).is_some_and(|t| !t.is_done());
+        if !(open && (live || d.held.is_some())) {
+            continue;
+        }
+        let row = DraftRow {
+            session: d.session,
+            text: d.text.and_then(|id| text(value, id)),
+            held: d.held.as_ref().map(|why| why.to_string()),
+            from: d.from,
+        };
+        rows.insert(FaceKey::Draft(d.id), FaceRow::Draft(row));
+    }
+    rows
 }
 
 /// The subscription as the latest response reported it.
@@ -162,7 +185,7 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
     json!({
         "id": t.id.to_string(),
         "name": t.name,
-        "created": {"seq": t.created.seq.0, "at": t.created.at.0},
+        "created": {"seq": t.created.seq.n, "at": t.created.at.0},
         "started_by": t.by.and_then(|c| tool_use(state, c)).map(|t| t.0.clone()),
         "mode": match t.mode {
             Mode::Autonomous => "autonomous",
@@ -314,7 +337,7 @@ fn call(state: &State, value: Text, id: CallId) -> Value {
 }
 
 /// One line saying what a record did, naming tasks as the state knows them.
-pub fn describe(state: &State, record: &Record) -> String {
+pub fn describe(state: &State, fact: &Fact) -> String {
     let name = |id: TaskId| {
         state
             .task(id)
@@ -336,7 +359,7 @@ pub fn describe(state: &State, record: &Record) -> String {
             },
         )
     };
-    match &record.fact {
+    match fact {
         Fact::Launched(l) => format!("brain launched, build {}", l.build),
         Fact::Shutdown { within } => format!("brain shutting down, within {}s", within / 1000),
         Fact::Task(id, event) => match event {
@@ -364,7 +387,7 @@ pub fn describe(state: &State, record: &Record) -> String {
                 )
             }
             TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
-            TaskEvent::Drain(Drain::ToMax) => format!("{} interrupted", name(*id)),
+            TaskEvent::Drain(Drain::ToMax { .. }) => format!("{} interrupted", name(*id)),
             TaskEvent::Drain(Drain::Stop { by, within: 0 }) => {
                 format!("{} stopped by {by:?}, now", name(*id))
             }
@@ -451,6 +474,17 @@ pub fn describe(state: &State, record: &Record) -> String {
         }
         Fact::Ranking(r) => format!("queue ranked: {} placed", r.order.len()),
         Fact::Focus(_) => "a face changed focus".into(),
+        Fact::Face(place) => format!("tab {place} is Max's"),
+        Fact::Seen(at) => format!("as seen at {at}"),
+        Fact::Draft(id, event) => {
+            use harness_core::draft::DraftEvent as E;
+            match event {
+                E::Opened { session } => format!("draft {id} opened for {}", name(*session)),
+                E::Text(_) => format!("draft {id} edited"),
+                E::Send { .. } => format!("draft {id} sent"),
+                E::Discarded => format!("draft {id} discarded"),
+            }
+        }
     }
 }
 

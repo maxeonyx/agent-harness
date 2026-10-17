@@ -6,7 +6,6 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use harness_core::call::{Call, Outcome, Output};
-use harness_core::environment::FromLimb;
 use harness_core::id::{CallId, Digest};
 use harness_core::live::Live;
 use harness_core::resource::{Observation, Version};
@@ -104,10 +103,9 @@ impl Inner {
         let timeout =
             Duration::from_millis(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT));
         let truncator = Truncator::new(Limits::default(), pattern(Some(&input.grep))?);
-        let out = self.out.clone();
         // A character split across two reads is held until it is whole.
         let mut tail = Vec::new();
-        let progress = move |bytes: &[u8]| {
+        let progress = |bytes: &[u8]| {
             tail.extend_from_slice(bytes);
             let whole = match std::str::from_utf8(&tail) {
                 Err(e) if e.error_len().is_none() => e.valid_up_to(),
@@ -115,11 +113,11 @@ impl Inner {
             };
             let chunk = String::from_utf8_lossy(&tail[..whole]).into_owned();
             tail.drain(..whole);
-            let _ = out.send(FromLimb::Live(Live::Call { call, chunk }));
+            self.live(Live::Call { call, chunk });
         };
         // Without this record, an instance killed now would leave the tree
         // running with nobody to end it.
-        self.calls
+        self.marks
             .running(call)
             .map_err(|e| format!("cannot record the command: {e}"))?;
         let ran = shell::run(
@@ -134,7 +132,7 @@ impl Inner {
         .map_err(|e| format!("cannot run the command: {e}"))?;
         // What outlived SIGKILL stays recorded, for the next instance.
         if !matches!(&ran.tree, TreeEnded::Killed { survivors } if !survivors.is_empty()) {
-            self.calls.ran(call);
+            self.marks.ran(call);
         }
         let shutdown = self.shutting_down.load(std::sync::atomic::Ordering::SeqCst);
         let output = Output {

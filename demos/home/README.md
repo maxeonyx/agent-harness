@@ -4,7 +4,7 @@
 demos/home/run.sh
 ```
 
-Then open https://mx-hv-mj.local:4320 (another port: `PORT=4400`). It is one brain with one journal, kept in `~/.local/share/agent-harness/home/` (another: `DIR=…`), so everything you start carries on when it runs again.
+Then open https://mx-hv-mj.local:4320 (another port: `PORT=4400`). It is one brain with one database, kept in `~/.local/share/agent-harness/home/` (another: `DIR=…`), so everything you start carries on when it runs again.
 
 What to do:
 
@@ -24,7 +24,7 @@ On a machine with no microphone, `SAMPLE=1 demos/home/run.sh` offers **Dictate t
 
 ## A real run
 
-A fresh journal, a chat started from **+ New** in a scratch directory, asked: "Use your web_search tool to find what happened in New Zealand news this week: three items with sources. Then, in one response, write them to news2.md and commit that file, as two tool calls." The brain's log, trimmed:
+A fresh database, a chat started from **+ New** in a scratch directory, asked: "Use your web_search tool to find what happened in New Zealand news this week: three items with sources. Then, in one response, write them to news2.md and commit that file, as two tool calls." The brain's log, trimmed:
 
 ```
    17.4s    25  words delivered to try

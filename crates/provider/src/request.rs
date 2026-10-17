@@ -157,8 +157,9 @@ fn members(params: &[u8]) -> Result<&[u8], RequestError> {
 }
 
 /// `blocks` (a JSON array of objects) with `cache_control` added to its last
-/// block, spliced in before that block's closing brace, for the provider's
-/// default lifetime.
+/// block, spliced in before that block's closing brace, for an hour: long
+/// enough that a context Max comes back to, or one a restarted brain sends
+/// again, still reads its cache.
 fn mark(blocks: &[u8]) -> Result<Vec<u8>, RequestError> {
     let not_blocks = || RequestError("a breakpoint's entry does not end in a block".into());
     let inner = blocks
@@ -170,6 +171,6 @@ fn mark(blocks: &[u8]) -> Result<Vec<u8>, RequestError> {
         return Err(not_blocks());
     }
     let at = inner.len() - 1;
-    let control: &[u8] = br#","cache_control":{"type":"ephemeral"}"#;
+    let control: &[u8] = br#","cache_control":{"type":"ephemeral","ttl":"1h"}"#;
     Ok([&blocks[..at], control, &blocks[at..]].concat())
 }

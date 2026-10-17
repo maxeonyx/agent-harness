@@ -202,13 +202,18 @@ name = "harness-brain"
 version = "0.0.0"
 dependencies = [
  "harness-core",
+ "harness-face-tab",
  "harness-face-web",
  "harness-limb-workspace",
  "harness-provider",
  "harness-runtime",
  "harness-store",
+ "harness-substrate",
  "libc",
+ "rustls",
+ "serde",
  "serde_json",
+ "tungstenite",
 ]
 
 [[package]]
@@ -216,8 +221,19 @@ name = "harness-core"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "harness-substrate",
  "imbl",
  "serde",
+]
+
+[[package]]
+name = "harness-face-tab"
+version = "0.0.0"
+dependencies = [
+ "harness-core",
+ "harness-substrate",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -225,7 +241,9 @@ name = "harness-face-web"
 version = "0.0.0"
 dependencies = [
  "harness-core",
+ "harness-face-tab",
  "harness-provider",
+ "harness-substrate",
  "rustls",
  "serde_json",
  "tungstenite",
@@ -238,6 +256,8 @@ version = "0.0.0"
 dependencies = [
  "harness-core",
  "harness-runtime",
+ "harness-store",
+ "harness-substrate",
  "libc",
  "regex",
  "serde",
@@ -267,8 +287,16 @@ name = "harness-store"
 version = "0.0.0"
 dependencies = [
  "harness-core",
+ "harness-substrate",
  "rusqlite",
  "serde_json",
+]
+
+[[package]]
+name = "harness-substrate"
+version = "0.0.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

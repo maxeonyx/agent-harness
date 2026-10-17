@@ -10,10 +10,10 @@ use crate::call::{CallEvent, Caller, Outcome as CallOutcome};
 use crate::context::{EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::Binding;
+use crate::fact::{Author, Fact, Rejected, Stated};
 use crate::id::{
     CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, TaskId, Timestamp, ValueId,
 };
-use crate::journal::{Author, Fact, Record, Rejected};
 use crate::model_call::{Ending, ModelCallEvent, Stop};
 use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::state::{Mark, State};
@@ -40,7 +40,7 @@ use crate::state::{Mark, State};
 /// it its first root ([`Move::Root`]).
 ///
 /// Its life is folded from the facts that concern it (`Task::apply`, run
-/// only by [`State::apply`]): its own events, its model calls, the
+/// only by the brain's fold): its own events, its model calls, the
 /// settlements of the calls it waits on, deliveries to it, and changes to
 /// what it embodies. The life is never written down as a fact, so it cannot
 /// disagree with its history; "what is it waiting on" and "is it waiting on
@@ -455,7 +455,7 @@ pub enum Mode {
 /// as a reminder after each tool round, and at the top of a handover is how
 /// a deeply forked agent knows to stop after A.1.3.
 ///
-/// A mandate Max gives is his words: the journal counts its text among the
+/// A mandate Max gives is his words: the brain counts its text among the
 /// words he has said, heard by the task he gave it to, so the task can quote
 /// it on ([`State::heard`]). Who gave any other mandate is the caller of the
 /// meta call that created the task ([`Task::by`]).
@@ -539,7 +539,12 @@ pub enum Drain {
     /// while the task's round waits on a scope with members still running
     /// ([`Rejected::Scoped`], and [`State::scoped`] beforehand); to talk to
     /// it then, Max opens an aside.
-    ToMax,
+    ///
+    /// It names the turn he interrupts by one of its requests, the one he
+    /// was watching: an interrupt arriving once that turn has ended is
+    /// refused ([`Rejected::Finished`]), so a late one never stops the
+    /// next turn.
+    ToMax { turn: ModelCallId },
     /// Cancel the task and everything it owns ([`crate::cancel`]): it must
     /// have exited `within` milliseconds of this fact. Its request is cut,
     /// its calls and members are stopped with less time, and it takes one
@@ -683,7 +688,7 @@ impl TaskEvent {
 /// A task begins. Its environment and places, and for a fork, resume or
 /// aside its context, follow from its origin.
 ///
-/// Who may create one is checked by the journal. Max creates in his own
+/// Who may create one is checked by the brain's fold. Max creates in his own
 /// scope, with `by` empty, and his mandate is his words. The brain creates
 /// only as the effect of an agent's meta call, `by`: in the scope that call
 /// opens, or as a sibling in its caller's own spawn scope, and only what the
@@ -726,7 +731,7 @@ pub enum Move {
 
 impl Task {
     /// The task its creation describes, reading its source from the
-    /// journal's state. A fresh task starts with no context; any other
+    /// brain's state. A fresh task starts with no context; any other
     /// continues its source's.
     pub(crate) fn new(
         id: TaskId,
@@ -867,7 +872,7 @@ impl Task {
     /// response is unanswered; a task is done only when nothing it started
     /// is outstanding and nothing waking is unread; and Max's words are never
     /// lost, to a turn that ends first or to a handover.
-    pub(crate) fn apply(&mut self, record: &Record, world: &State) -> Result<(), Rejected> {
+    pub(crate) fn apply(&mut self, record: &Stated, world: &State) -> Result<(), Rejected> {
         let at = record.at;
         if self.is_done() {
             return self.after_done(record);
@@ -900,7 +905,7 @@ impl Task {
     /// A finished task folds only a new name, and Max's actions in its chat,
     /// which ride into a resume of it. Provisional: Max's choice between
     /// that and refusing them is open.
-    fn after_done(&mut self, record: &Record) -> Result<(), Rejected> {
+    fn after_done(&mut self, record: &Stated) -> Result<(), Rejected> {
         match &record.fact {
             Fact::Task(id, TaskEvent::Renamed(name)) if *id == self.id => {
                 self.name = name.clone();
@@ -990,7 +995,7 @@ impl Task {
             }
             TaskEvent::Drain(drain) => match &mut self.life {
                 Life::Starting => match drain {
-                    Drain::ToMax => return Err(Rejected::Starting),
+                    Drain::ToMax { .. } => return Err(Rejected::Starting),
                     Drain::Stop { by, .. } => {
                         let outcome = Outcome::Cancelled {
                             by: *by,
@@ -1022,7 +1027,7 @@ impl Task {
                         (Some(ending @ (Draining::Stopping(_) | Draining::Failing(_))), _) => {
                             ending
                         }
-                        (_, Drain::ToMax) => Draining::ToMax,
+                        (_, Drain::ToMax { .. }) => Draining::ToMax,
                         (_, Drain::Stop { by, within }) => {
                             Draining::Stopping(Stopping::new(*by, at, *within))
                         }
@@ -1278,7 +1283,7 @@ impl Task {
             }
         }
         if matches!(delivery.content, Content::Words(_))
-            && matches!(by, Author::Max { .. })
+            && matches!(by, Author::Max)
             && let Life::Live(live) = &mut self.life
         {
             live.owed_since = None;

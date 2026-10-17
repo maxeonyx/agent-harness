@@ -77,7 +77,7 @@ pub struct ModelCall {
     /// What `appends` was rendered from, span by span in block order. A
     /// task has seen exactly what its requests rendered, so a request
     /// retried after a rate limit renders what arrived meanwhile, and
-    /// nothing depends on journal positions.
+    /// nothing depends on the brain's positions.
     pub renders: Vec<Span>,
     /// The request's other parameters exactly as sent: `max_tokens`,
     /// thinking, effort, `stream`.

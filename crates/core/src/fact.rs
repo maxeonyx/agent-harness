@@ -1,40 +1,40 @@
-//! The journal: one brain's append-only record of everything that happened,
-//! and the one way facts get into it.
-
-use std::collections::BTreeMap;
+//! Facts: what the harness's places say, who said it, and why the brain
+//! refuses what it refuses.
 
 use serde::{Deserialize, Serialize};
 
 use crate::attention::{Focus, Ranking};
 use crate::call::CallEvent;
 use crate::delivery::{Content, Delivery};
+use crate::draft::DraftEvent;
 use crate::environment::{Description, Environment, Limb, Reach};
-use crate::id::{CallId, FaceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ValueId};
+use crate::id::{
+    CallId, DeliveryId, EventId, LimbId, ModelCallId, PlaceId, Seq, TaskId, Time, Timestamp,
+    ValueId,
+};
 use crate::model_call::ModelCallEvent;
 use crate::resource::Change;
-use crate::state::State;
 use crate::task::TaskEvent;
 use crate::value::Bytes;
 
-/// One fact, at its position in one brain's journal.
+/// One fact as its decider folds it: where it took effect, the decider's
+/// clock there, who stated it, and the fact's own identity.
 ///
-/// **Concept.** The journal is the harness's only source of truth. Every
-/// fact a participant states is appended once, with the next [`Seq`], in
-/// the same transaction as the values it names, and never changed. Each
-/// fact belongs to exactly one identity. Every state anyone reads (a task's
-/// state, the context tree, the tree Max watches, his queue, whether a
-/// prefix is warm, a day's cost) is a fold of the journal:
-/// [`crate::state::State`]. Nothing is recorded twice, so nothing can
-/// disagree with anything else, and only the facts are a compatibility
-/// surface: every fold can be rewritten by a self-modifying harness without
-/// migrating data.
+/// **Concept.** The core's view of one fact of a
+/// [`harness_substrate::Record`]. Every state anyone reads (a task's state,
+/// the context tree, the tree Max watches, his queue, whether a prefix is
+/// warm, a day's cost) is a fold of these: [`crate::state::State`]. Nothing
+/// is recorded twice, so nothing can disagree with anything else, and only
+/// the facts are a compatibility surface: every fold can be rewritten by a
+/// self-modifying harness without migrating data.
 ///
 /// What must be a fact: something becomes one when a participant acts on
 /// it, recorded at the detail its consequences need. The model's
 /// observation is kept exactly (the context it was sent, and what each
-/// request newly included). Max's is kept as the journal position his face
-/// had shown him. Streamed tokens are not facts ([`crate::live`]) until Max
-/// interrupts, when what he watched is kept with the abandoned request.
+/// request newly included). Max's is kept as the view his face had shown
+/// him ([`Fact::Seen`]). Streamed tokens are not facts ([`crate::live`])
+/// until Max interrupts, when what he watched is kept with the abandoned
+/// request.
 ///
 /// **Vision.** "Strictly events + derived views" (`tech.md`); a brain that
 /// "picks up where it left off" after a crash or a relaunch onto its own
@@ -51,42 +51,46 @@ use crate::value::Bytes;
 /// against its child's first request, and none records what the environment
 /// did between turns or what Max had seen when he acted.
 ///
-/// **Different here.** One log per brain holds every participant's facts,
-/// typed by the identity they belong to, with who stated each.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Record {
+/// **Different here.** Every participant is a place with its own records;
+/// the brain includes them into one order of its own, and folds each fact
+/// with who stated it, which it derives from where the record came from.
+#[derive(Clone, Debug)]
+pub struct Stated<'a> {
     pub seq: Seq,
     pub at: Timestamp,
     pub by: Author,
-    pub fact: Fact,
+    pub fact: &'a Fact,
+    /// The fact's identity, and the id of whatever it creates. Its place is
+    /// where it was said: for Max's, the face.
+    pub event: EventId,
+    /// The brain time the view on Max's screen was as of: the record's
+    /// [`Fact::Seen`], for a record of his.
+    pub seen: Option<Time>,
 }
 
-/// Who stated a fact.
+/// Who stated a fact, derived from the place its record came from: never
+/// stated, so never forged.
 ///
-/// The brain states what it decides and observes. A limb states facts about
-/// its own calls and resources, and no others: how a call it ran ended, that
-/// a file it owns changed and which call changed it. Max states his words,
-/// his calls, his answers to asks and his controls over the tree. Only a
-/// person acts on a picture that may be out of date, so only Max's facts say
-/// how far his face had got. That answers "did he say yes before or after
-/// the agent changed its plan?", and lets his words be rendered with a note
-/// when the agent has moved on since. What each author may state is checked
-/// by the fold, so a confused limb cannot settle another limb's call.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The brain states what it decides and observes: its own place. A limb
+/// states facts about its own calls and resources, and no others: the
+/// place the brain last connected it as ([`crate::environment::Reach`]).
+/// Max states his words, his calls, his answers to asks and his controls
+/// over the tree, from a place the brain accepted as one of his faces
+/// ([`Fact::Face`]). A record from any other place is refused
+/// ([`Rejected::Author`]). Which face is the record's own place, and what
+/// it had shown him is the record's [`Fact::Seen`]: both are in
+/// [`Stated`], neither here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Author {
     Brain,
     Limb(LimbId),
-    /// Max, through one face, having received the journal up to `seen`.
-    Max {
-        face: FaceId,
-        seen: Seq,
-    },
+    Max,
 }
 
-/// What a record says, and which identity it belongs to.
+/// What a fact says, and which identity it belongs to.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Fact {
-    /// A brain started writing this journal.
+    /// A brain started writing.
     Launched(Launched),
     /// The brain writing the journal is going away, and must have exited
     /// `within` milliseconds of this fact ([`crate::cancel`]): it was asked
@@ -115,14 +119,24 @@ pub enum Fact {
         limb: LimbId,
         description: Description,
     },
-    /// What the brain knows of its connection to a limb.
+    /// What the brain knows of its connection to a limb, and which place
+    /// speaks for it.
     Reach {
         limb: LimbId,
         reach: Reach,
     },
+    /// That a place is one of Max's faces: a tab or a phone the brain
+    /// accepted. Stated by the brain.
+    Face(PlaceId),
+    /// The brain time the view on Max's screen was as of when he did what
+    /// the rest of this record says. A face puts one in every record it acts
+    /// in, so what he had seen is a fact, kept with the act.
+    Seen(Time),
+    /// Max's words before they are a delivery.
+    Draft(DeliveryId, DraftEvent),
     /// The attention scheduler's (or Max's) whole new order of tasks.
     Ranking(Ranking),
-    /// Which task one face shows Max.
+    /// Which task the face stating it shows Max.
     Focus(Focus),
 }
 
@@ -173,22 +187,27 @@ impl Fact {
                 description: _,
             } => {}
             Fact::Reach { limb: _, reach: _ } => {}
+            Fact::Face(_) | Fact::Seen(_) => {}
+            Fact::Draft(_, event) => match event {
+                DraftEvent::Text(text) | DraftEvent::Send { text, .. } => values.push(*text),
+                DraftEvent::Opened { session: _ } | DraftEvent::Discarded => {}
+            },
             Fact::Ranking(Ranking { order: _ }) => {}
-            Fact::Focus(Focus { face: _, task: _ }) => {}
+            Fact::Focus(Focus { task: _ }) => {}
         }
         values
     }
 }
 
-/// The boundary between two writers of one journal.
+/// The boundary between two processes of one brain place.
 ///
 /// After a crash, a relaunch onto a newer build, or the relaunch an agent
 /// asked for (`by`: the call that asked, which the new brain settles, so a
-/// self-upgrade has a real outcome). The journal has one writer at a time;
-/// everything after this record was written by `build`, which is how an
+/// self-upgrade has a real outcome). The brain has one process at a time;
+/// everything it writes after this record was written by `build`, which is how an
 /// operator links a stuck subtree to an upgrade and how a rolled-back build
 /// knows which facts are newer than it. It is also the whole of restart:
-/// what the earlier writer had in flight is what [`State::todo`] says to
+/// what the earlier writer had in flight is what [`crate::state::State::todo`] says to
 /// redo.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Launched {
@@ -196,10 +215,10 @@ pub struct Launched {
     pub by: Option<CallId>,
 }
 
-/// Facts one author states together, with the bytes they name.
+/// Facts one place states together, with the bytes they name: what a
+/// record of the harness says ([`crate::schema::Harness`]).
 ///
-/// **Concept.** The unit of atomicity: committed whole or not at all, with
-/// consecutive positions. A response and the calls of its tool uses; a
+/// **Concept.** The unit of atomicity: folded whole or refused whole. A response and the calls of its tool uses; a
 /// spawn's dispatch and its members; a settlement, its output and the
 /// changes the call made. Values travel with the facts that name them, from
 /// whoever produced the bytes (the provider's response, a remote limb's
@@ -210,7 +229,7 @@ pub struct Batch {
     pub facts: Vec<Fact>,
 }
 
-/// A fact the journal refuses, because accepting it would break the model:
+/// Why the brain refuses a fact, because accepting it would break the model:
 /// end something twice, leave a tool use unanswered, move a context off the
 /// tree, outlive an owner, or address something that cannot hear it.
 ///
@@ -218,13 +237,12 @@ pub struct Batch {
 /// an engineer reading a log) learns which rule fired, and a face can act on
 /// one by matching it rather than its wording. A refusal of the brain's own
 /// facts is a bug in the brain. A refusal of Max's or a limb's is a race the
-/// rules answer: he stops a task that has just finished, a limb repeats a
-/// settlement after reconnecting.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// rules answer (he stops a task that has just finished), and it stays in
+/// band: the brain holds the refused record and says why in the
+/// [`harness_substrate::Included`] that took it in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Rejected {
-    /// Not the next position.
-    OutOfOrder { expected: Seq },
-    /// Names an identity the journal has never seen.
+    /// Names an identity the brain has never seen.
     Unknown,
     /// Creates an identity that already exists, a second environment or
     /// limb of one name, or runs a call the brain runs a second time.
@@ -245,6 +263,9 @@ pub enum Rejected {
     /// A stop of a member whose deadline is later than its owner's: nothing
     /// a task owns may outlive it.
     Late,
+    /// A draft edit from a face that had not seen another face's newest
+    /// text of it: it becomes a draft of its own.
+    Concurrent,
     /// A stop's expiry before its deadline.
     Early,
     /// A request that leaves a tool use of the previous response unanswered.
@@ -284,8 +305,11 @@ pub enum Rejected {
     NotForTask,
     /// A quote that is not Max's words heard by the task quoting them.
     Unheard,
-    /// Its author may not state it.
+    /// Its author may not state it, or it comes from a place that is no
+    /// one's, or claims Max had seen a view the brain has not yet shown.
     Author,
+    /// Creates something under an id its own event did not mint.
+    Minted,
     /// Names a value that is neither stored nor in its batch.
     Missing(ValueId),
     /// Names a value in its batch larger than [`Bytes::LIMIT`].
@@ -296,23 +320,20 @@ pub enum Rejected {
     Idle,
     /// An interrupt to a task whose round waits on a scope with members
     /// still running: the move cannot be Max's until the scope closes, so
-    /// his face offers an aside instead ([`State::scoped`] says so first).
+    /// his face offers an aside instead ([`crate::state::State::scoped`] says so first).
     Scoped,
 }
 
 impl std::fmt::Display for Rejected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let said = match self {
-            Rejected::OutOfOrder { expected } => {
-                return write!(f, "out of order: the next position is {}", expected.0);
-            }
             Rejected::Missing(value) => {
                 return write!(f, "value {value} is neither stored nor sent");
             }
             Rejected::TooLarge(value) => {
                 return write!(f, "value {value} is larger than the limit");
             }
-            Rejected::Unknown => "names something the journal has never seen",
+            Rejected::Unknown => "names something the brain has never seen",
             Rejected::Exists => "creates something that already exists",
             Rejected::Finished => "addresses something already finished",
             Rejected::NotFinished => "resumes a task that has not finished",
@@ -322,6 +343,9 @@ impl std::fmt::Display for Rejected {
             }
             Rejected::Draining => "the task is draining and may start nothing new",
             Rejected::Late => "a member's stop may not end later than its owner's",
+            Rejected::Concurrent => {
+                "another device changed this draft meanwhile: these words are a new draft beside it"
+            }
             Rejected::Early => "the deadline has not come",
             Rejected::Unanswered => "leaves a tool use unanswered",
             Rejected::WrongScope => "not allowed in that scope",
@@ -337,6 +361,7 @@ impl std::fmt::Display for Rejected {
             Rejected::NotForTask => "does not concern what it is routed to",
             Rejected::Unheard => "quotes words Max did not say to the quoting task",
             Rejected::Author => "its author may not state it",
+            Rejected::Minted => "creates something under an id its event did not mint",
             Rejected::Scoped => "the task is waiting on its children; talk to it through an aside",
             Rejected::Idle => {
                 "the task would wait on nothing; mark it done, or say something with the change"
@@ -346,152 +371,16 @@ impl std::fmt::Display for Rejected {
     }
 }
 
-/// Where a journal is kept, from the model's side: records in order, and
-/// values by id.
-pub trait Store {
-    type Error;
-
-    /// Every record, in order.
-    fn records(&self, each: &mut dyn FnMut(Record)) -> Result<(), Self::Error>;
-
-    /// Whether the value is stored.
-    fn has(&self, value: ValueId) -> Result<bool, Self::Error>;
-
-    /// Store the values (each under [`Bytes::id`], idempotently) and append
-    /// the records, in one transaction.
-    fn append(&mut self, values: &[Bytes], records: &[Record]) -> Result<(), Self::Error>;
+/// Why the brain did not fold a record: which of its facts broke which rule.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Refusal {
+    /// The index of the fact in its batch.
+    pub fact: u32,
+    pub why: Rejected,
 }
 
-/// The journal's one writer: its store and its fold, kept in step.
-///
-/// **Concept.** Every fact enters through [`Journal::commit`]: positions
-/// and the time are stamped, every value a fact names is checked to be
-/// stored or in the batch, each fact is folded, and only then is the batch
-/// appended. A refused batch is never written and leaves the state as it
-/// was, so the brain answers a race with Max or a limb from the same rules
-/// that keep the journal sound, and nothing else in the harness assigns a
-/// position, folds ahead of the store, or appends without folding.
-///
-/// A batch folds into a copy of the state, and the copy replaces it only
-/// once the store has the batch. [`State`] is persistent, so the copy costs
-/// nothing until it diverges: a refusal anywhere in any author's batch, or a
-/// store that fails, leaves the state exactly as it was, with nothing to
-/// rebuild.
-pub struct Journal<S> {
-    store: S,
-    state: State,
-}
-
-/// Why a commit or an open failed.
-#[derive(Debug)]
-pub enum Error<E> {
-    /// The fact at `index` of the batch would break the model; nothing was
-    /// appended.
-    Refused { index: usize, why: Rejected },
-    /// The store failed; nothing was appended.
-    Store(E),
-    /// A stored record does not fold: the journal was written by a model
-    /// this build cannot read.
-    Unreadable { seq: Seq, why: Rejected },
-}
-
-impl<E: std::fmt::Display> std::fmt::Display for Error<E> {
+impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Refused { index, why } => {
-                write!(f, "fact {index} of the batch refused: {why}")
-            }
-            Error::Store(error) => write!(f, "journal store: {error}"),
-            Error::Unreadable { seq, why } => {
-                write!(f, "journal record {} does not fold: {why}", seq.0)
-            }
-        }
-    }
-}
-
-impl<E: std::error::Error + 'static> std::error::Error for Error<E> {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Store(error) => Some(error),
-            Error::Refused { .. } | Error::Unreadable { .. } => None,
-        }
-    }
-}
-
-impl<S: Store> Journal<S> {
-    /// Fold everything the store holds.
-    pub fn open(store: S) -> Result<Journal<S>, Error<S::Error>> {
-        let state = fold(&store)?;
-        Ok(Journal { store, state })
-    }
-
-    /// What the journal says is true now. Cloning it is cheap and the clone
-    /// never changes, so a face in the same process reads the brain's state
-    /// as of any commit without folding the journal a second time.
-    pub fn state(&self) -> &State {
-        &self.state
-    }
-
-    pub fn store(&self) -> &S {
-        &self.store
-    }
-
-    /// Append `batch` as the next records, stated by `by` at `at`, or
-    /// refuse it whole. Returns the records as appended.
-    pub fn commit(
-        &mut self,
-        by: Author,
-        batch: Batch,
-        at: Timestamp,
-    ) -> Result<Vec<Record>, Error<S::Error>> {
-        let Batch { values, facts } = batch;
-        let given: BTreeMap<ValueId, usize> = values.iter().map(|v| (v.id(), v.len())).collect();
-        let first = self.state.next().0;
-        let records: Vec<Record> = facts
-            .into_iter()
-            .zip(first..)
-            .map(|(fact, seq)| Record {
-                seq: Seq(seq),
-                at,
-                by: by.clone(),
-                fact,
-            })
-            .collect();
-        for (index, record) in records.iter().enumerate() {
-            for value in record.fact.values() {
-                let why = match given.get(&value) {
-                    Some(len) if *len > Bytes::LIMIT => Rejected::TooLarge(value),
-                    Some(_) => continue,
-                    None if self.store.has(value).map_err(Error::Store)? => continue,
-                    None => Rejected::Missing(value),
-                };
-                return Err(Error::Refused { index, why });
-            }
-        }
-        let next = self
-            .state
-            .with(&records)
-            .map_err(|(index, why)| Error::Refused { index, why })?;
-        self.store.append(&values, &records).map_err(Error::Store)?;
-        self.state = next;
-        Ok(records)
-    }
-}
-
-fn fold<S: Store>(store: &S) -> Result<State, Error<S::Error>> {
-    let mut state = State::default();
-    let mut unreadable = None;
-    store
-        .records(&mut |record| {
-            if unreadable.is_none()
-                && let Err(why) = state.apply(&record)
-            {
-                unreadable = Some((record.seq, why));
-            }
-        })
-        .map_err(Error::Store)?;
-    match unreadable {
-        Some((seq, why)) => Err(Error::Unreadable { seq, why }),
-        None => Ok(state),
+        write!(f, "fact {} refused: {}", self.fact, self.why)
     }
 }
