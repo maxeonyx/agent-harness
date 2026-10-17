@@ -98,7 +98,8 @@ export function fillTip() {
     const place = Object.values(t.places || {})[0];
     const mode = t.mode === "user-facing" ? "chat" : t.mode === "standing" ? "standing" : null;
     const what = [t.environment, mode !== t.environment && mode].filter(Boolean).join(" ");
-    lines.push(el("div", null, [what, place && `in ${place.split("/").filter(Boolean).slice(-2).join("/")}`].filter(Boolean).join(" · ")));
+    const phased = t.compactions && `compacted ${t.compactions === 1 ? "once" : `${t.compactions}×`}`;
+    lines.push(el("div", null, [what, t.origin === "fork" && "a fork", phased, place && `in ${place.split("/").filter(Boolean).slice(-2).join("/")}`].filter(Boolean).join(" · ")));
     if (t.tokens && !isDone(t)) lines.push(el("div", null, `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`));
     if (t.mandate && !fc) lines.push(el("div", "m", t.mandate.slice(0, 240)));
   }
