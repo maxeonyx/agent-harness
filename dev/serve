@@ -47,15 +47,11 @@ if systemctl --user -q is-active "$unit"; then
     [[ $# -eq 0 ]] || echo "dev/serve: $unit keeps the flags it runs with; stop it to change them" >&2
     pid=$(systemctl --user show -p MainPID --value "$unit")
     limb=$(dirname "$(readlink -f "/proc/$pid/exe")")/harness-limb-builds
-    if [[ ! -x $limb ]]; then
-        cargo build -q --release -p harness-limb-builds
-        limb=$repo/target/release/harness-limb-builds
-    fi
+    [[ -x $limb ]] || exec cargo run -q --release -p harness-limb-builds -- relaunch "$unit" "$repo"
     exec "$limb" relaunch "$unit" "$repo"
 fi
 
-cargo build -q --release -p harness-limb-builds
-build=$("$repo/target/release/harness-limb-builds" install "$repo")
+build=$(cargo run -q --release -p harness-limb-builds -- install "$repo")
 commit=${build##*/}
 data=$home/$name
 mkdir -p "$data"
