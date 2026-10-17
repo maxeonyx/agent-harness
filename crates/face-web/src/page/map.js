@@ -33,7 +33,11 @@ function look(t) {
       return { cls: "working tool" + stopping, text: `${c.tool || "tools"}${c.input ? " " + gist(c.input) : ""}` };
     }
     case "max": return { cls: "needs" + stopping, text: "your turn" + since };
-    case "starting": return { cls: "starting", text: w.limbs.length ? `making ${w.limbs.join(", ")}` : "starting" };
+    case "starting": {
+      const u = w.unreachable[0];
+      if (u) return { cls: "starting failed", text: `can't reach ${u.limb}: ${u.why}` };
+      return { cls: "starting", text: w.limbs.length ? `making ${w.limbs.join(", ")}` : "starting" };
+    }
     case "harness": return { cls: "working" + stopping, text: "harness" + since };
     case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `paused with ${h.name}` : "paused" }; }
     case "parked": return { cls: "paused", text: "parked" + since };

@@ -268,7 +268,9 @@ impl Workspace {
         let log = Log::open(store.replica(), store).map_err(io::Error::other)?;
         let inner = Inner {
             limb: config.limb,
-            root: dir.canonicalize()?,
+            root: dir
+                .canonicalize()
+                .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", dir.display())))?,
             clone,
             skills,
             kind: config.kind,
