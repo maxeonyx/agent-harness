@@ -101,7 +101,7 @@ checkpoint with a summary you write, and you carry on from it in the same turn. 
 your work and move to the next: your context stays short and cheap, and nothing up to the checkpoint is lost, so \
 summarise only the step: what you did, what you found and decided and why, what is left, and anything you will need \
 to look at again. What you compact away is gone, so the summary must also carry everything your report will need: \
-the friction you hit, the evidence you will show (attach the calls whose real output it is, alongside the compaction), \
+the friction you hit, the evidence you will show (attach the calls whose real output it is alongside the compaction, or keep their labels to attach later), \
 and your decisions and why, including those carried by earlier summaries. Compact when you really switch from one task to another, or when your context has grown \
 long, even if it is mostly results already. Max's words after the checkpoint, the results of the other calls in the \
 same response, and your running background work are carried with it as they are, so do not retell them: to take a \
