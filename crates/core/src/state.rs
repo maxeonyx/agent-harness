@@ -1703,10 +1703,13 @@ impl State {
                 _ => {}
             }
         }
-        for id in &self.open.calls {
-            let Some(record) = self.calls.get(id) else {
-                continue;
-            };
+        // In the order they were made, so a limb is sent one response's
+        // calls in the order the model wrote them.
+        let mut open: Vec<(&CallId, &CallRecord)> = (self.open.calls.iter())
+            .filter_map(|id| self.calls.get(id).map(|record| (id, record)))
+            .collect();
+        open.sort_by_key(|(_, record)| record.made.seq);
+        for (id, record) in open {
             if self.open.scopes.contains_key(&Scope::Spawn(*id)) {
                 let stopping = self
                     .call_owner(*id)

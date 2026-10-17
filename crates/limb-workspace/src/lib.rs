@@ -24,7 +24,11 @@
 //! The brain runs it as a process of its own, `harness-limb-workspace` or
 //! `harness-limb-user` ([`process`]).
 //!
-//! A call is run on its own thread, and recorded on disk as started before
+//! A call is run on its own thread, after the calls its task made before it
+//! in the same workspace have ended: a model writes one response's tool uses
+//! in the order it means them to happen (write a file, then commit it), so
+//! they run in that order. Background work and other tasks run alongside.
+//! Each call is recorded on disk as started before
 //! it has any effect and as settled before the settlement is sent. So
 //! [`ToLimb::Run`] is idempotent per call, however often a crash of the
 //! brain or of the limb makes it arrive: it is answered from the record, left
@@ -63,13 +67,13 @@ pub mod user;
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
-use harness_core::call::{Call, CallEvent, Outcome, Output};
+use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::environment::{Description, FromLimb, Instruction, Limb, LimbKind, ToLimb};
-use harness_core::id::{CallId, Digest, InstanceId, LimbId, ValueId};
+use harness_core::id::{CallId, Digest, InstanceId, LimbId, TaskId, ValueId};
 use harness_core::journal::{Batch, Fact};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
@@ -198,6 +202,9 @@ struct Inner {
     calls: Calls,
     out: Sender<FromLimb>,
     running: Mutex<HashMap<CallId, Running>>,
+    /// For each task, the end of its latest call: its next call waits for
+    /// it.
+    latest: Mutex<HashMap<TaskId, Receiver<()>>>,
     /// The resources the brain asked to hear about, at the version last
     /// reported.
     watched: Mutex<HashMap<ResourceKey, Version>>,
@@ -229,6 +236,7 @@ impl Workspace {
             calls: Calls::open(config.state.join("calls"))?,
             out,
             running: Mutex::default(),
+            latest: Mutex::default(),
             watched: Mutex::default(),
             files: Mutex::default(),
         };
@@ -314,12 +322,26 @@ impl Workspace {
             return inner.settle(report, outcome);
         }
         let stop = Arc::new(Stop::default());
+        // Dropped when this call ends, which lets its task's next call go.
+        let (ended, after) = mpsc::channel::<()>();
+        let before = match call.caller {
+            Caller::Agent { task, .. } => lock(&inner.latest).insert(task, after),
+            _ => None,
+        };
         let thread = {
             let inner = self.inner.clone();
             let stop = stop.clone();
             thread::spawn(move || {
+                let _ended = ended;
+                if let Some(before) = before {
+                    let _ = before.recv();
+                }
                 let mut report = Report::new(Some(id));
-                let outcome = inner.execute(id, &call, &input, &stop, &mut report);
+                let outcome = if stop.get() {
+                    Outcome::Interrupted { partial: None }
+                } else {
+                    inner.execute(id, &call, &input, &stop, &mut report)
+                };
                 inner.rescan(&mut report, call.tool == "bash");
                 inner.settle(report, outcome);
                 lock(&inner.running).remove(&id);
