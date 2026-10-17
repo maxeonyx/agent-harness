@@ -113,6 +113,10 @@ struct Link {
     replica: ReplicaId,
     wire: Wire,
     publisher: Publisher<LimbKey, LimbRow, Refusal>,
+    /// How it connected, until it first speaks: recorded then, so a limb
+    /// that says hello and fails before it can serve (its directory cannot
+    /// be made) leaves only why.
+    unsaid: Option<Reach>,
 }
 
 /// One brain: the decider of everything its replicas say.
@@ -637,6 +641,11 @@ impl Brain {
         if self.state().limb(limb).is_none_or(|l| l.kind.is_brains()) {
             return errln!("a link said it is limb {limb}, which is no plugin limb here");
         }
+        let known = self.state().connected(limb).map(|(p, _)| p) == Some(replica);
+        let unsaid = (!known).then_some(Reach::Connected {
+            instance: replica,
+            build,
+        });
         self.links.insert(
             limb,
             Link {
@@ -644,22 +653,26 @@ impl Brain {
                 replica,
                 wire,
                 publisher: Publisher::default(),
+                unsaid,
             },
         );
-        if self.state().connected(limb).map(|(p, _)| p) == Some(replica) {
-            return self.publish();
-        }
-        self.fact(Fact::Reach {
-            limb,
-            reach: Reach::Connected {
-                instance: replica,
-                build,
-            },
-        });
+        self.publish();
     }
 
-    /// A link ended. If it was its limb's current one, the limb is lost
-    /// until it connects again.
+    /// A record from link `conn`: the limb's, if the link is its current
+    /// one, which is connected from its first record on.
+    fn heard(&mut self, conn: Conn, record: Record) {
+        let Some((&limb, link)) = self.links.iter_mut().find(|(_, l)| l.conn == conn) else {
+            return;
+        };
+        if let Some(reach) = link.unsaid.take() {
+            self.fact(Fact::Reach { limb, reach });
+        }
+        self.include(record);
+    }
+
+    /// A link ended. If it was its limb's current one, and it had spoken,
+    /// the limb is lost until it connects again.
     fn left(&mut self, conn: Conn) {
         let Some(limb) = self
             .links
@@ -668,8 +681,11 @@ impl Brain {
         else {
             return;
         };
-        self.links.remove(&limb);
+        let link = self.links.remove(&limb).expect("found");
         errln!("limb {limb}: its link ended");
+        if link.unsaid.is_some() {
+            return;
+        }
         self.fact(Fact::Reach {
             limb,
             reach: Reach::Lost,
@@ -1538,10 +1554,7 @@ and you cannot finish until it has.",
             What::Link(conn, link::Said::Joined(hello, wire)) => self.joined(conn, hello, wire),
             What::Link(conn, link::Said::Up(up)) => match *up {
                 // Only the current link speaks for its limb.
-                Up::Record(record) if self.links.values().any(|l| l.conn == conn) => {
-                    self.include(record)
-                }
-                Up::Record(_) => {}
+                Up::Record(record) => self.heard(conn, record),
                 Up::Live(live) => self.feed.push(live.live),
             },
             What::Link(conn, link::Said::Left) => self.left(conn),
