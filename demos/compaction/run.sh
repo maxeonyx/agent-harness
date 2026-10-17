@@ -20,9 +20,11 @@ waits() { [ "$(c /view 2>/dev/null | jq -r "$root | .waiting.kind")" = max ]; }
 await() { until waits; do kill -0 "$pid" 2>/dev/null || { cat "$dir/brain.log"; exit 1; }; sleep 1; done; }
 
 echo "== the agent starts on demos/compaction/mandate.md"
-env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" \
-  --workspace "$dir/repo" --mandate demos/compaction/mandate.md > "$dir/brain.log" 2>&1 &
+env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" > "$dir/brain.log" 2>&1 &
 pid=$!
+# Max starts the chat at a tab once this brain serves (not another on the port).
+until grep -q '^face: ' "$dir/brain.log"; do kill -0 "$pid" 2>/dev/null || { cat "$dir/brain.log"; exit 1; }; sleep 0.2; done
+target/release/examples/act "$port" chat orchestrator "$PWD/$dir/repo" "$(cat demos/compaction/mandate.md)" > /dev/null
 await
 grep -E 'compacted|Max sends' "$dir/brain.log" || true
 echo
