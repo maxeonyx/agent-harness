@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{env, fs, thread};
 
 use harness_core::call::CallEvent;
+use harness_core::context::EntryId;
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::draft::DraftEvent;
 use harness_core::environment::{Host, Limb, LimbKind};
@@ -21,7 +22,6 @@ use harness_core::id::{
     CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, ReplicaId, TaskId, Timestamp,
 };
 use harness_core::live::Live;
-use harness_core::context::EntryId;
 use harness_core::task::{
     Abandoner, Created, Drain, Mandate, Mode, Move, Origin, Scope, TaskEvent,
 };
