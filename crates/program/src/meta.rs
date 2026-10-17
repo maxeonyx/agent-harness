@@ -18,6 +18,7 @@
 //! spawns twice.
 
 use harness_core::call::{Call, Caller};
+use harness_core::context::Rendered;
 use harness_core::delivery::Content;
 use harness_core::environment::{Audience, Description, Instruction, Limb, LimbKind, Tool};
 use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
@@ -33,12 +34,9 @@ pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
 pub const COMPACT_AND_CONTINUE: &str = "compact_and_continue";
 pub const COMPACT_AND_REPORT: &str = "compact_and_report";
-/// The one compaction tool of a root made before the two: it continues.
-const COMPACT: &str = "compact";
-
 /// Whether `tool` is a compaction tool.
 pub fn compacts(tool: &str) -> bool {
-    [COMPACT_AND_CONTINUE, COMPACT_AND_REPORT, COMPACT].contains(&tool)
+    [COMPACT_AND_CONTINUE, COMPACT_AND_REPORT].contains(&tool)
 }
 
 pub const BACKGROUND: &str = "background";
@@ -102,7 +100,9 @@ words, or whatever woke you), and each compaction. `compact_and_continue` replac
 checkpoint with a summary you write, and you carry on from it in the same turn. Use it whenever you finish a step of \
 your work and move to the next: your context stays short and cheap, and nothing up to the checkpoint is lost, so \
 summarise only the step: what you did, what you found and decided and why, what is left, and anything you will need \
-to look at again or report. Compact when you really switch from one task to another, or when your context has grown \
+to look at again. What you compact away is gone, so the summary must also carry everything your report will need: \
+the friction you hit, the evidence you will show (attach the calls whose real output it is alongside the compaction, or keep their labels to attach later), \
+and your decisions and why, including those carried by earlier summaries. Compact when you really switch from one task to another, or when your context has grown \
 long, even if it is mostly results already. Max's words after the checkpoint, the results of the other calls in the \
 same response, and your running background work are carried with it as they are, so do not retell them: to take a \
 file into the compacted context as it is now, read it in the same response.\n\n\
@@ -112,7 +112,8 @@ were started by another agent, it is your result, and what you read alongside it
 everything the reader needs in the report: they never see the summary.\n\n\
 With `fresh: true` either tool starts a new context instead, from your role, your mandate, Max's words and your \
 summary alone. Use it when even your checkpoints have grown long; the summary must then carry everything else you \
-need. A change to your role's definition takes effect then.\n\n\
+need. A change to your role's definition takes effect then. A `compact_and_continue` right after another compaction, with no other \
+call since or alongside it, is refused: there is nothing to replace.\n\n\
 Each result of a call you make ends with its label, such as `[call-3fa2c1]`. `attach` gives back the outputs of the \
 calls you name by label, exactly as the harness recorded them, so whoever reads your work sees the real output (the \
 log line, the command's output) rather than your retelling of it. Attach alongside `compact_and_report`, or alone \
@@ -164,7 +165,7 @@ and returns at once: the agent that started you gets its result with yours.",
             "required": ["tasks"]
         }
     });
-    let summary = json!({ "type": "string", "description": "What you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on." });
+    let summary = json!({ "type": "string", "description": "What you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, and everything your report will need (friction, evidence, decisions), including what earlier summaries carried." });
     let fresh = json!({ "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and your summary alone." });
     let compact_and_continue = json!({
         "name": COMPACT_AND_CONTINUE,
@@ -290,6 +291,31 @@ pub struct Compact {
     pub fresh: bool,
     /// `compact_and_report`'s report, which ends the turn.
     pub report: Option<String>,
+}
+
+/// Whether a compaction by `task` now would only repeat its last one: its
+/// latest checkpoint is a compaction's carry that holds no call's output,
+/// and every call it has made since is a compaction, so there is nothing
+/// to replace. This is what an
+/// agent compacting in a loop looks like; only `compact_and_continue` can
+/// loop, since `compact_and_report` ends the turn.
+pub fn repeats(state: &State, task: &Task) -> bool {
+    let (Some(checkpoint), Some(head)) = (state.checkpoint(task), task.head()) else {
+        return false;
+    };
+    state.compacted(checkpoint).is_some_and(|c| {
+        !c.renders
+            .iter()
+            .any(|span| matches!(span.from, Rendered::Call(_)))
+    }) && !state.calls().any(|(id, record)| {
+        matches!(record.call.caller, Caller::Agent { task: t, .. } if t == task.id)
+            && !compacts(&record.call.tool)
+            && state.origin(id).is_some_and(|response| {
+                response != checkpoint
+                    && state.descends(head, response)
+                    && state.descends(response, checkpoint)
+            })
+    })
 }
 
 /// A compaction call's input, or why it cannot compact.
