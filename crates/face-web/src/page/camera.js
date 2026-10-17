@@ -171,10 +171,11 @@ const centrePoint = () => ({ x: (innerWidth / 2 - cam.x) / cam.k, y: (innerHeigh
 // Room kept right of the card for the task's controls, which float there
 // (on a phone they float inside it).
 const controlsRoom = () => phone() ? 0 : 48;
+// A new chat's card is short; on a phone its tuning wraps to a line of its own.
 function cardSize(id) {
   const m = phone() ? 6 : 16;
   const W = Math.min(id === NEW ? 640 : 880, innerWidth - 2 * m - controlsRoom());
-  const H = id === NEW ? 168 : innerHeight - 2 * m;
+  const H = id === NEW ? (phone() ? 200 : 168) : innerHeight - 2 * m;
   return { W, H };
 }
 export function seamFor(id) {

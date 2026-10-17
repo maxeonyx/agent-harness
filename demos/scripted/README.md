@@ -13,6 +13,7 @@ What to look for:
   - `say TEXT`
   - `tool NAME JSON`
   - `long N`
+  - `vary TEXT` (adds which time this request was asked, so a retry gives other words)
   - `error STATUS TEXT`
   - `limit SECONDS`
   - `fail TEXT`
