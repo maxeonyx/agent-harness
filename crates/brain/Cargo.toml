@@ -8,6 +8,7 @@ description = "The brain: decides what every replica says, works through its to-
 [dependencies]
 harness-core = { path = "../core" }
 harness-face-web = { path = "../face-web" }
+harness-limb-browser = { path = "../limb-browser" }
 harness-limb-workspace = { path = "../limb-workspace" }
 harness-program = { path = "../program" }
 harness-provider = { path = "../provider" }

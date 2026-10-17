@@ -7,7 +7,8 @@
 //! through the provider, dispatches calls to limbs, runs the meta limb's
 //! calls itself, and settles scopes. It reads nothing from disk but its
 //! database and its own executable, whose digest is the build it records
-//! launching ([`harness_core::build::Launched`]), and keeps nothing a restart would need anywhere else. A
+//! launching ([`harness_core::build::Launched`]) (and, given `--page`, the
+//! page's files, for an edit to show on reload), and keeps nothing a restart would need anywhere else. A
 //! relaunch is no special case: the to-do list of the folded database says
 //! each unfinished request was lost, and each limb that reconnects is
 //! shipped the calls it holds rows for.
@@ -104,7 +105,7 @@ const SOURCE: &str = env!("HARNESS_SOURCE");
 /// What `harness-brain --help` prints. `--model scripted` is
 /// [`harness_provider::SCRIPTED`].
 const USAGE: &str = "\
-usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL]
+usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL] [--page DIR]
        harness-brain --version
 
   --db DB          the database; a new one is made if none is there
@@ -115,8 +116,16 @@ usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model M
                    nothing (it answers from a script in the chat)
   --sample WAV     a recording the page offers to dictate, for a machine with
                    no microphone
+  --page DIR       serve the page's files from DIR (crates/face-web/src/page)
+                   as they are on disk, so an edit shows on reload, instead of
+                   the ones built in
   --version        print the commit it was built from
   --help           print this
+
+HARNESS_BROWSER    the harness's browser: an endpoint to attach to
+                   (host:port, http://… or ws://…) or a browser to launch;
+                   empty for Playwright's headless shell. A changed value is a
+                   new version of the browser limb; unset keeps the one it has
 
 Max starts a chat as he does at a tab: at the page, or from a script with
 `target/release/examples/act PORT chat ROLE DIR|- TEXT`.
@@ -135,6 +144,7 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let (mut db, mut port, mut roles, mut sample, mut model) = (None, None, None, None, None);
+    let mut page = None;
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
@@ -147,6 +157,7 @@ fn run() -> Result<(), String> {
                 outln!("harness-brain {SOURCE}");
                 return Ok(());
             }
+            "--page" => page = Some(PathBuf::from(value()?)),
             "--help" | "-h" => {
                 outln!("{}", USAGE.trim_end());
                 return Ok(());
@@ -190,6 +201,7 @@ fn run() -> Result<(), String> {
             feed: feed.clone(),
             models: offered.clone(),
             source: SOURCE.into(),
+            page,
         },
     );
     // The Windows host, read again for each connection: DHCP can move it.

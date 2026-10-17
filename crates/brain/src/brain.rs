@@ -179,6 +179,9 @@ impl Brain {
         let max = find(&|k| *k == LimbKind::Max);
         let web = find(&|k| *k == LimbKind::Provider);
         let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
+        let browser_limb = find(
+            &|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == harness_limb_browser::KIND),
+        );
         let roles_limb =
             find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == roles::KIND));
         let at = decider.next();
@@ -215,16 +218,51 @@ impl Brain {
         let user = define(&mut facts, user_limb, &|id| {
             Settings::user(id, config.clone(), skills.clone())
         });
+        // The harness's browser: `$HARNESS_BROWSER` names one to attach to
+        // or launch, as the limb's settings say (empty for Playwright's
+        // headless shell), and a new value is a new version of the limb.
+        // Unset, the definition stays as it is.
+        let wanted = std::env::var("HARNESS_BROWSER")
+            .ok()
+            .map(|word| harness_limb_browser::Settings::parse(&word));
+        if let Some(id) = browser_limb
+            && let Some(wanted) = &wanted
+            && state
+                .limb(id)
+                .and_then(harness_limb_browser::Settings::of)
+                .as_ref()
+                != Some(wanted)
+        {
+            facts.push(Fact::Limb(wanted.definition(id)));
+        }
+        let browser = define(&mut facts, browser_limb, &|id| {
+            wanted.clone().unwrap_or_default().definition(id)
+        });
+        let shared: std::collections::BTreeMap<String, LimbId> = [
+            ("meta", meta),
+            ("user", user),
+            ("web", web),
+            ("browser", browser),
+        ]
+        .into_iter()
+        .map(|(n, l)| (n.to_string(), l))
+        .collect();
         let roles = match (roles_limb, roles_dir) {
-            (Some(id), _) => Some(id),
+            // A roles limb defined before a shared limb was is told of it.
+            (Some(id), _) => {
+                let limb = state.limb(id).expect("found among the limbs");
+                if let Some(settings) = roles::Settings::of(limb) {
+                    let mut limbs = settings.limbs.clone();
+                    limbs.extend(shared);
+                    if limbs != settings.limbs {
+                        let settings = roles::Settings { limbs, ..settings };
+                        facts.push(Fact::Limb(settings.definition(id)));
+                    }
+                }
+                Some(id)
+            }
             (None, Some(dir)) => {
-                let settings = roles::Settings {
-                    dir,
-                    limbs: [("meta", meta), ("user", user), ("web", web)]
-                        .into_iter()
-                        .map(|(n, l)| (n.to_string(), l))
-                        .collect(),
-                };
+                let settings = roles::Settings { dir, limbs: shared };
                 Some(define(&mut facts, None, &|id| settings.definition(id)))
             }
             (None, None) => None,
