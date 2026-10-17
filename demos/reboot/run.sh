@@ -7,7 +7,8 @@
 # does: stops it, reloads systemd and starts it from its file alone. Then
 # it kills the brain with SIGKILL and systemd starts it again. Each time
 # the face answers with the same commit, from the build NAME/build links
-# to. At the end the unit is retired: disabled and its file deleted.
+# to. At the end the unit is retired: disabled, its file and its data
+# deleted.
 set -euo pipefail
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 name=${NAME:-reboot-demo} port=${PORT:-4471}
@@ -27,6 +28,7 @@ retire() {
     systemctl --user disable --now --quiet "$unit" 2>/dev/null || true
     rm -f "$file"
     systemctl --user daemon-reload
+    rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness/$name"
 }
 retire
 trap retire EXIT
