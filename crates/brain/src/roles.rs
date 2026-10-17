@@ -40,7 +40,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use harness_core::environment::{
-    Environment, Host, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp,
+    Effort, Environment, Host, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp, UnknownEffort,
 };
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{Digest, EnvironmentId, LimbId, ReplicaId, Time};
@@ -257,12 +257,15 @@ fn parse(text: &str) -> Result<Role, String> {
             .collect()
     };
     let model = one("model").ok_or("no `model`")?;
-    let effort = one("effort").unwrap_or_else(|| "medium".into());
+    let effort: Effort = match one("effort") {
+        Some(named) => named.parse().map_err(|e: UnknownEffort| e.to_string())?,
+        None => Effort::Medium,
+    };
     Ok(Role {
         path: String::new(),
         version: Version::Gone,
         name: one("name").ok_or("no `name`")?,
-        model: model_id(&model),
+        model: harness_provider::model_id(&model).to_owned(),
         params: serde_json::json!({
             "max_tokens": 64000,
             "thinking": {"type": "adaptive"},
@@ -274,16 +277,6 @@ fn parse(text: &str) -> Result<Role, String> {
         starts: list("starts"),
         prompt: prompt.trim().to_string(),
     })
-}
-
-/// Claude Code's model aliases, as the API names them.
-fn model_id(alias: &str) -> String {
-    match alias {
-        "opus" => "claude-opus-5-5",
-        "sonnet" => "claude-sonnet-5",
-        other => other,
-    }
-    .into()
 }
 
 /// The batch that brings the environments up to the role files: each role

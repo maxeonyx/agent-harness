@@ -148,7 +148,7 @@ function entry(s, into, e, index, t, parent) {
   ]));
   const r = e.response;
   if (r && r.ended) {
-    const meta = el("div", "meta", `${clock(r.ended)} · ${((r.ended - r.sent) / 1000).toFixed(1)}s · ${kTokens(r.context)} context · ${kTokens(r.output)} out`);
+    const meta = el("div", "meta", `${clock(r.ended)} · ${((r.ended - r.sent) / 1000).toFixed(1)}s · ${modelName(r.model)}${r.effort ? ` ${r.effort}` : ""} · ${kTokens(r.context)} context · ${kTokens(r.output)} out`);
     // A turn of only tools keeps its timing on its last step, so a folded group shows one.
     (s.group ? s.group.rows[s.group.rows.length - 1] : into).append(meta);
   }

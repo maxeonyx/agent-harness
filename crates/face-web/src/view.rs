@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::delivery::Content;
-use harness_core::environment::{LimbKind, Reach};
+use harness_core::environment::{Effort, Environment, LimbKind, Reach};
 use harness_core::fact::Fact;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
@@ -23,6 +23,23 @@ type Text<'a> = &'a dyn Fn(ValueId) -> Option<Vec<u8>>;
 
 fn text(value: Text, id: ValueId) -> Option<String> {
     value(id).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The model and effort a task's next request runs at, and while its cache
+/// is warm, until when and how many tokens a change would reread without it.
+fn tuning(value: Text, t: &Task, env: &Environment, last: Option<&Ended>) -> Value {
+    let warm = last.and_then(|ended| {
+        let u = ended.usage?;
+        Some(json!({
+            "until": ended.at.at.0 + harness_provider::request::CACHED_FOR_MS,
+            "tokens": u.input + u.cache_read + u.cache_write_short + u.cache_write_long + u.output,
+        }))
+    });
+    json!({
+        "model": t.tuning.model(env),
+        "effort": t.tuning.effort.or_else(|| harness_provider::effort(&value(env.params)?)),
+        "warm": warm,
+    })
 }
 
 /// Every tab's rows, as of the state: each task, each spawn's scope, Max's
@@ -67,6 +84,7 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
                 "id": e.id.to_string(),
                 "name": e.name,
                 "model": e.model,
+                "effort": value(e.params).and_then(|p| harness_provider::effort(&p)),
                 "places": e.places,
             })
         })
@@ -77,6 +95,8 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
         .map(|l| l.id);
     let harness = json!({
         "environments": environments,
+        "models": harness_provider::MODELS.map(|m| json!({"id": m.id, "name": m.name})),
+        "efforts": Effort::ALL,
         "workspaces": workspaces,
         "build": state.launch().map(|(_, l)| format!("build {:.12}", l.build.to_string())),
         "limited": state.limited(now).map(|t| t.0),
@@ -267,7 +287,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "mandate": text(value, t.mandate.text),
         "head": t.head().map(|h| h.to_string()),
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
-        "window": state.environment(t.environment).map(|e| harness_provider::context_window(&e.model)),
+        "window": state.environment(t.environment).map(|e| harness_provider::context_window(t.tuning.model(e))),
+        "tuning": state.environment(t.environment).map(|e| tuning(value, t, e, last)),
         "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
         // Whether Max has paused it, how, and on which task: itself or an
         // ancestor.

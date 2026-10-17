@@ -251,7 +251,7 @@ async function start(how, text, files, after = []) {
     id = next();
     out.push({ Task: [id, { Created: {
       name: h.name, by: null, scope: h.scope, origin: h.origin,
-      mode: "UserFacing", mandate: { text: mandate, brief: null, quotes: [] },
+      mode: "UserFacing", mandate: { text: mandate, brief: null, quotes: [] }, tuning: h.tuning || {},
     } }] });
     if (words) out.push({ Delivery: { id: next(), to: id, content: { Words: digest(words) }, read: "Next" } });
     return [...out, ...after];

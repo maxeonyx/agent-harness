@@ -19,9 +19,10 @@ function buildNew() {
   const places = el("span");
   places.style.display = "contents";
   const fill = () => places.replaceChildren(...placesOf(role.value).flatMap(placeField));
-  role.onchange = () => { drafts.set("new:role", role.value); fill(); };
+  role.onchange = () => { drafts.set("new:role", role.value); fill(); renderTune(null); };
   fill();
   picks.replaceChildren(role, places);
+  renderTune(null);
 }
 const placesOf = (role) => view.environments.find((e) => e.name === role)?.places || [];
 // A place's field: a workspace's is a directory, offered from those known.
@@ -58,7 +59,7 @@ async function startNew(text, files) {
       if (!known) out.push({ Limb: { id: limb, name, kind: { Plugin: { kind: place, config: JSON.stringify({ dir: name }) } } } });
       places[place] = limb;
     }
-    return { name: nameFrom(text), scope: "Max", origin: { Fresh: { environment: env.id, places } } };
+    return { name: nameFrom(text), scope: "Max", origin: { Fresh: { environment: env.id, places } }, tuning: newTuning() };
   }, text, files);
   if (why) { giveBack(NEW, text, files); return say(`not started: ${why}`, true); }
 }

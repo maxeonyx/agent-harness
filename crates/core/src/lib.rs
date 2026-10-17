@@ -215,10 +215,10 @@
 //! lifecycles, which Bx's artifacts are not; going back to an entry does
 //! not go back in the world, since the files a context's calls wrote are
 //! not versioned with it (restoring them would be an act of its workspace's
-//! limb); a limb on another machine runs
-//! a build installed there under its hash, as a Bx artifact is, but who may
-//! reach it is the host's own access control, outside any definition, as
-//! Bx keeps trust outside the build; a replica is a mutable timeline
+//! limb); a limb on another machine runs a build installed there under its
+//! hash, as a Bx artifact is, but who may reach it is the host's own access
+//! control, outside any definition, as Bx keeps trust outside the build; a
+//! replica is a mutable timeline
 //! and a time is not a hash, so the same bytes said twice are two records;
 //! and records are collected by the durability their schema declares, not
 //! by what is still referenced.

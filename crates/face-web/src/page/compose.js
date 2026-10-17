@@ -250,7 +250,7 @@ function buildCompose(id) {
   line.append(box, side);
   const row = el("div", "row2");
   const sample = el("button", "later sample", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
-  row.append(sample, el("span", "picks"), el("span", "status"));
+  row.append(sample, el("span", "picks"), el("span", "status"), el("span", "tune"));
   wrap.append(el("div", "others"), tray, line, row);
   // What Max can do to the task itself floats outside the card, beside it.
   compose.append(wrap, el("div", "acts"));
@@ -276,6 +276,63 @@ function buildCompose(id) {
   renderOthers();
   renderComposeState(t);
 }
+// ─── Model and effort ──────────────────────────────────────────────────────
+// The pill under the send: the model and effort the chat's next request
+// runs at, "Opus · high". Each is a choice of its own; choosing its role's
+// leaves it to the role. While its cache is warm, each other choice says
+// what it costs: the whole context read again without the cache. A new
+// chat's choice is kept with its draft and goes into the fact that starts
+// it.
+const modelName = (id) => view.models?.find((m) => m.id === id)?.name || id;
+function tuneOf(t) {
+  if (t) return { env: view.environments.find((e) => e.name === t.environment), ...t.tuning };
+  const env = view.environments.find((e) => e.name === $("#n-role")?.value);
+  return { env, model: drafts.get("new:model") || env?.model, effort: drafts.get("new:effort") || env?.effort, warm: null };
+}
+function renderTune(t) {
+  const pill = $(".tune", compose);
+  if (!pill || (t && isDone(t))) return pill?.replaceChildren();
+  const now = tuneOf(t);
+  if (!now.env || !now.model) return pill.replaceChildren();
+  const warm = now.warm && now.warm.until > Date.now() ? now.warm.tokens : 0;
+  const key = `${now.model}|${now.effort}|${warm}|${now.env.name}`;
+  if (pill.dataset.key === key) return;
+  pill.dataset.key = key;
+  const cost = warm ? ` · rereads ${kTokens(warm)}` : "";
+  const pick = (title, list, chosen, name, field) => {
+    const s = el("select", "pick"); s.title = title;
+    s.append(...list.map((v) => Object.assign(el("option", null, name(v) + (v === chosen ? "" : cost)), { value: v })));
+    s.value = chosen;
+    s.onchange = () => retune(t, now, field, s.value);
+    return s;
+  };
+  const models = view.models.map((m) => m.id);
+  if (!models.includes(now.model)) models.push(now.model);
+  pill.title = warm ? `Changing either reads the whole context again without the cache: ${kTokens(warm)} tokens` : "The model and effort its next request runs at";
+  pill.replaceChildren(
+    pick("Its model", models, now.model, modelName, "model"),
+    el("span", "dot", "·"),
+    pick("How hard it thinks", view.efforts, now.effort, (e) => e, "effort"),
+  );
+}
+// The whole setting at once, with what is its role's left to the role.
+async function retune(t, now, field, value) {
+  const next = { model: now.model, effort: now.effort, [field]: value };
+  if (!t) { drafts.set(`new:${field}`, value === now.env[field] ? "" : value); return renderTune(null); }
+  const tuning = {};
+  if (next.model !== now.env.model) tuning.model = next.model;
+  if (next.effort !== now.env.effort) tuning.effort = next.effort;
+  const why = await act({ Task: [t.id, { Tuned: tuning }] });
+  if (why) say(`not changed: ${why}`, true);
+}
+// What a new chat's Created says it runs at.
+function newTuning() {
+  const now = tuneOf(null), tuning = {};
+  if (now.model && now.model !== now.env?.model) tuning.model = now.model;
+  if (now.effort && now.effort !== now.env?.effort) tuning.effort = now.effort;
+  return tuning;
+}
+
 // Send or Queue: its icon, and the word it shows once staged.
 function goButton(name, cls, word, tip) {
   const b = icon(name, `go ${cls}`, tip);
@@ -304,6 +361,7 @@ function renderComposeState(t) {
   send.classList.toggle("locked", locked);
   send.title = locked ? "Changed on another device a moment ago" : "Send (Enter, twice)";
   $(".box", compose).classList.toggle("staged", !!staged);
+  renderTune(t);
 }
 // The first press stages, the second sends; the other button restages as
 // itself. A press while dictating ends the dictation and stages, and a
