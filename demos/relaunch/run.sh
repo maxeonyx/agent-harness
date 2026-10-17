@@ -27,9 +27,11 @@ rm -rf "$work" "$home/$name"
 mkdir -p "$work/ws"
 git clone -q "$repo" "$work/clone"
 git -C "$work/clone" checkout -q --detach "$(git -C "$repo" rev-parse HEAD)"
-# Share this clone's target directory, so nothing builds from scratch.
+# A target directory of its own, kept between runs so dependencies stay
+# built. Never this clone's: cargo would take one clone's build as fresh
+# for the other, and this clone's binaries would be the demo's commits.
 mkdir "$work/clone/.cargo"
-printf '[build]\ntarget-dir = "%s/target"\n' "$repo" > "$work/clone/.cargo/config.toml"
+printf '[build]\ntarget-dir = "%s/.demo-relaunch-target.ignore"\n' "$repo" > "$work/clone/.cargo/config.toml"
 git -C "$work/clone" config user.name demo
 git -C "$work/clone" config user.email demo@localhost
 
