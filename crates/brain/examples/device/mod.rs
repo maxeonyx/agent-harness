@@ -170,6 +170,7 @@ impl Device {
     /// The harness row's `list`, such as its environments or workspaces:
     /// the `id` of the one whose `key` is `value`.
     fn harness_id<T: std::str::FromStr>(&self, list: &str, key: &str, value: &str) -> Option<T> {
+        self.tab.view()?;
         let Some(FaceRow::Harness(row)) = self.rows().get(&FaceKey::Harness) else {
             return None;
         };
