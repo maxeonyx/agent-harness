@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use imbl::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
-use crate::call::{CallEvent, Caller, Outcome as CallOutcome};
+use crate::call::{CallEvent, Caller, Outcome as CallOutcome, Owner};
 use crate::context::{EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::Binding;
@@ -507,6 +507,10 @@ pub enum Input {
     Late(CallId),
     /// One of Max's actions in its chat has settled. Rides along.
     MaxAction(CallId),
+    /// A member passed it one of its running background calls
+    /// ([`crate::call::CallEvent::Passed`]), which is its own from now on.
+    /// Rides along.
+    Passed(CallId),
     /// Max's words, or a turn the harness asks for. Wakes it.
     Delivery(DeliveryId),
 }
@@ -516,7 +520,7 @@ impl Input {
     pub fn wakes(&self) -> bool {
         match self {
             Input::Background(_) | Input::Late(_) | Input::Delivery(_) => true,
-            Input::Result(_) | Input::MaxAction(_) => false,
+            Input::Result(_) | Input::MaxAction(_) | Input::Passed(_) => false,
         }
     }
 
@@ -527,6 +531,7 @@ impl Input {
                 Rendered::Call(b),
             ) => a == b,
             (Input::Delivery(a), Rendered::Delivery(b)) => a == b,
+            (Input::Passed(a), Rendered::Note(Note::Passed { call: b })) => a == b,
             _ => false,
         }
     }
@@ -1327,7 +1332,23 @@ impl Task {
                 Ok(())
             }
             CallEvent::Settled(_) => self.settled(id, at),
-            CallEvent::Dispatched | CallEvent::Stopping { .. } => Err(Rejected::NotForTask),
+            CallEvent::Passed { to, .. } => {
+                if let Some(i) = self.background.iter().position(|c| *c == id) {
+                    self.background.remove(i);
+                } else if *to == Owner::Task(self.id) {
+                    if self.drain().is_some() {
+                        return Err(Rejected::Draining);
+                    }
+                    self.background.push(id);
+                    self.pending.push(Input::Passed(id));
+                } else {
+                    return Err(Rejected::NotForTask);
+                }
+                Ok(())
+            }
+            CallEvent::Dispatched | CallEvent::Stopping { .. } | CallEvent::Abandon => {
+                Err(Rejected::NotForTask)
+            }
         }
     }
 

@@ -5,9 +5,11 @@
 //! finished children, and which settles with every member's result once
 //! the last is done. `add_sibling` adds one task to the caller's own scope
 //! and returns at once. `handover` moves the caller to a new root once its
-//! round is over, carrying only its note. `background` makes a call to
-//! one of the caller's other tools that no round waits on: its result
-//! arrives as a message, and the caller cannot finish until it has. Their effects (the members' `Created` facts, with a
+//! round is over, carrying only its note. `background` makes a named call
+//! to one of the caller's other tools that no round waits on: its result
+//! arrives as a message, and its owner cannot finish until it has. `stop`
+//! abandons one of those calls, and `pass` hands one up the tree
+//! ([`harness_core::call::Owner`]). Their effects (the members' `Created` facts, with a
 //! limb for each new clone) are appended in the same batch as the
 //! `Dispatched`, so a crash leaves both or neither, and a restart never
 //! spawns twice.
@@ -28,6 +30,8 @@ pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
 pub const HANDOVER: &str = "handover";
 pub const BACKGROUND: &str = "background";
+pub const STOP: &str = "stop";
+pub const PASS: &str = "pass";
 
 pub fn definition(id: LimbId) -> Limb {
     Limb {
@@ -44,6 +48,9 @@ pub fn description(limb: LimbId, roles: &[&str], member: bool) -> Description {
         "You can start other agents with `spawn`. One call starts a scope: a list of tasks that run at the same time, \
 and returns when every one of them has finished, with each one's result (its last message). \
 While they run you wait, so put everything that can run in parallel into one call.\n\n\
+Do your own work by forking: give each part of it to a fork, which does it and returns a summary, so your context \
+keeps the results without the tool calls that produced them. Fork one part at a time when each depends on the \
+last. Start a fresh agent for a larger task, or for work in another role.\n\n\
 Each task is a fork of you, a fresh agent, or a resume of an agent you started before that has finished. \
 A fork continues from this exact point of your context: it knows everything you know, so its mandate can be short, \
 and it shares your cache, so it is cheap. It works in your directory with you. \
@@ -66,8 +73,11 @@ you write: use it when your context has grown long, or before a new phase of the
 write what the next context needs: where the work stands, what you decided and why, what is next, and Max's words verbatim.",
     );
     said.push_str(
-        "\n\n`background` runs one of your other tools without waiting for it: it returns at once, the tool's result \
-reaches you as a message when it settles, and you cannot finish until it has.",
+        "\n\n`background` runs one of your other tools without waiting for it, under a `name` you give it: it returns \
+at once, and the tool's result reaches you as a message when it settles. You cannot finish while background work you \
+own still runs. `stop` it when you no longer need it, or `pass` it to the agent that started you (to Max, if he \
+started you), who owns it from then on: do that only for what someone will still use after you finish, such as a \
+dev server or a browser tab, and say why.",
     );
     if member {
         said.push_str(
@@ -122,16 +132,42 @@ and returns at once: the agent that started you gets its result with yours.",
         "input_schema": {
             "type": "object",
             "properties": {
+                "name": { "type": "string", "description": "What to call it, unique among your running background work, such as `dev-server`." },
                 "tool": { "type": "string", "description": "The tool's name." },
                 "input": { "type": "object", "description": "The tool's input, as you would give it directly." }
             },
-            "required": ["tool", "input"]
+            "required": ["name", "tool", "input"]
+        }
+    });
+    let stop = json!({
+        "name": STOP,
+        "description": "Stop one of your running background calls. Its outcome still comes to you as a message.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "call": { "type": "string", "description": "The background call's name." }
+            },
+            "required": ["call"]
+        }
+    });
+    let pass = json!({
+        "name": PASS,
+        "description": "Hand one of your running background calls to the agent that started you, or to Max if he started you. It keeps running, it is theirs to use and stop, and its outcome goes to them.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "call": { "type": "string", "description": "The background call's name." },
+                "why": { "type": "string", "description": "What it is for, and what its new owner should do with it." }
+            },
+            "required": ["call", "why"]
         }
     });
     let mut tools = vec![
         tool(SPAWN, spawn),
         tool(HANDOVER, handover),
         tool(BACKGROUND, background),
+        tool(STOP, stop),
+        tool(PASS, pass),
     ];
     if member {
         let sibling = json!({
@@ -181,14 +217,50 @@ pub fn note(input: &[u8]) -> String {
         .unwrap_or_default()
 }
 
-/// A background call's tool and its input.
-pub fn background(input: &[u8]) -> Result<(String, Bytes), String> {
+/// A background call's name, its tool and its input.
+pub fn background(input: &[u8]) -> Result<(String, String, Bytes), String> {
     let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
+    let name = value["name"]
+        .as_str()
+        .filter(|n| !n.is_empty())
+        .ok_or("`name` must name the call")?;
     let tool = value["tool"].as_str().ok_or("`tool` must name a tool")?;
     if !value["input"].is_object() {
         return Err("`input` must be the tool's input object".into());
     }
-    Ok((tool.to_owned(), Bytes::from(value["input"].to_string())))
+    Ok((
+        name.to_owned(),
+        tool.to_owned(),
+        Bytes::from(value["input"].to_string()),
+    ))
+}
+
+/// The running background call a `stop` or `pass` names among those
+/// `owner` owns, and a pass's reason.
+pub fn owned(state: &State, owner: &Task, input: &[u8]) -> Result<(CallId, String), String> {
+    let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
+    let name = value["call"]
+        .as_str()
+        .ok_or("`call` must name a background call")?;
+    let why = value["why"].as_str().unwrap_or_default().to_owned();
+    let call = named(state, owner, name).ok_or(format!(
+        "you have no running background call named `{name}`"
+    ))?;
+    match state.call(call) {
+        Some(record) if record.abandoned || record.stopping.is_some() => {
+            Err(format!("`{name}` is already stopping"))
+        }
+        _ => Ok((call, why)),
+    }
+}
+
+/// The newest of `owner`'s running background calls named `name`.
+fn named(state: &State, owner: &Task, name: &str) -> Option<CallId> {
+    owner.background.iter().rev().copied().find(|c| {
+        state.call(*c).is_some_and(
+            |r| matches!(&r.call.caller, Caller::Background { name: n, .. } if n == name),
+        )
+    })
 }
 
 /// A spawn or add_sibling call's input.
@@ -301,12 +373,18 @@ pub fn expects(context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
 /// A `background` call's input as the call it starts, with its input's
 /// bytes: routed by the caller's binding, never to the meta limb.
 pub fn background_call(
+    state: &State,
     parent: &Task,
     from: CallId,
     meta: LimbId,
     input: &[u8],
 ) -> Result<(Call, Bytes), String> {
-    let (tool, input) = background(input)?;
+    let (name, tool, input) = background(input)?;
+    if named(state, parent, &name).is_some() {
+        return Err(format!(
+            "you already have background work named `{name}` running"
+        ));
+    }
     let context = parent.context().ok_or("you have no context")?;
     let limb = context
         .binding
@@ -319,6 +397,7 @@ pub fn background_call(
         caller: Caller::Background {
             task: parent.id,
             from,
+            name,
         },
         expects: expects(context, Some(limb)),
         tool,

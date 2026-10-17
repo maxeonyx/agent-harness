@@ -298,6 +298,10 @@ pub enum Note {
     /// calls, or for an aside the call its source is waiting on. Their real
     /// results go to the parent's branch.
     Elsewhere { call: CallId },
+    /// A member passed the task one of its running background calls
+    /// ([`crate::task::Input::Passed`]): whose it was, why, and that it is
+    /// the task's to stop or pass on now.
+    Passed { call: CallId },
     /// Things this context embodies have changed since. `told` were only
     /// announced ("changed after you read it"), so the context still embodies
     /// the old versions and the next request announces only what moves

@@ -78,8 +78,10 @@ function fillTip() {
   if (id?.startsWith("b:")) {
     const n = graph.nodes.get(id);
     if (!n) return hideTip();
-    lines.push(el("b", null, n.call.tool), el("div", "now", `started ${ago(n.call.made)} ago`));
-    const input = gist(n.call.input);
+    const c = n.call;
+    lines.push(el("b", null, c.name ? `${c.name}: ${c.tool}` : c.tool), el("div", "now", `started ${ago(c.made)} ago`));
+    if (c.owner === "max" && c.passed) lines.push(el("div", null, `Passed to you by ${byId[c.passed.by]?.name || "an agent"}: ${c.passed.why}`));
+    const input = gist(c.input);
     if (input) lines.push(el("div", "m", input));
   } else {
     t = byId[id];
@@ -101,6 +103,7 @@ function fillTip() {
   });
   while (words.children.length > lines.length) words.lastChild.remove();
   if (t) fillTipActions(t);
+  else fillCallActions(graph.nodes.get(id).call);
   tip.hidden = false;
 }
 // The task it belongs to, its actions, and Open: drawn again only when
@@ -122,6 +125,19 @@ function fillTipActions(t) {
   const up = parent && el("button", "up", `↑ ${parent.name}`);
   if (up) { up.type = "button"; up.title = `Open ${parent.name}`; up.onclick = () => { hideTip(); go(parent.id); }; }
   foot.replaceChildren(...[up, acts, why].filter(Boolean));
+}
+// Background work's actions, drawn again only when they change.
+function fillCallActions(call) {
+  const list = callActionsOf(call), pinned = !!tipFor.pinned;
+  const key = `${call.id}:${pinned}:${actionsKey(list)}`;
+  let foot = tip.querySelector(".foot");
+  if (foot?.dataset.key === key) return;
+  if (!foot) tip.append(foot = el("div", "foot"));
+  foot.dataset.key = key;
+  const why = el("div", "why");
+  const acts = el("div", "acts");
+  acts.append(...list.map((a) => actionButton(a, pinned, (text) => { why.textContent = text; })));
+  foot.replaceChildren(acts, why);
 }
 // Beside the node, below it if there is room; pinned, at the pointer.
 function placeTip() {

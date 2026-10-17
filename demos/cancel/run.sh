@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Stopping work, end to end, on real brains: Max abandons a task whose
 # background worker saves its state; Max abandons one whose process ignores
-# SIGTERM, with a deadline too short for it; and Ctrl-C, once and then
-# twice, on a brain in a terminal, then once more to see it carry on from
-# the cache. After each, every process the brain started is looked for.
+# SIGTERM, with a deadline too short for it; Ctrl-C, once and then twice,
+# on a brain in a terminal, then once more to see it carry on from the
+# cache; and an agent that passes its background worker to Max and
+# finishes, while the worker runs on until Max stops it. After each, every
+# process the brain started is looked for.
 # Watch at https://mx-hv-mj.local:4326.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -108,3 +110,23 @@ python3 demos/cancel/terminal.py "$dir/c3.log" "responded" 0 2 0.2 -- \
   env "$mark=1" "$brain" --roles roles --role engineer --port "$port" --db "$dir/c.sqlite"
 say "left running:"
 left
+
+say "== D. The agent passes its background worker to Max and finishes; the worker runs on until Max stops it"
+: > "$dir/repo/worker.log"
+launch d "Start \`./worker.sh\` in the background: call the \`background\` tool with the \`name\` \`worker\`, to run \`bash\` with the command \`./worker.sh\` and \`timeout_ms\` 600000. It is a server Max will go on using after you finish, so then pass it to Max with the \`pass\` tool, saying why. Then say in one line what you did, and end your turn."
+say "its own background work, and what it passed to Max:"
+q "$root | {background: [.background[].name], handed: [.handed[] | {name, owner, why: .passed.why}]}" | sed 's/^/          /'
+say "Max presses Done: it finishes, as nothing it owns still runs"
+target/release/examples/act "$port" done | sed 's/^/          the brain: /'
+until_root '.outcome != null' 180
+say "finished: $(q "$root | .outcome.kind"); left running:"
+left
+call=$(q "$root | .handed[0].id")
+say "Max stops the worker passed to him, $call"
+target/release/examples/act "$port" stop "$call" | sed 's/^/          the brain: /'
+until_root '(.handed | length) == 0' 120
+say "stopped; worker.log:"
+sed 's/^/          /' "$dir/repo/worker.log"
+say "left running:"
+left
+finish d

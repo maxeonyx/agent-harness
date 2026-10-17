@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use harness_core::call::{Caller, Outcome as CallOutcome};
+use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::delivery::Content;
 use harness_core::environment::LimbKind;
 use harness_core::fact::Fact;
@@ -297,6 +297,12 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "trouble": last.map_or(Value::Null, trouble),
         "pending": pending_words(state, value, t),
         "background": t.background.iter().map(|c| call(state, value, *c)).collect::<Vec<_>>(),
+        // What it passed to Max that still runs: his now.
+        "handed": state
+            .handed()
+            .filter(|(_, r)| r.passed.last().is_some_and(|h| h.by == t.id))
+            .map(|(c, _)| call(state, value, c))
+            .collect::<Vec<_>>(),
         "tokens": last.and_then(|e| e.usage).map(|u| json!({
             "context": u.input + u.cache_read + u.cache_write_short + u.cache_write_long,
             "output": u.output,
@@ -405,6 +411,16 @@ fn call(state: &State, value: Text, id: CallId) -> Value {
         "made": record.made.at.0,
         "status": status,
         "children": children,
+        "name": match &record.call.caller {
+            Caller::Background { name, .. } => Some(name),
+            _ => None,
+        },
+        "owner": match record.owner {
+            Owner::Task(task) => task.to_string(),
+            Owner::Max => "max".into(),
+        },
+        "passed": record.passed.last().map(|h| json!({"by": h.by.to_string(), "why": h.why})),
+        "abandoned": record.abandoned,
     })
 }
 
@@ -427,7 +443,12 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                         None => "the harness".into(),
                     },
                 };
-                format!("{by}'s {}", c.call.tool)
+                match &c.call.caller {
+                    Caller::Background { name, .. } if !name.is_empty() => {
+                        format!("{by}'s {} `{name}`", c.call.tool)
+                    }
+                    _ => format!("{by}'s {}", c.call.tool),
+                }
             },
         )
     };
@@ -513,6 +534,14 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                 E::Stopping { within } => {
                     format!("{} stopping, within {}s", call_name(*id), within / 1000)
                 }
+                E::Passed { to, why } => {
+                    let to = match to {
+                        Owner::Task(task) => name(*task),
+                        Owner::Max => "Max".into(),
+                    };
+                    format!("{} passed to {to}: {why}", call_name(*id))
+                }
+                E::Abandon => format!("{} abandoned", call_name(*id)),
                 E::Settled(o) => format!("{} {}", call_name(*id), outcome(o)),
             }
         }

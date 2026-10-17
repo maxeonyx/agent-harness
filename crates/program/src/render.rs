@@ -2,7 +2,7 @@
 //! a model. Policy: the core fixes what must be rendered (every result of
 //! the last round) and leaves the rest here.
 
-use harness_core::call::{Caller, Outcome, Output};
+use harness_core::call::{Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Binding, Description};
@@ -200,6 +200,12 @@ pub fn turn(
             }
             Input::Background(call) | Input::Late(call) | Input::MaxAction(call) => {
                 texts.push(Rendered::Call(call), vec![activity(state, values, call)]);
+            }
+            Input::Passed(call) => {
+                texts.push(
+                    Rendered::Note(Note::Passed { call }),
+                    vec![passed(state, task, call)],
+                );
             }
             Input::Delivery(id) => {
                 let Some(delivered) = state.delivery(id) else {
@@ -421,6 +427,37 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
     text(&format!("[harness] {what}:\n{}", said.join("\n")))
 }
 
+/// A background call passed to `task`: whose it was, why, and that it is
+/// the task's own now.
+fn passed(state: &State, task: &Task, call: CallId) -> String {
+    let Some(record) = state.call(call) else {
+        return text("[harness] Background work was passed to you.");
+    };
+    let name = match &record.call.caller {
+        Caller::Background { name, .. } => name.as_str(),
+        _ => "",
+    };
+    let handed = record
+        .passed
+        .iter()
+        .rev()
+        .find(|h| h.to == Owner::Task(task.id));
+    let (by, why) = handed.map_or(("an agent you started", ""), |h| {
+        (
+            state
+                .task(h.by)
+                .map_or("an agent you started", |t| t.name.as_str()),
+            h.why.as_str(),
+        )
+    });
+    text(&format!(
+        "[harness] `{by}` passed you its background `{}` call `{name}`, which is still running: {why}\n\
+It is yours now: its result comes to you as a message when it settles, and you cannot finish while it runs. \
+`stop` it, or `pass` it up in turn.",
+        record.call.tool
+    ))
+}
+
 /// What a delivery made `at` says.
 fn delivery(values: Values, task: &Task, content: &Content, at: Timestamp) -> Vec<String> {
     let aside = matches!(task.origin, Origin::Aside { .. });
@@ -446,9 +483,9 @@ left undone. This is your last message here."
                 .to_owned()
         }
         Content::Prompt(Prompt::Lingering) => {
-            "Your turn ended, but work you started in the background is still running. Its result wakes you \
-when it settles, and you cannot finish before then. If there is nothing else to do meanwhile, end your turn \
-to wait."
+            "Your turn ended, but background work you own is still running. Its result wakes you when it \
+settles, and you cannot finish before then. `stop` what you no longer need; `pass` up what someone will still use \
+after you finish. If there is nothing else to do meanwhile, end your turn to wait."
                 .to_owned()
         }
         Content::Prompt(Prompt::Tidy) => {

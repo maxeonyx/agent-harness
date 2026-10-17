@@ -4,6 +4,7 @@
 //! ```text
 //! act PORT done           Done on the task Max started
 //! act PORT abandon MS     Abandon it, with MS milliseconds to finish
+//! act PORT stop CALL      Stop a call, such as one passed to Max
 //! ```
 //!
 //! It prints `included`, or `refused: <why>` and exits 1.
@@ -20,7 +21,7 @@ use harness_substrate::Status;
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let usage = || -> ! {
-        eprintln!("usage: act PORT done | act PORT abandon MS");
+        eprintln!("usage: act PORT done | act PORT abandon MS | act PORT stop CALL");
         exit(2)
     };
     let Some(port) = args.first().and_then(|p| p.parse().ok()) else {
@@ -33,6 +34,10 @@ fn main() {
         (Some("done"), None) => tab.done(root),
         (Some("abandon"), Some(ms)) => match ms.parse() {
             Ok(ms) => tab.abandon(root, Duration::from_millis(ms)),
+            Err(_) => usage(),
+        },
+        (Some("stop"), Some(call)) => match call.parse() {
+            Ok(call) => tab.stop(call),
             Err(_) => usage(),
         },
         _ => usage(),
