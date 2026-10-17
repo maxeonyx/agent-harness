@@ -11,7 +11,7 @@ use harness_core::context::{Entry, EntryId, Message, Role, Root};
 use harness_core::id::{ModelCallId, ReplicaId, TaskId, ValueId};
 use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall};
-use harness_provider::{Client, Finished, IDENTITY, Login, Progress};
+use harness_provider::{Client, Finished, IDENTITY, Login, Progress, resolve};
 use harness_runtime::Cancel;
 use serde_json::json;
 
@@ -62,10 +62,15 @@ impl Store {
 }
 
 fn main() {
-    let model = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "claude-sonnet-5".into());
+    let name = std::env::args().nth(1).unwrap_or_else(|| "haiku".into());
     let client = Client::new(Login::claude_code().unwrap_or_else(|e| fail(&e.to_string())));
+    let models = client
+        .models(&Cancel::new())
+        .unwrap_or_else(|e| fail(&format!("listing the models: {e}")));
+    let model = resolve(&name, models.iter().map(|m| m.id.as_str()))
+        .unwrap_or_else(|| fail(&format!("the provider lists no model {name}")))
+        .to_string();
+    println!("model: {model}");
     let start = Instant::now();
     let mut store = Store::default();
     let params = store.value(br#"{"max_tokens":2048}"#.to_vec());

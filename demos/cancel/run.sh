@@ -7,7 +7,8 @@
 # finishes, while the worker runs on until Max stops it; and a brain run
 # as a systemd service, restarted while a command runs. After each, every
 # process the brain started is looked for, with the unit it is in.
-# Watch at https://mx-hv-mj.local:4346.
+# Every role runs on Sonnet (MODEL=… for another; the effort is the
+# role's). Watch at https://mx-hv-mj.local:4346.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example act
@@ -15,6 +16,7 @@ dir=target/cancel-demo
 port=${PORT:-4346}
 url=https://mx-hv-mj.local:$port
 brain=target/release/harness-brain
+model=${MODEL:-sonnet}
 rm -rf "$dir"
 mkdir -p "$dir"
 demos/cancel/scratch.sh "$dir/repo"
@@ -36,7 +38,8 @@ left() {
       p=$(basename "$(dirname "$e")")
       # The unit is the last part of its cgroup: a service, or a limb's scope.
       ps -o pid=,pgid=,sid=,stat=,args= -p "$p" | awk -v u="$(sed 's|.*/||' "/proc/$p/cgroup" 2>/dev/null)" \
-        '{ printf "          %7s %7s %7s %-4s %-40s", $1, $2, $3, $4, u; $1=$2=$3=$4=""; sub(/^ +/, ""); print " " $0 }'
+        '{ printf "          %7s %7s %7s %-4s %-40s", $1, $2, $3, $4, u; $1=$2=$3=$4=""; sub(/^ +/, ""); print " " $0 }' ||
+        continue # it exited while being looked at
       any=1
     fi
   done
@@ -59,7 +62,7 @@ until_root() { # jq condition on the root task, seconds
 # Start a brain in the background on a new database, wait for the root to
 # end its first turn, and say what is running.
 launch() { # name mandate
-  env "$mark=1" "$brain" --roles roles --port "$port" --db "$dir/$1.sqlite" > "$dir/$1.log" 2>&1 &
+  env "$mark=1" "$brain" --roles roles --model "$model" --port "$port" --db "$dir/$1.sqlite" > "$dir/$1.log" 2>&1 &
   pid=$!
   target/release/examples/act "$port" chat engineer "$PWD/$dir/repo" "$2" | sed 's/^/          the brain: /'
   until_root '.waiting.kind == "max"' 180
@@ -100,19 +103,19 @@ printf '%s\n' "Run \`./slow.sh\` with \`bash\` (it takes about a minute), then t
 # Max starts the task at a tab once the brain in the terminal serves.
 target/release/examples/act "$port" chat engineer "$PWD/$dir/repo" "$(cat "$dir/c.md")" > /dev/null &
 python3 demos/cancel/terminal.py "$dir/c1.log" "./slow.sh" 3 1 0 -- \
-  env "$mark=1" "$brain" --roles roles --port "$port" --db "$dir/c.sqlite"
+  env "$mark=1" "$brain" --roles roles --model "$model" --port "$port" --db "$dir/c.sqlite"
 say "left running:"
 left
 
 say "== C2. The same database again; Ctrl-C twice while its request waits for the first byte"
 python3 demos/cancel/terminal.py "$dir/c2.log" "request sent" 0.8 2 0.2 -- \
-  env "$mark=1" "$brain" --roles roles --port "$port" --db "$dir/c.sqlite"
+  env "$mark=1" "$brain" --roles roles --model "$model" --port "$port" --db "$dir/c.sqlite"
 say "left running:"
 left
 
 say "== C3. Again: the request the last Ctrl-C cut is sent again, and reads the cache"
 python3 demos/cancel/terminal.py "$dir/c3.log" "responded" 0 2 0.2 -- \
-  env "$mark=1" "$brain" --roles roles --port "$port" --db "$dir/c.sqlite"
+  env "$mark=1" "$brain" --roles roles --model "$model" --port "$port" --db "$dir/c.sqlite"
 say "left running:"
 left
 
@@ -143,7 +146,7 @@ printf '%s\n' "Run \`./slow.sh\` with \`bash\` (it takes about a minute), then t
 cat > "$dir/e.sh" <<EOF
 #!/usr/bin/env bash
 [ -e $dir/e.sqlite ] || $PWD/target/release/examples/act $port chat engineer $PWD/$dir/repo "\$(cat $PWD/$dir/e.md)" &
-exec $PWD/$brain --roles roles --port $port --db $dir/e.sqlite
+exec $PWD/$brain --roles roles --model $model --port $port --db $dir/e.sqlite
 EOF
 chmod +x "$dir/e.sh"
 systemd-run --user --quiet --unit="$unit" --same-dir \

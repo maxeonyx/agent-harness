@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 
 mod device;
 
-use device::{Device, blocks, status};
+use device::{Device, blocks, role_args, status};
 
 fn main() {
     let port: u16 = env::var("PORT")
@@ -49,9 +49,17 @@ fn main() {
         .unwrap();
     assert!(made.success(), "the scratch repo");
     let db = dir.join("brain.sqlite");
+    // Scripted unless `MODEL` names a real one: then each message asks in
+    // words, and the restarts read the prompt cache.
+    let model = device::model("scripted");
+    let roles = role_args(&dir, &model);
+    let ask = |real: &'static str, script: &'static str| match model.as_str() {
+        "scripted" => script,
+        _ => real,
+    };
 
     title("launch 1: a new database, and a chat with Max");
-    let mut brain = Brain::launch(&db, port, 1);
+    let mut brain = Brain::launch(&db, &roles, port, 1);
     let mut pc = Device::connect("pc", port);
     let mut phone = Device::connect("phone", port);
     pc.pump_until(|d| d.environment("engineer").is_some());
@@ -60,8 +68,11 @@ fn main() {
     pc.chat(
         engineer,
         repo.to_str(),
-        "This chat is a demonstration of the harness. Max sends short messages: do exactly what each asks, \
+        ask(
+            "This chat is a demonstration of the harness. Max sends short messages: do exactly what each asks, \
 in as few words as you can. Now reply only `ready`, and end your turn.",
+            "A demonstration chat.\nsay ready",
+        ),
     );
     brain.wait("responded, EndTurn");
     pc.pump_until(|d| d.session().is_some());
@@ -111,7 +122,13 @@ in as few words as you can. Now reply only `ready`, and end your turn.",
     println!("  agent: {}", brain.wait("responded, EndTurn"));
 
     title("6. A request interrupted before its first byte");
-    let asked = pc.message(session, "Count from 1 to 40, one number per line.");
+    let asked = pc.message(
+        session,
+        ask(
+            "Count from 1 to 40, one number per line.",
+            "slow 2000 long 40",
+        ),
+    );
     pc.pump_until(|d| matches!(d.tab.status(asked), Status::Included));
     let turn = pc
         .turn(session)
@@ -131,13 +148,16 @@ in as few words as you can. Now reply only `ready`, and end your turn.",
     title("5. Ctrl-C mid-command: the brain drains, exits, and the next launch carries on");
     pc.message(
         session,
-        "Use bash to run `sleep 8 && echo slept`, then reply with what it printed, or how it ended.",
+        ask(
+            "Use bash to run `sleep 8 && echo slept`, then reply with what it printed, or how it ended.",
+            "tool bash {\"command\": \"sleep 8 && echo slept\"}\nsay It printed what the result says.",
+        ),
     );
     brain.wait("bash dispatched");
     thread::sleep(Duration::from_secs(1));
     brain.signal("INT");
     brain.wait_exit();
-    let mut brain = Brain::launch(&db, port, 2);
+    let mut brain = Brain::launch(&db, &roles, port, 2);
     pc.reconnect(port);
     phone.reconnect(port);
     let after = brain.wait("responded");
@@ -148,13 +168,19 @@ in as few words as you can. Now reply only `ready`, and end your turn.",
     title(
         "5. Ctrl-C twice mid-request: the brain exits at once, and the next launch sends it again",
     );
-    pc.message(session, "Name three fruits, one per line.");
+    pc.message(
+        session,
+        ask(
+            "Name three fruits, one per line.",
+            "slow 500 say Apple\\nBanana\\nCherry",
+        ),
+    );
     brain.wait("request sent");
     brain.signal("INT");
     thread::sleep(Duration::from_millis(100));
     brain.signal("INT");
     brain.wait_exit();
-    let mut brain = Brain::launch(&db, port, 3);
+    let mut brain = Brain::launch(&db, &roles, port, 3);
     pc.reconnect(port);
     phone.reconnect(port);
     println!("  agent, after the restart: {}", brain.wait("responded"));
@@ -193,9 +219,10 @@ struct Brain {
 }
 
 impl Brain {
-    fn launch(db: &Path, port: u16, n: u32) -> Brain {
+    fn launch(db: &Path, roles: &[String], port: u16, n: u32) -> Brain {
         let mut child = Command::new("target/release/harness-brain")
-            .args(["--roles", "roles", "--db"])
+            .args(roles)
+            .arg("--db")
             .arg(db)
             .args(["--port", &port.to_string()])
             .stdout(Stdio::piped())

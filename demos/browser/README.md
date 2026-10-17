@@ -5,7 +5,7 @@ demos/browser/run.sh                                   # the harness launches a 
 HARNESS_BROWSER=127.0.0.1:9222 demos/browser/run.sh    # or drives the one at this endpoint
 ```
 
-Watch it at https://mx-hv-mj.local:4342 (another port: `PORT=4400 demos/browser/run.sh`). It takes about a minute and a dozen requests on the subscription: Opus for the chat, Sonnet for the browser agent.
+Watch it at https://mx-hv-mj.local:4342 (another port: `PORT=4400 demos/browser/run.sh`). It takes under a minute and about ten requests on the subscription, every role on Sonnet at its own effort (`MODEL=…` for another).
 
 What happens:
 
@@ -24,24 +24,36 @@ Changing it is a new version of the limb's definition, and a running limb switch
 
 ## Real output
 
-A run at 03:38 NZDT on 2026-10-18, attached to a headless shell at `127.0.0.1:9444` (`HARNESS_BROWSER=127.0.0.1:9444 PORT=4410`). Lines are cut at 200 characters.
+A run at 04:05 NZDT on 2026-10-18 on Sonnet, with the headless shell the limb launched (`PORT=4376`). The brain's lines are cut at 170 characters, the rest at 200.
 
 ```
-    8.3s 66e3ee87a1b2fa5e.12  chat-expense-claim created (browser)
-    8.9s 66e3ee87a1b2fa5e.13  browser connected
-    8.9s a54d46806ee94623.1  browser described: 4 tools
-   10.8s 66e3ee87a1b2fa5e.19  chat-expense-claim's tab `claim` made {"url":"file:///…/demos/browser/site/receipts.html"}
-   12.5s 66e3ee87a1b2fa5e.23  chat-expense-claim's page made {"tab": "claim", "script": "return document.body.innerText"}
-   …
-   22.8s 66e3ee87a1b2fa5e.34  chat-expense-claim's browser made {"script": "const t=tab(\"claim\");\nconst rows=[[\"2026-10-02\",\"Air New Zealand – WLG–AKL flight\",\"18
-   23.0s 66e3ee87a1b2fa5e.36  chat-expense-claim's tab `claim` passed to chat: Filled-in claim form for Max to check and submit.
-   23.4s a54d46806ee94623.5  chat-expense-claim's browser completed
-   52.6s 66e3ee87a1b2fa5e.41  chat's spawn completed
-   55.6s 66e3ee87a1b2fa5e.45  chat-expense-claim's tab `claim` passed to Max: The October claim form is filled in but not submitted. Max should check it and submit it him
-   62.4s 66e3ee87a1b2fa5e.48  chat: responded, EndTurn, 0 calls (2 in, 10332 cached, 559 out)
+    7.9s e3876ab41512153b.12  Can you do my October expense-expense-claim created (browser)
+    8.4s e3876ab41512153b.13  browser connected
+    8.4s 32272afa869c115f.1  browser described: 4 tools
+   10.5s e3876ab41512153b.18  Can you do my October expense-expense-claim: responded, ToolUse, 1 calls (4 in, 0 cached, 145 out)
+   10.5s e3876ab41512153b.19  Can you do my October expense-expense-claim's tab `claim` made {"url":"file:///…
+   10.7s e3876ab41512153b.21  Can you do my October expense-expense-claim's tab `claim` dispatched
+   12.0s e3876ab41512153b.23  Can you do my October expense-expense-claim's page made {"tab": "claim", "script": "return document.body.innerText"}
+   12.0s e3876ab41512153b.23  Can you do my October expense-expense-claim: responded, ToolUse, 1 calls (2 in, 11607 cached, 75 out)
+   13.8s e3876ab41512153b.28  Can you do my October expense-expense-claim's browser made {"script": "const t=tab('claim');await t.goto('file:///…
+   13.8s e3876ab41512153b.28  Can you do my October expense-expense-claim: responded, ToolUse, 1 calls (2 in, 11794 cached, 155 out)
+   13.8s e3876ab41512153b.29  Can you do my October expense-expense-claim's browser dispatched
+   13.8s 32272afa869c115f.3  tab 8C6A206F64F146E075A4D922B06712E6 changed
+   13.9s 32272afa869c115f.4  Can you do my October expense-expense-claim's browser completed
+   17.4s e3876ab41512153b.34  Can you do my October expense-expense-claim's browser made {"script": "const t=tab('claim');\nconst r=[['2026-10-02','Air New Zealand – WLG–
+   17.4s e3876ab41512153b.34  Can you do my October expense-expense-claim: responded, ToolUse, 2 calls (2 in, 12148 cached, 536 out)
+   17.4s e3876ab41512153b.35  Can you do my October expense-expense-claim's browser dispatched
+   17.4s e3876ab41512153b.36  Can you do my October expense-expense-claim's tab `claim` passed to Can you do my October expense: Filled claim form for Max to check and su
+   17.5s 32272afa869c115f.5  Can you do my October expense-expense-claim's browser completed
+   21.1s e3876ab41512153b.40  Can you do my October expense-expense-claim: responded, EndTurn, 0 calls (2 in, 12809 cached, 420 out)
+   21.1s e3876ab41512153b.41  Can you do my October expense's spawn completed
+   23.0s e3876ab41512153b.44  Can you do my October expense: responded, ToolUse, 1 calls (4 in, 8821 cached, 104 out)
+   23.0s e3876ab41512153b.45  Can you do my October expense-expense-claim's tab `claim` passed to Max: This tab holds the filled-in October claim form. Max should check i
+   26.6s e3876ab41512153b.48  Can you do my October expense: responded, EndTurn, 0 calls (2 in, 10393 cached, 429 out)
+
 
 == What the browser shows, read over DevTools
-  tab 31141DEB  claim.html  "Expense claim"
+  tab 8C6A206F  claim.html  "Expense claim"
     period: October 2026
     1. 2026-10-02 | Air New Zealand – WLG–AKL flight | 189.00
     2. 2026-10-02 | Uber – Airport to office | 42.50
@@ -50,23 +62,31 @@ A run at 03:38 NZDT on 2026-10-18, attached to a headless shell at `127.0.0.1:94
     5. 2026-10-09 | Noel Leeming – USB-C dock | 229.00
     6. 2026-10-14 | Wellington Parking – Parking, client visit | 18.00
     total: $654.30; not submitted
-  tab 04CAA20F  about:blank  "about:blank"
 
 == Handed to Max: the tab, still open
-  66e3ee87a1b2fa5e.19.1  tab `claim`
+  e3876ab41512153b.19.1  tab `claim`
 
 == Max has checked it and closes the tab: Stop on the call
-  act: Max presses Stop on 66e3ee87a1b2fa5e.19.1
+  act: tab 9f1348113ee29650 linked
+  act: Max presses Stop on e3876ab41512153b.19.1
 included
-  tab 04CAA20F  about:blank  "about:blank"
+  no tabs open
 
 == Max presses Done, and the chat writes its result
+  act: tab 49ff5002d08cfadf linked
+  act: Max presses Done
+included
 == the task is done; its result:
 
-I filled in your October expense claim with the six work receipts, totalling **$654.30 NZD**. I didn't submit it: it's open in the `claim` tab, which is yours to check and submit.
+**Result**
 
-- **What went in:** the flight (189.00), the Uber (42.50), the hotel (164.00), the client coffee (11.80), the USB-C dock (229.00) and the parking (18.00). …
-- **What was left out:** the two receipts marked personal, the groceries (96.20) and the cinema (21.50).
+**Done:** A browser agent filled in Max's October 2026 expense claim with the six work receipts, totalling $654.30 NZD. That matches the sum of the receipts. It didn't submit the form. I passed its ta
+
+**Excluded:** The agent left out two receipts marked personal on the receipts page. These were Countdown groceries ($96.20) and Event Cinemas ($21.50).
+
+**Learned:** The agent found no ambiguous receipts. All eight were dated October, had an amount, and none looked like a duplicate. I couldn't open the file URLs myself, so everything above comes from 
+
+**Left undone:** Max still has to check the form and click Submit himself. I haven't done that.
 ```
 
-The `about:blank` tab is the attached browser's own first tab. No call holds it, so it counts as Max's, and nothing closed it.
+Attached to a browser of your own (`HARNESS_BROWSER`), its own first tab shows too: no call holds it, so it counts as Max's, and nothing closes it.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# A real brain run (Sonnet and Opus), driven only by records said at one of
-# Max's tabs, the way the page drives it: hold, interrupt, the queue, focus,
+# A real brain run (Sonnet at low effort; MODEL=haiku for another), driven
+# only by records said at one of Max's tabs, the way the page drives it: hold, interrupt, the queue, focus,
 # words, stop, refusals in band, and live text. Watch it at
 # https://mx-hv-mj.local:4400 (another port: PORT=...).
 set -euo pipefail

@@ -4,7 +4,7 @@
 demos/face-controls/run.sh
 ```
 
-It starts a real brain run (Sonnet and Opus) on the brain demo's scratch repo and mandate (`demos/brain/scratch.sh`, `demos/brain/mandate.md`), then drives it as Max, only from one tab: a replica on the face's link, `wss://…/link?replica=<id>`, played by the same `Tab` the page runs as wasm. Watch it at https://mx-hv-mj.local:4400 while it runs (another port: `PORT=…`). It takes about two minutes and ends when the root has its result. The script is `crates/brain/examples/face_controls.rs`; its files are in `target/face-controls-demo`.
+It starts a real brain run (every role on Sonnet at low effort, from a copy of `roles/`; `MODEL=haiku` for another) on the brain demo's scratch repo and mandate (`demos/brain/scratch.sh`, `demos/brain/mandate.md`), then drives it as Max, only from one tab: a replica on the face's link, `wss://…/link?replica=<id>`, played by the same `Tab` the page runs as wasm. Watch it at https://mx-hv-mj.local:4400 while it runs (another port: `PORT=…`). It takes about two minutes and ends when the root has its result. The script is `crates/brain/examples/face_controls.rs`; its files are in `target/face-controls-demo`.
 
 What it does, in order:
 
@@ -40,114 +40,107 @@ A pause covers the task and everything under it, and the newest word on the way 
 
 ## Real output
 
-A run at 23:26 NZDT on 2026-10-17:
+A run on Sonnet at low effort at 04:05 NZDT on 2026-10-18, on port 4377:
 
 ```
-  brain launched (pid 1542816), log target/face-controls-demo/brain.log
-  watch it at https://mx-hv-mj.local:4400
-  tab: tab b5c0d8dedebe5881 linked
-   0.1s  the root task is orchestrator
-   0.1s  == pause the root: nothing under it sends a request until it is resumed
+  brain launched (pid 2328588), log target/face-controls-demo/brain.log
+  watch it at https://mx-hv-mj.local:4377
+  tab: tab 91f6d8960a1afee1 linked
+  tab: Max starts a chat in /home/maxeonyx/agent-harness-workspace/agent-harness-r2-retry-same/target/face-controls-demo/repo: "Build textstats with two agents in parallel.\n\nThis repository is a tiny Python package with no code yet; `README.md` says what it should become.\n\nBuild it with two agents working in parallel, in one `spawn` call:\n- a fork of yourself writes `textstats/wordcount.py` and `tests/test_wordcount.py`;\n- a fresh engineer, on the branch `palindromes` in its own clone, writes `textstats/palindromes.py` and `tests/test_palindromes.py`, commits them and pushes the branch.\n\nRead the repository first, so the fork knows what you know; give the fresh engineer everything it needs in its mandate. Each agent runs `./check.sh` before it ends its turn.\n\nWhen both have returned, merge the engineer's branch (`git merge palindromes`), run `./check.sh` yourself, fix anything small, commit everything with git, and end your turn with a short report of what each agent did.\n"
+   0.9s  the root task is Build textstats with two agents in
+   0.9s  == pause the root: nothing under it sends a request until it is resumed
           pause: is included
-   2.2s  paused now: orchestrator
-   7.2s  5 s later: 0 requests sent meanwhile; resume it
+   1.0s  paused now: Build textstats with two agents in
+   6.0s  5 s later: 0 requests sent meanwhile; resume it
           resume: is included
-   7.3s  == park the root once both children are under way: each brings its work to a safe point and waits
+   6.0s  == park the root once both children are under way: each brings its work to a safe point and waits
           park: is included
-  34.2s  orchestrator-palindromes: parked
-  34.2s  orchestrator-wordcount: parked
+  34.5s  Build textstats with two agents in-palindromes: parked
+  34.5s  Build textstats with two agents in-wordcount: parked
           resume: is included
-  34.4s  orchestrator-palindromes: carrying on, on 'model'
-  34.4s  orchestrator-wordcount: carrying on, on 'model'
-  34.4s  == interrupt both children in their next request
-  34.4s  interrupt orchestrator-palindromes while it is on 'model', naming its request 938c87cb3499f4e9.58.0
+  34.8s  Build textstats with two agents in-palindromes: carrying on, on 'model'
+  34.8s  Build textstats with two agents in-wordcount: carrying on, on 'model'
+  34.8s  == interrupt both children in their next request
+  34.8s  interrupt Build textstats with two agents in-palindromes while it is on 'model', naming its request 894c25c4f506913a.48.0
           interrupt: is included
-  34.4s  interrupt orchestrator-wordcount while it is on 'model', naming its request 938c87cb3499f4e9.57.0
+  34.8s  interrupt Build textstats with two agents in-wordcount while it is on 'model', naming its request 894c25c4f506913a.47.0
           interrupt: is included
-          brain: orchestrator-palindromes interrupted
-          brain: orchestrator-wordcount interrupted
-  34.5s  both wait on Max; his queue, oldest first:
-          orchestrator-palindromes: unranked
-          orchestrator-wordcount: unranked
-  34.5s  == reorder the queue: the second to the top
+          brain: Build textstats with two agents in-palindromes interrupted
+          brain: Build textstats with two agents in-wordcount interrupted
+  34.8s  both wait on Max; his queue, oldest first:
+          Build textstats with two agents in-wordcount: unranked
+          Build textstats with two agents in-palindromes: unranked
+  34.8s  == reorder the queue: the second to the top
           the ranking: is included
-          orchestrator-wordcount: placed by you
-          orchestrator-palindromes: placed by you
-  34.5s  == focus the top item, orchestrator-wordcount, and tell it to carry on
+          Build textstats with two agents in-palindromes: placed by you
+          Build textstats with two agents in-wordcount: placed by you
+  34.9s  == focus the top item, Build textstats with two agents in-palindromes, and tell it to carry on
           focus: is included
           words: is included
-  34.6s  the same record again, as a tab whose link dropped would resend it:
-          the record is included; the database holds the delivery b5c0d8dedebe5881.9.0 1 time(s): the resend was skipped
-  35.6s  == abandon the other, orchestrator-palindromes
+  34.9s  the same record again, as a tab whose link dropped would resend it:
+          the record is included; the database holds the delivery 91f6d8960a1afee1.10.0 1 time(s): the resend was skipped
+  35.9s  == abandon the other, Build textstats with two agents in-wordcount
   tab: Max presses Abandon, with 120s to finish
           abandon: is included
-  39.1s  orchestrator-palindromes: abandoned by Max
-  39.1s  == what the brain refuses, in the tab's standing
+  38.5s  Build textstats with two agents in-wordcount: abandoned by Max
+  38.5s  == what the brain refuses, in the tab's standing
           pause the abandoned task: is refused, in its own standing: fact 0 refused: addresses something already finished
           words to the abandoned task: is refused, in its own standing: fact 0 refused: addresses something already finished
           failing a task, which is not Max's to say: is refused, in its own standing: fact 0 refused: its author may not state it
-  39.2s  == live text: a streaming response, and a new link carrying on
+  38.6s  == live text: a streaming response, and a new link carrying on
   tab: Max presses Done
-  87.1s  the first link, for 2 s of 938c87cb3499f4e9.97.0: 664 characters
+  82.3s  the first link, for 2 s of 894c25c4f506913a.87.0: 830 characters
   tab: linked again
-  90.7s  a new link, until the response ended: 1833 characters, which start with the first link's text: false
-  90.7s  the streamed text:
-          Only half of what you asked for got built. The wordcount module is built, tested and committed on `main`. Palindromes was not built: you abandoned that agent before it wrote anything.
+  82.8s  a new link, until the response ended: 1067 characters, which start with the first link's text: true
+  82.8s  the streamed text:
+          **Result**
           
-          **What I did**
-          - Read the repo: an empty package, the spec in `README.md`, and `check.sh`. No remote is set up.
-          - Started two agents in one `spawn` call:
-            - a fork of myself to write wordcount in this directory;
-  90.7s  == wait for the root to end its turn, and mark it done
+          **Did:**
+          - I read the repo, then ran two agents in parallel. A fork wrote `textstats/wordcount.py` and `tests/test_wordcount.py`. A fresh engineer, on branch `palindromes`, wrote `textstats/palindromes.py` and `tests/test_palindromes.py` and pushed the branch.
+          - I merged `palindromes` into `main` with no conflicts. `./check.sh` passes: 8 tests OK, style OK.
+          - I committed the wordcount files as "Add wordcount".
+  82.8s  == wait for the root to end its turn, and mark it done
   harness-brain: SIGINT: shutting down; requests in flight have 300s to finish (again to stop now)
   harness-brain: shut down
-  92.1s  brain exited: exit status: 0
-  92.1s  the brain's log of the controls, and the root's result:
-    0.1s b5c0d8dedebe5881.1  orchestrator paused
-    7.2s b5c0d8dedebe5881.2  orchestrator resumed
-   19.3s b5c0d8dedebe5881.3  orchestrator paused for now
-   19.3s 938c87cb3499f4e9.29  Park prompt delivered to orchestrator-wordcount
-   19.3s 938c87cb3499f4e9.30  Park prompt delivered to orchestrator-palindromes
-   34.1s b5c0d8dedebe5881.4  orchestrator resumed
-   34.1s 938c87cb3499f4e9.55  Resume prompt delivered to orchestrator-wordcount
-   34.1s 938c87cb3499f4e9.56  Resume prompt delivered to orchestrator-palindromes
-   34.4s b5c0d8dedebe5881.5  orchestrator-palindromes interrupted
-   34.4s b5c0d8dedebe5881.6  orchestrator-wordcount interrupted
-   34.4s 938c87cb3499f4e9.61  orchestrator-palindromes: response cut
-   34.4s 938c87cb3499f4e9.62  orchestrator-wordcount: response cut
-   34.5s b5c0d8dedebe5881.7  queue ranked: 2 placed
-   34.5s b5c0d8dedebe5881.8  a face changed focus
-   34.5s b5c0d8dedebe5881.9  words delivered to orchestrator-wordcount
-   35.6s b5c0d8dedebe5881.10  orchestrator-palindromes abandoned by Max, to exit within 120s
-   35.6s 938c87cb3499f4e9.68  Tidy prompt delivered to orchestrator-palindromes
-   83.5s b5c0d8dedebe5881.14  Done prompt delivered to orchestrator
+  84.1s  brain exited: exit status: 0
+  84.1s  the brain's log of the controls, and the root's result:
+    0.2s 91f6d8960a1afee1.2  Build textstats with two agents in paused
+    5.3s 91f6d8960a1afee1.3  Build textstats with two agents in resumed
+   12.3s 91f6d8960a1afee1.4  Build textstats with two agents in paused for now
+   12.3s 894c25c4f506913a.28  Park prompt delivered to Build textstats with two agents in-wordcount
+   12.3s 894c25c4f506913a.29  Park prompt delivered to Build textstats with two agents in-palindromes
+   33.8s 91f6d8960a1afee1.5  Build textstats with two agents in resumed
+   33.8s 894c25c4f506913a.45  Resume prompt delivered to Build textstats with two agents in-wordcount
+   33.8s 894c25c4f506913a.46  Resume prompt delivered to Build textstats with two agents in-palindromes
+   34.1s 91f6d8960a1afee1.6  Build textstats with two agents in-palindromes interrupted
+   34.1s 91f6d8960a1afee1.7  Build textstats with two agents in-wordcount interrupted
+   34.1s 894c25c4f506913a.51  Build textstats with two agents in-wordcount: response cut
+   34.1s 894c25c4f506913a.52  Build textstats with two agents in-palindromes: response cut
+   34.1s 91f6d8960a1afee1.8  queue ranked: 2 placed
+   34.2s 91f6d8960a1afee1.9  a face changed focus
+   34.2s 91f6d8960a1afee1.10  words delivered to Build textstats with two agents in-palindromes
+   35.2s 91f6d8960a1afee1.11  Build textstats with two agents in-wordcount abandoned by Max, to exit within 120s
+   35.2s 894c25c4f506913a.59  Tidy prompt delivered to Build textstats with two agents in-wordcount
+   78.6s 91f6d8960a1afee1.15  Done prompt delivered to Build textstats with two agents in
 == the task is done; its result:
 
-Only half of what you asked for got built. The wordcount module is built, tested and committed on `main`. Palindromes was not built: you abandoned that agent before it wrote anything.
+**Result**
 
-**What I did**
-- Read the repo: an empty package, the spec in `README.md`, and `check.sh`. No remote is set up.
-- Started two agents in one `spawn` call:
-  - a fork of myself to write wordcount in this directory;
-  - a fresh engineer on branch `palindromes`, with the spec, a word rule that matches wordcount's, and instructions to commit and push.
-- **Fork:** wrote `textstats/wordcount.py` and `tests/test_wordcount.py`.
-  - `count_words` lower-cases the text and counts runs of letters, digits or apostrophes. Underscores split words.
-  - `top` sorts by count, highest first, with ties broken alphabetically, and returns the first `n`.
-  - There are 5 tests.
-- **Engineer:** abandoned by you, so no branch was made and there was nothing to merge.
-- I read the fork's code and found nothing to fix. I ran `./check.sh` myself: all 5 tests and the style check pass. I committed the two files as `76ae427 Add wordcount: count_words and top, with tests`.
+**Did:**
+- I read the repo, then ran two agents in parallel. A fork wrote `textstats/wordcount.py` and `tests/test_wordcount.py`. A fresh engineer, on branch `palindromes`, wrote `textstats/palindromes.py` and `tests/test_palindromes.py` and pushed the branch.
+- I merged `palindromes` into `main` with no conflicts. `./check.sh` passes: 8 tests OK, style OK.
+- I committed the wordcount files as "Add wordcount".
 
-**What I learned**
-- The repo has no remote, so "push the branch" had nowhere to go. A fresh engineer's push would only have reached my clone.
-- When you abandon an agent I treat that as your decision, so I didn't start it again on my own.
+**Learned:**
+- The fork's report said Max had abandoned the task, but its files were complete and uncommitted. I kept them and did not check why it said that.
+- The engineer's `cd repo-palindromes` failed because it was already in that directory. This did no harm.
+- For palindromes, apostrophes are ignored when checking a word, but they stay in the returned word. The README doesn't say which way this should go.
+- I never confirmed that the `palindromes` push reached the remote.
 
-**Left undone**
-- **Palindromes:** `textstats/palindromes.py` and `tests/test_palindromes.py` were never written. The engineer's plan, if you pick it up:
-  - find words with the same rule as wordcount;
-  - check each one with `is_palindrome`, which ignores apostrophes;
-  - compare `min_len` against the word's length including apostrophes.
-- **Merge:** the `git merge palindromes` step never happened.
-- **Push:** nothing is pushed, because there is no remote.
+**Left undone:**
+- `git push` of `main` failed because the repo has no remote or upstream configured. `main` is local only.
+- The apostrophe behaviour needs Max's decision.
+
+
+The database: target/face-controls-demo/brain.sqlite
 ```
-
-Each line of the brain's log names the record it folded: `<tab>.N` is the tab's Nth record, and the other prefix the brain's own.
