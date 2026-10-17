@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{env, fs, thread};
 
 use harness_core::call::CallEvent;
+use harness_core::context::EntryId;
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::draft::DraftEvent;
 use harness_core::environment::{Host, Limb, LimbKind};
@@ -21,7 +22,9 @@ use harness_core::id::{
     CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, ReplicaId, TaskId, Timestamp,
 };
 use harness_core::live::Live;
-use harness_core::task::{Abandoner, Created, Drain, Mandate, Mode, Origin, Scope, TaskEvent};
+use harness_core::task::{
+    Abandoner, Created, Drain, Mandate, Mode, Move, Origin, Scope, TaskEvent,
+};
 use harness_core::value::Bytes;
 use harness_face_tab::{Down, FaceKey, FaceRow, Tab, Up};
 use harness_substrate::Status;
@@ -197,7 +200,8 @@ impl Device {
     /// The harness row's `list`, such as its environments or workspaces:
     /// the `id` of the one whose `key` is `value`.
     fn harness_id<T: std::str::FromStr>(&self, list: &str, key: &str, value: &str) -> Option<T> {
-        let Some(FaceRow::Harness(row)) = self.tab.view()?.rows.get(&FaceKey::Harness) else {
+        self.tab.view()?;
+        let Some(FaceRow::Harness(row)) = self.rows().get(&FaceKey::Harness) else {
             return None;
         };
         row[list]
@@ -292,6 +296,15 @@ impl Device {
                     within: within.as_millis() as u64,
                 }),
             )],
+        })
+    }
+
+    /// Max moves `task` back to an entry it has been at.
+    pub fn back(&mut self, task: TaskId, to: EntryId) -> u64 {
+        println!("  {}: Max moves it back to {to}", self.name);
+        self.say(Batch {
+            values: Vec::new(),
+            facts: vec![Fact::Task(task, TaskEvent::Moved(Move::Back { to }))],
         })
     }
 
