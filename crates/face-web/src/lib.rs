@@ -1,26 +1,27 @@
-//! The harness's web face: Max's work as a map of tasks, live from the
-//! journal, each opening into the log of what it did.
+//! The harness's web face: Max's work as a map of tasks, each opening into
+//! the log of what it did, served to every tab as a place on the substrate.
 //!
-//! A face is a reader of the journal and nothing else. The brain hands it
-//! the [`State`] after each commit, a persistent value the face holds while
-//! the brain moves on. It sends the views the core derives: every
-//! task, the scope that owns it and what it waits on
-//! ([`State::waiting_on`], the throbber), Max's queue ([`State::queue`]) and
-//! a task's context. It keeps no state of its own that could disagree with
-//! the journal.
+//! **Each tab is a place.** The page runs `harness-face-tab` as wasm: the
+//! tab's own log, kept in IndexedDB, and its replica of the rows this face
+//! derives for it. One WebSocket per tab, `/link?place=<id>`, carries the
+//! substrate's [`Up`] and [`Down`] as JSON. What Max does is a record at his
+//! tab: every [`Up::Record`] goes to the brain ([`Wiring::include`]), which
+//! answers only with what it folds. So a refusal is in band, in the tab's
+//! standing, beside the view that shows what he acted on; there is no reply
+//! to a request, because there is no request.
 //!
-//! **The page** (`page.html`) is the map. A task is a node; a scope (the
-//! spawn call that owns its members) is a junction under its owner; the
-//! projects are the map's disconnected components. A node opens into its
-//! log: its context, exactly as sent, rendered, with what is streaming now
-//! and Max's words it has not read yet. Moving the map closes it.
+//! **Rows.** After every fold the brain hands the face a [`Folded`]: the
+//! state, the brain time it is as of, and every place's standing. The face
+//! derives the rows once ([`view::rows`]: each task, each scope, the queue,
+//! the harness, Max's drafts), and each link's [`Publisher`] ships its tab
+//! what changed: a whole [`View`] on connecting, then steps. Nothing about
+//! a tab is kept here while it is away: it reconnects to a whole view and
+//! ships what the view's standing does not include.
 //!
-//! **The cursor is the journal position.** The page's event stream is one
-//! event per commit: the whole view, with the [`Seq`] it reached as the
-//! event id. The browser resends the last id it got when it reconnects, and
-//! is sent the next view once the journal is past it, so a view is never
-//! sent twice and never missed. `/view` is the latest view alone, for a
-//! client that only looks.
+//! **Live progress.** A running request's streamed text and a running
+//! command's output are not facts; the brain puts them in a [`Feed`], and
+//! each link forwards what its tab has not had as [`Down::Live`], all of it
+//! again after a reconnect.
 //!
 //! **A context is a value.** It is fetched by its head entry
 //! (`/context/<entry>`), read off the fold ([`State::context`]) with the
@@ -29,108 +30,94 @@
 //! the browser caches it forever and refetches only when the task's head
 //! moves.
 //!
-//! **Max's facts.** Everything Max does from the page is a batch of his
-//! facts in the core's own encoding, posted to `/act` and passed to [`Act`],
-//! which the brain implements: his words (a delivery from the compose box,
-//! where Enter is a new line and Max sends now or for the end of the
-//! task's turn), his controls over a task
-//! (interrupt, stop, hold), a new order for his queue, and the task he is
-//! focused on. The bytes his facts name (his words) travel in the batch, and
-//! the page names them with `/digest`, the core's [`ValueId::of`]. The face
-//! writes nothing and judges nothing: the brain commits the batch as his,
-//! and the core's fold decides what Max may author, so a refusal comes back
-//! with the core's reason. Each page is its own face, with an id it keeps,
-//! and mints the ids of what it creates, so a post retried after a dropped
-//! connection cannot deliver twice.
-//!
-//! **Live progress.** A running request's streamed events and a running
-//! command's output are not facts; the brain puts them in a [`Feed`], and
-//! `/live?model=<id>` or `/live?call=<id>` streams them with their count as
-//! the event id, so a reconnect resumes where it left off.
-//!
-//! **Usage and trouble.** The subscription's 5-hour and 7-day use is the
-//! latest response's report, and why a task's last turn did not respond is
-//! that turn's ending: both are read off the fold, never kept.
-//!
 //! The box takes dictation too ([`Dictation`]): the page's microphone,
 //! relayed to Anthropic's speech-to-text endpoint, the transcript arriving in
 //! the box as editable text.
 //!
-//! Transport is std's TCP, rustls and one static page with no build step;
-//! the dictation socket is a WebSocket (tungstenite, without its TLS).
+//! Transport is std's TCP, rustls, one static page and the tab's wasm,
+//! built from `harness-face-tab` by this crate's build script; the
+//! sockets are WebSockets (tungstenite, without its TLS).
 
 mod dictation;
 mod http;
 mod live;
 mod view;
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::io::{self, Write};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::{self, ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::Path;
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::Caller;
 use harness_core::context::{Entry, EntryId, Note, Rendered};
 use harness_core::delivery::{Content, Delivery};
-use harness_core::id::{CallId, FaceId, ModelCallId, Seq, Timestamp, ValueId};
-use harness_core::journal::Batch;
+use harness_core::fact::Refusal;
+use harness_core::id::{PlaceId, Time, Timestamp, ValueId};
+use harness_core::schema::Record;
 use harness_core::state::{Delivered, State};
+use harness_face_tab::{Down, FaceKey, FaceRow, Up, View};
+use harness_substrate::{Live, Publisher, Standing};
 use serde_json::{Value, json};
+use tungstenite::{Message, WebSocket};
 
 pub use dictation::{Dictation, Edit, Socket, edits};
 pub use live::{Feed, Running};
 pub use view::describe;
 
-/// Where a face reads the values the journal's facts name. A face never
-/// writes.
+/// Where a face reads the values the facts name. A face never writes.
 pub trait Source: Send + Sync + 'static {
     /// A value's bytes, if stored.
     fn value(&self, id: ValueId) -> Option<Vec<u8>>;
 }
 
-/// Where Max's facts go: the brain, the journal's only writer.
-pub trait Act: Send + Sync + 'static {
-    /// Commit `batch` authored [`Author::Max`] by `face`, which had shown
-    /// him the journal up to `seen`. An `Err` is why it was not committed
-    /// (the core's [`harness_core::journal::Rejected`], by name), shown to
-    /// Max.
-    fn act(&self, face: FaceId, seen: Seq, batch: Batch) -> Result<(), String>;
-}
-
-/// What a face is wired to. With nothing, it only watches.
+/// What a face is wired to.
 #[derive(Default)]
 pub struct Wiring {
-    pub act: Option<Box<dyn Act>>,
+    /// Where each tab's records go: the brain, which states that the tab
+    /// is Max's if it is new to it, includes the record, and answers with
+    /// a later [`Folded`]. Without it, a face only watches.
+    pub include: Option<Box<dyn Fn(Record) + Send + Sync>>,
     pub dictation: Option<Dictation>,
     /// Live progress, from whoever runs things.
     pub feed: Feed,
 }
 
-/// A face over one journal: follows its commits and serves the page.
+/// What the brain hands the face after each fold.
+pub struct Folded {
+    pub state: State,
+    /// The brain's time the state is as of: its head.
+    pub as_of: Time,
+    /// How far the brain has included each place it holds records of.
+    pub standing: BTreeMap<PlaceId, Standing<Refusal>>,
+}
+
+/// A face over one brain: follows its folds and serves the page.
 ///
-/// Only the follower writes `state`, and holds it only to swap the state
-/// in; viewers read it alongside one another. Nothing reads the store while
-/// holding either lock.
+/// Only the follower writes `state` and `shown`; links read them alongside
+/// one another. Nothing reads the store while holding either lock.
 pub struct Face<S> {
     source: S,
     wiring: Wiring,
     state: RwLock<State>,
-    shown: Mutex<Shown>,
-    grew: Condvar,
+    shown: Mutex<Option<Arc<Shown>>>,
 }
 
-/// What every viewer is sent: the page's view, rendered once per fold, and
-/// the last record it includes.
+/// What every link publishes from: the rows, derived once per fold.
 struct Shown {
-    view: Arc<String>,
-    seq: Seq,
+    as_of: Time,
+    rows: BTreeMap<FaceKey, FaceRow>,
+    standing: BTreeMap<PlaceId, Standing<Refusal>>,
 }
 
-/// How often an idle event stream is written to, so a dead one is noticed.
+/// How long a link waits for its tab before looking for something to
+/// ship it. A synchronous TLS socket cannot be read on one thread and
+/// written on another, so a link takes turns.
+const TURN: Duration = Duration::from_millis(20);
+/// How often an idle link is pinged, so a dead one is noticed.
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
 impl<S: Source> Face<S> {
@@ -138,53 +125,49 @@ impl<S: Source> Face<S> {
         Face::with(source, Wiring::default())
     }
 
-    /// A face that acts, dictates and shows live progress as `wiring` allows.
+    /// A face that includes, dictates and shows live progress as `wiring`
+    /// allows.
     pub fn with(source: S, wiring: Wiring) -> Arc<Face<S>> {
-        let state = State::default();
-        let view = Arc::new(render(&state, &|_| None));
         Arc::new(Face {
             source,
             wiring,
-            state: RwLock::new(state),
-            shown: Mutex::new(Shown { view, seq: Seq(0) }),
-            grew: Condvar::new(),
+            state: RwLock::new(State::default()),
+            shown: Mutex::new(None),
         })
     }
 
-    /// Follow the brain's commits until it stops sending them. States that
-    /// queue while a view renders are shown as the last of them.
-    pub fn follow(&self, commits: Receiver<State>) {
-        while let Ok(mut state) = commits.recv() {
-            if let Some(last) = commits.try_iter().last() {
-                state = last;
+    /// Follow the brain's folds until it stops sending them. Folds that
+    /// queue while rows are derived are shown as the last of them.
+    pub fn follow(&self, folds: Receiver<Folded>) {
+        while let Ok(mut folded) = folds.recv() {
+            if let Some(last) = folds.try_iter().last() {
+                folded = last;
             }
-            let view = Arc::new(render(&state, &|id| self.source.value(id)));
-            let last = state.last().unwrap_or(Seq(0));
-            *self.state.write().unwrap_or_else(|e| e.into_inner()) = state;
-            *self.show() = Shown { view, seq: last };
-            self.grew.notify_all();
+            let rows = view::rows(&folded.state, &|id| self.source.value(id), now());
+            *self.state.write().unwrap_or_else(|e| e.into_inner()) = folded.state;
+            *self.show() = Some(Arc::new(Shown {
+                as_of: folded.as_of,
+                rows,
+                standing: folded.standing,
+            }));
         }
     }
 
     /// Serve one connection: read its request, answer it.
     pub fn handle(&self, stream: impl Socket) -> io::Result<()> {
         let (request, mut stream) = http::read_request(stream)?;
-        match (request.method.as_str(), request.path.as_str()) {
-            ("GET", "/") => http::respond(
+        match request.path.as_str() {
+            "/" => http::respond(
                 &mut stream,
                 "text/html; charset=utf-8",
                 PAGE.as_bytes(),
                 false,
             ),
-            ("GET", "/events") => self.events(&mut stream, request.last_event_id),
-            ("GET", "/view") => {
-                let view = Arc::clone(&self.show().view);
-                http::respond(&mut stream, "application/json", view.as_bytes(), false)
-            }
-            ("GET", "/wiring") => {
+            "/tab.wasm" => http::respond(&mut stream, "application/wasm", TAB, false),
+            "/wiring" => {
                 let dictation = self.wiring.dictation.as_ref();
                 let can = json!({
-                    "act": self.wiring.act.is_some(),
+                    "act": self.wiring.include.is_some(),
                     "dictation": dictation.is_some(),
                     "sample": dictation.is_some_and(Dictation::has_sample),
                 });
@@ -195,52 +178,94 @@ impl<S: Source> Face<S> {
                     false,
                 )
             }
-            ("POST", "/act") => self.act(&mut stream, &request.body),
-            ("POST", "/digest") => {
-                let id = ValueId::of(&request.body).to_string();
-                http::respond(&mut stream, "text/plain", id.as_bytes(), false)
-            }
-            ("GET", "/dictation") => self.dictate(stream, &request),
-            ("GET", "/live") => self.live(&mut stream, &request),
-            ("GET", path) => match path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
+            "/view" => self.view(&mut stream),
+            "/link" => self.link(stream, &request),
+            "/dictation" => self.dictate(stream, &request),
+            path => match path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
                 Some(head) => self.context(&mut stream, head),
                 None => http::not_found(&mut stream),
             },
-            _ => http::not_found(&mut stream),
         }
     }
 
-    /// A batch of Max's facts: `{"face", "seen", "batch"}`, in the journal's
-    /// own encoding.
-    fn act(&self, stream: &mut impl Write, body: &[u8]) -> io::Result<()> {
-        let Some(act) = &self.wiring.act else {
-            return http::refuse(stream, "501 Not Implemented", "not wired to a brain");
+    /// A tab's link: `?place=<id>`. Its records go to the brain; its view,
+    /// and live progress, come back.
+    fn link(&self, mut stream: impl Socket, request: &http::Request) -> io::Result<()> {
+        let place = request
+            .query("place")
+            .and_then(|p| p.parse::<PlaceId>().ok());
+        let (Some(place), Some(key)) = (place, &request.websocket_key) else {
+            return http::refuse(&mut stream, "400 Bad Request", "expected ?place=<id>");
         };
-        let mut said: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
-        let face = serde_json::from_value::<FaceId>(said["face"].take());
-        let batch = serde_json::from_value::<Batch>(said["batch"].take());
-        let (Ok(face), Some(seen), Ok(batch)) = (face, said["seen"].as_u64(), batch) else {
-            return http::refuse(stream, "400 Bad Request", "expected {face, seen, batch}");
-        };
-        match act.act(face, Seq(seen), batch) {
-            Ok(()) => http::respond(stream, "text/plain", b"", false),
-            Err(why) => http::refuse(stream, "409 Conflict", &why),
+        http::accept_websocket(&mut stream, key)?;
+        stream.set_read_timeout(Some(TURN))?;
+        let mut tab = WebSocket::from_raw_socket(stream, tungstenite::protocol::Role::Server, None);
+        let mut publisher = Publisher::default();
+        let mut published: Option<Arc<Shown>> = None;
+        let mut live = HashMap::new();
+        let mut pinged = Instant::now();
+        loop {
+            match tab.read() {
+                Ok(Message::Text(text)) => match serde_json::from_str::<Up>(&text) {
+                    Ok(Up::Record(record)) if record.at.place == place => {
+                        if let Some(include) = &self.wiring.include {
+                            include(record);
+                        }
+                    }
+                    Ok(Up::Live(_)) => {}
+                    // A link speaks for its own place, in the schema's words.
+                    _ => return Ok(()),
+                },
+                Ok(Message::Close(_)) => return Ok(()),
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                Err(_) => return Ok(()),
+            }
+            let shown = self.show().clone();
+            if let Some(shown) =
+                shown.filter(|s| !published.as_ref().is_some_and(|p| Arc::ptr_eq(p, s)))
+            {
+                let view = View {
+                    as_of: shown.as_of,
+                    standing: shown.standing.get(&place).cloned().unwrap_or_default(),
+                    rows: shown.rows.clone(),
+                };
+                if let Some(down) = publisher.publish(view) {
+                    send(&mut tab, &down)?;
+                }
+                published = Some(shown);
+            }
+            if let Some(shown) = &published {
+                for piece in self.wiring.feed.since(&mut live) {
+                    let down = Down::Live(Live {
+                        after: shown.as_of,
+                        live: piece,
+                    });
+                    send(&mut tab, &down)?;
+                }
+            }
+            if pinged.elapsed() > HEARTBEAT {
+                pinged = Instant::now();
+                tab.send(Message::Ping(Default::default()))
+                    .map_err(io::Error::other)?;
+            }
         }
     }
 
-    /// A running thing's live progress: `?model=<id>` or `?call=<id>`.
-    fn live(&self, stream: &mut impl Write, request: &http::Request) -> io::Result<()> {
-        let running = match (request.query("model"), request.query("call")) {
-            (Some(id), _) => id.parse::<ModelCallId>().map(Running::Model),
-            (_, Some(id)) => id.parse::<CallId>().map(Running::Call),
-            _ => return http::refuse(stream, "400 Bad Request", "expected ?model= or ?call="),
-        };
-        let Ok(running) = running else {
-            return http::refuse(stream, "400 Bad Request", "a bad id");
-        };
-        http::start_events(stream)?;
-        let after = request.last_event_id.map_or(0, |s| s.0 as usize);
-        self.wiring.feed.stream(stream, running, after, HEARTBEAT)
+    /// The rows as of the last fold, by key, for a script that only looks.
+    fn view(&self, stream: &mut impl Write) -> io::Result<()> {
+        let shown = self.show().clone();
+        let view = shown.map(|s| {
+            let rows: serde_json::Map<String, Value> = s
+                .rows
+                .iter()
+                .map(|(k, r)| (k.to_string(), json!(r)))
+                .collect();
+            json!({ "as_of": s.as_of, "rows": rows })
+        });
+        let body = serde_json::to_vec(&view).expect("a JSON value serialises");
+        http::respond(stream, "application/json", &body, false)
     }
 
     /// The dictation socket: `?rate=<Hz>` of the page's PCM, or `?sample`.
@@ -253,11 +278,8 @@ impl<S: Source> Face<S> {
             return http::refuse(&mut stream, "400 Bad Request", "expected ?rate=<Hz>");
         };
         http::accept_websocket(&mut stream, key)?;
-        let mut page = tungstenite::WebSocket::from_raw_socket(
-            stream,
-            tungstenite::protocol::Role::Server,
-            None,
-        );
+        let mut page =
+            WebSocket::from_raw_socket(stream, tungstenite::protocol::Role::Server, None);
         dictation.relay(&mut page, rate, request.query("sample").is_some());
         Ok(())
     }
@@ -266,32 +288,8 @@ impl<S: Source> Face<S> {
         self.state.read().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn show(&self) -> MutexGuard<'_, Shown> {
+    fn show(&self) -> MutexGuard<'_, Option<Arc<Shown>>> {
         self.shown.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// The event stream: from the client's cursor, one event per fold.
-    fn events(&self, stream: &mut impl Write, cursor: Option<Seq>) -> io::Result<()> {
-        http::start_events(stream)?;
-        let mut cursor = cursor;
-        loop {
-            let (shown, _) = self
-                .grew
-                .wait_timeout_while(self.show(), HEARTBEAT, |s| {
-                    cursor.is_some_and(|c| s.seq <= c)
-                })
-                .unwrap_or_else(|e| e.into_inner());
-            let (seq, view) = (shown.seq, Arc::clone(&shown.view));
-            drop(shown);
-            if cursor.is_some_and(|c| seq <= c) {
-                stream.write_all(b": heartbeat\n\n")?;
-                stream.flush()?;
-                continue;
-            }
-            write!(stream, "id: {}\ndata: {view}\n\n", seq.0)?;
-            stream.flush()?;
-            cursor = Some(seq);
-        }
     }
 
     /// The context ending at `head`, root first, with the bytes its entries
@@ -341,6 +339,11 @@ impl<S: Source> Face<S> {
         let body = serde_json::to_vec(&chain).expect("a JSON value serialises");
         http::respond(stream, "application/json", &body, true)
     }
+}
+
+fn send<S: Socket>(tab: &mut WebSocket<S>, down: &Down) -> io::Result<()> {
+    let text = serde_json::to_string(down).expect("a view serialises");
+    tab.send(Message::text(text)).map_err(io::Error::other)
 }
 
 /// Who wrote a run of blocks the harness sent.
@@ -501,10 +504,6 @@ fn response(state: &State, entry: EntryId) -> Value {
     })
 }
 
-fn render(state: &State, value: &dyn Fn(ValueId) -> Option<Vec<u8>>) -> String {
-    view::view(state, value, now()).to_string()
-}
-
 fn now() -> Timestamp {
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -513,6 +512,8 @@ fn now() -> Timestamp {
 }
 
 const PAGE: &str = include_str!("page.html");
+/// The tab, as the page runs it.
+const TAB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tab.wasm"));
 
 /// The TLS configuration for a PEM certificate chain and key.
 pub fn tls(cert: &Path, key: &Path) -> io::Result<Arc<rustls::ServerConfig>> {

@@ -89,8 +89,6 @@ pub struct DraftRow {
     pub held: Option<String>,
     /// The draft whose Send, or concurrent edit, opened this one.
     pub from: Option<DeliveryId>,
-    /// When it was opened, on the opening tab's clock.
-    pub opened: Timestamp,
 }
 
 /// What the brain ships a tab.

@@ -236,7 +236,9 @@ name = "harness-face-web"
 version = "0.0.0"
 dependencies = [
  "harness-core",
+ "harness-face-tab",
  "harness-provider",
+ "harness-substrate",
  "rustls",
  "serde_json",
  "tungstenite",
