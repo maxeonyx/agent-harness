@@ -32,7 +32,7 @@ Each command owns every process it starts, and they are all killed when it ends,
 A process that starts a session of its own leaves the command: `setsid server > server.log 2>&1 &` keeps a server across calls. \
 Stop it with `kill <pid>`; it is stopped anyway when the workspace closes.
 
-Long `bash` and `grep` output is cut to a view: its first and last 30 lines, with markers naming the lines each gap hides, and its longest lines cut to fit about 16 KiB. \
+Long `bash` and `grep` output is cut to a view: its first and last 30 lines, with markers naming the lines each gap hides, and its longest lines cut to fit about 16 KiB; binary output is not shown. \
 When anything is cut, the view ends by naming a file that holds the whole output: `read` or `grep` that file rather than running the command again. \
 `bash` takes an optional `grep` pattern: lines matching it in the middle are shown too, with a little context, and a cut line keeps the part around its match; name what you look for (errors, a test's name) when the output may be long. \
 `read` returns whole numbered lines, as many as you ask for up to 64 KiB, and says where to read on; it shows an image as an image.

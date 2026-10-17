@@ -88,6 +88,8 @@ const OUTPUTS: usize = 100;
 impl Outputs {
     pub fn open(dir: PathBuf) -> io::Result<Outputs> {
         fs::create_dir_all(&dir)?;
+        // Named to an agent whose directory is elsewhere.
+        let dir = dir.canonicalize()?;
         Ok(Outputs { dir })
     }
 

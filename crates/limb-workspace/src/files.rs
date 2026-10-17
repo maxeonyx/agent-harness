@@ -336,7 +336,7 @@ impl Inner {
             for (n, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
                 if regex.is_match(line) {
                     found += 1;
-                    truncator.line(&format!("{name}:{}:{line}", n + 1));
+                    truncator.line(&format!("{name}:{}:", n + 1), line);
                 }
             }
         }
@@ -363,11 +363,10 @@ impl Inner {
         let Some(whole) = output.whole else {
             return (output.text, None);
         };
-        let lines = output.lines;
         let kept = self.outputs.keep(call, &whole);
         let said = match kept {
             Ok(path) => format!(
-                "[cut to fit; all {lines} lines are in {}: `read` or `grep` it]\n",
+                "[cut to fit; the whole output is in {}: `read` or `grep` it]\n",
                 path.display()
             ),
             Err(e) => format!("[cut to fit; the whole output could not be kept: {e}]\n"),
