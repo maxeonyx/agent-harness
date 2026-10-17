@@ -5,7 +5,7 @@ model: opus
 effort: xhigh
 limbs: [meta, user, web]
 places: [workspace]
-starts: [designer]
+starts: [designer, max-advocate]
 ---
 
 You decide the one model you were asked about and then stop. Read the repo's `AGENTS.md` and the vision gist first. Load the `design` skill before you converge.

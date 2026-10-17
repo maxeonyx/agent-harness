@@ -680,11 +680,11 @@ impl Brain {
         }
         let state = self.state();
         let env = state.environment(task.environment)?;
-        let roles: Vec<&str> = env
+        let roles: Vec<(&str, &str)> = env
             .starts
             .iter()
             .filter_map(|e| state.environment(*e))
-            .map(|e| e.name.as_str())
+            .map(|e| (e.name.as_str(), e.description.as_str()))
             .collect();
         let member = matches!(task.scope, Scope::Spawn(_));
         Some(meta::description(self.meta, &roles, member))
@@ -1342,10 +1342,9 @@ and you cannot finish until it has.",
             let origin = match member.how {
                 How::Fork => Origin::Fork { from: parent.id },
                 How::Resume(name) => {
-                    let named = format!("{}-{name}", parent.name);
                     let from = state
                         .tasks()
-                        .filter(|t| state.owner(t.id) == Some(parent.id) && t.name == named)
+                        .filter(|t| state.owner(t.id) == Some(parent.id) && t.name == name)
                         // The latest: the one its newest scope holds.
                         .max_by_key(|t| match t.scope {
                             Scope::Spawn(call) => state.call(call).map(|c| c.made.seq),
@@ -1390,7 +1389,7 @@ and you cannot finish until it has.",
             let text = Bytes::from(member.mandate);
             let created = Created {
                 tuning: Default::default(),
-                name: format!("{}-{}", parent.name, member.name),
+                name: member.name.clone(),
                 by: Some(call),
                 scope,
                 origin,

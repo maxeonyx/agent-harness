@@ -41,13 +41,19 @@ pub fn definition(id: LimbId) -> Limb {
     }
 }
 
-/// What the meta limb tells a root in an environment that starts `roles`;
-/// `member` when the task is in a scope it can add siblings to.
-pub fn description(limb: LimbId, roles: &[&str], member: bool) -> Description {
+/// What the meta limb tells a root in an environment that starts `roles`,
+/// each a name and its one-line description; `member` when the task is in
+/// a scope it can add siblings to.
+pub fn description(limb: LimbId, roles: &[(&str, &str)], member: bool) -> Description {
     let mut said = String::from(
-        "You can start other agents with `spawn`. One call starts a scope: a list of tasks that run at the same time, \
-and returns when every one of them has finished, with each one's result (its last message). \
-While they run you wait, so put everything that can run in parallel into one call.\n\n\
+        "All the calls of one response start together, and you get all of their results together, once the last \
+has finished. So no call sees another's result from the same response: a call that needs one goes in your next \
+response. Calls to your workspace or your browser are the exception: each starts once the calls you wrote before it \
+to the same place have ended, so you can write a file and commit it in one response.\n\n\
+You can start other agents with `spawn`. One call starts a scope: a list of tasks that run at the same time, \
+and its result is each one's result (its last message), once every one of them has finished. Your other calls in \
+the same response run alongside it, and their results wait with its. While they run you wait, so put everything \
+that can run in parallel into one call.\n\n\
 Do the steps of your own work yourself, one after another, and compact between them (below). Fork for parts that \
 can run at the same time, or to explore something whose details you will not need afterwards. Start a fresh agent \
 for a larger task, or for work in another role.\n\n\
@@ -56,16 +62,21 @@ A fork continues from this exact point of your context: it knows everything you 
 and it shares your cache, so it is cheap. It works in your directory with you. \
 A resume continues that agent's own context with a new mandate, so a follow-up question keeps everything it learned. \
 A fresh agent starts from nothing but its role, the shared `brief`, the `quotes` and its mandate, so say everything it needs. \
-Each of Max's messages, mandates and answers is labelled `max-…`: name it in `quotes` to give his words to every fresh agent verbatim, rather than retelling them.",
+Each of Max's messages, mandates and answers is labelled `max-…`: name it in `quotes` to give his words to every fresh agent verbatim, rather than retelling them.\n\n\
+A fork can itself spawn, and start the roles you can. `spawn` cannot run under `background`: you always wait for \
+your scope.",
     );
     if roles.is_empty() {
         said.push_str("\n\nYou cannot start fresh agents, only forks of yourself.");
     } else {
-        said.push_str(&format!(
-            "\n\nThe roles you can start fresh: {}. A fresh agent gets its own clone of your repository, on the \
-`branch` you name, made from `base`; it commits and pushes there.",
-            roles.join(", ")
-        ));
+        said.push_str("\n\nThe roles you can start fresh:\n");
+        for (name, what) in roles {
+            said.push_str(&format!("\n- `{name}`: {what}"));
+        }
+        said.push_str(
+            "\n\nA fresh agent gets its own clone of your repository, on the `branch` you name, made from `base`; \
+it commits and pushes there.",
+        );
     }
     said.push_str(
         "\n\nYour context keeps checkpoints: its first message, each message that began one of your turns (Max's \
@@ -100,7 +111,7 @@ and returns at once: the agent that started you gets its result with yours.",
         "properties": {
             "name": { "type": "string", "description": "Short and descriptive, such as `wordcount`." },
             "mandate": { "type": "string", "description": "What this agent must do, and how to check it is done." },
-            "role": { "type": "string", "enum": roles, "description": "Start a fresh agent in this role. Omit, with `resume`, to fork yourself." },
+            "role": { "type": "string", "enum": roles.iter().map(|(name, _)| name).collect::<Vec<_>>(), "description": "Start a fresh agent in this role. Omit, with `resume`, to fork yourself." },
             "resume": { "type": "string", "description": "The name of a finished agent you started, to continue it." },
             "branch": { "type": "string", "description": "A fresh agent's own branch, for its clone." },
             "base": { "type": "string", "description": "What its branch is made from if it does not exist yet. Default `main`." }

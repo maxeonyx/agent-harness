@@ -163,6 +163,7 @@ fn write(file: &str) -> Result<(), Box<dyn std::error::Error>> {
                 places: vec![],
                 starts: vec![],
                 source: None,
+                description: String::new(),
             })],
         })
         .map_err(fail)?;

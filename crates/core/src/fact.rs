@@ -177,6 +177,7 @@ impl Fact {
             Fact::Environment(Environment {
                 id: _,
                 name: _,
+                description: _,
                 role,
                 model: _,
                 params,
