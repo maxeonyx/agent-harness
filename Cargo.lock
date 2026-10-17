@@ -280,6 +280,7 @@ name = "harness-store"
 version = "0.0.0"
 dependencies = [
  "harness-core",
+ "harness-substrate",
  "rusqlite",
  "serde_json",
 ]

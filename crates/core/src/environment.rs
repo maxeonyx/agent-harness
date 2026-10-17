@@ -394,3 +394,20 @@ pub enum LimbRow {
     /// A value's bytes.
     Value(Bytes),
 }
+
+/// What the brain ships a limb over its link.
+pub type LimbDown = harness_substrate::Down<LimbKey, LimbRow, crate::fact::Refusal, ()>;
+
+/// What a limb ships the brain over its link: its own records, and a
+/// running command's output so far.
+pub type LimbUp = harness_substrate::Up<crate::schema::Harness, crate::live::Live>;
+
+/// The first thing a limb says on connecting: which limb it is, and the
+/// place its records are of. Then [`LimbUp`]s one way and [`LimbDown`]s the
+/// other. A limb reconnects with the same place, to this brain or a
+/// restarted one, and is shipped a whole view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hello {
+    pub limb: LimbId,
+    pub place: PlaceId,
+}
