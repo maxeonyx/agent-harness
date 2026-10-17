@@ -32,9 +32,9 @@ Each command owns every process it starts, and they are all killed when it ends,
 A process that starts a session of its own leaves the command: `setsid server > server.log 2>&1 &` keeps a server across calls. \
 Stop it with `kill <pid>`; it is stopped anyway when the workspace closes.
 
-Long `bash` and `grep` output is cut to its first and last 30 lines, and lines over 200 characters to their two ends. \
-`bash` requires a `grep` pattern: lines matching it in the middle are shown too, with a little context, in addition to the head and tail, so name what you are looking for (errors, a test's name). \
-An empty pattern adds nothing. Markers say how many lines and matches each gap hides. \
+Long `bash` and `grep` output is cut to a view: its first and last 30 lines, with markers naming the lines each gap hides, and its longest lines cut to fit about 16 KiB; binary output is not shown. \
+When anything is cut, the view ends by naming a file that holds the whole output: `read` or `grep` that file rather than running the command again. \
+`bash` takes an optional `grep` pattern: lines matching it in the middle are shown too, with a little context, and a cut line keeps the part around its match; name what you look for (errors, a test's name) when the output may be long. \
 `read` returns whole numbered lines, as many as you ask for up to 64 KiB, and says where to read on; it shows an image as an image.
 
 This directory is shared: forks of your context and other agents may work in it too. \
@@ -50,13 +50,14 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "bash",
             "Run a bash command in the workspace directory, with stdin closed and stdout and stderr merged. \
-             Ends with the exit code. Output is cut to its first and last lines plus the lines matching `grep`.",
+             Ends with the exit code. Long output is cut to its first and last lines plus the lines matching `grep`; \
+             the whole of it is kept in a file the result names.",
             json!({
                 "command": { "type": "string", "description": "The command, run with `bash -c`." },
-                "grep": { "type": "string", "description": "A regular expression for the lines worth seeing from the middle of long output, in addition to the head and tail. Empty for none." },
+                "grep": { "type": "string", "description": "A regular expression for the lines worth seeing from the middle of long output, besides its head and tail: errors, a test's name." },
                 "timeout_ms": { "type": "integer", "description": "Stop the command after this long. Default 120000, at most 600000." }
             }),
-            &["command", "grep"],
+            &["command"],
         ),
         tool(
             "read",
@@ -92,7 +93,9 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "grep",
-            "Search a file, or the text files under a directory, for a regular expression, skipping `.git`. Prints `path:line:text`.",
+            "Search a file, or the text files under a directory, for a regular expression, skipping `.git`. \
+             Prints `path:line:text`; a long line shows the part around its match. \
+             Many matches are cut like `bash` output, the whole list kept in a file the result names.",
             json!({
                 "pattern": { "type": "string" },
                 "path": { "type": "string", "description": "Where to search. Default: the workspace directory." }
