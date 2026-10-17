@@ -1691,7 +1691,7 @@ async function start(how, text, files, after = []) {
   return why;
 }
 const aside = (t, text, files, after) => start({ name: `${t.name}-aside`, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } } }, text, files, after);
-const resume = (t, text, files) => start({ name: t.name, scope: "Max", origin: { Resume: { from: t.id } } }, text, files);
+const resume = (t, text, files, after) => start({ name: t.name, scope: "Max", origin: { Resume: { from: t.id } } }, text, files, after);
 
 // ─── The log: the context, exactly as sent, rendered ──────────────────────
 const contexts = new Map();
@@ -2159,11 +2159,12 @@ let box = null, dictation = null;
 const local = new Map();  // draft id -> { text, attached, v }
 const bound = new Map();  // session -> the draft this tab writes to
 const saving = new Map(); // session -> pending save timer
+const leaving = new Set(); // drafts being sent or thrown away: no longer the box's
 const rowsOf = (session) => (view?.drafts || []).filter((d) => d.session === session);
 function draftOf(session) {
   const id = bound.get(session);
-  if (id && (local.has(id) || rowsOf(session).some((d) => d.id === id))) return id;
-  const open = rowsOf(session).filter((d) => !d.held);
+  if (id && !leaving.has(id) && (local.has(id) || rowsOf(session).some((d) => d.id === id))) return id;
+  const open = rowsOf(session).filter((d) => !d.held && !leaving.has(d.id));
   const pick = open.length ? open[open.length - 1].id : null;
   if (pick) bound.set(session, pick); else bound.delete(session);
   return pick;
@@ -2241,19 +2242,21 @@ function restoreLocal() {
     }
   }
 }
-// A chat not started yet, and its fields, have no session; nor has the
-// continuing of a finished chat, whose words start the session that takes
-// them. Theirs are kept in this tab.
-const unborn = (key) => key === NEW || key.startsWith("new:") || isDone(byId[key]);
+// A chat not started yet, and its fields, have no session: theirs are kept
+// in this tab.
+const unborn = (key) => key === NEW || key.startsWith("new:");
 const keptHere = (key) => ({ text: "", attached: [], ...parse(sessionStorage.getItem(`draft:${key}`) || "{}") });
-const keepHere = (key, change) => sessionStorage.setItem(`draft:${key}`, JSON.stringify({ ...keptHere(key), ...change }));
+const keepHere = (key, change) => {
+  try { sessionStorage.setItem(`draft:${key}`, JSON.stringify({ ...keptHere(key), ...change })); return null; }
+  catch { return "too big to keep in this tab"; }
+};
 const drafts = {
   get: (session) => unborn(session) ? keptHere(session).text : contentOf(draftOf(session) || `new:${session}`).text,
   set: (session, text) => unborn(session) ? keepHere(session, { text }) : edit(session, { text }),
 };
 const attached = {
   get: (session) => unborn(session) ? keptHere(session).attached : contentOf(draftOf(session) || `new:${session}`).attached,
-  set: (session, list) => { if (unborn(session)) keepHere(session, { attached: list }); else edit(session, { attached: list }); return null; },
+  set: (session, list) => { if (unborn(session)) return keepHere(session, { attached: list }); edit(session, { attached: list }); return null; },
 };
 // The brain's text for the draft in the box, if this tab has nothing of
 // its own unsaved: what another device typed.
@@ -2270,14 +2273,14 @@ function renderOthers() {
   const others = $(".others", compose);
   if (!others || !box) return;
   const session = box.dataset.key, mine = draftOf(session);
-  others.replaceChildren(...rowsOf(session).filter((d) => d.id !== mine).map((d) => {
+  others.replaceChildren(...rowsOf(session).filter((d) => d.id !== mine && !leaving.has(d.id)).map((d) => {
     const c = contentOf(d.id), card = el("div", `other${d.held ? " held" : ""}`);
     card.append(el("span", "said", c.text.split("\n")[0].slice(0, 160) || `${c.attached.length} attached`));
     card.append(el("span", "why", d.held ? `not heard: ${d.held}` : !d.from ? "another draft" : rowsOf(session).some((o) => o.id === d.from) ? "typed at the same time as another" : "typed after another was sent"));
     if (!d.held) { const use = el("button", "btn", "Edit this"); use.onclick = () => { bound.set(session, d.id); box.value = prev = c.text; autosize(); renderTray(); renderOthers(); }; card.append(use); }
-    else if (unborn(session)) {
+    else {
       const use = el("button", "btn", "Use these words");
-      use.onclick = async () => { box.value = prev = c.text; drafts.set(session, c.text); attached.set(session, c.attached); autosize(); renderTray(); await act({ Draft: [d.id, "Discarded"] }); renderOthers(); };
+      use.onclick = async () => { giveBack(session, c.text, c.attached); leaving.add(d.id); renderOthers(); await act({ Draft: [d.id, "Discarded"] }); renderOthers(); };
       card.append(use);
     }
     return card;
@@ -2397,20 +2400,16 @@ async function submit(read) {
   if (dictation) return stopDictation();
   if (!t) return startNew(text, files);
   say("");
-  clearTimeout(saving.get(key));
-  saving.delete(key);
   const ask = askOf(t);
-  let draft = unborn(key) ? null : draftOf(key);
+  const continues = isDone(t) || (t.scoped && !ask && read === "Next");
+  if (continues && !text.trim()) return say("write something to go with what is attached", true);
+  let draft = takeWords(key);
+  const discard = draft ? [{ Draft: [draft, "Discarded"] }] : [];
   // A new task whose mandate is these words; the draft goes with them.
-  if (isDone(t) || (t.scoped && !ask && read === "Next")) {
-    if (!text.trim()) return say("write something to go with what is attached", true);
-    const why = isDone(t) ? await resume(t, text, files) : await aside(t, text, files, draft ? [{ Draft: [draft, "Discarded"] }] : []);
-    if (why) return say(`not sent: ${why}`, true);
+  if (continues) {
+    const why = isDone(t) ? await resume(t, text, files, discard) : await aside(t, text, files, discard);
+    if (why) { returnWords(key, draft, text, files); return say(`not sent: ${why}`, true); }
     local.delete(draft);
-    bound.delete(key);
-    if (unborn(key)) { drafts.set(key, ""); attached.set(key, []); }
-    if (box.value === text) { box.value = prev = ""; autosize(); }
-    renderTray();
     return;
   }
   const blocks = [...files.map((a) => a.block), ...(text.trim() ? [{ type: "text", text }] : [])];
@@ -2418,28 +2417,51 @@ async function submit(read) {
   let sent = null;
   const why = await act((at) => {
     sent = `${at}.0`;
-    if (ask) return [{ Call: [ask.id, { Settled: { Completed: { model: id, full: null, observes: [] } } }] }, ...(draft ? [{ Draft: [draft, "Discarded"] }] : [])];
+    if (ask) return [{ Call: [ask.id, { Settled: { Completed: { model: id, full: null, observes: [] } } }] }, ...discard];
     const facts = [];
     if (!draft) { draft = sent; facts.push({ Draft: [draft, { Opened: { session: t.id } }] }); }
     facts.push({ Draft: [draft, { Send: { text: id, read } }] });
     return facts;
   }, [words]);
-  if (why) return say(`not sent: ${why}`, true);
+  if (why) { returnWords(key, draft === sent ? null : draft, text, files); return say(`not sent: ${why}`, true); }
+  local.delete(draft);
   const rows = view.drafts;
   const successor = !ask && rows.find((d) => d.id === sent && d.from === draft);
   const held = !ask && rows.find((d) => d.id === draft && d.held);
-  local.delete(draft);
   if (successor) {
-    bound.set(key, successor.id);
-    renderOthers();
+    returnWords(key, successor.id, text, files);
     return say("another device sent this draft first: your words are a new draft, beside it", true);
   }
-  if (held) { bound.delete(key); renderOthers(); return say(`held, not heard: ${held.held}`, true); }
-  bound.delete(key);
-  if (box.value === text) { box.value = prev = ""; autosize(); }
-  renderTray();
+  if (held) leaving.delete(draft);
   renderOthers();
+  if (held) return say(`held, not heard: ${held.held}`, true);
   renderComposeState(t);
+}
+// What is in the box leaves it as it is sent: the box is empty at once, so
+// a second press sends nothing, and what Max types while it goes is a draft
+// of its own. The draft the words were in is the send's.
+function takeWords(key) {
+  clearTimeout(saving.get(key));
+  saving.delete(key);
+  const draft = unborn(key) ? null : draftOf(key);
+  if (draft) leaving.add(draft);
+  bound.delete(key);
+  local.delete(`new:${key}`);
+  if (unborn(key)) { drafts.set(key, ""); attached.set(key, []); }
+  if (box?.dataset.key === key) { box.value = prev = ""; autosize(); renderTray(); renderOthers(); }
+  return draft;
+}
+// Refused, the words come back to their draft, before anything typed since.
+function returnWords(key, draft, text, files) {
+  if (draft) { leaving.delete(draft); bound.set(key, draft); }
+  giveBack(key, text, files);
+}
+function giveBack(key, text, files) {
+  const now = drafts.get(key), more = attached.get(key);
+  const back = now.trim() ? `${text}\n\n${now}` : text;
+  drafts.set(key, back);
+  attached.set(key, [...files, ...more]);
+  if (box?.dataset.key === key) { box.value = prev = back; autosize(); renderTray(); renderOthers(); }
 }
 
 let prev = "";
@@ -2596,6 +2618,7 @@ async function startNew(text, files) {
   if (!env) return say("choose a role", true);
   if (env.places.length && !dir) return say(`it needs a directory for its ${env.places[0]}`, true);
   if (!text.trim()) return say("write what it is for", true);
+  takeWords(NEW);
   const why = await start((next, out) => {
     const places = {};
     for (const place of env.places) {
@@ -2606,10 +2629,7 @@ async function startNew(text, files) {
     }
     return { name: nameFrom(text), scope: "Max", origin: { Fresh: { environment: env.id, places } } };
   }, text, files);
-  if (why) return say(`not started: ${why}`, true);
-  box.value = prev = "";
-  drafts.set(NEW, "");
-  attached.set(NEW, []);
+  if (why) { giveBack(NEW, text, files); return say(`not started: ${why}`, true); }
 }
 
 // ─── Finding a chat ────────────────────────────────────────────────────────
