@@ -211,8 +211,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
     })
 }
 
-/// Max's words delivered to the task that no request has rendered yet: what
-/// he sent that the agent has not read.
+/// What was delivered to the task that no request has rendered yet: Max's
+/// words the agent has not read, and a standard prompt (his Done, a stop).
 fn pending_words(state: &State, value: Text, t: &Task) -> Vec<Value> {
     t.pending
         .iter()
@@ -220,13 +220,17 @@ fn pending_words(state: &State, value: Text, t: &Task) -> Vec<Value> {
             Input::Delivery(id) => state.delivery(*id),
             _ => None,
         })
-        .filter_map(|d| match d.delivery.content {
-            Content::Words(words) => Some(json!({
+        .map(|d| match d.delivery.content {
+            Content::Words(words) => json!({
                 "at": d.at.at.0,
                 "content": text(value, words),
                 "read": format!("{:?}", d.delivery.read),
-            })),
-            _ => None,
+            }),
+            Content::Prompt(prompt) => json!({
+                "at": d.at.at.0,
+                "prompt": format!("{prompt:?}"),
+                "read": format!("{:?}", d.delivery.read),
+            }),
         })
         .collect()
 }

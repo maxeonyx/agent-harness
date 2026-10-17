@@ -260,22 +260,30 @@ its prompt and tools take effect from your next `handover`.",
     }
 
     if first {
-        let said = match (task.origin.clone(), task.scope) {
-            (Origin::Aside { .. }, _) => format!(
+        // Max's words are a block of their own after the harness's framing,
+        // so a face shows them as he wrote them.
+        let framing = match (task.origin.clone(), task.scope) {
+            (Origin::Aside { .. }, _) => Some(format!(
                 "[harness] This is an aside: Max forked you to talk while the agents you started work. You are \
 told when they are all done. When Max marks this aside done, you summarise what came of the talk, and that \
-goes back to the context you were forked from with their results. He wrote (`{}` quotes it in a brief):\n\n{}",
-                label(task.mandate.text),
-                said(values, task.mandate.text)
-            ),
-            (_, Scope::Max) => format!(
-                "[harness] Max's mandate to you (`{}` quotes it in a brief):\n\n{}",
-                label(task.mandate.text),
-                said(values, task.mandate.text)
-            ),
-            (_, Scope::Spawn(_)) => mandate(state, values, task),
+goes back to the context you were forked from with their results. He wrote (`{}` quotes it in a brief):",
+                label(task.mandate.text)
+            )),
+            (Origin::Resume { .. }, Scope::Max) if task.by.is_none() => Some(format!(
+                "[harness] Max has reopened this chat after it finished. He wrote (`{}` quotes it in a brief):",
+                label(task.mandate.text)
+            )),
+            (_, Scope::Max) => Some(format!(
+                "[harness] Max's mandate to you (`{}` quotes it in a brief):",
+                label(task.mandate.text)
+            )),
+            (_, Scope::Spawn(_)) => None,
         };
-        texts.push(Rendered::Note(Note::Mandate), vec![text(&said)]);
+        let said = match framing {
+            Some(framing) => vec![text(&framing), text(&said(values, task.mandate.text))],
+            None => vec![text(&mandate(state, values, task))],
+        };
+        texts.push(Rendered::Note(Note::Mandate), said);
     }
     if let Some(Seed { from, note }) = seed {
         texts.push(

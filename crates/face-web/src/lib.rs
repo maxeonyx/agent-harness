@@ -75,8 +75,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::Caller;
 use harness_core::context::{Entry, EntryId, Note, Rendered};
-use harness_core::delivery::{Content, Delivery};
-use harness_core::id::{CallId, FaceId, ModelCallId, Seq, Timestamp, ValueId};
+use harness_core::delivery::{Content, Delivery, Prompt};
+use harness_core::id::{CallId, FaceId, ModelCallId, Seq, TaskId, Timestamp, ValueId};
 use harness_core::journal::Batch;
 use harness_core::state::{Delivered, State};
 use serde_json::{Value, json};
@@ -350,7 +350,7 @@ enum Author {
     Harness,
     /// A tool's result, or a background call's settlement.
     Call,
-    /// The task's mandate.
+    /// The mandate an agent gave the task. A mandate Max gave is his words.
     Mandate,
     /// The brief a spawn's members share.
     Brief,
@@ -360,6 +360,8 @@ enum Author {
     /// Max's answer to a question asked in the background, in one block
     /// with the harness's note.
     Answer { words: ValueId },
+    /// A standard prompt: Max's Done, or the stop an owner or Max made.
+    Prompt(Prompt),
 }
 
 /// A request that appended some of a context: its messages and the runs of
@@ -392,14 +394,14 @@ fn sent(state: &State, chain: &[(EntryId, Entry, Value)]) -> Vec<Sent> {
                     runs: call
                         .renders
                         .iter()
-                        .map(|span| (author(state, &span.from), span.blocks))
+                        .map(|span| (author(state, call.task, &span.from), span.blocks))
                         .collect(),
                 })
         })
         .collect()
 }
 
-fn author(state: &State, from: &Rendered) -> Author {
+fn author(state: &State, task: TaskId, from: &Rendered) -> Author {
     match from {
         Rendered::Delivery(id) => match state.delivery(*id) {
             Some(Delivered {
@@ -414,7 +416,15 @@ fn author(state: &State, from: &Rendered) -> Author {
                 words: *words,
                 at: at.at,
             },
-            _ => Author::Harness,
+            Some(Delivered {
+                delivery:
+                    Delivery {
+                        content: Content::Prompt(prompt),
+                        ..
+                    },
+                ..
+            }) => Author::Prompt(*prompt),
+            None => Author::Harness,
         },
         Rendered::Call(call) => match state.call(*call) {
             Some(record)
@@ -430,7 +440,14 @@ fn author(state: &State, from: &Rendered) -> Author {
             }
             _ => Author::Call,
         },
-        Rendered::Note(Note::Mandate) => Author::Mandate,
+        // A task Max started, an aside or a resume, opens with his words.
+        Rendered::Note(Note::Mandate) => match state.task(task) {
+            Some(t) if t.by.is_none() => Author::Max {
+                words: t.mandate.text,
+                at: t.created.at,
+            },
+            _ => Author::Mandate,
+        },
         Rendered::Note(Note::Brief) => Author::Brief,
         Rendered::Note(_) => Author::Harness,
     }
@@ -469,6 +486,7 @@ fn authors(
                         Author::Call => json!({"by": "call"}),
                         Author::Mandate => json!({"by": "mandate"}),
                         Author::Brief => json!({"by": "brief"}),
+                        Author::Prompt(p) => json!({"by": "prompt", "prompt": format!("{p:?}")}),
                         Author::Answer { words } => {
                             let said: Vec<String> = blocks(words)
                                 .iter()
