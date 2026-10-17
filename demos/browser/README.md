@@ -5,7 +5,7 @@ demos/browser/run.sh                                   # the harness launches a 
 HARNESS_BROWSER=127.0.0.1:9222 demos/browser/run.sh    # or drives the one at this endpoint
 ```
 
-Watch it at https://mx-hv-mj.local:4342 (another port: `PORT=4400 demos/browser/run.sh`). It takes under a minute and about ten requests on the subscription, every role on Sonnet at its own effort (`MODEL=…` for another).
+It runs on the test brain `browser` (`dev/drive.mjs`) and prints its link to watch. It takes under a minute and about ten requests on the subscription, every role on Sonnet at low effort (`MODEL=…` for another).
 
 What happens:
 
@@ -16,7 +16,7 @@ What happens:
 5. You stop the call (`act PORT stop CALL`, the Stop button on it in the face), which closes the tab. Then you press Done, and the chat writes its result.
 
 Where the browser is, the limb's settings say, from `HARNESS_BROWSER` when the brain starts:
-- **Unset or empty:** the limb launches Playwright's `chrome-headless-shell` with a profile of its own, in the limb's state (`~/.local/state/harness/limbs/<limb>/profile`). Here the demo sets `XDG_STATE_HOME`, so that state stays in `target/browser-demo`.
+- **Unset or empty:** the limb launches Playwright's `chrome-headless-shell` with a profile of its own, in the limb's state (`~/.local/state/harness/limbs/<limb>/profile`). On a test brain that state is in `.drive.ignore/browser/state`.
 - **`host:port`, `http://…` or `ws://…`:** it attaches to a browser already running there. For a Chrome you can see on Windows, start it with a dedicated profile (never your own; Chrome refuses remote debugging on the default one anyway): `chrome.exe --remote-debugging-port=9222 --user-data-dir=%LOCALAPPDATA%\harness-chrome`. Then tunnel it into the VM from Windows with `ssh -N -R 9222:127.0.0.1:9222 mx-hv-mj.local`, and start the brain with `HARNESS_BROWSER=127.0.0.1:9222`. A tab you open yourself in that window is yours: agents can work in it when told, and never close it.
 - **Any other path:** a browser executable to launch.
 
@@ -24,36 +24,55 @@ Changing it is a new version of the limb's definition, and a running limb switch
 
 ## Real output
 
-A run at 04:05 NZDT on 2026-10-18 on Sonnet, with the headless shell the limb launched (`PORT=4376`). The brain's lines are cut at 170 characters, the rest at 200.
+A run at 04:33 NZDT on 2026-10-18 on Sonnet at low effort, with the headless shell the limb launched. Paths are shortened to `…/`; the brain's lines are cut at 170 characters, the rest at 200.
 
 ```
-    7.9s e3876ab41512153b.12  Can you do my October expense-expense-claim created (browser)
-    8.4s e3876ab41512153b.13  browser connected
-    8.4s 32272afa869c115f.1  browser described: 4 tools
-   10.5s e3876ab41512153b.18  Can you do my October expense-expense-claim: responded, ToolUse, 1 calls (4 in, 0 cached, 145 out)
-   10.5s e3876ab41512153b.19  Can you do my October expense-expense-claim's tab `claim` made {"url":"file:///…
-   10.7s e3876ab41512153b.21  Can you do my October expense-expense-claim's tab `claim` dispatched
-   12.0s e3876ab41512153b.23  Can you do my October expense-expense-claim's page made {"tab": "claim", "script": "return document.body.innerText"}
-   12.0s e3876ab41512153b.23  Can you do my October expense-expense-claim: responded, ToolUse, 1 calls (2 in, 11607 cached, 75 out)
-   13.8s e3876ab41512153b.28  Can you do my October expense-expense-claim's browser made {"script": "const t=tab('claim');await t.goto('file:///…
-   13.8s e3876ab41512153b.28  Can you do my October expense-expense-claim: responded, ToolUse, 1 calls (2 in, 11794 cached, 155 out)
-   13.8s e3876ab41512153b.29  Can you do my October expense-expense-claim's browser dispatched
-   13.8s 32272afa869c115f.3  tab 8C6A206F64F146E075A4D922B06712E6 changed
-   13.9s 32272afa869c115f.4  Can you do my October expense-expense-claim's browser completed
-   17.4s e3876ab41512153b.34  Can you do my October expense-expense-claim's browser made {"script": "const t=tab('claim');\nconst r=[['2026-10-02','Air New Zealand – WLG–
-   17.4s e3876ab41512153b.34  Can you do my October expense-expense-claim: responded, ToolUse, 2 calls (2 in, 12148 cached, 536 out)
-   17.4s e3876ab41512153b.35  Can you do my October expense-expense-claim's browser dispatched
-   17.4s e3876ab41512153b.36  Can you do my October expense-expense-claim's tab `claim` passed to Can you do my October expense: Filled claim form for Max to check and su
-   17.5s 32272afa869c115f.5  Can you do my October expense-expense-claim's browser completed
-   21.1s e3876ab41512153b.40  Can you do my October expense-expense-claim: responded, EndTurn, 0 calls (2 in, 12809 cached, 420 out)
-   21.1s e3876ab41512153b.41  Can you do my October expense's spawn completed
-   23.0s e3876ab41512153b.44  Can you do my October expense: responded, ToolUse, 1 calls (4 in, 8821 cached, 104 out)
-   23.0s e3876ab41512153b.45  Can you do my October expense-expense-claim's tab `claim` passed to Max: This tab holds the filled-in October claim form. Max should check i
-   26.6s e3876ab41512153b.48  Can you do my October expense: responded, EndTurn, 0 calls (2 in, 10393 cached, 429 out)
+brain browser on https://mx-hv-mj.local:4405/ (pid 2427662; every role on sonnet/low)
+log …/.drive.ignore/browser/brain.log
+end it with: node dev/drive.mjs down --brain browser
+== Max asks a chat, in the chat role:
+Can you do my October expense claim? The receipts are at file://…/demos/browser/site/receipts.html and the claim form is at file://…/demos/browser/site/claim.html. Only the work ones, not the personal
+
+    0.0s 2c87e04249b34225.1  limb browser defined
+    0.0s efff045ee27ed1d0.1  environment browser defined
+    0.0s efff045ee27ed1d0.1  role …/roles/browser.md changed
+    0.1s 2c87e04249b34225.4  tab 3c89caa951447857 is Max's
+    3.4s 2c87e04249b34225.11  Can you do my October expense's spawn made
+    3.4s 2c87e04249b34225.11  Can you do my October expense: responded, ToolUse, 1 calls (4 in, 0 cached, 274 out)
+    3.4s 2c87e04249b34225.12  Can you do my October expense's spawn dispatched
+    3.4s 2c87e04249b34225.12  Can you do my October expense-claim created (browser)
+    4.0s 2c87e04249b34225.13  browser connected
+    4.0s c17b47c7a7a2f837.1  browser described: 4 tools
+    5.8s 2c87e04249b34225.18  Can you do my October expense-claim: responded, ToolUse, 1 calls (4 in, 11278 cached, 144 out)
+    5.8s 2c87e04249b34225.19  Can you do my October expense-claim's tab `r` made {"url":"file://…/demos/b
+    6.0s 2c87e04249b34225.21  Can you do my October expense-claim's tab `r` dispatched
+    7.1s 2c87e04249b34225.23  Can you do my October expense-claim's page made {"tab": "r", "script": "return document.body.innerText"}
+    7.1s 2c87e04249b34225.23  Can you do my October expense-claim: responded, ToolUse, 1 calls (2 in, 11630 cached, 74 out)
+    8.7s 2c87e04249b34225.28  Can you do my October expense-claim: responded, ToolUse, 1 calls (2 in, 11816 cached, 167 out)
+    8.7s 2c87e04249b34225.29  Can you do my October expense-claim's tab `c` made {"url":"file://…/demos/b
+    8.9s 2c87e04249b34225.31  Can you do my October expense-claim's tab `c` dispatched
+   10.0s 2c87e04249b34225.33  Can you do my October expense-claim's page made {"tab": "c", "script": "return document.body.innerHTML"}
+   10.0s 2c87e04249b34225.33  Can you do my October expense-claim: responded, ToolUse, 1 calls (2 in, 12169 cached, 76 out)
+   13.0s 2c87e04249b34225.38  Can you do my October expense-claim's browser made {"script": "const t=tab('c');\nconst rows=[[\"2026-10-02\",\"Air New Zealand – WLG–AKL fl
+   13.0s 2c87e04249b34225.38  Can you do my October expense-claim: responded, ToolUse, 2 calls (2 in, 12376 cached, 474 out)
+   13.0s 2c87e04249b34225.39  Can you do my October expense-claim's browser dispatched
+   13.1s c17b47c7a7a2f837.4  Can you do my October expense-claim's browser completed
+   15.1s 2c87e04249b34225.45  Can you do my October expense-claim: responded, ToolUse, 2 calls (4 in, 11630 cached, 130 out)
+   15.1s 2c87e04249b34225.46  Can you do my October expense-claim's tab `r` abandoned
+   15.1s 2c87e04249b34225.47  Can you do my October expense-claim's tab `c` passed to Can you do my October expense: Filled October claim form, not submitted; Max can rev
+   15.3s 2c87e04249b34225.49  Can you do my October expense-claim's tab `r` stopping, within 10s
+   15.5s c17b47c7a7a2f837.5  Can you do my October expense-claim's tab `r` interrupted
+   15.5s c17b47c7a7a2f837.6  tab ED6D1CEB75D521DC5D54B4CD5158D70E changed
+   18.5s 2c87e04249b34225.53  Can you do my October expense-claim: responded, EndTurn, 0 calls (2 in, 11950 cached, 322 out)
+   21.6s 2c87e04249b34225.56  Can you do my October expense-claim: responded, EndTurn, 0 calls (4 in, 12205 cached, 358 out)
+   21.6s 2c87e04249b34225.57  Can you do my October expense's spawn completed
+   24.4s 2c87e04249b34225.60  Can you do my October expense: responded, ToolUse, 1 calls (4 in, 9224 cached, 202 out)
+   24.4s 2c87e04249b34225.61  Can you do my October expense-claim's tab `c` passed to Max: This is the filled October claim form, not submitted. Max should check it and s
+   27.7s 2c87e04249b34225.64  Can you do my October expense: responded, EndTurn, 0 calls (2 in, 9985 cached, 325 out)
 
 
 == What the browser shows, read over DevTools
-  tab 8C6A206F  claim.html  "Expense claim"
+  tab 974586A0  claim.html  "Expense claim"
     period: October 2026
     1. 2026-10-02 | Air New Zealand – WLG–AKL flight | 189.00
     2. 2026-10-02 | Uber – Airport to office | 42.50
@@ -64,29 +83,33 @@ A run at 04:05 NZDT on 2026-10-18 on Sonnet, with the headless shell the limb la
     total: $654.30; not submitted
 
 == Handed to Max: the tab, still open
-  e3876ab41512153b.19.1  tab `claim`
+  2c87e04249b34225.29.1  tab `c`
 
 == Max has checked it and closes the tab: Stop on the call
-  act: tab 9f1348113ee29650 linked
-  act: Max presses Stop on e3876ab41512153b.19.1
+  act: tab b1e72604baa540cf linked
+  act: Max presses Stop on 2c87e04249b34225.29.1
 included
   no tabs open
 
 == Max presses Done, and the chat writes its result
-  act: tab 49ff5002d08cfadf linked
+  act: tab d174b9a2c06148aa linked
   act: Max presses Done
 included
 == the task is done; its result:
 
 **Result**
 
-**Done:** A browser agent filled in Max's October 2026 expense claim with the six work receipts, totalling $654.30 NZD. That matches the sum of the receipts. It didn't submit the form. I passed its ta
-
-**Excluded:** The agent left out two receipts marked personal on the receipts page. These were Countdown groceries ($96.20) and Event Cinemas ($21.50).
-
-**Learned:** The agent found no ambiguous receipts. All eight were dated October, had an amount, and none looked like a duplicate. I couldn't open the file URLs myself, so everything above comes from 
-
-**Left undone:** Max still has to check the form and click Submit himself. I haven't done that.
+- **Done:** A browser agent read the October receipts and filled in the claim form with 6 work receipts, totalling 654.30. It did not submit the form. I passed the form tab to Max to check and submit.
+- **Known lines:** I only have four of the six:
+  - 2026-10-02, Air New Zealand flight WLG–AKL, 189.00.
+  - 2026-10-02, Uber from the airport to the office, 42.50.
+  - 2026-10-03, Ibis Auckland, 1 night, 164.00.
+  - 2026-10-04, Mojo coffee with a client, 11.80.
+- **Unverified:**
+  - The agent lost context when it was compacted, so I don't have the other two lines. One of them is dated 2026-10-09.
+  - I don't know which receipts it excluded as personal, or whether it flagged any as ambiguous.
+  - I did not re-check the form or the receipts page myself.
+- **Left undone:** Max still has to compare the form against `receipts.html` and submit it. He should check for missing work receipts and for personal ones that got in. The Mojo coffee is the likelies
 ```
 
 Attached to a browser of your own (`HARNESS_BROWSER`), its own first tab shows too: no call holds it, so it counts as Max's, and nothing closes it.
