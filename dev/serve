@@ -41,17 +41,18 @@ build=$home/builds/$commit
 if [[ ! -d $build ]]; then
     echo "building $commit"
     staging=$home/builds/.$commit.$$
+    trap '[[ ! -d $staging ]] || { chmod -R u+w "$staging"; rm -rf "$staging"; }' EXIT
     mkdir -p "$staging/bin"
     cargo build --release --workspace --bins --example act \
         --message-format=json-render-diagnostics |
         jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
         xargs -r cp -t "$staging/bin"
     git archive HEAD roles | tar -x -C "$staging"
-    [[ $("$staging/bin/harness-brain" --version) == "$commit" ]] ||
-        die "the build says it is $("$staging/bin/harness-brain" --version), not $commit"
+    built=$("$staging/bin/harness-brain" --version)
+    [[ $built == "harness-brain $commit" ]] || die "the build says it is $built, not $commit"
     chmod -R a-w "$staging"
     # Another serve may have installed it meanwhile: the first one stands.
-    mv -T "$staging" "$build" 2>/dev/null || { chmod -R u+w "$staging"; rm -rf "$staging"; }
+    mv -T "$staging" "$build" 2>/dev/null || true
 fi
 
 unit=harness-$name.service
