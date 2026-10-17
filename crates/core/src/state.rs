@@ -49,7 +49,7 @@ use crate::value::Bytes;
 ///
 /// It holds the context tree itself ([`State::entry`], [`State::context`]),
 /// learned from the facts that carry entries, so a request's head, a
-/// breakpoint and a rewind are checked against the tree, and a face renders
+/// breakpoint and a move back are checked against the tree, and a face renders
 /// any context from the fold and the value store alone.
 ///
 /// What it guarantees, by refusing every record that would break it: a task
@@ -540,6 +540,7 @@ impl State {
         let draft = Draft {
             id,
             session: raced.session,
+            at: raced.at,
             text: Some(*text),
             typed: None,
             sent: None,
@@ -579,7 +580,7 @@ impl State {
         record: &Stated,
     ) -> Result<(), Rejected> {
         match event {
-            DraftEvent::Opened { session } => {
+            DraftEvent::Opened { session, at } => {
                 minted(id.0, record)?;
                 if self.drafts.contains_key(&id) || self.deliveries.contains_key(&id) {
                     return Err(Rejected::Exists);
@@ -590,6 +591,7 @@ impl State {
                 let draft = Draft {
                     id,
                     session: *session,
+                    at: *at,
                     text: None,
                     typed: None,
                     sent: None,
@@ -624,6 +626,7 @@ impl State {
                         let new = Draft {
                             id: successor,
                             session: draft.session,
+                            at: draft.at,
                             text: Some(*text),
                             typed: None,
                             sent: None,
@@ -885,8 +888,11 @@ impl State {
                             }
                     ),
                     TaskEvent::Expired => false,
-                    TaskEvent::Moved(movement) => matches!(movement, Move::Rewind { .. }),
-                    TaskEvent::ModeSet(_) | TaskEvent::Renamed(_) | TaskEvent::Pause(_) => true,
+                    TaskEvent::Moved(movement) => matches!(movement, Move::Back { .. }),
+                    TaskEvent::ModeSet(_)
+                    | TaskEvent::Renamed(_)
+                    | TaskEvent::Tuned(_)
+                    | TaskEvent::Pause(_) => true,
                 },
                 Fact::Delivery(delivery) => matches!(
                     delivery.content,
@@ -1153,7 +1159,7 @@ impl State {
                 self.check_start(task, start)?;
                 root = Some(&start.root);
             }
-            TaskEvent::Moved(Move::Rewind { to }) => {
+            TaskEvent::Moved(Move::Back { to }) => {
                 let on_chain = task
                     .context()
                     .is_some_and(|c| self.descends(c.head, *to) && self.descends(*to, c.start));

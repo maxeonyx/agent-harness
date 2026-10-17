@@ -54,6 +54,70 @@ pub use client::{Client, Finished, Progress};
 pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};
 
+use harness_core::environment::Effort;
+
+/// A model the subscription offers, as a face lists it and a role file may
+/// name it.
+#[derive(Clone, Copy, Debug)]
+pub struct Model {
+    /// The role file's name for it, as in Claude Code: `opus`.
+    pub alias: &'static str,
+    /// The provider's name for it, as a root names it.
+    pub id: &'static str,
+    /// What a face calls it: `Opus`.
+    pub name: &'static str,
+}
+
+/// The current model of each family, most capable first: what Max chooses
+/// a chat's model from. The provider lists more (`GET /v1/models`, read
+/// 2026-10-18 NZT): older versions, and families the harness does not use.
+pub const MODELS: [Model; 3] = [
+    Model {
+        alias: "opus",
+        id: "claude-opus-5-5",
+        name: "Opus",
+    },
+    Model {
+        alias: "sonnet",
+        id: "claude-sonnet-5-5",
+        name: "Sonnet",
+    },
+    Model {
+        alias: "haiku",
+        id: "claude-haiku-5-5",
+        name: "Haiku",
+    },
+];
+
+/// The provider's name for a model a role file names: its alias's id, or
+/// the name as given.
+pub fn model_id(name: &str) -> &str {
+    MODELS
+        .iter()
+        .find(|m| m.alias == name)
+        .map_or(name, |m| m.id)
+}
+
+/// The effort request parameters ask for (`output_config.effort`), if they
+/// name one the harness uses.
+pub fn effort(params: &[u8]) -> Option<Effort> {
+    let params: serde_json::Value = serde_json::from_slice(params).ok()?;
+    params["output_config"]["effort"].as_str()?.parse().ok()
+}
+
+/// The request parameters with `effort` in place of theirs; `None` when
+/// they are not a JSON object.
+pub fn with_effort(params: &[u8], effort: Effort) -> Option<Vec<u8>> {
+    let mut params: serde_json::Value = serde_json::from_slice(params).ok()?;
+    params
+        .as_object_mut()?
+        .entry("output_config")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()?
+        .insert("effort".into(), effort.as_str().into());
+    serde_json::to_vec(&params).ok()
+}
+
 /// How many tokens a model's context holds: 1M for the current Opus and
 /// Sonnet models without a beta, 200k for Haiku.
 pub fn context_window(model: &str) -> u64 {

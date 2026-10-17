@@ -181,6 +181,7 @@ fn write(file: &str) -> Result<(), Box<dyn std::error::Error>> {
                 facts: vec![Fact::Task(
                     TaskId(at.event(0)),
                     TaskEvent::Created(Box::new(Created {
+                        tuning: Default::default(),
                         name: format!("count {k}"),
                         by: None,
                         scope: Scope::Max,
