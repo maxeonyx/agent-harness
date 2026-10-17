@@ -8,10 +8,14 @@ dir=target/unread-demo
 port=${PORT:-4396}
 rm -rf "$dir" && mkdir -p "$dir"
 db=$dir/brain.sqlite
+# Everything the demo starts carries this mark; its limbs outlive their
+# brains, so what is left is ended when it finishes.
+mark=HARNESS_OWNER_unread-demo-$$
+trap 'demos/end.sh "$mark"' EXIT
 
 # Run the brain until it has launched, then stop it as Ctrl-C would.
 launch() {
-  target/release/harness-brain --db "$db" --port "$port" "$@" > "$dir/launch$n.log" 2>&1 &
+  env "$mark=1" target/release/harness-brain --db "$db" --port "$port" "$@" > "$dir/launch$n.log" 2>&1 &
   local pid=$!
   until grep -q '^face:' "$dir/launch$n.log"; do sleep 0.1; done
   kill -INT $pid && wait $pid

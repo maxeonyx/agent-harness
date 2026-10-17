@@ -16,4 +16,14 @@
   #tip.pinned .open { margin: 0; border: 0; border-radius: 7px; padding: .35em .55em; text-align: left; font-size: 13px; }
 
   #find { position: fixed; top: max(14px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 40; width: min(26em, calc(100vw - 2em)); font: 15px var(--sans); padding: .5em 1em; border-radius: 999px; border: 1px solid var(--line); background: var(--white); color: var(--ink); box-shadow: 0 8px 26px rgba(40, 30, 20, .14); outline: 0; }
+  #found { position: fixed; top: calc(max(14px, env(safe-area-inset-top)) + 3em); left: 50%; transform: translateX(-50%); z-index: 40; width: min(34em, calc(100vw - 2em)); max-height: min(60vh, 32em); overflow-y: auto; display: flex; flex-direction: column; padding: .3em; border-radius: 14px; border: 1px solid var(--line); background: var(--white); box-shadow: 0 8px 26px rgba(40, 30, 20, .14); font: 14px var(--sans); color: var(--ink); }
+  #found .hit { all: unset; display: grid; grid-template-columns: 1fr auto; gap: .15em .8em; padding: .45em .7em; border-radius: 10px; cursor: pointer; }
+  #found .hit.chosen { background: var(--hover); }
+  #found .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #found .count { color: var(--muted); font-size: 12px; }
+  #found .said { grid-column: 1 / -1; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  #found mark { background: #f7e3a1; color: inherit; border-radius: 3px; }
+  #found .none { padding: .5em .7em; color: var(--muted); }
+  .chunk.revealed { animation: revealed 2.4s ease-out; border-radius: 8px; }
+  @keyframes revealed { from { background: #f7e3a1; } to { background: transparent; } }
 

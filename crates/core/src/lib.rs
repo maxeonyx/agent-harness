@@ -29,7 +29,7 @@
 //! | A call | [`call::Call`] | [`call::CallEvent`] | [`state::CallRecord`] |
 //! | Max's message | [`id::DeliveryId`]: a [`draft::Draft`], then the [`delivery::Delivery`] it becomes | [`draft::DraftEvent`], from any of his faces | [`state::State::draft`], [`state::State::fate`], the task's pending inputs |
 //! | An environment: a role | [`environment::Environment`] | each new version | [`state::State::environment`] |
-//! | A limb | [`environment::Limb`], unique by name | each new version, never of another kind; [`fact::Fact::Described`]; [`environment::Reach`], which names the replica speaking for it | [`state::State::limb`], [`state::State::limb_named`], [`state::State::described`], [`state::State::connected`], [`state::State::limb_rows`] |
+//! | A limb | [`environment::Limb`], unique by name, a server on its [`environment::Host`] | each new version, never of another kind or host; [`fact::Fact::Described`]; [`environment::Reach`], which names the replica speaking for it and its build | [`state::State::limb`], [`state::State::limb_named`], [`state::State::described`], [`state::State::connected`], [`state::State::limb_rows`] |
 //! | A resource | [`resource::ResourceKey`] | [`resource::Change`] | [`state::State::resource`], [`state::State::stale`] |
 //! | Max's attention | [`attention::Ranking`], [`attention::Focus`] (the newest per face is kept) | each new one | [`state::State::queue`] |
 //! | Max's faces | [`fact::Fact::Face`] | the brain accepting each replica | [`state::State::is_face`]; what each showed him is [`fact::Fact::Seen`] |
@@ -129,6 +129,22 @@
 //!   at most once; every follower ships what the brain's standing of it does
 //!   not include, and the brain skips what it already has. A brain restart,
 //!   a limb restart and a dropped connection are one case.
+//! - **Limbs live on their own.** A plugin limb is a server on its
+//!   [host](environment::Host): on the brain's machine, or on another one
+//!   through SSH. The brain starts it if it is not running and dials it,
+//!   because the brain always knows where its limbs are and a remote one
+//!   often cannot reach the brain. After that it lives apart from any
+//!   brain: a brain going away, cleanly or not, closes a link and stops
+//!   none of its calls, which are its tasks' work; the limb leaves only once
+//!   no brain has been connected for 15 minutes. Its state on its host is
+//!   its address, its lock and its records at once, so a second start is a
+//!   no-op, two builds of one brain reach one instance, and the newest
+//!   connection replaces a stale one. A limb serves the brain whose records
+//!   define it, so two domains' brains never share a limb process, even on
+//!   one machine. Several tasks share a limb as they share a workspace or a
+//!   browser; what one task holds inside it (a tab, a sandbox's state) is a
+//!   [resource](resource::ResourceKey) of that limb. How much of this is
+//!   built yet: [`environment::Host`].
 //! - **Context updates and the environment between turns.** Each task knows
 //!   the version of everything its context embodies; a change becomes one
 //!   notice at its next request, and wakes a standing task that listens.
@@ -199,7 +215,10 @@
 //! lifecycles, which Bx's artifacts are not; going back to an entry does
 //! not go back in the world, since the files a context's calls wrote are
 //! not versioned with it (restoring them would be an act of its workspace's
-//! limb); a replica is a mutable timeline
+//! limb); a limb on another machine runs
+//! a build installed there under its hash, as a Bx artifact is, but who may
+//! reach it is the host's own access control, outside any definition, as
+//! Bx keeps trust outside the build; a replica is a mutable timeline
 //! and a time is not a hash, so the same bytes said twice are two records;
 //! and records are collected by the durability their schema declares, not
 //! by what is still referenced.

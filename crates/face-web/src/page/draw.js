@@ -99,8 +99,11 @@ function drawEdges() {
   edgesLayer.replaceChildren(...paths);
 }
 
-// Why a task's last turn did not respond, while it matters.
+// Why a task is stuck, while it matters: a place it starts in that could
+// not be made, or its last turn not responding.
 function trouble(t) {
+  const failed = t.waiting?.kind === "starting" ? t.waiting.failed || [] : [];
+  if (failed.length) return failed.map((f) => `couldn't make ${f.limb}: ${f.why} · the harness keeps trying; abandon it, or start again elsewhere`).join("; ");
   const x = t.trouble;
   if (!x || isDone(t)) return null;
   if (x.until != null) return x.until > Date.now() ? `limited until ${clock(x.until)}` : null;

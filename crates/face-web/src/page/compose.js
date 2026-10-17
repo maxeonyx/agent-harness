@@ -204,20 +204,20 @@ function buildCompose(id) {
   box.dataset.key = id;
   box.spellcheck = true;
   box.value = drafts.get(id);
-  // Beside the box: what Max can do to the task, small; then the two he
-  // presses most, dictate and send, large.
+  // Beside the box, the two Max presses most: dictate and send, large.
   const side = el("div", "side");
   const mic = icon("mic", "mic", "Dictate"); mic.hidden = !can.dictation;
   const queue = goButton("queue", "queue", "Queue", "It reads this when its turn ends, without cutting across its work (Alt+Enter, twice)");
   const send = goButton("send", "send", "Send", "Send (Enter, twice)");
-  side.append(el("div", "acts"), mic, queue, send);
+  side.append(mic, queue, send);
   const line = el("div", "line");
   line.append(box, side);
   const row = el("div", "row2");
   const sample = el("button", "later sample", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
   row.append(sample, el("span", "picks"), el("span", "status"));
   wrap.append(el("div", "others"), tray, line, row);
-  compose.append(wrap);
+  // What Max can do to the task itself floats outside the card, beside it.
+  compose.append(wrap, el("div", "acts"));
   // What is pasted or dropped in is attached.
   box.addEventListener("paste", (e) => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); attach(id, fs); } });
   wrap.addEventListener("dragover", (e) => { e.preventDefault(); wrap.classList.add("drop"); });

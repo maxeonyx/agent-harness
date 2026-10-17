@@ -6,12 +6,12 @@
 # cache; and an agent that passes its background worker to Max and
 # finishes, while the worker runs on until Max stops it. After each, every
 # process the brain started is looked for.
-# Watch at https://mx-hv-mj.local:4326.
+# Watch at https://mx-hv-mj.local:4346.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example act
 dir=target/cancel-demo
-port=${PORT:-4326}
+port=${PORT:-4346}
 url=https://mx-hv-mj.local:$port
 brain=target/release/harness-brain
 rm -rf "$dir"
@@ -22,6 +22,7 @@ start=$(date +%s.%N)
 # Everything a demo brain starts inherits this mark, however it escapes
 # its process group, so what is left of them is found by it.
 mark=HARNESS_OWNER_cancel-demo-$$
+trap 'demos/end.sh "$mark"' EXIT
 left() {
   local pids=()
   for e in /proc/[0-9]*/environ; do

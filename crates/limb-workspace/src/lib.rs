@@ -70,7 +70,7 @@ pub mod user;
 use std::collections::HashMap;
 use std::io::{self, PipeReader};
 use std::os::fd::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -78,7 +78,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::environment::{
-    Description, Instruction, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp,
+    Description, Host, Instruction, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp,
 };
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{CallId, Digest, LimbId, ReplicaId, TaskId, Timestamp, ValueId};
@@ -137,7 +137,7 @@ impl Settings {
     /// The settings a limb definition holds.
     pub fn of(limb: &Limb) -> Option<Settings> {
         match &limb.kind {
-            LimbKind::Plugin { kind, config } if Kind::of(kind).is_some() => {
+            LimbKind::Plugin { kind, config, .. } if Kind::of(kind).is_some() => {
                 serde_json::from_str(config).ok()
             }
             _ => None,
@@ -166,6 +166,7 @@ impl Settings {
             kind: LimbKind::Plugin {
                 kind: kind.name().into(),
                 config: serde_json::to_string(self).expect("settings are JSON"),
+                host: Host::Local,
             },
         }
     }
@@ -222,14 +223,6 @@ pub struct Workspace {
     rows: Mutex<Mirror<LimbKey, LimbRow, Refusal>>,
 }
 
-/// What applying a view asks of the link.
-pub struct Applied {
-    /// Ship these first: what the brain had not included when it connected.
-    pub ship: Vec<Record>,
-    /// The brain asks the limb to be gone by then.
-    pub shutdown: Option<Timestamp>,
-}
-
 struct Inner {
     limb: LimbId,
     root: PathBuf,
@@ -261,14 +254,34 @@ struct Running {
     thread: Option<JoinHandle<()>>,
 }
 
+/// `dir` as an absolute path: `~/…` in `$HOME`.
+fn absolute(dir: &Path) -> io::Result<PathBuf> {
+    if let Ok(rest) = dir.strip_prefix("~") {
+        let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("no $HOME for `~`"))?;
+        return Ok(PathBuf::from(home).join(rest));
+    }
+    if dir.is_absolute() {
+        return Ok(dir.to_path_buf());
+    }
+    Err(io::Error::other(format!(
+        "{} is not an absolute path",
+        dir.display()
+    )))
+}
+
 impl Workspace {
-    /// Start an instance: make its clone if it has one to make, open its
-    /// log, and end what an earlier instance left running. Blocks while it
-    /// clones.
+    /// Start an instance: make its directory (its clone, if it has one to
+    /// make), open its log, and end what an earlier instance left running.
+    /// Blocks while it clones. A directory given as `~/…` is in `$HOME`; any
+    /// other must be absolute.
     pub fn open(config: Config, out: Out) -> io::Result<Workspace> {
         let Settings { dir, clone, skills } = config.settings;
-        if let Some(clone) = &clone {
-            git::clone(clone, &dir)?;
+        let dir = absolute(&dir)?;
+        match &clone {
+            Some(clone) => git::clone(clone, &dir)?,
+            None => std::fs::create_dir_all(&dir).map_err(|e| {
+                io::Error::new(e.kind(), format!("cannot make {}: {e}", dir.display()))
+            })?,
         }
         std::fs::create_dir_all(&config.state)?;
         let store = Store::open(config.state.join("limb.sqlite")).map_err(io::Error::other)?;
@@ -319,17 +332,14 @@ impl Workspace {
     /// stop, watch what it asks. A whole view begins a connection: the
     /// limb ships what the brain has not included, then describes itself.
     /// Never blocks on a call.
-    pub fn apply(&self, down: LimbDown) -> Result<Applied, Restored> {
+    pub fn apply(&self, down: LimbDown) -> Result<Vec<Record>, Restored> {
         let inner = &self.inner;
         let mut ship = Vec::new();
         let connected = matches!(down, LimbDown::View(_));
         let mut replica = lock(&self.rows);
         replica.apply(down);
         let Some(view) = replica.view() else {
-            return Ok(Applied {
-                ship,
-                shutdown: None,
-            });
+            return Ok(ship);
         };
         {
             let mut log = lock(&inner.log);
@@ -352,18 +362,24 @@ impl Workspace {
                 }],
             });
         }
-        let mut shutdown = None;
         for (key, row) in &view.rows {
             match (key, row) {
-                (LimbKey::Call(id), LimbRow::Call { call, stopping }) => {
+                (
+                    LimbKey::Call(id),
+                    LimbRow::Call {
+                        call,
+                        stopping,
+                        first_sent_to,
+                    },
+                ) => {
                     let input = match &view.rows.get(&LimbKey::Value(call.input)) {
                         Some(LimbRow::Value(bytes)) => Some(bytes),
                         _ => None,
                     };
-                    self.call(*id, call, input, *stopping);
+                    let earlier = *first_sent_to != self.replica();
+                    self.call(*id, call, input, *stopping, earlier);
                 }
                 (LimbKey::Watch, LimbRow::Watch { known }) => inner.watch(known),
-                (LimbKey::Shutdown, LimbRow::Shutdown { by }) => shutdown = Some(*by),
                 _ => {}
             }
         }
@@ -374,12 +390,20 @@ impl Workspace {
                 inner.marks.forget(call);
             }
         }
-        Ok(Applied { ship, shutdown })
+        Ok(ship)
     }
 
     /// One call row: run it at most once, however often it arrives, and
-    /// stop it when the row says so.
-    fn call(&self, id: CallId, call: &Call, input: Option<&Bytes>, stopping: Option<Timestamp>) {
+    /// stop it when the row says so. `earlier`: it was first sent to an
+    /// instance of this limb whose state is lost, which may have run it.
+    fn call(
+        &self,
+        id: CallId,
+        call: &Call,
+        input: Option<&Bytes>,
+        stopping: Option<Timestamp>,
+        earlier: bool,
+    ) {
         let inner = &self.inner;
         let mut running = lock(&inner.running);
         if let Some(running) = running.get(&id) {
@@ -393,7 +417,7 @@ impl Workspace {
         if inner.settled(id) {
             return;
         }
-        let started = inner.marks.is_started(id);
+        let started = earlier || inner.marks.is_started(id);
         if stopping.is_some() {
             let outcome = if started {
                 Outcome::Unknown
