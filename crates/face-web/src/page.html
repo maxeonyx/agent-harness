@@ -2,15 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>harness</title>
 <script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/styles/github.min.css">
 <style>
   :root {
     --ground: #f0eee6; --paper: #faf9f5; --white: #fffefb; --line: #e3dfd3; --ink: #141413;
     --muted: #6b6a64; --faint: #a19f96; --maroon: #7a1f22; --maroon-soft: #f3e3e1; --hover: #e9e5d9;
+    --green: #4f8a55; --red: #b3352c;
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
     --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
@@ -25,48 +28,44 @@
     border: 1px solid var(--line); background: var(--paper); white-space: nowrap;
   }
   .btn:hover { background: var(--hover); }
-  .btn:disabled { color: var(--faint); cursor: default; background: var(--paper); }
-  .btn.armed { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
-  .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
-  .btn.primary:hover { background: #33322e; }
-  .btn.primary.armed { background: var(--maroon); border-color: var(--maroon); }
+  .btn.armed { background: var(--ink); border-color: var(--ink); color: var(--paper); }
   [hidden] { display: none !important; }
+  .icon { display: inline-grid; place-items: center; width: 2.15em; height: 2.15em; border-radius: 50%; color: var(--muted); flex: none; }
+  .icon:hover { background: var(--hover); color: var(--ink); }
+  .icon svg { width: 1.2em; height: 1.2em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-  /* The header and the footer float over the map. */
-  #top, #bottom {
-    position: fixed; left: 0; right: 0; z-index: 30; display: flex; align-items: center; gap: .9em;
-    padding: .55em 1.1em; pointer-events: none;
+  /* What floats over the map: usage at the left, fit and new at the right. */
+  #bottom {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; align-items: center; gap: .9em;
+    padding: .55em .9em max(.55em, env(safe-area-inset-bottom)); pointer-events: none; color: var(--muted); font-size: 12.5px;
   }
-  #top > *, #bottom > * { pointer-events: auto; }
-  #top { top: 0; padding-top: max(.55em, env(safe-area-inset-top)); }
-  #bottom { bottom: 0; color: var(--muted); font-size: 12.5px; padding-bottom: max(.55em, env(safe-area-inset-bottom)); }
-  .mark { font: 600 17px var(--serif); letter-spacing: .01em; }
+  #bottom > * { pointer-events: auto; }
+  body.covered #bottom { display: none; }
   .spacer { flex: 1; pointer-events: none !important; }
-  #link { width: .55em; height: .55em; border-radius: 50%; background: #6c8f5e; }
-  #link.down { background: var(--maroon); animation: breathe 1.2s infinite; }
-  #pill { border-color: transparent; background: rgba(250, 249, 245, .85); backdrop-filter: blur(6px); }
-  #pill.owed { background: var(--maroon); color: var(--paper); border-color: var(--maroon); }
-  #pill.owed .n { font-weight: 700; }
+  #bottom .icon { background: rgba(250, 249, 245, .88); backdrop-filter: blur(6px); border: 1px solid var(--line); }
+  #bottom #new { width: 2.7em; height: 2.7em; background: var(--ink); border-color: var(--ink); color: var(--paper); }
   #usage { display: inline-flex; gap: 1.1em; align-items: center; }
   .gauge { display: inline-flex; gap: .4em; align-items: center; }
   .gauge i { display: inline-block; width: 3.4em; height: .32em; border-radius: 1em; background: var(--line); overflow: hidden; }
   .gauge i b { display: block; height: 100%; background: var(--muted); }
   .gauge.high i b { background: var(--maroon); }
   .alarm { color: var(--maroon); font-weight: 600; }
-  #bottom .btn { font-size: 13px; background: rgba(250, 249, 245, .85); backdrop-filter: blur(6px); }
+  /* Shown only while the brain is out of reach, and only once it has been a moment. */
+  #link { position: fixed; top: max(.6em, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 40; display: none; padding: .2em .8em; border-radius: 999px; background: var(--maroon); color: var(--paper); font-size: 12.5px; pointer-events: none; }
+  #link.down { display: block; animation: late 1.5s steps(1, end) both; }
+  #link.down::after { content: "reconnecting"; }
+  @keyframes late { from { opacity: 0; } to { opacity: 1; } }
 
   /* The map: an endless dotted ground, the world on it. */
   #map { position: fixed; inset: 0; overflow: hidden; touch-action: none; cursor: grab;
     background-color: var(--ground);
     background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); }
   #map.grabbing { cursor: grabbing; }
+  #map.grabbing #panel { user-select: none; -webkit-user-select: none; }
   #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-  #world.flying { transition: transform .45s var(--ease); }
+  #nodes { user-select: none; -webkit-user-select: none; }
   #edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
-  #map.dim #world { opacity: .4; filter: saturate(.5); transition: opacity .3s, filter .3s; }
-  #world { transition: opacity .3s, filter .3s; }
-  #empty { position: fixed; inset: 0; display: grid; place-content: center; text-align: center; gap: .8em; color: var(--muted); }
-  #empty h2 { font: 500 22px var(--serif); color: var(--ink); margin: 0; }
+  #empty { position: fixed; inset: 0; display: grid; place-content: center; color: var(--faint); font: 16px var(--serif); pointer-events: none; }
 
   path.edge { fill: none; stroke: rgba(20, 20, 19, .32); stroke-width: 1.5; }
   path.edge.receives { stroke-dasharray: 5 5; }
@@ -75,10 +74,11 @@
   path.edge.flow.max { stroke: var(--maroon); }
   @keyframes flow { to { stroke-dashoffset: 18; } }
 
-  /* A node: a dot and its name, no box. */
+  /* A node: a dot and its name. Its colour and motion say what it is doing;
+     the words are on hover. */
   .node {
     position: absolute; left: 0; top: 0; display: flex; flex-direction: column; align-items: center;
-    text-decoration: none; color: inherit; text-align: center; transform-origin: 50% 0;
+    text-decoration: none; color: inherit; text-align: center; transition: opacity .25s;
   }
   .node .dot {
     position: relative; width: var(--d); height: var(--d); border-radius: 50%; display: grid; place-items: center;
@@ -88,113 +88,107 @@
   .node:hover .dot { transform: scale(1.1); }
   .node .name { margin-top: 5px; font: 600 13.5px/1.2 var(--serif); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .node.root .name { font-size: 15.5px; }
-  .node .status { margin-top: 1px; font-size: 11.5px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .node .where { font-size: 11px; color: var(--faint); }
   .node .ring { position: absolute; inset: -5px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
   .node.working .ring { border-top-color: var(--ink); border-right-color: rgba(20, 20, 19, .25); animation: spin 1.5s linear infinite; }
   .node.streaming .ring { animation-duration: .7s; }
   .node.tool .ring { border: 2px dashed rgba(20, 20, 19, .55); animation: spin 4s linear infinite; }
-  .node.waiting-children .ring { border-color: rgba(20, 20, 19, .18); }
+  .node.children .ring { border-color: rgba(20, 20, 19, .16); }
   .node.starting .dot { border-style: dashed; color: var(--faint); }
   .node.starting .ring { border: 2px dotted rgba(20, 20, 19, .3); animation: spin 6s linear infinite; }
-  .node.open .dot { border-color: var(--maroon); color: var(--maroon); background: var(--white); border-width: 2px; }
-  .node.open .ring { border-color: var(--maroon); opacity: .5; animation: halo 2.4s var(--ease) infinite; }
-  .node.open .status { color: var(--maroon); font-weight: 600; }
   .node.listening .dot { border-style: double; border-width: 3px; }
-  .node.held .dot, .node.limited .dot { border-color: var(--faint); color: var(--faint); }
-  .node.done .dot { background: #8d8b83; border-color: #8d8b83; color: var(--paper); }
-  .node.done .name { color: var(--muted); font-weight: 500; }
-  .node.failed .dot { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
-  .node.failed .status, .node .status.trouble { color: var(--maroon); }
+  .node.needs .dot { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
+  .node.needs .name { color: var(--maroon); }
+  .node.next .ring { border-color: var(--maroon); animation: halo 2.2s var(--ease) infinite; }
+  .node.paused .dot { background: var(--ground); border-color: var(--faint); color: var(--muted); }
+  .node.paused .name { color: var(--muted); }
+  .node.trouble .ring { border: 2px dashed var(--red); animation: spin 3s linear infinite; }
+  .node.cancelling .ring { border: 2px dashed var(--faint); animation: spin 5s linear infinite; }
+  .node.done { opacity: .5; }
+  .node.done:hover { opacity: .9; }
+  .node.done .dot { background: var(--green); border-color: var(--green); color: var(--paper); }
+  .node.done .name { font-weight: 500; }
+  .node.failed .dot { background: var(--red); border-color: var(--red); }
   .node.cancelled .dot { background: var(--line); border-color: var(--faint); color: var(--muted); border-radius: 30%; }
-  .node .badge {
-    position: absolute; top: -7px; right: -9px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
-    background: var(--maroon); color: var(--paper); font: 700 10.5px/17px var(--sans);
-  }
-  .node .more { margin-top: 3px; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; padding: 0 .5em; background: var(--paper); }
+  .node.unmatched { opacity: .12 !important; }
+  .node.selected { visibility: hidden; }
+  .node .more { margin-top: 3px; font-size: 11px; color: var(--muted); border-radius: 9px; padding: 0 .5em; }
   /* A finished project, folded: a small card on the archive shelf. */
-  .node.archived { align-items: flex-start; text-align: left; justify-content: center; height: 40px; padding: 0 1.6em 0 .7em; border: 1px solid var(--line); border-radius: 10px; background: rgba(250, 249, 245, .7); }
+  .node.archived { align-items: flex-start; text-align: left; justify-content: center; height: 34px; padding: 0 1.7em 0 .75em; border: 1px solid var(--line); border-radius: 10px; background: rgba(250, 249, 245, .7); opacity: 1; }
+  .node.archived::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--green); opacity: .6; }
+  .node.archived.failed::before { background: var(--red); }
   .node.archived:hover { background: var(--paper); }
   .node.archived .dot { display: none; }
   .node.archived .name { margin: 0; font: 500 13px/1.2 var(--serif); color: var(--muted); }
-  .node.archived .status { font-size: 11px; color: var(--faint); }
-  .node.archived .more { position: absolute; right: .3em; top: 50%; transform: translateY(-50%); margin: 0; border: 0; background: none; }
-  .node.archived.selected { border-color: var(--ink); }
-  .node.selected .dot { box-shadow: 0 0 0 4px var(--paper), 0 0 0 5.5px var(--ink); }
+  .node.archived .more { position: absolute; right: .25em; top: 50%; transform: translateY(-50%); margin: 0; }
   .node.scope { pointer-events: none; }
   .node.scope .dot { --d: 9px; background: var(--ink); border: 0; }
   .node.scope.background .dot { background: var(--paper); border: 1.5px solid var(--ink); }
-  .node.scope.settled .dot { background: #8d8b83; }
+  .node.scope.settled .dot { background: var(--green); opacity: .6; }
   .node.sat .dot { font: 600 11px/1 var(--sans); border-style: dashed; }
   .node.sat .name { font: 12px/1.2 var(--sans); color: var(--muted); font-weight: 400; }
-  .node.sat.ask .dot { border-color: var(--maroon); color: var(--maroon); border-style: solid; }
+  .node.sat.ask .dot { background: var(--maroon); border-color: var(--maroon); color: var(--paper); border-style: solid; }
   .node.sat.ask .name { color: var(--maroon); font-weight: 600; }
   .node.enter { animation: grow .45s var(--ease); }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes halo { 0% { transform: scale(1); opacity: .55; } 70% { transform: scale(1.45); opacity: 0; } 100% { opacity: 0; } }
+  @keyframes halo { 0% { transform: scale(1); opacity: .7; } 70% { transform: scale(1.55); opacity: 0; } 100% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .35; } }
   @keyframes grow { from { transform: scale(.2); opacity: 0; } }
 
-  /* The queue: what waits on Max, in his order. */
-  #drawer {
-    position: fixed; top: 3.2em; right: 1em; z-index: 40; width: min(26em, calc(100vw - 2em)); max-height: 70vh; overflow: auto;
-    background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 50px rgba(40, 30, 20, .18);
-    padding: .4em;
-  }
-  #drawer h3 { margin: .4em .7em .3em; font: 600 11.5px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); display: flex; align-items: center; }
-  #drawer h3 .btn { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 12.5px; }
-  .queued { display: grid; grid-template-columns: 1.6em 1fr auto; gap: .1em .5em; padding: .55em .6em; border-radius: 10px; cursor: pointer; }
-  .queued:hover { background: var(--hover); }
-  .queued .num { color: var(--maroon); font-weight: 700; text-align: right; }
-  .queued .what { font: 600 14px var(--serif); }
-  .queued .ask, .queued .why { grid-column: 2 / 4; font-size: 12.5px; color: var(--muted); }
-  .queued .ask { color: var(--ink); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-  .queued .move { display: flex; gap: .2em; }
-  .queued .move button { padding: 0 .35em; border-radius: 5px; color: var(--muted); }
-  .queued .move button:hover { background: var(--line); color: var(--ink); }
-  .queued .move button:disabled { visibility: hidden; }
-  .nothing { padding: .6em .8em; color: var(--muted); }
+  /* What needs Max but is off screen: a mark at the edge, toward it. */
+  .offscreen { position: fixed; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--maroon); color: var(--paper); display: grid; place-items: center; box-shadow: 0 3px 10px rgba(122, 31, 34, .35); }
+  .offscreen svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  .offscreen.next::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--maroon); animation: halo 2.2s var(--ease) infinite; }
 
-  /* A node opened: its log, over the map, which still shows around it. */
+  /* The words for what is hovered. */
+  #tip { position: fixed; z-index: 50; max-width: 21em; background: var(--white); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(40, 30, 20, .14); padding: .5em .75em .55em; font-size: 12.5px; color: var(--muted); pointer-events: none; }
+  #tip b { display: block; color: var(--ink); font: 600 14px/1.3 var(--serif); }
+  #tip .now { color: var(--ink); }
+  #tip .m { margin-top: .3em; color: var(--faint); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  #find { position: fixed; top: max(14px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 40; width: min(26em, calc(100vw - 2em)); font: 15px var(--sans); padding: .5em 1em; border-radius: 999px; border: 1px solid var(--line); background: var(--white); color: var(--ink); box-shadow: 0 8px 26px rgba(40, 30, 20, .14); outline: 0; }
+
+  /* An open node: a card in the map where the node is. */
   #panel {
-    position: fixed; z-index: 20; top: 3.4em; bottom: 2.9em; left: 50%; width: min(70rem, calc(100vw - 7rem)); transform: translateX(-50%);
-    display: flex; flex-direction: column; background: var(--paper); border: 1px solid var(--line); border-radius: 18px;
-    box-shadow: 0 24px 70px rgba(40, 30, 20, .22); overflow: hidden;
+    position: absolute; left: 0; top: 0; z-index: 2; display: flex; flex-direction: column; background: var(--paper);
+    border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 22px 60px rgba(40, 30, 20, .2); overflow: hidden;
+    cursor: auto; touch-action: auto; will-change: transform;
   }
-  #panel > .bar { display: flex; align-items: center; gap: .6em; padding: .6em .8em .6em 1.1em; border-bottom: 1px solid var(--line); min-height: 3.1em; flex-wrap: wrap; }
-  .crumbs { display: flex; align-items: baseline; gap: .3em; min-width: 0; flex: 1 1 auto; overflow: hidden; white-space: nowrap; }
-  .crumbs a { color: var(--muted); text-decoration: none; font-size: 13px; }
-  .crumbs a:hover { color: var(--ink); text-decoration: underline; }
-  .crumbs .sep { color: var(--faint); }
-  .crumbs .here { font: 600 17px var(--serif); overflow: hidden; text-overflow: ellipsis; }
-  .crumbs .role { font-size: 12px; color: var(--muted); margin-left: .3em; }
-  .bar .state { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
-  .bar .state.max { color: var(--maroon); font-weight: 600; }
-  .bar .ctx { display: inline-flex; align-items: center; gap: .4em; font-size: 12px; color: var(--muted); white-space: nowrap; border-radius: 8px; padding: .15em .4em; }
+  #panel > .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em 1em; border-bottom: 1px solid var(--line); min-height: 2.9em; cursor: grab; }
+  .bar .mini { position: relative; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; background: var(--paper); }
+  .bar .mini::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid transparent; }
+  .bar .mini.working::after { border-top-color: var(--ink); animation: spin 1.2s linear infinite; }
+  .bar .mini.tool::after { border: 1.5px dashed rgba(20, 20, 19, .5); animation: spin 4s linear infinite; }
+  .bar .mini.starting { border-style: dashed; }
+  .bar .mini.needs { background: var(--maroon); border-color: var(--maroon); }
+  .bar .mini.paused { border-color: var(--faint); background: var(--ground); }
+  .bar .mini.done { background: var(--green); border-color: var(--green); }
+  .bar .mini.failed { background: var(--red); border-color: var(--red); }
+  .bar .mini.cancelled { background: var(--line); border-color: var(--faint); border-radius: 30%; }
+  .bar .title { flex: 1; min-width: 0; font: 600 16.5px/1.3 var(--serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+  .bar .title[contenteditable] { cursor: text; outline: 0; border-bottom: 1px solid var(--ink); text-overflow: clip; }
+  .bar .ctx { display: grid; align-items: center; width: 3.6em; height: 1.6em; padding: 0 .35em; border-radius: 6px; }
   .bar .ctx:hover { background: var(--hover); }
+  .bar .ctx i { display: block; height: .3em; border-radius: 1em; background: var(--line); overflow: hidden; }
+  .bar .ctx b { display: block; height: 100%; background: var(--muted); }
+  .bar .ctx.high b { background: var(--maroon); }
+  .bar .x { font-size: 20px; line-height: 1; width: 1.5em; height: 1.5em; border-radius: 8px; color: var(--muted); }
+  .bar .x:hover { background: var(--hover); color: var(--ink); }
   #panel > .mix { border-bottom: 1px solid var(--line); padding: .7em 1.1em .8em; font-size: 12.5px; color: var(--muted); }
   .mix .stack { display: flex; height: .55em; border-radius: 1em; overflow: hidden; background: var(--line); margin: .45em 0 .6em; max-width: 40em; }
   .mix .stack b { display: block; height: 100%; }
-  .mix table { border-collapse: collapse; }
+  .mix table { border-collapse: collapse; margin-bottom: .6em; }
   .mix td { padding: .05em 1.2em .05em 0; }
   .mix td.n { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
   .mix i { display: inline-block; width: .7em; height: .7em; border-radius: 2px; margin-right: .45em; vertical-align: -.05em; }
-  .node .fill { display: block; width: 3.2em; height: 3px; border-radius: 2px; background: var(--line); margin-top: 3px; overflow: hidden; }
-  .node .fill b { display: block; height: 100%; background: var(--muted); }
-  .node .fill.high b { background: var(--maroon); }
-  .bar .controls { display: flex; gap: .35em; align-items: center; }
-  .bar .controls .btn, .bar > .btn { font-size: 12.5px; padding: .2em .65em; }
-  .bar .answer { font-size: 12.5px; color: var(--muted); }
-  .bar .answer.bad { color: var(--maroon); font-weight: 600; }
-  .bar .x { font-size: 20px; line-height: 1; padding: .1em .35em; border-radius: 8px; color: var(--muted); }
-  .bar .x:hover { background: var(--hover); color: var(--ink); }
-  #panel .back { display: none; }
+  .mix .btn { font-size: 12.5px; padding: .15em .7em; }
   #panel > .body { flex: 1; display: flex; min-height: 0; }
-  .scroll { flex: 1; overflow: auto; overscroll-behavior: contain; scroll-padding-bottom: 2em; }
+  #panel.fresh > .body { display: none; }
+  .scroll { flex: 1; overflow: auto; overscroll-behavior: contain; scroll-padding-bottom: 2em; touch-action: pan-y; }
   .log { max-width: 48rem; margin: 0 auto; padding: 1.4em 1.6em 2.5em; }
   .viewer { flex: 1; min-width: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; background: var(--white); }
   .viewer header { display: flex; align-items: center; gap: .6em; padding: .5em .8em; border-bottom: 1px solid var(--line); font-size: 13px; }
   .viewer header .path { font-family: var(--mono); font-size: 12.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .viewer header .x { font-size: 20px; line-height: 1; padding: .1em .35em; border-radius: 8px; color: var(--muted); }
   .viewer .content { flex: 1; overflow: auto; padding: 1em 1.4em; }
   .viewer iframe { width: 100%; height: 100%; border: 0; background: white; }
   .viewer .content.frame { padding: 0; }
@@ -213,7 +207,8 @@
   .prose h1 { font-size: 1.35em; } .prose h2 { font-size: 1.2em; } .prose h3 { font-size: 1.07em; }
   .prose code { font: .86em var(--mono); background: rgba(20, 20, 19, .055); padding: .1em .3em; border-radius: 4px; }
   .prose pre { background: #f3f1ea; border: 1px solid var(--line); border-radius: 8px; padding: .7em .9em; overflow: auto; }
-  .prose pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.5; }
+  .prose pre code, .prose pre code.hljs { background: none; padding: 0; font-size: 12.5px; line-height: 1.5; }
+  .prose .diagram { margin: .65em 0; overflow: auto; text-align: center; }
   .prose blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 1em; color: var(--muted); }
   .prose table { border-collapse: collapse; font-size: .92em; display: block; overflow: auto; }
   .prose th, .prose td { border: 1px solid var(--line); padding: .3em .6em; text-align: left; }
@@ -221,10 +216,12 @@
   .prose img { max-width: 100%; }
   .plain { white-space: pre-wrap; }
   .said { display: flex; flex-direction: column; align-items: flex-end; }
-  .said .caption { font-size: 11.5px; color: var(--muted); margin: 0 .5em .2em; }
   .said .bubble { max-width: 85%; background: #e9e5da; border-radius: 16px 16px 4px 16px; padding: .6em 1em; font: 15px/1.55 var(--sans); white-space: pre-wrap; overflow-wrap: anywhere; }
   .said.queued-words .bubble { background: transparent; border: 1.5px dashed var(--faint); }
   .said.answer .bubble { border-left: 3px solid var(--maroon); }
+  .said.prompt .bubble { font-weight: 600; padding: .45em 1em; }
+  .said .then { max-width: 85%; margin: .3em .3em 0 0; font-size: 12px; color: var(--faint); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  .said .then.full { white-space: pre-wrap; text-align: left; }
   .card { border: 1px solid var(--line); border-radius: 12px; background: var(--white); padding: .75em 1em; }
   .card .label { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: .35em; display: flex; gap: .6em; align-items: baseline; }
   .card.mandate { background: transparent; }
@@ -233,14 +230,14 @@
   .more-link { font-size: 12.5px; color: var(--maroon); margin-top: .3em; cursor: pointer; }
   details > summary.more-link { margin: .1em 0 .3em 1em; }
   .card.ask { border-color: var(--maroon); background: var(--maroon-soft); }
-  .card.ask .label { color: var(--maroon); }
   .card.result { border-color: #c9c4b4; }
-  .card.ended { border-color: var(--maroon); color: var(--maroon); }
-  .note { display: flex; gap: .5em; font-size: 12.5px; color: var(--muted); margin: .2em 0 1em; }
-  .note::before { content: "⚙"; color: var(--faint); }
-  .note .t { white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; cursor: pointer; }
-  .note .t.full { display: block; }
-  .meta { font-size: 11.5px; color: var(--faint); margin: -.5em 0 1.1em; }
+  .card.ended { border-color: var(--red); color: var(--red); }
+  .note { display: flex; gap: .5em; font-size: 12.5px; color: var(--faint); margin: .2em 0 1em; }
+  .note::before { content: "⚙"; }
+  .note .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; min-width: 0; }
+  .note .t.full { white-space: pre-wrap; color: var(--muted); }
+  .meta { font-size: 11.5px; color: var(--faint); margin: -.5em 0 1.1em; opacity: 0; transition: opacity .15s; }
+  .chunk:hover .meta, .row:hover > .meta { opacity: 1; }
   .thought { font-size: 13px; color: var(--muted); margin: 0 0 .7em; }
   .thought summary { cursor: pointer; list-style: none; }
   .thought summary::before { content: "◌ "; }
@@ -248,21 +245,22 @@
   .steps { margin: 0 0 1.1em; border-left: 2px solid var(--line); padding-left: .2em; }
   .steps > .head { font-size: 12.5px; color: var(--muted); padding: .1em .5em .3em; cursor: pointer; }
   .steps > .head:hover { color: var(--ink); }
-  .steps.folded > .row:not(:last-child) { display: none; }
+  .steps.folded > .row:not(:last-child):not(.asks) { display: none; }
   .row { margin: 0 0 .15em; }
   .row > .line { display: flex; align-items: baseline; gap: .55em; padding: .22em .5em; border-radius: 7px; cursor: pointer; font-size: 13.5px; min-width: 0; }
   .row > .line:hover { background: var(--hover); }
   .row .tool { font: 600 12px var(--mono); color: var(--ink); }
   .row .gist { font: 12.5px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
   .row .st { font-size: 12px; color: var(--muted); white-space: nowrap; }
-  .row .st.bad { color: var(--maroon); }
+  .row .st.bad { color: var(--red); }
   .row .st.run::before { content: ""; display: inline-block; width: .7em; height: .7em; border: 1.5px solid var(--ink); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -.05em; margin-right: .3em; }
   .row .open-file { font-size: 12px; color: var(--maroon); }
   .row > .meta { margin: 0 0 .3em .5em; }
   .row > .detail { margin: .2em 0 .6em 1em; }
   .row:not(.expanded) > .detail { display: none; }
+  .row > .card.ask { margin: .3em 0 .6em; }
   .io { font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f1ea; border: 1px solid var(--line); border-radius: 8px; padding: .55em .75em; margin: .3em 0; max-height: 28em; overflow: auto; }
-  .io.err { border-color: var(--maroon); }
+  .io.err { border-color: var(--red); }
   .io .k { color: var(--muted); }
   .rendered { border: 1px solid var(--line); border-radius: 8px; padding: .7em 1em; background: var(--white); margin: .3em 0; max-height: 34em; overflow: auto; }
   .rendered img { max-width: 100%; }
@@ -272,10 +270,10 @@
   .chip { display: inline-flex; align-items: center; gap: .4em; padding: .25em .7em .25em .35em; border: 1px solid var(--line); border-radius: 999px; background: var(--white); font: 600 13px var(--serif); text-decoration: none; color: inherit; }
   .chip:hover { border-color: var(--ink); }
   .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid var(--ink); display: grid; place-items: center; font: 600 9px var(--serif); }
-  .chip.done .d { background: #8d8b83; border-color: #8d8b83; color: var(--paper); }
-  .chip.open .d { border-color: var(--maroon); color: var(--maroon); }
-  .chip.failed .d { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
-  .chip .s { font: 11.5px var(--sans); color: var(--muted); }
+  .chip.done .d { background: var(--green); border-color: var(--green); color: var(--paper); }
+  .chip.done { color: var(--muted); }
+  .chip.needs .d { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
+  .chip.failed .d { background: var(--red); border-color: var(--red); color: var(--paper); }
   .live-text { border-left: 2px solid var(--ink); padding-left: .9em; }
   .live-text::after { content: "▍"; animation: breathe 1s infinite; }
   .exact .io { max-height: none; }
@@ -283,89 +281,77 @@
   .exact-entry .who { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }
 
-  /* What Max writes: a staging area, kept until he sends it one of two ways. */
-  .compose { padding: .2em 1.2em 1em; }
-  .compose .box { max-width: 48rem; margin: 0 auto; background: var(--white); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 2px 10px rgba(40, 30, 20, .06); padding: .55em .7em .5em .9em; }
+  /* What Max writes: a staging area, kept until he sends it. Under it, what
+     he can do to the task itself. */
+  .compose { padding: .2em 1em .6em; }
+  .compose .box { max-width: 48rem; margin: 0 auto; background: var(--white); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 2px 10px rgba(40, 30, 20, .06); padding: .6em .55em .4em .95em; }
   .compose .box:focus-within { border-color: #c9c4b4; box-shadow: 0 2px 14px rgba(40, 30, 20, .1); }
   .compose .box.drop { border-color: var(--ink); }
   .compose .others:empty { display: none; }
-  .compose .other { display: flex; align-items: center; gap: .6em; max-width: 48rem; margin: 0 auto .35em; padding: .35em .6em; border: 1px dashed var(--line, #8884); border-radius: 8px; font-size: 13px; }
+  .compose .other { display: flex; align-items: center; gap: .6em; margin: 0 0 .4em; padding: .35em .6em; border: 1px dashed var(--line); border-radius: 10px; font-size: 13px; }
   .compose .other .said { flex: 1; white-space: pre-wrap; }
   .compose .other .why { color: var(--muted); font-size: 12px; }
-  .compose .other.held { border-style: solid; opacity: .85; }
+  .compose .other.held { border-style: solid; }
   .compose .tray { display: flex; flex-wrap: wrap; gap: .4em; margin: .1em 0 .35em; }
   .compose .tray:empty { display: none; }
   .compose .att { display: inline-flex; align-items: center; gap: .35em; font-size: 12px; border: 1px solid var(--line); border-radius: 8px; padding: .15em .25em .15em .4em; background: var(--paper); max-width: 16em; }
   .compose .att img { height: 2.2em; border-radius: 4px; }
   .compose .att span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .compose .att button { color: var(--muted); padding: 0 .3em; }
-  .compose .to { font-size: 11.5px; color: var(--muted); margin-bottom: .15em; }
-  .compose .to.answering { color: var(--maroon); font-weight: 600; }
-  .compose textarea { display: block; width: 100%; border: 0; outline: 0; resize: none; background: transparent; font: 15px/1.5 var(--sans); color: var(--ink); min-height: 2.6em; max-height: 40vh; padding: 0; }
-  .compose .row2 { display: flex; align-items: center; gap: .5em; margin-top: .3em; }
-  .compose .status { flex: 1; font-size: 12px; color: var(--muted); }
-  .compose .status.bad { color: var(--maroon); font-weight: 600; }
-  .compose .mic.on { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
+  .compose textarea { display: block; width: 100%; border: 0; outline: 0; resize: none; background: transparent; font: 15px/1.5 var(--sans); color: var(--ink); min-height: 1.5em; max-height: 40vh; padding: .1em .4em .1em 0; }
+  .compose .row2 { display: flex; align-items: center; gap: .3em; margin-top: .2em; margin-left: -.45em; }
+  .compose .status { flex: 1; min-width: 0; font-size: 12px; color: var(--red); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compose .mic.on { background: var(--maroon); color: var(--paper); animation: breathe 1.6s infinite; }
+  .compose .later { font-size: 12.5px; color: var(--muted); padding: .25em .6em; border-radius: 999px; white-space: nowrap; }
+  .compose .later:hover { background: var(--hover); color: var(--ink); }
+  .compose .send { background: var(--ink); color: var(--paper); }
+  .compose .send:hover { background: #33322e; color: var(--paper); }
+  .compose .send:disabled { background: var(--line); cursor: default; }
+  .compose .halt { border: 1.5px solid var(--ink); color: var(--ink); }
+  .compose .halt svg { width: .9em; height: .9em; }
+  .compose .picks { display: inline-flex; gap: .3em; min-width: 0; }
+  .compose .pick { font: 12.5px var(--sans); color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 999px; padding: .25em .6em; max-width: 16em; outline: 0; }
+  .compose .pick:hover, .compose .pick:focus { border-color: var(--line); color: var(--ink); }
+  .compose input.pick { width: 13em; }
   .compose .closed { max-width: 48rem; margin: 0 auto; color: var(--muted); font-size: 13px; text-align: center; padding: .4em; }
-
-  /* A new task: Max's own scope. */
-  .new-chat { max-width: 34em; margin: 1.5em auto 0; }
-  .new-chat label { display: block; font-size: 12px; color: var(--muted); margin: .7em 0 .2em; }
-  .new-chat input, .new-chat select { width: 100%; font: 14px var(--sans); padding: .45em .6em; border: 1px solid var(--line); border-radius: 8px; background: var(--white); color: var(--ink); }
+  .acts { max-width: 48rem; margin: .4em auto 0; display: flex; justify-content: flex-end; gap: 1.1em; font-size: 12.5px; padding: 0 .6em; }
+  .acts:empty { display: none; }
+  .acts button { color: var(--muted); }
+  .acts button:hover { color: var(--ink); text-decoration: underline; }
+  .acts button.armed { color: var(--maroon); font-weight: 600; }
 
   @media (max-width: 760px) {
-    #panel { inset: 0; width: auto; transform: none; border-radius: 0; border: 0; border-top: 1px solid var(--line); top: calc(2.75em + env(safe-area-inset-top)); bottom: 0; z-index: 31; box-shadow: none; }
-    #top { background: var(--ground); }
-    #panel > .bar { padding: .4em .6em .4em .3em; gap: .4em; }
-    #panel .back { display: inline-block; font-size: 22px; padding: 0 .4em; }
-    .bar .x { display: none; }
-    .crumbs a, .crumbs .sep, .crumbs .role { display: none; }
-    .bar .ctx { display: none; }
-    .bar .controls { order: 9; width: 100%; overflow-x: auto; }
+    #panel { border-radius: 14px; }
     .log { padding: 1em 1em 2em; }
     .prose { font-size: 15.5px; }
-    .compose { padding: .2em .5em max(.5em, env(safe-area-inset-bottom)); }
+    .compose { padding: .2em .4em max(.45em, env(safe-area-inset-bottom)); }
     .viewer { position: absolute; inset: 0; z-index: 2; border: 0; }
     #panel > .body { position: relative; }
-    #usage .reset { display: none; }
-    #bottom { gap: .6em; padding-left: .7em; padding-right: .7em; }
-    #build { display: none; }
+    .gauge .pc { display: none; }
   }
 </style>
 </head>
 <body>
-<header id="top">
-  <span class="mark">harness</span>
-  <span id="link" class="down" title="connecting"></span>
-  <span class="spacer"></span>
-  <button id="pill" class="btn" type="button"></button>
-</header>
-<div id="drawer" hidden></div>
-
-<main id="map"><div id="world"><svg id="edges"></svg><div id="nodes"></div></div></main>
-<div id="empty" hidden><h2>Nothing is running.</h2><div>Start a chat, and it appears here as a node.</div><div><button class="btn primary" id="empty-new" type="button">New chat</button></div></div>
-
-<section id="panel" hidden>
+<span id="link" class="down"></span>
+<main id="map"><div id="world"><svg id="edges"></svg><div id="nodes"></div><section id="panel" hidden>
   <div class="bar">
-    <button class="back" type="button" aria-label="back to the map">‹</button>
-    <nav class="crumbs"></nav>
-    <span class="state"></span>
+    <span class="mini"></span>
+    <span class="title"></span>
     <button class="ctx" type="button"></button>
-    <span class="controls"></span>
-    <button class="btn exact-toggle" type="button" title="Show the context exactly as it was sent">Exact</button>
-    <button class="x" type="button" aria-label="close" title="Back to the map (Esc)">×</button>
+    <button class="x" type="button" aria-label="close" title="Close (Esc)">×</button>
   </div>
   <div class="mix" hidden></div>
-  <div class="body"><div class="scroll"><div class="log"></div><button class="btn jump" type="button" hidden>↓ Latest</button></div><aside class="viewer" hidden></aside></div>
+  <div class="body"><div class="scroll"><div class="log"></div><button class="btn jump" type="button" hidden>↓</button></div><aside class="viewer" hidden></aside></div>
   <div class="compose"></div>
-</section>
+</section></div></main>
+<div id="marks"></div>
+<div id="empty" hidden>Double-click anywhere to start a chat</div>
+<input id="find" type="search" placeholder="Find a chat" autocomplete="off" hidden>
+<div id="tip" hidden></div>
 
 <footer id="bottom">
-  <button class="btn" id="new" type="button">+ New</button>
   <span id="usage"></span>
   <span class="spacer"></span>
-  <span id="build"></span>
-  <button class="btn" id="fit" type="button" title="Fit the map (F)">Fit</button>
 </footer>
 
 
@@ -387,9 +373,25 @@ const ago = (ms) => {
 };
 const kTokens = (n) => n == null ? "?" : n < 1000 ? `${n}` : n < 1e6 ? `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k` : `${+(n / 1e6).toFixed(1)}M`;
 const parse = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const phone = () => matchMedia("(max-width: 760px)").matches;
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const lerp = (a, b, e) => a + (b - a) * e;
+// Icons, drawn in the colour of the text around them.
+const ICONS = {
+  mic: '<path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
+  send: '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>',
+  stop: '<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  toward: '<path d="M9 5l7 7-7 7"/>',
+};
+function icon(name, cls, title) {
+  const b = el("button", `icon ${cls || ""}`);
+  b.type = "button";
+  b.innerHTML = `<svg viewBox="0 0 24 24">${ICONS[name]}</svg>`;
+  if (title) { b.title = title; b.setAttribute("aria-label", title); }
+  return b;
+}
 
 // The gist of a call's input: its command, or the path or pattern it names.
 function gist(input) {
@@ -405,7 +407,26 @@ function markdown(text) {
   const div = el("div", "prose");
   div.innerHTML = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: false }));
   for (const a of div.querySelectorAll("a")) { a.target = "_blank"; a.rel = "noopener"; }
+  // Code in the colours of its language, when it names one; a diagram drawn.
+  for (const code of div.querySelectorAll("pre > code")) {
+    const lang = [...code.classList].find((c) => c.startsWith("language-"))?.slice(9);
+    if (lang === "mermaid") diagram(code.parentElement, code.textContent);
+    else if (lang && window.hljs?.getLanguage(lang)) hljs.highlightElement(code);
+  }
   return div;
+}
+// A mermaid diagram where its source was. The library loads the first time
+// one is shown; a source it cannot draw stays as written.
+let mermaidLib = null, diagrams = 0;
+async function diagram(pre, source) {
+  try {
+    mermaidLib ||= import("https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs")
+      .then((m) => { m.default.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" }); return m.default; });
+    const { svg } = await (await mermaidLib).render(`mermaid-${++diagrams}`, source);
+    const fig = el("div", "diagram");
+    fig.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true } });
+    pre.replaceWith(fig);
+  } catch { /* stays as its source */ }
 }
 
 // ─── This tab: a replica on the substrate ────────────────────────────────────
@@ -547,7 +568,7 @@ function hold(id) {
   }));
 }
 let tab = null;
-async function start() {
+async function boot() {
   wasm = (await WebAssembly.instantiateStreaming(fetch("/tab.wasm"))).instance.exports;
   let id = sessionStorage.getItem("replica");
   if (!id || !(await hold(id))) { do id = mintPlace(); while (!(await hold(id))); }
@@ -605,36 +626,42 @@ async function act(facts, values = []) {
 let view = null;
 let byId = {};
 let graph = { nodes: new Map(), edges: [], comps: [] };
+// A chat of Max's he continued after it finished is one node: its newest
+// resume, whose context holds all of it. Each earlier one maps to it.
+let alias = {};
+const live = (id) => alias[id] || id;
 
-// What a task is waiting on, as the map shows it: a class and a few words.
+// What a task is doing, as the map shows it: classes for its dot, and the
+// words its hover says.
 function look(t) {
   const w = t.waiting || {};
   const since = w.since != null ? ` · ${ago(w.since)}` : "";
+  const stopping = t.stop && w.kind !== "done" ? " cancelling" : "";
   switch (w.kind) {
-    case "model": return { cls: w.streaming ? "working streaming" : "working", text: (w.streaming ? "writing" : "thinking") + since };
+    case "model": return { cls: (w.streaming ? "working streaming" : "working") + stopping, text: (stopping ? "cancelling: " : "") + (w.streaming ? "writing" : "thinking") + since };
     case "calls": {
       const kids = w.calls.flatMap((c) => c.children);
       if (kids.length) {
-        const live = kids.filter((k) => byId[k] && byId[k].waiting?.kind !== "done").length;
-        return { cls: "waiting-children", text: `waiting on ${live} of ${kids.length}${since}` };
+        const running = kids.filter((k) => byId[k] && byId[k].waiting?.kind !== "done").length;
+        return { cls: "children" + stopping, text: `waiting on ${running} of ${kids.length}${since}` };
       }
       const c = w.calls[0] || {};
-      return { cls: "working tool", text: `${c.tool || "tools"}${c.input ? " " + gist(c.input) : ""}` };
+      return { cls: "working tool" + stopping, text: `${c.tool || "tools"}${c.input ? " " + gist(c.input) : ""}` };
     }
-    case "max": return { cls: "open", text: w.ask ? "asks you" : "your turn" };
+    case "max": return { cls: "needs" + stopping, text: (w.ask ? "asks you" : "your turn") + since };
     case "starting": return { cls: "starting", text: w.limbs.length ? `making ${w.limbs.join(", ")}` : "starting" };
-    case "harness": return { cls: "working", text: "harness" + since };
-    case "held": return { cls: "held", text: "held" };
-    case "limited": return { cls: "limited", text: `limited until ${clock(w.until)}` };
+    case "harness": return { cls: "working" + stopping, text: "harness" + since };
+    case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `paused with ${h.name}` : "paused" }; }
+    case "limited": return { cls: "paused", text: `limited until ${clock(w.until)}` };
     case "listening": {
       const asks = (t.background || []).filter((b) => b.limb === "max").length;
-      return { cls: "listening", text: asks ? "waits on your answer" : w.calls.length ? `waits on ${w.calls.length} in background` : "listening" };
+      return { cls: "listening" + stopping, text: asks ? "asks you, carrying on" : w.calls.length ? `${w.calls.length} in the background` : "listening" };
     }
     case "done": {
       const o = t.outcome || {};
-      if (o.kind === "failed") return { cls: "done failed", text: `failed · ${ago(w.since)} ago` };
-      if (o.kind === "cancelled") return { cls: "done cancelled", text: `cancelled · ${ago(w.since)} ago` };
-      return { cls: "done", text: `done · ${ago(w.since)} ago` };
+      if (o.kind === "failed") return { cls: "done failed", text: `failed ${ago(w.since)} ago` };
+      if (o.kind === "cancelled") return { cls: "done cancelled", text: `cancelled ${ago(w.since)} ago` };
+      return { cls: "done", text: `done ${ago(w.since)} ago` };
     }
   }
   return { cls: "", text: w.kind || "" };
@@ -645,13 +672,17 @@ const glyph = (t) => (t.environment || t.name || "?").trim()[0].toUpperCase();
 // Tasks in the order they were created.
 const order = (a, b) => a.created.seq - b.created.seq;
 const isDone = (t) => t.waiting?.kind === "done";
+// A resume Max made of one of his own chats: the same chat, continued.
+const chained = (t) => t.origin === "resume" && !t.owner && byId[t.from] && !byId[t.from].owner;
 // Who a task belongs to on the map: its scope's owner, or the task a resume
 // in Max's own scope continues.
-const parentOf = (t) => t.owner || (t.from && byId[t.from] ? t.from : null);
+const parentOf = (t) => t.owner ? live(t.owner) : t.from && byId[t.from] && !chained(t) ? live(t.from) : null;
 const ancestry = (t) => { const out = []; for (let p = parentOf(t); p && byId[p] && out.length < 50; p = parentOf(byId[p])) out.unshift(byId[p]); return out; };
+// What pauses a task: itself, or the nearest paused task above it.
+const heldBy = (t) => t.held ? t : ancestry(t).reverse().find((a) => a.held) || null;
 // The calls a task is waiting on right now.
 function awaited(t) {
-  const w = t.waiting || {};
+  const w = t?.waiting || {};
   return new Set([...(w.calls || []).map((c) => c.id), ...(w.ask ? [w.ask.id] : [])]);
 }
 
@@ -662,19 +693,27 @@ const unfolded = new Set();
 
 function derive() {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
+  alias = {};
+  for (const t of [...view.tasks].sort(order)) {
+    if (!chained(t)) continue;
+    for (const [k, v] of Object.entries(alias)) if (v === t.from) alias[k] = t.id;
+    alias[t.from] = t.id;
+  }
   const nodes = new Map(), edges = [];
-  for (const t of view.tasks) nodes.set(t.id, { id: t.id, kind: "task", t });
+  for (const t of view.tasks) if (!alias[t.id]) nodes.set(t.id, { id: t.id, kind: "task", t });
   for (const [call, s] of Object.entries(view.scopes)) {
-    if (!byId[s.owner]) continue;
-    const members = view.tasks.filter((t) => t.scope === call).sort(order);
+    const owner = live(s.owner);
+    if (!byId[owner]) continue;
+    const members = view.tasks.filter((t) => t.scope === call && !alias[t.id]).sort(order);
     const waiting = awaited(byId[s.owner]).has(call);
     nodes.set(`s:${call}`, { id: `s:${call}`, kind: "scope", call, scope: s, members });
-    edges.push({ from: s.owner, to: `s:${call}`, kind: s.background ? "receives" : "owns", flow: waiting, made: s.made });
+    edges.push({ from: owner, to: `s:${call}`, kind: s.background ? "receives" : "owns", flow: waiting, made: s.made });
     for (const m of members) edges.push({ from: `s:${call}`, to: m.id, kind: "owns", flow: waiting && !isDone(m), made: m.created.seq });
   }
   for (const t of view.tasks) {
-    if (t.scope && !view.scopes[t.scope] && t.owner) edges.push({ from: t.owner, to: t.id, kind: "owns", made: t.created.seq });
-    if (t.origin === "resume" && byId[t.from]) edges.push({ from: t.from, to: t.id, kind: "continues" });
+    if (alias[t.id]) continue;
+    if (t.scope && !view.scopes[t.scope] && t.owner) edges.push({ from: live(t.owner), to: t.id, kind: "owns", made: t.created.seq });
+    if (t.origin === "resume" && byId[t.from] && !chained(t)) edges.push({ from: live(t.from), to: t.id, kind: "continues" });
     const waits = awaited(t);
     for (const b of t.background || []) {
       if (b.status === "settled" || b.tool === "spawn") continue;
@@ -697,10 +736,10 @@ function derive() {
   const now = Date.now();
   const list = [...comps.values()].filter((c) => c.tasks.length).map((c) => {
     const root = c.tasks.find((t) => !parentOf(t)) || c.tasks[0];
-    const live = c.tasks.some((t) => !isDone(t));
+    const running = c.tasks.some((t) => !isDone(t));
     const last = Math.max(...c.tasks.map((t) => t.waiting?.since || 0));
-    const folded = !live && now - last > FOLD_AFTER && !unfolded.has(root.id) && !c.tasks.some((t) => t.id === openId && t.id !== root.id);
-    return { root, live, last, folded, nodes: c.nodes, tasks: c.tasks };
+    const folded = !running && now - last > FOLD_AFTER && !unfolded.has(root.id) && !c.tasks.some((t) => t.id === openId && t.id !== root.id);
+    return { root, live: running, last, folded, nodes: c.nodes, tasks: c.tasks };
   });
   list.sort((a, b) => (b.live - a.live) || order(a.root, b.root));
   graph = { nodes, edges, comps: list };
@@ -714,15 +753,15 @@ let positions = new Map();   // id -> {x, y, w, h}: laid out
 let shown = new Map();       // id -> {x, y}: drawn now (tweened)
 let shape = "";
 
-const CARD_H = 40;
+const CARD_H = 34;
 const cardStatus = (c) => `finished ${ago(c.last)} ago · ${c.tasks.length} task${c.tasks.length > 1 ? "s" : ""}`;
 function sizeOf(n, comp) {
-  if (comp.folded) return { w: Math.min(260, Math.max(150, measure(shortName(n.t), "600 13px Georgia") + 28, measure(cardStatus(comp), "11px sans-serif") * 1.15 + 44)), h: CARD_H };
+  if (comp.folded) return { w: Math.min(240, Math.max(120, measure(shortName(n.t), "500 13px Georgia") + 34 + (comp.tasks.length > 1 ? 14 : 0))), h: CARD_H };
   if (n.kind === "scope") return { w: 12, h: 12 };
   if (n.kind === "sat") return { w: Math.min(160, Math.max(90, measure(satLabel(n), "12px sans-serif") + 10)), h: SAT_DOT + 22 };
   const root = comp.root.id === n.id;
-  const w = Math.min(210, Math.max(118, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
-  return { w, h: (root ? ROOT_DOT : DOT) + 44 + (root ? 18 : 0) + (n.t.tokens && !isDone(n.t) ? 6 : 0) };
+  const w = Math.min(210, Math.max(110, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
+  return { w, h: (root ? ROOT_DOT : DOT) + (root ? 26 : 24) };
 }
 const satLabel = (n) => n.call.limb === "max" ? "asks you" : `${n.call.tool} ${gist(n.call.input)}`.trim();
 
@@ -806,14 +845,19 @@ function depthFirst(c) {
 const map = $("#map"), world = $("#world"), nodesLayer = $("#nodes"), edgesLayer = $("#edges");
 let cam = { x: 0, y: 0, k: 1 };
 let framed = true;  // follows the map's growth until Max moves it himself
-function applyCamera(fly = false) {
-  world.classList.toggle("flying", fly && !reduced());
-  world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.k})`;
+function applyCamera() {
+  // Whole pixels, so the open card's text stays sharp.
+  const x = Math.round(cam.x), y = Math.round(cam.y);
+  world.style.transform = `translate(${x}px, ${y}px) scale(${cam.k})`;
   const g = 24 * cam.k;
   map.style.backgroundSize = `${g}px ${g}px`;
-  map.style.backgroundPosition = `${cam.x}px ${cam.y}px`;
-  if (fly) setTimeout(() => world.classList.remove("flying"), 480);
+  map.style.backgroundPosition = `${x}px ${y}px`;
+  placeMarks();
+  coverCheck();
 }
+// The map is moved only by the camera, never by the browser scrolling it to
+// show what has focus.
+map.addEventListener("scroll", () => { map.scrollTop = 0; map.scrollLeft = 0; });
 function bounds(ids) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const [id, p] of positions) {
@@ -822,55 +866,51 @@ function bounds(ids) {
   }
   return x0 === Infinity ? null : { x0, y0, x1, y1 };
 }
-function fit(fly = true) {
-  const live = new Set(graph.comps.filter((c) => !c.folded).flatMap((c) => c.nodes.map((n) => n.id)));
-  const b = bounds(live.size ? live : null);
-  if (!b) return;
-  const top = 64, bottom = 56, side = 40;
+// The camera that shows every live project at a size that reads.
+function framing() {
+  const running = new Set(graph.comps.filter((c) => !c.folded).flatMap((c) => c.nodes.map((n) => n.id)));
+  const b = bounds(running.size ? running : null);
+  if (!b) return null;
+  const top = 48, bottom = 64, side = 40;
   const w = innerWidth - side * 2, h = innerHeight - top - bottom;
   const least = phone() ? .7 : .45;
   const k = Math.max(least, Math.min(1.25, w / (b.x1 - b.x0), h / (b.y1 - b.y0)));
-  cam = { k, x: side + (w - (b.x1 - b.x0) * k) / 2 - b.x0 * k, y: top + (h - (b.y1 - b.y0) * k) / 2 - b.y0 * k };
+  const c = { k, x: side + (w - (b.x1 - b.x0) * k) / 2 - b.x0 * k, y: top + (h - (b.y1 - b.y0) * k) / 2 - b.y0 * k };
   // Too big to fit at a size that reads: start at the top, the first project centred.
-  if ((b.y1 - b.y0) * k > h) cam.y = top - b.y0 * k;
+  if ((b.y1 - b.y0) * k > h) c.y = top - b.y0 * k;
   if ((b.x1 - b.x0) * k > w) {
     const first = graph.comps[0] && positions.get(graph.comps[0].root.id);
-    cam.x = first ? innerWidth / 2 - (first.x + first.w / 2) * k : side - b.x0 * k;
+    c.x = first ? innerWidth / 2 - (first.x + first.w / 2) * k : side - b.x0 * k;
   }
+  return c;
+}
+function fit(fly = true) {
+  if (openId) { if (saved) saved.framed = true; closeNode(); return; }
+  const c = framing();
+  if (!c) return;
   framed = true;
-  applyCamera(fly);
-}
-// Where a node's dot is on screen.
-function dotAt(id) {
-  const p = shown.get(id) || positions.get(id);
-  if (!p) return null;
-  const n = graph.nodes.get(id);
-  const d = n?.kind === "task" && graph.comps.some((c) => c.root.id === id) ? ROOT_DOT : DOT;
-  return { x: cam.x + (p.x + p.w / 2) * cam.k, y: cam.y + (p.y + d / 2) * cam.k, r: d / 2 * cam.k };
-}
-function centreOn(id, k = cam.k, fly = true) {
-  const p = positions.get(id);
-  if (!p) return;
-  cam = { k, x: innerWidth / 2 - (p.x + p.w / 2) * k, y: innerHeight * .42 - (p.y + DOT / 2) * k };
-  framed = false;
-  applyCamera(fly);
+  if (fly) glide(c, { T: 420 });
+  else { cam = c; applyCamera(); }
 }
 
-// Dragging, the wheel and a pinch move the map; moving it closes an open node.
+// Dragging the ground, the wheel and a pinch move the map. Over the open
+// card, the pointer and the wheel are the card's own: its text selects and
+// its log scrolls, while its header drags the map like the ground does.
 const pointers = new Map();
 let drag = null;
+const cards = (e) => e.target.closest?.("#panel") && (!e.target.closest("#panel > .bar") || e.target.closest("button, [contenteditable]"));
 map.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 && e.pointerType === "mouse") return;
+  if (cards(e)) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   drag = { moved: false, start: { x: e.clientX, y: e.clientY }, cam: { ...cam }, pinch: pointers.size === 2 ? pinchOf() : null };
-  map.setPointerCapture?.(e.pointerId);
 });
 map.addEventListener("pointermove", (e) => {
   if (!pointers.has(e.pointerId) || !drag) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) {
     const p = pinchOf();
-    if (!drag.pinch) { drag.pinch = p; drag.cam = { ...cam }; }
+    if (!drag.pinch) { settle(); drag.pinch = p; drag.cam = { ...cam }; }
     const k = Math.max(.15, Math.min(3, drag.cam.k * p.d / drag.pinch.d));
     const wx = (drag.pinch.x - drag.cam.x) / drag.cam.k, wy = (drag.pinch.y - drag.cam.y) / drag.cam.k;
     cam = { k, x: p.x - wx * k, y: p.y - wy * k };
@@ -878,7 +918,16 @@ map.addEventListener("pointermove", (e) => {
   } else {
     const dx = e.clientX - drag.start.x, dy = e.clientY - drag.start.y;
     if (!drag.moved && Math.hypot(dx, dy) < 5) return;
-    if (!drag.moved) { drag.moved = true; map.classList.add("grabbing"); if (openId) closeNode(); }
+    if (!drag.moved) {
+      // Only now is it a drag: a press that does not move stays a click on what it pressed.
+      drag.moved = true;
+      map.classList.add("grabbing");
+      map.setPointerCapture?.(e.pointerId);
+      settle();
+      getSelection().removeAllRanges();
+      drag.cam = { x: cam.x - dx, y: cam.y - dy, k: cam.k };
+      hideTip();
+    }
     cam = { ...cam, x: drag.cam.x + dx, y: drag.cam.y + dy };
   }
   framed = false;
@@ -893,119 +942,261 @@ map.addEventListener("pointerup", lift);
 map.addEventListener("pointercancel", lift);
 function pinchOf() { const [a, b] = [...pointers.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)) }; }
 map.addEventListener("wheel", (e) => {
+  if (e.target.closest("#panel") && !e.ctrlKey) return;
   e.preventDefault();
-  if (openId) closeNode();
+  settle();
+  hideTip();
   const k = Math.max(.15, Math.min(3, cam.k * Math.exp(-e.deltaY * (e.deltaMode ? .05 : .0015))));
   const wx = (e.clientX - cam.x) / cam.k, wy = (e.clientY - cam.y) / cam.k;
   cam = { k, x: e.clientX - wx * k, y: e.clientY - wy * k };
   framed = false;
   applyCamera();
 }, { passive: false });
-// A click on the bare map closes an open node.
-map.addEventListener("click", (e) => { if (!drag?.moved && openId && !e.target.closest(".node")) closeNode(); });
+// On the bare ground, a click closes the open card and a double click opens
+// a new chat there. A click waits a moment to know which it is; a double tap
+// on a touch screen is a double click.
+let closing = 0, tapped = null;
+// By the path the event took, not its target: a button its own click redraws
+// is no longer in the card when the click reaches the map.
+const ground = (e) => !drag?.moved && !e.composedPath().some((n) => n.matches?.(".node, #panel, .offscreen"));
+map.addEventListener("click", (e) => {
+  if (!ground(e) || e.detail > 1 || !openId) return;
+  clearTimeout(closing);
+  closing = setTimeout(closeNode, 220);
+});
+map.addEventListener("dblclick", (e) => { if (ground(e)) newHere(e.clientX, e.clientY); });
+map.addEventListener("pointerup", (e) => {
+  if (e.pointerType !== "touch" || !ground(e)) return;
+  const now = performance.now();
+  if (tapped && now - tapped.at < 320 && Math.hypot(e.clientX - tapped.x, e.clientY - tapped.y) < 30) { tapped = null; newHere(e.clientX, e.clientY); }
+  else tapped = { at: now, x: e.clientX, y: e.clientY };
+});
+let lastNew = 0;
+function newHere(sx, sy) {
+  clearTimeout(closing);
+  const now = performance.now();
+  if (now - lastNew < 450) return;
+  lastNew = now;
+  newPoint = { x: (sx - cam.x) / cam.k, y: (sy - cam.y) / cam.k, sx, sy };
+  go(NEW);
+}
+
+// ─── The open card, in the map ─────────────────────────────────────────────
+// An open node is a card in the world, where the node is: its top at the
+// node's top, centred on it. The map makes room at the card's seams without
+// being laid out again: what is wholly beside the node's column moves out
+// sideways, and what is below the node moves down, each by the card's size,
+// so everything keeps its place relative to everything else.
+const SEAM = 28;
+let seam = null;       // the open card's place: {id, o, W, H, sx, sy}
+let cardShown = null;  // the card's visible rect in the world, now
+let newPoint = null;   // where a new chat's card opens, in the world
+const centrePoint = () => ({ x: (innerWidth / 2 - cam.x) / cam.k, y: (innerHeight * .3 - cam.y) / cam.k, sx: innerWidth / 2, sy: innerHeight * .3 });
+
+function cardSize(id) {
+  const m = phone() ? 6 : 16;
+  const W = Math.min(id === NEW ? 640 : 880, innerWidth - 2 * m - (phone() ? 0 : 32));
+  const H = id === NEW ? 168 : innerHeight - 2 * m;
+  return { W, H };
+}
+function seamFor(id) {
+  let o;
+  if (id === NEW) { const p = newPoint || (newPoint = centrePoint()); o = { x: p.x - 1, y: p.y - 14, w: 2, h: 2 }; }
+  else { const p = positions.get(id); if (!p) return null; o = { x: p.x, y: p.y, w: p.w, h: p.h }; }
+  const { W, H } = cardSize(id);
+  return { id, o, W, H, sx: Math.max(0, (W - o.w) / 2) + SEAM, sy: Math.max(0, H - o.h) + SEAM };
+}
+const cardRect = (s) => ({ x: s.o.x + s.o.w / 2 - s.W / 2, y: s.o.y, w: s.W, h: s.H });
+// Where a node goes with the card open.
+function target(id) {
+  const p = positions.get(id);
+  if (!seam || !p || id === seam.id) return p;
+  const { o, sx, sy } = seam;
+  let dx = 0, dy = 0;
+  if (p.x + p.w <= o.x + 1) dx = -sx; else if (p.x >= o.x + o.w - 1) dx = sx;
+  if (p.y >= o.y + o.h - 1) dy = sy;
+  return dx || dy ? { ...p, x: p.x + dx, y: p.y + dy } : p;
+}
+// A node's dot, or a new chat's point: what a card opens from and closes to.
+function dotRect(id) {
+  if (id === NEW) { const p = newPoint || centrePoint(); return { x: p.x - 10, y: p.y - 14, w: 20, h: 20 }; }
+  const p = shown.get(id) || positions.get(id);
+  if (!p) return null;
+  if (graph.comps.some((c) => c.folded && c.root.id === id)) return { x: p.x, y: p.y, w: p.w, h: p.h };
+  const d = graph.comps.some((c) => c.root.id === id) ? ROOT_DOT : DOT;
+  return { x: p.x + p.w / 2 - d / 2, y: p.y, w: d, h: d };
+}
+// The camera that shows a card at its own size, moved as little as it takes
+// for all of it to show; `at` is a point of the world held where it is on
+// screen, so the card opens where Max was looking.
+function camFor(r, at) {
+  const m = phone() ? 6 : 16;
+  const p = at || { x: r.x + r.w / 2, y: r.y, sx: innerWidth / 2, sy: m };
+  const c = { k: 1, x: p.sx - p.x, y: p.sy - p.y };
+  const left = c.x + r.x, top = c.y + r.y;
+  if (r.w > innerWidth - 2 * m) c.x = (innerWidth - r.w) / 2 - r.x;
+  else if (left < m) c.x += m - left;
+  else if (left + r.w > innerWidth - m) c.x -= left + r.w - (innerWidth - m);
+  if (top < m) c.y += m - top;
+  else if (top + r.h > innerHeight - m) c.y -= top + r.h - (innerHeight - m);
+  return c;
+}
+// A node's place as the card will have it, held where the node is on screen.
+function heldAt(id) {
+  const p = positions.get(id), s = shown.get(id) || p;
+  if (!p) return null;
+  return { x: p.x + p.w / 2, y: p.y, sx: cam.x + (s.x + s.w / 2) * cam.k, sy: cam.y + s.y * cam.k };
+}
+function placeCard(b) {
+  panel.style.left = `${b.x}px`; panel.style.top = `${b.y}px`;
+  panel.style.width = `${b.w}px`; panel.style.height = `${b.h}px`;
+}
+// Shows the part `v` of a card whose box is `b`: growing down and outwards
+// from where it opens, as the node opening into the room made for it.
+function clipCard(v, b) {
+  const dx = v.x + v.w / 2 - (b.x + b.w / 2), dy = v.y - b.y;
+  const sx = Math.max(0, (b.w - v.w) / 2), sy = Math.max(0, b.h - v.h);
+  panel.style.transform = dx || dy ? `translate(${dx}px, ${dy}px)` : "";
+  panel.style.clipPath = sx > .5 || sy > .5 ? `inset(0 ${sx}px ${sy}px ${sx}px round ${Math.min(18, v.w / 2, v.h / 2)}px)` : "";
+}
+const lerpRect = (a, b, e) => ({ x: lerp(a.x, b.x, e), y: lerp(a.y, b.y, e), w: lerp(a.w, b.w, e), h: lerp(a.h, b.h, e) });
+// The floating controls hide when the card would sit under them.
+let usageRight = 0;
+function coverCheck() {
+  let covered = false;
+  if (openId && cardShown) {
+    const l = cam.x + cardShown.x * cam.k, r = l + cardShown.w * cam.k;
+    const t = cam.y + cardShown.y * cam.k, b = t + cardShown.h * cam.k;
+    covered = b > innerHeight - 60 && t < innerHeight && (l < usageRight + 24 || r > innerWidth - 120);
+  }
+  document.body.classList.toggle("covered", covered);
+}
+
+// ─── Motion ────────────────────────────────────────────────────────────────
+// One frame loop moves all that moves: the nodes, the card, the camera; the
+// edges and the marks at the screen's edges follow each frame.
+const anims = new Map();
+let raf = 0;
+function animate(name, T, step) {
+  anims.get(name)?.done();
+  return new Promise((done) => {
+    anims.set(name, { t0: performance.now(), T: reduced() ? 0 : T, step, done });
+    if (!raf) raf = requestAnimationFrame(frame);
+  });
+}
+function frame(now) {
+  raf = 0;
+  for (const [name, a] of anims) {
+    const u = a.T ? Math.min(1, (now - a.t0) / a.T) : 1;
+    a.step(1 - Math.pow(1 - u, 3));
+    if (u >= 1) { anims.delete(name); a.done(); }
+  }
+  drawEdges();
+  applyCamera();
+  if (anims.size) raf = requestAnimationFrame(frame);
+}
+// Everything that is moving, where it is going, now.
+function settle() {
+  for (const a of anims.values()) { a.step(1); a.done(); }
+  anims.clear();
+  drawEdges();
+  applyCamera();
+}
+// Everything to where it belongs: the nodes to their places around the open
+// card's seams, the card from `cardFrom` to `cardTo` in its box, the camera
+// to `to`. With no `to` and the card open, the camera keeps the card where
+// it is on screen, and the map moves around it.
+// A card opening, closing or moving is a flight: what else would move
+// waits for it to land rather than cutting it short.
+let flight = null;
+function glide(to = null, { T = 240, cardFrom, cardTo, box, strong = false } = {}) {
+  if (flight && !strong) return flight.then(() => glide(to, { T, cardFrom, cardTo, box }));
+  const r1 = cardTo !== undefined ? cardTo : seam ? cardRect(seam) : null;
+  const r0 = cardFrom !== undefined ? cardFrom : cardShown || r1;
+  const b = box !== undefined ? box : r1;
+  const from = new Map([...shown].map(([id, p]) => [id, { ...p }]));
+  const goal = new Map([...positions.keys()].map((id) => [id, target(id)]));
+  const c0 = { ...cam };
+  if (!to && seam && r0 && r1 && b === r1 && (r0.x !== r1.x || r0.y !== r1.y)) to = { k: cam.k, x: cam.x - (r1.x - r0.x) * cam.k, y: cam.y - (r1.y - r0.y) * cam.k };
+  const still = !to && [...goal].every(([id, p]) => { const f = from.get(id); return f && Math.abs(f.x - p.x) < .5 && Math.abs(f.y - p.y) < .5; })
+    && (!r0 && !r1 || r0 && r1 && Math.abs(r0.w - r1.w) < .5 && Math.abs(r0.h - r1.h) < .5 && Math.abs(r0.x - r1.x) < .5 && Math.abs(r0.y - r1.y) < .5);
+  if (still) return Promise.resolve();
+  if (b) placeCard(b);
+  return animate("glide", T, (e) => {
+    for (const [id, p] of goal) {
+      const f = from.get(id) || p;
+      const s = { x: lerp(f.x, p.x, e), y: lerp(f.y, p.y, e), w: p.w, h: p.h };
+      shown.set(id, s);
+      const a = nodeEls.get(id);
+      if (a) a.style.transform = `translate(${s.x}px, ${s.y}px)`;
+    }
+    if (to) cam = { k: lerp(c0.k, to.k, e), x: lerp(c0.x, to.x, e), y: lerp(c0.y, to.y, e) };
+    if (r0 && r1 && b) { cardShown = lerpRect(r0, r1, e); clipCard(cardShown, b); }
+  });
+}
 
 // ─── Drawing the map ───────────────────────────────────────────────────────
 const nodeEls = new Map();
-let tween = null;
 
 function drawMap() {
   const visible = new Set(positions.keys());
   for (const [id, elx] of nodeEls) if (!visible.has(id)) { elx.remove(); nodeEls.delete(id); shown.delete(id); }
   const roots = new Set(graph.comps.map((c) => c.root.id));
   const folded = new Map(graph.comps.filter((c) => c.folded).map((c) => [c.root.id, c]));
-  const queue = new Map((view.queue || []).map((q, i) => [q.task, i + 1]));
+  const queue = (view.queue || []).map((q) => live(q.task));
   for (const id of visible) {
     const n = graph.nodes.get(id);
     if (!n) continue;
     let a = nodeEls.get(id);
-    const fresh = !a;
-    if (fresh) {
+    if (!a) {
       a = el(n.kind === "task" ? "a" : "div", "node");
-      a.append(el("span", "dot"), el("span", "name"), el("span", "status"));
+      a.append(el("span", "dot"), el("span", "name"));
       $(".dot", a).append(el("span", "ring"));
       if (n.kind === "task") {
         a.href = `#${id}`;
         a.addEventListener("click", (e) => { if (e.button || e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); if (!drag?.moved) go(id); });
+        hoverable(a, id);
       } else if (n.kind === "sat") {
         a.addEventListener("click", () => { if (!drag?.moved) go(n.task); });
         a.style.cursor = "pointer";
+        hoverable(a, id);
       }
       nodesLayer.append(a);
       nodeEls.set(id, a);
       // A new node grows out of where its owner is.
       const from = graph.edges.find((e) => e.to === id)?.from;
-      const pf = from && (shown.get(from) || positions.get(from));
-      const p = positions.get(id);
-      shown.set(id, pf && shown.size ? { x: pf.x + (pf.w || 0) / 2 - p.w / 2, y: pf.y } : { x: p.x, y: p.y });
+      const pf = from && shown.get(from);
+      const p = target(id);
+      shown.set(id, pf ? { x: pf.x + (pf.w || 0) / 2 - p.w / 2, y: pf.y, w: p.w, h: p.h } : { ...p });
+      a.style.transform = `translate(${shown.get(id).x}px, ${shown.get(id).y}px)`;
       if (shown.size > 1) a.classList.add("enter");
     }
     const p = positions.get(id);
     a.style.width = `${p.w}px`;
+    const faded = finding && !found.has(id) ? " unmatched" : "";
     if (n.kind === "task") {
-      const t = n.t, l = look(t), root = roots.has(id);
-      const fc = folded.get(id);
-      a.className = fc ? `node archived${id === openId ? " selected" : ""}` : `node ${l.cls}${root ? " root" : ""}${id === openId ? " selected" : ""}`;
+      const t = n.t, l = look(t), root = roots.has(id), fc = folded.get(id), q = queue.indexOf(id);
+      a.className = fc ? `node archived${l.cls.includes("failed") ? " failed" : ""}${faded}`
+        : `node ${l.cls}${q >= 0 ? " needs" : ""}${q === 0 ? " next" : ""}${trouble(t) ? " trouble" : ""}${root ? " root" : ""}${id === openId ? " selected" : ""}${faded}`;
       a.style.setProperty("--d", `${root ? ROOT_DOT : DOT}px`);
-      const dot = $(".dot", a);
-      dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = glyph(t)) : dot.prepend(document.createTextNode(glyph(t)));
-      let badge = $(".badge", dot);
-      if (queue.has(id)) { if (!badge) dot.append(badge = el("span", "badge")); badge.textContent = queue.get(id); } else badge?.remove();
+      const dot = $(".dot", a), g = l.cls === "paused" ? "‖" : glyph(t);
+      dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = g) : dot.prepend(document.createTextNode(g));
       $(".name", a).textContent = shortName(t);
-      const st = $(".status", a);
-      const bad = trouble(t);
-      st.textContent = fc ? cardStatus(fc) : bad || l.text;
-      let fill = $(".fill", a);
-      if (t.tokens && !isDone(t)) {
-        if (!fill) { a.insertBefore(fill = el("span", "fill"), st.nextSibling); fill.append(el("b")); }
-        const f = fullness(t);
-        fill.classList.toggle("high", f > .8);
-        fill.firstChild.style.width = `${Math.max(2, Math.round(f * 100))}%`;
-        fill.title = `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`;
-      } else fill?.remove();
-      st.classList.toggle("trouble", !!bad);
-      a.title = `${t.name} · ${t.environment || ""} · ${t.mode}\n\n${(t.mandate || "").slice(0, 400)}`;
-      let where = $(".where", a);
-      const place = Object.values(t.places || {})[0];
-      if (root && place) { if (!where) a.append(where = el("span", "where")); where.textContent = place.split("/").filter(Boolean).pop(); where.title = place; } else where?.remove();
       let more = $(".more", a);
       if (fc && fc.tasks.length > 1) {
         if (!more) { a.append(more = el("button", "more", "⌄")); more.title = "Unfold the project"; more.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); unfolded.add(id); refresh(); }); }
       } else more?.remove();
-      if (fc) where?.remove();
     } else if (n.kind === "scope") {
-      a.className = `node scope${n.scope.background ? " background" : ""}${n.scope.settled ? " settled" : ""}`;
-      $(".name", a).textContent = ""; $(".status", a).textContent = "";
+      a.className = `node scope${n.scope.background ? " background" : ""}${n.scope.settled ? " settled" : ""}${faded}`;
     } else {
-      a.className = `node sat${n.call.limb === "max" ? " ask" : " working"}`;
+      a.className = `node sat${n.call.limb === "max" ? " ask" : " working"}${faded}`;
       a.style.setProperty("--d", `${SAT_DOT}px`);
-      const dot = $(".dot", a);
-      dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = n.call.limb === "max" ? "?" : "⋯") : dot.prepend(document.createTextNode(n.call.limb === "max" ? "?" : "⋯"));
+      const dot = $(".dot", a), g = n.call.limb === "max" ? "?" : "⋯";
+      dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = g) : dot.prepend(document.createTextNode(g));
       $(".name", a).textContent = satLabel(n);
-      $(".status", a).textContent = ago(n.call.made);
-      a.title = n.call.input || "";
     }
   }
-  startTween();
-}
-
-// Nodes glide to where the layout puts them; edges follow every frame.
-function startTween() {
-  const from = new Map([...shown].map(([id, p]) => [id, { ...p }]));
-  const t0 = performance.now(), T = reduced() ? 0 : 480;
-  cancelAnimationFrame(tween);
-  const frame = (now) => {
-    const u = T ? Math.min(1, (now - t0) / T) : 1;
-    const e = 1 - Math.pow(1 - u, 3);
-    for (const [id, p] of positions) {
-      const f = from.get(id) || p;
-      shown.set(id, { x: f.x + (p.x - f.x) * e, y: f.y + (p.y - f.y) * e, w: p.w, h: p.h });
-      const a = nodeEls.get(id);
-      if (a) a.style.transform = `translate(${shown.get(id).x}px, ${shown.get(id).y}px)`;
-    }
-    drawEdges();
-    if (u < 1) tween = requestAnimationFrame(frame);
-  };
-  tween = requestAnimationFrame(frame);
+  if (tipFor) fillTip();
 }
 
 function anchor(id, end) {
@@ -1053,16 +1244,25 @@ function trouble(t) {
 }
 
 // ─── The whole page, from the view ─────────────────────────────────────────
-let busy = false, again = false;
+let busy = false, again = false, shownBefore = false;
+// The view folded into the map: what it is, where everything goes.
+async function rebuild() {
+  derive();
+  const changed = await layout();
+  if (openId) seam = seamFor(openId) || seam;
+  drawMap();
+  return changed;
+}
 async function refresh() {
   if (!view) return;
   if (busy) { again = true; return; }
   busy = true;
   try {
-    derive();
-    const changed = await layout();
-    drawMap();
-    if (changed && framed && !openId) fit(nodeEls.size > 0 && shownBefore);
+    // A card opening or closing finishes before the map moves under it.
+    await moving;
+    const changed = await rebuild();
+    glide(null, { T: shownBefore ? 420 : 0 });
+    if (changed && framed && !openId) fit(shownBefore);
     shownBefore = true;
     render();
   } finally {
@@ -1070,66 +1270,121 @@ async function refresh() {
     if (again) { again = false; refresh(); }
   }
 }
-let shownBefore = false;
 
 function render() {
   if (!view) return;
-  $("#empty").hidden = view.tasks.length > 0;
-  renderPill();
+  $("#empty").hidden = view.tasks.length > 0 || !!openId;
   renderUsage();
-  $("#build").textContent = `${view.build || ""} · seq ${view.seq}`;
+  const q = view.queue || [];
+  document.title = q.length ? `(${q.length}) harness` : "harness";
+  notify(q);
   if (openId) renderPanel();
-  if (!$("#drawer").hidden) renderDrawer();
   syncCompose();
   renderOthers();
+  placeMarks();
 }
 
-// ─── Max's queue ───────────────────────────────────────────────────────────
-function renderPill() {
-  const q = view.queue || [];
-  const pill = $("#pill");
-  pill.classList.toggle("owed", q.length > 0);
-  pill.replaceChildren();
-  if (q.length) pill.append(el("span", "n", String(q.length)), q.length === 1 ? " needs you" : " need you");
-  else pill.append("nothing needs you");
-  document.title = q.length ? `(${q.length}) harness` : "harness";
-}
-$("#pill").onclick = () => { const d = $("#drawer"); d.hidden = !d.hidden; if (!d.hidden) renderDrawer(); };
-function renderDrawer() {
-  const d = $("#drawer"), q = view.queue || [];
-  const h = el("h3", null, "Waiting on you");
-  if (q.length) { const next = el("button", "btn", "Next ›"); next.onclick = () => { d.hidden = true; go(q[0].task); }; h.append(next); }
-  d.replaceChildren(h);
-  if (!q.length) d.append(el("div", "nothing", "Nothing needs you."));
-  q.forEach((item, i) => {
-    const t = byId[item.task];
-    const row = el("div", "queued");
-    const move = el("span", "move");
-    for (const [label, to] of [["↑", i - 1], ["↓", i + 1]]) {
-      const b = el("button", null, label);
-      b.disabled = !can.act || to < 0 || to >= q.length;
-      b.onclick = (e) => { e.stopPropagation(); reorder(i, to); };
-      move.append(b);
+// ─── What needs Max, off screen ────────────────────────────────────────────
+// What waits on Max where the camera does not show it is a mark at the
+// screen's edge, toward it, the next one haloed; a click opens it.
+const marksEl = $("#marks"), markEls = new Map();
+function placeMarks() {
+  if (!view) return;
+  const m = 20, seen = new Set(), placed = [];
+  // The open card covers what is under it: no mark goes there.
+  const card = openId && !panel.hidden ? panel.getBoundingClientRect() : null;
+  (view.queue || []).forEach((q, i) => {
+    const id = live(q.task), p = shown.get(id);
+    if (!p || id === openId) return;
+    const x = cam.x + (p.x + p.w / 2) * cam.k, y = cam.y + (p.y + DOT / 2) * cam.k;
+    if (x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight) return;
+    seen.add(id);
+    let a = markEls.get(id);
+    if (!a) {
+      a = el("button", "offscreen");
+      a.type = "button";
+      a.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.toward}</svg>`;
+      a.onclick = () => go(id);
+      marksEl.append(a);
+      markEls.set(id, a);
     }
-    const proj = ancestry(t)[0];
-    row.append(el("span", "num", String(i + 1)), el("span", "what", `${t.name}`), move);
-    row.append(el("span", "ask", item.ask ? `asks: ${parse(item.ask.input)?.question || item.ask.input}` : `your turn · ${ago(item.since)}`));
-    row.append(el("span", "why", `${proj ? proj.name + " · " : ""}${item.why || "unranked"} · waiting ${ago(item.since)}`));
-    row.onclick = () => { d.hidden = true; go(item.task); };
-    d.append(row);
+    a.title = byId[id]?.name || "";
+    a.classList.toggle("next", i === 0);
+    // Marks toward the same corner line up along the edge rather than stack.
+    let cx = Math.max(m, Math.min(innerWidth - m, x)), cy = Math.max(m, Math.min(innerHeight - m - 40, y));
+    const along = cx === m || cx === innerWidth - m ? [0, 30] : [30, 0];
+    while (placed.some(([px, py]) => Math.hypot(px - cx, py - cy) < 28)) { cx += along[0]; cy += along[1]; }
+    placed.push([cx, cy]);
+    a.hidden = !!card && cx > card.left - 12 && cx < card.right + 12 && cy > card.top - 12 && cy < card.bottom + 12;
+    a.style.left = `${cx}px`;
+    a.style.top = `${cy}px`;
+    $("svg", a).style.transform = `rotate(${Math.atan2(y - innerHeight / 2, x - innerWidth / 2)}rad)`;
   });
+  for (const [id, a] of markEls) if (!seen.has(id)) { a.remove(); markEls.delete(id); }
 }
-// Max's own order for his queue: the whole order, each keeping its reason.
-async function reorder(from, to) {
-  const order = view.queue.map((q) => ({ task: q.task, why: q.why || "placed by you" }));
-  order.splice(to, 0, ...order.splice(from, 1));
-  order[to].why = "placed by you";
-  const why = await act({ Ranking: { order } });
-  if (why) alert(`queue not reordered: ${why}`);
+
+// ─── Hover: the words the map does not show ───────────────────────────────
+const tip = $("#tip");
+let tipFor = null, tipTimer = 0;
+function hoverable(target, id) {
+  target.addEventListener("pointerenter", (e) => {
+    if (e.pointerType !== "mouse" || drag?.moved) return;
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(() => { tipFor = { id, target }; fillTip(); }, tip.hidden ? 300 : 0);
+  });
+  target.addEventListener("pointerleave", hideTip);
 }
-document.addEventListener("pointerdown", (e) => {
-  if (!$("#drawer").hidden && !e.target.closest("#drawer, #pill")) $("#drawer").hidden = true;
-});
+function hideTip() { clearTimeout(tipTimer); tipFor = null; tip.hidden = true; }
+function fillTip() {
+  if (!tipFor || !tipFor.target.isConnected) return hideTip();
+  const id = typeof tipFor.id === "function" ? tipFor.id() : tipFor.id;
+  const lines = [];
+  if (id?.startsWith("b:")) {
+    const n = graph.nodes.get(id);
+    if (!n) return hideTip();
+    lines.push(el("b", null, n.call.limb === "max" ? "Asks you" : n.call.tool), el("div", "now", `${n.call.limb === "max" ? "asked" : "started"} ${ago(n.call.made)} ago`));
+    const input = n.call.limb === "max" ? parse(n.call.input)?.question : gist(n.call.input);
+    if (input) lines.push(el("div", "m", input));
+  } else {
+    const t = byId[id];
+    if (!t) return hideTip();
+    const fc = graph.comps.find((c) => c.folded && c.root.id === id);
+    lines.push(el("b", null, t.name), el("div", "now", fc ? cardStatus(fc) : trouble(t) || look(t).text));
+    const place = Object.values(t.places || {})[0];
+    const mode = t.mode === "user-facing" ? "chat" : t.mode === "standing" ? "standing" : null;
+    const what = [t.environment, mode !== t.environment && mode].filter(Boolean).join(" ");
+    lines.push(el("div", null, [what, place && `in ${place.split("/").filter(Boolean).slice(-2).join("/")}`].filter(Boolean).join(" · ")));
+    if (t.tokens && !isDone(t)) lines.push(el("div", null, `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`));
+    if (t.mandate && !fc) lines.push(el("div", "m", t.mandate.slice(0, 240)));
+  }
+  tip.replaceChildren(...lines);
+  tip.hidden = false;
+  const r = tipFor.target.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+  let y = r.bottom + 8;
+  if (y + h > innerHeight - 8) y = r.top - h - 8;
+  tip.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
+  tip.style.top = `${Math.max(8, y)}px`;
+}
+
+// ─── Telling Max when he is not looking ───────────────────────────────────
+// When something newly waits on him and this tab is not in front, the
+// system says so, and a click brings the tab forward with it open. The
+// browser asks his permission at his first touch of the page.
+let notified = null;
+addEventListener("pointerdown", () => { if (window.Notification?.permission === "default") Notification.requestPermission(); }, { once: true });
+function notify(queue) {
+  const before = notified;
+  notified = new Set(queue.map((q) => q.task));
+  if (!before || !document.hidden || window.Notification?.permission !== "granted") return;
+  for (const q of queue) {
+    const t = byId[q.task];
+    if (before.has(q.task) || !t) continue;
+    try {
+      const n = new Notification(t.name, { body: q.ask ? (parse(q.ask.input)?.question || "").slice(0, 200) : "Your turn", tag: t.id });
+      n.onclick = () => { focus(); n.close(); go(t.id); };
+    } catch { /* a phone's browser notifies only from a service worker */ }
+  }
+}
 
 // ─── Usage ─────────────────────────────────────────────────────────────────
 const pct = (f) => f == null ? "?" : `${Math.round(f * 100)}%`;
@@ -1141,30 +1396,38 @@ const resets = (ms) => {
 function renderUsage() {
   const u = view.usage, span = $("#usage");
   span.replaceChildren();
-  if (!u) return;
-  for (const [label, w] of [["5h", u.five_hour], ["7d", u.seven_day]]) {
+  if (u) for (const [label, w] of [["5h", u.five_hour], ["7d", u.seven_day]]) {
     const f = w?.used, r = w?.resets;
     const g = el("span", `gauge${f > .8 ? " high" : ""}`);
     const bar = el("i"); const fill = el("b"); fill.style.width = `${Math.round((f || 0) * 100)}%`; bar.append(fill);
-    g.append(label, bar, pct(f), el("span", "reset", resets(r)));
-    g.title = `as of ${clock(u.at)}`;
+    g.append(label, bar, el("span", "pc", pct(f)));
+    g.title = `${label}: ${pct(f)} used · ${resets(r)} · as of ${clock(u.at)}`;
     span.append(g);
   }
-  if (!u.on_plan) span.append(el("span", "alarm", "billed outside the plan: nothing more is sent"));
+  if (u && !u.on_plan) span.append(el("span", "alarm", "billed outside the plan: nothing more is sent"));
   if (view.limited) span.append(el("span", "alarm", `limited until ${clock(view.limited)}`));
+  usageRight = span.getBoundingClientRect().right;
 }
+const fitButton = icon("fit", "", "Fit the map (F)"), newButton = icon("plus", "", "New chat (or double-click the map)");
+newButton.id = "new";
+fitButton.onclick = () => fit(true);
+newButton.onclick = () => { newPoint = null; go(NEW); };
+$("#bottom").append(fitButton, newButton);
 
 // ─── Opening a node ────────────────────────────────────────────────────────
-// The URL names the open node, so the back button closes it and a node opens
-// in a tab of its own with a middle click.
+// The URL names the open node, so back closes it and a middle click opens a
+// node in a tab of its own. Going from one card to another replaces the
+// entry, so back always goes to the map.
 const panel = $("#panel"), logEl = $(".log", panel), scrollEl = $(".scroll", panel);
-let openId = null, saved = null, moving = Promise.resolve();
-// The panel's id for a chat not started yet.
+let openId = null, saved = null, moving = Promise.resolve(), stay = false;
+// The card's id for a chat not started yet.
 const NEW = "new";
 
 function go(id) {
+  if (id !== NEW) id = live(id);
   if (id === openId) return;
-  history.pushState({ node: id }, "", `#${id}`);
+  if (history.state?.node) history.replaceState({ node: id }, "", `#${id}`);
+  else history.pushState({ node: id }, "", `#${id}`);
   route();
 }
 function closeNode() {
@@ -1176,129 +1439,128 @@ addEventListener("popstate", route);
 addEventListener("hashchange", route);
 
 function route() {
-  const id = location.hash.slice(1) || null;
+  const raw = location.hash.slice(1) || null;
+  const id = raw && raw !== NEW ? live(raw) : raw;
   const known = id && (byId[id] || (id === NEW && view));
   moving = moving.then(() => transition(known ? id : id && !view ? id : null));
 }
 
 async function transition(to) {
   if (to === openId) return;
+  if (to && (!view || (!byId[to] && to !== NEW))) { pendingOpen = to; return; }
   const from = openId;
-  if (from) await shrink(from, !to);
-  if (to) {
-    if (!view || (!byId[to] && to !== NEW)) { pendingOpen = to; return; }
-    // Unfold a finished project to reach a node in it.
-    const comp = graph.comps.find((c) => c.tasks.some((t) => t.id === to));
-    if (comp?.folded && comp.root.id !== to) { unfolded.add(comp.root.id); await refreshNow(); }
-    if (!saved) saved = { cam: { ...cam }, framed };
-    if (to !== NEW) centreOn(to, Math.max(cam.k, phone() ? 1.1 : 1.3), true);
-    if (from) await sleep(reduced() ? 0 : 380);
-    await expand(to);
-  } else if (saved) {
+  if (from) leave();
+  hideTip();
+  if (!to) {
     // Back to the map as it was: framing all of it, or where Max left it.
-    if (saved.framed) fit(true);
-    else { cam = saved.cam; framed = false; applyCamera(true); }
-    saved = null;
+    const back = saved?.framed ? framing() : saved?.cam;
+    framed = !!saved?.framed;
+    const card = cardShown, dot = dotRect(from);
+    openId = null; seam = null; saved = null;
+    await fly(back || null, { T: 200, cardFrom: card, cardTo: card && dot, box: card });
+    if (!openId) { panel.hidden = true; panel.style.clipPath = ""; panel.style.transform = ""; cardShown = null; coverCheck(); }
+    nodeEls.get(from)?.classList.remove("selected");
+    render();
+    return;
   }
-}
-let pendingOpen = null;
-async function refreshNow() { await refresh(); while (busy) await sleep(20); }
-
-// The node opens into the panel: the panel is revealed from the node's dot.
-async function expand(id) {
-  openId = id;
-  if (can.act && byId[id]) act({ Focus: { task: id } });
-  for (const [nid, a] of nodeEls) a.classList.toggle("selected", nid === id);
-  map.classList.add("dim");
+  // Unfold a finished project to reach a node in it.
+  const comp = graph.comps.find((c) => c.tasks.some((t) => t.id === to));
+  if (comp?.folded && comp.root.id !== to) { unfolded.add(comp.root.id); await rebuild(); }
+  if (!saved) saved = { cam: { ...cam }, framed };
+  const was = cardShown, keep = stay && was;
+  stay = false;
+  openId = to;
+  seam = seamFor(to);
+  if (!seam) { openId = null; return; }
+  const r = cardRect(seam);
+  // Opened from the map, the card holds the node where it was on screen; a
+  // task made from the open card (a new chat started, a chat continued, an
+  // aside) takes the card's place as it is.
+  const at = keep ? { x: r.x + r.w / 2, y: r.y, sx: cam.x + (was.x + was.w / 2) * cam.k, sy: cam.y + was.y * cam.k }
+    : to === NEW ? { x: newPoint.x, y: newPoint.y - 14, sx: newPoint.sx, sy: newPoint.sy - 14 } : heldAt(to);
+  framed = false;
   panel.hidden = false;
-  buildPanel(id);
-  await sleep(0);
-  const d = dotAt(id), P = panel.getBoundingClientRect();
-  if (d && !reduced()) {
-    const inset = `inset(${d.y - d.r - P.top}px ${P.right - d.x - d.r}px ${P.bottom - d.y - d.r}px ${d.x - d.r - P.left}px round ${d.r}px)`;
-    await panel.animate([{ clipPath: inset, opacity: .6 }, { clipPath: "inset(0 0 0 0 round 18px)", opacity: 1 }], { duration: 420, easing: "cubic-bezier(.2,.8,.2,1)" }).finished.catch(() => {});
-  }
+  buildPanel(to);
+  $("#empty").hidden = true;
+  if (from) nodeEls.get(from)?.classList.remove("selected");
+  nodeEls.get(to)?.classList.add("selected");
+  await fly(camFor(r, at), { T: 260, cardFrom: from && was ? { ...was } : dotRect(to), cardTo: r, box: r });
+  if (openId === to) { panel.style.clipPath = ""; panel.style.transform = ""; }
   if (!phone()) $(".compose textarea", panel)?.focus({ preventScroll: true });
 }
-async function shrink(id, toMap) {
+let pendingOpen = null;
+async function fly(to, opts) {
+  const f = glide(to, { ...opts, strong: true });
+  flight = f;
+  await f;
+  if (flight === f) flight = null;
+}
+// What an open card holds that closing it lets go.
+function leave() {
   stopFollowing();
-  const d = dotAt(id), P = panel.getBoundingClientRect();
   if (dictation) stopDictation();
-  if (d && !reduced()) {
-    const inset = `inset(${d.y - d.r - P.top}px ${P.right - d.x - d.r}px ${P.bottom - d.y - d.r}px ${d.x - d.r - P.left}px round ${d.r}px)`;
-    await panel.animate([{ clipPath: "inset(0 0 0 0 round 18px)", opacity: 1 }, { clipPath: inset, opacity: .3 }], { duration: toMap ? 300 : 240, easing: "cubic-bezier(.4,0,.6,1)" }).finished.catch(() => {});
-  }
-  panel.hidden = true;
-  openId = null;
   logState = null;
-  for (const a of nodeEls.values()) a.classList.remove("selected");
-  if (toMap) map.classList.remove("dim");
+  if (title.isContentEditable) endRename(false);
 }
 
-// ─── The panel: who, what state, controls ─────────────────────────────────
+// ─── The card: who, how full, what it says, what Max writes ───────────────
 let logState = null;
+const title = $(".title", panel), mini = $(".mini", panel);
 function buildPanel(id) {
-  logState = { id, head: undefined, rendered: [], rows: new Map(), group: null, exact: logState?.exact || false, follow: true };
+  logState = { id, head: undefined, rendered: [], rows: new Map(), group: null, exact: false, follow: true };
   logEl.replaceChildren();
-  logEl.classList.toggle("exact", logState.exact);
+  logEl.classList.remove("exact");
   $(".viewer", panel).hidden = true;
+  $(".mix", panel).hidden = true;
   scrollEl.scrollTop = 0;
+  panel.classList.toggle("fresh", id === NEW);
   buildCompose(id);
-  $(".exact-toggle", panel).hidden = id === NEW;
   if (id === NEW) buildNew();
   else renderPanel();
 }
 $(".x", panel).onclick = closeNode;
-$(".back", panel).onclick = closeNode;
-$(".exact-toggle", panel).onclick = () => {
-  logState.exact = !logState.exact;
-  $(".exact-toggle", panel).classList.toggle("armed", logState.exact);
-  const id = logState.id; const exact = logState.exact;
-  logState = { id, head: undefined, rendered: [], rows: new Map(), group: null, exact, follow: true };
-  logEl.classList.toggle("exact", exact);
-  logEl.replaceChildren();
-  renderPanel();
-};
-addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    if (!$("#drawer").hidden) { $("#drawer").hidden = true; return; }
-    if (!$(".viewer", panel).hidden) { $(".viewer", panel).hidden = true; return; }
-    if (openId) closeNode();
-  }
-  if ((e.key === "f" || e.key === "F") && !openId && !e.target.closest("input, textarea, select")) fit(true);
-});
+hoverable(mini, () => openId);
 
 function renderPanel() {
   const t = byId[openId];
   if (!t) return;
-  // Breadcrumbs: the project, the way down, and this task.
-  const crumbs = $(".crumbs", panel);
-  crumbs.replaceChildren();
-  for (const a of ancestry(t)) {
-    const link = el("a", null, a.name); link.href = `#${a.id}`;
-    link.onclick = (e) => { e.preventDefault(); go(a.id); };
-    crumbs.append(link, el("span", "sep", "›"));
-  }
-  crumbs.append(el("span", "here", t.name), el("span", "role", [t.environment, t.mode === "user-facing" ? "chat" : t.origin !== "fresh" ? t.origin : null].filter(Boolean).join(" · ")));
-  const l = look(t);
-  const st = $(".state", panel);
-  st.textContent = trouble(t) || l.text;
-  st.className = `state${l.cls.includes("open") ? " max" : ""}`;
+  const l = look(t), needs = (view.queue || []).some((q) => live(q.task) === t.id);
+  mini.className = `mini ${l.cls}${needs ? " needs" : ""}`;
+  if (!title.isContentEditable && title.textContent !== t.name) title.textContent = t.name;
+  title.title = "Double-click to rename";
   const ctx = $(".ctx", panel);
-  ctx.replaceChildren();
   ctx.hidden = !t.tokens;
   if (t.tokens) {
     const f = fullness(t);
-    const g = el("span", `gauge${f > .8 ? " high" : ""}`);
-    const bar = el("i"); const fill = el("b"); fill.style.width = `${Math.round(f * 100)}%`; bar.append(fill);
-    g.append(bar, `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`);
-    ctx.title = "What its context holds";
-    ctx.append(g);
+    ctx.className = `ctx${f > .8 ? " high" : ""}`;
+    ctx.title = `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context: what it holds`;
+    if (!ctx.firstChild) { const i = el("i"); i.append(el("b")); ctx.append(i); }
+    $("b", ctx).style.width = `${Math.max(2, Math.round(f * 100))}%`;
   }
   if (!$(".mix", panel).hidden) renderMix(t);
   renderControls(t);
   renderLog(t);
   renderComposeState(t);
+}
+
+// The name is renamed where it is: a double click, then Enter.
+title.addEventListener("dblclick", () => {
+  if (!byId[openId] || !can.act) return;
+  title.contentEditable = "plaintext-only";
+  title.focus();
+  getSelection().selectAllChildren(title);
+});
+title.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); endRename(true); }
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); endRename(false); }
+});
+title.addEventListener("blur", () => { if (title.isContentEditable) endRename(true); });
+async function endRename(keep) {
+  const t = byId[openId], name = title.textContent.trim();
+  title.removeAttribute("contenteditable");
+  if (!t || !keep || !name || name === t.name) { title.textContent = t?.name || ""; return; }
+  const why = await act({ Task: [t.id, { Renamed: name }] });
+  if (why) { title.textContent = t.name; say(`not renamed: ${why}`, true); }
 }
 
 // How full a task's context was at its last request, of its model's window.
@@ -1322,7 +1584,7 @@ function mixOf(chain) {
       const who = e.role === "user" ? (e.by || [])[k]?.by || "harness" : null;
       const into = b.type === "tool_result" ? "results" : b.type === "tool_use" ? "calls"
         : b.type === "thinking" || b.type === "redacted_thinking" ? null
-        : e.role === "assistant" ? "said" : who === "max" || who === "answer" ? "max"
+        : e.role === "assistant" ? "said" : who === "max" || who === "answer" || who === "prompt" ? "max"
         : who === "mandate" || who === "brief" ? "mandate" : "notes";
       if (into) m[into] += size(b);
     });
@@ -1331,7 +1593,7 @@ function mixOf(chain) {
 }
 async function renderMix(t) {
   const box = $(".mix", panel);
-  const key = `${t.id}:${t.head}:${t.tokens?.context}`;
+  const key = `${t.id}:${t.head}:${t.tokens?.context}:${logState?.exact}`;
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   const chain = t.head ? await contextOf(t.head) : null;
@@ -1346,64 +1608,77 @@ async function renderMix(t) {
     tr.append(name, el("td", "n", `≈${kTokens(Math.round(tokens * m[k] / total))}`), el("td", "n", `${Math.round(m[k] / total * 100)}%`));
     table.append(tr);
   }
-  const head = el("div", null, `${kTokens(tokens)} tokens of a ${kTokens(t.window)} window (${Math.round(fullness(t) * 100)}%) at its last request · ${t.tokens?.output ?? "?"} out · split by size`);
-  box.replaceChildren(head, stack, table);
+  const head = el("div", null, `${kTokens(tokens)} of ${kTokens(t.window)} (${Math.round(fullness(t) * 100)}%) at its last request · ${t.tokens?.output ?? "?"} out`);
+  const exact = el("button", `btn${logState?.exact ? " armed" : ""}`, "As sent");
+  exact.type = "button";
+  exact.title = "The log as the exact context the model was sent";
+  exact.onclick = () => {
+    const id = logState.id, on = !logState.exact;
+    logState = { id, head: undefined, rendered: [], rows: new Map(), group: null, exact: on, follow: true };
+    logEl.classList.toggle("exact", on);
+    logEl.replaceChildren();
+    renderPanel();
+  };
+  box.replaceChildren(head, stack, table, exact);
 }
 $(".ctx", panel).onclick = () => { const m = $(".mix", panel); m.hidden = !m.hidden; m.dataset.key = ""; if (!m.hidden && byId[openId]) renderMix(byId[openId]); };
 
+// What Max can do to the task itself, quietly under the box: pause it and
+// what is under it, cancel it and what it started, and, in a chat, say it
+// is done. A cancel asks once more; a second while it tidies up ends it now.
 function renderControls(t) {
-  const box = $(".controls", panel);
-  const key = `${t.id}:${t.waiting?.kind}:${t.held}:${t.mode}:${can.act}`;
-  if (box.dataset.key === key) return;
-  box.dataset.key = key;
-  box.replaceChildren();
+  const row = $(".acts", compose);
+  if (!row) return;
+  const holder = heldBy(t);
+  const key = `${t.id}:${isDone(t)}:${holder?.id}:${t.mode}:${!!t.stop}:${t.stop?.hard}:${can.act}`;
+  if (row.dataset.key === key) return;
+  row.dataset.key = key;
+  row.replaceChildren();
   if (!can.act || isDone(t)) return;
-  const answer = el("span", "answer");
-  const button = (label, title, fact, done, confirm) => {
-    const b = el("button", "btn", label);
-    b.title = title;
+  const action = (label, tip, fact, confirm) => {
+    const b = el("button", null, label);
+    b.type = "button";
+    b.title = tip;
     b.onclick = async () => {
       if (confirm && !b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = `${label}?`; setTimeout(() => { b.classList.remove("armed"); b.textContent = label; }, 4000); return; }
       b.classList.remove("armed"); b.textContent = label;
-      answer.className = "answer"; answer.textContent = "pending";
       const why = await act(fact);
-      answer.className = why ? "answer bad" : "answer";
-      answer.textContent = why ? `refused: ${why}` : done;
-      if (why && byId[t.id]?.scoped) { const a = el("button", "btn", "Open an aside"); a.onclick = () => aside(t, answer); answer.append(" ", a); }
+      if (why) say(`${label}: ${why}`, true);
     };
-    box.append(b);
+    row.append(b);
   };
-  if (t.scoped) { const a = el("button", "btn", "Aside"); a.title = "Talk to a fork of it while its agents work; it is told when they are done, and when you say Done its summary goes back with their results"; a.onclick = () => aside(t, answer); box.append(a); }
-  else if (t.waiting?.kind !== "max" && t.turn) button("Interrupt", "Stop at the next safe point and wait for you", () => ({ Task: [t.id, { Drain: { ToMax: { turn: byId[t.id].turn } } }] }), "interrupted: your move once it stops");
-  button(t.held ? "Release" : "Hold", "No new requests under it until released", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), t.held ? "released" : "held");
-  if (t.mode === "user-facing") button("Done", "It writes its result and finishes", (at) => ({ Delivery: { id: `${at}.0`, to: t.id, content: { Prompt: "Done" } } }), "done: its last turn writes the result", true);
-  // A stop gives it two minutes to stop what it started and tidy up; Kill
-  // ends a stopping task now, with no tidy-up turn.
-  if (!t.stop) button("Stop", "Cancel it and everything it started: it tidies up and reports, within two minutes", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 120000 } } }] }), "stopping: it tidies up, then reports", true);
-  else if (!t.stop.hard) button("Kill", "End it and everything it started now, with no tidy-up turn", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 0 } } }] }), "killed", true);
-  box.append(answer);
+  if (holder) action("Resume", holder === t ? "It and everything under it carry on" : `Paused with ${holder.name}: it and everything under it carry on`, () => ({ Task: [holder.id, { Held: false }] }));
+  else action("Pause", "It and everything under it finish what is running, then wait", () => ({ Task: [t.id, { Held: true }] }));
+  if (!t.stop) action("Cancel", "It and everything it started stop, tidy up and report", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 120000 } } }] }), true);
+  else if (!t.stop.hard) action("Cancel now", "End it and everything it started now, with no tidy-up", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 0 } } }] }), true);
+  if (t.mode === "user-facing") action("Done", "It writes its result and finishes", (at) => ({ Delivery: { id: `${at}.0`, to: t.id, content: { Prompt: "Done" } } }));
 }
 
-// An aside: a chat with a fork of a task waiting on agents it started, as
-// one more of them. It is told when the rest are done, and its summary goes
-// back with their results when Max marks it done.
-async function aside(t, answer) {
-  const key = t.id;
-  const said = drafts.get(key).trim() || "I want to talk while your work runs.";
-  const text = digest(said);
+// A task Max starts from what he wrote: its mandate his words, what he
+// attached delivered with them. A new chat, a finished chat continued, or
+// an aside: a fork of a task waiting on agents it started, to talk with
+// while they work, as one more of them. What the record creates is named
+// by its time and the fact that creates it; `how` may make facts of its
+// own first (a new chat's limbs), and `after` rides along.
+async function start(how, text, files, after = []) {
+  const mandate = digest(text), words = files.length ? JSON.stringify(files.map((a) => a.block)) : null;
   let id;
-  const why = await act((at) => ({ Task: [id = `${at}.0`, { Created: {
-    name: `${t.name}-aside`, by: null, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } },
-    mode: "UserFacing", mandate: { text, brief: null, quotes: [] },
-  } }] }), [said]);
-  answer.className = why ? "answer bad" : "answer";
-  answer.textContent = why ? `aside refused: ${why}` : "aside opened";
-  if (why) return;
-  drafts.set(key, "");
-  if ($(".compose textarea", panel)?.dataset.key === key) $(".compose textarea", panel).value = "";
-  await sleep(300);
-  go(id);
+  const why = await act((at) => {
+    const out = [], next = () => `${at}.${out.length}`;
+    const h = typeof how === "function" ? how(next, out) : how;
+    id = next();
+    out.push({ Task: [id, { Created: {
+      name: h.name, by: null, scope: h.scope, origin: h.origin,
+      mode: "UserFacing", mandate: { text: mandate, brief: null, quotes: [] },
+    } }] });
+    if (words) out.push({ Delivery: { id: next(), to: id, content: { Words: digest(words) }, read: "Next" } });
+    return [...out, ...after];
+  }, words ? [text, words] : [text]);
+  if (!why) { pendingOpen = id; stay = true; }
+  return why;
 }
+const aside = (t, text, files, after) => start({ name: `${t.name}-aside`, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } } }, text, files, after);
+const resume = (t, text, files) => start({ name: t.name, scope: "Max", origin: { Resume: { from: t.id } } }, text, files);
 
 // ─── The log: the context, exactly as sent, rendered ──────────────────────
 const contexts = new Map();
@@ -1466,17 +1741,18 @@ function entry(s, into, e, index, t) {
   if (e.role === "root") {
     const d = el("details", "thought");
     const tools = (parse(e.tools) || []).map((x) => x.name);
-    d.append(el("summary", null, `${e.model} · system prompt (${kTokens(Math.round((e.system || "").length / 4))} tokens) · ${tools.length} tools: ${tools.join(", ")}`));
+    d.append(el("summary", null, `${e.model} · system prompt and ${tools.length} tools`));
     d.append(el("div", "io", e.system || ""), el("div", "io", JSON.stringify(parse(e.tools), null, 2) || ""));
     into.append(d);
     return;
   }
   const blocks = blocksOf(e);
   // What the harness sent: each block as whoever wrote it, by the face's
-  // account of the request that sent it.
+  // account of the request that sent it. Max's words are his bubbles; the
+  // harness's labels for them are not shown.
   if (e.role === "user") {
     const by = e.by || [];
-    let run = null; // Max's bubble or the brief's card a block continues
+    let run = null; // Max's bubble or the mandate's card a block continues
     blocks.forEach((b, k) => {
       const who = by[k] || { by: "harness" };
       if (run && run.by !== who.by) run = null;
@@ -1486,24 +1762,29 @@ function entry(s, into, e, index, t) {
       if (b.type !== "text" || who.by === "label") return;
       const text = b.text || "";
       if (who.by === "max") {
-        if (run) { $(".bubble", run.el).textContent += `\n${text}`; return; }
-        run = { by: "max", el: said(text, `you, ${clock(who.at)}`) };
+        // A mandate sent before its framing had a block of its own carries it.
+        const words = text.replace(/^\[harness\][^\n]*:\n\n/, "");
+        if (run) { $(".bubble", run.el).textContent += `\n${words}`; return; }
+        run = { by: "max", el: said(words, clock(who.at)) };
         into.append(run.el);
+      } else if (who.by === "prompt") {
+        into.append(prompted(who.prompt, text));
       } else if (who.by === "answer") {
-        into.append(said(who.said, "answered your question in the background", "answer"));
-      } else if (who.by === "brief") {
-        if (!run) { run = { by: "brief", el: el("div", "card mandate") }; run.el.append(el("div", "label", "Brief · shared by everything its spawn started")); into.append(run.el); }
+        into.append(said(who.said, "while it carried on", "answer"));
+      } else if (who.by === "brief" || who.by === "mandate") {
+        if (!run) {
+          run = { by: who.by, el: el("div", "entry card mandate") };
+          run.el.title = who.by === "brief" ? "The brief its spawn shares" : `From ${byId[t.owner]?.name || "its owner"}`;
+          into.append(run.el);
+        }
         run.el.append(markdown(text));
-      } else if (who.by === "mandate") {
-        const card = el("div", `card mandate${text.length > 900 ? " clip" : ""}`);
-        const from = t.origin === "aside" ? "you, opening this aside" : !t.owner ? "you" : byId[t.owner]?.name || "its owner";
-        card.append(el("div", "label", `Mandate · from ${from}`), markdown(text));
-        if (text.length > 900) { const m = el("button", "more-link", "Show all"); m.onclick = () => { card.classList.toggle("clip"); m.textContent = card.classList.contains("clip") ? "Show all" : "Show less"; }; card.append(m); }
-        into.append(card);
-      } else {
-        const n = el("div", "note"); const tx = el("span", "t", text);
-        tx.onclick = () => tx.classList.toggle("full"); n.append(tx); into.append(n);
-      }
+        if (text.length > 900 && !$(".more-link", run.el)) {
+          const card = run.el, m = el("button", "more-link", "Show all");
+          card.classList.add("clip");
+          m.onclick = () => { card.classList.toggle("clip"); m.textContent = card.classList.contains("clip") ? "Show all" : "Show less"; };
+          card.after(m);
+        }
+      } else into.append(note(text));
     });
     return;
   }
@@ -1521,8 +1802,7 @@ function entry(s, into, e, index, t) {
       const copy = el("button", "copy", "Copy"); copy.title = "Copy as markdown";
       copy.onclick = () => navigator.clipboard.writeText(b.text || "").then(() => { copy.textContent = "Copied"; setTimeout(() => { copy.textContent = "Copy"; }, 1200); });
       p.append(copy);
-      if (t.outcome?.kind === "result" && isLast(s, e, t)) { const card = el("div", "card result"); card.append(el("div", "label", "Result"), p); into.append(card); }
-      else into.append(p);
+      into.append(p);
     } else if (b.type === "tool_use" || b.type === "server_tool_use") {
       step(s, into, b, t);
     } else if (b.type === "web_search_tool_result" || b.type === "web_fetch_tool_result") {
@@ -1536,14 +1816,35 @@ function entry(s, into, e, index, t) {
     (s.group ? s.group.rows[s.group.rows.length - 1] : into).append(meta);
   }
 }
-const isLast = (s, e, t) => e.id === t.head || (t.outcome && e.id === t.head);
 
-function said(text, caption, cls = "") {
+// Words in a bubble on the right: Max's, or what his user is to an agent.
+// When and how they were sent is on hover.
+function said(text, when, cls = "") {
   const d = el("div", `entry said ${cls}`);
   const words = parse(text);
   const body = Array.isArray(words) ? words.map((w) => w.type === "image" ? "[image]" : w.text || "").join("\n") : text;
-  d.append(el("div", "caption", caption), el("div", "bubble", body));
+  const bubble = el("div", "bubble", body);
+  if (when) bubble.title = when;
+  d.append(bubble);
   return d;
+}
+// A standard prompt, as the act it is: Max's Done; a cancel, his or the
+// agent's owner's. The harness's instruction is a line under it, in full
+// when clicked. Other standard prompts are the harness's notes.
+const PROMPTS = { Done: "Done", Stopping: "Cancel" };
+function prompted(prompt, text) {
+  if (!PROMPTS[prompt]) return note(text);
+  const d = said(PROMPTS[prompt], null, "prompt");
+  const then = el("div", "then", text.replace(/^\[harness\] /, ""));
+  then.onclick = () => then.classList.toggle("full");
+  d.append(then);
+  return d;
+}
+function note(text) {
+  const n = el("div", "note"), tx = el("span", "t", text.replace(/^\[harness\] /, ""));
+  tx.onclick = () => tx.classList.toggle("full");
+  n.append(tx);
+  return n;
 }
 
 // Consecutive tool steps with no words between them fold into one group,
@@ -1602,7 +1903,8 @@ function toolRow(s, b, t) {
   }
   if (b.name === "ask" || (b.name === "background" && input.tool === "ask")) {
     const q = el("div", "card ask");
-    q.append(el("div", "label", b.name === "ask" ? "Asked you" : "Asked you, carrying on meanwhile"), markdown(inner.question || JSON.stringify(inner)));
+    q.append(markdown(inner.question || JSON.stringify(inner)));
+    row.classList.add("asks");
     row.insertBefore(q, detail);
   }
   if (b.name === "handover") {
@@ -1660,7 +1962,8 @@ function chip(m) {
   const a = el("a", `chip ${l.cls}`);
   a.href = `#${m.id}`;
   a.onclick = (e) => { if (e.button || e.ctrlKey || e.metaKey) return; e.preventDefault(); go(m.id); };
-  a.append(el("span", "d", glyph(m)), m.name, el("span", "s", l.text));
+  a.append(el("span", "d", glyph(m)), shortName(m));
+  a.title = l.text;
   return a;
 }
 // A tool use's result, shown in its row.
@@ -1670,7 +1973,7 @@ function result(s, b) {
   const st = $(".st", r.row);
   const text = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.type === "text" ? x.text : `[${x.type}]`).join("\n");
   st.className = `st${b.is_error ? " bad" : ""}`;
-  st.textContent = b.is_error ? "failed" : r.b.name === "spawn" ? "results in" : "✓";
+  st.textContent = b.is_error ? "failed" : "✓";
   const detail = $(".detail", r.row);
   const out = el("div", `io${b.is_error ? " err" : ""}`, text);
   const path = r.inner.path;
@@ -1682,7 +1985,7 @@ function result(s, b) {
   }
   if (r.b.name === "spawn") {
     const card = el("div", "card result");
-    card.append(el("div", "label", "Their results"), markdown(text));
+    card.append(markdown(text));
     const d = el("details"); d.append(el("summary", "more-link", "Their results"), card);
     r.row.insertBefore(d, detail);
   }
@@ -1716,7 +2019,7 @@ function viewFile(path, content) {
 }
 
 // What is not in the context yet: what is streaming now, what Max sent that
-// the agent has not read, a question waiting for him, how it ended.
+// the agent has not read, how it went wrong.
 function renderTail(s, t) {
   let tail = $(".tail", logEl);
   if (!tail) { tail = el("div", "tail"); logEl.append(tail); }
@@ -1730,30 +2033,26 @@ function renderTail(s, t) {
   const parts = [];
   if (t.waiting?.kind === "model") parts.push(followModel(t.waiting.call));
   else stopModel();
-  for (const p of t.pending || []) parts.push(said(p.content, `you, ${clock(p.at)} · ${p.read === "TurnEnd" ? "it reads this when its turn ends" : "not read yet"}`, "queued-words"));
-  const ask = askOf(t);
-  if (ask) {
-    const card = el("div", "entry card ask");
-    card.append(el("div", "label", t.waiting?.kind === "max" ? "Waiting for your answer" : "Asked you in the background · it carries on meanwhile"), markdown(parse(ask.input)?.question || ask.input || ""));
-    parts.push(card);
-  } else if (t.waiting?.kind === "max" && t.mode === "user-facing") {
-    parts.push(el("div", "note", "Its turn ended: your move. It finishes when you say Done."));
+  // Not read yet: dashed, until the request that reads it.
+  for (const p of t.pending || []) {
+    const when = `${clock(p.at)} · ${p.read === "TurnEnd" ? "read when its turn ends" : "not read yet"}`;
+    parts.push(p.prompt ? said(PROMPTS[p.prompt] || p.prompt, when, "queued-words prompt") : said(p.content, when, "queued-words"));
   }
+  if (!t.head && !isDone(t)) parts.push(t.owner ? mandateCard(t) : said(t.mandate || "", "not read yet", "queued-words"));
   const bad = trouble(t);
-  if (bad) parts.push(Object.assign(el("div", "entry card ended", bad)));
+  if (bad) parts.push(el("div", "entry card ended", bad));
   const o = t.outcome;
   if (o?.kind === "failed") parts.push(el("div", "entry card ended", `Failed: ${o.reason}`));
-  if (o?.kind === "cancelled") parts.push(el("div", "entry card ended", `Cancelled by ${o.by === "Max" ? "you" : "its owner stopping"}${o.report ? "; its last message is its report" : ", before it could write a report"}`));
-  if (!t.head && !isDone(t)) parts.push(el("div", "note", `Starting: ${look(t).text}`), mandateCard(t));
-  const key = JSON.stringify([t.waiting?.kind, t.waiting?.call, (t.pending || []).length, ask?.id, bad, o, t.head]);
+  const key = JSON.stringify([t.waiting?.kind, t.waiting?.call, t.pending, bad, o, t.head]);
   if (tail.dataset.key !== key || parts.some((p) => p.classList?.contains("live-holder"))) {
     tail.dataset.key = key;
     tail.replaceChildren(...parts);
   }
 }
 function mandateCard(t) {
-  const c = el("div", "card mandate");
-  c.append(el("div", "label", `Mandate · from ${t.owner ? byId[t.owner]?.name : "you"}`), markdown(t.mandate || ""));
+  const c = el("div", "entry card mandate");
+  c.title = `From ${byId[t.owner]?.name || "its owner"}`;
+  c.append(markdown(t.mandate || ""));
   return c;
 }
 // The task's outstanding question to Max: mid-turn, or in the background.
@@ -1775,15 +2074,15 @@ $(".jump", panel).onclick = () => { scrollEl.scrollTo({ top: scrollEl.scrollHeig
 
 // A request streaming, or a command printing: neither is a fact. Each
 // arrives on the link as live pieces, all of them again after a reconnect.
-const live = new Map(), watchers = new Map();
+const pieces = new Map(), watchers = new Map();
 function liveArrived(l) {
   const [kind] = Object.keys(l), key = `${kind}:${l[kind].call}`;
-  const text = (live.get(key) || "") + l[kind].chunk;
-  live.set(key, text);
+  const text = (pieces.get(key) || "") + l[kind].chunk;
+  pieces.set(key, text);
   watchers.get(key)?.(text);
 }
-function liveReset() { live.clear(); for (const f of watchers.values()) f(""); }
-function watch(key, f) { watchers.set(key, f); f(live.get(key) || ""); }
+function liveReset() { pieces.clear(); for (const f of watchers.values()) f(""); }
+function watch(key, f) { watchers.set(key, f); f(pieces.get(key) || ""); }
 let modelStream = null;
 const callStreams = new Set();
 function followModel(call) {
@@ -1922,9 +2221,10 @@ function restoreLocal() {
     }
   }
 }
-// A chat not started yet, and its fields, have no session: theirs are
-// kept in this tab.
-const unborn = (key) => key === NEW || key.startsWith("new:");
+// A chat not started yet, and its fields, have no session; nor has the
+// continuing of a finished chat, whose words start the session that takes
+// them. Theirs are kept in this tab.
+const unborn = (key) => key === NEW || key.startsWith("new:") || isDone(byId[key]);
 const keptHere = (key) => ({ text: "", attached: [], ...parse(sessionStorage.getItem(`draft:${key}`) || "{}") });
 const keepHere = (key, change) => sessionStorage.setItem(`draft:${key}`, JSON.stringify({ ...keptHere(key), ...change }));
 const drafts = {
@@ -1938,7 +2238,7 @@ const attached = {
 // The brain's text for the draft in the box, if this tab has nothing of
 // its own unsaved: what another device typed.
 function syncCompose() {
-  if (!box || dictation) return;
+  if (!box || dictation || unborn(box.dataset.key)) return;
   const id = draftOf(box.dataset.key);
   if (id && local.has(id)) return;
   const text = drafts.get(box.dataset.key);
@@ -1955,6 +2255,11 @@ function renderOthers() {
     card.append(el("span", "said", c.text.split("\n")[0].slice(0, 160) || `${c.attached.length} attached`));
     card.append(el("span", "why", d.held ? `not heard: ${d.held}` : !d.from ? "another draft" : rowsOf(session).some((o) => o.id === d.from) ? "typed at the same time as another" : "typed after another was sent"));
     if (!d.held) { const use = el("button", "btn", "Edit this"); use.onclick = () => { bound.set(session, d.id); box.value = prev = c.text; autosize(); renderTray(); renderOthers(); }; card.append(use); }
+    else if (unborn(session)) {
+      const use = el("button", "btn", "Use these words");
+      use.onclick = async () => { box.value = prev = c.text; drafts.set(session, c.text); attached.set(session, c.attached); autosize(); renderTray(); await act({ Draft: [d.id, "Discarded"] }); renderOthers(); };
+      card.append(use);
+    }
     return card;
   }));
 }
@@ -1992,41 +2297,28 @@ function buildCompose(id) {
   compose.replaceChildren();
   box = null;
   const t = byId[id];
-  if (id !== NEW && (!t || isDone(t))) {
-    compose.append(el("div", "closed", t && isDone(t) ? "Finished. Its log is read-only." : ""));
-    // Words he sent after it finished: kept, and shown as his, unheard.
-    for (const d of t ? rowsOf(id).filter((d) => d.held) : []) {
-      const c = contentOf(d.id), card = el("div", "other held");
-      card.append(el("span", "said", c.text), el("span", "why", `the agent did not hear this: ${d.held}`));
-      compose.append(card);
-    }
-    return;
-  }
+  if (id !== NEW && !t) return;
   if (!can.act) { compose.append(el("div", "closed", "This face only watches.")); return; }
   const wrap = el("div", "box");
-  const to = el("div", "to");
   const tray = el("div", "tray");
   box = el("textarea");
-  box.rows = 2;
+  box.rows = id === NEW ? 2 : 1;
   box.dataset.key = id;
   box.spellcheck = true;
   box.value = drafts.get(id);
-  box.placeholder = "Write, paste, drop or dictate. Nothing is sent until you send it.";
   const row = el("div", "row2");
-  const file = Object.assign(el("input"), { type: "file", multiple: true, hidden: true });
-  const clip = el("button", "btn", "Attach"); clip.type = "button";
-  const mic = el("button", "btn mic", "Dictate"); mic.type = "button"; mic.hidden = !can.dictation;
-  const sample = el("button", "btn", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
+  const mic = icon("mic", "mic", "Dictate"); mic.hidden = !can.dictation;
+  const sample = el("button", "later sample", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
+  const picks = el("span", "picks");
   const status = el("span", "status");
-  const later = el("button", "btn later", "At turn end"); later.type = "button";
-  later.title = "It reads this once its turn ends, without cutting across its work (Ctrl+Shift+Enter)";
-  const send = el("button", "btn primary send", "Send now"); send.type = "button";
-  row.append(clip, file, mic, sample, status, later, send);
-  const others = el("div", "others");
-  wrap.append(to, others, tray, box, row);
-  compose.append(wrap);
-  clip.onclick = () => file.click();
-  file.onchange = () => { attach(id, [...file.files]); file.value = ""; };
+  const later = el("button", "later after", "After this turn"); later.type = "button";
+  later.title = "It reads this when its turn ends, without cutting across its work (Ctrl+Shift+Enter)";
+  const halt = icon("stop", "halt", "Interrupt: it stops at the next safe point, and waits for you");
+  const send = icon("send", "send", "Send (Ctrl+Enter)");
+  row.append(mic, sample, picks, status, later, halt, send);
+  wrap.append(el("div", "others"), tray, box, row);
+  compose.append(wrap, el("div", "acts"));
+  // What is pasted or dropped in is attached.
   box.addEventListener("paste", (e) => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); attach(id, fs); } });
   wrap.addEventListener("dragover", (e) => { e.preventDefault(); wrap.classList.add("drop"); });
   wrap.addEventListener("dragleave", () => wrap.classList.remove("drop"));
@@ -2035,6 +2327,7 @@ function buildCompose(id) {
   sample.onclick = () => dictate(true);
   send.onclick = () => submit("Next");
   later.onclick = () => submit("TurnEnd");
+  halt.onclick = async () => { const why = await act({ Task: [id, { Drain: { ToMax: { turn: byId[id].turn } } }] }); if (why) say(`not interrupted: ${why}`, true); };
   box.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
@@ -2047,47 +2340,62 @@ function buildCompose(id) {
   renderOthers();
   renderComposeState(t);
 }
-// Mid-turn, a message can go now or wait for the turn's end; between turns,
-// or as an answer to its question, there is only now.
+// Mid-turn, words can go now or wait for the turn's end; between turns, in
+// response to its question, or to a finished chat, there is only now.
 const midTurn = (t) => ["model", "calls", "harness", "held", "limited"].includes(t.waiting?.kind);
+// Working on its own, not waiting on agents it started: what an interrupt stops.
+const working = (t) => !t.scoped && !!t.turn && (["model", "harness"].includes(t.waiting?.kind) || (t.waiting?.kind === "calls" && !t.waiting.calls.some((c) => c.children.length)));
 function renderComposeState(t) {
-  if (box?.dataset.key === NEW && !t) {
-    $(".to", compose).textContent = "A new chat: sending starts it, with these words as what it is for";
-    $(".later", compose).hidden = true;
-    $(".send", compose).textContent = "Start";
+  if (!box) return;
+  const key = box.dataset.key, has = !!box.value.trim() || attached.get(key).length > 0;
+  $(".send", compose).disabled = !has;
+  if (key === NEW) {
+    box.placeholder = "New chat";
+    $(".after", compose).hidden = true;
+    $(".halt", compose).hidden = true;
     return;
   }
-  // A finished chat's compose is only what it did not hear: drawn afresh.
-  if (t && isDone(t) && openId === t.id) return buildCompose(t.id);
-  if (!box || box.dataset.key !== t.id) return;
-  const to = $(".to", compose), ask = askOf(t), mid = midTurn(t) && !ask;
-  to.className = `to${ask ? " answering" : ""}`;
-  to.textContent = ask ? `Answering: ${(parse(ask.input)?.question || "").split("\n")[0].slice(0, 120)}`
-    : !mid ? `To ${t.name} · its turn has ended`
-    : `To ${t.name} · working: send now to reach it mid-turn, or at its turn's end`;
-  $(".later", compose).hidden = !mid;
-  $(".send", compose).textContent = ask ? "Answer" : mid ? "Send now" : "Send";
-  $(".send", compose).title = "Ctrl+Enter";
+  if (!t || key !== t.id) return;
+  const ask = askOf(t), mid = midTurn(t) && !ask && !isDone(t);
+  box.placeholder = isDone(t) ? "Continue this chat" : ask ? "Respond" : "Reply";
+  $(".after", compose).hidden = !(mid && has);
+  $(".halt", compose).hidden = !can.act || isDone(t) || !working(t);
 }
-const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = text; s.className = `status${bad ? " bad" : ""}`; } };
+// Only what went wrong is said; what went right shows as itself.
+const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`; } };
 function autosize() { if (!box) return; box.style.height = "auto"; box.style.height = `${Math.min(box.scrollHeight, innerHeight * .4)}px`; }
 
+// Sending: to a task working or between turns, the draft's Send; to its
+// question, the response that settles it and discards the draft; to a task
+// waiting on agents it started, an aside that talks now; to a finished
+// chat, the chat continued.
 async function submit(read) {
   if (!box) return;
-  const t = byId[box.dataset.key];
-  const text = box.value, files = attached.get(box.dataset.key);
+  const key = box.dataset.key, t = byId[key];
+  const text = box.value, files = attached.get(key);
   if (!text.trim() && !files.length) return;
   if (dictation) return stopDictation();
   if (!t) return startNew(text, files);
-  say("pending");
+  say("");
+  clearTimeout(saving.get(key));
+  saving.delete(key);
   const ask = askOf(t);
+  let draft = unborn(key) ? null : draftOf(key);
+  // A new task whose mandate is these words; the draft goes with them.
+  if (isDone(t) || (t.scoped && !ask && read === "Next")) {
+    if (!text.trim()) return say("write something to go with what is attached", true);
+    const why = isDone(t) ? await resume(t, text, files) : await aside(t, text, files, draft ? [{ Draft: [draft, "Discarded"] }] : []);
+    if (why) return say(`not sent: ${why}`, true);
+    local.delete(draft);
+    bound.delete(key);
+    if (unborn(key)) { drafts.set(key, ""); attached.set(key, []); }
+    if (box.value === text) { box.value = prev = ""; autosize(); }
+    renderTray();
+    return;
+  }
   const blocks = [...files.map((a) => a.block), ...(text.trim() ? [{ type: "text", text }] : [])];
   const words = JSON.stringify(blocks), id = digest(words);
-  clearTimeout(saving.get(t.id));
-  saving.delete(t.id);
-  let draft = draftOf(t.id), sent = null;
-  // An answer settles the question and discards the draft; anything else
-  // sends the draft, opening it first if no pause has yet.
+  let sent = null;
   const why = await act((at) => {
     sent = `${at}.0`;
     if (ask) return [{ Call: [ask.id, { Settled: { Completed: { model: id, full: null, observes: [] } } }] }, ...(draft ? [{ Draft: [draft, "Discarded"] }] : [])];
@@ -2102,16 +2410,16 @@ async function submit(read) {
   const held = !ask && rows.find((d) => d.id === draft && d.held);
   local.delete(draft);
   if (successor) {
-    bound.set(t.id, successor.id);
+    bound.set(key, successor.id);
     renderOthers();
     return say("another device sent this draft first: your words are a new draft, beside it", true);
   }
-  if (held) { bound.delete(t.id); renderOthers(); return say(`held, not heard: ${held.held}`, true); }
-  bound.delete(t.id);
+  if (held) { bound.delete(key); renderOthers(); return say(`held, not heard: ${held.held}`, true); }
+  bound.delete(key);
   if (box.value === text) { box.value = prev = ""; autosize(); }
   renderTray();
   renderOthers();
-  say(ask ? "answered" : read === "TurnEnd" ? `${t.name} reads it when its turn ends` : `sent to ${t.name}`);
+  renderComposeState(t);
 }
 
 let prev = "";
@@ -2131,6 +2439,7 @@ function onInput() {
   prev = now;
   drafts.set(box.dataset.key, now);
   autosize();
+  renderComposeState(byId[box.dataset.key]);
 }
 
 // The endpoint's edits, in the transcript's own offsets, last first so the
@@ -2150,7 +2459,7 @@ function applyEdits(edits) {
   }
   if (following) target.setSelectionRange(end(), end());
   drafts.set(l.key, target.value);
-  if (shown) { prev = box.value; autosize(); }
+  if (shown) { prev = box.value; autosize(); renderComposeState(byId[l.key]); }
 }
 
 // The microphone as 16-bit PCM, in chunks of a tenth of a second.
@@ -2194,7 +2503,7 @@ async function dictate(sample) {
   ws.binaryType = "arraybuffer";
   dictation = { ws, mic, key: box.dataset.key, T: "", P: 0, start: at };
   if (mic) mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); };
-  const b = $(".mic", compose); if (b) { b.classList.add("on"); b.textContent = "Stop"; }
+  const b = $(".mic", compose); if (b) { b.classList.add("on"); b.title = "Stop dictating"; }
   say("connecting");
   const l = dictation;
   ws.onmessage = (m) => {
@@ -2224,48 +2533,41 @@ function finishDictation(l) {
   releaseMic(l);
   dictation = null;
   l.ws.close();
-  const b = $(".mic", compose); if (b) { b.classList.remove("on"); b.textContent = "Dictate"; }
+  const b = $(".mic", compose); if (b) { b.classList.remove("on"); b.title = "Dictate"; }
   if (!$(".status", compose)?.classList.contains("bad")) say("");
 }
 
 // ─── A new chat, in Max's own scope ───────────────────────────────────────
-// "+ New" opens the panel on a chat that does not exist yet: its role and
-// directory above, the same staging box as every chat below. Sending
-// starts it: the words are its mandate, and what is attached reaches it
-// with them. Until then it has no session for a draft to belong to, so
-// what is typed for it is kept in this tab alone.
-$("#new").onclick = () => go(NEW);
-$("#empty-new").onclick = () => go(NEW);
+// A double click on the ground, or +, opens a small card there on a chat
+// that does not exist yet: the same staging box as every chat, its role and
+// directory beside the send, its draft and attachments kept like theirs.
+// Sending starts it: the words are its mandate, what is attached reaches it
+// with them, and the card becomes the chat where it is.
 function buildNew() {
-  $(".crumbs", panel).replaceChildren(el("span", "here", "New chat"));
-  $(".state", panel).textContent = "";
+  title.textContent = "New chat";
+  title.title = "";
+  mini.className = "mini starting";
   $(".ctx", panel).hidden = true;
-  $(".controls", panel).replaceChildren();
-  const field = (tag, key, label) => {
-    const f = el(tag); f.id = `n-${key}`;
-    f.value = drafts.get(`new:${key}`);
-    f.addEventListener("input", () => drafts.set(`new:${key}`, f.value));
-    const l = el("label", null, label); l.htmlFor = f.id;
-    form.append(l, f);
-    return f;
-  };
-  const form = el("div", "new-chat");
-  const role = field("select", "role", "Role");
+  const picks = $(".picks", compose);
+  if (!picks) return;
+  const role = el("select", "pick"); role.id = "n-role"; role.title = "Its role";
   role.append(...view.environments.map((e) => Object.assign(el("option", null, e.name), { value: e.name })));
   role.value = drafts.get("new:role") || (view.environments.some((e) => e.name === "chat") ? "chat" : view.environments[0]?.name);
-  role.onchange = () => drafts.set("new:role", role.value);
-  const dir = field("input", "dir", "Directory");
-  dir.placeholder = "/path/to/a/directory";
+  role.hidden = view.environments.length < 2;
+  const dir = el("input", "pick"); dir.id = "n-dir"; dir.placeholder = "directory"; dir.title = "Where it works";
+  dir.value = drafts.get("new:dir");
   dir.setAttribute("list", "n-dirs");
   const dirs = el("datalist"); dirs.id = "n-dirs";
   dirs.append(...view.workspaces.map((w) => Object.assign(el("option"), { value: w.dir })));
-  form.append(dirs);
-  field("input", "name", "Name").placeholder = "from its first words";
-  logEl.replaceChildren(form);
+  const needs = () => { dir.hidden = !view.environments.find((e) => e.name === role.value)?.places.length; };
+  role.onchange = () => { drafts.set("new:role", role.value); needs(); };
+  dir.oninput = () => drafts.set("new:dir", dir.value);
+  needs();
+  picks.replaceChildren(role, dir, dirs);
 }
-// A name from the first words of a mandate.
-const title = (text) => {
-  const words = text.trim().split("\n")[0].split(/\s+/).slice(0, 6).join(" ");
+// A name from the first words of a mandate, to its first clause's end.
+const nameFrom = (text) => {
+  const words = text.trim().split(/[\n.,;:!?]/)[0].split(/\s+/).slice(0, 6).join(" ");
   return words.length > 40 ? `${words.slice(0, 39)}…` : words;
 };
 async function startNew(text, files) {
@@ -2274,41 +2576,72 @@ async function startNew(text, files) {
   if (!env) return say("choose a role", true);
   if (env.places.length && !dir) return say(`it needs a directory for its ${env.places[0]}`, true);
   if (!text.trim()) return say("write what it is for", true);
-  say("starting");
-  const name = $("#n-name").value.trim() || title(text), mandate = digest(text);
-  const words = files.length ? JSON.stringify(files.map((a) => a.block)) : null;
-  let id;
-  // What the record creates: a limb for each new directory, the task, and
-  // what is attached as its first words.
-  const facts = (at) => {
-    let i = 0;
-    const out = [], places = {};
+  const why = await start((next, out) => {
+    const places = {};
     for (const place of env.places) {
       const known = view.workspaces.find((w) => w.dir === dir);
-      const limb = known ? known.id : `${at}.${i++}`;
+      const limb = known ? known.id : next();
       if (!known) out.push({ Limb: { id: limb, name: dir, kind: { Plugin: { kind: place, config: JSON.stringify({ dir }) } } } });
       places[place] = limb;
     }
-    id = `${at}.${i++}`;
-    out.push({ Task: [id, { Created: {
-      name, by: null, scope: "Max",
-      origin: { Fresh: { environment: env.id, places } },
-      mode: "UserFacing",
-      mandate: { text: mandate, brief: null, quotes: [] },
-    } }] });
-    if (words) out.push({ Delivery: { id: `${at}.${i}`, to: id, content: { Words: digest(words) }, read: "Next" } });
-    return out;
-  };
-  const why = await act(facts, words ? [text, words] : [text]);
+    return { name: nameFrom(text), scope: "Max", origin: { Fresh: { environment: env.id, places } } };
+  }, text, files);
   if (why) return say(`not started: ${why}`, true);
   box.value = prev = "";
-  for (const k of [NEW, "new:name"]) drafts.set(k, "");
+  drafts.set(NEW, "");
   attached.set(NEW, []);
-  pendingOpen = id;
 }
 
-$("#fit").onclick = () => fit(true);
-addEventListener("resize", () => { shape = ""; refresh(); });
+// ─── Finding a chat ────────────────────────────────────────────────────────
+// Ctrl+K, or /: what matches by its name or what it was for stays, the rest
+// of the map fades; Enter opens the newest match, Esc lets it go.
+const findEl = $("#find");
+let finding = "", found = new Set();
+function startFind() { findEl.hidden = false; findEl.focus(); findEl.select(); }
+function endFind() { findEl.hidden = true; findEl.value = ""; finding = ""; found = new Set(); findEl.blur(); if (view) drawMap(); }
+findEl.addEventListener("input", () => {
+  finding = findEl.value.trim().toLowerCase();
+  found = new Set();
+  if (finding) {
+    for (const t of view.tasks) if (`${t.name}\n${t.mandate || ""}`.toLowerCase().includes(finding)) found.add(live(t.id));
+    // A folded project matches through what it folds.
+    for (const c of graph.comps) if (c.folded && c.tasks.some((t) => found.has(t.id))) found.add(c.root.id);
+  }
+  drawMap();
+});
+findEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    const first = [...view.tasks].sort((a, b) => b.created.seq - a.created.seq).find((t) => found.has(live(t.id)));
+    endFind();
+    if (first) go(first.id);
+  } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); endFind(); }
+});
+findEl.addEventListener("blur", () => { if (!finding) endFind(); });
+
+addEventListener("keydown", (e) => {
+  const typing = e.target.closest?.("input, textarea, select, [contenteditable]");
+  if (e.key === "Escape") {
+    if (!$(".viewer", panel).hidden) { $(".viewer", panel).hidden = true; return; }
+    if (!$(".mix", panel).hidden) { $(".mix", panel).hidden = true; return; }
+    if (openId) closeNode();
+    return;
+  }
+  if ((e.key === "k" && (e.ctrlKey || e.metaKey)) || (e.key === "/" && !typing)) { e.preventDefault(); startFind(); return; }
+  if (!typing && (e.key === "f" || e.key === "F") && !e.ctrlKey && !e.metaKey && !openId) fit(true);
+});
+// The card fits the window it is in: a phone's keyboard opening shrinks it.
+addEventListener("resize", () => {
+  if (openId && seam) {
+    const was = cardShown;
+    seam = seamFor(openId);
+    const r = cardRect(seam);
+    placeCard(r);
+    cardShown = r;
+    cam = camFor(r, was && { x: r.x + r.w / 2, y: r.y, sx: cam.x + (was.x + was.w / 2) * cam.k, sy: cam.y + was.y * cam.k });
+    applyCamera();
+  }
+  refresh();
+});
 
 // ─── The view ──────────────────────────────────────────────────────────────
 // The tab's rows, one per object, as the page draws them.
@@ -2334,17 +2667,9 @@ async function viewArrived(fresh) {
   if (pendingOpen && byId[pendingOpen]) { const id = pendingOpen; pendingOpen = null; history.replaceState({ node: id }, "", `#${id}`); route(); }
   else if (!openId && location.hash.length > 1 && (byId[location.hash.slice(1)] || location.hash === `#${NEW}`) && !moving.started) { moving.started = true; route(); }
 }
-start().catch((e) => { $("#link").className = "down"; $("#link").title = `this tab could not start: ${e}`; console.error(e); });
-// Waits grow between events.
-setInterval(() => { if (view) { drawMapText(); if (openId) renderPanel(); } }, 1000);
-function drawMapText() {
-  for (const [id, a] of nodeEls) {
-    const n = graph.nodes.get(id);
-    if (n?.kind !== "task") continue;
-    const st = $(".status", a), fc = graph.comps.find((c) => c.folded && c.root.id === id);
-    st.textContent = fc ? cardStatus(fc) : trouble(n.t) || look(n.t).text;
-  }
-}
+boot().catch((e) => { $("#link").className = "down"; $("#link").title = `this tab could not start: ${e}`; console.error(e); });
+// Waits grow between events: the hover's words, and the open card's.
+setInterval(() => { if (view) { if (tipFor) fillTip(); if (openId) renderPanel(); } }, 1000);
 </script>
 </body>
 </html>
