@@ -10,18 +10,15 @@
 //! coming back.
 //!
 //! A limb that cannot start (its directory cannot be made, its clone
-//! fails) exits saying why in the file [`FAILED`] in its state directory,
-//! which the brain records as why it never connected.
+//! fails) exits saying why on its standard error, which the brain keeps in
+//! the limb's `log` and records as why it never connected.
 //!
-//! It exits only once nothing it started is left: told to shut down
-//! ([`LimbRow::Shutdown`]), the link gone for good, or a signal, it stops
-//! every running call (`SIGTERM` to each command's processes, `SIGKILL` at
-//! the deadline), waits for each to settle, ends any orphan it adopted as
-//! subreaper, and only then exits. A second request makes the stop harder.
-//! The brain bounds the whole by killing the limb's tree, which the next
-//! instance finds by its marks.
-//!
-//! [`LimbRow::Shutdown`]: harness_core::environment::LimbRow::Shutdown
+//! It exits only once nothing it started is left: the link gone for good,
+//! or a signal, it stops every running call (`SIGTERM` to each command's
+//! processes, `SIGKILL` at the deadline), waits for each to settle, ends
+//! any orphan it adopted as subreaper, and only then exits. A second
+//! request makes the stop harder. A brain shutting down only closes the
+//! link: the calls are its tasks' work, and run on for the next brain.
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -32,12 +29,13 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use harness_core::build::BuildId;
 use harness_core::environment::{Hello, Limb, LimbDown, LimbKind, LimbUp};
 use harness_runtime::{Cancel, signals};
 use harness_substrate::Up;
 use serde::Serialize;
 
-use crate::{Config, Kind, SHUTDOWN, Settings, Workspace, instant};
+use crate::{Config, Kind, SHUTDOWN, Settings, Workspace};
 
 /// How long the link may stay down before the limb takes the brain as gone:
 /// long enough for a crashed brain to be restarted by hand, so a restart
@@ -48,20 +46,12 @@ pub const ABSENT: Duration = Duration::from_secs(15 * 60);
 /// How often it tries to reconnect.
 const RETRY: Duration = Duration::from_millis(200);
 
-/// The file in a limb's state directory saying why its process ended
-/// before it connected.
-pub const FAILED: &str = "failed";
-
 /// Run as the limb of `kind` until it has shut down.
 pub fn main(kind: &str) -> ExitCode {
     match serve(kind) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("harness-limb-{kind}: {e}");
-            if let Some(state) = std::env::args().nth(1).map(PathBuf::from) {
-                let _ = std::fs::create_dir_all(&state)
-                    .and_then(|()| std::fs::write(state.join(FAILED), &e));
-            }
             ExitCode::FAILURE
         }
     }
@@ -116,6 +106,10 @@ fn serve(kind: &str) -> Result<(), String> {
     let hello = Hello {
         limb: workspace.limb(),
         replica: workspace.replica(),
+        build: std::env::current_exe()
+            .and_then(std::fs::read)
+            .ok()
+            .map(|bytes| BuildId::of(&bytes)),
     };
     connect(PathBuf::from(socket), hello, events.clone());
 
@@ -149,15 +143,12 @@ fn serve(kind: &str) -> Result<(), String> {
             Event::Gone => down(SHUTDOWN),
             Event::Up(up) => ship(&mut link, &*up),
             Event::Down(down_) => match workspace.apply(*down_) {
-                Ok(applied) => {
-                    for record in applied.ship {
+                Ok(unsent) => {
+                    for record in unsent {
                         ship(
                             &mut link,
                             &Up::<_, harness_core::live::Live>::Record(record),
                         );
-                    }
-                    if let Some(by) = applied.shutdown {
-                        down(instant(by).saturating_duration_since(Instant::now()));
                     }
                 }
                 Err(restored) => {

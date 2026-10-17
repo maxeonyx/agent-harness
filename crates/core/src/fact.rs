@@ -96,9 +96,10 @@ pub enum Fact {
     /// `within` milliseconds of this fact ([`crate::cancel`]): it was asked
     /// by a signal (Ctrl-C, `SIGTERM`). Its tasks are not stopped; it starts
     /// nothing new, lets requests in flight finish until the deadline and
-    /// cuts them at it, and shuts its limbs down. Stated again with less time
-    /// to make it harder. A launch with no shutdown before the next one
-    /// ended in a crash.
+    /// cuts them at it, and closes its links to its limbs, whose calls run
+    /// on for the next brain ([`crate::environment::Host`]). Stated again
+    /// with less time to make it harder. A launch with no shutdown before
+    /// the next one ended in a crash.
     Shutdown {
         within: u64,
     },

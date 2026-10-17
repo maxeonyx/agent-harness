@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::delivery::Content;
-use harness_core::environment::LimbKind;
+use harness_core::environment::{LimbKind, Reach};
 use harness_core::fact::Fact;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
@@ -571,9 +571,9 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Reach { limb, reach } => {
             let limb = state.limb(*limb).map_or("?".into(), |l| l.name.clone());
             match reach {
-                harness_core::environment::Reach::Connected { .. } => format!("{limb} connected"),
-                harness_core::environment::Reach::Lost => format!("{limb} lost"),
-                harness_core::environment::Reach::Failed { why } => {
+                Reach::Connected { .. } => format!("{limb} connected"),
+                Reach::Lost => format!("{limb} lost"),
+                Reach::Failed { why } => {
                     format!("{limb} failed to start: {why}")
                 }
             }

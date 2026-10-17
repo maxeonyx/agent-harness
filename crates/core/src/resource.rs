@@ -64,7 +64,8 @@ use crate::id::{CallId, Digest, LimbId, ValueId};
 pub struct ResourceKey {
     pub limb: LimbId,
     /// What kind of thing it is, in its limb's words: `file`, `skill`,
-    /// `instructions`, `tool`, `instance`, `queue`, `presence`.
+    /// `instructions`, `tool`, `instance`, `queue`, `presence`, a browser's
+    /// `tab`.
     pub kind: String,
     /// Within the kind: a path, a skill name, a tool name. Empty for a
     /// singleton such as the instance.

@@ -39,7 +39,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
-use harness_core::environment::{Environment, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp};
+use harness_core::environment::{
+    Environment, Host, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp,
+};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{Digest, EnvironmentId, LimbId, ReplicaId, Time};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
@@ -70,13 +72,16 @@ impl Settings {
             kind: LimbKind::Plugin {
                 kind: KIND.into(),
                 config: serde_json::to_string(self).expect("settings are JSON"),
+                host: Host::Brain,
             },
         }
     }
 
     pub fn of(limb: &Limb) -> Option<Settings> {
         match &limb.kind {
-            LimbKind::Plugin { kind, config } if kind == KIND => serde_json::from_str(config).ok(),
+            LimbKind::Plugin { kind, config, .. } if kind == KIND => {
+                serde_json::from_str(config).ok()
+            }
             _ => None,
         }
     }
@@ -85,8 +90,7 @@ impl Settings {
 /// Run the roles limb `limb` as the replica `here`, on a link: what the brain
 /// ships arrives on `down`, and what it says goes to `up`. Its log is in
 /// memory, so each run is a new replica: everything it says, it derives
-/// again from its files. Returns once the brain shuts down or lets go of
-/// the link.
+/// again from its files. Returns once the brain lets go of the link.
 pub fn run(limb: &Limb, here: ReplicaId, down: Receiver<LimbDown>, up: impl Fn(LimbUp)) {
     let Some(settings) = Settings::of(limb) else {
         return eprintln!("the roles limb's settings do not parse");
@@ -110,9 +114,6 @@ pub fn run(limb: &Limb, here: ReplicaId, down: Receiver<LimbDown>, up: impl Fn(L
                     eprintln!("the brain refused the roles limb's record {n}: {why}");
                 }
                 let _ = log.cover(&view.standing);
-                if view.rows.contains_key(&LimbKey::Shutdown) {
-                    return;
-                }
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
@@ -127,22 +128,48 @@ pub fn run(limb: &Limb, here: ReplicaId, down: Receiver<LimbDown>, up: impl Fn(L
             })
             .collect();
         let said = read(&settings.dir).and_then(|roles| {
-            let batch = environments(&roles, &current, &settings.limbs, limb.id, log.next())?;
-            if batch.facts.is_empty() {
-                return Ok(());
+            // A role naming a limb this harness does not define is left out,
+            // and said why, so one file cannot hold back every other role.
+            let (roles, unusable): (Vec<Role>, Vec<Role>) = roles
+                .into_iter()
+                .partition(|r| r.limbs.iter().all(|l| settings.limbs.contains_key(l)));
+            let batch = environments(&roles, &current, &settings.limbs, limb.id, log.next())
+                .map_err(|e| skipped(e, &unusable, &settings.limbs))?;
+            if !batch.facts.is_empty() {
+                let record = log
+                    .say(crate::brain::now(), |_| batch)
+                    .map_err(|e| e.to_string())?;
+                up(Up::Record(record));
             }
-            let record = log
-                .say(crate::brain::now(), |_| batch)
-                .map_err(|e| e.to_string())?;
-            up(Up::Record(record));
-            Ok(())
+            match unusable.is_empty() {
+                true => Ok(()),
+                false => Err(skipped(String::new(), &unusable, &settings.limbs)),
+            }
         });
         let now = said.err();
         if now.is_some() && now != error {
-            eprintln!("the roles are unchanged: {}", now.as_deref().unwrap_or(""));
+            eprintln!("roles: {}", now.as_deref().unwrap_or(""));
         }
         error = now;
     }
+}
+
+/// Why the roles in `unusable` were left out, after `error`.
+fn skipped(error: String, unusable: &[Role], limbs: &BTreeMap<String, LimbId>) -> String {
+    let mut why = error;
+    for r in unusable {
+        let missing: Vec<&str> = r
+            .limbs
+            .iter()
+            .filter(|l| !limbs.contains_key(*l))
+            .map(String::as_str)
+            .collect();
+        if !why.is_empty() {
+            why.push_str("; ");
+        }
+        why.push_str(&format!("{}: no limb `{}`", r.name, missing.join("`, `")));
+    }
+    why
 }
 
 /// One role file, parsed.
