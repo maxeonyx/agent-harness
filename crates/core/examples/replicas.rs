@@ -446,13 +446,19 @@ fn main() {
         }
     }
     let delivered = hub.brain.state().delivery(draft).unwrap();
-    let harness_core::fact::Author::Max {
-        face,
-        seen: Some(seen),
-    } = delivered.by
-    else {
+    let (harness_core::fact::Author::Max, Some(seen)) = (delivered.by, delivered.seen) else {
         panic!("Max sent it");
     };
+    let face = hub
+        .brain
+        .state()
+        .draft(draft)
+        .unwrap()
+        .sent
+        .unwrap()
+        .by
+        .at
+        .place;
     println!(
         "  the delivery has the draft's id {}, by Max at the {}, who had seen the brain's view as of {}",
         show(draft.0.at),

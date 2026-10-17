@@ -44,8 +44,8 @@ pub enum What<S: Schema> {
 /// `Included`, and folds it there; so the decider's order of concurrent
 /// acts is its own sequence, recorded, the same for every replica and every
 /// later build. A record its rules refuse is still held and still included,
-/// with `refused` saying why: the act stays a fact, its having had no
-/// effect is a fact beside it, and the follower reads both in its
+/// with `refused` saying why: the act stays a fact, folded as refused
+/// ([`Schema::refused`]), and the follower reads both in its
 /// [`crate::Standing`]. Including a follower's record `m` includes every
 /// earlier record of that place too, since a place's records arrive in its
 /// own order.
@@ -133,10 +133,20 @@ pub trait Schema: Clone + fmt::Debug + PartialEq + 'static {
     /// Fold one record into `state`, or refuse it. On a refusal `state` may
     /// be part way through the record; the decider discards it.
     fn fold(state: &mut Self::State, folding: Folding<'_, Self>) -> Result<(), Self::Refusal>;
+
+    /// Fold a record the rules refused, as refused: an invalid act is still
+    /// a fact, and the state may say so (a draft edit that raced another
+    /// device's becomes a draft of its own). It runs instead of
+    /// [`Schema::fold`] wherever the decider's recorded verdict is a
+    /// refusal, so a refusal's effect never depends on history that
+    /// collection has since dropped. By default a refusal has no effect.
+    fn refused(state: &mut Self::State, folding: Folding<'_, Self>, why: &Self::Refusal) {
+        let _ = (state, folding, why);
+    }
 }
 
 /// One record as a decider folds it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct Folding<'a, S: Schema> {
     /// The decider's time this record takes effect at: the record itself,
     /// if it is the decider's own, or the [`Included`] that took it in.
@@ -148,3 +158,11 @@ pub struct Folding<'a, S: Schema> {
     pub at: Time,
     pub said: &'a S::Said,
 }
+
+impl<S: Schema> Clone for Folding<'_, S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S: Schema> Copy for Folding<'_, S> {}

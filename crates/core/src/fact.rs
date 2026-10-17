@@ -60,8 +60,12 @@ pub struct Stated<'a> {
     pub at: Timestamp,
     pub by: Author,
     pub fact: &'a Fact,
-    /// The fact's identity, and the id of whatever it creates.
+    /// The fact's identity, and the id of whatever it creates. Its place is
+    /// where it was said: for Max's, the face.
     pub event: EventId,
+    /// The brain time the view on Max's screen was as of: the record's
+    /// [`Fact::Seen`], for a record of his.
+    pub seen: Option<Time>,
 }
 
 /// Who stated a fact, derived from the place its record came from: never
@@ -73,21 +77,14 @@ pub struct Stated<'a> {
 /// Max states his words, his calls, his answers to asks and his controls
 /// over the tree, from a place the brain accepted as one of his faces
 /// ([`Fact::Face`]). A record from any other place is refused
-/// ([`Rejected::Author`]). Only a person acts on a picture that may be out
-/// of date, so only Max's facts say what his face had shown him. That
-/// answers "did he say yes before or after the agent changed its plan?",
-/// and lets his words be rendered with a note when the agent has moved on
-/// since.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// ([`Rejected::Author`]). Which face is the record's own place, and what
+/// it had shown him is the record's [`Fact::Seen`]: both are in
+/// [`Stated`], neither here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Author {
     Brain,
     Limb(LimbId),
-    /// Max, through one face, having seen the brain's view as of `seen`
-    /// (the record's [`Fact::Seen`]).
-    Max {
-        face: PlaceId,
-        seen: Option<Time>,
-    },
+    Max,
 }
 
 /// What a fact says, and which identity it belongs to.

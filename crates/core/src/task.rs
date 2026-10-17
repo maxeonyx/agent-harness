@@ -1274,7 +1274,7 @@ impl Task {
             }
         }
         if matches!(delivery.content, Content::Words(_))
-            && matches!(by, Author::Max { .. })
+            && matches!(by, Author::Max)
             && let Life::Live(live) = &mut self.life
         {
             live.owed_since = None;

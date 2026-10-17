@@ -160,7 +160,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                 What::Said(said) => (record.at, Some(said), None),
                 What::Included(included) => {
                     let said = match held.get(&included.of).map(|r| &r.what) {
-                        Some(What::Said(said)) if included.refused.is_none() => Some(said),
+                        Some(What::Said(said)) => Some(said),
                         _ => None,
                     };
                     (included.of, said, Some(included))
@@ -174,9 +174,19 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                     at,
                     said,
                 };
-                match S::fold(&mut decider.state, folding) {
-                    Ok(()) => durability = Some(S::durability(at, said)),
-                    Err(why) => divergences.push(Divergence { at, why }),
+                match included.and_then(|i| i.refused.as_ref()) {
+                    // The recorded verdict stands.
+                    Some(why) => S::refused(&mut decider.state, folding, why),
+                    None => {
+                        let mut state = decider.state.clone();
+                        match S::fold(&mut state, folding) {
+                            Ok(()) => {
+                                decider.state = state;
+                                durability = Some(S::durability(at, said));
+                            }
+                            Err(why) => divergences.push(Divergence { at, why }),
+                        }
+                    }
                 }
             }
             let holder = Holder {
@@ -217,6 +227,12 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
 
     pub fn storage(&self) -> &St {
         &self.storage
+    }
+
+    /// How far this decider has included every place it has included
+    /// anything of.
+    pub fn standings(&self) -> &BTreeMap<PlaceId, Standing<S::Refusal>> {
+        &self.standing
     }
 
     /// How far this decider has included `place`, and what it refused.
@@ -291,7 +307,11 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                 };
                 match S::fold(&mut state, folding) {
                     Ok(()) => (None, Some(S::durability(record.at, said))),
-                    Err(why) => (Some(why), None),
+                    Err(why) => {
+                        state = self.state.clone();
+                        S::refused(&mut state, folding, &why);
+                        (Some(why), None)
+                    }
                 }
             }
             // Another decider's receipt: held as a fact, folded by nobody here.

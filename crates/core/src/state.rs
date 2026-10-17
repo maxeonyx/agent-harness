@@ -253,6 +253,8 @@ pub struct Delivered {
     pub delivery: Delivery,
     pub at: Mark,
     pub by: Author,
+    /// What Max had seen when he wrote it, for his words.
+    pub seen: Option<Time>,
 }
 
 /// A plugin limb's description, and when it said it.
@@ -452,7 +454,7 @@ impl State {
             }
         }
         let by = self
-            .author(here.place, at.place, seen)
+            .author(here.place, at.place)
             .ok_or(refuse(0, Rejected::Author))?;
         let given: BTreeMap<ValueId, usize> =
             said.values.iter().map(|v| (v.id(), v.len())).collect();
@@ -475,9 +477,10 @@ impl State {
                     i: i as u32,
                 },
                 at: clock,
-                by: by.clone(),
+                by,
                 fact,
                 event: at.event(i as u32),
+                seen,
             };
             self.apply(&stated).map_err(|why| refuse(i, why))?;
         }
@@ -489,7 +492,7 @@ impl State {
 
     /// Who speaks from `from` to the brain at `here`: the brain itself, the
     /// limb the brain last connected as that place, or Max at a face.
-    fn author(&self, here: PlaceId, from: PlaceId, seen: Option<Time>) -> Option<Author> {
+    fn author(&self, here: PlaceId, from: PlaceId) -> Option<Author> {
         if from == here {
             return Some(Author::Brain);
         }
@@ -499,10 +502,7 @@ impl State {
         });
         match limb {
             Some(limb) => Some(Author::Limb(limb)),
-            None => self
-                .faces
-                .contains(&from)
-                .then_some(Author::Max { face: from, seen }),
+            None => self.faces.contains(&from).then_some(Author::Max),
         }
     }
 
@@ -690,9 +690,10 @@ impl State {
             Fact::Seen(_) => {}
             Fact::Draft(id, event) => self.fold_draft(*id, event, record)?,
             Fact::Focus(focus) => {
-                let Author::Max { face, .. } = record.by else {
+                let Author::Max = record.by else {
                     return Err(Rejected::Author);
                 };
+                let face = record.event.at.place;
                 match focus.task {
                     Some(task) => {
                         self.focus.insert(face, task);
@@ -782,7 +783,7 @@ impl State {
                 Fact::Described { limb: of, .. } => of == limb,
                 _ => false,
             },
-            Author::Max { .. } => match fact {
+            Author::Max => match fact {
                 Fact::Task(_, event) => match event {
                     TaskEvent::Created(created) => {
                         created.by.is_none()
@@ -1432,7 +1433,7 @@ impl State {
         }
         let mark = Mark::of(record);
         // Max's answer to a question is his words, heard by whoever asked.
-        if let Author::Max { .. } = record.by
+        if let Author::Max = record.by
             && let Some(output) = outcome.output()
             && let Some(asker) = self.call_owner(id)
         {
@@ -1480,7 +1481,8 @@ impl State {
             Delivered {
                 delivery: delivery.clone(),
                 at: mark,
-                by: record.by.clone(),
+                by: record.by,
+                seen: record.seen,
             },
         );
         Ok(())
