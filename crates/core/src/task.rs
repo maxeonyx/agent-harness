@@ -897,11 +897,15 @@ impl Task {
         }
     }
 
-    /// A finished task folds only Max's actions in its chat, which ride into
-    /// a resume of it. Provisional: Max's choice between that and refusing
-    /// them is open.
+    /// A finished task folds only a new name, and Max's actions in its chat,
+    /// which ride into a resume of it. Provisional: Max's choice between
+    /// that and refusing them is open.
     fn after_done(&mut self, record: &Record) -> Result<(), Rejected> {
         match &record.fact {
+            Fact::Task(id, TaskEvent::Renamed(name)) if *id == self.id => {
+                self.name = name.clone();
+                Ok(())
+            }
             Fact::Call(id, CallEvent::Made(call)) if matches!(call.caller, Caller::Max { chat: Some(t), .. } if t == self.id) =>
             {
                 self.max_actions.push(*id);
