@@ -1,0 +1,8 @@
+  /* The words for what is hovered. */
+  #tip { position: fixed; z-index: 50; max-width: 21em; background: var(--white); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(40, 30, 20, .14); padding: .5em .75em .55em; font-size: 12.5px; color: var(--muted); pointer-events: none; }
+  #tip b { display: block; color: var(--ink); font: 600 14px/1.3 var(--serif); }
+  #tip .now { color: var(--ink); }
+  #tip .m { margin-top: .3em; color: var(--faint); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  #find { position: fixed; top: max(14px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 40; width: min(26em, calc(100vw - 2em)); font: 15px var(--sans); padding: .5em 1em; border-radius: 999px; border: 1px solid var(--line); background: var(--white); color: var(--ink); box-shadow: 0 8px 26px rgba(40, 30, 20, .14); outline: 0; }
+

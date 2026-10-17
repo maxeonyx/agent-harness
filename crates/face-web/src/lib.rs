@@ -505,7 +505,34 @@ fn now() -> Timestamp {
     Timestamp(ms as i64)
 }
 
-const PAGE: &str = include_str!("page.html");
+/// The page: one document, one style sheet and one script, written as the
+/// pieces in `page/` and joined here in this order, so a piece runs exactly
+/// as if the whole were one file. Each piece is one area of the face; its
+/// first comment says which.
+const PAGE: &str = concat!(
+    include_str!("page/head.html"),
+    include_str!("page/base.css"),
+    include_str!("page/chrome.css"),
+    include_str!("page/map.css"),
+    include_str!("page/overlays.css"),
+    include_str!("page/card.css"),
+    include_str!("page/compose.css"),
+    include_str!("page/phone.css"),
+    include_str!("page/body.html"),
+    include_str!("page/base.js"),
+    include_str!("page/tab.js"),
+    include_str!("page/map.js"),
+    include_str!("page/camera.js"),
+    include_str!("page/draw.js"),
+    include_str!("page/hover.js"),
+    include_str!("page/chrome.js"),
+    include_str!("page/card.js"),
+    include_str!("page/log.js"),
+    include_str!("page/compose.js"),
+    include_str!("page/newchat.js"),
+    include_str!("page/main.js"),
+    include_str!("page/tail.html"),
+);
 /// The tab, as the page runs it.
 const TAB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tab.wasm"));
 

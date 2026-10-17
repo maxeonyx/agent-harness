@@ -1,0 +1,437 @@
+// ─── What Max writes ───────────────────────────────────────────────────────
+// One box per open node: a staging area, its text and attachments kept per
+// task across tabs and reloads. Enter is a new line; nothing reaches the
+// model until Max sends it, one of two ways: now (Ctrl+Enter), read with the
+// task's next request even mid-turn, or at the end of its turn
+// (Ctrl+Shift+Enter), so it does not cut across the work. Either way the
+// harness tells the model how far into its work he wrote.
+// Dictation streams into the box as edits to a live region, which Max can
+// edit too: an edit inside it pins the text up to the end of his edit, and
+// the words still coming go after it.
+const compose = $(".compose", panel);
+let box = null, dictation = null;
+
+// Max's drafts, held by the brain: a draft is a message from its first
+// pause in typing, so the phone shows what the PC typed and either can send
+// it. Its content is `{text, attached}`. This tab keeps what it typed until
+// the brain has included it; then the draft's row holds it.
+const local = new Map();  // draft id -> { text, attached, v }
+const bound = new Map();  // session -> the draft this tab writes to
+const saving = new Map(); // session -> pending save timer
+const leaving = new Set(); // drafts being sent or thrown away: no longer the box's
+const rowsOf = (session) => (view?.drafts || []).filter((d) => d.session === session);
+function draftOf(session) {
+  const id = bound.get(session);
+  if (id && !leaving.has(id) && (local.has(id) || rowsOf(session).some((d) => d.id === id))) return id;
+  const open = rowsOf(session).filter((d) => !d.held && !leaving.has(d.id));
+  const pick = open.length ? open[open.length - 1].id : null;
+  if (pick) bound.set(session, pick); else bound.delete(session);
+  return pick;
+}
+function contentOf(id) {
+  if (!id) return { text: "", attached: [] };
+  if (local.has(id)) return local.get(id);
+  const row = (view?.drafts || []).find((d) => d.id === id);
+  const said = parse(row?.text || "{}");
+  // A held Send's words are the content blocks it sent.
+  if (Array.isArray(said)) return {
+    text: said.filter((b) => b.type === "text").map((b) => b.text).join("\n\n"),
+    attached: said.filter((b) => b.type !== "text").map((block) => ({ name: block.type, block })),
+  };
+  return { text: "", attached: [], ...said };
+}
+function edit(session, change) {
+  const id = draftOf(session) || `new:${session}`;
+  const was = contentOf(id === `new:${session}` ? null : id);
+  local.set(id, { ...was, ...local.get(id), ...change, v: (local.get(id)?.v || 0) + 1 });
+  clearTimeout(saving.get(session));
+  saving.set(session, setTimeout(() => save(session), 600));
+}
+// One record per pause: the whole content, or the draft's discarding once
+// it is empty.
+async function save(session) {
+  saving.delete(session);
+  let id = draftOf(session) || `new:${session}`;
+  const c = local.get(id);
+  if (!c) return;
+  const value = JSON.stringify({ text: c.text, attached: c.attached });
+  const empty = !c.text && !c.attached.length;
+  if (id.startsWith("new:") && empty) return local.delete(id);
+  let raced = null;
+  const why = await act((at) => {
+    raced = `${at}.0`;
+    c.n = Number(at.split(".")[1]);
+    c.saved = c.v;
+    if (!id.startsWith("new:")) return { Draft: [id, empty ? "Discarded" : { Text: digest(value) }] };
+    local.delete(id);
+    id = `${at}.0`;
+    local.set(id, c);
+    bound.set(session, id);
+    return [{ Draft: [id, { Opened: { session } }] }, { Draft: [id, { Text: digest(value) }] }];
+  }, empty ? [] : [value]);
+  if (!why && empty && !local.has(id)) bound.delete(session);
+  // Another device edited it first: these words are a draft of their own
+  // now, and this box goes on with them.
+  if (why && rowsOf(session).some((d) => d.id === raced)) {
+    if (local.get(id) === c) { local.delete(id); local.set(raced, c); }
+    bound.set(session, raced);
+    if (box?.dataset.key === session) syncCompose();
+  }
+  if (box?.dataset.key === session) renderOthers();
+}
+// Forget what this tab typed once the brain holds it: then the draft's row
+// is the truth, whichever device typed last.
+function settleLocal() {
+  for (const [id, c] of local) if (c.n && c.saved === c.v && tab.status(c.n) !== "pending") local.delete(id);
+}
+// After a reload, what this tab typed that the brain has not yet included
+// is in its own records: back into the boxes.
+function restoreLocal() {
+  for (const r of tab.records()) {
+    const said = r.what.Said;
+    if (!said) continue;
+    const n = Number(r.at.split(".")[1]);
+    for (const f of said.facts) {
+      const [id, e] = f.Draft || [];
+      if (e?.Opened) bound.set(e.Opened.session, id);
+      if (e?.Text) {
+        const value = said.values.find((v) => typeof v === "string" && digest(v) === e.Text);
+        if (value) local.set(id, { text: "", attached: [], ...parse(value), v: 1, saved: 1, n });
+      }
+    }
+  }
+}
+// A chat not started yet, and its fields, have no session: theirs are kept
+// in this tab.
+const unborn = (key) => key === NEW || key.startsWith("new:");
+const keptHere = (key) => ({ text: "", attached: [], ...parse(sessionStorage.getItem(`draft:${key}`) || "{}") });
+const keepHere = (key, change) => {
+  try { sessionStorage.setItem(`draft:${key}`, JSON.stringify({ ...keptHere(key), ...change })); return null; }
+  catch { return "too big to keep in this tab"; }
+};
+const drafts = {
+  get: (session) => unborn(session) ? keptHere(session).text : contentOf(draftOf(session) || `new:${session}`).text,
+  set: (session, text) => unborn(session) ? keepHere(session, { text }) : edit(session, { text }),
+};
+const attached = {
+  get: (session) => unborn(session) ? keptHere(session).attached : contentOf(draftOf(session) || `new:${session}`).attached,
+  set: (session, list) => { if (unborn(session)) return keepHere(session, { attached: list }); edit(session, { attached: list }); return null; },
+};
+// The brain's text for the draft in the box, if this tab has nothing of
+// its own unsaved: what another device typed.
+function syncCompose() {
+  if (!box || dictation || unborn(box.dataset.key)) return;
+  const id = draftOf(box.dataset.key);
+  if (id && local.has(id)) return;
+  const text = drafts.get(box.dataset.key);
+  if (box.value !== text) { box.value = prev = text; autosize(); renderTray(); }
+}
+// The session's other drafts: words held when the session could not take
+// them, and drafts opened beside this one (a concurrent Send or edit).
+function renderOthers() {
+  const others = $(".others", compose);
+  if (!others || !box) return;
+  const session = box.dataset.key, mine = draftOf(session);
+  others.replaceChildren(...rowsOf(session).filter((d) => d.id !== mine && !leaving.has(d.id)).map((d) => {
+    const c = contentOf(d.id), card = el("div", `other${d.held ? " held" : ""}`);
+    card.append(el("span", "said", c.text.split("\n")[0].slice(0, 160) || `${c.attached.length} attached`));
+    card.append(el("span", "why", d.held ? `not heard: ${d.held}` : !d.from ? "another draft" : rowsOf(session).some((o) => o.id === d.from) ? "typed at the same time as another" : "typed after another was sent"));
+    if (!d.held) { const use = el("button", "btn", "Edit this"); use.onclick = () => { bound.set(session, d.id); box.value = prev = c.text; autosize(); renderTray(); renderOthers(); }; card.append(use); }
+    else {
+      const use = el("button", "btn", "Use these words");
+      use.onclick = async () => { giveBack(session, c.text, c.attached); leaving.add(d.id); renderOthers(); await act({ Draft: [d.id, "Discarded"] }); renderOthers(); };
+      card.append(use);
+    }
+    return card;
+  }));
+}
+
+const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+async function attach(key, files) {
+  const list = attached.get(key);
+  for (const f of files) {
+    if (IMAGES.includes(f.type)) {
+      const data = await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.readAsDataURL(f); });
+      list.push({ name: f.name || "pasted image", block: { type: "image", source: { type: "base64", media_type: f.type, data } } });
+    } else {
+      list.push({ name: f.name, block: { type: "text", text: `[${f.name}]\n\n${await f.text()}` } });
+    }
+  }
+  const why = attached.set(key, list);
+  if (why) say(`not attached: ${why}`, true);
+  renderTray();
+}
+function renderTray() {
+  const tray = $(".tray", compose);
+  if (!tray || !box) return;
+  const key = box.dataset.key;
+  tray.replaceChildren(...attached.get(key).map((a, i) => {
+    const chip = el("span", "att");
+    if (a.block.type === "image") { const img = el("img"); img.src = `data:${a.block.source.media_type};base64,${a.block.source.data}`; chip.append(img); }
+    const x = el("button", null, "×"); x.type = "button"; x.title = "Remove";
+    x.onclick = () => { const list = attached.get(key); list.splice(i, 1); attached.set(key, list); renderTray(); };
+    chip.append(el("span", null, a.name), x);
+    return chip;
+  }));
+}
+
+function buildCompose(id) {
+  compose.replaceChildren();
+  box = null;
+  const t = byId[id];
+  if (id !== NEW && !t) return;
+  if (!can.act) { compose.append(el("div", "closed", "This face only watches.")); return; }
+  const wrap = el("div", "box");
+  const tray = el("div", "tray");
+  box = el("textarea");
+  box.rows = id === NEW ? 2 : 1;
+  box.dataset.key = id;
+  box.spellcheck = true;
+  box.value = drafts.get(id);
+  const row = el("div", "row2");
+  const mic = icon("mic", "mic", "Dictate"); mic.hidden = !can.dictation;
+  const sample = el("button", "later sample", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
+  const picks = el("span", "picks");
+  const status = el("span", "status");
+  const later = el("button", "later after", "After this turn"); later.type = "button";
+  later.title = "It reads this when its turn ends, without cutting across its work (Ctrl+Shift+Enter)";
+  const halt = icon("stop", "halt", "Interrupt: it stops at the next safe point, and waits for you");
+  const send = icon("send", "send", "Send (Ctrl+Enter)");
+  row.append(mic, sample, picks, status, later, halt, send);
+  wrap.append(el("div", "others"), tray, box, row);
+  compose.append(wrap, el("div", "acts"));
+  // What is pasted or dropped in is attached.
+  box.addEventListener("paste", (e) => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); attach(id, fs); } });
+  wrap.addEventListener("dragover", (e) => { e.preventDefault(); wrap.classList.add("drop"); });
+  wrap.addEventListener("dragleave", () => wrap.classList.remove("drop"));
+  wrap.addEventListener("drop", (e) => { e.preventDefault(); wrap.classList.remove("drop"); attach(id, [...e.dataTransfer.files]); });
+  mic.onclick = () => dictate(false);
+  sample.onclick = () => dictate(true);
+  send.onclick = () => submit("Next");
+  later.onclick = () => submit("TurnEnd");
+  halt.onclick = async () => { const why = await act({ Task: [id, { Drain: { ToMax: { turn: byId[id].turn } } }] }); if (why) say(`not interrupted: ${why}`, true); };
+  box.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    if (dictation) return stopDictation();
+    submit(e.shiftKey && !later.hidden ? "TurnEnd" : "Next");
+  });
+  box.addEventListener("input", onInput);
+  autosize();
+  renderTray();
+  renderOthers();
+  renderComposeState(t);
+}
+// Mid-turn, words can go now or wait for the turn's end; between turns, in
+// response to its question, or to a finished chat, there is only now.
+const midTurn = (t) => ["model", "calls", "harness", "held", "limited"].includes(t.waiting?.kind);
+// Working on its own, not waiting on agents it started: what an interrupt stops.
+const working = (t) => !t.scoped && !!t.turn && (["model", "harness"].includes(t.waiting?.kind) || (t.waiting?.kind === "calls" && !t.waiting.calls.some((c) => c.children.length)));
+function renderComposeState(t) {
+  if (!box) return;
+  const key = box.dataset.key, has = !!box.value.trim() || attached.get(key).length > 0;
+  $(".send", compose).disabled = !has;
+  if (key === NEW) {
+    box.placeholder = "New chat";
+    $(".after", compose).hidden = true;
+    $(".halt", compose).hidden = true;
+    return;
+  }
+  if (!t || key !== t.id) return;
+  const mid = midTurn(t) && !isDone(t);
+  box.placeholder = isDone(t) ? "Continue this chat" : "Reply";
+  $(".after", compose).hidden = !(mid && has);
+  $(".halt", compose).hidden = !can.act || isDone(t) || !working(t);
+}
+// Only what went wrong is said; what went right shows as itself.
+const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`; } };
+function autosize() { if (!box) return; box.style.height = "auto"; box.style.height = `${Math.min(box.scrollHeight, innerHeight * .4)}px`; }
+
+// Sending: to a task working or between turns, the draft's Send; to a task
+// waiting on agents it started, an aside that talks now; to a finished
+// chat, the chat continued.
+async function submit(read) {
+  if (!box) return;
+  const key = box.dataset.key, t = byId[key];
+  const text = box.value, files = attached.get(key);
+  if (!text.trim() && !files.length) return;
+  if (dictation) return stopDictation();
+  if (!t) return startNew(text, files);
+  say("");
+  const continues = isDone(t) || (t.scoped && read === "Next");
+  if (continues && !text.trim()) return say("write something to go with what is attached", true);
+  let draft = takeWords(key);
+  const discard = draft ? [{ Draft: [draft, "Discarded"] }] : [];
+  // A new task whose mandate is these words; the draft goes with them.
+  if (continues) {
+    const why = isDone(t) ? await resume(t, text, files, discard) : await aside(t, text, files, discard);
+    if (why) { returnWords(key, draft, text, files); return say(`not sent: ${why}`, true); }
+    local.delete(draft);
+    return;
+  }
+  const blocks = [...files.map((a) => a.block), ...(text.trim() ? [{ type: "text", text }] : [])];
+  const words = JSON.stringify(blocks), id = digest(words);
+  let sent = null;
+  const why = await act((at) => {
+    sent = `${at}.0`;
+    const facts = [];
+    if (!draft) { draft = sent; facts.push({ Draft: [draft, { Opened: { session: t.id } }] }); }
+    facts.push({ Draft: [draft, { Send: { text: id, read } }] });
+    return facts;
+  }, [words]);
+  if (why) { returnWords(key, draft === sent ? null : draft, text, files); return say(`not sent: ${why}`, true); }
+  local.delete(draft);
+  const rows = view.drafts;
+  const successor = rows.find((d) => d.id === sent && d.from === draft);
+  const held = rows.find((d) => d.id === draft && d.held);
+  if (successor) {
+    returnWords(key, successor.id, text, files);
+    return say("another device sent this draft first: your words are a new draft, beside it", true);
+  }
+  if (held) leaving.delete(draft);
+  renderOthers();
+  if (held) return say(`held, not heard: ${held.held}`, true);
+  renderComposeState(t);
+}
+// What is in the box leaves it as it is sent: the box is empty at once, so
+// a second press sends nothing, and what Max types while it goes is a draft
+// of its own. The draft the words were in is the send's.
+function takeWords(key) {
+  clearTimeout(saving.get(key));
+  saving.delete(key);
+  const draft = unborn(key) ? null : draftOf(key);
+  if (draft) leaving.add(draft);
+  bound.delete(key);
+  local.delete(`new:${key}`);
+  if (unborn(key)) { drafts.set(key, ""); attached.set(key, []); }
+  if (box?.dataset.key === key) { box.value = prev = ""; autosize(); renderTray(); renderOthers(); }
+  return draft;
+}
+// Refused, the words come back to their draft, before anything typed since.
+function returnWords(key, draft, text, files) {
+  if (draft) { leaving.delete(draft); bound.set(key, draft); }
+  giveBack(key, text, files);
+}
+function giveBack(key, text, files) {
+  const now = drafts.get(key), more = attached.get(key);
+  const back = now.trim() ? `${text}\n\n${now}` : text;
+  drafts.set(key, back);
+  attached.set(key, [...files, ...more]);
+  if (box?.dataset.key === key) { box.value = prev = back; autosize(); renderTray(); renderOthers(); }
+}
+
+let prev = "";
+function onInput() {
+  const now = box.value;
+  if (dictation && dictation.key === box.dataset.key) {
+    let x = 0;
+    while (x < prev.length && x < now.length && prev[x] === now[x]) x++;
+    let tail = 0;
+    while (tail < prev.length - x && tail < now.length - x && prev[prev.length - 1 - tail] === now[now.length - 1 - tail]) tail++;
+    const removed = prev.length - x - tail, inserted = now.length - x - tail;
+    const l = dictation;
+    const end = l.start + l.T.length - l.P;
+    if (x + removed <= l.start && !(x === l.start && removed === 0 && l.T.length === l.P)) l.start += inserted - removed;
+    else if (x <= end) { l.P = Math.min(l.T.length, l.P + Math.max(0, x + removed - l.start)); l.start = x + inserted; }
+  }
+  prev = now;
+  drafts.set(box.dataset.key, now);
+  autosize();
+  renderComposeState(byId[box.dataset.key]);
+}
+
+// The endpoint's edits, in the transcript's own offsets, last first so the
+// earlier offsets still hold. If Max has gone to another node meanwhile,
+// they land in the draft of the node he was dictating to.
+function applyEdits(edits) {
+  const l = dictation;
+  const shown = box && box.dataset.key === l.key;
+  const target = shown ? box : Object.assign(document.createElement("textarea"), { value: drafts.get(l.key) });
+  const end = () => l.start + l.T.length - l.P;
+  const following = shown && target.selectionStart === target.selectionEnd && target.selectionEnd === end();
+  for (const e of [...edits].reverse()) {
+    if (e.at >= l.P) { const from = l.start + e.at - l.P; target.setRangeText(e.put, from, from + e.cut, "preserve"); }
+    else if (e.at + e.cut <= l.P) l.P += e.put.length - e.cut;
+    else { target.setRangeText(e.put, l.start, l.start + e.at + e.cut - l.P, "preserve"); l.P = e.at; }
+    l.T = l.T.slice(0, e.at) + e.put + l.T.slice(e.at + e.cut);
+  }
+  if (following) target.setSelectionRange(end(), end());
+  drafts.set(l.key, target.value);
+  if (shown) { prev = box.value; autosize(); renderComposeState(byId[l.key]); }
+}
+
+// The microphone as 16-bit PCM, in chunks of a tenth of a second.
+const WORKLET = URL.createObjectURL(new Blob([`
+registerProcessor("pcm", class extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(sampleRate / 10); this.n = 0; }
+  process([input]) {
+    const ch = input[0];
+    if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (this.n === this.buf.length) {
+        this.port.postMessage(this.buf.buffer, [this.buf.buffer]);
+        this.buf = new Int16Array(sampleRate / 10); this.n = 0;
+      }
+    }
+    return true;
+  }
+});`], { type: "application/javascript" }));
+
+async function dictate(sample) {
+  if (dictation) return stopDictation();
+  if (!box) return;
+  let rate = 16000, mic = null;
+  try {
+    if (!sample) {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      const ctx = new AudioContext();
+      await ctx.audioWorklet.addModule(WORKLET);
+      const node = new AudioWorkletNode(ctx, "pcm");
+      ctx.createMediaStreamSource(stream).connect(node);
+      rate = ctx.sampleRate;
+      mic = { stream, ctx, node };
+    }
+  } catch (e) { return say(`no microphone: ${e.message}`, true); }
+  // Dictation goes in at the caret, a space from the word before it.
+  let at = box.selectionEnd;
+  if (at > 0 && !/\s/.test(box.value[at - 1])) { box.setRangeText(" ", at, at, "end"); at += 1; prev = box.value; }
+  const ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
+  ws.binaryType = "arraybuffer";
+  dictation = { ws, mic, key: box.dataset.key, T: "", P: 0, start: at };
+  if (mic) mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); };
+  const b = $(".mic", compose); if (b) { b.classList.add("on"); b.title = "Stop dictating"; }
+  say("connecting");
+  const l = dictation;
+  ws.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.listening) say(sample ? "dictating the sample" : "listening");
+    if (d.edits && dictation === l) applyEdits(d.edits);
+    if (d.error) say(d.error, true);
+    if (d.final) finishDictation(l);
+  };
+  ws.onclose = () => finishDictation(l);
+  box.focus();
+}
+function releaseMic(l) {
+  if (!l.mic) return;
+  l.mic.stream.getTracks().forEach((t) => t.stop());
+  l.mic.ctx.close();
+  l.mic = null;
+}
+function stopDictation() {
+  if (!dictation) return;
+  releaseMic(dictation);
+  if (dictation.ws.readyState === 1) dictation.ws.send(JSON.stringify({ type: "stop" }));
+  say("finishing");
+}
+function finishDictation(l) {
+  if (dictation !== l) return;
+  releaseMic(l);
+  dictation = null;
+  l.ws.close();
+  const b = $(".mic", compose); if (b) { b.classList.remove("on"); b.title = "Dictate"; }
+  if (!$(".status", compose)?.classList.contains("bad")) say("");
+}
+
