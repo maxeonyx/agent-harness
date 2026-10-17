@@ -25,7 +25,7 @@ use crate::resource::Observation;
 /// itself implements ([`crate::environment::LimbKind`]): a spawn opens a
 /// scope and settles when its last task is done, so a parent waiting on its
 /// children is a task with an outstanding call and nothing more; a handover
-/// moves its caller to a new context; an ask is a call Max answers. Their
+/// moves its caller to a new context. Their
 /// effects are appended in the same batch as the call's own events, so a
 /// crash leaves all of them or none, and a restart never spawns twice.
 ///

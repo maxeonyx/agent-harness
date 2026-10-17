@@ -52,7 +52,6 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use harness_core::call::Caller;
 use harness_core::context::{Entry, EntryId, Note, Rendered};
 use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::fact::Refusal;
@@ -360,9 +359,6 @@ enum Author {
     /// Max's words, after the harness's label for them: the last of the
     /// run's blocks, as many as his words are.
     Max { words: ValueId, at: Timestamp },
-    /// Max's answer to a question asked in the background, in one block
-    /// with the harness's note.
-    Answer { words: ValueId },
     /// A standard prompt: Max's Done, or the stop an owner or Max made.
     Prompt(Prompt),
 }
@@ -429,20 +425,7 @@ fn author(state: &State, task: TaskId, from: &Rendered) -> Author {
             }) => Author::Prompt(*prompt),
             None => Author::Harness,
         },
-        Rendered::Call(call) => match state.call(*call) {
-            Some(record)
-                if state.is_ask(*call)
-                    && matches!(record.call.caller, Caller::Background { .. }) =>
-            {
-                match record.outcome().and_then(|o| o.output()) {
-                    Some(output) => Author::Answer {
-                        words: output.model,
-                    },
-                    None => Author::Call,
-                }
-            }
-            _ => Author::Call,
-        },
+        Rendered::Call(_) => Author::Call,
         // A task Max started, an aside or a resume, opens with his words.
         Rendered::Note(Note::Mandate) => match state.task(task) {
             Some(t) if t.by.is_none() => Author::Max {
@@ -490,13 +473,6 @@ fn authors(
                         Author::Mandate => json!({"by": "mandate"}),
                         Author::Brief => json!({"by": "brief"}),
                         Author::Prompt(p) => json!({"by": "prompt", "prompt": format!("{p:?}")}),
-                        Author::Answer { words } => {
-                            let said: Vec<String> = blocks(words)
-                                .iter()
-                                .filter_map(|b| b["text"].as_str().map(String::from))
-                                .collect();
-                            json!({"by": "answer", "said": said.join("\n")})
-                        }
                     },
                 })
                 .collect();

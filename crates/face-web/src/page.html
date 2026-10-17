@@ -12,7 +12,7 @@
 <style>
   :root {
     --ground: #f0eee6; --paper: #faf9f5; --white: #fffefb; --line: #e3dfd3; --ink: #141413;
-    --muted: #6b6a64; --faint: #a19f96; --maroon: #7a1f22; --maroon-soft: #f3e3e1; --hover: #e9e5d9;
+    --muted: #6b6a64; --faint: #a19f96; --maroon: #7a1f22; --hover: #e9e5d9;
     --green: #4f8a55; --red: #b3352c;
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
@@ -126,8 +126,6 @@
   .node.scope.settled .dot { background: var(--green); opacity: .6; }
   .node.sat .dot { font: 600 11px/1 var(--sans); border-style: dashed; }
   .node.sat .name { font: 12px/1.2 var(--sans); color: var(--muted); font-weight: 400; }
-  .node.sat.ask .dot { background: var(--maroon); border-color: var(--maroon); color: var(--paper); border-style: solid; }
-  .node.sat.ask .name { color: var(--maroon); font-weight: 600; }
   .node.enter { animation: grow .45s var(--ease); }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes halo { 0% { transform: scale(1); opacity: .7; } 70% { transform: scale(1.55); opacity: 0; } 100% { opacity: 0; } }
@@ -218,7 +216,6 @@
   .said { display: flex; flex-direction: column; align-items: flex-end; }
   .said .bubble { max-width: 85%; background: #e9e5da; border-radius: 16px 16px 4px 16px; padding: .6em 1em; font: 15px/1.55 var(--sans); white-space: pre-wrap; overflow-wrap: anywhere; }
   .said.queued-words .bubble { background: transparent; border: 1.5px dashed var(--faint); }
-  .said.answer .bubble { border-left: 3px solid var(--maroon); }
   .said.prompt .bubble { font-weight: 600; padding: .45em 1em; }
   .said .then { max-width: 85%; margin: .3em .3em 0 0; font-size: 12px; color: var(--faint); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
   .said .then.full { white-space: pre-wrap; text-align: left; }
@@ -229,7 +226,6 @@
   .card.clip .prose { max-height: 13em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
   .more-link { font-size: 12.5px; color: var(--maroon); margin-top: .3em; cursor: pointer; }
   details > summary.more-link { margin: .1em 0 .3em 1em; }
-  .card.ask { border-color: var(--maroon); background: var(--maroon-soft); }
   .card.result { border-color: #c9c4b4; }
   .card.ended { border-color: var(--red); color: var(--red); }
   .note { display: flex; gap: .5em; font-size: 12.5px; color: var(--faint); margin: .2em 0 1em; }
@@ -245,7 +241,7 @@
   .steps { margin: 0 0 1.1em; border-left: 2px solid var(--line); padding-left: .2em; }
   .steps > .head { font-size: 12.5px; color: var(--muted); padding: .1em .5em .3em; cursor: pointer; }
   .steps > .head:hover { color: var(--ink); }
-  .steps.folded > .row:not(:last-child):not(.asks) { display: none; }
+  .steps.folded > .row:not(:last-child) { display: none; }
   .row { margin: 0 0 .15em; }
   .row > .line { display: flex; align-items: baseline; gap: .55em; padding: .22em .5em; border-radius: 7px; cursor: pointer; font-size: 13.5px; min-width: 0; }
   .row > .line:hover { background: var(--hover); }
@@ -258,7 +254,6 @@
   .row > .meta { margin: 0 0 .3em .5em; }
   .row > .detail { margin: .2em 0 .6em 1em; }
   .row:not(.expanded) > .detail { display: none; }
-  .row > .card.ask { margin: .3em 0 .6em; }
   .io { font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f1ea; border: 1px solid var(--line); border-radius: 8px; padding: .55em .75em; margin: .3em 0; max-height: 28em; overflow: auto; }
   .io.err { border-color: var(--red); }
   .io .k { color: var(--muted); }
@@ -648,15 +643,12 @@ function look(t) {
       const c = w.calls[0] || {};
       return { cls: "working tool" + stopping, text: `${c.tool || "tools"}${c.input ? " " + gist(c.input) : ""}` };
     }
-    case "max": return { cls: "needs" + stopping, text: (w.ask ? "asks you" : "your turn") + since };
+    case "max": return { cls: "needs" + stopping, text: "your turn" + since };
     case "starting": return { cls: "starting", text: w.limbs.length ? `making ${w.limbs.join(", ")}` : "starting" };
     case "harness": return { cls: "working" + stopping, text: "harness" + since };
     case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `paused with ${h.name}` : "paused" }; }
     case "limited": return { cls: "paused", text: `limited until ${clock(w.until)}` };
-    case "listening": {
-      const asks = (t.background || []).filter((b) => b.limb === "max").length;
-      return { cls: "listening" + stopping, text: asks ? "asks you, carrying on" : w.calls.length ? `${w.calls.length} in the background` : "listening" };
-    }
+    case "listening": return { cls: "listening" + stopping, text: w.calls.length ? `${w.calls.length} in the background` : "listening" };
     case "done": {
       const o = t.outcome || {};
       if (o.kind === "failed") return { cls: "done failed", text: `failed ${ago(w.since)} ago` };
@@ -683,7 +675,7 @@ const heldBy = (t) => t.held ? t : ancestry(t).reverse().find((a) => a.held) || 
 // The calls a task is waiting on right now.
 function awaited(t) {
   const w = t?.waiting || {};
-  return new Set([...(w.calls || []).map((c) => c.id), ...(w.ask ? [w.ask.id] : [])]);
+  return new Set((w.calls || []).map((c) => c.id));
 }
 
 // A finished project folds to its root once it has been finished a while:
@@ -719,7 +711,7 @@ function derive() {
       if (b.status === "settled" || b.tool === "spawn") continue;
       const id = `b:${b.id}`;
       nodes.set(id, { id, kind: "sat", call: b, task: t.id });
-      edges.push({ from: t.id, to: id, kind: "receives", flow: waits.has(b.id) || t.waiting?.kind === "listening", max: b.limb === "max" });
+      edges.push({ from: t.id, to: id, kind: "receives", flow: waits.has(b.id) || t.waiting?.kind === "listening" });
     }
   }
   // Components, by the edges between them.
@@ -763,7 +755,7 @@ function sizeOf(n, comp) {
   const w = Math.min(210, Math.max(110, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
   return { w, h: (root ? ROOT_DOT : DOT) + (root ? 26 : 24) };
 }
-const satLabel = (n) => n.call.limb === "max" ? "asks you" : `${n.call.tool} ${gist(n.call.input)}`.trim();
+const satLabel = (n) => `${n.call.tool} ${gist(n.call.input)}`.trim();
 
 // Each project is laid out on its own, then the projects are shelved in
 // reading order, live ones first, in rows as wide as the screen: on a phone
@@ -1192,9 +1184,9 @@ function drawMap() {
     } else if (n.kind === "scope") {
       a.className = `node scope${n.scope.background ? " background" : ""}${n.scope.settled ? " settled" : ""}${faded}`;
     } else {
-      a.className = `node sat${n.call.limb === "max" ? " ask" : " working"}${faded}`;
+      a.className = `node sat working${faded}`;
       a.style.setProperty("--d", `${SAT_DOT}px`);
-      const dot = $(".dot", a), g = n.call.limb === "max" ? "?" : "⋯";
+      const dot = $(".dot", a), g = "⋯";
       dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = g) : dot.prepend(document.createTextNode(g));
       $(".name", a).textContent = satLabel(n);
     }
@@ -1346,8 +1338,8 @@ function fillTip() {
   if (id?.startsWith("b:")) {
     const n = graph.nodes.get(id);
     if (!n) return hideTip();
-    lines.push(el("b", null, n.call.limb === "max" ? "Asks you" : n.call.tool), el("div", "now", `${n.call.limb === "max" ? "asked" : "started"} ${ago(n.call.made)} ago`));
-    const input = n.call.limb === "max" ? parse(n.call.input)?.question : gist(n.call.input);
+    lines.push(el("b", null, n.call.tool), el("div", "now", `started ${ago(n.call.made)} ago`));
+    const input = gist(n.call.input);
     if (input) lines.push(el("div", "m", input));
   } else {
     const t = byId[id];
@@ -1384,7 +1376,7 @@ function notify(queue) {
     const t = byId[q.task];
     if (before.has(q.task) || !t) continue;
     try {
-      const n = new Notification(t.name, { body: q.ask ? (parse(q.ask.input)?.question || "").slice(0, 200) : "Your turn", tag: t.id });
+      const n = new Notification(t.name, { body: "Your turn", tag: t.id });
       n.onclick = () => { focus(); n.close(); go(t.id); };
     } catch { /* a phone's browser notifies only from a service worker */ }
   }
@@ -1597,7 +1589,7 @@ function mixOf(chain) {
       const who = e.role === "user" ? (e.by || [])[k]?.by || "harness" : null;
       const into = b.type === "tool_result" ? "results" : b.type === "tool_use" ? "calls"
         : b.type === "thinking" || b.type === "redacted_thinking" ? null
-        : e.role === "assistant" ? "said" : who === "max" || who === "answer" || who === "prompt" ? "max"
+        : e.role === "assistant" ? "said" : who === "max" || who === "prompt" ? "max"
         : who === "mandate" || who === "brief" ? "mandate" : "notes";
       if (into) m[into] += size(b);
     });
@@ -1786,8 +1778,6 @@ function entry(s, into, e, index, t) {
         into.append(run.el);
       } else if (who.by === "prompt") {
         into.append(prompted(who.prompt, text));
-      } else if (who.by === "answer") {
-        into.append(said(who.said, "while it carried on", "answer"));
       } else if (who.by === "brief" || who.by === "mandate") {
         if (!run) {
           run = { by: who.by, el: el("div", "entry card mandate") };
@@ -1917,12 +1907,6 @@ function toolRow(s, b, t) {
     const chips = el("div", "chips");
     row.insertBefore(chips, detail);
     row.chips = chips;
-  }
-  if (b.name === "ask" || (b.name === "background" && input.tool === "ask")) {
-    const q = el("div", "card ask");
-    q.append(markdown(inner.question || JSON.stringify(inner)));
-    row.classList.add("asks");
-    row.insertBefore(q, detail);
   }
   if (b.name === "handover") {
     const q = el("div", "card");
@@ -2074,11 +2058,6 @@ function mandateCard(t) {
   c.title = `From ${byId[t.owner]?.name || "its owner"}`;
   c.append(markdown(t.mandate || ""));
   return c;
-}
-// The task's outstanding question to Max: mid-turn, or in the background.
-function askOf(t) {
-  if (t.waiting?.kind === "max" && t.waiting.ask) return t.waiting.ask;
-  return (view.queue || []).find((q) => q.task === t.id && q.ask)?.ask || (t.background || []).find((b) => b.limb === "max" && b.status !== "settled") || null;
 }
 
 // The log keeps to its bottom while Max is there, so live text scrolls into
@@ -2379,8 +2358,8 @@ function renderComposeState(t) {
     return;
   }
   if (!t || key !== t.id) return;
-  const ask = askOf(t), mid = midTurn(t) && !ask && !isDone(t);
-  box.placeholder = isDone(t) ? "Continue this chat" : ask ? "Respond" : "Reply";
+  const mid = midTurn(t) && !isDone(t);
+  box.placeholder = isDone(t) ? "Continue this chat" : "Reply";
   $(".after", compose).hidden = !(mid && has);
   $(".halt", compose).hidden = !can.act || isDone(t) || !working(t);
 }
@@ -2388,8 +2367,7 @@ function renderComposeState(t) {
 const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`; } };
 function autosize() { if (!box) return; box.style.height = "auto"; box.style.height = `${Math.min(box.scrollHeight, innerHeight * .4)}px`; }
 
-// Sending: to a task working or between turns, the draft's Send; to its
-// question, the response that settles it and discards the draft; to a task
+// Sending: to a task working or between turns, the draft's Send; to a task
 // waiting on agents it started, an aside that talks now; to a finished
 // chat, the chat continued.
 async function submit(read) {
@@ -2400,8 +2378,7 @@ async function submit(read) {
   if (dictation) return stopDictation();
   if (!t) return startNew(text, files);
   say("");
-  const ask = askOf(t);
-  const continues = isDone(t) || (t.scoped && !ask && read === "Next");
+  const continues = isDone(t) || (t.scoped && read === "Next");
   if (continues && !text.trim()) return say("write something to go with what is attached", true);
   let draft = takeWords(key);
   const discard = draft ? [{ Draft: [draft, "Discarded"] }] : [];
@@ -2417,7 +2394,6 @@ async function submit(read) {
   let sent = null;
   const why = await act((at) => {
     sent = `${at}.0`;
-    if (ask) return [{ Call: [ask.id, { Settled: { Completed: { model: id, full: null, observes: [] } } }] }, ...discard];
     const facts = [];
     if (!draft) { draft = sent; facts.push({ Draft: [draft, { Opened: { session: t.id } }] }); }
     facts.push({ Draft: [draft, { Send: { text: id, read } }] });
@@ -2426,8 +2402,8 @@ async function submit(read) {
   if (why) { returnWords(key, draft === sent ? null : draft, text, files); return say(`not sent: ${why}`, true); }
   local.delete(draft);
   const rows = view.drafts;
-  const successor = !ask && rows.find((d) => d.id === sent && d.from === draft);
-  const held = !ask && rows.find((d) => d.id === draft && d.held);
+  const successor = rows.find((d) => d.id === sent && d.from === draft);
+  const held = rows.find((d) => d.id === draft && d.held);
   if (successor) {
     returnWords(key, successor.id, text, files);
     return say("another device sent this draft first: your words are a new draft, beside it", true);
