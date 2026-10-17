@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::ops::ControlFlow;
 use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,6 +12,7 @@ use harness_core::id::{ModelCallId, TaskId, ValueId};
 use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall};
 use harness_provider::{Client, Finished, IDENTITY, Login, Progress};
+use harness_runtime::Cancel;
 use serde_json::json;
 
 /// What the journal and the value store hold, in miniature: the entries the
@@ -156,6 +156,7 @@ fn turn(
             call,
             &store.context(call.base),
             |id| store.values.get(&id).cloned(),
+            &Cancel::new(),
             |progress| {
                 match progress {
                     Progress::FirstByte => {
@@ -171,10 +172,9 @@ fn turn(
                             line.drain(..=n);
                         }
                     }
-                    Progress::Live(_) | Progress::Streaming => {}
+                    Progress::Live(_) => {}
                 }
                 let _ = std::io::stdout().flush();
-                ControlFlow::Continue(())
             },
         )
         .unwrap_or_else(|e| fail(&format!("{label}: {e}")));
