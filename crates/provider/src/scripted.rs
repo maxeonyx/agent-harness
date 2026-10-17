@@ -4,10 +4,14 @@
 //! wire format, so everything after the socket runs as it does for a real
 //! response: the status, the event stream, the assembly, the ending.
 //!
-//! Its reply is a function of the request. The script is the text of the
-//! latest user message that has any: each line starting with a verb is one
+//! Its reply is a function of the request. The script is the words of the
+//! latest user message that has any of someone's words, not the harness's
+//! (which start `[harness]`): each line starting with a verb is one
 //! response, taken in turn, one for each assistant message since. Other
-//! lines are ignored, so a mandate or a brief can carry one.
+//! lines are ignored, so a mandate can carry one. The harness's notices in
+//! the message a response answers (`[harness] Changed since you last saw
+//! them: a.txt.`) leave the script where it is; the response opens with a
+//! text block quoting them, so a test sees each arrive.
 //!
 //! ```text
 //! say TEXT              a reply (`\n` is a line break); the turn ends
@@ -87,6 +91,13 @@ pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashMap<u64, u3
     let (verb, rest) = step.act.split_once(' ').unwrap_or((&step.act, ""));
     let rest = rest.trim();
     let mut events = Events::new(body.len());
+    if let Some(last) = messages.last() {
+        let notices = notices(last);
+        if !notices.is_empty() {
+            let noted = format!("(scripted) Noted: {}\n\n", notices.join("\n"));
+            events.text_block(&noted, " ");
+        }
+    }
     match verb {
         "say" => events.text(&rest.replace("\\n", "\n"), " ", "end_turn"),
         "vary" => events.text(&format!("{rest} (try {asked})"), " ", "end_turn"),
@@ -126,7 +137,7 @@ pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashMap<u64, u3
             return response;
         }
         "fail" => {
-            events.start_text("Starting a scripted reply that will fail. ");
+            events.text_block("Starting a scripted reply that will fail. ", " ");
             let text = if rest.is_empty() {
                 "scripted failure"
             } else {
@@ -137,14 +148,14 @@ pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashMap<u64, u3
                 json!({"type": "error", "error": {"type": "api_error", "message": text}}),
             );
         }
-        "drop" => events.start_text("Starting a scripted reply that will stop early. "),
+        "drop" => events.text_block("Starting a scripted reply that will stop early. ", " "),
         _ => events.text(&step.act, " ", "end_turn"),
     }
     Response {
         status: 200,
         headers: vec![("content-type".into(), "text/event-stream".into())],
         body: Body::Local(Box::new(Stream {
-            events: events.0,
+            events: events.queue,
             current: Cursor::new(Vec::new()),
             slow: step.slow,
             cancel: cancel.clone(),
@@ -194,7 +205,7 @@ fn step(messages: &[Value]) -> Step {
     };
     let script = messages.iter().enumerate().rev().find_map(|(i, m)| {
         (m["role"] == "user")
-            .then(|| text(m))
+            .then(|| script(m))
             .flatten()
             .map(|t| (i, t))
     });
@@ -263,19 +274,48 @@ fn parse(line: &str) -> Option<Step> {
     }
 }
 
-/// A message's text blocks, joined; `None` if it has none.
-fn text(message: &Value) -> Option<String> {
+/// How the harness's own text starts: its notices, and the framing it puts
+/// before someone's words (`harness_program::render`).
+const HARNESS: &str = "[harness]";
+
+/// A message's text blocks, in order, its content if that is one string.
+fn texts(message: &Value) -> Vec<&str> {
     let content = &message["content"];
-    if let Some(s) = content.as_str() {
-        return Some(s.to_owned());
+    match content.as_str() {
+        Some(s) => vec![s],
+        None => content
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["type"] == "text")
+            .filter_map(|b| b["text"].as_str())
+            .collect(),
     }
-    let texts: Vec<&str> = content
-        .as_array()?
-        .iter()
-        .filter(|b| b["type"] == "text")
-        .filter_map(|b| b["text"].as_str())
+}
+
+/// The words in a message that are not the harness's, joined: a script,
+/// or `None` if it has none.
+fn script(message: &Value) -> Option<String> {
+    let words: Vec<&str> = texts(message)
+        .into_iter()
+        .filter(|t| !t.starts_with(HARNESS))
         .collect();
-    (!texts.is_empty()).then(|| texts.join("\n"))
+    (!words.is_empty()).then(|| words.join("\n"))
+}
+
+/// What the harness says in a message that frames no words: its notices,
+/// which each response acknowledges, so a test sees them arrive. A
+/// harness text followed by words introduces them, and is not one.
+fn notices(message: &Value) -> Vec<&str> {
+    let texts = texts(message);
+    texts
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            t.starts_with(HARNESS) && texts.get(i + 1).is_none_or(|n| n.starts_with(HARNESS))
+        })
+        .map(|(_, t)| *t)
+        .collect()
 }
 
 /// The tool results in a message, each quoted up to [`QUOTED`] characters,
@@ -317,12 +357,21 @@ fn refused(status: u16, message: &str) -> Response {
     }
 }
 
-/// A response's server-sent events, each whole.
-struct Events(VecDeque<Vec<u8>>);
+/// A response's server-sent events, each whole, with how many content
+/// blocks and characters of output they hold so far.
+struct Events {
+    queue: VecDeque<Vec<u8>>,
+    blocks: usize,
+    output: usize,
+}
 
 impl Events {
     fn new(request: usize) -> Events {
-        let mut events = Events(VecDeque::new());
+        let mut events = Events {
+            queue: VecDeque::new(),
+            blocks: 0,
+            output: 0,
+        };
         let usage = json!({
             "input_tokens": request.div_ceil(4),
             "output_tokens": 0,
@@ -340,66 +389,61 @@ impl Events {
     }
 
     fn push(&mut self, name: &str, data: Value) {
-        self.0
+        self.queue
             .push_back(format!("event: {name}\ndata: {data}\n\n").into_bytes());
     }
 
-    /// A text block streamed in pieces ending at each `split`, and no end.
-    fn start_text(&mut self, text: &str) {
-        self.text_block(text, " ");
-    }
-
-    fn text_block(&mut self, text: &str, split: &str) {
+    /// A block: started with `block`, then each of `deltas`, then stopped.
+    fn block(&mut self, block: Value, deltas: impl IntoIterator<Item = Value>) {
+        let index = self.blocks;
+        self.blocks += 1;
         self.push(
             "content_block_start",
-            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_start", "index": index, "content_block": block}),
         );
-        for piece in text.split_inclusive(split) {
+        for delta in deltas {
             self.push(
                 "content_block_delta",
-                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": piece}}),
+                json!({"type": "content_block_delta", "index": index, "delta": delta}),
             );
         }
         self.push(
             "content_block_stop",
-            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "content_block_stop", "index": index}),
         );
     }
 
-    /// A whole reply of one text block.
+    /// A text block streamed in pieces ending at each `split`.
+    fn text_block(&mut self, text: &str, split: &str) {
+        self.output += text.len();
+        let pieces = text
+            .split_inclusive(split)
+            .map(|piece| json!({"type": "text_delta", "text": piece}));
+        self.block(json!({"type": "text", "text": ""}), pieces);
+    }
+
+    /// A whole reply ending in a text block.
     fn text(&mut self, text: &str, split: &str, stop: &str) {
         self.text_block(text, split);
-        self.end(stop, text.len().div_ceil(4));
+        self.end(stop);
     }
 
-    /// A whole reply of tool uses, each id unique in its conversation of
-    /// `n` messages.
+    /// A whole reply ending in tool uses, each id unique in its
+    /// conversation of `n` messages.
     fn tools(&mut self, uses: &[(String, String)], n: usize) {
-        for (index, (name, input)) in uses.iter().enumerate() {
-            self.push(
-                "content_block_start",
-                json!({"type": "content_block_start", "index": index, "content_block": {
-                    "type": "tool_use", "id": format!("toolu_scripted_{n}_{index}"), "name": name, "input": {},
-                }}),
-            );
-            self.push(
-                "content_block_delta",
-                json!({"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": input}}),
-            );
-            self.push(
-                "content_block_stop",
-                json!({"type": "content_block_stop", "index": index}),
+        for (name, input) in uses {
+            self.output += name.len() + input.len();
+            let id = format!("toolu_scripted_{n}_{}", self.blocks);
+            self.block(
+                json!({"type": "tool_use", "id": id, "name": name, "input": {}}),
+                [json!({"type": "input_json_delta", "partial_json": input})],
             );
         }
-        let output = uses
-            .iter()
-            .map(|(name, input)| name.len() + input.len())
-            .sum::<usize>()
-            .div_ceil(4);
-        self.end("tool_use", output);
+        self.end("tool_use");
     }
 
-    fn end(&mut self, stop: &str, output: usize) {
+    fn end(&mut self, stop: &str) {
+        let output = self.output.div_ceil(4);
         self.push(
             "message_delta",
             json!({"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": null}, "usage": {"output_tokens": output}}),

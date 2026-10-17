@@ -12,8 +12,8 @@
 // `up` builds the harness, ends whatever this clone left on PORT (the
 // brain and its limbs), and starts a brain there on its own database in
 // .drive.ignore/PORT/ and this clone's roles/, every role on MODEL: the
-// scripted model, which costs nothing, unless told (`sonnet`; a role's
-// effort stays its file's). Its database outlives `up`, so the next `up`
+// scripted model, which costs nothing, unless told (`sonnet/low`, or
+// `sonnet` to keep each role's effort: the brain's `--model`). Its database outlives `up`, so the next `up`
 // relaunches a rebuilt brain on the same chats; `down --wipe` forgets them.
 // Its face serves the page from crates/face-web/src/page as it is on disk
 // (`--page`), so an edit to the page shows on reload, with no rebuild.
