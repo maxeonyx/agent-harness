@@ -223,7 +223,7 @@ function renderControls(t) {
   const row = $(".acts", compose);
   if (!row) return;
   const holder = heldBy(t);
-  const key = `${t.id}:${isDone(t)}:${holder?.id}:${t.mode}:${!!t.stop}:${t.stop?.hard}:${can.act}`;
+  const key = `${t.id}:${isDone(t)}:${holder?.id}:${t.pause?.how}:${t.mode}:${!!t.stop}:${t.stop?.hard}:${can.act}`;
   if (row.dataset.key === key) return;
   row.dataset.key = key;
   row.replaceChildren();
@@ -240,10 +240,11 @@ function renderControls(t) {
     };
     row.append(b);
   };
-  if (holder) action("Resume", holder === t ? "It and everything under it carry on" : `Paused with ${holder.name}: it and everything under it carry on`, () => ({ Task: [holder.id, { Held: false }] }));
-  else action("Pause", "It and everything under it finish what is running, then wait", () => ({ Task: [t.id, { Held: true }] }));
-  if (!t.stop) action("Cancel", "It and everything it started stop, tidy up and report", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 120000 } } }] }), true);
-  else if (!t.stop.hard) action("Cancel now", "End it and everything it started now, with no tidy-up", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 0 } } }] }), true);
+  if (t.pause?.how === "now") action("Park", "Pause for now: each agent in the middle of its work brings it to a safe point, says where it stands, and waits", () => ({ Task: [t.id, { Pause: "Park" }] }));
+  if (holder) action("Resume", holder === t ? "It and everything under it carry on" : `Paused with ${holder.name}: it and everything under it carry on`, () => ({ Task: [holder.id, { Pause: "Off" }] }));
+  else action("Pause", "Nothing new starts under it: what is running finishes, then it waits", () => ({ Task: [t.id, { Pause: "Now" }] }));
+  if (!t.stop) action("Abandon", "The work is no longer needed: it and everything it started stop, tidy up and report", () => ({ Task: [t.id, { Drain: { Abandon: { by: "Max", within: 120000 } } }] }), true);
+  else if (!t.stop.hard) action("Abandon now", "End it and everything it started now, with no tidy-up", () => ({ Task: [t.id, { Drain: { Abandon: { by: "Max", within: 0 } } }] }), true);
   if (t.mode === "user-facing") action("Done", "It writes its result and finishes", (at) => ({ Delivery: { id: `${at}.0`, to: t.id, content: { Prompt: "Done" } } }));
 }
 

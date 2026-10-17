@@ -97,10 +97,21 @@ pub enum Prompt {
     /// it was opened on is waiting only on it, and carries on once Max marks
     /// it done. Said once per aside ([`crate::state::Todo::Unblock`]).
     Unblocked,
-    /// The task is being cancelled, and everything it started has stopped:
-    /// leave what it was doing safe and understandable, then end the turn
-    /// with a report of where things stand, before the deadline. The one
-    /// turn a stopping task gets ([`crate::cancel`]); said once, by the
-    /// brain ([`crate::state::Todo::Tidy`]).
-    Stopping,
+    /// The task is abandoned, and everything it started has stopped: leave
+    /// what it was doing safe and understandable, then end the turn with a
+    /// report of where things stand, before the deadline. The one turn an
+    /// abandoned task gets ([`crate::cancel`]); said once, by the brain
+    /// ([`crate::state::Todo::Tidy`]).
+    #[serde(alias = "Stopping")]
+    Tidy,
+    /// Max parked the task ([`crate::task::Pause::Park`]): bring the work to
+    /// a safe point, start nothing new, keep or stop its background work as
+    /// it sees fit, and end the turn saying where things stand. It is not
+    /// the end of the task: the turn that reads this ends
+    /// [`crate::task::Phase::Parked`]. Said once per park, by the brain
+    /// ([`crate::state::Todo::Park`]).
+    Park,
+    /// Max resumed a task that parked or was asked to: carry on from where
+    /// it left off. Said by the brain ([`crate::state::Todo::Resume`]).
+    Resume,
 }

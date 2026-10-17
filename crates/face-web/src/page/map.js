@@ -36,12 +36,13 @@ function look(t) {
     case "starting": return { cls: "starting", text: w.limbs.length ? `making ${w.limbs.join(", ")}` : "starting" };
     case "harness": return { cls: "working" + stopping, text: "harness" + since };
     case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `paused with ${h.name}` : "paused" }; }
+    case "parked": return { cls: "paused", text: "parked" + since };
     case "limited": return { cls: "paused", text: `limited until ${clock(w.until)}` };
     case "listening": return { cls: "listening" + stopping, text: w.calls.length ? `${w.calls.length} in the background` : "listening" };
     case "done": {
       const o = t.outcome || {};
       if (o.kind === "failed") return { cls: "done failed", text: `failed ${ago(w.since)} ago` };
-      if (o.kind === "cancelled") return { cls: "done cancelled", text: `cancelled ${ago(w.since)} ago` };
+      if (o.kind === "abandoned") return { cls: "done cancelled", text: `abandoned ${ago(w.since)} ago` };
       return { cls: "done", text: `done ${ago(w.since)} ago` };
     }
   }
@@ -60,7 +61,7 @@ const chained = (t) => t.origin === "resume" && !t.owner && byId[t.from] && !byI
 const parentOf = (t) => t.owner ? live(t.owner) : t.from && byId[t.from] && !chained(t) ? live(t.from) : null;
 const ancestry = (t) => { const out = []; for (let p = parentOf(t); p && byId[p] && out.length < 50; p = parentOf(byId[p])) out.unshift(byId[p]); return out; };
 // What pauses a task: itself, or the nearest paused task above it.
-const heldBy = (t) => t.held ? t : ancestry(t).reverse().find((a) => a.held) || null;
+const heldBy = (t) => !t.pause ? null : t.pause.by === t.id ? t : ancestry(t).find((a) => a.id === t.pause.by) || null;
 // The calls a task is waiting on right now.
 function awaited(t) {
   const w = t?.waiting || {};

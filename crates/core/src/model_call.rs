@@ -169,7 +169,7 @@ impl ModelCallEvent {
                 quota: _,
             } => match ending {
                 Ending::Responded { content, stop: _ } => out.push(*content),
-                Ending::Abandoned { partial } => out.extend(*partial),
+                Ending::Cut { partial } => out.extend(*partial),
                 Ending::Failed { .. } | Ending::Limited { .. } | Ending::Lost => {}
             },
         }
@@ -197,10 +197,12 @@ pub enum Ending {
     /// until `until`. Not the task's failure, so it never counts towards
     /// giving up on it.
     Limited { until: Timestamp },
-    /// The harness stopped reading: Max interrupted, or the task is
-    /// stopping. Nothing was kept as the model's; the visible text Max may
-    /// have been reacting to is kept here and quoted to the model next.
-    Abandoned { partial: Option<ValueId> },
+    /// The harness cut it: Max interrupted, the task is abandoned, or the
+    /// brain is shutting down. Nothing was kept as the model's; the visible
+    /// text Max may have been reacting to is kept here and quoted to the
+    /// model next.
+    #[serde(alias = "Abandoned")]
+    Cut { partial: Option<ValueId> },
     /// Sent by an earlier brain, which ended before it did. Nothing from it
     /// was kept.
     Lost,

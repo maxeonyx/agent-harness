@@ -40,7 +40,7 @@ pub enum Progress {
 pub struct Finished {
     pub ending: Ending,
     /// The bytes of [`Ending::Responded`]'s content or
-    /// [`Ending::Abandoned`]'s partial, which travel in the batch that
+    /// [`Ending::Cut`]'s partial, which travel in the batch that
     /// records the ending. The brain reads a response's tool uses from them.
     pub value: Option<Vec<u8>>,
     pub usage: Option<Usage>,
@@ -73,7 +73,7 @@ impl Client {
     /// arrives, then the visible text as [`Live`].
     ///
     /// Requesting `cancel` cuts the request at once, wherever it is blocked:
-    /// it ends [`Ending::Abandoned`] with the visible text so far and the
+    /// it ends [`Ending::Cut`] with the visible text so far and the
     /// usage the stream had reported. A request has no graceful phase; its
     /// owner decides whether to let it finish.
     ///
@@ -97,7 +97,7 @@ impl Client {
             quota,
         };
         let cut = |e: std::io::Error, status| match Cancelled::is(&e) {
-            true => Ending::Abandoned { partial: None },
+            true => Ending::Cut { partial: None },
             false => failed(status, e.to_string(), None),
         };
 
@@ -149,7 +149,7 @@ impl Client {
             if let Err(e) = reader.read_to_string(&mut text)
                 && Cancelled::is(&e)
             {
-                return Ok(end(Ending::Abandoned { partial: None }, None, quota));
+                return Ok(end(Ending::Cut { partial: None }, None, quota));
             }
             let message = serde_json::from_str::<serde_json::Value>(&text)
                 .ok()
@@ -175,7 +175,7 @@ impl Client {
                 Some(Err(e)) if Cancelled::is(&e) => {
                     let partial = assembly.visible();
                     return Ok(Finished {
-                        ending: Ending::Abandoned {
+                        ending: Ending::Cut {
                             partial: partial.as_deref().map(ValueId::of),
                         },
                         value: partial,

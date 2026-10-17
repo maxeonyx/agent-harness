@@ -70,7 +70,11 @@
 //!   command's processes and the brain itself ([`cancel`]): a stop carries a
 //!   deadline that shrinks on the way down, everything owned confirms its
 //!   exit before its owner's tidy-up turn, and the deadline is a hard kill
-//!   that needs no cooperation. Members are created in
+//!   that needs no cooperation. Max has three controls over a subtree,
+//!   inherited down it: pause (nothing new starts, nothing running is cut,
+//!   no turn is spent), park (each agent in the middle of its own loop
+//!   takes one turn to reach a safe point, then waits; [`task::Pause`]),
+//!   and abandon (that protocol: the work is done, but abandoned). Members are created in
 //!   the batch that dispatches their spawn, so membership is atomic with
 //!   the scope. Only Max starts tasks in his scope; an agent starts, through
 //!   its own meta call, only forks of itself, resumes of its finished

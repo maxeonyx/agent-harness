@@ -13,7 +13,7 @@ use harness_core::id::{CallId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::model_call::{Ending, ModelCallEvent};
 use harness_core::state::{Ended, State, Waiting};
 use harness_core::task::{
-    Drain, Draining, Input, Mode, Move, Origin, Outcome, Phase, Scope, Task, TaskEvent,
+    Drain, Draining, Input, Mode, Move, Origin, Outcome, Pause, Phase, Scope, Task, TaskEvent,
 };
 use harness_face_tab::{DraftRow, FaceKey, FaceRow};
 use serde_json::{Value, json};
@@ -151,7 +151,7 @@ fn trouble(ended: &Ended) -> Value {
             },
         }),
         Ending::Limited { until } => json!({"at": ended.at.at.0, "until": until.0}),
-        Ending::Responded { .. } | Ending::Abandoned { .. } | Ending::Lost => Value::Null,
+        Ending::Responded { .. } | Ending::Cut { .. } | Ending::Lost => Value::Null,
     }
 }
 
@@ -165,8 +165,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
     let outcome = match t.outcome() {
         Some(Outcome::Result { .. }) => json!({"kind": "result"}),
         Some(Outcome::Failed { reason }) => json!({"kind": "failed", "reason": reason}),
-        Some(Outcome::Cancelled { by, report }) => {
-            json!({"kind": "cancelled", "by": format!("{by:?}"), "report": report.is_some()})
+        Some(Outcome::Abandoned { by, report }) => {
+            json!({"kind": "abandoned", "by": format!("{by:?}"), "report": report.is_some()})
         }
         None => Value::Null,
     };
@@ -202,16 +202,24 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
         "window": state.environment(t.environment).map(|e| harness_provider::context_window(&e.model)),
         "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
-        "held": t.held,
+        // Whether Max has paused it, how, and on which task: itself or an
+        // ancestor.
+        "pause": state.pause(t.id).map(|(how, by)| json!({
+            "how": match how {
+                Pause::Park => "park",
+                Pause::Now | Pause::Off => "now",
+            },
+            "by": by.to_string(),
+        })),
         "scoped": scoped,
         "draining": t.drain().map(|d| match d {
             Draining::ToMax => "to Max".to_string(),
-            Draining::Stopping(s) => format!("stop ({:?})", s.by),
+            Draining::Abandoning(s) => format!("abandon ({:?})", s.by),
             Draining::Failing(reason) => format!("fail: {reason}"),
         }),
         // How far through its stop it is, and by when it must have exited.
         "stop": match t.drain() {
-            Some(Draining::Stopping(s)) => json!({
+            Some(Draining::Abandoning(s)) => json!({
                 "by": format!("{:?}", s.by),
                 "deadline": s.deadline.0,
                 "tidying": s.tidying,
@@ -277,7 +285,8 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
             "limbs": limbs.iter().map(|l| state.limb(*l).map_or_else(|| l.to_string(), |l| l.name.clone())).collect::<Vec<_>>(),
         }),
         Waiting::Brain { since } => json!({"kind": "harness", "since": since.0}),
-        Waiting::Held { since } => json!({"kind": "held", "since": since.0}),
+        Waiting::Paused { since } => json!({"kind": "held", "since": since.0}),
+        Waiting::Parked { since } => json!({"kind": "parked", "since": since.0}),
         Waiting::Limited { until, since } => {
             json!({"kind": "limited", "until": until.0, "since": since.0})
         }
@@ -385,18 +394,19 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             }
             TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
             TaskEvent::Drain(Drain::ToMax { .. }) => format!("{} interrupted", name(*id)),
-            TaskEvent::Drain(Drain::Stop { by, within: 0 }) => {
-                format!("{} stopped by {by:?}, now", name(*id))
+            TaskEvent::Drain(Drain::Abandon { by, within: 0 }) => {
+                format!("{} abandoned by {by:?}, now", name(*id))
             }
-            TaskEvent::Drain(Drain::Stop { by, within }) => format!(
-                "{} stopped by {by:?}, to exit within {}s",
+            TaskEvent::Drain(Drain::Abandon { by, within }) => format!(
+                "{} abandoned by {by:?}, to exit within {}s",
                 name(*id),
                 within / 1000
             ),
             TaskEvent::Expired => format!("{} is past its deadline: stopped hard", name(*id)),
             TaskEvent::Drain(Drain::Fail(why)) => format!("{} failing: {why}", name(*id)),
-            TaskEvent::Held(true) => format!("{} held", name(*id)),
-            TaskEvent::Held(false) => format!("{} released", name(*id)),
+            TaskEvent::Pause(Pause::Now) => format!("{} paused", name(*id)),
+            TaskEvent::Pause(Pause::Park) => format!("{} parked", name(*id)),
+            TaskEvent::Pause(Pause::Off) => format!("{} resumed", name(*id)),
         },
         Fact::ModelCall(id, event) => {
             let task = state.model_call(*id).map(|m| name(m.call.task));
@@ -423,7 +433,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                             None => format!("{task}: request failed: {message}"),
                         },
                         Ending::Limited { .. } => format!("{task}: limited by the account"),
-                        Ending::Abandoned { .. } => format!("{task}: response abandoned"),
+                        Ending::Cut { .. } => format!("{task}: response cut"),
                         Ending::Lost => format!("{task}: request lost"),
                     }
                 }

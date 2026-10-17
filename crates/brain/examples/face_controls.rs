@@ -20,7 +20,7 @@ use harness_core::fact::{Batch, Fact};
 use harness_core::id::{DeliveryId, ModelCallId, TaskId};
 use harness_core::live::Live;
 use harness_core::schema::Harness;
-use harness_core::task::{Drain, TaskEvent};
+use harness_core::task::{Drain, Pause, TaskEvent};
 use harness_face_tab::{FaceKey, FaceRow, Up};
 use harness_store::Store;
 use harness_substrate::{Status, Storage, What};
@@ -62,16 +62,19 @@ fn main() {
     let root = max.root().unwrap();
     say(&format!("the root task is {}", name(&max, root)));
 
-    title("hold the root: nothing under it sends a request until it is released");
-    let held = say_facts(&mut max, vec![Fact::Task(root, TaskEvent::Held(true))]);
-    verdict(&mut max, "hold", held);
+    title("pause the root: nothing under it sends a request until it is resumed");
+    let held = say_facts(
+        &mut max,
+        vec![Fact::Task(root, TaskEvent::Pause(Pause::Now))],
+    );
+    verdict(&mut max, "pause", held);
     max.pump_until(|d| !with_waiting(d, "held").is_empty());
     brain.poll();
     let names: Vec<String> = with_waiting(&max, "held")
         .into_iter()
         .map(|t| name(&max, t))
         .collect();
-    say(&format!("held now: {}", names.join(", ")));
+    say(&format!("paused now: {}", names.join(", ")));
     max.listen(Duration::from_secs(5), |_| false);
     let sent = brain
         .poll()
@@ -79,10 +82,13 @@ fn main() {
         .filter(|l| l.contains("request sent"))
         .count();
     say(&format!(
-        "5 s later: {sent} requests sent meanwhile; release it"
+        "5 s later: {sent} requests sent meanwhile; resume it"
     ));
-    let released = say_facts(&mut max, vec![Fact::Task(root, TaskEvent::Held(false))]);
-    verdict(&mut max, "release", released);
+    let released = say_facts(
+        &mut max,
+        vec![Fact::Task(root, TaskEvent::Pause(Pause::Off))],
+    );
+    verdict(&mut max, "resume", released);
 
     title("interrupt both children as soon as they are under way");
     max.listen(Duration::from_secs(180), |d| children(d).len() == 2);
@@ -168,9 +174,9 @@ fn main() {
         deliveries(&db, id)
     );
 
-    title(&format!("stop the other, {}", name(&max, other)));
-    let stop = max.stop(other, Duration::from_secs(120));
-    verdict(&mut max, "stop", stop);
+    title(&format!("abandon the other, {}", name(&max, other)));
+    let abandon = max.abandon(other, Duration::from_secs(120));
+    verdict(&mut max, "abandon", abandon);
     max.listen(Duration::from_secs(180), |d| {
         !row(d, other)["outcome"].is_null()
     });
@@ -183,8 +189,11 @@ fn main() {
     ));
 
     title("what the brain refuses, in the tab's standing");
-    let n = say_facts(&mut max, vec![Fact::Task(other, TaskEvent::Held(true))]);
-    verdict(&mut max, "hold the stopped task", n);
+    let n = say_facts(
+        &mut max,
+        vec![Fact::Task(other, TaskEvent::Pause(Pause::Now))],
+    );
+    verdict(&mut max, "pause the abandoned task", n);
     let more = blocks("Are you still there?");
     let id = DeliveryId(max.tab.next().event(0));
     let n = max.say(Batch {
@@ -196,7 +205,7 @@ fn main() {
             read: Read::Next,
         })],
     });
-    verdict(&mut max, "words to the stopped task", n);
+    verdict(&mut max, "words to the abandoned task", n);
     let n = say_facts(
         &mut max,
         vec![Fact::Task(
@@ -272,14 +281,15 @@ fn main() {
 
 /// What the brain logs of Max's controls.
 const CONTROLS: &[&str] = &[
-    " held",
-    " released",
+    " paused",
+    " parked",
+    " resumed",
     " interrupted",
-    "response abandoned",
+    "response cut",
     "queue ranked",
     "changed focus",
     "delivered to",
-    "stopped by Max",
+    "abandoned by Max",
     "the task is done",
 ];
 

@@ -20,7 +20,7 @@ Every control is one record said at the tab: a `harness_core::fact::Batch` of Ma
 ```rust
 Fact::Task(task, TaskEvent::Held(true))
 Fact::Task(task, TaskEvent::Drain(Drain::ToMax { turn }))       // turn: the request Max watched
-Fact::Task(task, TaskEvent::Drain(Drain::Stop { by: Stopper::Max, within: 120_000 }))
+Fact::Task(task, TaskEvent::Drain(Drain::Abandon { by: Abandoner::Max, within: 120_000 }))
 Fact::Ranking(Ranking { order: vec![Ranked { task, why: "placed by you".into() }] })
 Fact::Focus(Focus { task: Some(task) })
 Fact::Delivery(Delivery { id, to: task, content: Content::Words(words.id()), read: Read::Next })
