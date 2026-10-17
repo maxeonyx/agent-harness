@@ -108,11 +108,10 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
         rows.insert(FaceKey::Scope(id), FaceRow::Scope(scope));
     }
     // A sent draft is a delivery in its session; a discarded one is gone.
-    // What is left can still be sent, or was held with its words kept.
+    // What is left can still be sent, or was held with its words kept: a
+    // finished session's draft is the words that continue it.
     for d in state.drafts() {
-        let open = d.sent.is_none() && !d.discarded;
-        let live = state.task(d.session).is_some_and(|t| !t.is_done());
-        if !(open && (live || d.held.is_some())) {
+        if d.sent.is_some() || d.discarded {
             continue;
         }
         let row = DraftRow {
