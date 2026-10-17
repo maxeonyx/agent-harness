@@ -30,8 +30,15 @@ fn text(value: Text, id: ValueId) -> Option<String> {
 /// were held.
 pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, FaceRow> {
     let mut rows = BTreeMap::new();
+    // Each task's newest request: what an interrupt names.
+    let mut turns = BTreeMap::new();
+    for (id, record) in state.model_calls() {
+        let newest = turns.entry(record.call.task).or_insert(id);
+        *newest = (*newest).max(id);
+    }
     for t in state.tasks() {
-        let row = task(state, value, t, state.last_turn(t.id), now);
+        let mut row = task(state, value, t, state.last_turn(t.id), now);
+        row["turn"] = json!(turns.get(&t.id).map(|id| id.to_string()));
         rows.insert(FaceKey::Task(t.id), FaceRow::Task(row));
     }
     let queue: Vec<Value> = state
@@ -376,7 +383,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                 )
             }
             TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
-            TaskEvent::Drain(Drain::ToMax) => format!("{} interrupted", name(*id)),
+            TaskEvent::Drain(Drain::ToMax { .. }) => format!("{} interrupted", name(*id)),
             TaskEvent::Drain(Drain::Stop { by, within: 0 }) => {
                 format!("{} stopped by {by:?}, now", name(*id))
             }

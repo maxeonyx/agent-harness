@@ -1368,7 +1368,7 @@ function renderControls(t) {
     box.append(b);
   };
   if (t.scoped) { const a = el("button", "btn", "Aside"); a.title = "Talk to a fork of it while its agents work; it is told when they are done, and when you say Done its summary goes back with their results"; a.onclick = () => aside(t, answer); box.append(a); }
-  else if (t.waiting?.kind !== "max") button("Interrupt", "Stop at the next safe point and wait for you", () => ({ Task: [t.id, { Drain: "ToMax" }] }), "interrupted: your move once it stops");
+  else if (t.waiting?.kind !== "max" && t.turn) button("Interrupt", "Stop at the next safe point and wait for you", () => ({ Task: [t.id, { Drain: { ToMax: { turn: byId[t.id].turn } } }] }), "interrupted: your move once it stops");
   button(t.held ? "Release" : "Hold", "No new requests under it until released", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), t.held ? "released" : "held");
   if (t.mode === "user-facing") button("Done", "It writes its result and finishes", (at) => ({ Delivery: { id: `${at}.0`, to: t.id, content: { Prompt: "Done" } } }), "done: its last turn writes the result", true);
   // A stop gives it two minutes to stop what it started and tidy up; Kill
