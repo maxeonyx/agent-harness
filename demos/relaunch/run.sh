@@ -11,7 +11,7 @@
 # why, and the old build never stopped. Then onto a commit whose brain
 # exits 20 s after it starts, which the rehearsal cannot see: the old
 # build's builds limb sees it die, starts the old bytes again, and the
-# session reads why at its next turn. Each rehearsal has the provider
+# session is woken to read why. Each rehearsal has the provider
 # count tokens and stream one short response: a few real requests.
 set -euo pipefail
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -20,7 +20,7 @@ unit=harness-$name.service
 home=${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness
 work=$repo/.demo-relaunch.ignore
 step() { printf '\n== %s\n' "$*"; }
-view() { curl -sk "https://localhost:$port/view" | jq -c '.rows.harness.Harness | {source, how: .launch.how, probation}'; }
+view() { curl -sk "https://localhost:$port/view" | jq -c '.rows.harness.Harness | {source, how: .launch.how, relaunch, probation, superseded}'; }
 
 systemctl --user -q is-active "$unit" && systemctl --user stop "$unit"
 rm -rf "$work" "$home/$name"
@@ -85,8 +85,7 @@ for _ in $(seq 300); do
 done
 view
 echo "NAME/build -> $(readlink "$home/$name/build")"
-step "the session's next turn reads why"
-"$act" "$port" say "$chat" "say read it" | tail -1
+step "the session wakes, unasked, and reads why"
 for _ in $(seq 240); do
     said=$(sqlite3 "$home/$name/brain.sqlite" "select cast(bytes as text) from value" |
         grep -a '(scripted) Noted' | grep -a -o "\[harness\] $unit: [^\"]*" | tail -1) || true

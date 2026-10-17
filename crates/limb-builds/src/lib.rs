@@ -301,6 +301,7 @@ impl Inner {
                         version: observed.version,
                         by: None,
                         content: Some(content.id()),
+                        wakes: true,
                     })],
                     values: vec![content],
                 });

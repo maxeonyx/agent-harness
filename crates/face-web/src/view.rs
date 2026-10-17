@@ -111,6 +111,12 @@ pub fn rows(
         "launch": state.launch().map(|(_, l)| l),
         "probation": state.probation().verdict(),
         "source": source,
+        "relaunch": relaunch(state, value),
+        "superseded": state
+            .limbs()
+            .filter(|l| state.superseded(l.id).is_some())
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>(),
         "limited": state.limited(now).map(|t| t.0),
         "provider": provider.map(|l| l.to_string()),
         "usage": usage(state, value, provider),
@@ -166,6 +172,45 @@ pub fn rows(
 /// headers reported and what Max's latest usage reading returned, each
 /// window by name, as of when; whether a reading is running; and why the
 /// last one failed, if none has succeeded since.
+/// Where the latest relaunch of the brain stands, as far as it concerns the
+/// build running now: `under way` while the builds limb is building and
+/// rehearsing it; `took over` once it settled in this launch's span, when
+/// `probation` says how far the build has proven itself; `went back` with
+/// the builds limb's reason, the content of its change of the service it
+/// relaunched, when that change came after this launch. `null` when the
+/// running build did not come from a relaunch.
+fn relaunch(state: &State, value: Text) -> Value {
+    let builds = |limb: Option<LimbId>| {
+        limb.and_then(|l| state.limb(l))
+            .is_some_and(|l| matches!(&l.kind, LimbKind::Plugin { kind, .. } if kind == "builds"))
+    };
+    let Some((_, call)) = state
+        .calls()
+        .filter(|(_, c)| c.call.tool == "relaunch" && builds(c.limb))
+        .last()
+    else {
+        return Value::Null;
+    };
+    let Some(settled) = &call.settled else {
+        return json!({"stage": "under way"});
+    };
+    let CallOutcome::Completed(output) = &settled.outcome else {
+        return Value::Null;
+    };
+    let since = state.launch().map(|(mark, _)| mark.seq);
+    let back = output
+        .observes
+        .iter()
+        .filter_map(|o| state.resource(&o.resource))
+        .find(|c| Some(c.at.seq) > since)
+        .and_then(|c| c.content);
+    match back {
+        Some(why) => json!({"stage": "went back", "why": text(value, why)}),
+        None if Some(settled.at.seq) > since => json!({"stage": "took over"}),
+        None => Value::Null,
+    }
+}
+
 fn usage(state: &State, value: Text, provider: Option<LimbId>) -> Value {
     let window = |w: &Window| json!({"used": w.used, "resets": w.resets.map(|t| t.0)});
     let mut at = None;
