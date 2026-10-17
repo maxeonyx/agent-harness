@@ -16,28 +16,41 @@ pub fn backoff_ms(failures: u32) -> i64 {
     1000 << failures.min(5)
 }
 
-/// Where a request asks the provider to cache: the end of the root, the end
-/// of the context the request extends, the end of a shared brief it appends,
-/// and its new tail.
+/// Where a request asks the provider to cache, at most the provider's four
+/// places: the end of the root, the task's latest checkpoint, the end of the
+/// context the request extends, the end of a shared brief it appends, and
+/// its new tail.
 ///
-/// The middle ones are what make fan-outs cheap. A fork starts on its
-/// parent's response, which no parent request ever marked, and fresh
-/// siblings append the same brief to the same root, so the first request of
-/// the first sibling writes that prefix and the others read it ([`hold`]).
-/// The same mark on an ordinary turn re-reads the previous request's prefix.
-pub fn breakpoints(root: EntryId, shared: &[EntryId], tail: EntryId) -> Vec<EntryId> {
+/// The middle ones are what make fan-outs and compactions cheap. A fork
+/// starts on its parent's response, which no parent request ever marked,
+/// and fresh siblings append the same brief to the same root, so the first
+/// request of the first sibling writes that prefix and the others read it
+/// ([`hold`]). A compaction resumes at the latest checkpoint, which each
+/// request since has kept warm by marking it. The same mark on an ordinary
+/// turn re-reads the previous request's prefix. A brief is only on a
+/// context's first request, which has no checkpoint yet, so the four are
+/// enough.
+pub fn breakpoints(
+    root: EntryId,
+    checkpoint: Option<EntryId>,
+    shared: &[EntryId],
+    tail: EntryId,
+) -> Vec<EntryId> {
     let mut at = vec![root];
-    for &id in shared.iter().chain([&tail]) {
+    for &id in checkpoint.iter().chain(shared).chain([&tail]) {
         if !at.contains(&id) {
             at.push(id);
         }
+    }
+    if at.len() > 4 {
+        at.drain(1..at.len() - 3);
     }
     at
 }
 
 /// Fan-out gating: hold a task's request while another task's request whose
 /// context contains this task's head has not had its first byte. Siblings
-/// over one cold prefix (forks at one response, fresh tasks on one seed)
+/// over one cold prefix (forks at one response, fresh tasks on one brief)
 /// then pay one cache write between them instead of one each.
 pub fn hold<'a>(head: EntryId, cold: impl IntoIterator<Item = &'a HashSet<EntryId>>) -> bool {
     cold.into_iter().any(|context| context.contains(&head))

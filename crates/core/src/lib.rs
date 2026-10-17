@@ -23,7 +23,7 @@
 //! | A build of the brain | [`build::BuildId`]; its span opened by [`build::Launched`] | [`fact::Fact::Launched`], [`fact::Fact::Shutdown`] | [`state::State::launch`], [`state::State::shutdown`] |
 //! | A value | [`id::ValueId`] | none: immutable [`value::Bytes`], arriving in the [`fact::Batch`] that first names them | itself |
 //! | Max's words | a value he said | the delivery, mandate or settlement that carried them | [`state::State::said`], [`state::State::heard`] |
-//! | A context | [`context::Entry`], named by [`context::EntryId`] | none: carried inside the fact that first sends or receives it | [`state::State::context`] |
+//! | A context | [`context::Entry`], named by [`context::EntryId`] | none: carried inside the fact that first sends or receives it, or the [`task::Compaction`] that appends it | [`state::State::context`], [`state::State::checkpoint`], [`state::State::compacted`] |
 //! | A task | [`task::Task`] | [`task::TaskEvent`], and the facts below that concern it | [`task::Task`]: its [`task::Life`], folded by the brain's fold ([`schema::Harness`]) |
 //! | A request | [`model_call::ModelCall`] | [`model_call::ModelCallEvent`] | [`state::ModelCallRecord`] |
 //! | A call | [`call::Call`] | [`call::CallEvent`] | [`state::CallRecord`] |
@@ -54,8 +54,10 @@
 //!   wire messages, held by the fold. A fork starts on its parent's
 //!   response; fresh siblings with the same brief and attachments append the
 //!   same entries, so a shared seed is one cache prefix with no bookkeeping;
-//!   a handover or a rebuild moves the head to a new root; a resume starts on a
-//!   finished task's last entry; a rewind moves back and restores what the
+//!   a compaction moves the head back to the task's latest checkpoint, or to
+//!   a new root, and appends what it carries forward, so the agent moves
+//!   between phases of its work without losing itself and nothing is
+//!   deleted; a resume starts on a finished task's last entry; a rewind moves back and restores what the
 //!   context embodied there; an aside is Max's fork of a task waiting on
 //!   its children, a member of the scope it waits on, so its result reaches
 //!   the task with theirs. A request's head is computed from its base
@@ -164,7 +166,7 @@
 //! the limb of a directory that has one ([`state::State::limb_named`]); when
 //! to let go of a limb process no task needs; which pending inputs a
 //! request renders beyond the results it must; the wording of notes; where
-//! breakpoints go; keep-alive and handover timing, an expected-value
+//! breakpoints go; keep-alive and compaction timing, an expected-value
 //! decision over [`model_call::ModelCall`] records; when to hold a fan-out's
 //! siblings (until the first one's first byte); retry and give-up
 //! thresholds, including when an account limit or a bad billing claim stops

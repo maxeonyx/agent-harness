@@ -378,6 +378,9 @@ enum Author {
     Max { words: ValueId, at: Timestamp },
     /// A standard prompt: Max's Done, or the stop an owner or Max made.
     Prompt(Prompt),
+    /// A compaction's framing and summary; it replaced the branch ending at
+    /// `from`.
+    Compacted { from: EntryId },
 }
 
 /// A request that appended some of a context: its messages and the runs of
@@ -387,9 +390,29 @@ struct Sent {
     runs: Vec<(Author, usize)>,
 }
 
-/// The requests that appended the messages of `chain`.
+/// The requests and compactions that appended the messages of `chain`.
 fn sent(state: &State, chain: &[(EntryId, Entry, Value)]) -> Vec<Sent> {
     let wanted: BTreeSet<EntryId> = chain.iter().map(|(id, _, _)| *id).collect();
+    let carried = chain.iter().filter_map(|(id, entry, _)| {
+        let compacted = state.compacted(*id)?;
+        let Entry::Message { message, .. } = entry else {
+            return None;
+        };
+        let runs = compacted.renders.iter().map(|span| {
+            let author = match span.from {
+                Rendered::Note(Note::Compacted) => Author::Compacted {
+                    from: compacted.from,
+                },
+                _ => author(state, compacted.task, &span.from),
+            };
+            (author, span.blocks)
+        });
+        Some(Sent {
+            messages: vec![(*id, message.content)],
+            runs: runs.collect(),
+        })
+    });
+    let carried: Vec<Sent> = carried.collect();
     state
         .model_calls()
         .filter_map(|(_, record)| {
@@ -414,6 +437,7 @@ fn sent(state: &State, chain: &[(EntryId, Entry, Value)]) -> Vec<Sent> {
                         .collect(),
                 })
         })
+        .chain(carried)
         .collect()
 }
 
@@ -452,6 +476,13 @@ fn author(state: &State, task: TaskId, from: &Rendered) -> Author {
             _ => Author::Mandate,
         },
         Rendered::Note(Note::Brief) => Author::Brief,
+        Rendered::Note(Note::Kept { words }) => match state.said(*words) {
+            Some(mark) => Author::Max {
+                words: *words,
+                at: mark.at,
+            },
+            None => Author::Harness,
+        },
         Rendered::Note(_) => Author::Harness,
     }
 }
@@ -490,6 +521,9 @@ fn authors(
                         Author::Mandate => json!({"by": "mandate"}),
                         Author::Brief => json!({"by": "brief"}),
                         Author::Prompt(p) => json!({"by": "prompt", "prompt": format!("{p:?}")}),
+                        Author::Compacted { from } => {
+                            json!({"by": "compacted", "from": from.to_string()})
+                        }
                     },
                 })
                 .collect();

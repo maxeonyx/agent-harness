@@ -7,7 +7,7 @@ use imbl::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome, Owner};
-use crate::context::{EntryId, Message, Note, Rendered, Role, Root, Span};
+use crate::context::{Entry, EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::Binding;
 use crate::fact::{Author, Fact, Rejected, Stated};
@@ -28,9 +28,10 @@ use crate::state::{Mark, State};
 /// for life, the limbs that fill that environment's places (its own clone),
 /// and a [`Life`]: starting, live in a [`Context`], or done. A task is an
 /// identity; its context is a value. The head moves through the context tree
-/// (a fork starts a task on its parent's response, a handover moves a task
-/// to a new root, a resume starts a task on another's last entry, a rewind
-/// moves it back), and none of that copies or edits a context.
+/// (a fork starts a task on its parent's response, a compaction replaces
+/// what the task did since a checkpoint with what it carries, a resume
+/// starts a task on another's last entry, a rewind moves it back), and
+/// none of that copies or edits a context.
 ///
 /// Creation and the first root are separate facts. A spawn creates its
 /// members in the batch that dispatches it, so a scope's membership is
@@ -52,11 +53,12 @@ use crate::state::{Mark, State};
 /// [`Phase::Acting`] on its spawn call, like waiting on any tool, and a task
 /// is done only when nothing it started is still running and nothing sent
 /// to it is unread); the A.1.3 problem (the mandate is data, so the harness
-/// can state it at the fork, after each tool round and after a handover);
+/// can state it at the fork, after each tool round and in a compaction's
+/// carry);
 /// user-facing, autonomous and standing tasks, which differ only in
 /// [`Mode`]; the throbber; restart (the life says what to redo); and Max's
 /// words never lost (a pending delivery stops a turn from completing the
-/// task, and survives a handover).
+/// task, and survives a compaction).
 ///
 /// **Existing harnesses.** OpenCode, Codex and Oh My Pi each keep a session
 /// or thread with a status the agent loop keeps current as it runs, and
@@ -141,7 +143,7 @@ pub struct Live {
     pub drain: Option<Draining>,
     /// Since when Max has owed this task a word: set when a user-facing turn
     /// ends or Max interrupts, cleared by his words or by a change of mode.
-    /// It survives the harness's own turns (a handover before the cache
+    /// It survives the harness's own turns (a compaction before the cache
     /// expires), so the task keeps its place in his queue through them.
     pub owed_since: Option<Timestamp>,
     /// Requests that failed in a row; the brain's policy gives up at some
@@ -195,9 +197,9 @@ pub enum Phase {
 
 /// The context a task is working in, and everything that belongs to it
 /// rather than to the task: where it began, where it ends now, which limb
-/// runs each of its tools, and what it embodies. A new root replaces the
-/// whole of it; Max's words and actions pending for the task survive, since
-/// they are for the task.
+/// runs each of its tools, and what it embodies. A compaction onto a fresh
+/// root replaces all but what it embodies; Max's words and actions pending
+/// for the task survive any compaction, since they are for the task.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Context {
     /// Where it began: its root, or the entry it was forked, resumed or
@@ -205,8 +207,8 @@ pub struct Context {
     pub start: EntryId,
     pub head: EntryId,
     /// Which limb runs each of its tools. Made with its root and kept until
-    /// the next one, so a redefined environment takes effect at the task's
-    /// next root, never under it.
+    /// the next one, so a redefined environment takes effect when the task
+    /// next compacts onto a fresh root, never under it.
     pub binding: Binding,
     /// The version of each resource it embodies, and what it has been told
     /// since. Persistent, so a fork's copy shares it until either changes.
@@ -249,6 +251,24 @@ impl Context {
             knows: self.knows.clone(),
             learned: Vector::new(),
         }
+    }
+
+    /// The context a compaction leaves, before it learns from its carry:
+    /// this one with a new head, or a new root's that still embodies what
+    /// this one did, where the root does not say otherwise. Keeping what it
+    /// embodied keeps the notices and the stale-write refusals true: the
+    /// summary was written from those versions.
+    fn compacted(&self, onto: &Onto, head: EntryId) -> Context {
+        let mut context = match onto {
+            Onto::Checkpoint(_) => self.clone(),
+            Onto::Fresh(start) => {
+                let mut rooted = Context::rooted(start);
+                rooted.knows = self.knows.clone().union(rooted.knows);
+                rooted
+            }
+        };
+        context.head = head;
+        context
     }
 
     /// Whether `change` moves something this context embodies that it has
@@ -405,7 +425,7 @@ pub enum Origin {
 }
 
 /// A new root, and what is decided with it: a fresh task's first context,
-/// a handover's, a rebuild's.
+/// or the one a compaction starts afresh.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Start {
     pub root: Root,
@@ -464,7 +484,7 @@ pub enum Mode {
 ///
 /// The chain of mandates up the owner chain is the task's place in the
 /// overall work: "A, then A.1, then A.1.3". Rendering that chain at a fork,
-/// as a reminder after each tool round, and at the top of a handover is how
+/// as a reminder after each tool round, and in a compaction's carry is how
 /// a deeply forked agent knows to stop after A.1.3.
 ///
 /// A mandate Max gives is his words: the brain counts its text among the
@@ -763,8 +783,20 @@ impl TaskEvent {
                 out.extend(*brief);
                 out.extend(quotes);
             }
-            TaskEvent::Moved(Move::Handover { call: _, start } | Move::Root(start)) => {
-                start.values(out);
+            TaskEvent::Moved(Move::Root(start)) => start.values(out),
+            TaskEvent::Moved(Move::Compact(compaction)) => {
+                let Compaction {
+                    by: _,
+                    onto,
+                    carry,
+                    renders: _,
+                    report,
+                } = &**compaction;
+                if let Onto::Fresh(start) = onto {
+                    start.values(out);
+                }
+                out.push(*carry);
+                out.extend(*report);
             }
             TaskEvent::Moved(Move::Rewind { to: _ })
             | TaskEvent::ModeSet(_)
@@ -800,24 +832,129 @@ pub struct Created {
 /// The head moved to an entry that does not extend it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Move {
-    /// To a new root, written by the task's own handover call: once that
-    /// call has settled with the seed and its round is over, the next
-    /// request starts the new context instead of continuing the old one,
-    /// which ends on it. The root is rendered from the environment's
-    /// current version, which is where a rebuild picks up a changed
-    /// AGENTS.md, role, model or tool set.
-    Handover { call: CallId, start: Box<Start> },
-    /// To a new root the harness built without the agent's help: a starting
-    /// task's first, once its limbs have described themselves; or a boundary
-    /// note and the mandate, for a context the provider will no longer
-    /// accept, or a task with no handover tool (the scheduler, whose memory
-    /// is the queue it observes).
+    /// A starting task's first root, once every limb it reaches has
+    /// described itself. A task has one: every later context is a
+    /// [compaction](Move::Compact).
     Root(Box<Start>),
+    Compact(Box<Compaction>),
     /// Back to a response on the task's own chain since its start that
-    /// ended a model turn, so the next message is Max's. The abandoned
-    /// branch stays in the tree, and the context embodies again only what
-    /// it embodied there.
-    Rewind { to: EntryId },
+    /// ended a model turn, or a compaction's report, so the next message is
+    /// Max's. The abandoned branch stays in the tree, and the context
+    /// embodies again only what it embodied there.
+    Rewind {
+        to: EntryId,
+    },
+}
+
+/// The task moves between phases of its work without losing itself: what
+/// it did since its latest [checkpoint](crate::state::State::checkpoint) is
+/// replaced by what it carries forward.
+///
+/// **Concept.** A compaction is a move of the head that appends. The head
+/// goes back to where the context should resume ([`Onto`]), and one user
+/// message is appended there: the carry, which holds the agent's summary,
+/// Max's words from what it replaced, verbatim, the output of every call of
+/// the round whose tool uses it replaced, and the background work the task
+/// still owns. Optionally an assistant message follows, the report, which
+/// ends the turn as if the agent had just said it: Max reads it as the
+/// first message of the compacted context, and an autonomous task's result
+/// is it. Nothing is deleted: what was replaced is the branch that ended at
+/// the old head, still in the tree for Max and the face to read, and the
+/// carry's renders say where each block came from.
+///
+/// Compacting onto the latest checkpoint is the ordinary case. Every
+/// earlier checkpoint stays verbatim (the first message of the context, the
+/// message that began each model turn, each earlier carry), so in a long
+/// chat Max's messages and the agent's reports stay word for word and only
+/// the tool calls between them go; each summary covers one phase, so its
+/// cost is that phase's and it never summarises a summary; and the prefix
+/// up to the checkpoint is already cached. Compacting onto a fresh root is
+/// the reset, when even that has grown long, or to pick up a changed role,
+/// model, instructions or tool set.
+///
+/// **Vision.** "The agent can be considered the same despite the
+/// compaction" (Max, 2026-10-17): the carry is the agent's own note, never
+/// a handover to someone else. The fork-per-phase want ("the main context
+/// is left with only the summaries … rather than many, many tool calls")
+/// without having to foresee the phases: a compaction leaves the same tree
+/// a returning fork does, a side branch summarised at its branch point.
+/// Cache-aware compaction (`compaction.md`): the prefix is kept, not
+/// re-sent. "Compaction never destroys the transcript" (critique §3). The
+/// testimony's silent mutation: what the context embodied is kept through
+/// it, so notices and stale-write refusals still hold.
+///
+/// **Existing harnesses.** Oh My Pi, Pi and OpenCode compact by replacing
+/// the conversation with a summary of all of it plus a replayed tail
+/// (`ref-oh-my-pi/packages/coding-agent/src/session/session-context.ts:355`,
+/// `ref-opencode/packages/schema/src/session-message.ts:255`): each
+/// compaction summarises the last summary, the user's words survive only as
+/// the summariser retold them, and the cache starts cold.
+///
+/// **Bx.** Shared: a compaction is a record whose input is the old head and
+/// whose output is the new one, both named by hash; the replaced branch is
+/// never deleted, so it stays addressable; provenance is in the record
+/// ([`Compaction::renders`]), not in the bytes. Not shared: a summary is
+/// written by a model, so the mapping from old head to new is neither
+/// deterministic nor lossless, and is recorded rather than re-derivable.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Compaction {
+    /// The task's own compaction call, settled, once the round that made it
+    /// is over. `None` when the harness compacts: a context the provider no
+    /// longer accepts, or a task with no compaction tool.
+    pub by: Option<CallId>,
+    pub onto: Onto,
+    /// The content of the user message appended after `onto`.
+    pub carry: ValueId,
+    /// What `carry`'s blocks were rendered from, in block order.
+    pub renders: Vec<Span>,
+    /// The content of an assistant message appended after the carry, which
+    /// ends the model turn.
+    pub report: Option<ValueId>,
+}
+
+/// Where a compaction resumes the context.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Onto {
+    /// The task's latest checkpoint: everything up to it is kept verbatim.
+    Checkpoint(EntryId),
+    /// A new root, rendered from the environment's current version, where a
+    /// changed role, model, instructions or tool set takes effect. It has
+    /// no attachments of its own: they are in the carry.
+    Fresh(Box<Start>),
+}
+
+impl Compaction {
+    /// The entry the carry is: a user message after `onto`.
+    pub fn carry_entry(&self) -> Entry {
+        Entry::Message {
+            parent: match &self.onto {
+                Onto::Checkpoint(at) => *at,
+                Onto::Fresh(start) => start.root.id(),
+            },
+            message: Message {
+                role: Role::User,
+                content: self.carry,
+            },
+        }
+    }
+
+    /// The entries it appends, each with its id: the carry, then the report.
+    pub fn entries(&self) -> Vec<(EntryId, Entry)> {
+        let carry = self.carry_entry();
+        let at = carry.id();
+        let mut out = vec![(at, carry)];
+        if let Some(content) = self.report {
+            let report = Entry::Message {
+                parent: at,
+                message: Message {
+                    role: Role::Assistant,
+                    content,
+                },
+            };
+            out.push((report.id(), report));
+        }
+        out
+    }
 }
 
 impl Task {
@@ -974,7 +1111,7 @@ impl Task {
     /// no request is sent while a drain is pending or a tool use of the last
     /// response is unanswered; a task is done only when nothing it started
     /// is outstanding and nothing waking is unread; and Max's words are never
-    /// lost, to a turn that ends first or to a handover.
+    /// lost, to a turn that ends first or to a compaction.
     pub(crate) fn apply(&mut self, record: &Stated, world: &State) -> Result<(), Rejected> {
         let at = record.at;
         if self.is_done() {
@@ -1065,26 +1202,14 @@ impl Task {
                 }
             }
             TaskEvent::Renamed(name) => self.name = name.clone(),
-            TaskEvent::Moved(Move::Handover { call, start }) => {
-                let live = self.live_mut()?;
-                if live.drain.is_some() {
-                    return Err(Rejected::Draining);
-                }
-                if live.phase != Phase::Ready || !self.pending.contains(&Input::Result(*call)) {
-                    return Err(Rejected::Busy);
+            TaskEvent::Moved(Move::Root(start)) => {
+                if self.life != Life::Starting {
+                    return Err(Rejected::Exists);
                 }
                 self.root(start, at, world)?;
             }
-            TaskEvent::Moved(Move::Root(start)) => {
-                if let Life::Live(live) = &self.life {
-                    if live.drain.is_some() {
-                        return Err(Rejected::Draining);
-                    }
-                    if !waiting(&live.phase) {
-                        return Err(Rejected::Busy);
-                    }
-                }
-                self.root(start, at, world)?;
+            TaskEvent::Moved(Move::Compact(compaction)) => {
+                self.compact(compaction, at, world)?;
             }
             TaskEvent::Moved(Move::Rewind { to }) => {
                 let live = self.live_mut()?;
@@ -1162,41 +1287,18 @@ impl Task {
         Ok(())
     }
 
-    /// Begin a new context at `start`'s root. The old context's results have
-    /// nowhere to go in it; Max's words and actions stay pending, since they
-    /// are for the task, not the context. A task waiting on Max still waits
-    /// on him unless the new context has attachments to run.
+    /// Begin the task's first context at `start`'s root, with its
+    /// attachments to run first.
     fn root(&mut self, start: &Start, at: Timestamp, world: &State) -> Result<(), Rejected> {
-        let context = Context::rooted(start);
-        self.drop_results();
-        let mut live = match std::mem::replace(&mut self.life, Life::Starting) {
-            Life::Live(mut live) => {
-                live.context = context;
-                live
-            }
-            Life::Starting | Life::Done { .. } => {
-                self.since = at;
-                Live::new(context)
-            }
-        };
-        let phase = if !start.awaits.is_empty() {
-            Phase::Acting(Step {
+        let mut live = Live::new(Context::rooted(start));
+        if !start.awaits.is_empty() {
+            live.phase = Phase::Acting(Step {
                 response: None,
                 outstanding: start.awaits.clone(),
-            })
-        } else if matches!(
-            live.phase,
-            Phase::AwaitingMax | Phase::Listening | Phase::Parked
-        ) {
-            live.phase.clone()
-        } else {
-            Phase::Ready
-        };
-        if live.phase != phase {
-            live.phase = phase;
-            self.since = at;
+            });
         }
         self.life = Life::Live(live);
+        self.since = at;
         for call in &start.awaits {
             if world
                 .call(*call)
@@ -1206,6 +1308,57 @@ impl Task {
             {
                 self.settled(*call, at)?;
             }
+        }
+        Ok(())
+    }
+
+    /// Replace what the task did since `compaction.onto` with its carry.
+    /// The agent compacts once the round of its compaction call is over,
+    /// carrying every other result of that round; the harness compacts a
+    /// task between turns. Neither while it is stopping: its tidy-up turn
+    /// is its last, with no next context. A report ends the turn as a
+    /// response would; otherwise the task carries on, or keeps waiting.
+    fn compact(
+        &mut self,
+        compaction: &Compaction,
+        at: Timestamp,
+        world: &State,
+    ) -> Result<(), Rejected> {
+        let Task { pending, life, .. } = self;
+        let Life::Live(live) = life else {
+            return Err(Rejected::Starting);
+        };
+        if live.drain.is_some() {
+            return Err(Rejected::Draining);
+        }
+        match compaction.by {
+            Some(call) if live.phase != Phase::Ready || !pending.contains(&Input::Result(call)) => {
+                return Err(Rejected::Busy);
+            }
+            None if !waiting(&live.phase) => return Err(Rejected::Busy),
+            _ => {}
+        }
+        // Nothing of the round is dropped unseen: its tool uses go, so
+        // their outputs are carried. The compaction call's own is the
+        // compaction.
+        let carried = |p: &Input| compaction.renders.iter().any(|r| p.is(&r.from));
+        let dropped = pending.iter().any(|p| match p {
+            Input::Result(call) => Some(*call) != compaction.by && !carried(p),
+            _ => false,
+        });
+        if dropped {
+            return Err(Rejected::Unanswered);
+        }
+        let entries = compaction.entries();
+        let carry = entries[0].0;
+        let mut context = live.context.compacted(&compaction.onto, carry);
+        learn(&mut context, &[], &compaction.renders, carry, world)?;
+        let (head, _) = *entries.last().expect("a carry");
+        context.head = head;
+        live.context = context;
+        pending.retain(|p| !matches!(p, Input::Result(_)));
+        if compaction.report.is_some() {
+            self.turn_ended(head, at, world);
         }
         Ok(())
     }
@@ -1604,12 +1757,12 @@ fn learn(
                     return Err(Rejected::NotForTask);
                 }
             }
+            Rendered::Note(Note::Kept { words }) => {
+                world.said(*words).ok_or(Rejected::Unknown)?;
+            }
             Rendered::Note(Note::Stale { told, shown }) => {
                 context.tell(told, &mut before);
                 context.observe(shown, &mut before);
-            }
-            Rendered::Note(Note::Boundary { from: Some(from) }) => {
-                world.entry(*from).ok_or(Rejected::Unknown)?;
             }
             Rendered::Note(_) => {}
         }

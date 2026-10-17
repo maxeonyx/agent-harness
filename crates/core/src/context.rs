@@ -51,17 +51,20 @@ impl FromStr for EntryId {
 /// tree and refuses a head that does not grow along it. Nothing else
 /// stores entries.
 ///
-/// Fork, fresh start, shared seed, handover, resume, rewind and aside are
-/// all a task's head moving to an entry ([`crate::task`]): to the parent's
-/// response (a fork), to a new root (a fresh start or a handover), to a
-/// finished task's last entry (a resume), back along its own chain (a
-/// rewind). Fresh siblings given the same shared brief and attachments
-/// append the same messages to the same root, so the shared seed Max
-/// describes in `handoff-improvements.md` is one set of nodes and one cache
-/// prefix by construction, not by bookkeeping.
+/// Fork, fresh start, shared seed, compaction, resume, rewind and aside
+/// are all a task's head moving to an entry ([`crate::task::Move`]): to the
+/// parent's response (a fork), to a new root (a fresh start), to an earlier
+/// entry of its own chain with the carry of a compaction appended, or to a
+/// new root with that carry (a compaction onto a checkpoint or a fresh
+/// one), to a finished task's last entry (a resume), back along its own
+/// chain (a rewind). Fresh siblings given the same shared brief and
+/// attachments append the same messages to the same root, so the shared
+/// seed Max describes in `handoff-improvements.md` is one set of nodes and
+/// one cache prefix by construction, not by bookkeeping.
 ///
 /// Why each entry exists is not in it. Provenance is in the request that
-/// first sent it ([`crate::model_call::ModelCall::renders`]) and the
+/// first sent it ([`crate::model_call::ModelCall::renders`]), or the
+/// compaction that carried it ([`crate::task::Compaction::renders`]), and the
 /// versions it embodies are in the facts it renders
 /// ([`crate::call::Output::observes`]): Bx's separation of an artifact from
 /// the build record that says how it was made, which keeps identical bytes
@@ -69,12 +72,12 @@ impl FromStr for EntryId {
 ///
 /// **Vision.** The context lifecycle, which Max ranks among the most
 /// interesting parts: append vs rebuild (`context-and-agent-loop.md`),
-/// fork-by-default for cache reuse, handovers with attachments
+/// fork-by-default for cache reuse, compaction with attachments
 /// (`handoff-improvements.md`), cache-aware compaction (`compaction.md`),
 /// "AGENTS.md changed after turn N" (`context-updates.md`), backend cache
 /// state that survives a relaunch (`tech.md`), and "compaction never
-/// destroys the transcript" (critique §3): nothing is deleted, a handover
-/// starts a new root.
+/// destroys the transcript" (critique §3): nothing is deleted, and what a
+/// compaction replaced stays a branch of the tree.
 ///
 /// **Why bytes, not a typed history.** The provider caches by exact prefix
 /// and binds each thinking block's signature to the prefix that produced it.
@@ -245,9 +248,10 @@ fn digest(fields: &[&[u8]]) -> EntryId {
     EntryId(Digest(*hasher.finalize().as_bytes()))
 }
 
-/// What a run of blocks a request appended was rendered from: the next
-/// `blocks` content blocks of its [appended](crate::model_call::ModelCall::appends)
-/// messages, which are all user messages. So whoever reads a context knows
+/// What a run of blocks the harness wrote was rendered from: the next
+/// `blocks` content blocks of the user messages a request
+/// [appended](crate::model_call::ModelCall::appends), or of a compaction's
+/// [carry](crate::task::Compaction::carry). So whoever reads a context knows
 /// who said each block, without reading the harness's wording.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
@@ -262,13 +266,13 @@ pub struct Span {
 /// attachments and the harness's own notes all reach the model as user
 /// content or tool results. This keeps what actually happened, so an
 /// inspector never confuses "the agent read this file" with "Max had this
-/// file open" or "this was attached at the handover".
+/// file open" or "this was attached when it compacted".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Rendered {
     /// A call's settlement: a tool result for one of the task's own tool uses
-    /// (a spawn's result is its children's), an attachment shown as a tool
-    /// call the task made, a background call's result, or one of Max's
-    /// actions in the chat.
+    /// (a spawn's result is its children's), an attachment, a background
+    /// call's result, one of Max's actions in the chat, or, in a
+    /// compaction's carry, the output of a call whose tool use it replaced.
     Call(CallId),
     /// Max's words, or a turn the harness asked for.
     Delivery(DeliveryId),
@@ -291,7 +295,7 @@ pub enum Note {
     Brief,
     /// The task's mandate: at a fork, as user text after the answers to the
     /// forked response's tool uses; at a fresh start, after the shared brief;
-    /// after a handover, at the top.
+    /// in the carry of a compaction onto a fresh root, after the framing.
     Mandate,
     /// The neutral answer, in a fork's first message, to a tool use in the
     /// forked response: the spawn that started the fork, the parent's other
@@ -312,9 +316,17 @@ pub enum Note {
         told: Vec<Observation>,
         shown: Vec<Observation>,
     },
-    /// This context begins where another ended (a handover, a resume, a
-    /// rebuild), and what is and is not carried over.
-    Boundary { from: Option<EntryId> },
+    /// The opening of a compaction's carry: the harness's framing, in the
+    /// agent's own voice ("I compacted my work since…"), the summary the
+    /// agent wrote, and the background work it still owns. What it replaced
+    /// is the branch ending at the task's head before it
+    /// ([`crate::state::Compacted::from`]).
+    Compacted,
+    /// Max's words, verbatim, carried by a compaction from what it replaced,
+    /// so a summary never stands in for what he said. They are one of his
+    /// [said](crate::state::State::said) values: a message, a mandate or an
+    /// answer.
+    Kept { words: ValueId },
     /// The last response stopped short of ending its turn (its output limit,
     /// a provider pause): carry on. A response Max interrupted is quoted
     /// here too, from [`crate::model_call::Ending::Cut`].

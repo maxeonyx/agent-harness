@@ -13,7 +13,7 @@ use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
 use harness_core::state::{Ended, State, Waiting};
 use harness_core::task::{
-    Drain, Draining, Input, Mode, Move, Origin, Outcome, Pause, Phase, Scope, Task, TaskEvent,
+    Drain, Draining, Input, Mode, Move, Onto, Origin, Outcome, Pause, Phase, Scope, Task, TaskEvent,
 };
 use harness_face_tab::{DraftRow, FaceKey, FaceRow};
 use serde_json::{Value, json};
@@ -473,12 +473,22 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             TaskEvent::Moved(Move::Root(start)) => {
                 format!("{} has a new root, on {}", name(*id), start.root.model)
             }
-            TaskEvent::Moved(Move::Handover { start, .. }) => {
-                format!(
-                    "{} handed over to a new root, on {}",
-                    name(*id),
-                    start.root.model
-                )
+            TaskEvent::Moved(Move::Compact(c)) => {
+                let by = if c.by.is_some() {
+                    ""
+                } else {
+                    " (by the harness)"
+                };
+                let onto = match &c.onto {
+                    Onto::Checkpoint(_) => "onto its latest checkpoint".to_string(),
+                    Onto::Fresh(start) => format!("onto a new root, on {}", start.root.model),
+                };
+                let report = if c.report.is_some() {
+                    ", and reported"
+                } else {
+                    ""
+                };
+                format!("{} compacted {onto}{by}{report}", name(*id))
             }
             TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
             TaskEvent::Drain(Drain::ToMax { .. }) => format!("{} interrupted", name(*id)),
