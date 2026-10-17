@@ -1,5 +1,6 @@
 //! Trees of processes an owner started, and ending them.
 
+use std::collections::HashSet;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -143,10 +144,11 @@ pub struct Process {
 /// is left, and at the deadline (or the earlier one the waiter's cancel is
 /// brought forward to) kill each one left.
 ///
-/// Only the processes there when it asks are asked. What starts after is
-/// the cleanup's own work (a trap's `sleep`, a build tool reaping its
-/// jobs), its to finish: asking it too would cut the cleanup short. It is
-/// killed at the deadline with the rest.
+/// Only the processes that started before it asked are asked, each once,
+/// including one a scan missed because it was forked just as the scan ran.
+/// What starts after is the cleanup's own work (a trap's `sleep`, a build
+/// tool reaping its jobs), its to finish: asking it too would cut the
+/// cleanup short. It is killed at the deadline with the rest.
 ///
 /// `members` lists the tree's live processes, reaping what it must first;
 /// it is called again on every wake, since members start others and adopted
@@ -162,7 +164,9 @@ pub fn end(
     mut members: impl FnMut() -> Vec<Process>,
     mut serve: impl FnMut() -> Option<RawFd>,
 ) -> io::Result<Ended> {
-    let mut ask = ask;
+    let mut asked: HashSet<(libc::pid_t, u64)> = HashSet::new();
+    // When it first asked, in the clock `/proc` gives start times in.
+    let mut asked_at: Option<u64> = None;
     let mut killed: Option<Instant> = None;
     loop {
         let watch = serve();
@@ -194,9 +198,13 @@ pub fn end(
             }
             (now + RESCAN).min(since + KILL_WAIT)
         } else {
-            if let Some(ask) = ask.take() {
-                for (_, fd) in &pinned {
-                    signal(fd, ask);
+            if let Some(ask) = ask {
+                let first = asked_at.is_none();
+                let at = *asked_at.get_or_insert_with(ticks);
+                for (p, fd) in &pinned {
+                    if (first || p.start < at) && asked.insert((p.pid, p.start)) {
+                        signal(fd, ask);
+                    }
                 }
             }
             (now + RESCAN).min(deadline)
@@ -284,6 +292,24 @@ fn carries(pid: libc::pid_t, var: &str) -> bool {
         kv.strip_prefix(var)
             .is_some_and(|rest| rest.first() == Some(&b'='))
     })
+}
+
+/// Now, in clock ticks since boot: the clock of a process's start time in
+/// `/proc/<pid>/stat`.
+fn ticks() -> u64 {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime and sysconf only read the clock and a constant.
+    let hz = unsafe {
+        libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut now);
+        libc::sysconf(libc::_SC_CLK_TCK)
+    };
+    let hz = u64::try_from(hz).unwrap_or(100);
+    let secs = u64::try_from(now.tv_sec).unwrap_or(0);
+    let nanos = u64::try_from(now.tv_nsec).unwrap_or(0);
+    secs * hz + nanos * hz / 1_000_000_000
 }
 
 /// A pidfd for the process, if it is still the one `/proc` showed.

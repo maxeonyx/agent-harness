@@ -19,7 +19,7 @@ Every control is a batch of Max's facts in the journal's own encoding, posted to
 
 ```json
 {"Task": ["<task>", {"Drain": "ToMax"}]}
-{"Task": ["<task>", {"Drain": {"Stop": "Max"}}]}
+{"Task": ["<task>", {"Drain": {"Stop": {"by": "Max", "within": 120000}}}]}
 {"Task": ["<task>", {"Held": true}]}
 {"Ranking": {"order": [{"task": "<task>", "why": "placed by you"}]}}
 {"Focus": {"face": "<face>", "task": "<task>"}}
