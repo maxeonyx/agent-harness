@@ -1,7 +1,7 @@
 //! The loop: act on each item of the to-do list, commit what happened,
 //! repeat.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,6 +19,7 @@ use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{
     CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
 };
+use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
 use harness_core::schema::{self, Record};
 use harness_core::state::{State, Todo};
@@ -134,6 +135,9 @@ pub struct Brain {
     limbs: HashMap<LimbId, Process>,
     /// When the brain last failed to reach a limb.
     failed: HashMap<LimbId, Instant>,
+    /// The limbs whose link ended while they were superseded: their
+    /// ending is a move to the build the brain starts, not a failure.
+    moving: HashSet<LimbId>,
     /// The limbs connected now.
     links: HashMap<LimbId, Link>,
     /// The next number for a process link, counting up from 1.
@@ -304,6 +308,7 @@ impl Brain {
             models,
             limbs: HashMap::new(),
             failed: HashMap::new(),
+            moving: HashSet::new(),
             links: HashMap::new(),
             attached: 1,
             hosted: Conn::MAX,
@@ -585,7 +590,9 @@ impl Brain {
             let Some(process) = self.limbs.remove(&limb) else {
                 continue;
             };
-            if !success && self.state().shutdown().is_none() {
+            if self.moving.remove(&limb) {
+                self.connect(limb);
+            } else if !success && self.state().shutdown().is_none() {
                 self.unreached(limb, process.last_words());
             }
         }
@@ -644,6 +651,9 @@ impl Brain {
         };
         let link = self.links.remove(&limb).expect("found");
         errln!("limb {limb}: its link ended");
+        if self.state().superseded(limb).is_some() {
+            self.moving.insert(limb);
+        }
         if link.unsaid.is_some() {
             return;
         }
@@ -909,12 +919,11 @@ impl Brain {
             }
             _ => {}
         }
-        let env = self
-            .state()
-            .environment(task.environment)
-            .expect("the task's environment");
-        let model = task.tuning.model(env).to_owned();
-        let params = env.params;
+        let Next {
+            call,
+            values,
+            model,
+        } = next(self.state(), &|v| self.value(v), &task, false);
         if policy::hold(
             head,
             &model,
@@ -922,68 +931,7 @@ impl Brain {
         ) {
             return;
         }
-
-        // The first request of a context renders its beginning: at its
-        // start, however often it has been sent from there. A context
-        // compacted onto a fresh root has its mandate in its carry.
-        let first = task.context().is_some_and(|c| c.start == head);
-        let mut values = Vec::new();
-        let mut appends = Vec::new();
-        let mut renders = Vec::new();
-        if first && let Some(brief) = render::briefing(&|v| self.value(v), &task) {
-            appends.push(user(render::blocks(&brief), &mut values));
-            renders.push(Span {
-                from: Rendered::Note(Note::Brief),
-                blocks: brief.len(),
-            });
-        }
-        let forked = match task.origin {
-            Origin::Fork { .. } | Origin::Aside { .. } if first => self.response_calls(head),
-            _ => Vec::new(),
-        };
-        let turn = render::turn(self.state(), &|v| self.value(v), &task, first, &forked);
-        if !turn.blocks.is_empty() {
-            appends.push(user(render::blocks(&turn.blocks), &mut values));
-        }
-        renders.extend(turn.renders);
-        // Max's effort, when it is not the environment's, as parameters of
-        // its own.
-        let params = match task.tuning.effort {
-            Some(effort) => {
-                let named = self.value(params);
-                match harness_provider::with_effort(&named, effort) {
-                    Some(tuned) if harness_provider::effort(&named) != Some(effort) => {
-                        let tuned = Bytes::from(tuned);
-                        let id = tuned.id();
-                        values.push(tuned);
-                        id
-                    }
-                    _ => params,
-                }
-            }
-            None => params,
-        };
-        let rooted = match &self.state().context(head)[0].1 {
-            Entry::Root(root) => root.model != model,
-            Entry::Message { .. } => unreachable!("a context starts at a root"),
-        };
-        let mut call = ModelCall {
-            model: rooted.then_some(model.clone()),
-            task: id,
-            base: head,
-            appends,
-            renders,
-            params,
-            breakpoints: Vec::new(),
-        };
         let appended: Vec<EntryId> = call.entries().into_iter().map(|(e, _)| e).collect();
-        let root = self.state().context(head)[0].0;
-        let shared: Vec<EntryId> = [head]
-            .into_iter()
-            .chain(appended.iter().rev().skip(1).copied())
-            .collect();
-        let checkpoint = self.state().checkpoint(&task);
-        call.breakpoints = policy::breakpoints(root, checkpoint, &shared, call.head());
 
         let request = ModelCallId(self.decider.next().event(0));
         self.append(Batch {
@@ -1022,7 +970,6 @@ impl Brain {
         let thread = thread::spawn(move || {
             let base: Vec<(EntryId, &Entry)> = base.iter().map(|(id, e)| (*id, e)).collect();
             let finished = client.send(
-                request,
                 &call,
                 &base,
                 |id| bytes.get(&id).cloned(),
@@ -1031,20 +978,15 @@ impl Brain {
                     Progress::FirstByte => {
                         let _ = events.send(Event(What::FirstByte(request)));
                     }
-                    Progress::Live(live) => feed.push(live),
+                    Progress::Text(chunk) => feed.push(Live::Model {
+                        call: request,
+                        chunk,
+                    }),
                 },
             );
             let _ = events.send(Event(What::Finished(request, finished)));
         });
         self.requests.insert(request, (cancel, thread));
-    }
-
-    /// The calls a response made, in order: what a fork of it must answer.
-    fn response_calls(&self, response: EntryId) -> Vec<CallId> {
-        self.state()
-            .response(response)
-            .map(|m| m.calls.clone())
-            .unwrap_or_default()
     }
 
     fn first_byte(&mut self, request: ModelCallId) {
@@ -1718,8 +1660,22 @@ and you cannot finish until it has.",
                 standing: self.decider.standing(link.replica),
                 rows,
             };
-            if let Some(down) = link.publisher.publish(view) {
-                let _ = link.wire.send(down);
+            // `Superseded` changes on a line of its own: a limb of a build
+            // before it cannot read it, and drops that line whole.
+            let mut before = view.clone();
+            let held = link
+                .publisher
+                .shipped()
+                .and_then(|v| v.rows.get(&LimbKey::Superseded))
+                .cloned();
+            match held {
+                Some(row) => before.rows.insert(LimbKey::Superseded, row),
+                None => before.rows.remove(&LimbKey::Superseded),
+            };
+            for view in [before, view] {
+                if let Some(down) = link.publisher.publish(view) {
+                    let _ = link.wire.send(down);
+                }
             }
         }
     }
@@ -1814,6 +1770,109 @@ fn ends(fact: &Fact) -> Option<Running> {
     }
 }
 
+/// The request a task sends next, and the new values it names.
+pub struct Next {
+    pub call: ModelCall,
+    pub values: Vec<Bytes>,
+    /// The model it goes to: the task's, which its root may not name.
+    pub model: String,
+}
+
+/// The request `task` sends next, rendered from `state` and the bytes
+/// `value` reads. With `unanswered`, a tool use of its head with no result
+/// yet is answered as done elsewhere, as a fork's first request answers its
+/// parent's: what a check renders for a session still waiting on a call.
+pub fn next(
+    state: &State,
+    value: &dyn Fn(ValueId) -> Vec<u8>,
+    task: &Task,
+    unanswered: bool,
+) -> Next {
+    let head = task.head().expect("a task that sends has a context");
+    let env = state
+        .environment(task.environment)
+        .expect("the task's environment");
+    let model = task.tuning.model(env).to_owned();
+    let params = env.params;
+    let calls = || {
+        state
+            .response(head)
+            .map(|m| m.calls.clone())
+            .unwrap_or_default()
+    };
+
+    // The first request of a context renders its beginning: at its
+    // start, however often it has been sent from there. A context
+    // compacted onto a fresh root has its mandate in its carry.
+    let first = task.context().is_some_and(|c| c.start == head);
+    let mut values = Vec::new();
+    let mut appends = Vec::new();
+    let mut renders = Vec::new();
+    if first && let Some(brief) = render::briefing(value, task) {
+        appends.push(user(render::blocks(&brief), &mut values));
+        renders.push(Span {
+            from: Rendered::Note(Note::Brief),
+            blocks: brief.len(),
+        });
+    }
+    let forked = match task.origin {
+        Origin::Fork { .. } | Origin::Aside { .. } if first => calls(),
+        _ if unanswered => calls()
+            .into_iter()
+            .filter(|c| !task.pending.contains(&Input::Result(*c)))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let turn = render::turn(state, value, task, first, &forked);
+    if !turn.blocks.is_empty() {
+        appends.push(user(render::blocks(&turn.blocks), &mut values));
+    }
+    renders.extend(turn.renders);
+    // Max's effort, when it is not the environment's, as parameters of
+    // its own.
+    let params = match task.tuning.effort {
+        Some(effort) => {
+            let named = value(params);
+            match harness_provider::with_effort(&named, effort) {
+                Some(tuned) if harness_provider::effort(&named) != Some(effort) => {
+                    let tuned = Bytes::from(tuned);
+                    let id = tuned.id();
+                    values.push(tuned);
+                    id
+                }
+                _ => params,
+            }
+        }
+        None => params,
+    };
+    let context = state.context(head);
+    let rooted = match &context[0].1 {
+        Entry::Root(root) => root.model != model,
+        Entry::Message { .. } => unreachable!("a context starts at a root"),
+    };
+    let mut call = ModelCall {
+        model: rooted.then_some(model.clone()),
+        task: task.id,
+        base: head,
+        appends,
+        renders,
+        params,
+        breakpoints: Vec::new(),
+    };
+    let appended: Vec<EntryId> = call.entries().into_iter().map(|(e, _)| e).collect();
+    let shared: Vec<EntryId> = [head]
+        .into_iter()
+        .chain(appended.iter().rev().skip(1).copied())
+        .collect();
+    let checkpoint = state.checkpoint(task);
+    call.breakpoints = policy::breakpoints(context[0].0, checkpoint, &shared, call.head());
+    Next {
+        call,
+        values,
+        model,
+    }
+}
+
 /// A user message of these bytes, which go in the batch.
 fn user(content: Bytes, values: &mut Vec<Bytes>) -> Message {
     let message = Message {
@@ -1832,7 +1891,6 @@ pub fn now() -> Timestamp {
     )
 }
 
-/// A new replica, for a face or a co-hosted limb this launch: 64 random bits.
 /// The executable the brain starts for each kind of plugin limb: each
 /// `harness-limb-<kind>` beside its own, by digest. A limb connected with
 /// other bytes is superseded ([`harness_core::state::State::superseded`]).
@@ -1861,6 +1919,7 @@ fn limb_builds() -> BTreeMap<String, BuildId> {
         .collect()
 }
 
+/// A new replica, for a face or a co-hosted limb this launch: 64 random bits.
 fn mint_replica() -> ReplicaId {
     let mut bytes = [0; 8];
     std::fs::File::open("/dev/urandom")

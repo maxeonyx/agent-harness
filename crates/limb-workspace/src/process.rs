@@ -38,6 +38,10 @@ impl harness_limb::Kind for Workspace {
         Workspace::apply(self, down)
     }
 
+    fn holds(&self) -> bool {
+        Workspace::holds(self)
+    }
+
     fn stop_all(&self, within: Duration) {
         Workspace::stop_all(self, within)
     }

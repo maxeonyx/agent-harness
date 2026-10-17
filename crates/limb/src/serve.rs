@@ -9,6 +9,10 @@
 //! the network dropped silently is replaced the moment the brain dials
 //! again. The kind opens on the first view's [`LimbRow::Definition`].
 //!
+//! A brain that would start another build in its place
+//! ([`LimbRow::Superseded`]) has it exit once nothing it holds would die
+//! with it, so the brain's next attach starts that build.
+//!
 //! A brain going away is a link closing: it stops nothing. The limb exits
 //! on a signal, or once no brain has been linked for [`ABSENT`], and only
 //! once nothing it started is left: it stops every running call (`SIGTERM`,
@@ -39,6 +43,7 @@ use harness_core::schema::Harness;
 use harness_runtime::{Cancel, signals};
 use harness_store::Store;
 use harness_substrate::{Log, Up};
+use serde_json::Value;
 
 use crate::{ABSENT, Kind, SHUTDOWN, State};
 
@@ -112,7 +117,19 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
     let mut conns: HashMap<Conn, UnixStream> = HashMap::new();
     let mut link: Option<Conn> = None;
     let mut alone_since = Instant::now();
+    // The build the brain would start instead of this one, once it says so.
+    let mut superseded: Option<BuildId> = None;
     loop {
+        if let Some(by) = superseded
+            && !limb_.stopping()
+            && limb_.kind.as_ref().is_some_and(|k| !k.holds())
+        {
+            eprintln!(
+                "harness-limb-{kind}: superseded by build {:.12}: shutting down",
+                by.to_string()
+            );
+            limb_.down(SHUTDOWN);
+        }
         let event = match inbox.recv_timeout(Duration::from_secs(1)) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
@@ -152,6 +169,7 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
                     }
                     link = Some(conn);
                 }
+                superseded = superseded_by(&down, superseded);
                 match limb_.apply(*down) {
                     Ok(unsent) => {
                         for record in unsent {
@@ -302,7 +320,7 @@ fn read(conn: Conn, stream: UnixStream, events: Sender<Event>) {
     thread::spawn(move || {
         for line in BufReader::new(stream).lines() {
             let Ok(line) = line else { break };
-            match serde_json::from_str(&line) {
+            match parse(&line) {
                 Ok(down) => {
                     let _ = events.send(Event::Down(conn, Box::new(down)));
                 }
@@ -311,6 +329,65 @@ fn read(conn: Conn, stream: UnixStream, events: Sender<Event>) {
         }
         let _ = events.send(Event::Ended(conn));
     });
+}
+
+/// Whether the brain would start another build in this limb's place, as of
+/// `down`, if it was `before`.
+fn superseded_by(down: &LimbDown, before: Option<BuildId>) -> Option<BuildId> {
+    let by = |row: &LimbRow| match row {
+        LimbRow::Superseded { by } => Some(*by),
+        _ => None,
+    };
+    match down {
+        LimbDown::View(view) => view.rows.get(&LimbKey::Superseded).and_then(by),
+        LimbDown::Step(step) => match step.set.iter().find(|(k, _)| *k == LimbKey::Superseded) {
+            Some((_, row)) => by(row),
+            None if step.gone.contains(&LimbKey::Superseded) => None,
+            None => before,
+        },
+        LimbDown::Live(_) => before,
+    }
+}
+
+/// A line from the brain, without the rows this build cannot read: a brain
+/// of a later build may ship kinds of rows it has no idea of, and the rest
+/// of the line still holds.
+fn parse(line: &str) -> Result<LimbDown, serde_json::Error> {
+    serde_json::from_str(line).or_else(|whole| {
+        let mut value: Value = serde_json::from_str(line)?;
+        let mut skipped = Vec::new();
+        let mut known = |key: &Value, row: Option<&Value>| {
+            let ok = serde_json::from_value::<LimbKey>(key.clone()).is_ok()
+                && row.is_none_or(|r| serde_json::from_value::<LimbRow>(r.clone()).is_ok());
+            if !ok {
+                skipped.push(key.to_string());
+            }
+            ok
+        };
+        if let Some(rows) = value
+            .pointer_mut("/View/rows")
+            .and_then(Value::as_object_mut)
+        {
+            rows.retain(|k, r| known(&Value::String(k.clone()), Some(r)));
+        }
+        if let Some(set) = value.pointer_mut("/Step/set").and_then(Value::as_array_mut) {
+            set.retain(|pair| known(&pair[0], Some(&pair[1])));
+        }
+        if let Some(gone) = value
+            .pointer_mut("/Step/gone")
+            .and_then(Value::as_array_mut)
+        {
+            gone.retain(|k| known(k, None));
+        }
+        if skipped.is_empty() {
+            return Err(whole);
+        }
+        eprintln!(
+            "from the brain: skipping rows this build cannot read: {}",
+            skipped.join(", ")
+        );
+        serde_json::from_value(value)
+    })
 }
 
 /// Write one value to the link, if there is one. A write that fails drops
