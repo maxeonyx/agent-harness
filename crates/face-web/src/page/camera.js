@@ -1,7 +1,13 @@
+import { $, el, lerp, panel, phone, reduced } from "./base.js";
+import { byId, DOT, graph, look, positions, ROOT_DOT, shown } from "./map.js";
+import { drawEdges, nodeEls, placeMarks, refresh } from "./draw.js";
+import { hideTip } from "./hover.js";
+import { closeNode, go, NEW, openId, saved } from "./card.js";
+
 // ─── The camera ────────────────────────────────────────────────────────────
-const map = $("#map"), world = $("#world"), nodesLayer = $("#nodes"), edgesLayer = $("#edges");
-let cam = { x: 0, y: 0, k: 1 };
-let framed = true;  // follows the map's growth until Max moves it himself
+export const map = $("#map"), world = $("#world"), nodesLayer = $("#nodes"), edgesLayer = $("#edges");
+export let cam = { x: 0, y: 0, k: 1 };
+export let framed = true;  // follows the map's growth until Max moves it himself
 // While the map moves it is a layer of its own, so the browser moves a
 // picture instead of drawing every frame. A layer keeps the zoom it was
 // drawn at, so at rest it goes, and the open card's text is drawn again at
@@ -33,7 +39,7 @@ function bounds(ids) {
   return x0 === Infinity ? null : { x0, y0, x1, y1 };
 }
 // The camera that shows every live project at a size that reads.
-function framing() {
+export function framing() {
   const running = new Set(graph.comps.filter((c) => !c.folded).flatMap((c) => c.nodes.map((n) => n.id)));
   const b = bounds(running.size ? running : null);
   if (!b) return null;
@@ -50,7 +56,7 @@ function framing() {
   }
   return c;
 }
-function fit(fly = true) {
+export function fit(fly = true) {
   if (openId) { if (saved) saved.framed = true; closeNode(); return; }
   const c = framing();
   if (!c) return;
@@ -63,7 +69,7 @@ function fit(fly = true) {
 // card, the pointer and the wheel are the card's own: its text selects and
 // its log scrolls, while its header drags the map like the ground does.
 const pointers = new Map();
-let drag = null;
+export let drag = null;
 const cards = (e) => e.target.closest?.("#panel") && !asleep && (!e.target.closest("#panel > .bar") || e.target.closest("button, [contenteditable]"));
 map.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 && e.pointerType === "mouse") return;
@@ -121,7 +127,7 @@ map.addEventListener("wheel", (e) => {
 // On the bare ground, a click closes the open card and a double click opens
 // a new chat there. A click waits a moment to know which it is; a double tap
 // on a touch screen is a double click.
-let closing = 0, tapped = null;
+export let closing = 0, tapped = null;
 // By the path the event took, not its target: a button its own click redraws
 // is no longer in the card when the click reaches the map.
 const ground = (e) => !drag?.moved && !e.composedPath().some((n) => n.matches?.(".node, #panel, .offscreen"));
@@ -154,9 +160,12 @@ function newHere(sx, sy) {
 // sideways, and what is below the node moves down, each by the card's size,
 // so everything keeps its place relative to everything else.
 const SEAM = 28;
-let seam = null;       // the open card's place: {id, o, W, H, sx, sy}
-let cardShown = null;  // the card's visible rect in the world, now
-let newPoint = null;   // where a new chat's card opens, in the world
+export let seam = null;       // the open card's place: {id, o, W, H, sx, sy}
+export let cardShown = null;  // the card's visible rect in the world, now
+export let newPoint = null;   // where a new chat's card opens, in the world
+// Another area moves the camera's state through these: an import is read-only.
+export const setFramed = (f) => { framed = f; }, setSeam = (s) => { seam = s; };
+export const setCardShown = (r) => { cardShown = r; }, setNewPoint = (p) => { newPoint = p; };
 const centrePoint = () => ({ x: (innerWidth / 2 - cam.x) / cam.k, y: (innerHeight * .3 - cam.y) / cam.k, sx: innerWidth / 2, sy: innerHeight * .3 });
 
 // Room kept right of the card for the task's controls, which float there
@@ -168,7 +177,7 @@ function cardSize(id) {
   const H = id === NEW ? 168 : innerHeight - 2 * m;
   return { W, H };
 }
-function seamFor(id) {
+export function seamFor(id) {
   let o;
   if (id === NEW) { const p = newPoint || (newPoint = centrePoint()); o = { x: p.x - 1, y: p.y - 14, w: 2, h: 2 }; }
   else { const p = positions.get(id); if (!p) return null; o = { x: p.x, y: p.y, w: p.w, h: p.h }; }
@@ -176,9 +185,9 @@ function seamFor(id) {
   return { id, o, W, H, sx: Math.max(0, (W - o.w) / 2) + SEAM, sy: Math.max(0, H - o.h) + SEAM };
 }
 // On whole pixels, so its text is sharp where it rests.
-const cardRect = (s) => ({ x: Math.round(s.o.x + s.o.w / 2 - s.W / 2), y: Math.round(s.o.y), w: s.W, h: s.H });
+export const cardRect = (s) => ({ x: Math.round(s.o.x + s.o.w / 2 - s.W / 2), y: Math.round(s.o.y), w: s.W, h: s.H });
 // Where a node goes with the card open.
-function target(id) {
+export function target(id) {
   const p = positions.get(id);
   if (!seam || !p || id === seam.id) return p;
   const { o, sx, sy } = seam;
@@ -188,7 +197,7 @@ function target(id) {
   return dx || dy ? { ...p, x: p.x + dx, y: p.y + dy } : p;
 }
 // A node's dot, or a new chat's point: what a card opens from and closes to.
-function dotRect(id) {
+export function dotRect(id) {
   if (id === NEW) { const p = newPoint || centrePoint(); return { x: p.x - 10, y: p.y - 14, w: 20, h: 20 }; }
   const p = shown.get(id) || positions.get(id);
   if (!p) return null;
@@ -199,7 +208,7 @@ function dotRect(id) {
 // The camera that shows a card at its own size, moved as little as it takes
 // for all of it to show; `at` is a point of the world held where it is on
 // screen, so the card opens where Max was looking. Its controls show too.
-function camFor(card, at) {
+export function camFor(card, at) {
   const m = phone() ? 6 : 16;
   const p = at || { x: card.x + card.w / 2, y: card.y, sx: innerWidth / 2, sy: m };
   const c = { k: 1, x: p.sx - p.x, y: p.sy - p.y };
@@ -213,7 +222,7 @@ function camFor(card, at) {
   return c;
 }
 // A node's place as the card will have it, held where the node is on screen.
-function heldAt(id) {
+export function heldAt(id) {
   const p = positions.get(id), s = shown.get(id) || p;
   if (!p) return null;
   return { x: p.x + p.w / 2, y: p.y, sx: cam.x + (s.x + s.w / 2) * cam.k, sy: cam.y + s.y * cam.k };
@@ -233,7 +242,8 @@ function clipCard(v, b) {
 const lerpRect = (a, b, e) => ({ x: lerp(a.x, b.x, e), y: lerp(a.y, b.y, e), w: lerp(a.w, b.w, e), h: lerp(a.h, b.h, e) });
 // The floating controls hide when the card would sit under them.
 let usageRight = 0;
-function coverCheck() {
+export const setUsageRight = (r) => { usageRight = r; };
+export function coverCheck() {
   let covered = false;
   if (openId && cardShown) {
     const l = cam.x + cardShown.x * cam.k, r = l + cardShown.w * cam.k;
@@ -242,6 +252,21 @@ function coverCheck() {
   }
   document.body.classList.toggle("covered", covered);
 }
+
+// The card fits the window it is in: a phone's keyboard opening shrinks it.
+addEventListener("resize", () => {
+  const next = openId && seam && seamFor(openId);
+  if (next) {
+    const was = cardShown;
+    seam = next;
+    const r = cardRect(seam);
+    placeCard(r);
+    cardShown = r;
+    cam = camFor(r, was && { x: r.x + r.w / 2, y: r.y, sx: cam.x + (was.x + was.w / 2) * cam.k, sy: cam.y + was.y * cam.k });
+    applyCamera();
+  }
+  refresh();
+});
 
 // ─── The card asleep ───────────────────────────────────────────────────────
 // Zoomed out too far to read, or moved mostly off screen, the open card is
@@ -254,7 +279,7 @@ wake.append(wakeLabel);
 $("#panel").append(wake);
 let asleep = false;
 wake.addEventListener("click", () => { if (!drag?.moved) refocus(); });
-function refocus() {
+export function refocus() {
   if (!openId || !seam) return;
   framed = false;
   fly(camFor(cardRect(seam)), { T: 320 });
@@ -326,7 +351,13 @@ function settle() {
 // A card opening, closing or moving is a flight: what else would move
 // waits for it to land rather than cutting it short.
 let flight = null;
-function glide(to = null, { T = 240, cardFrom, cardTo, box, strong = false } = {}) {
+export async function fly(to, opts) {
+  const f = glide(to, { ...opts, strong: true });
+  flight = f;
+  await f;
+  if (flight === f) flight = null;
+}
+export function glide(to = null, { T = 240, cardFrom, cardTo, box, strong = false } = {}) {
   if (flight && !strong) return flight.then(() => glide(to, { T, cardFrom, cardTo, box }));
   const r1 = cardTo !== undefined ? cardTo : seam ? cardRect(seam) : null;
   const r0 = cardFrom !== undefined ? cardFrom : cardShown || r1;
@@ -351,4 +382,3 @@ function glide(to = null, { T = 240, cardFrom, cardTo, box, strong = false } = {
     if (r0 && r1 && b) { cardShown = lerpRect(r0, r1, e); clipCard(cardShown, b); }
   });
 }
-
