@@ -3,22 +3,30 @@
 #
 #   dev/serve NAME PORT [HARNESS-BRAIN FLAG...]
 #
-# Builds this clone's HEAD (a tree with uncommitted changes is refused)
-# and installs its executables and roles/ into
-# ~/.local/share/agent-harness/builds/COMMIT/, once, read-only: every
-# brain of that commit runs from there, and so do the limbs it starts,
-# which it finds beside its own executable. Then it starts the user unit
-# harness-NAME.service on ~/.local/share/agent-harness/NAME/brain.sqlite
-# with that build's roles, or, if the unit runs, stops it first: SIGTERM,
-# and the brain drains (its requests in flight get up to five minutes)
-# before the new build starts on the same database. Any further flags go
-# to harness-brain (`--model scripted`, `--sample WAV`); a relaunch takes
-# only the flags it is given. It prints the commit and the URL once the
-# new brain serves its face.
+# Runs this clone's HEAD (a tree with uncommitted changes is refused) as
+# the user unit harness-NAME.service on
+# ~/.local/share/agent-harness/NAME/brain.sqlite. The builds limb does the
+# work (crates/limb-builds), so there is one way to install and relaunch:
 #
-# ~/.local/share/agent-harness/NAME/build links to the build NAME runs, so
-# its `act` is ~/.local/share/agent-harness/NAME/build/bin/act. Each serve
-# deletes the builds nothing runs or links to, but the three newest.
+# - If the unit does not run, it installs the commit (`harness-limb-builds
+#   install`: its executables and roles/ into
+#   ~/.local/share/agent-harness/builds/COMMIT/, once, read-only, deleting
+#   the builds nothing runs or links to but the three newest) and starts
+#   it with that build's roles and any further flags (`--model scripted`,
+#   `--sample WAV`). It prints the commit and the URL once the brain serves
+#   its face.
+# - If it runs, it relaunches it, as the `relaunch` tool does, with the
+#   running build's own builds limb: the brain drains (its requests in
+#   flight get up to five minutes), the new build starts on the same
+#   database with the same flags, and it waits until the build is proven
+#   (a response, and a call a limb settled, in its span) or has gone back
+#   to the build before. It keeps the flags the brain runs with: stop
+#   the unit to change them. A running build older than the builds limb is relaunched by
+#   this clone's.
+#
+# ~/.local/share/agent-harness/NAME/build links to the build a restart of
+# NAME runs, the last proven, so its `act` is
+# ~/.local/share/agent-harness/NAME/build/bin/act.
 # Its log: journalctl --user -u harness-NAME.
 set -euo pipefail
 
@@ -32,61 +40,29 @@ shift 2
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$repo"
-# The same test as the brain's own `+dirty` (crates/brain/build.rs).
-[[ -z $(git status --porcelain --untracked-files=no) ]] ||
-    die "$repo has uncommitted changes; commit them, or stash them"
-commit=$(git rev-parse --short=12 HEAD)
-
+unit=harness-$name.service
 home=${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness
-build=$home/builds/$commit
-if [[ ! -d $build ]]; then
-    echo "building $commit"
-    staging=$home/builds/.$commit.$$
-    trap '[[ ! -d $staging ]] || { chmod -R u+w "$staging"; rm -rf "$staging"; }' EXIT
-    mkdir -p "$staging/bin"
-    cargo build --release --workspace --bins --example act \
-        --message-format=json-render-diagnostics |
-        jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
-        xargs -r cp -t "$staging/bin"
-    git archive HEAD roles | tar -x -C "$staging"
-    built=$("$staging/bin/harness-brain" --version)
-    [[ $built == "harness-brain $commit" ]] || die "the build says it is $built, not $commit"
-    chmod -R a-w "$staging"
-    # Another serve may have installed it meanwhile: the first one stands.
-    mv -T "$staging" "$build" 2>/dev/null || true
+
+if systemctl --user -q is-active "$unit"; then
+    [[ $# -eq 0 ]] || echo "dev/serve: $unit keeps the flags it runs with; stop it to change them" >&2
+    pid=$(systemctl --user show -p MainPID --value "$unit")
+    limb=$(dirname "$(readlink -f "/proc/$pid/exe")")/harness-limb-builds
+    if [[ ! -x $limb ]]; then
+        cargo build -q --release -p harness-limb-builds
+        limb=$repo/target/release/harness-limb-builds
+    fi
+    exec "$limb" relaunch "$unit" "$repo"
 fi
 
-unit=harness-$name.service
+cargo build -q --release -p harness-limb-builds
+build=$("$repo/target/release/harness-limb-builds" install "$repo")
+commit=${build##*/}
 data=$home/$name
 mkdir -p "$data"
-if systemctl --user -q is-active "$unit"; then
-    echo "stopping $unit: its requests in flight drain first"
-    systemctl --user stop "$unit"
-fi
-systemctl --user reset-failed "$unit" 2>/dev/null || true
 [[ -z $(ss -Hltn "sport = :$port") ]] || die "something else listens on port $port"
 ln -sfn "$build" "$data/build"
-
-# Prune the builds nothing uses: none a NAME/build links to, none a
-# running process (a brain, or a limb that outlived its brain) runs from,
-# and not the three newest of the rest.
-in_use=$(
-    { readlink -f "$home"/*/build; readlink /proc/[0-9]*/exe; } 2>/dev/null |
-        grep -o "^$home/builds/[0-9a-f]*" | sort -u
-) || true
-unused=$(ls -1dt "$home"/builds/[0-9a-f]* | grep -vxF "${in_use:-/}" | tail -n +4) || true
-for old in $unused; do
-    chmod -R u+w "$old" && rm -rf "$old" && echo "pruned ${old##*/}"
-done
-
-# KillMode=mixed: the stop's SIGTERM goes to the brain alone, which ends
-# its links to limbs itself; the limbs run in units of their own.
-systemd-run --user --quiet --collect --unit="$unit" \
-    --description="agent-harness brain $name ($commit)" \
-    --working-directory="$data" \
-    -p KillMode=mixed -p TimeoutStopSec=330 \
-    "$build/bin/harness-brain" --db "$data/brain.sqlite" --port "$port" \
-    --roles "$build/roles" "$@"
+"$build/bin/harness-limb-builds" start "$unit" "$build/bin/harness-brain" \
+    --db "$data/brain.sqlite" --port "$port" --roles "$build/roles" "$@"
 
 url=https://mx-hv-mj.local:$port/
 for _ in $(seq 120); do

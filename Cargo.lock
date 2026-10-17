@@ -217,6 +217,7 @@ dependencies = [
  "harness-face-tab",
  "harness-face-web",
  "harness-limb-browser",
+ "harness-limb-builds",
  "harness-limb-workspace",
  "harness-program",
  "harness-provider",
@@ -290,6 +291,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tungstenite",
+]
+
+[[package]]
+name = "harness-limb-builds"
+version = "0.0.0"
+dependencies = [
+ "harness-core",
+ "harness-limb",
+ "harness-store",
+ "harness-substrate",
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

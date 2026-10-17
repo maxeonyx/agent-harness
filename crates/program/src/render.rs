@@ -254,6 +254,16 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
                 names.join(", ")
             )));
         }
+        // What a limb said to show of a change, rather than announce it.
+        for s in stale.iter().filter(|s| s.resource.kind != "role") {
+            if let Some(content) = s.content {
+                said.push(text(&format!(
+                    "[harness] {}: {}",
+                    s.resource.name,
+                    self::said(values, content)
+                )));
+            }
+        }
         let told = stale
             .iter()
             .map(|s| Observation {
