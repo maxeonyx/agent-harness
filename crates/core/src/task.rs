@@ -1756,13 +1756,11 @@ fn learn(
                     .ok_or(Rejected::Unknown)?
                     .outcome()
                     .ok_or(Rejected::Busy)?;
-                match outcome {
-                    CallOutcome::Refused { current } => context.tell(current, &mut before),
-                    outcome => {
-                        if let Some(output) = outcome.output() {
-                            context.observe(&output.observes, &mut before);
-                        }
-                    }
+                if let CallOutcome::Refused { current, .. } = outcome {
+                    context.tell(current, &mut before);
+                }
+                if let Some(seen) = outcome.seen() {
+                    context.observe(&seen.observes, &mut before);
                 }
             }
             Rendered::Delivery(_) => {}

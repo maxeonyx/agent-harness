@@ -80,13 +80,12 @@ fn main() {
     );
     brain.call(&mut b, "grep", json!({ "pattern": "fn \\w+" }));
 
-    title("A edits on its old view: refused, untouched; it reads again and retries");
+    title("A edits on its old view: refused, untouched, shown the file as it is; it retries");
     brain.call(
         &mut a,
         "edit",
         json!({ "path": "src/lib.rs", "old": "-> i32", "new": "-> i64" }),
     );
-    brain.call(&mut a, "read", json!({ "path": "src/lib.rs" }));
     brain.call(
         &mut a,
         "edit",
@@ -613,7 +612,7 @@ fn show(
     let output = match outcome {
         Outcome::Completed(o) | Outcome::Failed(o) => Some(o),
         Outcome::Interrupted { partial } => partial,
-        Outcome::Refused { current } => {
+        Outcome::Refused { current, shown } => {
             for o in &current {
                 let had = context
                     .knows
@@ -626,7 +625,7 @@ fn show(
                     version(&o.version)
                 );
             }
-            None
+            shown
         }
         Outcome::Unknown => None,
     };
