@@ -14,6 +14,11 @@
 //! written once, when it is assembled from the stream; a tool use's input
 //! is kept as the model streamed it. Nothing is parsed and written again.
 //!
+//! **Usage.** [`Client::usage`] reads the plan's usage windows from the
+//! subscription's own endpoint (`/api/oauth/usage`), for Max's call to the
+//! provider limb; every response's headers report the 5-hour and 7-day
+//! windows too, in its [`harness_core::model_call::Quota`].
+//!
 //! **The subscription.** Three things, measured in Max's OpenCode plugin
 //! and the provider-wire spike: the `oauth-2025-04-20` beta (added here),
 //! the identity string [`IDENTITY`] as `system[0]` (the root's, checked
