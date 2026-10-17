@@ -821,7 +821,13 @@ impl Brain {
                 return;
             }
         }
-        match last.as_ref().map(|e| &e.ending) {
+        // What follows is read off the head: the response it is, if any.
+        let at_head = self
+            .state()
+            .response(head)
+            .and_then(|m| m.ended.as_ref())
+            .map(|e| e.ending.clone());
+        match &at_head {
             Some(Ending::Responded {
                 stop: Stop::Refused,
                 ..
@@ -853,12 +859,14 @@ impl Brain {
             return;
         }
 
-        // A new root after earlier requests starts again from the mandate.
+        // The first request of a context renders its beginning: at its
+        // start, however often it has been sent from there. A root after
+        // an earlier context also says where that one ended.
+        let first = task.context().is_some_and(|c| c.start == head);
         let seed = match self.state().entry(head) {
-            Some(Entry::Root(_)) => self.seed(id),
+            Some(Entry::Root(_)) => self.seed(id, head),
             _ => None,
         };
-        let first = last.is_none() || seed.is_some();
         let mut values = Vec::new();
         let mut appends = Vec::new();
         let mut renders = Vec::new();
@@ -975,11 +983,11 @@ impl Brain {
     /// Where the task's old context ended, and the note it handed over
     /// with, or why it ended without one: what a new root after earlier
     /// requests begins with.
-    fn seed(&self, task: TaskId) -> Option<render::Seed> {
+    fn seed(&self, task: TaskId, root: EntryId) -> Option<render::Seed> {
         let (_, last) = self
             .state()
             .model_calls()
-            .filter(|(_, m)| m.call.task == task)
+            .filter(|(_, m)| m.call.task == task && !self.state().descends(m.call.base, root))
             .max_by_key(|(_, m)| m.sent.seq)?;
         let handover = last
             .calls
