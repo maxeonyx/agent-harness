@@ -11,7 +11,8 @@
 //!
 //! ```text
 //! say TEXT              a reply (`\n` is a line break); the turn ends
-//! tool NAME [JSON]      a tool use, with that input (`{}` if none)
+//! tool NAME [JSON]      a tool use, with that input (`{}` if none); more
+//!                       `tool NAME JSON` after it are in the same response
 //! long N                a reply of N lines
 //! error STATUS [TEXT]   the request is refused with that HTTP status
 //! limit SECONDS         the plan's limit, reset in SECONDS
@@ -79,20 +80,15 @@ pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashSet<u64>>) 
     let mut events = Events::new(body.len());
     match verb {
         "say" => events.text(&rest.replace("\\n", "\n"), " ", "end_turn"),
-        "tool" => {
-            let (name, input) = rest.split_once(' ').unwrap_or((rest, ""));
-            let input = match input.trim() {
-                "" => "{}",
-                input => input,
-            };
-            if serde_json::from_str::<Value>(input).is_err() {
+        "tool" => match uses(rest) {
+            Ok(uses) => events.tools(&uses, messages.len()),
+            Err(name) => {
                 return refused(
                     400,
                     &format!("scripted: the input of `tool {name}` is not JSON"),
                 );
             }
-            events.tool(name, input, messages.len());
-        }
+        },
         "long" => {
             let n: usize = rest.parse().unwrap_or(100);
             let lines: Vec<String> = (1..=n)
@@ -152,6 +148,31 @@ struct Step {
     flaky: Option<u16>,
     /// The verb and what follows it; for a reply with no verb, its text.
     act: String,
+}
+
+/// The tool uses of `tool NAME [JSON] [tool NAME JSON]...`, or the name of
+/// one whose input is not JSON.
+fn uses(mut rest: &str) -> Result<Vec<(String, String)>, String> {
+    let mut uses = Vec::new();
+    loop {
+        let (name, after) = rest.split_once(' ').unwrap_or((rest, ""));
+        let after = after.trim_start();
+        let (input, tail) = match after {
+            "" => ("{}", ""),
+            _ => {
+                let mut values = serde_json::Deserializer::from_str(after).into_iter::<Value>();
+                match values.next() {
+                    Some(Ok(_)) => after.split_at(values.byte_offset()),
+                    _ => return Err(name.into()),
+                }
+            }
+        };
+        uses.push((name.to_string(), input.to_string()));
+        match tail.trim() {
+            "" => return Ok(uses),
+            tail => rest = tail.strip_prefix("tool ").ok_or(name)?.trim_start(),
+        }
+    }
 }
 
 /// The step `messages` are at.
@@ -329,24 +350,27 @@ impl Events {
         self.end(stop, text.len() / 4);
     }
 
-    /// A whole reply of one tool use, its id unique in its conversation of
+    /// A whole reply of tool uses, each id unique in its conversation of
     /// `n` messages.
-    fn tool(&mut self, name: &str, input: &str, n: usize) {
-        self.push(
-            "content_block_start",
-            json!({"type": "content_block_start", "index": 0, "content_block": {
-                "type": "tool_use", "id": format!("toolu_scripted_{n}"), "name": name, "input": {},
-            }}),
-        );
-        self.push(
-            "content_block_delta",
-            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": input}}),
-        );
-        self.push(
-            "content_block_stop",
-            json!({"type": "content_block_stop", "index": 0}),
-        );
-        self.end("tool_use", input.len() / 4);
+    fn tools(&mut self, uses: &[(String, String)], n: usize) {
+        for (index, (name, input)) in uses.iter().enumerate() {
+            self.push(
+                "content_block_start",
+                json!({"type": "content_block_start", "index": index, "content_block": {
+                    "type": "tool_use", "id": format!("toolu_scripted_{n}_{index}"), "name": name, "input": {},
+                }}),
+            );
+            self.push(
+                "content_block_delta",
+                json!({"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": input}}),
+            );
+            self.push(
+                "content_block_stop",
+                json!({"type": "content_block_stop", "index": index}),
+            );
+        }
+        let output = uses.iter().map(|(_, input)| input.len()).sum::<usize>() / 4;
+        self.end("tool_use", output);
     }
 
     fn end(&mut self, stop: &str, output: usize) {
