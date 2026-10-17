@@ -15,15 +15,17 @@
 // (page.log). Everything it starts, and every Chromium `page` starts for
 // it, carries one mark (demos/end.sh), named for the brain and this clone.
 //
-// `up` builds the harness, ends what the brain left running, and starts it
-// again on its database and this clone's roles/, every role on MODEL: the
+// `up` builds the harness, ends the brain if it still runs (SIGTERM, then
+// SIGKILL after 10 s), and starts it again on its database and this clone's roles/, every role on MODEL: the
 // scripted model, which costs nothing, unless told (`sonnet/low`, or
 // `sonnet` to keep each role's effort: the brain's `--model`). It keeps
 // the brain's port if that is free, or takes a free one in 4340-4499
 // (DRIVE_PORTS=LOW-HIGH for others), and succeeds once this launch's log
 // says it serves (`face: …`), or fails with the log's tail. The database
-// outlives `up`, so the next `up` relaunches a rebuilt brain on the same
-// chats; `down` ends everything of the brain's, and `down --wipe` forgets
+// outlives `up`, and so do its limbs, as any brain's do: the next `up`
+// relaunches a rebuilt brain on the same chats, linked to the same limbs,
+// so `kill -9 $(cat .drive.ignore/NAME/pid)` then `up` is a crash and a
+// relaunch; `down` ends everything of the brain's, and `down --wipe` forgets
 // it. The face serves the page from crates/face-web/src/page as it is on disk
 // (`--page`), so an edit to the page shows on reload, with no rebuild.
 //
@@ -85,13 +87,26 @@ function brainOf(name) {
   const file = (f) => path.join(dir, f);
   const read = (f) => fs.existsSync(file(f)) ? fs.readFileSync(file(f), "utf8").trim() : undefined;
   return {
-    name, dir, file,
+    name, dir, file, read,
     mark: `HARNESS_OWNER_drive_${name}_${clone}`,
     recorded: () => read("port") === undefined ? undefined : Number(read("port")),
     get port() {
       return this.recorded() ?? fail(`no brain ${name}: node dev/drive.mjs up --brain ${name}`);
     },
   };
+}
+
+// End the brain's own process, if it still runs, and leave its limbs.
+async function stop(brain) {
+  const pid = Number(brain.read("pid"));
+  const ours = () => {
+    try { return fs.readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(`${brain.mark}=1`); } catch { return false; }
+  };
+  if (!pid || !ours()) return;
+  process.kill(pid, "SIGTERM");
+  for (let i = 0; i < 100 && ours(); i++) await sleep(100);
+  if (ours()) process.kill(pid, "SIGKILL");
+  while (ours()) await sleep(100);
 }
 
 // End every process carrying the brain's mark: the brain, its limbs, any
@@ -124,7 +139,7 @@ async function up(brain, args) {
   if (args.length > 1) fail("usage: up [MODEL]");
   const model = args[0] ?? "scripted";
   execFileSync("cargo", ["build", "-q", "--release", "--bins", "--example", "act"], { cwd: repo, stdio: "inherit" });
-  end(brain);
+  await stop(brain);
   fs.mkdirSync(brain.file("state"), { recursive: true });
   const log = brain.file("brain.log");
   const tried = new Set();
