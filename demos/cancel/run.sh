@@ -59,11 +59,9 @@ until_root() { # jq condition on the root task, seconds
 # Start a brain in the background on a new database, wait for the root to
 # end its first turn, and say what is running.
 launch() { # name mandate
-  printf '%s\n' "$2" > "$dir/$1.md"
-  env "$mark=1" "$brain" --roles roles --role engineer --port "$port" \
-    --db "$dir/$1.sqlite" --workspace "$dir/repo" --mandate "$dir/$1.md" > "$dir/$1.log" 2>&1 &
+  env "$mark=1" "$brain" --roles roles --port "$port" --db "$dir/$1.sqlite" > "$dir/$1.log" 2>&1 &
   pid=$!
-  until c -s -o /dev/null "$url/" 2>/dev/null; do sleep 0.2; done
+  target/release/examples/act "$port" chat engineer "$PWD/$dir/repo" "$2" | sed 's/^/          the brain: /'
   until_root '.waiting.kind == "max"' 180
   say "its turn has ended with this running in the background:"
   left
@@ -99,21 +97,22 @@ finish b
 
 say "== C1. Ctrl-C once on a brain in a terminal, while a command runs"
 printf '%s\n' "Run \`./slow.sh\` with \`bash\` (it takes about a minute), then tell me in one line what its last line said." > "$dir/c.md"
+# Max starts the task at a tab once the brain in the terminal serves.
+target/release/examples/act "$port" chat engineer "$PWD/$dir/repo" "$(cat "$dir/c.md")" > /dev/null &
 python3 demos/cancel/terminal.py "$dir/c1.log" "./slow.sh" 3 1 0 -- \
-  env "$mark=1" "$brain" --roles roles --role engineer --port "$port" \
-  --db "$dir/c.sqlite" --workspace "$dir/repo" --mandate "$dir/c.md"
+  env "$mark=1" "$brain" --roles roles --port "$port" --db "$dir/c.sqlite"
 say "left running:"
 left
 
 say "== C2. The same database again; Ctrl-C twice while its request waits for the first byte"
 python3 demos/cancel/terminal.py "$dir/c2.log" "request sent" 0.8 2 0.2 -- \
-  env "$mark=1" "$brain" --roles roles --role engineer --port "$port" --db "$dir/c.sqlite"
+  env "$mark=1" "$brain" --roles roles --port "$port" --db "$dir/c.sqlite"
 say "left running:"
 left
 
 say "== C3. Again: the request the last Ctrl-C cut is sent again, and reads the cache"
 python3 demos/cancel/terminal.py "$dir/c3.log" "responded" 0 2 0.2 -- \
-  env "$mark=1" "$brain" --roles roles --role engineer --port "$port" --db "$dir/c.sqlite"
+  env "$mark=1" "$brain" --roles roles --port "$port" --db "$dir/c.sqlite"
 say "left running:"
 left
 
@@ -139,12 +138,12 @@ finish d
 
 say "== E. The brain as a systemd service, restarted while a command runs"
 printf '%s\n' "Run \`./slow.sh\` with \`bash\` (it takes about a minute), then tell me in one line what its last line said." > "$dir/e.md"
-# The service starts the task when it makes the database, and only then.
+# Max starts the task at a tab when the service makes the database, and
+# only then, once the brain serves.
 cat > "$dir/e.sh" <<EOF
 #!/usr/bin/env bash
-task=()
-[ -e $dir/e.sqlite ] || task=(--workspace $dir/repo --mandate $dir/e.md)
-exec $PWD/$brain --roles roles --role engineer --port $port --db $dir/e.sqlite "\${task[@]}"
+[ -e $dir/e.sqlite ] || $PWD/target/release/examples/act $port chat engineer $PWD/$dir/repo "\$(cat $PWD/$dir/e.md)" &
+exec $PWD/$brain --roles roles --port $port --db $dir/e.sqlite
 EOF
 chmod +x "$dir/e.sh"
 systemd-run --user --quiet --unit="$unit" --same-dir \
