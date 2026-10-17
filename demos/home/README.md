@@ -4,7 +4,7 @@
 demos/home/run.sh
 ```
 
-Then open https://mx-hv-mj.local:4320 (another port: `PORT=4400`). It is one brain with one database, kept in `~/.local/share/agent-harness/home/` (another: `DIR=…`), so everything you start carries on when it runs again.
+Then open https://mx-hv-mj.local:4320. It is `dev/serve home 4320`: one long-lived brain, the user unit `harness-home`, on the build of this clone's commit (a tree with uncommitted changes is refused), with one database kept in `~/.local/share/agent-harness/home/`. Run it again after a commit and the new build takes over the same database, so everything you started carries on. Another brain: `NAME=try PORT=4460 demos/home/run.sh`; its log: `journalctl --user -u harness-home`; stop it: `systemctl --user stop harness-home`. A brain already serving 4320 under another unit has to stop first, or `dev/serve` refuses the port.
 
 What to do:
 

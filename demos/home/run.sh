@@ -1,11 +1,9 @@
 #!/bin/sh
-# The harness Max uses at home: one brain, one database kept outside the
-# repo, chats started from the page. Run it again and everything carries on.
+# The harness Max uses at home: one long-lived brain, `dev/serve home`, a
+# user unit on ~/.local/share/agent-harness/home/brain.sqlite, chats
+# started from the page. Run it again (after a commit, say) and the new
+# build carries everything on. NAME=… PORT=… for another brain.
 set -eu
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain -p harness-limb-workspace
-dir=${DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness/home}
-mkdir -p "$dir"
 # SAMPLE=1 offers "Dictate the sample", for a machine with no microphone.
-exec target/release/harness-brain --roles roles --db "$dir/brain.sqlite" --port "${PORT:-4320}" \
-  ${SAMPLE:+--sample demos/home/sample.wav}
+exec dev/serve "${NAME:-home}" "${PORT:-4320}" ${SAMPLE:+--sample "$PWD/demos/home/sample.wav"}

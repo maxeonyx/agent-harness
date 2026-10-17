@@ -1,55 +1,54 @@
 #!/usr/bin/env bash
 # One agent works in two steps and compacts between them, then compacts and
-# reports; Max answers, and it compacts and reports again.
-# Watch it at https://mx-hv-mj.local:4410 (another port: PORT=4400).
+# reports; Max answers, and it compacts and reports again. It runs on the
+# test brain `compaction` (dev/drive.mjs), whose link it prints. Every role
+# runs on the scripted model, from script.md and answer.md, unless MODEL
+# names another (MODEL=sonnet/low: a real agent on mandate.md).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example act
-port=${PORT:-4410}
+drive() { node dev/drive.mjs "$1" --brain compaction "${@:2}"; }
+at=.drive.ignore/compaction
 dir=target/compaction-demo
-brain=target/release/harness-brain
 rm -rf "$dir"
 mkdir -p "$dir"
 demos/brain/scratch.sh "$dir/repo"
-mark=HARNESS_OWNER_compaction-demo-$$
-trap 'demos/end.sh "$mark"' EXIT
-c() { curl -sS --resolve "mx-hv-mj.local:$port:127.0.0.1" "https://mx-hv-mj.local:$port$1"; }
-root='.rows[] | .Task // empty | select(.owner == null)'
-waits() { [ "$(c /view 2>/dev/null | jq -r "$root | .waiting.kind")" = max ]; }
-# Until the agent waits on Max; if the brain has exited (its port taken, say), say why and stop.
-await() { until waits; do kill -0 "$pid" 2>/dev/null || { cat "$dir/brain.log"; exit 1; }; sleep 1; done; }
+model=${MODEL:-scripted}
+mandate=demos/compaction/mandate.md
+answer="Thanks. Add \`textstats.wordcount.unique(text: str) -> int\`, the number of distinct words, with a test, run the check, commit, and report again."
+if [ "$model" = scripted ]; then
+  mandate=demos/compaction/script.md
+  answer=$(cat demos/compaction/answer.md)
+fi
+# The brain's limbs outlive it, so what is left is ended when it finishes.
+trap 'drive down' EXIT
+drive down --wipe
+drive up "$model"
+port=$(cat "$at/port")
 
-echo "== the agent starts on demos/compaction/mandate.md"
-env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" > "$dir/brain.log" 2>&1 &
-pid=$!
-# Max starts the chat at a tab once this brain serves (not another on the port).
-until grep -q '^face: ' "$dir/brain.log"; do kill -0 "$pid" 2>/dev/null || { cat "$dir/brain.log"; exit 1; }; sleep 0.2; done
-chat=$(target/release/examples/act "$port" chat orchestrator "$PWD/$dir/repo" "$(cat demos/compaction/mandate.md)" | sed -n 's/^chat //p')
-await
-grep -E 'compacted|Max sends' "$dir/brain.log" || true
+echo "== the agent starts on $mandate, every role on $model"
+chat=$(drive chat orchestrator "$dir/repo" "$(cat "$mandate")")
+drive settle "$chat"
+grep -E 'compacted|Max sends' "$at/brain.log" | cut -c1-150 || true
 echo
 echo "== its context now: its first message and each carry are kept; the steps' tool calls are gone"
 demos/compaction/context.sh "$port"
 
 echo
 echo "== Max answers"
-target/release/examples/act "$port" say "$chat" "Thanks. Add \`textstats.wordcount.unique(text: str) -> int\`, the number of distinct words, with a test, run the check, commit, and report again."
-sleep 2
-await
+drive say "$chat" "$answer"
+drive settle "$chat"
 echo
 echo "== its context now: Max's words and both reports are kept verbatim"
 demos/compaction/context.sh "$port"
 
 echo
 target/release/examples/act "$port" done "$chat"
-until grep -q 'the task is done' "$dir/brain.log"; do sleep 0.5; done
-kill "$pid"
-wait "$pid" 2>/dev/null || true
+until grep -q 'the task is done' "$at/brain.log"; do sleep 0.5; done
 echo
 echo "== what the brain said of its tasks' moves"
-grep -E 'compacted|done' "$dir/brain.log" | cut -c1-160
+grep -E 'compacted|done' "$at/brain.log" | cut -c1-160
 echo
 echo "== the repository afterwards"
 git -C "$dir/repo" log --format='%h %s'
 echo
-echo "To keep serving the finished run: $brain --roles roles --db $dir/brain.sqlite --port $port"
+echo "To serve the finished run again: node dev/drive.mjs up --brain compaction $model"

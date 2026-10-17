@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
 # A chat starts a browser agent on a chore in real pages: an expense claim
 # filled in from a receipts page, left unsubmitted, its tab handed to Max.
-# Watch it at https://mx-hv-mj.local:4342 (PORT=… for another port).
-# Every role runs on Sonnet (MODEL=… for another; the effort is the role's).
+# It runs on the test brain `browser` (dev/drive.mjs), whose link it
+# prints. Every role runs on Sonnet at low effort (MODEL=… for another).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain -p harness-limb-workspace -p harness-limb-browser --bins --example act
-port=${PORT:-4342}
+drive() { node dev/drive.mjs "$1" --brain browser "${@:2}"; }
+at=.drive.ignore/browser
 dir=$PWD/target/browser-demo
-brain=target/release/harness-brain
 rm -rf "$dir"
 mkdir -p "$dir"
 site=$PWD/demos/browser/site
 sed -e "s|RECEIPTS|file://$site/receipts.html|" -e "s|CLAIM|file://$site/claim.html|" \
   demos/browser/mandate.md > "$dir/mandate.md"
-# The limbs' state, the browser's profile among it, stays in the demo.
-export XDG_STATE_HOME=$dir/state
-mark=HARNESS_OWNER_browser-demo-$$
-trap 'demos/end.sh "$mark"' EXIT
+trap 'drive down' EXIT
+drive down --wipe
+drive up "${MODEL:-sonnet/low}"
+port=$(cat "$at/port")
 c() { curl -sS --resolve "mx-hv-mj.local:$port:127.0.0.1" "https://mx-hv-mj.local:$port$1"; }
 root='.rows[] | .Task // empty | select(.owner == null)'
 waits_on_max() { [ "$(c /view 2>/dev/null | jq -r "$root | .waiting.kind")" = max ]; }
@@ -25,13 +24,13 @@ waits_on_max() { [ "$(c /view 2>/dev/null | jq -r "$root | .waiting.kind")" = ma
 echo "== Max asks a chat, in the chat role:"
 cat "$dir/mandate.md"
 echo
-env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" --model "${MODEL:-sonnet}" > "$dir/brain.log" 2>&1 &
-chat=$(target/release/examples/act "$port" chat chat - "$(cat "$dir/mandate.md")" | sed -n 's/^chat //p')
+chat=$(drive chat chat - "$(cat "$dir/mandate.md")")
 until waits_on_max; do sleep 1; done
-grep -E 'browser|tab|passed|spawn|responded' "$dir/brain.log" | cut -c1-170
+grep -E 'browser|tab|passed|spawn|responded' "$at/brain.log" | cut -c1-170
 echo
-# The browser: the one HARNESS_BROWSER names, or the one the limb launched.
-browser=${HARNESS_BROWSER:-$(ls -d "$XDG_STATE_HOME"/harness/limbs/*/profile)}
+# The browser: the one HARNESS_BROWSER names, or the one the limb launched,
+# whose profile is in the limbs' state.
+browser=${HARNESS_BROWSER:-$(ls -d "$at"/state/harness/limbs/*/profile)}
 echo
 echo "== What the browser shows, read over DevTools"
 node demos/browser/look.mjs "$browser"
@@ -49,6 +48,6 @@ node demos/browser/look.mjs "$browser"
 echo
 echo "== Max presses Done, and the chat writes its result"
 target/release/examples/act "$port" done "$chat"
-until grep -q 'the task is done' "$dir/brain.log"; do sleep 0.5; done
+until grep -q 'the task is done' "$at/brain.log"; do sleep 0.5; done
 sleep 0.5
-sed -n '/the task is done/,$p' "$dir/brain.log"
+sed -n '/the task is done/,$p' "$at/brain.log"

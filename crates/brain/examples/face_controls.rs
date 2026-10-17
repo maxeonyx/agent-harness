@@ -477,6 +477,9 @@ struct Brain {
 }
 
 impl Brain {
+    /// Started here rather than with `dev/drive.mjs up`: the demo reads
+    /// the brain's output line by line to time each control against what
+    /// the brain is doing, and ends the process itself.
     fn launch(db: &Path, roles: &[String], port: u16) -> Brain {
         let mut child = Command::new("target/release/harness-brain")
             .args(roles)
