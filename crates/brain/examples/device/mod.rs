@@ -52,7 +52,12 @@ pub fn model(default: &str) -> String {
 
 /// The brain's `--roles` and `--model` for a demo on `model`.
 pub fn role_args(model: &str) -> Vec<String> {
-    vec!["--roles".into(), "roles".into(), "--model".into(), model.into()]
+    vec![
+        "--roles".into(),
+        "roles".into(),
+        "--model".into(),
+        model.into(),
+    ]
 }
 
 /// A user message's content blocks: one text block.
