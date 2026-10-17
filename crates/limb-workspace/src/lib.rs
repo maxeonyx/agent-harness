@@ -41,8 +41,9 @@
 //! **Vision.** No permission prompts; process trees owned by their call;
 //! interrupted calls whose outcome is unknown kept distinct from failed
 //! ones (critique §5); "trunc (head + tail + grep for avoiding context
-//! overload) [...] use it by default for commands", with the agent required
-//! to name what it greps for ([`trunc`]); the shared-workspace race.
+//! overload) [...] use it by default for commands", with what it leaves
+//! out kept where the agent can read it ([`trunc`]); the shared-workspace
+//! race.
 //!
 //! **Existing harnesses.** OpenCode cuts tool output at 2000 lines or
 //! 50 KiB and writes the rest to a file
@@ -93,7 +94,7 @@ use serde_json::json;
 use harness_limb::{Out, SHUTDOWN};
 use harness_runtime::Cancel;
 
-use crate::record::Marks;
+use crate::record::{Marks, Outputs};
 
 /// The resource kinds this limb owns.
 const FILE: &str = "file";
@@ -226,6 +227,7 @@ struct Inner {
     skills: Option<PathBuf>,
     kind: Kind,
     marks: Marks,
+    outputs: Outputs,
     log: Mutex<Log<Harness, Store>>,
     out: Out,
     running: Mutex<HashMap<CallId, Running>>,
@@ -284,6 +286,7 @@ impl Workspace {
             skills,
             kind: config.kind,
             marks: Marks::open(config.state.join("calls"))?,
+            outputs: Outputs::open(config.state.join("outputs"))?,
             log: Mutex::new(log),
             out,
             running: Mutex::default(),

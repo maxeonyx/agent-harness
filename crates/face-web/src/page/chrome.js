@@ -1,10 +1,16 @@
+import { $, clock, el, icon } from "./base.js";
+import { act, digest } from "./tab.js";
+import { byId, view } from "./map.js";
+import { fit, setNewPoint, setUsageRight } from "./camera.js";
+import { go, NEW } from "./card.js";
+
 // ─── Telling Max when he is not looking ───────────────────────────────────
 // When something newly waits on him and this tab is not in front, the
 // system says so, and a click brings the tab forward with it open. The
 // browser asks his permission at his first touch of the page.
 let notified = null;
 addEventListener("pointerdown", () => { if (window.Notification?.permission === "default") Notification.requestPermission(); }, { once: true });
-function notify(queue) {
+export function notify(queue) {
   const before = notified;
   notified = new Set(queue.map((q) => q.task));
   if (!before || !document.hidden || window.Notification?.permission !== "granted") return;
@@ -46,7 +52,7 @@ async function refreshUsage() {
 const gauges = el("button", "gauges"), usageCard = el("div", "usage-card"), usageAlarms = el("span", "alarms");
 gauges.onclick = refreshUsage;
 $("#usage").append(gauges, usageCard, usageAlarms);
-function renderUsage() {
+export function renderUsage() {
   const u = view.usage, span = $("#usage"), w = u?.windows || {};
   const busy = refreshAsked || u?.refreshing, failed = refreshRefused || u?.failed;
   gauges.replaceChildren();
@@ -71,11 +77,11 @@ function renderUsage() {
   usageAlarms.replaceChildren();
   if (u && !u.on_plan) usageAlarms.append(el("span", "alarm", "billed outside the plan: nothing more is sent"));
   if (view.limited) usageAlarms.append(el("span", "alarm", `limited until ${clock(view.limited)} · carries on by itself`));
-  usageRight = span.getBoundingClientRect().right;
+  setUsageRight(span.getBoundingClientRect().right);
 }
 const fitButton = icon("fit", "", "Fit the map (F)"), newButton = icon("plus", "", "New chat (or double-click the map)");
 newButton.id = "new";
 fitButton.onclick = () => fit(true);
-newButton.onclick = () => { newPoint = null; go(NEW); };
+newButton.onclick = () => { setNewPoint(null); go(NEW); };
 $("#bottom").append(fitButton, newButton);
 

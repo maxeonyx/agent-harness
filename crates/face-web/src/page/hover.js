@@ -1,3 +1,10 @@
+import { $, ago, el, gist, kTokens } from "./base.js";
+import { byId, cardStatus, graph, isDone, look, parentOf } from "./map.js";
+import { drag } from "./camera.js";
+import { trouble } from "./draw.js";
+import { actionButton, actionsKey, actionsOf, callActionsOf } from "./actions.js";
+import { go } from "./card.js";
+
 // ─── The preview: the words the map does not show, and what Max can do ────
 // A short hover on a node opens it beside the node: its words, which he can
 // select, the task it belongs to, and its actions. It stays open while the
@@ -7,8 +14,8 @@
 // click (a long press, on touch) opens it pinned at the pointer, its
 // actions as rows, until Escape or a click elsewhere.
 const tip = $("#tip");
-let tipFor = null, tipTimer = 0, tipClosing = 0, leftAt = null;
-function hoverable(target, id) {
+export let tipFor = null, tipTimer = 0, tipClosing = 0, leftAt = null;
+export function hoverable(target, id) {
   target.style.webkitTouchCallout = "none";
   target.addEventListener("pointerenter", (e) => {
     if (e.pointerType !== "mouse" || drag?.moved || tipFor?.pinned) return;
@@ -43,7 +50,7 @@ function openTip(f) {
   fillTip();
   if (tipFor === f) placeTip();
 }
-function hideTip() { clearTimeout(tipTimer); clearTimeout(tipClosing); tipClosing = 0; tipFor = null; leftAt = null; tip.hidden = true; }
+export function hideTip() { clearTimeout(tipTimer); clearTimeout(tipClosing); tipClosing = 0; tipFor = null; leftAt = null; tip.hidden = true; }
 
 // Is the point in the triangle from where the pointer left the node to the
 // preview's two corners nearest it?
@@ -70,7 +77,7 @@ addEventListener("keydown", (e) => { if (e.key === "Escape" && tipFor && !tip.hi
 
 // Its words, drawn again as they change; a line that has not changed is
 // left as it is, so what Max selected in it stays selected.
-function fillTip() {
+export function fillTip() {
   if (!tipFor || !tipFor.target.isConnected) return hideTip();
   const id = typeof tipFor.id === "function" ? tipFor.id() : tipFor.id;
   const lines = [];

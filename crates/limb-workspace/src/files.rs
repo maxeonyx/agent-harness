@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use harness_core::call::{Call, Outcome, Output};
-use harness_core::id::{CallId, Digest};
+use harness_core::id::{CallId, Digest, ValueId};
 use harness_core::live::Live;
 use harness_core::resource::{Observation, Version};
 use regex::Regex;
@@ -17,7 +17,7 @@ use harness_runtime::{Cancel, Ended as TreeEnded};
 
 use crate::record::replace;
 use crate::shell::{self, Ended};
-use crate::trunc::{Limits, Truncator};
+use crate::trunc::{Truncated, Truncator};
 use crate::{Inner, Report, lock};
 
 const DEFAULT_TIMEOUT: u64 = 120_000;
@@ -26,7 +26,7 @@ const MAX_TIMEOUT: u64 = 600_000;
 #[derive(Deserialize)]
 struct Bash {
     command: String,
-    grep: String,
+    grep: Option<String>,
     timeout_ms: Option<u64>,
 }
 
@@ -94,7 +94,7 @@ impl Inner {
             "read" => parse(input).and_then(|i| self.read(i, report)),
             "write" => parse(input).and_then(|i| self.write(i, expects, report)),
             "edit" => parse(input).and_then(|i| self.edit(i, expects, report)),
-            "grep" => parse(input).and_then(|i| self.grep(i, cancel, report)),
+            "grep" => parse(input).and_then(|i| self.grep(id, i, cancel, report)),
             other => Err(format!("this workspace has no tool `{other}`")),
         };
         result.unwrap_or_else(|message| report.failed(&message))
@@ -109,7 +109,7 @@ impl Inner {
     ) -> Result<Outcome, String> {
         let timeout =
             Duration::from_millis(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT));
-        let truncator = Truncator::new(Limits::default(), pattern(Some(&input.grep))?);
+        let truncator = Truncator::new(pattern(input.grep.as_deref())?);
         // A character split across two reads is held until it is whole.
         let mut tail = Vec::new();
         let progress = |bytes: &[u8]| {
@@ -142,13 +142,11 @@ impl Inner {
             self.marks.ran(call);
         }
         let shutdown = self.shutting_down.load(std::sync::atomic::Ordering::SeqCst);
+        let ended = shell::describe(&ran, timeout, shutdown);
+        let (view, full) = self.shown(call, ran.output, report);
         let output = Output {
-            model: report.text(&format!(
-                "{}{}",
-                ran.output.text,
-                shell::describe(&ran, timeout, shutdown)
-            )),
-            full: ran.full.map(|full| report.value(full)),
+            model: report.text(&format!("{view}{ended}")),
+            full,
             observes: Vec::new(),
         };
         Ok(match ran.ended {
@@ -292,10 +290,16 @@ impl Inner {
         Ok(report.completed(&said, self.observations(&place.name, version)))
     }
 
-    fn grep(&self, input: Grep, cancel: &Cancel, report: &mut Report) -> Result<Outcome, String> {
+    fn grep(
+        &self,
+        call: CallId,
+        input: Grep,
+        cancel: &Cancel,
+        report: &mut Report,
+    ) -> Result<Outcome, String> {
         let regex = Regex::new(&input.pattern).map_err(|e| format!("invalid pattern: {e}"))?;
         let place = self.place(input.path.as_deref().unwrap_or("."));
-        let mut truncator = Truncator::new(Limits::default(), None);
+        let mut truncator = Truncator::matching(regex.clone());
         let mut found = 0;
         let mut pending = vec![place.path];
         while let Some(path) = pending.pop() {
@@ -332,15 +336,42 @@ impl Inner {
             for (n, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
                 if regex.is_match(line) {
                     found += 1;
-                    truncator.line(&format!("{name}:{}:{line}", n + 1));
+                    truncator.line(&format!("{name}:{}:", n + 1), line);
                 }
             }
         }
-        let said = match found {
-            0 => "No matches.".into(),
-            _ => truncator.finish().text,
+        if found == 0 {
+            return Ok(report.completed("No matches.", Vec::new()));
+        }
+        let (view, full) = self.shown(call, truncator.finish(), report);
+        Ok(Outcome::Completed(Output {
+            model: report.text(&view),
+            full,
+            observes: Vec::new(),
+        }))
+    }
+
+    /// The view of an output, and the whole of it when the view left some
+    /// out: kept as a file the agent can `read` or `grep`, which the view
+    /// names, and as a value for Max.
+    fn shown(
+        &self,
+        call: CallId,
+        output: Truncated,
+        report: &mut Report,
+    ) -> (String, Option<ValueId>) {
+        let Some(whole) = output.whole else {
+            return (output.text, None);
         };
-        Ok(report.completed(&said, Vec::new()))
+        let kept = self.outputs.keep(call, &whole);
+        let said = match kept {
+            Ok(path) => format!(
+                "[cut to fit; the whole output is in {}: `read` or `grep` it]\n",
+                path.display()
+            ),
+            Err(e) => format!("[cut to fit; the whole output could not be kept: {e}]\n"),
+        };
+        (output.text + &said, Some(report.value(whole)))
     }
 
     /// The refusal of a write or edit whose caller has not seen `current`.

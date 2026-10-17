@@ -1,25 +1,26 @@
-"use strict";
 // ─── Small things ──────────────────────────────────────────────────────────
-const $ = (s, root = document) => root.querySelector(s);
-const el = (tag, cls, text) => {
+export const $ = (s, root = document) => root.querySelector(s);
+export const el = (tag, cls, text) => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   if (text != null) e.textContent = text;
   return e;
 };
-const svgEl = (tag) => document.createElementNS("http://www.w3.org/2000/svg", tag);
-const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-const ago = (ms) => {
+export const svgEl = (tag) => document.createElementNS("http://www.w3.org/2000/svg", tag);
+export const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+export const ago = (ms) => {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m` : `${Math.floor(s / 86400)}d`;
 };
-const kTokens = (n) => n == null ? "?" : n < 1000 ? `${n}` : n < 1e6 ? `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k` : `${+(n / 1e6).toFixed(1)}M`;
-const parse = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
-const phone = () => matchMedia("(max-width: 760px)").matches;
-const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
-const lerp = (a, b, e) => a + (b - a) * e;
+export const kTokens = (n) => n == null ? "?" : n < 1000 ? `${n}` : n < 1e6 ? `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k` : `${+(n / 1e6).toFixed(1)}M`;
+export const parse = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
+export const phone = () => matchMedia("(max-width: 760px)").matches;
+export const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+export const lerp = (a, b, e) => a + (b - a) * e;
+// The open card's fixed parts in the document, which every area writes into.
+export const panel = $("#panel"), logEl = $(".log", panel), scrollEl = $(".scroll", panel);
 // Icons, drawn in the colour of the text around them.
-const ICONS = {
+export const ICONS = {
   mic: '<path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
   send: '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
@@ -32,7 +33,7 @@ const ICONS = {
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   toward: '<path d="M9 5l7 7-7 7"/>',
 };
-function icon(name, cls, title) {
+export function icon(name, cls, title) {
   const b = el("button", `icon ${cls || ""}`);
   b.type = "button";
   b.innerHTML = `<svg viewBox="0 0 24 24">${ICONS[name]}</svg>`;
@@ -41,7 +42,7 @@ function icon(name, cls, title) {
 }
 
 // The gist of a call's input: its command, or the path or pattern it names.
-function gist(input) {
+export function gist(input) {
   const v = typeof input === "string" ? parse(input) : input;
   const s = v && (v.command ?? v.path ?? v.pattern ?? v.question ?? v.query ?? v.url ?? v.name ?? v.tool);
   if (typeof s !== "string") return "";
@@ -49,7 +50,7 @@ function gist(input) {
   return line.length > 90 ? line.slice(0, 90) + "…" : line;
 }
 
-function markdown(text) {
+export function markdown(text) {
   if (!window.marked || !window.DOMPurify) return el("div", "plain", text);
   const div = el("div", "prose");
   div.innerHTML = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: false }));

@@ -198,6 +198,17 @@ impl<S: Source> Face<S> {
                 )
             }
             path => {
+                if let Some(script) = path
+                    .strip_prefix("/page/")
+                    .and_then(|name| SCRIPTS.iter().find(|(n, _)| *n == name))
+                {
+                    return http::respond(
+                        &mut stream,
+                        "text/javascript; charset=utf-8",
+                        script.1.as_bytes(),
+                        false,
+                    );
+                }
                 if let Some(head) = path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
                     return self.context(&mut stream, head);
                 }
@@ -608,10 +619,10 @@ fn now() -> Timestamp {
     Timestamp(ms as i64)
 }
 
-/// The page: one document, one style sheet and one script, written as the
-/// pieces in `page/` and joined here in this order, so a piece runs exactly
-/// as if the whole were one file. Each piece is one area of the face; its
-/// first comment says which.
+/// The page: one document and its style sheet, joined from the pieces in
+/// `page/` in this order. Its script is the modules `page/*.js`, served at
+/// `/page/<name>`: `main.js` starts the page, and each module imports what
+/// it uses from the others, so a name lives in one module and says where.
 const PAGE: &str = concat!(
     include_str!("page/head.html"),
     include_str!("page/base.css"),
@@ -622,21 +633,10 @@ const PAGE: &str = concat!(
     include_str!("page/compose.css"),
     include_str!("page/phone.css"),
     include_str!("page/body.html"),
-    include_str!("page/base.js"),
-    include_str!("page/tab.js"),
-    include_str!("page/map.js"),
-    include_str!("page/camera.js"),
-    include_str!("page/draw.js"),
-    include_str!("page/hover.js"),
-    include_str!("page/chrome.js"),
-    include_str!("page/actions.js"),
-    include_str!("page/card.js"),
-    include_str!("page/log.js"),
-    include_str!("page/compose.js"),
-    include_str!("page/newchat.js"),
-    include_str!("page/main.js"),
     include_str!("page/tail.html"),
 );
+/// The page's modules, by name: every `page/*.js`, listed by `build.rs`.
+const SCRIPTS: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/scripts.rs"));
 /// The tab, as the page runs it.
 const TAB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tab.wasm"));
 
