@@ -18,7 +18,7 @@ The brain reads nothing from disk but its database: the roles and the workspace 
 
 ## Real output
 
-A run at 17:27 NZT on 2026-10-17.
+A run at 17:00 NZT on 2026-10-17.
 
 ```
 == launch 1: a new database, and a chat with Max
