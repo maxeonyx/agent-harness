@@ -524,7 +524,7 @@ impl State {
                         match &limb.kind {
                             // Max's answer is his; the brain only withdraws the question.
                             LimbKind::Max => matches!(outcome, CallOutcome::Interrupted { .. }),
-                            LimbKind::Meta | LimbKind::Attention => true,
+                            LimbKind::Meta | LimbKind::Attention | LimbKind::Provider => true,
                             // A plugin's outcome is its own, unless it was never
                             // sent, or the brain gives up on it while the limb is
                             // unreached; the limb's real outcome is still taken
@@ -999,6 +999,7 @@ impl State {
                 let limb = self.limbs.get(&limb).ok_or(Rejected::Unknown)?;
                 let instance = match &limb.kind {
                     LimbKind::Max => return Err(Rejected::ForMax),
+                    LimbKind::Provider => return Err(Rejected::Unroutable),
                     // Run once, with its effects, so never twice.
                     LimbKind::Meta | LimbKind::Attention if made.dispatched.is_some() => {
                         return Err(Rejected::Exists);
@@ -1753,7 +1754,7 @@ impl State {
                 continue;
             }
             let due = match &limb.kind {
-                LimbKind::Max => false,
+                LimbKind::Max | LimbKind::Provider => false,
                 LimbKind::Meta | LimbKind::Attention => record.dispatched.is_none(),
                 LimbKind::Plugin { .. } => {
                     connection.is_some_and(|c| record.dispatched.is_none_or(|d| d.last.seq < c))

@@ -3,7 +3,7 @@ name: designer
 description: Decides one model for the orchestrator, following Max's design doctrine, and returns the decision as a result. Launched only by the orchestrator.
 model: opus
 effort: xhigh
-limbs: [meta, user]
+limbs: [meta, user, web]
 places: [workspace]
 starts: []
 ---

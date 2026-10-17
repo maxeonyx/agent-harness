@@ -254,6 +254,11 @@ pub enum LimbKind {
     /// Max's queue: read it, rank it, say why. The scheduler's only limb.
     /// Run by the brain like [`LimbKind::Meta`].
     Attention,
+    /// Tools the model provider runs inside a response (web search, web
+    /// fetch). The brain describes them; a root declares them like any
+    /// tool, but their use and results are blocks of the response itself,
+    /// so they never become calls.
+    Provider,
     /// A workspace, a JavaScript process, or anything else: a process of
     /// its own, started by the brain from its kind, so a brain relaunch does
     /// not kill its builds. It keeps a durable record of its calls, so it can

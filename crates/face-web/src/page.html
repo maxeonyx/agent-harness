@@ -263,6 +263,8 @@
   .rendered { border: 1px solid var(--line); border-radius: 8px; padding: .7em 1em; background: var(--white); margin: .3em 0; max-height: 34em; overflow: auto; }
   .rendered img { max-width: 100%; }
   .chips { display: flex; flex-wrap: wrap; gap: .4em; margin: .25em 0 .5em 1em; }
+  a.cite { font-size: .75em; padding: 0 .4em; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: var(--muted, #777); white-space: nowrap; vertical-align: .1em; }
+  .io.found a { text-decoration: none; } .io.found .host { opacity: .6; }
   .chip { display: inline-flex; align-items: center; gap: .4em; padding: .25em .7em .25em .35em; border: 1px solid var(--line); border-radius: 999px; background: var(--white); font: 600 13px var(--serif); text-decoration: none; color: inherit; }
   .chip:hover { border-color: var(--ink); }
   .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid var(--ink); display: grid; place-items: center; font: 600 9px var(--serif); }
@@ -402,7 +404,7 @@ const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 // The gist of a call's input: its command, or the path or pattern it names.
 function gist(input) {
   const v = typeof input === "string" ? parse(input) : input;
-  const s = v && (v.command ?? v.path ?? v.pattern ?? v.question ?? v.name ?? v.tool);
+  const s = v && (v.command ?? v.path ?? v.pattern ?? v.question ?? v.query ?? v.url ?? v.name ?? v.tool);
   if (typeof s !== "string") return "";
   const line = s.split("\n")[0];
   return line.length > 90 ? line.slice(0, 90) + "…" : line;
@@ -1361,7 +1363,7 @@ function entry(s, into, e, index, t) {
     return;
   }
   // The assistant's turn: its words read as prose; its tool uses as steps.
-  for (const b of blocks) {
+  for (const b of joined(blocks)) {
     if (b.type === "thinking" || b.type === "redacted_thinking") {
       if (!b.thinking) continue;
       const d = el("details", "thought"); d.append(el("summary", null, "Thinking"), el("div", "plain", b.thinking));
@@ -1370,10 +1372,13 @@ function entry(s, into, e, index, t) {
       closeGroup(s);
       const p = markdown(b.text || "");
       p.classList.add("entry");
+      for (const a of p.querySelectorAll('a[title^="cite: "]')) { a.className = "cite"; a.title = a.title.slice(6); }
       if (t.outcome?.kind === "result" && isLast(s, e, t)) { const card = el("div", "card result"); card.append(el("div", "label", "Result"), p); into.append(card); }
       else into.append(p);
-    } else if (b.type === "tool_use") {
+    } else if (b.type === "tool_use" || b.type === "server_tool_use") {
       step(s, into, b, t);
+    } else if (b.type === "web_search_tool_result" || b.type === "web_fetch_tool_result") {
+      served(s, b);
     }
   }
   const r = e.response;
@@ -1460,6 +1465,41 @@ function toolRow(s, b, t) {
   s.rows.set(b.id, { row, b, inner });
   fillChips(s, b.id);
   return row;
+}
+// What the provider's web search or fetch found, in the row of its use.
+function served(s, b) {
+  const r = s.rows.get(b.tool_use_id);
+  if (!r) return;
+  const c = b.content, failed = c && !Array.isArray(c) && c.error_code;
+  const st = $(".st", r.row);
+  st.className = `st${failed ? " bad" : ""}`;
+  st.textContent = failed ? "failed" : "✓";
+  const found = Array.isArray(c) ? c.filter((x) => x.url) : c?.url ? [{ url: c.url, title: c.content?.title }] : [];
+  const out = el("div", "io found");
+  if (failed) out.textContent = c.error_code;
+  for (const x of found) {
+    const a = el("a", null, x.title || x.url);
+    a.href = x.url; a.target = "_blank"; a.rel = "noopener";
+    const li = el("div"); li.append(a, el("span", "host", ` ${new URL(x.url).host}${x.page_age ? ` · ${x.page_age}` : ""}`)); out.append(li);
+  }
+  $(".detail", r.row).append(out);
+}
+// Consecutive text blocks read as one passage: a cited answer comes as
+// many small blocks, each cited one followed by links to its sources.
+function joined(blocks) {
+  const out = [];
+  for (const b of blocks) {
+    if (b.type !== "text") { out.push(b); continue; }
+    const urls = [...new Set((b.citations || []).map((c) => c.url).filter(Boolean))];
+    const text = (b.text || "") + urls.map((u) => {
+      const title = (b.citations.find((c) => c.url === u)?.title || u).replace(/["\\]/g, "");
+      return ` [${new URL(u).host.replace(/^www\./, "")}](${u} "cite: ${title}")`;
+    }).join("");
+    const prev = out[out.length - 1];
+    if (prev?.type === "text") prev.text += text;
+    else out.push({ type: "text", text });
+  }
+  return out;
 }
 function fillChips(s, toolUse) {
   const r = s.rows.get(toolUse);
