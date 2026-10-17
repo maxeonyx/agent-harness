@@ -93,7 +93,7 @@ impl Settings {
 /// again from its files. Returns once the brain lets go of the link.
 pub fn run(limb: &Limb, here: ReplicaId, down: Receiver<LimbDown>, up: impl Fn(LimbUp)) {
     let Some(settings) = Settings::of(limb) else {
-        return eprintln!("the roles limb's settings do not parse");
+        return errln!("the roles limb's settings do not parse");
     };
     let mut log: Log<Harness, Memory<Harness>> =
         Log::open(here, Memory::default()).expect("memory opens");
@@ -111,7 +111,7 @@ pub fn run(limb: &Limb, here: ReplicaId, down: Receiver<LimbDown>, up: impl Fn(L
                     }
                 }
                 for (n, why) in &view.standing.refused {
-                    eprintln!("the brain refused the roles limb's record {n}: {why}");
+                    errln!("the brain refused the roles limb's record {n}: {why}");
                 }
                 let _ = log.cover(&view.standing);
             }
@@ -148,7 +148,7 @@ pub fn run(limb: &Limb, here: ReplicaId, down: Receiver<LimbDown>, up: impl Fn(L
         });
         let now = said.err();
         if now.is_some() && now != error {
-            eprintln!("roles: {}", now.as_deref().unwrap_or(""));
+            errln!("roles: {}", now.as_deref().unwrap_or(""));
         }
         error = now;
     }

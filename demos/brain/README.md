@@ -4,7 +4,7 @@
 demos/brain/run.sh
 ```
 
-Then watch https://mx-hv-mj.local:4321 while it runs, and type to a task from its compose box (another port: `PORT=4400 demos/brain/run.sh`). It takes about two minutes on Opus (the roles in `roles/`) and costs a few dozen requests on the subscription.
+Then watch https://mx-hv-mj.local:4341 while it runs, and type to a task from its compose box (another port: `PORT=4400 demos/brain/run.sh`). It takes about two minutes on Opus (the roles in `roles/`) and costs a few dozen requests on the subscription.
 
 What it does:
 
@@ -16,7 +16,7 @@ What it does:
    - the workspaces outlive the brain. Each is a replica with its own log, and keeps running its calls while its link is down; it reconnects to the new brain with the same replica, ships what it recorded meanwhile, and the running `./check.sh` completes as if nothing happened. Had the brain stayed away 15 minutes, the workspace would have stopped its calls, recorded them as interrupted, and exited; a call is unknown only when the workspace died too, before it could record how the call ended.
 5. The orchestrator gets both results when the scope closes, runs `./check.sh`, commits, reports, and waits on you: like every task you start, it is a chat with you. `done.sh` presses **Done** for you at a tab (`target/release/examples/act PORT done`), and the orchestrator's last turn writes its result. The script prints that result and the repository's log.
 
-To serve a finished run again: `target/release/harness-brain --db target/brain-demo/brain.sqlite --port 4321`. A database whose root is done does nothing but serve.
+To serve a finished run again: `target/release/harness-brain --db target/brain-demo/brain.sqlite --port 4341`. A database whose root is done does nothing but serve.
 
 What the agents were told, from the store (`entry.content`, cut):
 

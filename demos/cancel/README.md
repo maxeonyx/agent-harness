@@ -4,7 +4,7 @@
 demos/cancel/run.sh
 ```
 
-It runs real brains on a scratch repo of three commands (`scratch.sh` makes it), and stops them the ways Max does. After each act it lists every process carrying the demo's mark: everything a brain starts inherits `HARNESS_OWNER_cancel-demo-<pid>`, however it escapes its process group, so what is listed is exactly what is left. A brain's limbs live on after it exits, for up to 15 minutes without one, so each list also shows the limbs of the brains before it; the demo ends them all when it finishes (`demos/end.sh`). Watch it at https://mx-hv-mj.local:4326 while it runs (another port: `PORT=4400`). It takes about two minutes.
+It runs real brains on a scratch repo of three commands (`scratch.sh` makes it), and stops them the ways Max does. After each act it lists every process carrying the demo's mark: everything a brain starts inherits `HARNESS_OWNER_cancel-demo-<pid>`, however it escapes its process group, so what is listed is exactly what is left. A brain's limbs live on after it exits, for up to 15 minutes without one, so each list also shows the limbs of the brains before it; the demo ends them all when it finishes (`demos/end.sh`). Watch it at https://mx-hv-mj.local:4346 while it runs (another port: `PORT=4400`). It takes about two minutes.
 
 What it does, in order:
 
