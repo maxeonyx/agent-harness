@@ -329,33 +329,49 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
             vec![text("[harness] Your response was cut off. Carry on.")],
         );
     }
-    if !texts.blocks.is_empty() {
-        turn.push(
-            Rendered::Note(Note::Now),
-            vec![text(&clock(state, task, now))],
-        );
+    // The clock starts what the harness says; mid-turn, it comes alone
+    // only to warn of a context nearly full.
+    let (clock, full) = clock(state, task, now);
+    if !texts.blocks.is_empty() || full {
+        turn.push(Rendered::Note(Note::Now), vec![text(&clock)]);
     }
     turn.extend(texts);
     turn
 }
 
 /// The time, and how full the context was at the task's last response,
-/// unless a compaction has replaced that context since.
-fn clock(state: &State, task: &Task, now: &Now) -> String {
+/// unless a compaction has replaced that context since (the head is its
+/// carry, or the report after it); and whether it
+/// is full enough to warn the agent to compact ([`crate::policy::WARN_AT`]).
+fn clock(state: &State, task: &Task, now: &Now) -> (String, bool) {
     let used = state
         .last_turn(task.id)
         .and_then(|e| e.usage)
-        .filter(|_| !task.head().is_some_and(|h| state.compacted(h).is_some()))
+        .filter(|_| {
+            !task
+                .head()
+                .is_some_and(|h| state.compacted(h).is_some() || state.reported(h))
+        })
         .map(|u| u.input + u.cache_read + u.cache_write_short + u.cache_write_long + u.output);
-    match used {
-        Some(used) => format!(
-            "[harness] {}. Your context: {} of {} tokens.",
-            now.time,
-            tokens(used),
-            tokens(now.window)
-        ),
-        None => format!("[harness] {}.", now.time),
+    let Some(used) = used else {
+        return (format!("[harness] {}.", now.time), false);
+    };
+    let mut said = format!(
+        "[harness] {}. Your context: {} of {} tokens.",
+        now.time,
+        tokens(used),
+        tokens(now.window)
+    );
+    let full = used * 100 >= now.window * crate::policy::WARN_AT;
+    if full {
+        said.push_str(&format!(
+            " It is {}% full: wrap up the step you are on soon, and then compact with `compact_and_continue`, \
+or `compact_and_report` if you are done. If it fills, the \
+harness compacts it for you, with no summary of yours, and what is only in your context is lost.",
+            used * 100 / now.window
+        ));
     }
+    (said, full)
 }
 
 /// A token count, short: `48k`, `1M`.
@@ -550,7 +566,7 @@ pub fn call_label(call: CallId) -> String {
 /// every tool's but the meta tools that only manage the agent's own work.
 fn labelled(tool: &str) -> bool {
     use crate::meta::*;
-    ![COMPACT, ATTACH, BACKGROUND, STOP, PASS, ADD_SIBLING].contains(&tool)
+    !compacts(tool) && ![ATTACH, BACKGROUND, STOP, PASS, ADD_SIBLING].contains(&tool)
 }
 
 /// A call's label as the last block of its result, if it has one.
@@ -676,7 +692,7 @@ fn observed_now<'a>(
     })
 }
 
-/// A tool result for one of the task's own tool uses. A `compact` call's
+/// A tool result for one of the task's own tool uses. A compaction call's
 /// result reaches the model only when the compaction did not happen: the
 /// task is stopping, or Max moved it back to before it.
 fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
@@ -686,11 +702,11 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
     };
     let outcome = record.outcome().expect("a pending result is settled");
     let (mut content, error) = outcome_content(values, outcome);
-    if record.call.tool == crate::meta::COMPACT && matches!(outcome, Outcome::Completed(_)) {
+    if crate::meta::compacts(&record.call.tool) && matches!(outcome, Outcome::Completed(_)) {
         let said = if state.has_compacted(call) {
             "Max moved you back to before this compaction, so your context is as it was here. Carry on from here."
         } else if task.ends() {
-            "Not compacted: you are being stopped, and this is your last turn."
+            "Not compacted: you are being stopped, and this is your last turn. End it with your report as your last message."
         } else {
             "Not compacted."
         };
@@ -871,8 +887,8 @@ Start nothing new. This is your last turn."
             "Max is pausing this work for now. Bring it to a safe point: finish or undo what is half done, so \
 nothing is left broken or half-written, and start nothing new.{shared} Work you have running in the \
 background is yours to keep or stop: keep what should still be running when Max comes back. If you have \
-done much since your last checkpoint, `compact` first, so you resume from a short context. Then end your turn with a \
-short note of where things stand and what you will do next. You will wait, paused, until Max \
+done much since your last checkpoint, end with `compact_and_report`, so you resume from a short context; otherwise end \
+your turn. Either way, your last message is a short note of where things stand and what you will do next. You will wait, paused, until Max \
 resumes you; this is not the end of your task."
         ),
         Content::Prompt(Prompt::Resume) => {
@@ -962,14 +978,17 @@ fn mandate(state: &State, values: Values, task: &Task, carried: bool) -> String 
             siblings.join(", ")
         ));
     }
-    // A root made before `compact` existed does not bind it.
-    let compact = task
+    // A root made before `compact_and_report` existed does not bind it.
+    let end = if task
         .context()
-        .is_some_and(|c| c.binding.limb(crate::meta::COMPACT).is_some());
-    let then = if compact { "`compact`, then " } else { "" };
+        .is_some_and(|c| c.binding.limb(crate::meta::COMPACT_AND_REPORT).is_some())
+    {
+        "end with `compact_and_report`. Its report is your result, and it"
+    } else {
+        "end your turn. Your last message is your result, and it"
+    };
     said_.push_str(&format!(
-        "\n\nWhen your part is done, {then}end your turn. Your last message is your result, and it goes \
-to `{owner_name}`."
+        "\n\nWhen your part is done, {end} goes to `{owner_name}`."
     ));
     said_
 }

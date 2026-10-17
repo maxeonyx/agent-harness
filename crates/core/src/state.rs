@@ -1326,9 +1326,12 @@ impl State {
         if let Some(root) = root {
             self.entries.insert(root.id(), Entry::Root(root.clone()));
         }
-        if let Some((carry, kept)) = compacted {
+        if let Some((carry, kept, report)) = compacted {
             self.compactions.insert(carry.id(), kept);
             self.entries.insert(carry.id(), carry);
+            if let Some(report) = report {
+                self.entries.insert(report.id(), report);
+            }
         }
         self.put(task);
         Ok(())
@@ -1342,7 +1345,7 @@ impl State {
         id: TaskId,
         task: &Task,
         compaction: &Compaction,
-    ) -> Result<(Entry, Compacted), Rejected> {
+    ) -> Result<(Entry, Compacted, Option<Entry>), Rejected> {
         let context = task.context().ok_or(Rejected::Starting)?;
         if let Some(call) = compaction.by {
             let made = self.calls.get(&call).ok_or(Rejected::Unknown)?;
@@ -1388,7 +1391,7 @@ impl State {
             by: compaction.by,
             renders: compaction.renders.clone(),
         };
-        Ok((compaction.carry_entry(), kept))
+        Ok((compaction.carry_entry(), kept, compaction.report_entry()))
     }
 
     /// The task's latest checkpoint: the last entry on its chain since its
@@ -1482,10 +1485,11 @@ impl State {
         }
     }
 
-    /// Whether a model turn ended at `entry`: a response that ended it, or
-    /// the head an interrupt left.
+    /// Whether a model turn ended at `entry`: a response that ended it, a
+    /// compaction's report, or the head an interrupt left.
     pub fn ended_turn(&self, entry: EntryId) -> bool {
         self.open.interrupted.contains(&entry)
+            || self.reported(entry)
             || self.response(entry).is_some_and(|m| {
                 matches!(
                     &m.ended,
@@ -1498,6 +1502,17 @@ impl State {
                     })
                 )
             })
+    }
+
+    /// Whether `entry` is a compaction's report: an assistant message
+    /// right after a carry that no model call wrote.
+    pub fn reported(&self, entry: EntryId) -> bool {
+        self.response(entry).is_none()
+            && matches!(
+                self.entries.get(&entry),
+                Some(Entry::Message { parent, message })
+                    if message.role == crate::context::Role::Assistant && self.compactions.contains_key(parent)
+            )
     }
 
     /// The model call a response came from.

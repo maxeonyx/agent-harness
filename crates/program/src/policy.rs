@@ -7,6 +7,11 @@ use std::time::Duration;
 use harness_core::context::EntryId;
 use harness_core::id::Timestamp;
 
+/// How full a context is, in percent of its window, when each request
+/// warns the agent to wrap up and compact itself: before the provider
+/// refuses it and the harness compacts it with no summary of the agent's.
+pub const WARN_AT: u64 = 80;
+
 /// Requests that may fail in a row before the task fails.
 pub const GIVE_UP: u32 = 5;
 
