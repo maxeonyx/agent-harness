@@ -30,7 +30,7 @@ use harness_core::task::{
 use harness_core::value::Bytes;
 use harness_face_web::{Feed, Folded, Running};
 use harness_limb_workspace::{Clone, Settings, user};
-use harness_substrate::{Publisher, Up, View, What as Said};
+use harness_substrate::{Error, Publisher, Up, View, What as Said};
 
 use crate::link::{self, Conn, Wire};
 use crate::process::Process;
@@ -1148,7 +1148,7 @@ Finish tidying up and end your turn with your report.",
             );
             batch.values.push(model);
             batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-            return self.append(batch);
+            return self.answer(id, batch);
         }
         let input = self.value(call.input);
         // A compaction happens once its round is over ([`Brain::compact`]).
@@ -1168,7 +1168,7 @@ Carry on with your next step, or, if your work is done, call `compact_and_report
                     let (model, failed) = render::failed(&format!("Not compacted: {why}."));
                     batch.values.push(model);
                     batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-                    return self.append(batch);
+                    return self.answer(id, batch);
                 }
             };
             let said = render::blocks(&[render::text(&said)]);
@@ -1182,7 +1182,7 @@ Carry on with your next step, or, if your work is done, call `compact_and_report
                 id,
                 CallEvent::Settled(Outcome::Completed(output)),
             ));
-            return self.append(batch);
+            return self.answer(id, batch);
         }
         if call.tool == meta::ATTACH {
             let said = meta::attach(self.state(), &|v| self.value(v), &parent, &input);
@@ -1201,7 +1201,7 @@ Carry on with your next step, or, if your work is done, call `compact_and_report
             batch
                 .facts
                 .push(Fact::Call(id, CallEvent::Settled(outcome)));
-            return self.append(batch);
+            return self.answer(id, batch);
         }
         if call.tool == meta::BACKGROUND {
             match meta::background_call(self.state(), &parent, id, self.meta, &input) {
@@ -1222,13 +1222,13 @@ and you cannot finish until it has.",
                         Fact::Call(made, CallEvent::Made(started)),
                         Fact::Call(id, CallEvent::Settled(Outcome::Completed(output))),
                     ]);
-                    return self.append(batch);
+                    return self.answer(id, batch);
                 }
                 Err(message) => {
                     let (model, failed) = render::failed(&message);
                     batch.values.push(model);
                     batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-                    return self.append(batch);
+                    return self.answer(id, batch);
                 }
             }
         }
@@ -1250,7 +1250,7 @@ and you cannot finish until it has.",
             batch
                 .facts
                 .push(Fact::Call(id, CallEvent::Settled(outcome)));
-            return self.append(batch);
+            return self.answer(id, batch);
         }
         // A tool an older root declared that the harness no longer has.
         if call.tool != meta::SPAWN && call.tool != meta::ADD_SIBLING {
@@ -1258,7 +1258,7 @@ and you cannot finish until it has.",
             let (model, failed) = render::failed(&said);
             batch.values.push(model);
             batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-            return self.append(batch);
+            return self.answer(id, batch);
         }
         match self.members(id, &call.tool, &parent, &input, &mut batch) {
             Ok(names) if call.tool == meta::ADD_SIBLING => {
@@ -1289,7 +1289,26 @@ and you cannot finish until it has.",
                 };
             }
         }
-        self.append(batch);
+        self.answer(id, batch);
+    }
+
+    /// Say the batch a meta call's dispatch makes. What an agent asks for
+    /// may be what the state refuses: then the call fails with why, and
+    /// nothing else is written.
+    fn answer(&mut self, id: CallId, batch: Batch) {
+        let Err(why) = self.say(batch) else {
+            return;
+        };
+        let (model, failed) = render::failed(&format!(
+            "Nothing was done: the harness refuses it ({why})."
+        ));
+        self.append(Batch {
+            values: vec![model],
+            facts: vec![
+                Fact::Call(id, CallEvent::Dispatched),
+                Fact::Call(id, CallEvent::Settled(failed)),
+            ],
+        });
     }
 
     /// A `stop` or `pass` of one of `parent`'s running background calls:
@@ -1630,16 +1649,31 @@ and you cannot finish until it has.",
     /// is written, and it stops.
     fn append(&mut self, batch: Batch) {
         let shown: String = format!("{:?}", batch.facts).chars().take(600).collect();
+        if let Err(why) = self.say(batch) {
+            panic!("the brain refuses its own batch (refused: {why}): {shown}");
+        }
+    }
+
+    /// Say the brain's own batch, or, if the state refuses it, nothing.
+    fn say(&mut self, batch: Batch) -> Result<(), Refusal> {
         let started: Vec<Running> = batch.facts.iter().filter_map(starts).collect();
         for running in &started {
             self.feed.start(*running);
         }
         let facts = batch.facts.clone();
-        let at = match self.decider.say(now(), |_| batch) {
-            Ok(at) => at,
-            Err(e) => panic!("the brain refuses its own batch ({e}): {shown}"),
-        };
-        self.changed(at, &facts);
+        match self.decider.say(now(), |_| batch) {
+            Ok(at) => {
+                self.changed(at, &facts);
+                Ok(())
+            }
+            Err(Error::Refused(why)) => {
+                for running in started {
+                    self.feed.end(running);
+                }
+                Err(why)
+            }
+            Err(Error::Storage(e)) => panic!("harness-brain: cannot store its own batch: {e}"),
+        }
     }
 
     /// Include a record from a limb or a tab. A refusal is the replica's to
