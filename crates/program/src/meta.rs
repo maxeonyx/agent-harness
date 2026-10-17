@@ -5,7 +5,9 @@
 //! finished children, and which settles with every member's result once
 //! the last is done. `add_sibling` adds one task to the caller's own scope
 //! and returns at once. `compact` compacts the caller's context once its
-//! round is over ([`harness_core::task::Compaction`]). `background` makes a named call
+//! round is over ([`harness_core::task::Compaction`]). `attach` gives back the
+//! recorded outputs of calls the caller names, so a compaction carries them
+//! and a report is followed by them. `background` makes a named call
 //! to one of the caller's other tools that no round waits on: its result
 //! arrives as a message, and its owner cannot finish until it has. `stop`
 //! abandons one of those calls, and `pass` hands one up the tree
@@ -17,14 +19,14 @@
 use harness_core::call::{Call, Caller};
 use harness_core::delivery::Content;
 use harness_core::environment::{Audience, Description, Instruction, Limb, LimbKind, Tool};
-use harness_core::id::{CallId, Digest, LimbId, ValueId};
+use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
 use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::state::State;
 use harness_core::task::{Context, Task};
 use harness_core::value::Bytes;
 use serde_json::{Value, json};
 
-use crate::render::{blocks, text};
+use crate::render::{Values, blocks, call_label, carried, text};
 
 pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
@@ -32,6 +34,11 @@ pub const COMPACT: &str = "compact";
 pub const BACKGROUND: &str = "background";
 pub const STOP: &str = "stop";
 pub const PASS: &str = "pass";
+pub const ATTACH: &str = "attach";
+
+/// The most of one attached call's text that is shown: about what a cut
+/// tool output shows.
+const ATTACHED: usize = 16 * 1024;
 
 pub fn definition(id: LimbId) -> Limb {
     Limb {
@@ -74,8 +81,8 @@ your scope.",
             said.push_str(&format!("\n- `{name}`: {what}"));
         }
         said.push_str(
-            "\n\nA fresh agent gets its own clone of your repository, on the `branch` you name, made from `base`; \
-it commits and pushes there.",
+            "\n\nA fresh agent gets its own clone of your repository (or of the clone `from` names), beside it, on the \
+`branch` you name, made from `base`; it commits and pushes there.",
         );
     }
     said.push_str(
@@ -91,7 +98,13 @@ message, after the summary: Max reads it, or, if you were started by another age
 read alongside that last `compact` reaches that agent with it.\n\n\
 With `fresh: true` it starts a new context instead, from your role, your mandate, Max's words and your summary alone. \
 Use it when even your checkpoints have grown long; the summary must then carry everything else you need. A change to \
-your role's definition takes effect then.",
+your role's definition takes effect then.\n\n\
+Each result of a call you make ends with its label, such as `[call-3fa2c1]`. `attach` gives back the outputs of the \
+calls you name by label, exactly as the harness recorded them, so whoever reads your work sees the real output (the \
+log line, the command's output) rather than your retelling of it. Attach alongside your last `compact`, or alone \
+right before your report, and the outputs follow your report to whoever reads it; attach alongside any `compact` to \
+keep them in your compacted context. You can attach your own calls, and the calls your agents attached to their \
+results.",
     );
     said.push_str(
         "\n\n`background` runs one of your other tools without waiting for it, under a `name` you give it: it returns \
@@ -114,7 +127,8 @@ and returns at once: the agent that started you gets its result with yours.",
             "role": { "type": "string", "enum": roles.iter().map(|(name, _)| name).collect::<Vec<_>>(), "description": "Start a fresh agent in this role. Omit, with `resume`, to fork yourself." },
             "resume": { "type": "string", "description": "The name of a finished agent you started, to continue it." },
             "branch": { "type": "string", "description": "A fresh agent's own branch, for its clone." },
-            "base": { "type": "string", "description": "What its branch is made from if it does not exist yet. Default `main`." }
+            "base": { "type": "string", "description": "What its branch is made from if it does not exist yet. Default `main`." },
+            "from": { "type": "string", "description": "The clone a fresh agent's clone is made from, and made beside: a directory, relative to your workspace. Default your workspace itself." }
         },
         "required": ["name", "mandate"]
     });
@@ -146,6 +160,17 @@ and returns at once: the agent that started you gets its result with yours.",
                 "fresh": { "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and your summary alone." }
             },
             "required": ["summary"]
+        }
+    });
+    let attach = json!({
+        "name": ATTACH,
+        "description": "Show the real outputs of calls you name, as the harness recorded them: alongside your last `compact` or right before your report, they reach whoever reads your report; alongside any `compact`, they stay in your compacted context.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "calls": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "The calls' labels, such as `call-3fa2c1`, from the end of each one's result." }
+            },
+            "required": ["calls"]
         }
     });
     let background = json!({
@@ -187,6 +212,7 @@ and returns at once: the agent that started you gets its result with yours.",
     let mut tools = vec![
         tool(SPAWN, spawn),
         tool(COMPACT, compact),
+        tool(ATTACH, attach),
         tool(BACKGROUND, background),
         tool(STOP, stop),
         tool(PASS, pass),
@@ -249,6 +275,98 @@ pub fn compaction(input: &[u8]) -> Result<Compact, String> {
         summary: summary.to_owned(),
         fresh: value["fresh"].as_bool().unwrap_or(false),
     })
+}
+
+/// An `attach` call's output: each call its input names, headed by what it
+/// was, its text cut to [`ATTACHED`]. `task` may attach a settled call it or
+/// any agent under it owns.
+pub fn attach(state: &State, values: Values, task: &Task, input: &[u8]) -> Result<Bytes, String> {
+    let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
+    let labels: Vec<&str> = value["calls"]
+        .as_array()
+        .filter(|c| !c.is_empty())
+        .and_then(|c| c.iter().map(Value::as_str).collect())
+        .ok_or("`calls` must be a non-empty list of labels")?;
+    let mut said = Vec::new();
+    for label in labels {
+        let call = state
+            .calls()
+            .find(|(id, record)| {
+                record.outcome().is_some() && call_label(*id) == label && under(state, *id, task.id)
+            })
+            .map(|(id, _)| id)
+            .ok_or(format!(
+                "none of your settled calls, or your agents' attached ones, is labelled `{label}`"
+            ))?;
+        said.extend(cut(
+            carried(state, values, "[harness] Attached: the", call),
+            &call_label(call),
+        ));
+    }
+    Ok(blocks(&said))
+}
+
+/// Whether `call` is owned by `task` or by an agent under it.
+fn under(state: &State, call: CallId, task: TaskId) -> bool {
+    let mut owner = state.call_owner(call);
+    while let Some(t) = owner {
+        if t == task {
+            return true;
+        }
+        owner = state.owner(t);
+    }
+    false
+}
+
+/// An attached call's blocks with their text cut to [`ATTACHED`]: its head
+/// and its tail, which names the file holding a cut tool output.
+fn cut(said: Vec<String>, label: &str) -> Vec<String> {
+    let mut left = ATTACHED;
+    let total: usize = said.iter().map(String::len).sum();
+    if total <= ATTACHED {
+        return said;
+    }
+    let mut kept = Vec::new();
+    for block in said {
+        let Ok(mut value) = serde_json::from_str::<Value>(&block) else {
+            continue;
+        };
+        let Some(text) = value["text"].as_str().map(str::to_owned) else {
+            // An image or other block: kept whole.
+            kept.push(block);
+            continue;
+        };
+        if text.len() <= left {
+            left -= text.len();
+            kept.push(block);
+            continue;
+        }
+        let head = floor(&text, left / 2);
+        let tail = ceil(&text, text.len() - left / 2);
+        value["text"] = Value::from(format!(
+            "{}\n[… {} bytes of `{label}` cut here …]\n{}",
+            &text[..head],
+            tail - head,
+            &text[tail..]
+        ));
+        left = 0;
+        kept.push(value.to_string());
+    }
+    kept
+}
+
+fn floor(text: &str, mut at: usize) -> usize {
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
+fn ceil(text: &str, mut at: usize) -> usize {
+    while !text.is_char_boundary(at) {
+        at += 1;
+    }
+    at
 }
 
 /// A background call's name, its tool and its input.
@@ -317,6 +435,8 @@ pub enum How {
         role: String,
         branch: Option<String>,
         base: String,
+        /// The clone its clone is made from, if not the parent's workspace.
+        from: Option<String>,
     },
     Resume(String),
 }
@@ -345,6 +465,7 @@ pub fn parse(tool: &str, input: &[u8]) -> Result<Spawn, String> {
                     role,
                     branch: field("branch"),
                     base: field("base").unwrap_or_else(|| "main".into()),
+                    from: field("from"),
                 },
                 (None, Some(from)) => How::Resume(from),
                 (None, None) => How::Fork,

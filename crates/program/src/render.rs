@@ -7,7 +7,7 @@ use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Binding, Description};
 use harness_core::fact::Author;
-use harness_core::id::{CallId, LimbId, Timestamp, ValueId};
+use harness_core::id::{CallId, Digest, LimbId, Timestamp, ValueId};
 use harness_core::model_call::{Ending, Stop};
 use harness_core::resource::Observation;
 use harness_core::state::{Delivered, Stale, State};
@@ -516,19 +516,46 @@ pub fn carried(state: &State, values: Values, whose: &str, call: CallId) -> Vec<
         input.truncate(cut);
         input.push('…');
     }
+    let blocks = content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(Value::to_string);
+    // An `attach` call's output heads each call it attaches already.
+    if record.call.tool == crate::meta::ATTACH && !error {
+        return blocks.collect();
+    }
     let failed = if error { " failed" } else { "" };
+    let named = if labelled(&record.call.tool) {
+        format!(" (`{}`)", call_label(call))
+    } else {
+        String::new()
+    };
     let mut said = vec![text(&format!(
-        "{whose} `{}` call {input}{failed}:",
+        "{whose} `{}` call{named} {input}{failed}:",
         record.call.tool
     ))];
-    said.extend(
-        content
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(Value::to_string),
-    );
+    said.extend(blocks);
     said
+}
+
+/// How an agent names one of its calls, or one its agents attached, to
+/// `attach` it: shown with the call's result.
+pub fn call_label(call: CallId) -> String {
+    let digest = Digest::of(call.to_string().as_bytes()).to_string();
+    format!("call-{}", &digest[..6])
+}
+
+/// Whether a call's result is worth attaching, and so shows its label:
+/// every tool's but the meta tools that only manage the agent's own work.
+fn labelled(tool: &str) -> bool {
+    use crate::meta::*;
+    ![COMPACT, ATTACH, BACKGROUND, STOP, PASS, ADD_SIBLING].contains(&tool)
+}
+
+/// A call's label as the last block of its result, if it has one.
+fn label_block(tool: &str, call: CallId) -> Option<Value> {
+    labelled(tool).then(|| json!({ "type": "text", "text": format!("[{}]", call_label(call)) }))
 }
 
 /// Max's words in what a compaction replaces, in the order he said them:
@@ -674,6 +701,11 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
     {
         blocks.push(json!({ "type": "text", "text": format!("(Max's answer: `{}` quotes it in a brief.)", label(output.model)) }));
     }
+    if let (Some(named), Value::Array(blocks)) =
+        (label_block(&record.call.tool, call), &mut content)
+    {
+        blocks.push(named);
+    }
     json!({
         "type": "tool_result",
         "tool_use_id": tool_use.0,
@@ -742,9 +774,11 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
         .collect();
     let what = match record.call.caller {
         Caller::Max { .. } => format!("Max ran `{}` here", record.call.tool),
-        Caller::Background { .. } => {
-            format!("Your background `{}` call has settled", record.call.tool)
-        }
+        Caller::Background { .. } => format!(
+            "Your background `{}` call (`{}`) has settled",
+            record.call.tool,
+            call_label(call)
+        ),
         _ => format!(
             "Your earlier `{}` call, whose outcome was unknown, did finish",
             record.call.tool

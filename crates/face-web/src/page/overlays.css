@@ -26,4 +26,5 @@
   #found .none { padding: .5em .7em; color: var(--muted); }
   .chunk.revealed { animation: revealed 2.4s ease-out; border-radius: 8px; }
   @keyframes revealed { from { background: #f7e3a1; } to { background: transparent; } }
-
+  /* A hint: what a control does, where a mouse rests on it. */
+  #hint { position: fixed; z-index: 70; max-width: 22em; pointer-events: none; background: var(--ink); color: var(--paper); border-radius: 7px; padding: .3em .6em; font-size: 12px; line-height: 1.35; box-shadow: 0 4px 14px rgba(40, 30, 20, .18); }

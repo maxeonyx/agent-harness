@@ -473,7 +473,7 @@ function viewFile(path, content) {
   const v = $(".viewer", panel);
   v.hidden = false;
   const head = el("header");
-  const raw = el("button", "btn", "Raw"), close = el("button", "x", "×");
+  const raw = el("button", "btn", "Raw"), close = el("button", "x"); close.title = "Close";
   head.append(el("span", "path", path), raw, close);
   const body = el("div", "content");
   const show = (asRaw) => {
