@@ -9,6 +9,7 @@
 //!                         Start a chat in ROLE's environment, in a new
 //!                         workspace over DIR (`-` for a role with none),
 //!                         with TEXT as its mandate
+//! act PORT say CHAT TEXT  Send TEXT to the chat CHAT, as its next words
 //! ```
 //!
 //! It prints `included` (for a chat, `chat <id>`), or `refused: <why>` and
@@ -27,7 +28,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: act PORT done | act PORT abandon MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT"
+            "usage: act PORT done | act PORT abandon MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT | act PORT say CHAT TEXT"
         );
         exit(2)
     };
@@ -47,6 +48,12 @@ fn main() {
         let (n, task) = tab.chat(env, (dir != "-").then_some(dir.as_str()), text);
         started = Some(task);
         n
+    } else if let [_, say, chat, text] = &args[..]
+        && say == "say"
+    {
+        let Ok(chat) = chat.parse() else { usage() };
+        tab.pump_until(|d| d.tab.view().is_some());
+        tab.message(chat, text)
     } else {
         tab.pump_until(|d| d.root().is_some());
         let root = tab.root().expect("a root");
