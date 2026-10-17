@@ -1,0 +1,39 @@
+  /* What Max writes: a staging area, kept until he sends it. Under it, what
+     he can do to the task itself. */
+  .compose { padding: .2em 1em .6em; }
+  .compose .box { max-width: 48rem; margin: 0 auto; background: var(--white); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 2px 10px rgba(40, 30, 20, .06); padding: .6em .55em .4em .95em; }
+  .compose .box:focus-within { border-color: #c9c4b4; box-shadow: 0 2px 14px rgba(40, 30, 20, .1); }
+  .compose .box.drop { border-color: var(--ink); }
+  .compose .others:empty { display: none; }
+  .compose .other { display: flex; align-items: center; gap: .6em; margin: 0 0 .4em; padding: .35em .6em; border: 1px dashed var(--line); border-radius: 10px; font-size: 13px; }
+  .compose .other .said { flex: 1; white-space: pre-wrap; }
+  .compose .other .why { color: var(--muted); font-size: 12px; }
+  .compose .other.held { border-style: solid; }
+  .compose .tray { display: flex; flex-wrap: wrap; gap: .4em; margin: .1em 0 .35em; }
+  .compose .tray:empty { display: none; }
+  .compose .att { display: inline-flex; align-items: center; gap: .35em; font-size: 12px; border: 1px solid var(--line); border-radius: 8px; padding: .15em .25em .15em .4em; background: var(--paper); max-width: 16em; }
+  .compose .att img { height: 2.2em; border-radius: 4px; }
+  .compose .att span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compose .att button { color: var(--muted); padding: 0 .3em; }
+  .compose textarea { display: block; width: 100%; border: 0; outline: 0; resize: none; background: transparent; font: 15px/1.5 var(--sans); color: var(--ink); min-height: 1.5em; max-height: 40vh; padding: .1em .4em .1em 0; }
+  .compose .row2 { display: flex; align-items: center; gap: .3em; margin-top: .2em; margin-left: -.45em; }
+  .compose .status { flex: 1; min-width: 0; font-size: 12px; color: var(--red); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compose .mic.on { background: var(--maroon); color: var(--paper); animation: breathe 1.6s infinite; }
+  .compose .later { font-size: 12.5px; color: var(--muted); padding: .25em .6em; border-radius: 999px; white-space: nowrap; }
+  .compose .later:hover { background: var(--hover); color: var(--ink); }
+  .compose .send { background: var(--ink); color: var(--paper); }
+  .compose .send:hover { background: #33322e; color: var(--paper); }
+  .compose .send:disabled { background: var(--line); cursor: default; }
+  .compose .halt { border: 1.5px solid var(--ink); color: var(--ink); }
+  .compose .halt svg { width: .9em; height: .9em; }
+  .compose .picks { display: inline-flex; gap: .3em; min-width: 0; }
+  .compose .pick { font: 12.5px var(--sans); color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 999px; padding: .25em .6em; max-width: 16em; outline: 0; }
+  .compose .pick:hover, .compose .pick:focus { border-color: var(--line); color: var(--ink); }
+  .compose input.pick { width: 13em; }
+  .compose .closed { max-width: 48rem; margin: 0 auto; color: var(--muted); font-size: 13px; text-align: center; padding: .4em; }
+  .acts { max-width: 48rem; margin: .4em auto 0; display: flex; justify-content: flex-end; gap: 1.1em; font-size: 12.5px; padding: 0 .6em; }
+  .acts:empty { display: none; }
+  .acts button { color: var(--muted); }
+  .acts button:hover { color: var(--ink); text-decoration: underline; }
+  .acts button.armed { color: var(--maroon); font-weight: 600; }
+

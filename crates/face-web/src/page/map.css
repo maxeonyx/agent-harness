@@ -1,0 +1,87 @@
+  /* Shown only while the brain is out of reach, and only once it has been a moment. */
+  #link { position: fixed; top: max(.6em, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 40; display: none; padding: .2em .8em; border-radius: 999px; background: var(--maroon); color: var(--paper); font-size: 12.5px; pointer-events: none; }
+  #link.down { display: block; animation: late 1.5s steps(1, end) both; }
+  #link.down::after { content: "reconnecting"; }
+  @keyframes late { from { opacity: 0; } to { opacity: 1; } }
+
+  /* The map: an endless dotted ground, the world on it. */
+  #map { position: fixed; inset: 0; overflow: hidden; touch-action: none; cursor: grab;
+    background-color: var(--ground);
+    background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); }
+  #map.grabbing { cursor: grabbing; }
+  #map.grabbing #panel { user-select: none; -webkit-user-select: none; }
+  #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #nodes { user-select: none; -webkit-user-select: none; }
+  #edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  #empty { position: fixed; inset: 0; display: grid; place-content: center; color: var(--faint); font: 16px var(--serif); pointer-events: none; }
+
+  path.edge { fill: none; stroke: rgba(20, 20, 19, .32); stroke-width: 1.5; }
+  path.edge.receives { stroke-dasharray: 5 5; }
+  path.edge.continues { stroke-dasharray: 1.5 4.5; stroke-linecap: round; stroke: rgba(20, 20, 19, .28); }
+  path.edge.flow { stroke: rgba(20, 20, 19, .62); stroke-dasharray: 2 7; stroke-linecap: round; stroke-width: 2; animation: flow .9s linear infinite; }
+  path.edge.flow.max { stroke: var(--maroon); }
+  @keyframes flow { to { stroke-dashoffset: 18; } }
+
+  /* A node: a dot and its name. Its colour and motion say what it is doing;
+     the words are on hover. */
+  .node {
+    position: absolute; left: 0; top: 0; display: flex; flex-direction: column; align-items: center;
+    text-decoration: none; color: inherit; text-align: center; transition: opacity .25s;
+  }
+  .node .dot {
+    position: relative; width: var(--d); height: var(--d); border-radius: 50%; display: grid; place-items: center;
+    background: var(--paper); border: 1.5px solid var(--ink); font: 600 calc(var(--d) * .44) / 1 var(--serif);
+    transition: transform .2s var(--ease), background .3s, border-color .3s, color .3s;
+  }
+  .node:hover .dot { transform: scale(1.1); }
+  .node .name { margin-top: 5px; font: 600 13.5px/1.2 var(--serif); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node.root .name { font-size: 15.5px; }
+  .node .ring { position: absolute; inset: -5px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
+  .node.working .ring { border-top-color: var(--ink); border-right-color: rgba(20, 20, 19, .25); animation: spin 1.5s linear infinite; }
+  .node.streaming .ring { animation-duration: .7s; }
+  .node.tool .ring { border: 2px dashed rgba(20, 20, 19, .55); animation: spin 4s linear infinite; }
+  .node.children .ring { border-color: rgba(20, 20, 19, .16); }
+  .node.starting .dot { border-style: dashed; color: var(--faint); }
+  .node.starting .ring { border: 2px dotted rgba(20, 20, 19, .3); animation: spin 6s linear infinite; }
+  .node.listening .dot { border-style: double; border-width: 3px; }
+  .node.needs .dot { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
+  .node.needs .name { color: var(--maroon); }
+  .node.next .ring { border-color: var(--maroon); animation: halo 2.2s var(--ease) infinite; }
+  .node.paused .dot { background: var(--ground); border-color: var(--faint); color: var(--muted); }
+  .node.paused .name { color: var(--muted); }
+  .node.trouble .ring { border: 2px dashed var(--red); animation: spin 3s linear infinite; }
+  .node.cancelling .ring { border: 2px dashed var(--faint); animation: spin 5s linear infinite; }
+  .node.done { opacity: .5; }
+  .node.done:hover { opacity: .9; }
+  .node.done .dot { background: var(--green); border-color: var(--green); color: var(--paper); }
+  .node.done .name { font-weight: 500; }
+  .node.failed .dot { background: var(--red); border-color: var(--red); }
+  .node.cancelled .dot { background: var(--line); border-color: var(--faint); color: var(--muted); border-radius: 30%; }
+  .node.unmatched { opacity: .12 !important; }
+  .node.selected { visibility: hidden; }
+  .node .more { margin-top: 3px; font-size: 11px; color: var(--muted); border-radius: 9px; padding: 0 .5em; }
+  /* A finished project, folded: a small card on the archive shelf. */
+  .node.archived { align-items: flex-start; text-align: left; justify-content: center; height: 34px; padding: 0 1.7em 0 .75em; border: 1px solid var(--line); border-radius: 10px; background: rgba(250, 249, 245, .7); opacity: 1; }
+  .node.archived::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--green); opacity: .6; }
+  .node.archived.failed::before { background: var(--red); }
+  .node.archived:hover { background: var(--paper); }
+  .node.archived .dot { display: none; }
+  .node.archived .name { margin: 0; font: 500 13px/1.2 var(--serif); color: var(--muted); }
+  .node.archived .more { position: absolute; right: .25em; top: 50%; transform: translateY(-50%); margin: 0; }
+  .node.scope { pointer-events: none; }
+  .node.scope .dot { --d: 9px; background: var(--ink); border: 0; }
+  .node.scope.background .dot { background: var(--paper); border: 1.5px solid var(--ink); }
+  .node.scope.settled .dot { background: var(--green); opacity: .6; }
+  .node.sat .dot { font: 600 11px/1 var(--sans); border-style: dashed; }
+  .node.sat .name { font: 12px/1.2 var(--sans); color: var(--muted); font-weight: 400; }
+  .node.enter { animation: grow .45s var(--ease); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes halo { 0% { transform: scale(1); opacity: .7; } 70% { transform: scale(1.55); opacity: 0; } 100% { opacity: 0; } }
+  @keyframes breathe { 50% { opacity: .35; } }
+  @keyframes grow { from { transform: scale(.2); opacity: 0; } }
+
+  /* What needs Max but is off screen: a mark at the edge, toward it. */
+  .offscreen { position: fixed; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--maroon); color: var(--paper); display: grid; place-items: center; box-shadow: 0 3px 10px rgba(122, 31, 34, .35); }
+  .offscreen svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  .offscreen.next::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--maroon); animation: halo 2.2s var(--ease) infinite; }
+

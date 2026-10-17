@@ -1,0 +1,16 @@
+  /* What floats over the map: usage at the left, fit and new at the right. */
+  #bottom {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; align-items: center; gap: .9em;
+    padding: .55em .9em max(.55em, env(safe-area-inset-bottom)); pointer-events: none; color: var(--muted); font-size: 12.5px;
+  }
+  #bottom > * { pointer-events: auto; }
+  body.covered #bottom { display: none; }
+  .spacer { flex: 1; pointer-events: none !important; }
+  #bottom .icon { background: rgba(250, 249, 245, .88); backdrop-filter: blur(6px); border: 1px solid var(--line); }
+  #bottom #new { width: 2.7em; height: 2.7em; background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  #usage { display: inline-flex; gap: 1.1em; align-items: center; }
+  .gauge { display: inline-flex; gap: .4em; align-items: center; }
+  .gauge i { display: inline-block; width: 3.4em; height: .32em; border-radius: 1em; background: var(--line); overflow: hidden; }
+  .gauge i b { display: block; height: 100%; background: var(--muted); }
+  .gauge.high i b { background: var(--maroon); }
+  .alarm { color: var(--maroon); font-weight: 600; }
