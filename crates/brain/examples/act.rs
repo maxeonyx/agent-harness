@@ -2,8 +2,9 @@
 //! `PORT`, one act, and how the brain took it.
 //!
 //! ```text
-//! act PORT done           Done on the task Max started
-//! act PORT abandon MS     Abandon it, with MS milliseconds to finish
+//! act PORT done CHAT      Done on the chat CHAT
+//! act PORT abandon CHAT MS
+//!                         Abandon it, with MS milliseconds to finish
 //! act PORT stop CALL      Stop a call, such as one passed to Max
 //! act PORT chat ROLE DIR TEXT
 //!                         Start a chat in ROLE's environment, in a new
@@ -30,7 +31,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: act PORT done | act PORT abandon MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT | act PORT say CHAT TEXT | act PORT back CHAT ENTRY"
+            "usage: act PORT done CHAT | act PORT abandon CHAT MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT | act PORT say CHAT TEXT | act PORT back CHAT ENTRY"
         );
         exit(2)
     };
@@ -65,18 +66,14 @@ fn main() {
         tab.pump_until(|d| d.tab.view().is_some());
         tab.back(chat, entry)
     } else {
-        tab.pump_until(|d| d.root().is_some());
-        let root = tab.root().expect("a root");
-        match (args.get(1).map(String::as_str), args.get(2)) {
-            (Some("done"), None) => tab.done(root),
-            (Some("abandon"), Some(ms)) => match ms.parse() {
-                Ok(ms) => tab.abandon(root, Duration::from_millis(ms)),
-                Err(_) => usage(),
-            },
-            (Some("stop"), Some(call)) => match call.parse() {
-                Ok(call) => tab.stop(call),
-                Err(_) => usage(),
-            },
+        tab.pump_until(|d| d.tab.view().is_some());
+        match &args[1..] {
+            [done, chat] if done == "done" => tab.done(chat.parse().unwrap_or_else(|_| usage())),
+            [abandon, chat, ms] if abandon == "abandon" => tab.abandon(
+                chat.parse().unwrap_or_else(|_| usage()),
+                Duration::from_millis(ms.parse().unwrap_or_else(|_| usage())),
+            ),
+            [stop, call] if stop == "stop" => tab.stop(call.parse().unwrap_or_else(|_| usage())),
             _ => usage(),
         }
     };

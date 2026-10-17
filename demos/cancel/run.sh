@@ -50,7 +50,7 @@ say() { printf "%6.1fs  %s\n" "$(awk "BEGIN { print $(date +%s.%N) - $start }")"
 q() { c "$url/view" | jq -r "$1"; }
 root='.rows[] | .Task // empty | select(.owner == null)'
 # Max abandons the root at a tab, with $1 ms to finish.
-abandon() { target/release/examples/act "$port" abandon "$1" | sed 's/^/          the brain: /'; }
+abandon() { target/release/examples/act "$port" abandon "$chat" "$1" | sed 's/^/          the brain: /'; }
 until_root() { # jq condition on the root task, seconds
   for _ in $(seq $(($2 * 2))); do
     [ "$(q "$root | $1" 2>/dev/null)" = true ] && return 0
@@ -64,7 +64,8 @@ until_root() { # jq condition on the root task, seconds
 launch() { # name mandate
   env "$mark=1" "$brain" --roles roles --model "$model" --port "$port" --db "$dir/$1.sqlite" > "$dir/$1.log" 2>&1 &
   pid=$!
-  target/release/examples/act "$port" chat engineer "$PWD/$dir/repo" "$2" | sed 's/^/          the brain: /'
+  chat=$(target/release/examples/act "$port" chat engineer "$PWD/$dir/repo" "$2" | sed -n 's/^chat //p')
+  echo "          the brain: chat $chat"
   until_root '.waiting.kind == "max"' 180
   say "its turn has ended with this running in the background:"
   left
@@ -125,7 +126,7 @@ launch d "Start \`./worker.sh\` in the background: call the \`background\` tool 
 say "its own background work, and what it passed to Max:"
 q "$root | {background: [.background[].name], handed: [.handed[] | {name, owner, why: .passed.why}]}" | sed 's/^/          /'
 say "Max presses Done: it finishes, as nothing it owns still runs"
-target/release/examples/act "$port" done | sed 's/^/          the brain: /'
+target/release/examples/act "$port" done "$chat" | sed 's/^/          the brain: /'
 until_root '.outcome != null' 180
 say "finished: $(q "$root | .outcome.kind"); left running:"
 left

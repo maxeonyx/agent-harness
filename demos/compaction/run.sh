@@ -41,7 +41,7 @@ echo "== its context now: Max's words and both reports are kept verbatim"
 demos/compaction/context.sh "$port"
 
 echo
-target/release/examples/act "$port" done
+target/release/examples/act "$port" done "$chat"
 until grep -q 'the task is done' "$dir/brain.log"; do sleep 0.5; done
 kill "$pid"
 wait "$pid" 2>/dev/null || true

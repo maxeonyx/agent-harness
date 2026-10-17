@@ -1,21 +1,30 @@
 #!/usr/bin/env node
-// A throwaway test brain, its chats, and its page driven the way Max drives it.
+// Throwaway test brains by name, their chats, and their pages driven the
+// way Max drives them. Every command takes `--brain NAME` (default `test`):
 //
-//   node dev/drive.mjs up PORT [MODEL]
-//   node dev/drive.mjs chat PORT ROLE DIR|- WORDS
-//   node dev/drive.mjs settle PORT CHAT [--timeout S]
-//   node dev/drive.mjs log PORT CHAT [--full]
-//   node dev/drive.mjs say PORT CHAT WORDS
-//   node dev/drive.mjs page PORT [--size WxH[@DPR] | --size phone] [--timeout S] [--log FILE] STEP...
-//   node dev/drive.mjs down PORT [--wipe]
+//   node dev/drive.mjs up [MODEL]
+//   node dev/drive.mjs chat ROLE DIR|- WORDS
+//   node dev/drive.mjs say CHAT WORDS
+//   node dev/drive.mjs settle CHAT [--timeout S]
+//   node dev/drive.mjs log CHAT [--full]
+//   node dev/drive.mjs page [--size WxH[@DPR] | --size phone] [--timeout S] [--log FILE] STEP...
+//   node dev/drive.mjs down [--wipe]
 //
-// `up` builds the harness, ends whatever this clone left on PORT (the
-// brain and its limbs), and starts a brain there on its own database in
-// .drive.ignore/PORT/ and this clone's roles/, every role on MODEL: the
+// A brain is everything in .drive.ignore/NAME/: its port, pid, database,
+// log (brain.log), its limbs' state (state/), and the last page run's log
+// (page.log). Everything it starts, and every Chromium `page` starts for
+// it, carries one mark (demos/end.sh), named for the brain and this clone.
+//
+// `up` builds the harness, ends what the brain left running, and starts it
+// again on its database and this clone's roles/, every role on MODEL: the
 // scripted model, which costs nothing, unless told (`sonnet/low`, or
-// `sonnet` to keep each role's effort: the brain's `--model`). Its database outlives `up`, so the next `up`
-// relaunches a rebuilt brain on the same chats; `down --wipe` forgets them.
-// Its face serves the page from crates/face-web/src/page as it is on disk
+// `sonnet` to keep each role's effort: the brain's `--model`). It keeps
+// the brain's port if that is free, or takes a free one in 4340-4499
+// (DRIVE_PORTS=LOW-HIGH for others), and succeeds once this launch's log
+// says it serves (`face: …`), or fails with the log's tail. The database
+// outlives `up`, so the next `up` relaunches a rebuilt brain on the same
+// chats; `down` ends everything of the brain's, and `down --wipe` forgets
+// it. The face serves the page from crates/face-web/src/page as it is on disk
 // (`--page`), so an edit to the page shows on reload, with no rebuild.
 //
 // `chat` starts a chat as Max does at a tab, with no browser (the `act`
@@ -23,9 +32,10 @@
 // its mandate, and prints its id. `say` sends a chat WORDS as Max's next
 // words, the same way. On the scripted model the words are the
 // script (crates/provider/src/scripted.rs). `settle` waits until the chat
-// waits on Max or is done (a limb that cannot start fails it at once), and
-// `log` prints its transcript: what each said, each tool call with its
-// result cut short (all of it with --full), its state and its children's.
+// waits on Max or is done, and fails at once on trouble, a failure, or a
+// limb that cannot start. `log` prints its transcript: what each said, each
+// tool call with its result cut short (all of it with --full), its state
+// and its children's.
 //
 // `page` opens the face in a fresh headless Chromium at 1920x1080 (or a
 // phone: 390x844, touch, twice the pixels) and runs the steps in order:
@@ -48,12 +58,12 @@
 // CSS means the first visible match; `CSS @N` the Nth (from 1), and
 // `CSS @last` the last: `click ".moves .mv @last"`.
 //
-// It fails, with a screenshot in .drive.ignore/PORT/failed.png, the
+// It fails, with a screenshot in .drive.ignore/NAME/failed.png, the
 // page's errors and its console, at the first step that cannot be done,
 // the first wait that times out (60 s unless --timeout), and the first
 // exception the page throws. Every run keeps its whole log, each console
-// line and exception timed against each step, in .drive.ignore/PORT/page.log
-// (or --log FILE).
+// line and exception timed against each step, in .drive.ignore/NAME/page.log
+// (or --log FILE). Its Chromium ends with it, killed or not.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -62,84 +72,142 @@ import net from "node:net";
 import path from "node:path";
 
 const repo = path.resolve(import.meta.dirname, "..");
-const placeOf = (port) => path.join(repo, ".drive.ignore", String(port));
-// Everything a brain on PORT starts carries this mark (see demos/end.sh),
-// named for this clone so another clone's brain on the port is not ours.
-const markOf = (port) =>
-  `HARNESS_OWNER_drive_${port}_${createHash("sha256").update(repo).digest("hex").slice(0, 8)}`;
 
 class Failed extends Error {}
 const fail = (why) => { throw new Failed(why); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function end(port) {
-  execFileSync(path.join(repo, "demos/end.sh"), [markOf(port)], { stdio: "inherit" });
+// A test brain: its directory, its mark, and the port it last served on.
+function brainOf(name) {
+  if (!/^[\w-]+$/.test(name)) fail(`--brain: a name is letters, digits, - and _: ${name}`);
+  const dir = path.join(repo, ".drive.ignore", name);
+  const clone = createHash("sha256").update(repo).digest("hex").slice(0, 8);
+  const file = (f) => path.join(dir, f);
+  const read = (f) => fs.existsSync(file(f)) ? fs.readFileSync(file(f), "utf8").trim() : undefined;
+  return {
+    name, dir, file,
+    mark: `HARNESS_OWNER_drive_${name}_${clone}`,
+    recorded: () => read("port") === undefined ? undefined : Number(read("port")),
+    get port() {
+      return this.recorded() ?? fail(`no brain ${name}: node dev/drive.mjs up --brain ${name}`);
+    },
+  };
 }
 
-async function up(port, args) {
-  if (args.length > 1) fail("usage: up PORT [MODEL]");
-  const model = args[0] ?? "scripted";
-  execFileSync("cargo", ["build", "-q", "--release", "--bins", "--example", "act"], { cwd: repo, stdio: "inherit" });
-  end(port);
-  const place = placeOf(port);
-  fs.mkdirSync(place, { recursive: true });
-  const log = path.join(place, "brain.log");
-  const out = fs.openSync(log, "a");
-  const brain = spawn(path.join(repo, "target/release/harness-brain"),
-    ["--roles", path.join(repo, "roles"), "--db", path.join(place, "brain.sqlite"), "--port", String(port), "--model", model,
-      "--page", path.join(repo, "crates/face-web/src/page")],
-    { detached: true, stdio: ["ignore", out, out], env: { ...process.env, [markOf(port)]: "1" } });
-  brain.unref();
-  let exited = null;
-  brain.on("exit", (code) => { exited = code; });
-  for (let i = 0; i < 300 && !(await listening(port)); i++) {
-    if (exited !== null) fail(`the brain exited (${exited}):\n${tail(log, 20)}`);
-    await sleep(100);
-  }
-  if (!(await listening(port))) fail(`the brain is not listening on ${port} after 30 s:\n${tail(log, 20)}`);
-  console.log(`brain on https://mx-hv-mj.local:${port}/ (pid ${brain.pid}; every role on ${model})\nlog ${log}\nend it with: node dev/drive.mjs down ${port}`);
+// End every process carrying the brain's mark: the brain, its limbs, any
+// Chromium a page run left.
+function end(brain) {
+  execFileSync(path.join(repo, "demos/end.sh"), [brain.mark], { stdio: "inherit" });
 }
 
-const tail = (file, n) => fs.readFileSync(file, "utf8").trimEnd().split("\n").slice(-n).join("\n");
+const tail = (text, n) => text.trimEnd().split("\n").slice(-n).join("\n");
 const listening = (port) => new Promise((r) => {
   const s = net.connect(port, "127.0.0.1", () => { s.destroy(); r(true); });
   s.on("error", () => r(false));
 });
+// Whether a brain could bind `port` now, as it does: every address.
+const free = (port) => new Promise((r) => {
+  const s = net.createServer().once("error", () => r(false));
+  s.listen({ port, host: "0.0.0.0", exclusive: true }, () => s.close(() => r(true)));
+});
 
-function down(port, wipe) {
-  end(port);
-  if (wipe) fs.rmSync(placeOf(port), { recursive: true, force: true });
+// The ports a brain may take: its own first, then the range from a place
+// its name picks, so two brains coming up at once rarely try the same one.
+function* candidates(brain) {
+  const [low, high] = (process.env.DRIVE_PORTS ?? "4340-4499").split("-").map(Number);
+  if (brain.recorded() !== undefined) yield brain.recorded();
+  const start = parseInt(createHash("sha256").update(brain.name).digest("hex").slice(0, 8), 16) % (high - low + 1);
+  for (let i = 0; i <= high - low; i++) yield low + ((start + i) % (high - low + 1));
+}
+
+async function up(brain, args) {
+  if (args.length > 1) fail("usage: up [MODEL]");
+  const model = args[0] ?? "scripted";
+  execFileSync("cargo", ["build", "-q", "--release", "--bins", "--example", "act"], { cwd: repo, stdio: "inherit" });
+  end(brain);
+  fs.mkdirSync(brain.file("state"), { recursive: true });
+  const log = brain.file("brain.log");
+  const tried = new Set();
+  for (const port of candidates(brain)) {
+    if (tried.has(port) || !(await free(port))) continue;
+    tried.add(port);
+    const launched = await launch(brain, model, port, log);
+    if (launched === "taken") continue;
+    fs.writeFileSync(brain.file("port"), `${port}\n`);
+    fs.writeFileSync(brain.file("pid"), `${launched}\n`);
+    console.log(`brain ${brain.name} on https://mx-hv-mj.local:${port}/ (pid ${launched}; every role on ${model})\nlog ${log}\nend it with: node dev/drive.mjs down --brain ${brain.name}`);
+    return;
+  }
+  fail(`no free port in ${process.env.DRIVE_PORTS ?? "4340-4499"}`);
+}
+
+// Start the brain on `port`: its pid once this launch's log says it
+// serves, or "taken" if another process bound the port first.
+async function launch(brain, model, port, log) {
+  const from = fs.existsSync(log) ? fs.statSync(log).size : 0;
+  const out = fs.openSync(log, "a");
+  const child = spawn(path.join(repo, "target/release/harness-brain"),
+    ["--roles", path.join(repo, "roles"), "--db", brain.file("brain.sqlite"), "--port", String(port), "--model", model,
+      "--page", path.join(repo, "crates/face-web/src/page")],
+    { detached: true, stdio: ["ignore", out, out], env: { ...process.env, [brain.mark]: "1", XDG_STATE_HOME: brain.file("state") } });
+  child.unref();
+  fs.closeSync(out);
+  let exited = null;
+  child.on("exit", (code, signal) => { exited = signal ?? code; });
+  const said = () => {
+    const fd = fs.openSync(log, "r");
+    const size = fs.fstatSync(fd).size;
+    const buf = Buffer.alloc(size - from);
+    fs.readSync(fd, buf, 0, buf.length, from);
+    fs.closeSync(fd);
+    return buf.toString("utf8");
+  };
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const text = said();
+    if (/^face: /m.test(text)) return child.pid;
+    if (exited !== null) {
+      if (text.includes("Address already in use")) return "taken";
+      fail(`the brain exited (${exited}) before it served:\n${tail(text, 20)}`);
+    }
+    if (Date.now() > deadline) fail(`the brain has not served in 60 s:\n${tail(text, 20)}`);
+    await sleep(100);
+  }
+}
+
+function down(brain, wipe) {
+  end(brain);
+  if (wipe) fs.rmSync(brain.dir, { recursive: true, force: true });
 }
 
 // ─── A chat, from the brain ───────────────────────────────────────────────
 
 // What Max does at a tab, with no browser: one act of `act`, a tab
 // replica. Its last line says how the brain took it.
-function act(port, ...args) {
-  const r = spawnSync(path.join(repo, "target/release/examples/act"), [String(port), ...args], { encoding: "utf8" });
+function act(brain, ...args) {
+  const r = spawnSync(path.join(repo, "target/release/examples/act"), [String(brain.port), ...args], { encoding: "utf8" });
   const last = (r.stdout ?? "").trim().split("\n").pop();
   const why = last.startsWith("refused:") ? last : (r.stderr ?? "").trim().split("\n").pop() || last;
   if (r.status !== 0) fail(why || `act ${args[0]}: ${r.error?.message ?? `exit ${r.status}`}`);
   return last;
 }
 
-// Max starts a chat.
-function chat(port, [role, dir, words, ...more]) {
-  if (words === undefined || more.length > 0) fail("usage: chat PORT ROLE DIR|- WORDS");
-  const id = act(port, "chat", role, dir === "-" ? "-" : path.resolve(dir), words).replace(/^chat /, "");
-  console.log(`chat ${id}`);
-  return id;
+// Max starts a chat; prints its id, alone, for a script to keep.
+function chat(brain, [role, dir, words, ...more]) {
+  if (words === undefined || more.length > 0) fail("usage: chat ROLE DIR|- WORDS");
+  const id = act(brain, "chat", role, dir === "-" ? "-" : path.resolve(dir), words).replace(/^chat /, "");
+  console.log(id);
 }
 
 // Max's next words to a chat; returns once the chat has moved on from
 // where it was, so a `settle` after it waits for its answer.
-async function say(port, [id, words, ...more]) {
-  if (words === undefined || more.length > 0) fail("usage: say PORT CHAT WORDS");
-  const was = (await task(port, id)).task.waiting;
-  act(port, "say", id, words);
+async function say(brain, [id, words, ...more]) {
+  if (words === undefined || more.length > 0) fail("usage: say CHAT WORDS");
+  const was = (await task(brain, id)).task.waiting;
+  act(brain, "say", id, words);
   const deadline = Date.now() + timeout;
   for (;;) {
-    const now = (await task(port, id)).task.waiting;
+    const now = (await task(brain, id)).task.waiting;
     if (now?.kind !== was?.kind || now?.since !== was?.since) return;
     if (Date.now() > deadline) fail(`${id} took the words but has not moved on in ${timeout / 1000} s`);
     await sleep(100);
@@ -147,48 +215,57 @@ async function say(port, [id, words, ...more]) {
 }
 
 // What the face serves: the view (every task's state) and a context's chain.
-function get(port, route) {
+function get(brain, route) {
+  const port = brain.port;
   return new Promise((resolve, reject) => {
     https.get({ host: "127.0.0.1", port, path: route, servername: "mx-hv-mj.local", rejectUnauthorized: false }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (d) => { body += d; });
       res.on("end", () => res.statusCode === 200 ? resolve(JSON.parse(body)) : reject(new Failed(`${route}: ${res.statusCode} ${body}`)));
-    }).on("error", (e) => reject(new Failed(`nothing answers on ${port} (${e.message}): node dev/drive.mjs up ${port}`)));
+    }).on("error", (e) => reject(new Failed(`brain ${brain.name} does not answer on ${port} (${e.message}): node dev/drive.mjs up --brain ${brain.name}`)));
   });
 }
 
-async function task(port, id) {
-  const { rows } = await get(port, "/view");
-  return { task: rows[`task:${id}`]?.Task ?? fail(`no chat ${id} on ${port}`), rows };
+async function task(brain, id) {
+  const { rows } = await get(brain, "/view");
+  return { task: rows[`task:${id}`]?.Task ?? fail(`no chat ${id} on brain ${brain.name}`), rows };
 }
 
 const clock = (ms) => new Date(ms).toLocaleTimeString("en-NZ", { timeZone: "Pacific/Auckland", hour12: false });
 
-// What a task waits on, in a line.
+// What a task waits on, in a line: every kind the face's view names.
 function state(t) {
   const w = t.waiting ?? {};
   const since = w.since === undefined ? "" : ` since ${clock(w.since)}`;
+  const calls = (cs) => cs.map((c) => c.tool ?? "a call").join(", ");
   const why = {
     max: () => "Max's turn",
     done: () => t.outcome?.kind === "failed" ? `failed: ${t.outcome.reason}` : (t.outcome?.kind ?? "done"),
     model: () => w.streaming ? "the model is writing" : "the model is thinking",
-    calls: () => `running ${w.calls.map((c) => c.tool ?? "a call").join(", ")}`,
+    calls: () => {
+      const kids = w.calls.flatMap((c) => c.children ?? []);
+      return kids.length > 0 ? `waiting on ${kids.length} agent(s)` : `running ${calls(w.calls)}`;
+    },
     starting: () => `starting ${w.limbs.join(", ")}${w.failed.map((f) => `; ${f.limb} failed: ${f.why}`).join("")}`,
+    harness: () => "the harness is working",
+    held: () => "paused",
+    parked: () => "parked",
     limited: () => `limited until ${clock(w.until)}`,
-  }[w.kind]?.() ?? w.kind ?? "unknown";
+    listening: () => `listening to ${calls(w.calls)} in the background`,
+  }[w.kind]?.() ?? `waiting on ${w.kind ?? "nothing it names"}`;
   return `${why}${since}${t.trouble ? ` (trouble: ${JSON.stringify(t.trouble)})` : ""}`;
 }
 
-const settled = (t) => t.waiting?.kind === "max" || t.waiting?.kind === "done";
-
-// Until the chat waits on Max or is done; a limb that cannot start fails it.
-async function settle(port, id) {
+// Until the chat waits on Max or is done. Trouble, a failure, or a limb
+// that cannot start fails it at once.
+async function settle(brain, id) {
   const deadline = Date.now() + timeout;
   for (;;) {
-    const { task: t } = await task(port, id);
-    if (settled(t)) return t;
-    if (t.waiting?.failed?.length > 0) fail(`${id}: ${state(t)}`);
+    const { task: t } = await task(brain, id);
+    const failed = t.trouble || t.outcome?.kind === "failed" || t.waiting?.failed?.length > 0;
+    if (failed) fail(`${id}: ${state(t)}`);
+    if (t.waiting?.kind === "max" || t.waiting?.kind === "done") return t;
     if (Date.now() > deadline) fail(`waited ${timeout / 1000} s for ${id} to settle: ${state(t)}`);
     await sleep(200);
   }
@@ -196,8 +273,8 @@ async function settle(port, id) {
 
 // A chat's transcript: who said what, each tool call with its result, cut
 // short unless `full`; then its state, and its children's.
-async function log(port, id, full) {
-  const { task: t, rows } = await task(port, id);
+async function log(brain, id, full) {
+  const { task: t, rows } = await task(brain, id);
   const cut = (text, lines, chars) => {
     if (full) return text;
     const all = text.split("\n");
@@ -208,7 +285,7 @@ async function log(port, id, full) {
   const indent = (text) => text.replaceAll("\n", "\n    ");
   const place = Object.values(t.places ?? {}).join(", ");
   console.log(`${t.id} "${t.name}": ${t.environment} on ${t.tuning?.model ?? "?"}${place ? ` in ${place}` : ""}`);
-  const chain = t.head ? await get(port, `/context/${t.head}`) : [];
+  const chain = t.head ? await get(brain, `/context/${t.head}`) : [];
   for (const entry of chain.slice(1)) {
     const blocks = JSON.parse(entry.content);
     blocks.forEach((b, i) => {
@@ -243,14 +320,20 @@ function chromium() {
 
 // One Chromium, its one tab, and what the page said while we drove it.
 class Browser {
-  static async open(place, size, log) {
-    const profile = fs.mkdtempSync(path.join(place, "chrome-"));
+  // Its Chromium stays in this process's group, so whatever kills the
+  // group kills it too, and carries the brain's mark, so `down` finds it.
+  static async open(brain, size, log) {
+    const profile = fs.mkdtempSync(path.join(brain.dir, "chrome-"));
     const proc = spawn(chromium(), [
       "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
       "--ignore-certificate-errors", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",
       `--window-size=${size.width},${size.height}`, "about:blank",
-    ], { detached: true, stdio: "ignore" });
+    ], { stdio: "ignore", env: { ...process.env, [brain.mark]: "1", [PAGE]: String(process.pid) } });
     const b = new Browser(proc, profile, size, log);
+    b.brain = brain;
+    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+      process.on(signal, () => { b.close(); process.exit(128 + { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 }[signal]); });
+    }
     const portFile = path.join(profile, "DevToolsActivePort");
     for (let i = 0; i < 100 && !fs.existsSync(portFile); i++) await sleep(100);
     if (!fs.existsSync(portFile)) { b.close(); fail("Chromium did not start"); }
@@ -413,10 +496,24 @@ class Browser {
     fs.writeFileSync(file, Buffer.from(data, "base64"));
   }
 
+  // Chromium and every process it started: each carries this run's pid.
   close() {
-    try { process.kill(-this.proc.pid, "SIGKILL"); } catch { /* already gone */ }
+    for (const pid of marked(PAGE, String(process.pid))) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
     fs.rmSync(this.profile, { recursive: true, force: true });
   }
+}
+
+// What a page run's Chromium carries: the pid of the run that started it.
+const PAGE = "HARNESS_DRIVE_PAGE";
+
+// The pids of the processes whose environment says `name=value`.
+function marked(name, value) {
+  const want = `${name}=${value}`;
+  return fs.readdirSync("/proc").filter((d) => /^\d+$/.test(d)).filter((d) => {
+    try { return fs.readFileSync(`/proc/${d}/environ`, "latin1").split("\0").includes(want); } catch { return false; }
+  }).map(Number);
 }
 
 function described(d) {
@@ -465,15 +562,15 @@ const steps = {
     console.log(`box ${css}: x ${r[0]} y ${r[1]} width ${r[2]} height ${r[3]}`);
   },
   text: (b, words) => b.until(JSON.stringify(words), `document.body.innerText.includes(${JSON.stringify(words)})`),
-  reply: async (b) => { await settle(b.port, (await b.eval("location.hash")).slice(1)); b.check(); },
+  reply: async (b) => { await settle(b.brain, (await b.eval("location.hash")).slice(1)); b.check(); },
   shot: async (b, file) => { await b.shot(file); console.log(`shot ${path.resolve(file)}`); },
   eval: async (b, js) => console.log(JSON.stringify(await b.eval(js)) ?? "undefined"),
   sleep: (b, ms) => sleep(Number(ms)).then(() => b.check()),
 };
 
-async function page(port, args) {
+async function page(brain, args) {
   let size = { width: 1920, height: 1080, dpr: 1, phone: false };
-  let log = path.join(placeOf(port), "page.log");
+  let log = brain.file("page.log");
   while (args[0]?.startsWith("--")) {
     const [flag, value] = args.splice(0, 2);
     if (value === undefined) fail(`${flag} needs a value`);
@@ -492,11 +589,9 @@ async function page(port, args) {
     if (words.length < step.length - 1) fail(`${name} needs ${step.length - 1} argument(s)`);
     plan.push([name, step, words]);
   }
-  const place = placeOf(port);
-  fs.mkdirSync(place, { recursive: true });
-  if (!(await listening(port))) fail(`nothing listens on ${port}: node dev/drive.mjs up ${port}`);
-  const b = await Browser.open(place, size, log);
-  b.port = port;
+  const port = brain.port;
+  if (!(await listening(port))) fail(`brain ${brain.name} does not listen on ${port}: node dev/drive.mjs up --brain ${brain.name}`);
+  const b = await Browser.open(brain, size, log);
   let at = "loading the page";
   try {
     await b.send("Page.navigate", { url: `https://mx-hv-mj.local:${port}/` });
@@ -508,7 +603,7 @@ async function page(port, args) {
     }
   } catch (e) {
     if (!(e instanceof Failed)) throw e;
-    const shot = path.join(place, "failed.png");
+    const shot = brain.file("failed.png");
     await b.shot(shot).catch(() => {});
     b.note(`failed: ${e.message}`);
     console.error(`failed at ${at}: ${e.message}`);
@@ -524,20 +619,25 @@ async function page(port, args) {
   }
 }
 
-const [command, port, ...rest] = process.argv.slice(2);
-const at = rest.indexOf("--timeout");
-if (at >= 0) timeout = Number(rest.splice(at, 2)[1]) * 1000;
+// `--brain NAME` and `--timeout S` go anywhere; the rest is the command's.
+const args = process.argv.slice(2);
+const option = (flag) => {
+  const at = args.indexOf(flag);
+  return at < 0 ? undefined : args.splice(at, 2)[1] ?? fail(`${flag} needs a value`);
+};
 try {
-  if (!/^\d+$/.test(port ?? "")) fail("usage: node dev/drive.mjs up|chat|say|settle|log|page|down PORT ... (see the top of dev/drive.mjs)");
-  const n = Number(port);
-  if (command === "up") await up(n, rest);
-  else if (command === "chat") chat(n, rest);
-  else if (command === "say") await say(n, rest);
-  else if (command === "settle") console.log(state(await settle(n, rest[0] ?? fail("usage: settle PORT CHAT"))));
-  else if (command === "log") await log(n, rest[0] ?? fail("usage: log PORT CHAT [--full]"), rest[1] === "--full");
-  else if (command === "down") down(n, rest[0] === "--wipe");
-  else if (command === "page") await page(n, rest);
-  else fail(`unknown command ${command}; up, chat, say, settle, log, page or down`);
+  const brain = brainOf(option("--brain") ?? "test");
+  const seconds = option("--timeout");
+  if (seconds !== undefined) timeout = Number(seconds) * 1000;
+  const [command, ...rest] = args;
+  if (command === "up") await up(brain, rest);
+  else if (command === "chat") chat(brain, rest);
+  else if (command === "say") await say(brain, rest);
+  else if (command === "settle") console.log(state(await settle(brain, rest[0] ?? fail("usage: settle CHAT"))));
+  else if (command === "log") await log(brain, rest[0] ?? fail("usage: log CHAT [--full]"), rest[1] === "--full");
+  else if (command === "down") down(brain, rest[0] === "--wipe");
+  else if (command === "page") await page(brain, rest);
+  else fail(`usage: node dev/drive.mjs up|chat|say|settle|log|page|down [--brain NAME] ... (see the top of dev/drive.mjs)`);
 } catch (e) {
   if (!(e instanceof Failed)) throw e;
   console.error(e.message);

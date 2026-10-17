@@ -4,7 +4,7 @@
 demos/scripted/run.sh
 ```
 
-It lists the models on offer, read from the provider with `harness-api` (one call on Max's login, no model call), then starts a test brain at https://mx-hv-mj.local:4370/ (`PORT` to change) with `node dev/drive.mjs up`, whose every role runs on the scripted model by default: no model call, no cost. Its first chat runs `mandate.md`, a script of three responses: a `bash` call, a `spawn` of a fork that streams its reply a word at a time, and a 60-line reply; the script prints the chat's transcript once it settles. `node dev/drive.mjs down 4370` ends the brain and the limbs it started.
+It lists the models on offer, read from the provider with `harness-api` (one call on Max's login, no model call), then starts a test brain named `scripted` with `node dev/drive.mjs up`, and prints its link, whose every role runs on the scripted model by default: no model call, no cost. Its first chat runs `mandate.md`, a script of three responses: a `bash` call, a `spawn` of a fork that streams its reply a word at a time, and a 60-line reply; the script prints the chat's transcript once it settles. `node dev/drive.mjs down --brain scripted` ends the brain and the limbs it started.
 
 What to look for:
 - The chat's tool call and its result, the fork's reply, then the long reply streaming in.
