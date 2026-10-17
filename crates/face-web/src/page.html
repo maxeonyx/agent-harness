@@ -300,19 +300,9 @@
   .compose .closed { max-width: 48rem; margin: 0 auto; color: var(--muted); font-size: 13px; text-align: center; padding: .4em; }
 
   /* A new task: Max's own scope. */
-  #sheet {
-    position: fixed; z-index: 40; left: 1em; bottom: 3.4em; width: min(30em, calc(100vw - 2em));
-    background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 18px 50px rgba(40, 30, 20, .2); padding: 1em 1.1em;
-  }
-  #sheet h3 { margin: 0 0 .6em; font: 600 16px var(--serif); }
-  #sheet label { display: block; font-size: 12px; color: var(--muted); margin: .45em 0 .15em; }
-  #sheet input, #sheet select, #sheet textarea { width: 100%; font: 14px var(--sans); padding: .4em .55em; border: 1px solid var(--line); border-radius: 8px; background: var(--white); color: var(--ink); }
-  #sheet textarea { min-height: 7em; resize: vertical; }
-  #sheet .check { display: flex; gap: .5em; align-items: center; color: var(--ink); font-size: 13.5px; margin-top: .6em; }
-  #sheet .check input { width: auto; }
-  #sheet .acts { display: flex; gap: .5em; align-items: center; margin-top: .8em; }
-  #sheet .acts .answer { flex: 1; font-size: 12.5px; color: var(--muted); }
-  #sheet .acts .answer.bad { color: var(--maroon); font-weight: 600; }
+  .new-chat { max-width: 34em; margin: 1.5em auto 0; }
+  .new-chat label { display: block; font-size: 12px; color: var(--muted); margin: .7em 0 .2em; }
+  .new-chat input, .new-chat select { width: 100%; font: 14px var(--sans); padding: .45em .6em; border: 1px solid var(--line); border-radius: 8px; background: var(--white); color: var(--ink); }
 
   @media (max-width: 760px) {
     #panel { inset: 0; width: auto; transform: none; border-radius: 0; border: 0; border-top: 1px solid var(--line); top: calc(2.75em + env(safe-area-inset-top)); bottom: 0; z-index: 31; box-shadow: none; }
@@ -344,7 +334,7 @@
 <div id="drawer" hidden></div>
 
 <main id="map"><div id="world"><svg id="edges"></svg><div id="nodes"></div></div></main>
-<div id="empty" hidden><h2>Nothing is running.</h2><div>Start a task, and it appears here as a node.</div><div><button class="btn primary" id="empty-new" type="button">New task</button></div></div>
+<div id="empty" hidden><h2>Nothing is running.</h2><div>Start a chat, and it appears here as a node.</div><div><button class="btn primary" id="empty-new" type="button">New chat</button></div></div>
 
 <section id="panel" hidden>
   <div class="bar">
@@ -369,14 +359,6 @@
   <button class="btn" id="fit" type="button" title="Fit the map (F)">Fit</button>
 </footer>
 
-<form id="sheet" hidden autocomplete="off">
-  <h3>A new task in your scope</h3>
-  <label for="s-role">Role</label><select id="s-role"></select>
-  <label for="s-name">Name</label><input id="s-name" placeholder="the role's name">
-  <label for="s-dir">Directory</label><input id="s-dir" list="s-dirs" placeholder="/path/to/your/clone"><datalist id="s-dirs"></datalist>
-  <label for="s-mandate">Mandate</label><textarea id="s-mandate" placeholder="What to do, and what to report."></textarea>
-  <div class="acts"><span class="answer"></span><button class="btn" type="button" id="s-cancel">Close</button><button class="btn primary" id="s-go" type="submit">Start</button></div>
-</form>
 
 <script>
 "use strict";
@@ -1020,6 +1002,8 @@ function renderUsage() {
 // in a tab of its own with a middle click.
 const panel = $("#panel"), logEl = $(".log", panel), scrollEl = $(".scroll", panel);
 let openId = null, saved = null, moving = Promise.resolve();
+// The panel's id for a chat not started yet.
+const NEW = "new";
 
 function go(id) {
   if (id === openId) return;
@@ -1036,7 +1020,8 @@ addEventListener("hashchange", route);
 
 function route() {
   const id = location.hash.slice(1) || null;
-  moving = moving.then(() => transition(id && byId[id] ? id : id && !view ? id : null));
+  const known = id && (byId[id] || (id === NEW && view));
+  moving = moving.then(() => transition(known ? id : id && !view ? id : null));
 }
 
 async function transition(to) {
@@ -1044,13 +1029,12 @@ async function transition(to) {
   const from = openId;
   if (from) await shrink(from, !to);
   if (to) {
-    if (!view || !byId[to]) { pendingOpen = to; return; }
+    if (!view || (!byId[to] && to !== NEW)) { pendingOpen = to; return; }
     // Unfold a finished project to reach a node in it.
     const comp = graph.comps.find((c) => c.tasks.some((t) => t.id === to));
     if (comp?.folded && comp.root.id !== to) { unfolded.add(comp.root.id); await refreshNow(); }
     if (!saved) saved = { cam: { ...cam }, framed };
-    const k = Math.max(cam.k, phone() ? 1.1 : 1.3);
-    centreOn(to, k, true);
+    if (to !== NEW) centreOn(to, Math.max(cam.k, phone() ? 1.1 : 1.3), true);
     if (from) await sleep(reduced() ? 0 : 380);
     await expand(to);
   } else if (saved) {
@@ -1066,7 +1050,7 @@ async function refreshNow() { await refresh(); while (busy) await sleep(20); }
 // The node opens into the panel: the panel is revealed from the node's dot.
 async function expand(id) {
   openId = id;
-  if (can.act && id) act({ Focus: { face: FACE, task: id } });
+  if (can.act && byId[id]) act({ Focus: { face: FACE, task: id } });
   for (const [nid, a] of nodeEls) a.classList.toggle("selected", nid === id);
   map.classList.add("dim");
   panel.hidden = false;
@@ -1103,7 +1087,9 @@ function buildPanel(id) {
   $(".viewer", panel).hidden = true;
   scrollEl.scrollTop = 0;
   buildCompose(id);
-  renderPanel();
+  $(".exact-toggle", panel).hidden = id === NEW;
+  if (id === NEW) buildNew();
+  else renderPanel();
 }
 $(".x", panel).onclick = closeNode;
 $(".back", panel).onclick = closeNode;
@@ -1119,7 +1105,6 @@ $(".exact-toggle", panel).onclick = () => {
 addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (!$("#drawer").hidden) { $("#drawer").hidden = true; return; }
-    if (!$("#sheet").hidden) { $("#sheet").hidden = true; return; }
     if (!$(".viewer", panel).hidden) { $(".viewer", panel).hidden = true; return; }
     if (openId) closeNode();
   }
@@ -1726,7 +1711,7 @@ function buildCompose(id) {
   compose.replaceChildren();
   box = null;
   const t = byId[id];
-  if (!t || isDone(t)) { compose.append(el("div", "closed", t && isDone(t) ? "Finished. Its log is read-only." : "")); return; }
+  if (id !== NEW && (!t || isDone(t))) { compose.append(el("div", "closed", t && isDone(t) ? "Finished. Its log is read-only." : "")); return; }
   if (!can.act) { compose.append(el("div", "closed", "This face only watches.")); return; }
   const wrap = el("div", "box");
   const to = el("div", "to");
@@ -1774,6 +1759,12 @@ function buildCompose(id) {
 // or as an answer to its question, there is only now.
 const midTurn = (t) => ["model", "calls", "harness", "held", "limited"].includes(t.waiting?.kind);
 function renderComposeState(t) {
+  if (box?.dataset.key === NEW && !t) {
+    $(".to", compose).textContent = "A new chat: sending starts it, with these words as what it is for";
+    $(".later", compose).hidden = true;
+    $(".send", compose).textContent = "Start";
+    return;
+  }
   if (!box || box.dataset.key !== t.id) return;
   const to = $(".to", compose), ask = askOf(t), mid = midTurn(t) && !ask;
   to.className = `to${ask ? " answering" : ""}`;
@@ -1791,9 +1782,10 @@ addEventListener("storage", (e) => { if (box && e.key === `draft:${box.dataset.k
 async function submit(read) {
   if (!box) return;
   const t = byId[box.dataset.key];
-  const text = box.value, files = attached.get(t.id);
+  const text = box.value, files = attached.get(box.dataset.key);
   if (!text.trim() && !files.length) return;
   if (dictation) return stopDictation();
+  if (!t) return startNew(text, files);
   say("sending");
   const ask = askOf(t);
   const blocks = [...files.map((a) => a.block), ...(text.trim() ? [{ type: "text", text }] : [])];
@@ -1927,58 +1919,78 @@ function finishDictation(l) {
   if (!$(".status", compose)?.classList.contains("bad")) say("");
 }
 
-// ─── A new task, in Max's own scope ───────────────────────────────────────
-const sheet = $("#sheet");
-for (const [id, key] of [["#s-name", "new:name"], ["#s-dir", "new:dir"], ["#s-mandate", "new:mandate"]]) kept($(id), key);
-const openSheet = () => {
-  sheet.hidden = !sheet.hidden;
-  if (sheet.hidden || !view) return;
-  const role = $("#s-role");
-  const chosen = role.value;
-  role.replaceChildren(...view.environments.map((e) => { const o = el("option", null, e.name); o.value = e.id; return o; }));
-  if (chosen) role.value = chosen;
-  $("#s-dirs").replaceChildren(...view.workspaces.map((w) => { const o = el("option"); o.value = w.dir; return o; }));
-  $("#s-mandate").focus();
+// ─── A new chat, in Max's own scope ───────────────────────────────────────
+// "+ New" opens the panel on a chat that does not exist yet: its role and
+// directory above, the same staging box as every chat below, its draft and
+// attachments kept like theirs. Sending starts it: the words are its
+// mandate, and what is attached reaches it with them.
+$("#new").onclick = () => go(NEW);
+$("#empty-new").onclick = () => go(NEW);
+function buildNew() {
+  $(".crumbs", panel).replaceChildren(el("span", "here", "New chat"));
+  $(".state", panel).textContent = "";
+  $(".ctx", panel).hidden = true;
+  $(".controls", panel).replaceChildren();
+  const field = (tag, key, label) => {
+    const f = el(tag); f.id = `n-${key}`;
+    f.value = drafts.get(`new:${key}`);
+    f.addEventListener("input", () => drafts.set(`new:${key}`, f.value));
+    const l = el("label", null, label); l.htmlFor = f.id;
+    form.append(l, f);
+    return f;
+  };
+  const form = el("div", "new-chat");
+  const role = field("select", "role", "Role");
+  role.append(...view.environments.map((e) => Object.assign(el("option", null, e.name), { value: e.name })));
+  role.value = drafts.get("new:role") || (view.environments.some((e) => e.name === "chat") ? "chat" : view.environments[0]?.name);
+  role.onchange = () => drafts.set("new:role", role.value);
+  const dir = field("input", "dir", "Directory");
+  dir.placeholder = "/path/to/a/directory";
+  dir.setAttribute("list", "n-dirs");
+  const dirs = el("datalist"); dirs.id = "n-dirs";
+  dirs.append(...view.workspaces.map((w) => Object.assign(el("option"), { value: w.dir })));
+  form.append(dirs);
+  field("input", "name", "Name").placeholder = "from its first words";
+  logEl.replaceChildren(form);
+}
+// A name from the first words of a mandate.
+const title = (text) => {
+  const words = text.trim().split("\n")[0].split(/\s+/).slice(0, 6).join(" ");
+  return words.length > 40 ? `${words.slice(0, 39)}…` : words;
 };
-$("#new").onclick = openSheet;
-$("#empty-new").onclick = openSheet;
-$("#s-cancel").onclick = () => { sheet.hidden = true; };
-let startArmed = false;
-for (const f of sheet.querySelectorAll("input, textarea, select")) f.addEventListener("input", () => { startArmed = false; $("#s-go").classList.remove("armed"); $("#s-go").textContent = "Start"; });
-sheet.onsubmit = async (e) => {
-  e.preventDefault();
-  const answer = $(".answer", sheet);
-  const env = view.environments.find((x) => x.id === $("#s-role").value);
-  const mandate = $("#s-mandate").value.trim();
-  if (!env || !mandate) { answer.textContent = "a role and a mandate"; return; }
-  const dir = $("#s-dir").value.trim();
-  if (env.places.length && !dir) { answer.textContent = `a directory for its ${env.places[0]}`; return; }
-  if (!startArmed) { startArmed = true; $("#s-go").classList.add("armed"); $("#s-go").textContent = "Start now"; answer.textContent = "again to start"; return; }
-  startArmed = false; $("#s-go").classList.remove("armed"); $("#s-go").textContent = "Start";
-  const facts = [], places = {};
+async function startNew(text, files) {
+  const env = view.environments.find((e) => e.name === $("#n-role").value);
+  const dir = $("#n-dir").value.trim();
+  if (!env) return say("choose a role", true);
+  if (env.places.length && !dir) return say(`it needs a directory for its ${env.places[0]}`, true);
+  if (!text.trim()) return say("write what it is for", true);
+  say("starting");
+  const facts = [], values = [text], places = {};
   for (const place of env.places) {
     const known = view.workspaces.find((w) => w.dir === dir);
     const id = known ? known.id : mint();
     if (!known) facts.push({ Limb: { id, name: dir, kind: { Plugin: { kind: place, config: JSON.stringify({ dir }) } } } });
     places[place] = id;
   }
-  const text = await digest(mandate);
   const id = mint();
   facts.push({ Task: [id, { Created: {
-    name: $("#s-name").value.trim() || env.name, by: null, scope: "Max",
+    name: $("#n-name").value.trim() || title(text), by: null, scope: "Max",
     origin: { Fresh: { environment: env.id, places } },
     mode: "UserFacing",
-    mandate: { text, brief: null, quotes: [] },
+    mandate: { text: await digest(text), brief: null, quotes: [] },
   } }] });
-  const why = await act(facts, [mandate]);
-  answer.className = why ? "answer bad" : "answer";
-  answer.textContent = why ? `refused: ${why}` : "started";
-  if (why) return;
-  for (const k of ["new:name", "new:mandate"]) drafts.set(k, "");
-  $("#s-mandate").value = ""; $("#s-name").value = "";
-  sheet.hidden = true;
+  if (files.length) {
+    const words = JSON.stringify(files.map((a) => a.block));
+    values.push(words);
+    facts.push({ Delivery: { id: mint(), to: id, content: { Words: await digest(words) }, read: "Next" } });
+  }
+  const why = await act(facts, values);
+  if (why) return say(`not started: ${why}`, true);
+  box.value = prev = "";
+  for (const k of [NEW, "new:name"]) drafts.set(k, "");
+  attached.set(NEW, []);
   pendingOpen = id;
-};
+}
 
 $("#fit").onclick = () => fit(true);
 addEventListener("resize", () => { shape = ""; refresh(); });
@@ -1992,7 +2004,7 @@ source.onerror = () => { $("#link").className = "down"; $("#link").title = "reco
 source.onmessage = async (m) => {
   view = JSON.parse(m.data);
   await refresh();
-  if (pendingOpen && byId[pendingOpen]) { const id = pendingOpen; pendingOpen = null; go(id); }
+  if (pendingOpen && byId[pendingOpen]) { const id = pendingOpen; pendingOpen = null; history.replaceState({ node: id }, "", `#${id}`); route(); }
   else if (!openId && location.hash.length > 1 && byId[location.hash.slice(1)] && !moving.started) { moving.started = true; route(); }
 };
 // Waits grow between events.
