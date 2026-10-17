@@ -1,9 +1,11 @@
-  /* On a phone: the card fills the screen, and the type is a touch larger. */
+  /* On a phone: the card fills the screen, and the type is a touch larger.
+     The usage stays over the open card, in a strip of its own below the box. */
   @media (max-width: 760px) {
     #panel { border-radius: 14px; }
     .log { padding: 1em 1em 2em; }
     .prose { font-size: 15.5px; }
     .compose { padding: .2em .4em max(.45em, env(safe-area-inset-bottom)); }
+    body.covered .compose { padding-bottom: calc(2.6em + env(safe-area-inset-bottom)); }
     .viewer { position: absolute; inset: 0; z-index: 2; border: 0; }
     #panel > .body { position: relative; }
     .gauge .pc { display: none; }

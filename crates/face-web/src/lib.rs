@@ -87,6 +87,9 @@ pub struct Wiring {
     pub dictation: Option<Dictation>,
     /// Live progress, from whoever runs things.
     pub feed: Feed,
+    /// The models on offer, newest first ([`harness_provider::Client::models`]),
+    /// which Max chooses a chat's from.
+    pub models: Vec<harness_provider::Model>,
 }
 
 /// What the brain hands the face after each fold.
@@ -148,7 +151,8 @@ impl<S: Source> Face<S> {
             if let Some(last) = folds.try_iter().last() {
                 folded = last;
             }
-            let rows = view::rows(&folded.state, &|id| self.source.value(id), now());
+            let value = |id| self.source.value(id);
+            let rows = view::rows(&folded.state, &value, &self.wiring.models, now());
             *self.state.write().unwrap_or_else(|e| e.into_inner()) = folded.state;
             *self.show() = Some(Arc::new(Shown {
                 as_of: folded.as_of,
@@ -561,8 +565,10 @@ fn authors(
 /// siblings it has been at, which of them it is (`n` of `of`, in the order
 /// they were first made), and where Max lands moving to the one before or
 /// after: the last response the task had on that path, or failing one, the
-/// last request. Read whole on every change of head, since a version is
-/// added by any request.
+/// last request. And for each response the model gave more than once, how
+/// many times (`tries`): an entry is its bytes, so a retry that says the
+/// same words is the same version, asked again. Read whole on every change
+/// of head and every request that ends, since either can add to it.
 fn versions(state: &State, task: TaskId) -> Value {
     let Some(start) = state.task(task).and_then(|t| t.context()).map(|c| c.start) else {
         return json!({});
@@ -575,7 +581,11 @@ fn versions(state: &State, task: TaskId) -> Value {
     calls.sort_by_key(|m| m.sent.seq);
     let mut children: BTreeMap<EntryId, Vec<EntryId>> = BTreeMap::new();
     let mut landing: HashMap<EntryId, (bool, EntryId)> = HashMap::new();
+    let mut tries: HashMap<EntryId, usize> = HashMap::new();
     for m in calls {
+        if let Some(r) = m.response {
+            *tries.entry(r).or_default() += 1;
+        }
         let ends = [Some((false, m.call.head())), m.response.map(|r| (true, r))];
         for (responded, end) in ends.into_iter().flatten() {
             let mut child = end;
@@ -614,6 +624,10 @@ fn versions(state: &State, task: TaskId) -> Value {
                 }),
             );
         }
+    }
+    for (entry, n) in tries.into_iter().filter(|(_, n)| *n > 1) {
+        let at = out.entry(entry.to_string()).or_insert_with(|| json!({}));
+        at["tries"] = n.into();
     }
     Value::Object(out)
 }

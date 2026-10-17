@@ -113,6 +113,7 @@
   .unmovable .moves .mv, .unmovable .versions .mv { opacity: .35; cursor: not-allowed; }
   .versions { display: flex; align-items: center; gap: .1em; font: 12px var(--sans); color: var(--muted); margin: 0 0 .2em; }
   .versions.user { justify-content: flex-end; }
+  .versions .tries { margin-left: .4em; }
   .meta { font-size: 11.5px; color: var(--faint); margin: -.5em 0 1.1em; opacity: 0; transition: opacity .15s; }
   .chunk:hover .meta, .row:hover > .meta { opacity: 1; }
   .thought { font-size: 13px; color: var(--muted); margin: 0 0 .7em; }

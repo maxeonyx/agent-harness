@@ -17,21 +17,24 @@ export async function contextOf(head) {
   return contexts.get(head);
 }
 
-// Where the task's context has other versions, read again with each head,
-// since any request can add one.
+// Where the task's context has other versions, read again with each head
+// and each request that ends, since any request can add one, and a retry
+// can end where it began.
 const versionsOf = (task) => fetch(`/versions/${task}`).then((r) => r.ok ? r.json() : {}).catch(() => ({}));
 
 export async function renderLog(t) {
   const s = logState;
   if (!s || s.id !== t.id) return;
-  if (s.head !== t.head) {
-    const head = t.head;
-    s.head = head;
-    const [chain, versions] = await Promise.all([head ? contextOf(head) : [], versionsOf(t.id)]);
-    if (logState !== s || s.head !== head) return;
-    if (!chain) { s.head = undefined; return; }
+  const seen = `${t.head} ${t.turn}`;
+  if (s.seen !== seen) {
+    s.seen = seen;
+    const head = t.head, moved = s.head !== head;
+    const [chain, versions] = await Promise.all([moved && head ? contextOf(head) : [], versionsOf(t.id)]);
+    if (logState !== s || s.seen !== seen) return;
+    if (!chain) { s.seen = undefined; return; }
+    if (moved) { s.head = head; stick(() => appendChain(s, chain, t)); }
     s.versions = versions;
-    stick(() => appendChain(s, chain, t));
+    stick(() => markVersions(s));
   }
   stick(() => renderTail(s, t));
   revealIn(s);
@@ -54,8 +57,7 @@ function appendChain(s, chain, t) {
     into.dataset.entry = e.id;
     if (s.exact) exactEntry(into, e);
     else entry(s, into, e, i, t, ids[i - 1]);
-    const v = s.versions?.[e.id];
-    if (v) into.prepend(versionArrows(v, e.role));
+    into.dataset.role = e.role;
     s.rendered.push({ id: e.id, el: into });
     const tail = $(".tail", logEl);
     if (tail) tail.before(into); else logEl.append(into);
@@ -367,6 +369,15 @@ function moves(list) {
   }
   return row;
 }
+// Each drawn entry's versions, drawn anew: the arrows between its siblings,
+// and how many times the model gave it, when more than once.
+function markVersions(s) {
+  for (const r of s.rendered) {
+    $(".versions", r.el)?.remove();
+    const v = s.versions?.[r.id];
+    if (v) r.el.prepend(versionArrows(v, r.el.dataset.role));
+  }
+}
 function versionArrows(v, role) {
   const d = el("div", `versions ${role}`);
   const go = (to, word) => {
@@ -376,7 +387,12 @@ function versionArrows(v, role) {
     b.onclick = (ev) => { ev.stopPropagation(); moveBack(to, "Version"); };
     return b;
   };
-  d.append(go(v.prev, "‹"), el("span", "n", `${v.n}/${v.of}`), go(v.next, "›"));
+  if (v.of) d.append(go(v.prev, "‹"), el("span", "n", `${v.n}/${v.of}`), go(v.next, "›"));
+  if (v.tries) {
+    const n = el("span", "tries", `said ${v.tries}×`);
+    n.title = `Asked ${v.tries} times: the model gave these same words each time`;
+    d.append(n);
+  }
   return d;
 }
 // Why the task cannot be moved now, if it cannot.

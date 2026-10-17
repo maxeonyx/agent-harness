@@ -15,6 +15,15 @@ const MAX_BREAKPOINTS: usize = 4;
 #[derive(Debug)]
 pub struct RequestError(pub String);
 
+/// The model `call` names: its own, or else its root's.
+pub fn model<'a>(call: &'a ModelCall, base: &[(EntryId, &'a Entry)]) -> Option<&'a str> {
+    match (&call.model, base.first()) {
+        (Some(model), _) => Some(model),
+        (None, Some((_, Entry::Root(root)))) => Some(&root.model),
+        _ => None,
+    }
+}
+
 /// The JSON body of `call`, with every value's bytes copied as they are.
 ///
 /// `base` is the context `call` extends, root first, as

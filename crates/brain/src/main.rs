@@ -43,16 +43,11 @@
 //! limb links, the face, signals, and where a new clone
 //! goes on disk.
 //!
-//! ```text
-//! harness-brain --db DB --port PORT [--roles DIR] [--sample WAV]
-//!               [--workspace DIR --mandate FILE [--name NAME] [--role ROLE]]
-//! ```
-//! A new database needs `--roles`, the directory the roles limb reads; an
-//! existing one keeps the roles limb it has. With a workspace and a
-//! mandate, the brain starts a task in Max's scope as his: a chat with him,
-//! like every task he starts, done when he says. Its mandate is his words,
-//! so its briefs can quote it. `--sample` offers the page a recording to
-//! dictate, for a machine with no microphone.
+//! Its flags are in [`USAGE`], which `harness-brain --help` prints.
+//!
+//! At launch the brain reads the models on offer from the provider once;
+//! a role's alias (`opus`) means the newest of its family, and a new model
+//! reaches the roles at the next launch.
 
 /// Print a line to stdout, dropping it once nothing reads it: `println!`
 /// panics on a closed pipe, and losing the reader of the brain's output
@@ -87,6 +82,7 @@ use std::thread;
 use harness_core::id::ValueId;
 use harness_face_web::{Dictation, Face, Feed, Source, Wiring};
 use harness_provider::{Client, Login};
+use harness_runtime::Cancel;
 use harness_store::Store;
 
 use crate::brain::{Brain, Inbox, Start};
@@ -100,6 +96,27 @@ impl Source for Values {
         store.value(id).ok().flatten()
     }
 }
+
+/// What `harness-brain --help` prints. `--model scripted` is
+/// [`harness_provider::SCRIPTED`].
+const USAGE: &str = "\
+usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL]
+                     [--workspace DIR --mandate FILE [--name NAME] [--role ROLE]]
+
+  --db DB          the database; a new one is made if none is there
+  --port PORT      where the face is served, over HTTPS
+  --roles DIR      the role files the roles limb reads; a new database needs
+                   it, an existing one keeps the roles limb it has
+  --model MODEL    run every role on MODEL over its file's; `scripted` costs
+                   nothing (it answers from a script in the chat)
+  --sample WAV     a recording the page offers to dictate, for a machine with
+                   no microphone
+  --workspace DIR  with --mandate, start a task in Max's scope as his: a chat
+  --mandate FILE   with him in DIR, whose mandate is FILE's words
+  --name NAME      that task's name (default: its role)
+  --role ROLE      that task's role (default: orchestrator)
+  --help           print this
+";
 
 fn main() -> ExitCode {
     match run() {
@@ -115,7 +132,7 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let (mut db, mut port, mut workspace, mut mandate, mut name) = (None, None, None, None, None);
     let (mut roles, mut role) = (None, "orchestrator".to_string());
-    let mut sample = None;
+    let (mut sample, mut model) = (None, None);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
@@ -127,7 +144,12 @@ fn run() -> Result<(), String> {
             "--roles" => roles = Some(PathBuf::from(value()?)),
             "--role" => role = value()?,
             "--sample" => sample = Some(PathBuf::from(value()?)),
-            _ => return Err(format!("unknown argument {flag}")),
+            "--model" => model = Some(value()?),
+            "--help" | "-h" => {
+                outln!("{}", USAGE.trim_end());
+                return Ok(());
+            }
+            _ => return Err(format!("unknown argument {flag}\n{USAGE}")),
         }
     }
     let db = db.ok_or("--db is required")?;
@@ -159,6 +181,11 @@ fn run() -> Result<(), String> {
     inbox.signals()?;
     let login = || Login::claude_code().map_err(|e| format!("the login: {}", e.0));
     let feed = Feed::default();
+    let client = Client::new(login()?);
+    let offered = client.models(&Cancel::new()).unwrap_or_else(|e| {
+        errln!("harness-brain: the provider's models: {e}; aliases keep what they resolved to");
+        vec![harness_provider::scripted()]
+    });
     let mut dictation = Dictation::new(login()?);
     if let Some(sample) = sample {
         dictation = dictation.with_sample(&sample)?;
@@ -169,12 +196,24 @@ fn run() -> Result<(), String> {
             include: Some(inbox.include()),
             dictation: Some(dictation),
             feed: feed.clone(),
+            models: offered.clone(),
         },
     );
     // The Windows host, read again for each connection: DHCP can move it.
     let allow = |peer: IpAddr| Some(peer) == harness_face_web::default_gateway().map(IpAddr::V4);
-    let client = Client::new(login()?);
-    let mut brain = Brain::launch(store, folds, client, roles.as_deref(), start, inbox, feed)?;
+    let mut brain = Brain::launch(
+        store,
+        folds,
+        client,
+        roles::Models {
+            offered,
+            every: model,
+        },
+        roles.as_deref(),
+        start,
+        inbox,
+        feed,
+    )?;
     // The face serves until the brain has shut down or panicked: the scope
     // would wait for the face forever, so the process exits from inside it.
     thread::scope(|s| {
