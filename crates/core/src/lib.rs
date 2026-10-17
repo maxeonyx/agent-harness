@@ -20,7 +20,7 @@
 //! | Identity | Type | Its facts | What is true now |
 //! |---|---|---|---|
 //! | A replica: the brain, a limb's instance, a face | [`id::ReplicaId`] | its own records ([`schema::Record`]); the brain includes the others' | the brain's [`state::State`], a persistent value any reader can hold; a follower's view of it |
-//! | A brain process | [`fact::Launched`] | [`fact::Fact::Launched`], [`fact::Fact::Shutdown`] | [`state::State::launch`], [`state::State::shutdown`] |
+//! | A build of the brain | [`build::BuildId`]; its span opened by [`build::Launched`] | [`fact::Fact::Launched`], [`fact::Fact::Shutdown`] | [`state::State::launch`], [`state::State::shutdown`] |
 //! | A value | [`id::ValueId`] | none: immutable [`value::Bytes`], arriving in the [`fact::Batch`] that first names them | itself |
 //! | Max's words | a value he said | the delivery, mandate or answer that carried them | [`state::State::said`], [`state::State::heard`] |
 //! | A context | [`context::Entry`], named by [`context::EntryId`] | none: carried inside the fact that first sends or receives it | [`state::State::context`] |
@@ -104,7 +104,7 @@
 //! - **Restart.** Not a mode: positions in the brain's timeline. A fresh
 //!   brain folds the records it holds, following the verdicts it recorded,
 //!   and works through [`state::State::todo`]. A request sent before the
-//!   current [`fact::Launched`] with no end was lost and is sent again;
+//!   current [`build::Launched`] with no end was lost and is sent again;
 //!   every limb a live task can reach is connected again
 //!   ([`state::Todo::Connect`]); every unsettled call is a row of its limb's
 //!   view, which the limb gets whole on connecting, and the limb runs each id
@@ -220,6 +220,7 @@
 //!   own pending acts as pending rather than predicting the brain's verdict.
 
 pub mod attention;
+pub mod build;
 pub mod call;
 pub mod cancel;
 pub mod context;

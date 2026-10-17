@@ -64,13 +64,32 @@ pub enum Status<'a, R> {
     Refused(&'a R),
 }
 
-/// A record the decider's recorded verdict accepted that this build's fold
-/// refuses. Reopening skips it, so the state is this build's reading of
-/// the past; the record stays, so an older build still reads it as before.
+/// A record this build does not fold as the build that included it did.
+/// Reopening skips it, so the state is this build's reading of the past;
+/// the record stays, so the build that wrote it still reads it as before.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Divergence<R> {
     pub at: Time,
-    pub why: R,
+    pub why: Diverged<R>,
+}
+
+/// Why a record is skipped on reopening.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Diverged<R> {
+    /// The recorded verdict accepted it; this build's fold refuses it.
+    Refused(R),
+    /// This build cannot read it, or the receipt that included it
+    /// ([`crate::Unread`]).
+    Unread(String),
+}
+
+impl<R: std::fmt::Display> std::fmt::Display for Diverged<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Diverged::Refused(why) => write!(f, "this build refuses it: {why}"),
+            Diverged::Unread(why) => write!(f, "this build cannot read it: {why}"),
+        }
+    }
 }
 
 /// Why the decider did not write its own record.
@@ -136,10 +155,26 @@ impl<R> Standing<R> {
     }
 }
 
+fn unread<R>(at: Time, why: &str) -> Divergence<R> {
+    Divergence {
+        at,
+        why: Diverged::Unread(why.to_owned()),
+    }
+}
+
+/// What a follower's record says, if this build can read it.
+fn said<S: Schema>(what: &What<S>) -> Option<Result<&S::Said, &String>> {
+    match what {
+        What::Said(said) => Some(Ok(said)),
+        What::Unread(unread) if unread.of.is_none() => Some(Err(&unread.why)),
+        What::Included(_) | What::Unread(_) => None,
+    }
+}
+
 impl<S: Schema, St: Storage<S>> Decider<S, St> {
     /// The decider at `here`, folding everything `storage` holds. A record
-    /// this build folds differently from the one that wrote it is skipped
-    /// and returned, for the embedding to surface.
+    /// this build cannot read, or folds differently from the build that
+    /// included it, is skipped and returned, for the embedding to surface.
     #[allow(clippy::type_complexity)]
     pub fn open(
         here: ReplicaId,
@@ -165,15 +200,30 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
         };
         let mut divergences = Vec::new();
         for record in own.values() {
-            let (at, said, included) = match &record.what {
-                What::Said(said) => (record.at, Some(said), None),
+            // A receipt this build cannot read still includes its record,
+            // as accepted: the verdict it holds is not this build's to know.
+            let read;
+            let (at, what, included) = match &record.what {
+                What::Said(said) => (record.at, Some(Ok(said)), None),
+                What::Unread(u) if u.of.is_none() => (record.at, Some(Err(&u.why)), None),
                 What::Included(included) => {
-                    let said = match held.get(&included.of).map(|r| &r.what) {
-                        Some(What::Said(said)) => Some(said),
-                        _ => None,
-                    };
-                    (included.of, said, Some(included))
+                    let what = held.get(&included.of).map(|r| &r.what);
+                    (included.of, what.and_then(said), Some(included))
                 }
+                What::Unread(u) => {
+                    divergences.push(unread(record.at, &u.why));
+                    let of = u.of.expect("a receipt names what it includes");
+                    read = Included { of, refused: None };
+                    (of, None, Some(&read))
+                }
+            };
+            let said = match what {
+                Some(Ok(said)) => Some(said),
+                Some(Err(why)) => {
+                    divergences.push(unread(at, why));
+                    None
+                }
+                None => None,
             };
             let mut durability = None;
             if let Some(said) = said {
@@ -193,7 +243,10 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                                 decider.state = state;
                                 durability = Some(S::durability(at, said));
                             }
-                            Err(why) => divergences.push(Divergence { at, why }),
+                            Err(why) => divergences.push(Divergence {
+                                at,
+                                why: Diverged::Refused(why),
+                            }),
                         }
                     }
                 }
@@ -332,8 +385,9 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                     }
                 }
             }
-            // Another decider's receipt: held as a fact, folded by nobody here.
-            What::Included(_) => (None, Some(Durability::Kept)),
+            // Another decider's receipt, or what this build cannot read:
+            // held as a fact, folded by nobody here.
+            What::Included(_) | What::Unread(_) => (None, Some(Durability::Kept)),
         };
         let holder = Holder {
             at: record.at,

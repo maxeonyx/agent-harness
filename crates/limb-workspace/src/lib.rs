@@ -625,7 +625,7 @@ impl Inner {
                 .facts
                 .iter()
                 .any(|f| matches!(f, Fact::Call(id, CallEvent::Settled(_)) if *id == call)),
-            harness_substrate::What::Included(_) => false,
+            harness_substrate::What::Included(_) | harness_substrate::What::Unread(_) => false,
         })
     }
 

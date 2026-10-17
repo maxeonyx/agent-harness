@@ -15,8 +15,9 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
+use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::environment::Environment;
-use harness_core::fact::{Batch, Fact, Launched};
+use harness_core::fact::{Batch, Fact};
 use harness_core::id::{EnvironmentId, ReplicaId, TaskId, Time, Timestamp};
 use harness_core::schema::{Brain, Record};
 use harness_core::task::{Created, Mandate, Mode, Origin, Scope, TaskEvent};
@@ -208,8 +209,8 @@ fn launched() -> Batch {
     Batch {
         values: vec![],
         facts: vec![Fact::Launched(Launched {
-            build: "crash-demo".into(),
-            by: None,
+            build: BuildId::of(b"crash-demo"),
+            how: Launch::Started,
         })],
     }
 }

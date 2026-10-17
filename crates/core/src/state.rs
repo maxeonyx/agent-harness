@@ -10,11 +10,12 @@ use crate::context::{Entry, EntryId};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
+use crate::build::{Launch, Launched};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::environment::{
     Audience, Description, Environment, Limb, LimbKey, LimbKind, LimbRow, Reach,
 };
-use crate::fact::{Author, Fact, Launched, Refusal, Rejected, Stated};
+use crate::fact::{Author, Fact, Refusal, Rejected, Stated};
 use crate::id::{
     CallId, DeliveryId, EnvironmentId, EventId, LimbId, ModelCallId, ReplicaId, Seq, TaskId, Time,
     Timestamp, ValueId,
@@ -647,7 +648,7 @@ impl State {
         let mark = Mark::of(record);
         match record.fact {
             Fact::Launched(launched) => {
-                if let Some(call) = launched.by
+                if let Launch::Relaunched { by: Some(call), .. } = launched.how
                     && !self.calls.contains_key(&call)
                 {
                     return Err(Rejected::Unknown);

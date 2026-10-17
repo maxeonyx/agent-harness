@@ -6,7 +6,8 @@
 //! [`State::todo`](harness_core::state::State::todo): it sends requests
 //! through the provider, dispatches calls to limbs, runs the meta limb's
 //! calls itself, and settles scopes. It reads nothing from disk but its
-//! database, and keeps nothing a restart would need anywhere else. A
+//! database and its own executable, whose digest is the build it records
+//! launching ([`harness_core::build::Launched`]), and keeps nothing a restart would need anywhere else. A
 //! relaunch is no special case: the to-do list of the folded database says
 //! each unfinished request was lost, and each limb that reconnects is
 //! shipped the calls it holds rows for.

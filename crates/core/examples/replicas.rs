@@ -7,10 +7,11 @@
 
 use std::collections::BTreeMap;
 
+use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::delivery::Read;
 use harness_core::draft::{DraftEvent, Fate};
 use harness_core::environment::Environment;
-use harness_core::fact::{Batch, Fact, Launched, Refusal};
+use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{DeliveryId, EnvironmentId, ReplicaId, TaskId, Time, Timestamp, ValueId};
 use harness_core::live::Live;
 use harness_core::schema::{Brain, Harness};
@@ -254,8 +255,8 @@ fn main() {
         values: vec![],
         facts: vec![
             Fact::Launched(Launched {
-                build: "demo".into(),
-                by: None,
+                build: BuildId::of(b"demo"),
+                how: Launch::Started,
             }),
             Fact::Face(PC),
             Fact::Face(PHONE),

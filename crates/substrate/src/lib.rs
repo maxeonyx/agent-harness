@@ -74,9 +74,9 @@ mod storage;
 mod time;
 mod view;
 
-pub use decider::{Decider, Divergence, Error, Standing, Status};
+pub use decider::{Decider, Diverged, Divergence, Error, Standing, Status};
 pub use log::{Log, Restored};
-pub use record::{Durability, Folding, Included, Live, Record, Schema, What};
+pub use record::{Durability, Folding, Included, Live, Record, Schema, Unread, What};
 pub use storage::{Memory, Storage};
 pub use time::{EventId, ParseError, ReplicaId, Time, Timestamp};
 pub use view::{Down, Mirror, Publisher, Step, Up, View};

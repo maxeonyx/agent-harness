@@ -1,7 +1,8 @@
 use std::fmt;
 
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::de::{DeserializeOwned, Error as _};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::value::RawValue;
 
 use crate::time::{Time, Timestamp};
 
@@ -27,13 +28,122 @@ pub struct Record<S: Schema> {
 }
 
 /// What a record says.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(bound = "")]
+///
+/// **Concept.** A record is an envelope and a payload. The envelope (the
+/// record's time and clock, whether it is said or a receipt, and what a
+/// receipt includes) is the substrate's, and every build reads it. The
+/// payload (what was said, or why a receipt refused) is the schema's, and a
+/// newer build may say something an older one has no word for. Such a
+/// record is [`What::Unread`] in the build that cannot read it: held as it
+/// was written, never rewritten, never folded. So no build fails to open a
+/// replica's records because of what another build wrote; only a change
+/// to the envelope, or to how a storage lays it out, is a boundary between
+/// builds.
+///
+/// `Unread` is for a build reading what a later one wrote. A build must read
+/// everything earlier builds wrote, so a schema changes its vocabulary
+/// only by adding to it, never by changing what an existing word means.
+///
+/// Records are JSON wherever they are stored or shipped: an unread record
+/// is written back out exactly as it was read.
+///
+/// **Vision.** "While we want live editing, we don't want live bricking":
+/// going back to the build before a bad one opens what the bad one wrote,
+/// and going forward again loses nothing.
+#[derive(Clone, Debug, PartialEq)]
 pub enum What<S: Schema> {
     /// The replica's own facts, in its schema's vocabulary.
     Said(S::Said),
     /// That this replica included another replica's record.
     Included(Included<S::Refusal>),
+    /// A payload this build cannot read.
+    Unread(Unread),
+}
+
+/// A record whose payload this build's schema does not parse.
+///
+/// **Concept.** Kept and skipped. A decider keeps it whatever durability
+/// its writer declared (this build cannot tell what supersedes it), counts
+/// its time, and never folds it; a receipt it cannot read still includes
+/// the record it names, so the follower's standing moves on, and the
+/// record it names is not folded. A decider includes a follower's unread
+/// record without folding it. A build that reads it folds it in its place
+/// the next time it opens the records.
+///
+/// **Existing harnesses.** A migration runs forward once, and an older
+/// build then refuses the database (Rails, Django); or a reader skips the
+/// fields it does not know and drops them when it writes the row back
+/// (protobuf).
+#[derive(Clone, Debug)]
+pub struct Unread {
+    /// For a receipt: the record it includes.
+    pub of: Option<Time>,
+    /// The record's `what`, exactly as it was written.
+    pub what: Box<RawValue>,
+    /// Why this build's schema does not parse it.
+    pub why: String,
+}
+
+impl PartialEq for Unread {
+    fn eq(&self, other: &Unread) -> bool {
+        self.of == other.of && self.what.get() == other.what.get()
+    }
+}
+
+/// The envelope of a `what`: the substrate's, read by every build.
+#[derive(Deserialize)]
+enum Envelope<'a> {
+    #[serde(borrow)]
+    Said(&'a RawValue),
+    Included {
+        of: Time,
+        #[serde(borrow)]
+        refused: Option<&'a RawValue>,
+    },
+}
+
+impl<S: Schema> Serialize for What<S> {
+    fn serialize<Se: Serializer>(&self, serializer: Se) -> Result<Se::Ok, Se::Error> {
+        match self {
+            What::Said(said) => serializer.serialize_newtype_variant("What", 0, "Said", said),
+            What::Included(included) => {
+                serializer.serialize_newtype_variant("What", 1, "Included", included)
+            }
+            What::Unread(unread) => unread.what.serialize(serializer),
+        }
+    }
+}
+
+impl<'de, S: Schema> Deserialize<'de> for What<S> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let what = Box::<RawValue>::deserialize(deserializer)?;
+        let unread = |of, why: serde_json::Error| Unread {
+            of,
+            what: what.clone(),
+            why: why.to_string(),
+        };
+        Ok(
+            match serde_json::from_str(what.get()).map_err(D::Error::custom)? {
+                Envelope::Said(said) => match serde_json::from_str(said.get()) {
+                    Ok(said) => What::Said(said),
+                    Err(why) => What::Unread(unread(None, why)),
+                },
+                Envelope::Included { of, refused: None } => {
+                    What::Included(Included { of, refused: None })
+                }
+                Envelope::Included {
+                    of,
+                    refused: Some(refused),
+                } => match serde_json::from_str(refused.get()) {
+                    Ok(refused) => What::Included(Included {
+                        of,
+                        refused: Some(refused),
+                    }),
+                    Err(why) => What::Unread(unread(Some(of), why)),
+                },
+            },
+        )
+    }
 }
 
 /// "This record of mine includes that record of yours": a decider's

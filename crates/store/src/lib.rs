@@ -23,6 +23,15 @@
 //! once and never sit in the rows a load reads. A dropped record leaves its
 //! values in place: collecting values is not built.
 //!
+//! # Across builds
+//!
+//! Only these tables are a boundary between builds: [`VERSION`] says
+//! which layout a file has, and a file of a layout this build does not
+//! know is refused. The records are not: a record whose facts this build
+//! has no word for loads as [`harness_substrate::Unread`], kept as it was
+//! written, with its values put back. A build that knows its facts reads
+//! it again. No record is ever rewritten.
+//!
 //! # Durability
 //!
 //! Write-ahead log, with a full sync at each commit: a commit that returned
@@ -41,8 +50,8 @@ use harness_core::value::Bytes;
 use harness_substrate::{Storage, What};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-/// Bumped by any change to the tables below; a file written by another
-/// version is refused rather than misread.
+/// The tables' layout, bumped by any change to them: a file of another
+/// layout is refused rather than misread.
 const VERSION: i64 = 6;
 
 const SCHEMA: &str = "
@@ -92,14 +101,6 @@ impl Store {
                 tx.pragma_update(None, "user_version", VERSION)?;
             }
             VERSION => {}
-            // Version 5 called a replica a place.
-            5 => {
-                tx.execute_batch(
-                    "ALTER TABLE meta RENAME COLUMN place TO replica;
-                     ALTER TABLE record RENAME COLUMN place TO replica;",
-                )?;
-                tx.pragma_update(None, "user_version", VERSION)?;
-            }
             found => return Err(Error::Version { found }),
         }
         let replica: String = tx.query_row("SELECT replica FROM meta", [], |row| row.get(0))?;
@@ -137,18 +138,25 @@ impl Storage<Harness> for Store {
         let mut records = Vec::new();
         while let Some(row) = rows.next()? {
             let vals: Vec<u8> = row.get(0)?;
-            let json: String = row.get(1)?;
-            let mut record: Record = serde_json::from_str(&json)?;
-            if let What::Said(batch) = &mut record.what {
-                for id in vals.chunks(32) {
-                    let id = ValueId(Digest(
-                        id.try_into().map_err(|_| Error::Corrupt("record.vals"))?,
-                    ));
-                    let bytes = self.value(id)?.ok_or(Error::Missing(id))?;
-                    batch.values.push(Bytes(bytes));
-                }
+            let mut json: String = row.get(1)?;
+            if !vals.is_empty() {
+                let mut record: serde_json::Value = serde_json::from_str(&json)?;
+                let values = record
+                    .pointer_mut("/what/Said/values")
+                    .ok_or(Error::Corrupt("record.vals"))?;
+                *values = vals
+                    .chunks(32)
+                    .map(|id| {
+                        let id = ValueId(Digest(
+                            id.try_into().map_err(|_| Error::Corrupt("record.vals"))?,
+                        ));
+                        let bytes = self.value(id)?.ok_or(Error::Missing(id))?;
+                        Ok(serde_json::to_value(Bytes(bytes))?)
+                    })
+                    .collect::<Result<_, Error>>()?;
+                json = record.to_string();
             }
-            records.push(record);
+            records.push(serde_json::from_str(&json)?);
         }
         Ok(records)
     }
@@ -183,7 +191,7 @@ impl Storage<Harness> for Store {
                         ..*record
                     })?
                 }
-                What::Included(_) => serde_json::to_string(record)?,
+                What::Included(_) | What::Unread(_) => serde_json::to_string(record)?,
             };
             insert.execute(params![
                 record.at.replica.to_string(),
@@ -211,8 +219,8 @@ fn mint() -> Result<ReplicaId, Error> {
 pub enum Error {
     /// The database failed: the file, the disk, a lock held too long.
     Sqlite(rusqlite::Error),
-    /// A stored record is not JSON the substrate can read: written by a
-    /// build whose facts this one does not know.
+    /// A stored record is not a record: its envelope, which every build
+    /// reads, does not parse.
     Json(serde_json::Error),
     /// The OS gave no entropy to mint the replica's id.
     Entropy(std::io::Error),
