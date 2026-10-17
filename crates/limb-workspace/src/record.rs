@@ -17,17 +17,11 @@ use serde::{Deserialize, Serialize};
 /// nobody knows what it did.
 pub struct Calls {
     dir: PathBuf,
-    /// The process groups of commands running now, so an instance that
-    /// starts after one died can end what it left behind.
-    groups: PathBuf,
-}
-
-/// A command's process group, and when its leader started, which tells it
-/// apart from a later process given the same pid.
-#[derive(Serialize, Deserialize)]
-pub struct Group {
-    pub group: i32,
-    pub start: u64,
+    /// A file per call whose command may be running, made before the
+    /// command starts and removed once nothing it started is left: so an
+    /// instance that starts after one was killed finds every command it left
+    /// behind by the call's mark ([`crate::shell::mark`]).
+    running: PathBuf,
 }
 
 /// What the record says of one call.
@@ -40,9 +34,9 @@ pub enum Recorded {
 
 impl Calls {
     pub fn open(dir: PathBuf) -> io::Result<Calls> {
-        let groups = dir.join("groups");
-        fs::create_dir_all(&groups)?;
-        Ok(Calls { dir, groups })
+        let running = dir.join("running");
+        fs::create_dir_all(&running)?;
+        Ok(Calls { dir, running })
     }
 
     pub fn get(&self, call: CallId) -> io::Result<Option<Recorded>> {
@@ -64,27 +58,27 @@ impl Calls {
         self.dir.join(format!("{call}.json"))
     }
 
-    pub fn running(&self, call: CallId, group: &Group) -> io::Result<()> {
-        let bytes = serde_json::to_vec(group).map_err(io::Error::other)?;
-        replace(&self.groups.join(format!("{call}.json")), &bytes)
+    /// The call's command is about to start.
+    pub fn running(&self, call: CallId) -> io::Result<()> {
+        replace(&self.running.join(call.to_string()), &[])
     }
 
+    /// Nothing the call's command started is left.
     pub fn ran(&self, call: CallId) {
-        let _ = fs::remove_file(self.groups.join(format!("{call}.json")));
+        let _ = fs::remove_file(self.running.join(call.to_string()));
     }
 
-    /// The groups recorded as running, forgetting them: called when an
-    /// instance starts, so every one belongs to an instance that has gone.
-    pub fn orphans(&self) -> io::Result<Vec<Group>> {
-        let mut groups = Vec::new();
-        for entry in fs::read_dir(&self.groups)? {
-            let path = entry?.path();
-            if let Ok(group) = serde_json::from_slice(&fs::read(&path)?) {
-                groups.push(group);
+    /// The calls whose commands may still be running: called when an
+    /// instance starts, so each belongs to an instance that has gone.
+    pub fn orphans(&self) -> io::Result<Vec<CallId>> {
+        let mut calls = Vec::new();
+        for entry in fs::read_dir(&self.running)? {
+            let entry = entry?;
+            if let Some(call) = entry.file_name().to_str().and_then(|n| n.parse().ok()) {
+                calls.push(call);
             }
-            fs::remove_file(path)?;
         }
-        Ok(groups)
+        Ok(calls)
     }
 }
 

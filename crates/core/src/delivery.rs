@@ -43,6 +43,26 @@ pub struct Delivery {
     pub id: DeliveryId,
     pub to: TaskId,
     pub content: Content,
+    /// When the task reads it.
+    #[serde(default)]
+    pub read: Read,
+}
+
+/// When a delivery reaches its task's context.
+///
+/// Max stages a message in his face, then sends it one of two ways. Either
+/// way it is the task's from the moment it is made (it wakes a waiting
+/// task, keeps a turn from completing, and survives a new root); they
+/// differ only in which request renders it, which is the brain's to honour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Read {
+    /// With the task's next request, after the tool round in flight if
+    /// there is one: the model hears it mid-turn.
+    #[default]
+    Next,
+    /// Once the model ends its turn: it does not interrupt the work, and
+    /// the turn it ended is answered.
+    TurnEnd,
 }
 
 /// What was delivered.
@@ -79,4 +99,10 @@ pub enum Prompt {
     /// it was opened on is waiting only on it, and carries on once Max marks
     /// it done. Said once per aside ([`crate::state::Todo::Unblock`]).
     Unblocked,
+    /// The task is being cancelled, and everything it started has stopped:
+    /// leave what it was doing safe and understandable, then end the turn
+    /// with a report of where things stand, before the deadline. The one
+    /// turn a stopping task gets ([`crate::cancel`]); said once, by the
+    /// brain ([`crate::state::Todo::Tidy`]).
+    Stopping,
 }

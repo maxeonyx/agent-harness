@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::delivery::Read;
 use crate::fact::Rejected;
 use crate::id::{DeliveryId, EventId, TaskId, ValueId};
 use crate::state::Mark;
@@ -32,8 +33,12 @@ pub enum DraftEvent {
     /// [`harness_substrate::Live`] if anything shows them.
     Text(ValueId),
     /// Deliver exactly `text`: the words on his screen, whatever another
-    /// device typed meanwhile.
-    Send { text: ValueId },
+    /// device typed meanwhile, for the session to read when `read` says.
+    Send {
+        text: ValueId,
+        #[serde(default)]
+        read: Read,
+    },
     /// He threw it away. Text typed into it afterwards, on another device
     /// that had not seen the discard, brings it back.
     Discarded,

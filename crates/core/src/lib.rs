@@ -20,7 +20,7 @@
 //! | Identity | Type | Its facts | What is true now |
 //! |---|---|---|---|
 //! | A place: the brain, a limb's instance, a face | [`id::PlaceId`] | its own records ([`schema::Record`]); the brain includes the others' | the brain's [`state::State`], a persistent value any reader can hold; a follower's view of it |
-//! | A brain process | [`fact::Launched`] | one record | [`state::State::launch`] |
+//! | A brain process | [`fact::Launched`] | [`fact::Fact::Launched`], [`fact::Fact::Shutdown`] | [`state::State::launch`], [`state::State::shutdown`] |
 //! | A value | [`id::ValueId`] | none: immutable [`value::Bytes`], arriving in the [`fact::Batch`] that first names them | itself |
 //! | Max's words | a value he said | the delivery, mandate or answer that carried them | [`state::State::said`], [`state::State::heard`] |
 //! | A context | [`context::Entry`], named by [`context::EntryId`] | none: carried inside the fact that first sends or receives it | [`state::State::context`] |
@@ -64,9 +64,13 @@
 //!   own code, and the entry id is the cache key.
 //! - **Structured concurrency.** Spawn is a call. A parent waiting on
 //!   children is acting on one outstanding call; the scope closes when the
-//!   call settles, which it can only do once every member is done; a stop
-//!   cascades through [`state::Todo::Stop`]; background work is a call the
-//!   task watches and cannot finish while it runs. Members are created in
+//!   call settles, which it can only do once every member is done;
+//!   background work is a call the task watches and cannot finish while it
+//!   runs. Stopping is one protocol at every level, from a task down to a
+//!   command's processes and the brain itself ([`cancel`]): a stop carries a
+//!   deadline that shrinks on the way down, everything owned confirms its
+//!   exit before its owner's tidy-up turn, and the deadline is a hard kill
+//!   that needs no cooperation. Members are created in
 //!   the batch that dispatches their spawn, so membership is atomic with
 //!   the scope. Only Max starts tasks in his scope; an agent starts, through
 //!   its own meta call, only forks of itself, resumes of its finished
@@ -217,6 +221,7 @@
 
 pub mod attention;
 pub mod call;
+pub mod cancel;
 pub mod context;
 pub mod delivery;
 pub mod draft;

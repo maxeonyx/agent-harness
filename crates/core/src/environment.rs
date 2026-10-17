@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::call::Call;
-use crate::id::{CallId, EnvironmentId, LimbId, PlaceId, ValueId};
+use crate::id::{CallId, EnvironmentId, LimbId, PlaceId, Timestamp, ValueId};
 use crate::resource::Observation;
 
 /// A role: what one kind of agent is, everything it can reach, and how it
@@ -352,6 +352,7 @@ pub enum Audience {
 pub enum LimbKey {
     Call(CallId),
     Watch,
+    Shutdown,
 }
 
 /// One row of what a limb holds of the brain: what the brain wants of it,
@@ -368,12 +369,22 @@ pub enum LimbKey {
 pub enum LimbRow {
     /// Run this call: dispatched to this limb and not settled. A limb that
     /// can check `call.expects` refuses it when they have moved, before it
-    /// has any effect. `stopping`: stop it as soon as it safely can; it
-    /// settles as interrupted.
-    Call { call: Call, stopping: bool },
+    /// has any effect. `stopping`: stop it gracefully (`SIGTERM` to a
+    /// command's processes) and kill what is left at this deadline
+    /// ([`crate::cancel`]); it settles as interrupted once nothing it started
+    /// is left. A deadline is only ever brought forward.
+    Call {
+        call: Call,
+        stopping: Option<Timestamp>,
+    },
     /// Watch these resources: what live contexts embody. `known` is every
     /// version the brain holds of each. Report, as a
     /// [`crate::resource::Change`], each resource whose version is none of
     /// these, and from then on each change as it happens.
     Watch { known: Vec<Observation> },
+    /// The brain is going away: stop every running call as a stopping
+    /// [`LimbRow::Call`] is stopped, then exit once nothing the limb started
+    /// is left, all by `by`. Its link closing means the same, with the limb's
+    /// own default.
+    Shutdown { by: Timestamp },
 }

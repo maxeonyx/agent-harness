@@ -1,0 +1,9 @@
+[package]
+name = "harness-runtime"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+description = "The process half of cancellation on Linux: a stop that reaches blocked work in band, sockets, process trees and signals, with threads and no async runtime."
+
+[dependencies]
+libc = "0.2"

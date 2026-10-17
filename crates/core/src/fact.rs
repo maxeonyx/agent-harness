@@ -95,6 +95,16 @@ pub enum Author {
 pub enum Fact {
     /// A brain started writing.
     Launched(Launched),
+    /// The brain writing the journal is going away, and must have exited
+    /// `within` milliseconds of this fact ([`crate::cancel`]): it was asked
+    /// by a signal (Ctrl-C, `SIGTERM`). Its tasks are not stopped; it starts
+    /// nothing new, lets requests in flight finish until the deadline and
+    /// cuts them at it, and shuts its limbs down. Stated again with less time
+    /// to make it harder. A launch with no shutdown before the next one
+    /// ended in a crash.
+    Shutdown {
+        within: u64,
+    },
     Task(TaskId, TaskEvent),
     ModelCall(ModelCallId, ModelCallEvent),
     Call(CallId, CallEvent),
@@ -140,7 +150,7 @@ impl Fact {
     pub fn values(&self) -> Vec<ValueId> {
         let mut values = Vec::new();
         match self {
-            Fact::Launched(Launched { build: _, by: _ }) => {}
+            Fact::Launched(Launched { build: _, by: _ }) | Fact::Shutdown { within: _ } => {}
             Fact::Task(_, event) => event.values(&mut values),
             Fact::ModelCall(_, event) => event.values(&mut values),
             Fact::Call(_, event) => event.values(&mut values),
@@ -148,6 +158,7 @@ impl Fact {
                 id: _,
                 to: _,
                 content,
+                read: _,
             }) => match content {
                 Content::Words(words) => values.push(*words),
                 Content::Prompt(_) => {}
@@ -181,7 +192,7 @@ impl Fact {
             Fact::Reach { limb: _, reach: _ } => {}
             Fact::Face(_) | Fact::Seen(_) => {}
             Fact::Draft(_, event) => match event {
-                DraftEvent::Text(text) | DraftEvent::Send { text } => values.push(*text),
+                DraftEvent::Text(text) | DraftEvent::Send { text, .. } => values.push(*text),
                 DraftEvent::Opened { session: _ } | DraftEvent::Discarded => {}
             },
             Fact::Ranking(Ranking { order: _ }) => {}
@@ -252,6 +263,11 @@ pub enum Rejected {
     Busy,
     /// The task is draining, so it may start nothing new.
     Draining,
+    /// A stop of a member whose deadline is later than its owner's: nothing
+    /// a task owns may outlive it.
+    Late,
+    /// A stop's expiry before its deadline.
+    Early,
     /// A request that leaves a tool use of the previous response unanswered.
     Unanswered,
     /// A standing task outside Max's scope, a task joining a scope its
@@ -326,6 +342,8 @@ impl std::fmt::Display for Rejected {
                 "not now: the task is thinking or acting, or the call is not at that point"
             }
             Rejected::Draining => "the task is draining and may start nothing new",
+            Rejected::Late => "a member's stop may not end later than its owner's",
+            Rejected::Early => "the deadline has not come",
             Rejected::Unanswered => "leaves a tool use unanswered",
             Rejected::WrongScope => "not allowed in that scope",
             Rejected::CannotStart => "its creator cannot start that",

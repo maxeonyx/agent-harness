@@ -2,17 +2,15 @@
 //! repeat.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
-use harness_core::delivery::{Content, Delivery, Prompt};
+use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Description, Environment, FromLimb, LimbKind, Reach, ToLimb};
 use harness_core::id::{
     CallId, DeliveryId, FaceId, InstanceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ToolUseId,
@@ -23,8 +21,8 @@ use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop};
 use harness_core::resource::{Change, Observation, ResourceKey};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
-    Context, Created, Drain, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome, Scope,
-    Start as TaskStart, Stopper, Task, TaskEvent,
+    Context, Created, Drain, Draining, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome,
+    Scope, Start as TaskStart, Stopper, Task, TaskEvent,
 };
 use harness_core::value::Bytes;
 use harness_face_web::{Act, Feed, Running};
@@ -32,6 +30,7 @@ use harness_limb_workspace::{Clone, Settings, user};
 
 use crate::process::Process;
 use harness_provider::{Client, Finished, Progress};
+use harness_runtime::{Cancel, signals};
 use harness_store::Store;
 
 use crate::max;
@@ -53,6 +52,8 @@ enum What {
     Exited(LimbId),
     FirstByte(ModelCallId),
     Finished(ModelCallId, Result<Finished, harness_provider::Error>),
+    /// A signal asking the brain's process to stop.
+    Signal(libc::c_int),
     /// A batch of Max's facts from a face, answered with whether the journal
     /// took it.
     Max {
@@ -78,6 +79,17 @@ impl Inbox {
     /// How Max's facts from the faces reach the brain.
     pub fn max(&self) -> Max {
         Max(self.events.clone())
+    }
+
+    /// Have `SIGINT`, `SIGTERM` and `SIGHUP` reach the brain as events: the
+    /// first shuts it down gracefully, the next at once.
+    pub fn signals(&self) -> Result<(), String> {
+        let events = self.events.clone();
+        let stops = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+        signals::forward(&stops, move |s| {
+            let _ = events.send(Event(What::Signal(s)));
+        })
+        .map_err(|e| format!("signals: {e}"))
     }
 }
 
@@ -141,8 +153,8 @@ pub struct Brain {
     /// The context of each request without a first byte yet: fan-out gating.
     cold: HashMap<ModelCallId, HashSet<EntryId>>,
     /// Each request in flight: the thread that sends it, joined when it
-    /// reports how it ended, and the flag that abandons it.
-    requests: HashMap<ModelCallId, (Arc<AtomicBool>, JoinHandle<()>)>,
+    /// reports how it ended, and its stop.
+    requests: HashMap<ModelCallId, (Cancel, JoinHandle<()>)>,
     /// The task this launch started, or else the first of Max's it found
     /// unfinished: the one whose result it prints.
     root: Option<TaskId>,
@@ -305,10 +317,13 @@ impl Brain {
         id
     }
 
-    /// Run until killed. The root's result is printed when it is done; the
-    /// face keeps serving.
+    /// Run until a signal has shut the brain down. The root's result is
+    /// printed when it is done; the face keeps serving.
     pub fn run(&mut self) {
         loop {
+            if self.down() {
+                return;
+            }
             if self.roles_read.elapsed() > ROLES_EVERY {
                 let error = self.define().err();
                 if error.is_some() && error != self.roles_error {
@@ -411,14 +426,13 @@ impl Brain {
             }
             Todo::Interrupt(call) => self.interrupt(call),
             Todo::Abandon(request) => {
-                if let Some((abort, _)) = self.requests.get(&request) {
-                    abort.store(true, Ordering::Relaxed);
+                if let Some((cancel, _)) = self.requests.get(&request) {
+                    cancel.now();
                 }
             }
-            Todo::Stop(task) => self.fact(Fact::Task(
-                task,
-                TaskEvent::Drain(Drain::Stop(Stopper::Owner)),
-            )),
+            Todo::Stop(task) => self.stop_member(task),
+            Todo::Tidy(task) => self.prompt(task, Prompt::Stopping),
+            Todo::Expire(task) => self.fact(Fact::Task(task, TaskEvent::Expired)),
             Todo::Settle(call) => self.settle_scope(call),
             Todo::Linger(task) => self.prompt(task, Prompt::Lingering),
             Todo::Unblock(aside) => self.prompt(aside, Prompt::Unblocked),
@@ -431,7 +445,75 @@ impl Brain {
             id: DeliveryId::generate(),
             to,
             content: Content::Prompt(prompt),
+            read: Read::Next,
         }));
+    }
+
+    /// Stop a member of a scope whose owner is stopping, with three quarters
+    /// of the time the owner has left, so the owner has the rest for its
+    /// own tidy-up turn after its members' reports are in.
+    fn stop_member(&mut self, task: TaskId) {
+        let state = self.state();
+        let owner = state.owner(task).and_then(|o| state.task(o));
+        let within = match owner.and_then(Task::drain) {
+            Some(Draining::Stopping(s)) if s.hard => 0,
+            Some(Draining::Stopping(s)) => policy::share(now(), s.deadline),
+            _ => policy::ms(policy::MEMBER_STOP),
+        };
+        let stop = Drain::Stop {
+            by: Stopper::Owner,
+            within,
+        };
+        self.fact(Fact::Task(task, TaskEvent::Drain(stop)));
+    }
+
+    // Shutting down.
+
+    /// A signal to stop the brain's process: the first commits a shutdown
+    /// that lets the requests in flight finish until its deadline, the next
+    /// brings the deadline to now. Tasks are not stopped: the next launch
+    /// carries them on.
+    fn signal(&mut self, signal: libc::c_int) {
+        let again = self.state().shutdown().is_some();
+        let (within, limbs) = if again {
+            (Duration::ZERO, Duration::ZERO)
+        } else {
+            (policy::DRAIN, policy::LIMB_SHUTDOWN)
+        };
+        let name = signals::name(signal);
+        if again {
+            eprintln!("harness-brain: {name} again: stopping now");
+        } else {
+            eprintln!(
+                "harness-brain: {name}: shutting down; requests in flight have {}s to finish (again to stop now)",
+                within.as_secs()
+            );
+        }
+        self.fact(Fact::Shutdown {
+            within: policy::ms(within),
+        });
+        for limb in self.limbs.values() {
+            limb.shutdown(limbs);
+        }
+    }
+
+    /// Whether the brain has shut down: no request, limb or connection is
+    /// left. At its deadline, and the grace after it, what is left is
+    /// killed, and a request that will not end is left to the process's
+    /// exit.
+    fn down(&mut self) -> bool {
+        let Some(deadline) = self.state().shutdown() else {
+            return false;
+        };
+        let killed = now().0 >= deadline.0 + policy::ms(policy::HARD_WAIT) as i64;
+        if killed {
+            for (limb, mut process) in self.limbs.drain() {
+                eprintln!("harness-brain: limb {limb} did not exit in time: killed");
+                process.kill();
+            }
+            self.connecting.clear();
+        }
+        killed || (self.requests.is_empty() && self.limbs.is_empty() && self.connecting.is_empty())
     }
 
     // Limbs.
@@ -485,10 +567,14 @@ impl Brain {
     }
 
     /// A limb's process has stopped talking. One that never said hello
-    /// cannot start; one that did is lost, and started again when needed.
+    /// cannot start, unless the brain told it to shut down first; one that
+    /// did is lost, and started again when needed.
     fn exited(&mut self, limb: LimbId) {
         self.limbs.remove(&limb);
         if self.connecting.remove(&limb) {
+            if self.state().shutdown().is_some() {
+                return;
+            }
             let why = "its process ended before it was ready (its error is above)";
             return self.unreachable(limb, why.into());
         }
@@ -617,7 +703,10 @@ impl Brain {
             return;
         }
         let task = self.state().task(id).expect("a task to send for").clone();
-        if self.handover(&task) {
+        // A stopping task's tidy-up turn is its last: there is no next
+        // context to hand over to.
+        let ending = task.ends();
+        if !ending && self.handover(&task) {
             return;
         }
         let head = task.head().expect("a ready task has a context");
@@ -655,6 +744,10 @@ impl Brain {
                 stop: Stop::ContextWindow,
                 ..
             }) if !matches!(self.state().entry(head), Some(Entry::Root(_))) => {
+                if ending {
+                    let reason = "its context filled during its tidy-up turn".to_string();
+                    return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
+                }
                 return match self.start_of(id) {
                     None => {}
                     Some(Err(why)) => self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
@@ -762,11 +855,11 @@ impl Brain {
             request,
             base.iter().map(|(id, _)| *id).chain(appended).collect(),
         );
-        let abort = Arc::new(AtomicBool::new(false));
+        let cancel = Cancel::new();
         let client = self.client.clone();
         let events = self.events.clone();
         let feed = self.feed.clone();
-        let flag = abort.clone();
+        let stop = cancel.clone();
         let thread = thread::spawn(move || {
             let base: Vec<(EntryId, &Entry)> = base.iter().map(|(id, e)| (*id, e)).collect();
             let finished = client.send(
@@ -774,24 +867,17 @@ impl Brain {
                 &call,
                 &base,
                 |id| bytes.get(&id).cloned(),
-                |progress| {
-                    match progress {
-                        Progress::FirstByte => {
-                            let _ = events.send(Event(What::FirstByte(request)));
-                        }
-                        Progress::Live(live) => feed.push(live),
-                        Progress::Streaming => {}
+                &stop,
+                |progress| match progress {
+                    Progress::FirstByte => {
+                        let _ = events.send(Event(What::FirstByte(request)));
                     }
-                    if flag.load(Ordering::Relaxed) {
-                        ControlFlow::Break(())
-                    } else {
-                        ControlFlow::Continue(())
-                    }
+                    Progress::Live(live) => feed.push(live),
                 },
             );
             let _ = events.send(Event(What::Finished(request, finished)));
         });
-        self.requests.insert(request, (abort, thread));
+        self.requests.insert(request, (cancel, thread));
     }
 
     /// Where the task's old context ended, and the note it handed over
@@ -955,6 +1041,16 @@ Check your workspace for what you had already done before carrying on."
             values: Vec::new(),
             facts: vec![Fact::Call(id, CallEvent::Dispatched)],
         };
+        // Only a stopping task's tidy-up turn makes calls while it ends.
+        if parent.ends() {
+            let (model, failed) = failed(
+                "You are being stopped: nothing new can start, and there is no next context. \
+Finish tidying up and end your turn with your report.",
+            );
+            batch.values.push(model);
+            batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
+            return self.append(batch);
+        }
         let input = self.value(call.input);
         if call.tool == meta::HANDOVER {
             let said = render::blocks(&[render::text(
@@ -1142,7 +1238,7 @@ and you cannot finish until it has.",
                 let said = match t.outcome() {
                     Some(TaskOutcome::Result { entry }) => self.visible(*entry),
                     Some(TaskOutcome::Failed { reason }) => format!("Failed: {reason}"),
-                    Some(TaskOutcome::Cancelled { by }) => format!("Cancelled by {by:?}."),
+                    Some(TaskOutcome::Cancelled { by, report }) => self.cancelled(*by, *report),
                     None => unreachable!("a scope settles when every member is done"),
                 };
                 (t.name.clone(), said)
@@ -1163,8 +1259,21 @@ and you cannot finish until it has.",
         });
     }
 
-    /// Stop a call: ask its limb, settle it at once if it never went, or
-    /// give it up as unknown if its limb cannot be reached to ask.
+    /// What a cancelled member says to the task that reads its result.
+    fn cancelled(&self, by: Stopper, report: Option<EntryId>) -> String {
+        let by = match by {
+            Stopper::Max => "Cancelled by Max",
+            Stopper::Owner => "Cancelled, because you are being stopped",
+        };
+        match report {
+            Some(entry) => format!("{by}. Its report:\n\n{}", self.visible(entry)),
+            None => format!("{by}, before it could write a report."),
+        }
+    }
+
+    /// Stop a call: ask its limb, with time to stop gracefully before the
+    /// tasks reading it must have stopped; settle it at once if it never
+    /// went, or give it up as unknown if its limb cannot be reached to ask.
     fn interrupt(&mut self, id: CallId) {
         let record = self.state().call(id).expect("a call to interrupt");
         let limb = record.limb;
@@ -1178,9 +1287,13 @@ and you cannot finish until it has.",
         if let Some(outcome) = settled {
             return self.fact(Fact::Call(id, CallEvent::Settled(outcome)));
         }
-        self.fact(Fact::Call(id, CallEvent::Stopping));
+        let within = match self.state().stop_by(id) {
+            Some(by) => policy::share(now(), by),
+            None => policy::ms(policy::CALL_GRACE),
+        };
+        self.fact(Fact::Call(id, CallEvent::Stopping { within }));
         if let Some(workspace) = limb.and_then(|l| self.limbs.get(&l)) {
-            workspace.send(&ToLimb::Stop { call: id });
+            workspace.send(&ToLimb::Stop { call: id, within });
         }
     }
 
@@ -1199,6 +1312,7 @@ and you cannot finish until it has.",
         match event {
             What::FirstByte(request) => self.first_byte(request),
             What::Finished(request, finished) => self.finished(request, finished),
+            What::Signal(signal) => self.signal(signal),
             What::Max {
                 face,
                 seen,
@@ -1356,6 +1470,7 @@ and you cannot finish until it has.",
         };
         let said = match outcome {
             TaskOutcome::Result { entry } => self.visible(*entry),
+            TaskOutcome::Cancelled { by, report } => self.cancelled(*by, *report),
             other => format!("{other:?}"),
         };
         println!("\n== the task is done; its result:\n\n{said}\n");

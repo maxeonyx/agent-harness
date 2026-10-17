@@ -19,12 +19,14 @@ Every control is a batch of Max's facts in the journal's own encoding, posted to
 
 ```json
 {"Task": ["<task>", {"Drain": "ToMax"}]}
-{"Task": ["<task>", {"Drain": {"Stop": "Max"}}]}
+{"Task": ["<task>", {"Drain": {"Stop": {"by": "Max", "within": 120000}}}]}
 {"Task": ["<task>", {"Held": true}]}
 {"Ranking": {"order": [{"task": "<task>", "why": "placed by you"}]}}
 {"Focus": {"face": "<face>", "task": "<task>"}}
 {"Delivery": {"id": "<new id>", "to": "<task>", "content": {"Words": "<digest of the words' bytes>"}}}
 ```
+
+A delivery with `"read": "TurnEnd"` waits for the end of the task's turn; without it, the task reads it with its next request.
 
 The brain commits the batch as Max's: the core decides what he may author, and a 409 carries its `Rejected` by name.
 

@@ -31,10 +31,16 @@
 //! [`Token::bearer`] too). It reads Claude Code's token for each request
 //! and never refreshes it.
 //!
+//! **Cancellation.** A request runs on a socket of its own ([`harness_runtime::Socket`])
+//! through a minimal HTTP/1.1 exchange, so a stop cuts it at once wherever it is
+//! blocked: connecting, in the TLS handshake, before the first byte, or
+//! mid-stream ([`Client::send`]).
+//!
 //! **Left to the brain:** breakpoint placement, holding a fan-out until a
 //! first byte, retries, and recording the facts in the journal.
 
 mod client;
+mod http;
 mod login;
 pub mod request;
 mod response;
@@ -42,6 +48,16 @@ mod response;
 pub use client::{Client, Finished, Progress};
 pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};
+
+/// How many tokens a model's context holds: 1M for the current Opus and
+/// Sonnet models without a beta, 200k for Haiku.
+pub fn context_window(model: &str) -> u64 {
+    if model.contains("haiku") {
+        200_000
+    } else {
+        1_000_000
+    }
+}
 
 /// Why a request was not sent.
 #[derive(Debug)]

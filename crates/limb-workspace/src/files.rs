@@ -14,8 +14,10 @@ use regex::Regex;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::record::{Group, replace};
-use crate::shell::{self, Ended, Process, Stop};
+use harness_runtime::{Cancel, Ended as TreeEnded};
+
+use crate::record::replace;
+use crate::shell::{self, Ended};
 use crate::trunc::{Limits, Truncator};
 use crate::{Inner, Report, lock};
 
@@ -71,7 +73,7 @@ impl Inner {
         id: CallId,
         call: &Call,
         input: &[u8],
-        stop: &Stop,
+        cancel: &Cancel,
         report: &mut Report,
     ) -> Outcome {
         let expects = &call.expects;
@@ -82,11 +84,11 @@ impl Inner {
             };
         }
         let result = match call.tool.as_str() {
-            "bash" => parse(input).and_then(|i| self.bash(id, i, stop, report)),
+            "bash" => parse(input).and_then(|i| self.bash(id, i, cancel, report)),
             "read" => parse(input).and_then(|i| self.read(i, report)),
             "write" => parse(input).and_then(|i| self.write(i, expects, report)),
             "edit" => parse(input).and_then(|i| self.edit(i, expects, report)),
-            "grep" => parse(input).and_then(|i| self.grep(i, stop, report)),
+            "grep" => parse(input).and_then(|i| self.grep(i, cancel, report)),
             other => Err(format!("this workspace has no tool `{other}`")),
         };
         result.unwrap_or_else(|message| report.failed(&message))
@@ -96,7 +98,7 @@ impl Inner {
         &self,
         call: CallId,
         input: Bash,
-        stop: &Stop,
+        cancel: &Cancel,
         report: &mut Report,
     ) -> Result<Outcome, String> {
         let timeout =
@@ -115,21 +117,31 @@ impl Inner {
             tail.drain(..whole);
             let _ = out.send(FromLimb::Live(Live::Call { call, chunk }));
         };
-        let process = Process::start(&input.command, &self.root, truncator, progress)
-            .map_err(|e| format!("cannot run the command: {e}"))?;
-        let group = process.group();
-        if let Some(start) = shell::started(group) {
-            // Without this record a crash would leave the tree running.
-            let _ = self.calls.running(call, &Group { group, start });
+        // Without this record, an instance killed now would leave the tree
+        // running with nobody to end it.
+        self.calls
+            .running(call)
+            .map_err(|e| format!("cannot record the command: {e}"))?;
+        let ran = shell::run(
+            call,
+            &input.command,
+            &self.root,
+            timeout,
+            cancel,
+            truncator,
+            progress,
+        )
+        .map_err(|e| format!("cannot run the command: {e}"))?;
+        // What outlived SIGKILL stays recorded, for the next instance.
+        if !matches!(&ran.tree, TreeEnded::Killed { survivors } if !survivors.is_empty()) {
+            self.calls.ran(call);
         }
-        let ran = process.wait(timeout, stop);
-        self.calls.ran(call);
-        let ran = ran.map_err(|e| format!("lost the command: {e}"))?;
+        let shutdown = self.shutting_down.load(std::sync::atomic::Ordering::SeqCst);
         let output = Output {
             model: report.text(&format!(
                 "{}{}",
                 ran.output.text,
-                shell::describe(&ran.ended, timeout)
+                shell::describe(&ran, timeout, shutdown)
             )),
             full: ran.full.map(|full| report.value(full)),
             observes: Vec::new(),
@@ -260,14 +272,14 @@ impl Inner {
         Ok(report.completed(&said, self.observations(&place.name, version)))
     }
 
-    fn grep(&self, input: Grep, stop: &Stop, report: &mut Report) -> Result<Outcome, String> {
+    fn grep(&self, input: Grep, cancel: &Cancel, report: &mut Report) -> Result<Outcome, String> {
         let regex = Regex::new(&input.pattern).map_err(|e| format!("invalid pattern: {e}"))?;
         let place = self.place(input.path.as_deref().unwrap_or("."));
         let mut truncator = Truncator::new(Limits::default(), None);
         let mut found = 0;
         let mut pending = vec![place.path];
         while let Some(path) = pending.pop() {
-            if stop.get() {
+            if cancel.is_requested() {
                 return Ok(Outcome::Interrupted { partial: None });
             }
             let Ok(meta) = fs::symlink_metadata(&path) else {

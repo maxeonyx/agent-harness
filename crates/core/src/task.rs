@@ -133,10 +133,11 @@ pub struct Live {
     pub context: Context,
     pub phase: Phase,
     /// Set when the task must stop doing what it is doing. No request is
-    /// sent while it is set. It is pending only while something is
-    /// outstanding (a request, a round, background work after a stop);
-    /// otherwise it takes effect as it arrives.
-    pub drain: Option<Drain>,
+    /// sent while it is set, but a stopping task's one tidy-up turn. It is
+    /// pending only while something is outstanding (a request, a round,
+    /// background work, members, a tidy-up turn); otherwise it takes effect
+    /// as it arrives.
+    pub drain: Option<Draining>,
     /// Since when Max has owed this task a word: set when a user-facing turn
     /// ends or Max interrupts, cleared by his words or by a change of mode.
     /// It survives the harness's own turns (a handover before the cache
@@ -163,7 +164,8 @@ impl Live {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
     /// The task's move: the brain builds and sends its next request, unless
-    /// it is held or the account is limited (derived, not stored here).
+    /// it is held or the account is limited (derived, not stored here). A
+    /// stopping task is ready for its tidy-up turn.
     Ready,
     /// A request is in flight. The calls of its tool uses are made with its
     /// response and recorded on the request.
@@ -527,21 +529,74 @@ pub struct Step {
     pub outstanding: Vec<CallId>,
 }
 
-/// What a task does once nothing is outstanding, instead of carrying on.
+/// What a task does once nothing is outstanding, instead of carrying on: the
+/// fact that asks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Drain {
-    /// Max interrupted: the move becomes his, whatever the mode. It never
-    /// passes through a spawn call (that would stop the scope), so it is
-    /// refused while the task's round waits on a scope with members still
-    /// running ([`Rejected::Scoped`], and [`State::scoped`] beforehand); to
-    /// talk to it then, Max opens an aside.
+    /// Max interrupted: the move becomes his, whatever the mode. Its round's
+    /// calls are stopped; its background work runs on. It never passes
+    /// through a spawn call (that would stop the scope), so it is refused
+    /// while the task's round waits on a scope with members still running
+    /// ([`Rejected::Scoped`], and [`State::scoped`] beforehand); to talk to
+    /// it then, Max opens an aside.
     ToMax,
-    /// The task is cancelled, and everything it owns with it.
-    Stop(Stopper),
+    /// Cancel the task and everything it owns ([`crate::cancel`]): it must
+    /// have exited `within` milliseconds of this fact. Its request is cut,
+    /// its calls and members are stopped with less time, and it takes one
+    /// tidy-up turn ([`crate::delivery::Prompt::Stopping`]), if there is
+    /// time, before it ends [`Outcome::Cancelled`]. A second stop can only
+    /// bring the deadline forward; `within: 0` is a hard stop, with no turn.
+    Stop { by: Stopper, within: u64 },
     /// The brain cannot carry the task on: the provider rejects its context,
     /// the model refused, a limb it needs cannot be made, retries are
     /// exhausted.
     Fail(String),
+}
+
+/// A drain under way on a live task: what its [`Drain`] facts asked, with
+/// what has happened since.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Draining {
+    ToMax,
+    Stopping(Stopping),
+    Failing(String),
+}
+
+/// A task being cancelled, and how far through the stop protocol it is
+/// ([`crate::cancel`]): first everything it owns stops, then its tidy-up
+/// turn, then it ends; or, from its deadline, nothing more of its own runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stopping {
+    pub by: Stopper,
+    /// When it must have exited: the earliest deadline it has been given.
+    pub deadline: Timestamp,
+    /// It has been asked for its tidy-up turn.
+    pub told: bool,
+    /// Its tidy-up turn has begun: the calls it makes now are its cleanup,
+    /// and run.
+    pub tidying: bool,
+    /// Nothing more of its own runs, and everything it owns is stopped now:
+    /// its deadline came ([`TaskEvent::Expired`], or a stop with no time
+    /// left), or its tidy-up turn cannot be had ([`Drain::Fail`]).
+    pub hard: bool,
+}
+
+impl Stopping {
+    fn new(by: Stopper, at: Timestamp, within: u64) -> Stopping {
+        Stopping {
+            by,
+            deadline: crate::cancel::deadline(at, within),
+            told: false,
+            tidying: false,
+            hard: within == 0,
+        }
+    }
+
+    /// Bring the deadline forward to `within` of `at`, if that is sooner.
+    fn tighten(&mut self, at: Timestamp, within: u64) {
+        self.deadline = self.deadline.min(crate::cancel::deadline(at, within));
+        self.hard |= at >= self.deadline;
+    }
 }
 
 /// Who stopped a task: only Max, or the stopping of its owner. No agent can
@@ -565,8 +620,12 @@ pub enum Outcome {
     Failed {
         reason: String,
     },
+    /// `report` is the last message of its tidy-up turn: where it left
+    /// things. `None` when it had no turn: stopped before it started, or
+    /// at or past its deadline.
     Cancelled {
         by: Stopper,
+        report: Option<EntryId>,
     },
 }
 
@@ -579,6 +638,11 @@ pub enum TaskEvent {
     Renamed(String),
     Moved(Move),
     Drain(Drain),
+    /// The deadline of the task's stop has come: from now nothing more of
+    /// its own runs, and everything it owns is stopped at once. The brain
+    /// states it at or after the deadline; Max's equivalent is a stop with
+    /// no time left.
+    Expired,
     Held(bool),
 }
 
@@ -610,6 +674,7 @@ impl TaskEvent {
             | TaskEvent::ModeSet(_)
             | TaskEvent::Renamed(_)
             | TaskEvent::Drain(_)
+            | TaskEvent::Expired
             | TaskEvent::Held(_) => {}
         }
     }
@@ -752,8 +817,14 @@ impl Task {
     }
 
     /// The drain pending on it, if any.
-    pub fn drain(&self) -> Option<&Drain> {
+    pub fn drain(&self) -> Option<&Draining> {
         self.live().and_then(|l| l.drain.as_ref())
+    }
+
+    /// Whether it is being stopped or failed: nothing new may start under
+    /// it, and it ends once what it owns has.
+    pub fn ends(&self) -> bool {
+        ends(self.drain())
     }
 
     /// Since when Max has owed it a word, if he does.
@@ -806,8 +877,7 @@ impl Task {
             Fact::ModelCall(id, event) => self.model_call(*id, event, at, world),
             Fact::Call(id, event) => self.call(*id, event, at, world),
             Fact::Delivery(delivery) if delivery.to == self.id => {
-                self.deliver(delivery, &record.by, at);
-                Ok(())
+                self.deliver(delivery, &record.by, at)
             }
             Fact::Change(change) => {
                 // Read off the change itself, so the fold of a change never
@@ -917,7 +987,13 @@ impl Task {
             TaskEvent::Drain(drain) => match &mut self.life {
                 Life::Starting => match drain {
                     Drain::ToMax => return Err(Rejected::Starting),
-                    Drain::Stop(by) => self.finish(Outcome::Cancelled { by: *by }, at),
+                    Drain::Stop { by, .. } => {
+                        let outcome = Outcome::Cancelled {
+                            by: *by,
+                            report: None,
+                        };
+                        self.finish(outcome, at);
+                    }
                     Drain::Fail(reason) => self.finish(
                         Outcome::Failed {
                             reason: reason.clone(),
@@ -926,16 +1002,47 @@ impl Task {
                     ),
                 },
                 Life::Live(live) => {
-                    // An ending outranks an interrupt; the first ending stands.
-                    if !ends(live.drain.as_ref()) {
-                        live.drain = Some(drain.clone());
-                    }
+                    live.drain = Some(match (live.drain.take(), drain) {
+                        // A stop under way can only be made harder.
+                        (Some(Draining::Stopping(mut s)), Drain::Stop { within, .. }) => {
+                            s.tighten(at, *within);
+                            Draining::Stopping(s)
+                        }
+                        // Its tidy-up turn cannot be had.
+                        (Some(Draining::Stopping(mut s)), Drain::Fail(_)) => {
+                            s.hard = true;
+                            Draining::Stopping(s)
+                        }
+                        // An ending outranks an interrupt; the first ending
+                        // stands.
+                        (Some(ending @ (Draining::Stopping(_) | Draining::Failing(_))), _) => {
+                            ending
+                        }
+                        (_, Drain::ToMax) => Draining::ToMax,
+                        (_, Drain::Stop { by, within }) => {
+                            Draining::Stopping(Stopping::new(*by, at, *within))
+                        }
+                        (_, Drain::Fail(reason)) => Draining::Failing(reason.clone()),
+                    });
                     if !matches!(live.phase, Phase::Thinking(_) | Phase::Acting(_)) {
                         self.drained(at);
                     }
                 }
                 Life::Done { .. } => return Err(Rejected::Finished),
             },
+            TaskEvent::Expired => {
+                let live = self.live_mut()?;
+                let Some(Draining::Stopping(stopping)) = &mut live.drain else {
+                    return Err(Rejected::NotForTask);
+                };
+                if at < stopping.deadline {
+                    return Err(Rejected::Early);
+                }
+                stopping.hard = true;
+                if !matches!(live.phase, Phase::Thinking(_) | Phase::Acting(_)) {
+                    self.drained(at);
+                }
+            }
             TaskEvent::Held(held) => self.held = *held,
         }
         Ok(())
@@ -1002,8 +1109,11 @@ impl Task {
                 let Life::Live(live) = life else {
                     return Err(Rejected::Starting);
                 };
-                if live.drain.is_some() {
-                    return Err(Rejected::Draining);
+                match &mut live.drain {
+                    None => {}
+                    // Its tidy-up turn, once it has been asked for it.
+                    Some(Draining::Stopping(s)) if s.told && !s.hard => s.tidying = true,
+                    Some(_) => return Err(Rejected::Draining),
                 }
                 if live.phase != Phase::Ready {
                     return Err(Rejected::Busy);
@@ -1105,7 +1215,7 @@ impl Task {
                 Ok(())
             }
             CallEvent::Settled(_) => self.settled(id, at),
-            CallEvent::Dispatched | CallEvent::Stopping => Err(Rejected::NotForTask),
+            CallEvent::Dispatched | CallEvent::Stopping { .. } => Err(Rejected::NotForTask),
         }
     }
 
@@ -1147,7 +1257,13 @@ impl Task {
         Ok(())
     }
 
-    fn deliver(&mut self, delivery: &Delivery, by: &Author, at: Timestamp) {
+    fn deliver(&mut self, delivery: &Delivery, by: &Author, at: Timestamp) -> Result<(), Rejected> {
+        if delivery.content == Content::Prompt(Prompt::Stopping) {
+            match &mut self.live_mut()?.drain {
+                Some(Draining::Stopping(s)) if !s.told && !s.hard => s.told = true,
+                _ => return Err(Rejected::NotForTask),
+            }
+        }
         self.pending.push(Input::Delivery(delivery.id));
         // Marking a task done hands it its last turn: it finishes when that
         // turn ends.
@@ -1166,6 +1282,7 @@ impl Task {
         if self.drain().is_none() {
             self.woken(at);
         }
+        Ok(())
     }
 
     /// Something that wakes arrived: if the task is waiting, it is its move
@@ -1182,8 +1299,17 @@ impl Task {
 
     /// The model ended its turn at `entry`: complete, wait, or carry on.
     fn turn_ended(&mut self, entry: EntryId, at: Timestamp, world: &State) {
-        if self.drain().is_some() {
-            return self.drained(at);
+        match self.drain() {
+            // The tidy-up turn is over: its last message is the report.
+            Some(Draining::Stopping(s)) if s.tidying && !s.hard && self.background.is_empty() => {
+                let outcome = Outcome::Cancelled {
+                    by: s.by,
+                    report: Some(entry),
+                };
+                return self.finish(outcome, at);
+            }
+            Some(_) => return self.drained(at),
+            None => {}
         }
         if self.wakes() {
             // Max's words, or a prompt, arrived during the turn.
@@ -1220,22 +1346,30 @@ impl Task {
     }
 
     /// Nothing in the round is outstanding: carry on, or do what the drain
-    /// says.
+    /// says. A stopping task waits for its background work to stop, then is
+    /// ready for its tidy-up turn, or ends if its deadline has come.
     fn drained(&mut self, at: Timestamp) {
         let Life::Live(live) = &mut self.life else {
             return;
         };
         match live.drain.clone() {
             None => self.enter(Phase::Ready, at),
-            Some(Drain::ToMax) => {
+            Some(Draining::ToMax) => {
                 live.drain = None;
                 self.await_max(at);
             }
-            Some(Drain::Stop(_) | Drain::Fail(_)) if !self.background.is_empty() => {
+            Some(Draining::Stopping(_) | Draining::Failing(_)) if !self.background.is_empty() => {
                 self.enter(Phase::Listening, at);
             }
-            Some(Drain::Stop(by)) => self.finish(Outcome::Cancelled { by }, at),
-            Some(Drain::Fail(reason)) => self.finish(Outcome::Failed { reason }, at),
+            Some(Draining::Stopping(s)) if s.hard => {
+                let outcome = Outcome::Cancelled {
+                    by: s.by,
+                    report: None,
+                };
+                self.finish(outcome, at);
+            }
+            Some(Draining::Stopping(_)) => self.enter(Phase::Ready, at),
+            Some(Draining::Failing(reason)) => self.finish(Outcome::Failed { reason }, at),
         }
     }
 
@@ -1269,8 +1403,8 @@ fn waiting(phase: &Phase) -> bool {
 }
 
 /// Whether a drain ends the task, rather than handing the move to Max.
-pub(crate) fn ends(drain: Option<&Drain>) -> bool {
-    matches!(drain, Some(Drain::Stop(_) | Drain::Fail(_)))
+pub(crate) fn ends(drain: Option<&Draining>) -> bool {
+    matches!(drain, Some(Draining::Stopping(_) | Draining::Failing(_)))
 }
 
 /// Update what a context embodies from what a request newly included,

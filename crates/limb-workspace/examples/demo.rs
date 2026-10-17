@@ -146,7 +146,7 @@ fn main() {
     let pids = read_pids(&pids);
     println!("  running: {}", alive(&pids));
     println!("  → Stop");
-    brain.ws.handle(ToLimb::Stop { call });
+    brain.ws.handle(ToLimb::Stop { call, within: 2000 });
     brain.settle(&mut a, call);
     println!("  afterwards: {}", after(&pids));
 
@@ -170,12 +170,15 @@ fn main() {
         ("again: the command the crash cut off", crashed),
         (
             "for a call this limb never received",
-            ToLimb::Stop { call: CallId(901) },
+            ToLimb::Stop {
+                call: CallId(901),
+                within: 2000,
+            },
         ),
     ] {
         let call = match &message {
             ToLimb::Run { id, .. } => *id,
-            ToLimb::Stop { call } => *call,
+            ToLimb::Stop { call, .. } => *call,
             _ => unreachable!(),
         };
         println!("\n  → {} call {} {why}", verb(&message), call.0);

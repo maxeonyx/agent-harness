@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use harness_core::delivery::Read;
 use harness_core::draft::{DraftEvent, Fate};
 use harness_core::environment::Environment;
 use harness_core::fact::{Batch, Fact, Launched, Refusal};
@@ -92,7 +93,7 @@ fn rows(state: &State) -> BTreeMap<Key, Row> {
             Life::Starting => "starting".to_string(),
             Life::Live(_) => "live".to_string(),
             Life::Done {
-                outcome: Outcome::Cancelled { by },
+                outcome: Outcome::Cancelled { by, .. },
                 ..
             } => format!("done: stopped by {by:?}"),
             Life::Done { .. } => "done".to_string(),
@@ -392,7 +393,13 @@ fn main() {
     let clock = hub.tick();
     let pc_send = pc.act(clock, |_| Batch {
         values: vec![words(&words_of[&pc_text]).1],
-        facts: vec![Fact::Draft(draft, DraftEvent::Send { text: pc_text })],
+        facts: vec![Fact::Draft(
+            draft,
+            DraftEvent::Send {
+                text: pc_text,
+                read: Read::Next,
+            },
+        )],
     });
     let clock = hub.tick();
     phone.act(clock, |_| Batch {
@@ -402,7 +409,13 @@ fn main() {
     let clock = hub.tick();
     let phone_send = phone.act(clock, |_| Batch {
         values: vec![phone_bytes],
-        facts: vec![Fact::Draft(draft, DraftEvent::Send { text: phone_text })],
+        facts: vec![Fact::Draft(
+            draft,
+            DraftEvent::Send {
+                text: phone_text,
+                read: Read::Next,
+            },
+        )],
     });
     println!(
         "  before syncing: pc's Send {}, phone's Send {}",
@@ -452,7 +465,10 @@ fn main() {
         values: vec![],
         facts: vec![Fact::Task(
             task,
-            TaskEvent::Drain(Drain::Stop(Stopper::Max)),
+            TaskEvent::Drain(Drain::Stop {
+                by: Stopper::Max,
+                within: 30_000,
+            }),
         )],
     };
     let clock = hub.tick();
@@ -479,7 +495,10 @@ fn main() {
         values: vec![words(&words_of[&phone_text]).1],
         facts: vec![Fact::Draft(
             successor,
-            DraftEvent::Send { text: phone_text },
+            DraftEvent::Send {
+                text: phone_text,
+                read: Read::Next,
+            },
         )],
     });
     hub.sync(&mut phone);
