@@ -79,7 +79,7 @@ Max opened himself is his, named by its id in `tabs()`; work in it only when you
   - `.goto(url)`: navigate and wait for the page to load.\n\
   - `.eval(fn, ...args)`: run `fn` in the page (a function or an expression string) and return its JSON result.\n\
   - `.click(selector)`: a real mouse click at the element's centre, scrolled into view.\n\
-  - `.fill(selector, text)`: replace a field's value as if typed; a `<select>` is set by value or label.\n\
+  - `.fill(selector, text)`: replace a field's value as if typed; a `<select>` is set by value or label, and a date (`2026-10-02`) or the like by value.\n\
   - `.press(key)`: a key such as `Enter`, `Tab`, `Escape`, `ArrowDown`, `Backspace`, or one character.\n\
   - `.waitFor(selectorOrFn, ms = 10000)`: until the selector matches or the function returns truthy.\n\
   - `.url()`, `.title()`, `.text(selector?)`: the URL, the title, an element's (or the page's) text.\n\
@@ -112,7 +112,8 @@ function tab(name) {
 "#;
 
 /// The page-side half of `fill`: focus the field and select what it holds,
-/// or set a `<select>` outright. Returns `"select"` when it set it.
+/// or set a `<select>`, a date and the like outright. Returns `"select"`
+/// when it set it.
 pub fn fill_script(selector: &str, text: &str) -> String {
     format!(
         r#"(() => {{
@@ -125,6 +126,15 @@ pub fn fill_script(selector: &str, text: &str) -> String {
     el.value = o.value;
     el.dispatchEvent(new Event('input', {{bubbles: true}}));
     el.dispatchEvent(new Event('change', {{bubbles: true}}));
+    return 'select';
+  }}
+  // Typing does not reach a date, a colour or a range: their value is set,
+  // through the prototype's setter so a framework's own tracking sees it.
+  if (el.tagName === 'INPUT' && /^(date|time|datetime-local|month|week|color|range)$/.test(el.type)) {{
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, {text});
+    el.dispatchEvent(new Event('input', {{bubbles: true}}));
+    el.dispatchEvent(new Event('change', {{bubbles: true}}));
+    if (el.value !== {text}) throw new Error({selector} + ' would not take ' + {text} + ': a ' + el.type + ' wants its own format');
     return 'select';
   }}
   el.focus();

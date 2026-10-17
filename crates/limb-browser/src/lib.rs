@@ -781,8 +781,11 @@ impl Inner {
                 continue;
             }
             let owner = h.owner.unwrap_or(Owner::Task(h.task));
+            // A task may still use a tab it opened and passed on: its own
+            // calls after the `pass` in one response run after it.
             let whose = match (who, owner) {
                 (Who::Task(t), Owner::Task(o)) if t == o => "yours",
+                (Who::Task(t), _) if t == h.task => "yours, passed on",
                 (_, Owner::Max) => "Max's",
                 (Who::Max, Owner::Task(_)) => "an agent's",
                 (Who::Task(_), Owner::Task(_)) => continue,
@@ -798,7 +801,10 @@ impl Inner {
                 ));
             }
         }
-        tabs.sort_by(|a, b| (a.2 != "yours", &a.0).cmp(&(b.2 != "yours", &b.0)));
+        tabs.sort_by(|a, b| {
+            let others = |t: &(String, String, &str)| !t.2.starts_with("yours");
+            (others(a), &a.0).cmp(&(others(b), &b.0))
+        });
         tabs
     }
 
