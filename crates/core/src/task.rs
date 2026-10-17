@@ -539,7 +539,12 @@ pub enum Drain {
     /// while the task's round waits on a scope with members still running
     /// ([`Rejected::Scoped`], and [`State::scoped`] beforehand); to talk to
     /// it then, Max opens an aside.
-    ToMax,
+    ///
+    /// It names the turn he interrupts by one of its requests, the one he
+    /// was watching: an interrupt arriving once that turn has ended is
+    /// refused ([`Rejected::Finished`]), so a late one never stops the
+    /// next turn.
+    ToMax { turn: ModelCallId },
     /// Cancel the task and everything it owns ([`crate::cancel`]): it must
     /// have exited `within` milliseconds of this fact. Its request is cut,
     /// its calls and members are stopped with less time, and it takes one
@@ -986,7 +991,7 @@ impl Task {
             }
             TaskEvent::Drain(drain) => match &mut self.life {
                 Life::Starting => match drain {
-                    Drain::ToMax => return Err(Rejected::Starting),
+                    Drain::ToMax { .. } => return Err(Rejected::Starting),
                     Drain::Stop { by, .. } => {
                         let outcome = Outcome::Cancelled {
                             by: *by,
@@ -1018,7 +1023,7 @@ impl Task {
                         (Some(ending @ (Draining::Stopping(_) | Draining::Failing(_))), _) => {
                             ending
                         }
-                        (_, Drain::ToMax) => Draining::ToMax,
+                        (_, Drain::ToMax { .. }) => Draining::ToMax,
                         (_, Drain::Stop { by, within }) => {
                             Draining::Stopping(Stopping::new(*by, at, *within))
                         }

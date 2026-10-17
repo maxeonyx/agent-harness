@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::call::Call;
 use crate::id::{CallId, EnvironmentId, LimbId, PlaceId, Timestamp, ValueId};
 use crate::resource::Observation;
+use crate::value::Bytes;
 
 /// A role: what one kind of agent is, everything it can reach, and how it
 /// thinks.
@@ -351,6 +352,8 @@ pub enum Audience {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum LimbKey {
     Call(CallId),
+    /// The bytes of a value a call row names.
+    Value(ValueId),
     Watch,
     Shutdown,
 }
@@ -364,7 +367,8 @@ pub enum LimbKey {
 /// run message, so nothing is sent again after a reconnection: the limb
 /// gets its whole view on connecting and runs each call it holds a row for
 /// and has no record of, at most once per id. A call's input is a value,
-/// fetched by its id.
+/// beside it as a [`LimbRow::Value`] row: the state names values, the
+/// brain's store holds their bytes, so the brain joins the two.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LimbRow {
     /// Run this call: dispatched to this limb and not settled. A limb that
@@ -387,4 +391,6 @@ pub enum LimbRow {
     /// is left, all by `by`. Its link closing means the same, with the limb's
     /// own default.
     Shutdown { by: Timestamp },
+    /// A value's bytes.
+    Value(Bytes),
 }

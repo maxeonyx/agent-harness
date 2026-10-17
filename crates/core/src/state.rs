@@ -10,7 +10,7 @@ use crate::context::{Entry, EntryId};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
-use crate::draft::{Draft, DraftEvent, Fate, Sent};
+use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::environment::{
     Audience, Description, Environment, Limb, LimbKey, LimbKind, LimbRow, Reach,
 };
@@ -20,7 +20,7 @@ use crate::id::{
     Timestamp, ValueId,
 };
 use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
-use crate::resource::{Change, ResourceKey, Version};
+use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::schema::Harness;
 use crate::task::{
     Created, Drain, Draining, Life, Mode, Move, Origin, Phase, Scope, Start, Stopper, Task,
@@ -490,6 +490,35 @@ impl State {
         Ok(())
     }
 
+    /// Fold a record the brain refused, as refused: a draft edit that raced
+    /// another face's becomes a draft of its own, named by its event, with
+    /// its words, beside the one it raced.
+    pub(crate) fn refused(&mut self, folding: Folding<'_, Harness>, why: &Refusal) {
+        let Folding { at, said, .. } = folding;
+        let Some(Fact::Draft(from, DraftEvent::Text(text))) = said.facts.get(why.fact as usize)
+        else {
+            return;
+        };
+        let (Rejected::Concurrent, Some(raced)) = (&why.why, self.drafts.get(from)) else {
+            return;
+        };
+        let id = DeliveryId(at.event(why.fact));
+        let draft = Draft {
+            id,
+            session: raced.session,
+            text: Some(*text),
+            typed: None,
+            sent: None,
+            held: None,
+            discarded: false,
+            from: Some(*from),
+        };
+        self.drafts.insert(id, draft);
+        // The refused record is kept for good, and its words with it.
+        self.kept_values
+            .extend(said.values.iter().map(Bytes::id).filter(|v| v == text));
+    }
+
     /// Who speaks from `from` to the brain at `here`: the brain itself, the
     /// limb the brain last connected as that place, or Max at a face.
     fn author(&self, here: PlaceId, from: PlaceId) -> Option<Author> {
@@ -528,6 +557,7 @@ impl State {
                     id,
                     session: *session,
                     text: None,
+                    typed: None,
                     sent: None,
                     held: None,
                     discarded: false,
@@ -537,7 +567,18 @@ impl State {
             }
             DraftEvent::Text(text) => {
                 let draft = self.drafts.get_mut(&id).ok_or(Rejected::Unknown)?;
+                let face = record.event.at.place;
+                if let Some(typed) = draft.typed
+                    && typed.by != face
+                    && record.seen.is_none_or(|seen| seen.n < typed.at.seq.n)
+                {
+                    return Err(Rejected::Concurrent);
+                }
                 draft.text = Some(*text);
+                draft.typed = Some(Typed {
+                    by: face,
+                    at: Mark::of(record),
+                });
                 draft.discarded = false;
             }
             DraftEvent::Send { text, read } => {
@@ -550,6 +591,7 @@ impl State {
                             id: successor,
                             session: draft.session,
                             text: Some(*text),
+                            typed: None,
                             sent: None,
                             held: None,
                             discarded: false,
@@ -570,6 +612,10 @@ impl State {
                             ..record.clone()
                         };
                         draft.text = Some(*text);
+                        draft.typed = Some(Typed {
+                            by: record.event.at.place,
+                            at: Mark::of(record),
+                        });
                         match self.deliver(&delivery, &as_delivery) {
                             Ok(()) => {
                                 draft.held = None;
@@ -792,7 +838,7 @@ impl State {
                     }
                     TaskEvent::Drain(drain) => matches!(
                         drain,
-                        Drain::ToMax
+                        Drain::ToMax { .. }
                             | Drain::Stop {
                                 by: Stopper::Max,
                                 ..
@@ -1074,8 +1120,28 @@ impl State {
                     return Err(Rejected::Detached);
                 }
             }
-            TaskEvent::Drain(Drain::ToMax) if self.scoped(task) => {
-                return Err(Rejected::Scoped);
+            TaskEvent::Drain(Drain::ToMax { turn }) => {
+                let named = self.model_calls.get(turn).ok_or(Rejected::Unknown)?;
+                if named.call.task != id {
+                    return Err(Rejected::NotForTask);
+                }
+                let ended = self.model_calls.values().any(|m| {
+                    m.call.task == id
+                        && m.sent.seq >= named.sent.seq
+                        && matches!(
+                            m.ended.as_ref().map(|e| &e.ending),
+                            Some(Ending::Responded {
+                                stop: Stop::EndTurn,
+                                ..
+                            })
+                        )
+                });
+                if ended {
+                    return Err(Rejected::Finished);
+                }
+                if self.scoped(task) {
+                    return Err(Rejected::Scoped);
+                }
             }
             TaskEvent::Drain(Drain::Stop {
                 by: Stopper::Owner,
@@ -1658,10 +1724,15 @@ impl State {
     }
 
     /// What `limb` holds of the brain: each call dispatched to it and not
-    /// settled, and whether it is being stopped. Its watch list is the
-    /// brain's to add here ([`LimbRow::Watch`]).
+    /// settled, with its stop's deadline; the resources of its that live
+    /// contexts embody, with every version the brain holds of each (its
+    /// current one where one is recorded, otherwise each a live context
+    /// embodies); and the brain's shutdown. The bytes of the values the
+    /// call rows name ([`LimbRow::Value`]) are the store's, so the brain
+    /// adds them.
     pub fn limb_rows(&self, limb: LimbId) -> BTreeMap<LimbKey, LimbRow> {
-        self.open
+        let mut rows: BTreeMap<LimbKey, LimbRow> = self
+            .open
             .calls
             .iter()
             .filter_map(|id| Some((*id, self.calls.get(id)?)))
@@ -1673,7 +1744,27 @@ impl State {
                 };
                 (LimbKey::Call(id), row)
             })
-            .collect()
+            .collect();
+        let mut known: Vec<Observation> = Vec::new();
+        for context in self.live().filter_map(Task::context) {
+            for (resource, embodied) in context.knows.iter().filter(|(r, _)| r.limb == limb) {
+                let version = self.resource(resource).map_or(embodied.has, |c| c.version);
+                let observation = Observation {
+                    resource: resource.clone(),
+                    version,
+                };
+                if !known.contains(&observation) {
+                    known.push(observation);
+                }
+            }
+        }
+        if !known.is_empty() {
+            rows.insert(LimbKey::Watch, LimbRow::Watch { known });
+        }
+        if let Some(by) = self.shutdown {
+            rows.insert(LimbKey::Shutdown, LimbRow::Shutdown { by });
+        }
+        rows
     }
 
     /// The place a limb is connected as under this brain, and since when.

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::delivery::Read;
 use crate::fact::Rejected;
-use crate::id::{DeliveryId, EventId, TaskId, ValueId};
+use crate::id::{DeliveryId, EventId, PlaceId, TaskId, ValueId};
 use crate::state::Mark;
 
 /// What Max does to a draft, from any of his faces.
@@ -30,7 +30,12 @@ pub enum DraftEvent {
     Opened { session: TaskId },
     /// The whole text when he paused typing. Only the newest is kept
     /// ([`crate::schema::Key::Draft`]); keystrokes in between are
-    /// [`harness_substrate::Live`] if anything shows them.
+    /// [`harness_substrate::Live`] if anything shows them. Its record's
+    /// [`crate::fact::Fact::Seen`] says which text it replaces: an edit
+    /// from a face that had not seen another face's newest text is refused
+    /// ([`crate::fact::Rejected::Concurrent`]) and becomes a draft of its
+    /// own beside this one, named by its event, so neither face's words
+    /// are lost.
     Text(ValueId),
     /// Deliver exactly `text`: the words on his screen, whatever another
     /// device typed meanwhile, for the session to read when `read` says.
@@ -51,6 +56,9 @@ pub struct Draft {
     pub session: TaskId,
     /// The newest text, in the brain's order.
     pub text: Option<ValueId>,
+    /// Which face typed the newest text, and when the brain took it in:
+    /// what decides whether another face's edit had seen it.
+    pub typed: Option<Typed>,
     /// The Send that delivered it.
     pub sent: Option<Sent>,
     /// Why the newest Send did not deliver: the session cannot take Max's
@@ -58,8 +66,15 @@ pub struct Draft {
     pub held: Option<Rejected>,
     pub discarded: bool,
     /// The draft whose Send opened this one, when a concurrent Send of
-    /// other words did.
+    /// other words did, or whose text another face's edit raced.
     pub from: Option<DeliveryId>,
+}
+
+/// Who typed a draft's newest text, and when the brain took it in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Typed {
+    pub by: PlaceId,
+    pub at: Mark,
 }
 
 /// The Send that delivered a draft.

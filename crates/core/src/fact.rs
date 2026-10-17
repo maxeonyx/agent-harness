@@ -263,6 +263,9 @@ pub enum Rejected {
     /// A stop of a member whose deadline is later than its owner's: nothing
     /// a task owns may outlive it.
     Late,
+    /// A draft edit from a face that had not seen another face's newest
+    /// text of it: it becomes a draft of its own.
+    Concurrent,
     /// A stop's expiry before its deadline.
     Early,
     /// A request that leaves a tool use of the previous response unanswered.
@@ -340,6 +343,9 @@ impl std::fmt::Display for Rejected {
             }
             Rejected::Draining => "the task is draining and may start nothing new",
             Rejected::Late => "a member's stop may not end later than its owner's",
+            Rejected::Concurrent => {
+                "another device changed this draft meanwhile: these words are a new draft beside it"
+            }
             Rejected::Early => "the deadline has not come",
             Rejected::Unanswered => "leaves a tool use unanswered",
             Rejected::WrongScope => "not allowed in that scope",
