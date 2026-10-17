@@ -202,6 +202,7 @@ name = "harness-brain"
 version = "0.0.0"
 dependencies = [
  "harness-core",
+ "harness-face-tab",
  "harness-face-web",
  "harness-limb-workspace",
  "harness-provider",
@@ -209,8 +210,10 @@ dependencies = [
  "harness-store",
  "harness-substrate",
  "libc",
+ "rustls",
  "serde",
  "serde_json",
+ "tungstenite",
 ]
 
 [[package]]

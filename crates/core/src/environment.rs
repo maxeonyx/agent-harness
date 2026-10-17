@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::call::Call;
-use crate::id::{CallId, EnvironmentId, LimbId, PlaceId, Timestamp, ValueId};
+use crate::id::{CallId, EnvironmentId, LimbId, ParseError, PlaceId, Timestamp, ValueId};
 use crate::resource::Observation;
 use crate::value::Bytes;
 
@@ -349,7 +349,9 @@ pub enum Audience {
 }
 
 /// Which row of a limb's view of the brain.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+///
+/// Written as a string (`call:{id}`), since a JSON object's keys are.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LimbKey {
     Call(CallId),
     /// The bytes of a value a call row names.
@@ -398,6 +400,50 @@ pub enum LimbRow {
     /// resources: what a limb holding role definitions restates only when
     /// its files differ.
     Environment(Environment),
+}
+
+impl std::fmt::Display for LimbKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LimbKey::Call(id) => write!(f, "call:{id}"),
+            LimbKey::Value(id) => write!(f, "value:{id}"),
+            LimbKey::Watch => f.write_str("watch"),
+            LimbKey::Environment(id) => write!(f, "environment:{id}"),
+            LimbKey::Shutdown => f.write_str("shutdown"),
+        }
+    }
+}
+
+impl std::str::FromStr for LimbKey {
+    type Err = ParseError;
+
+    fn from_str(text: &str) -> Result<LimbKey, ParseError> {
+        let invalid = ParseError {
+            expected: "a row: call:{id}, value:{id}, watch, environment:{id} or shutdown",
+        };
+        Ok(match text.split_once(':') {
+            None if text == "watch" => LimbKey::Watch,
+            None if text == "shutdown" => LimbKey::Shutdown,
+            Some(("call", id)) => LimbKey::Call(id.parse()?),
+            Some(("value", id)) => LimbKey::Value(id.parse()?),
+            Some(("environment", id)) => LimbKey::Environment(id.parse()?),
+            _ => return Err(invalid),
+        })
+    }
+}
+
+impl Serialize for LimbKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for LimbKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 /// What the brain ships a limb over its link.

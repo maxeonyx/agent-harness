@@ -16,3 +16,8 @@ harness-substrate = { path = "../substrate" }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+
+[dev-dependencies]
+harness-face-tab = { path = "../face-tab" }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
