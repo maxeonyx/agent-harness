@@ -59,7 +59,7 @@ use crate::resource::Observation;
 ///
 /// **Different here.** Delivery is at-least-once and execution at-most-once
 /// per id, owned by the executor; the record of what was asked and what came
-/// back is the journal's.
+/// back is the brain's.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Call {
     pub caller: Caller,

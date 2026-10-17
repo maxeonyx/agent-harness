@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::id::ValueId;
 
 /// The bytes of one [value](ValueId), as they travel beside the facts that
-/// name them ([`crate::journal::Batch`], [`crate::environment::ToLimb::Run`]).
+/// name them ([`crate::fact::Batch`]), or fetched by their id once and
+/// cached for good, since they never change.
 ///
 /// **Concept.** A value is bytes named by their digest. Nearly every value
 /// is text (a tool's output, a JSON input, a role prompt, Max's words), so in
@@ -23,8 +24,8 @@ use crate::id::ValueId;
 /// No value is larger than [`Bytes::LIMIT`]. That is the contract between
 /// whoever produces bytes and everyone who holds them: a limb cuts a
 /// command's output to fit before it sends it (head and tail, and how much it
-/// left out between them) and keeps none of it, and the journal refuses a
-/// larger value ([`crate::journal::Rejected::TooLarge`]), so a face can
+/// left out between them) and keeps none of it, and the brain refuses a
+/// larger value ([`crate::fact::Rejected::TooLarge`]), so a face can
 /// always fetch any value whole and a command that prints gigabytes costs
 /// the limb a bounded buffer, not its memory.
 ///
@@ -50,7 +51,7 @@ use crate::id::ValueId;
 pub struct Bytes(pub Vec<u8>);
 
 impl Bytes {
-    /// The largest value anyone sends or the journal stores: 32 MiB.
+    /// The largest value anyone sends or the brain stores: 32 MiB.
     pub const LIMIT: usize = 32 << 20;
 
     /// The value these bytes are.

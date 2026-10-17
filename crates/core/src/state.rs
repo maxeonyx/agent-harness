@@ -1,4 +1,4 @@
-//! The fold of the journal: every state anyone reads.
+//! The brain's fold: every state anyone reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,25 +8,32 @@ use crate::attention::{Queued, Ranking};
 use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome};
 use crate::context::{Entry, EntryId};
 use crate::delivery::{Content, Delivery, Prompt};
-use crate::environment::{Audience, Description, Environment, Limb, LimbKind, Reach};
+use harness_substrate::{Durability, Folding, Schema};
+
+use crate::draft::{Draft, DraftEvent, Fate, Sent};
+use crate::environment::{
+    Audience, Description, Environment, Limb, LimbKey, LimbKind, LimbRow, Reach,
+};
+use crate::fact::{Author, Fact, Launched, Refusal, Rejected, Stated};
 use crate::id::{
-    CallId, DeliveryId, EnvironmentId, FaceId, InstanceId, LimbId, ModelCallId, Seq, TaskId,
+    CallId, DeliveryId, EnvironmentId, EventId, LimbId, ModelCallId, PlaceId, Seq, TaskId, Time,
     Timestamp, ValueId,
 };
-use crate::journal::{Author, Fact, Launched, Record, Rejected};
 use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
 use crate::resource::{Change, ResourceKey, Version};
+use crate::schema::Harness;
 use crate::task::{
     Created, Drain, Life, Mode, Move, Origin, Phase, Scope, Start, Stopper, Task, TaskEvent, ends,
 };
+use crate::value::Bytes;
 
-/// Everything the journal says is true now.
+/// Everything the brain's records say is true now.
 ///
-/// **Concept.** The fold of every record, and the only door into the model.
-/// [`State::apply`] folds one record; [`State::with`] folds a batch into a
-/// copy, or refuses it and leaves this state as it was;
-/// [`crate::journal::Journal`] is the only caller that keeps it in step with
-/// a store. Every view a face, the scheduler or the brain's loop needs is a
+/// **Concept.** The fold of every record the brain holds, and the only door
+/// into the model. [`Harness`]'s fold derives who stated a record, checks
+/// the values it names and folds each of its facts ([`crate::schema::Harness`]); the
+/// brain's [`harness_substrate::Decider`] is the only caller, and folds into
+/// a copy it keeps only once the record is stored. Every view a face, the scheduler or the brain's loop needs is a
 /// method here, computed from the folded identities rather than kept beside
 /// them, so none can disagree with another: who reads a call is read off the
 /// tasks ([`Task::awaited`]), what a task is waiting on is read off its life,
@@ -34,10 +41,9 @@ use crate::task::{
 ///
 /// It is persistent: every map shares structure with the state it was
 /// folded from, so a clone costs nothing and never changes. That one choice
-/// makes a batch atomic for every author without rebuilding anything, lets
-/// a face in the brain's process read the brain's state as of any commit
-/// instead of folding the journal a second time, and lets a face ask
-/// whether Max's act would be accepted ([`State::with`]) before he makes it.
+/// makes a record atomic for every author without rebuilding anything, and
+/// lets the brain derive each follower's view from its state as of any of
+/// its times.
 ///
 /// It holds the context tree itself ([`State::entry`], [`State::context`]),
 /// learned from the facts that carry entries, so a request's head, a
@@ -69,7 +75,7 @@ use crate::task::{
 ///
 /// **Vision.** "Strictly events + derived views"; the tree Max watches
 /// ([`State::waiting_on`] is the throbber); his queue ([`State::queue`]);
-/// restart (a fresh brain folds the journal and carries on from
+/// restart (a fresh brain folds its records and carries on from
 /// [`State::todo`] with nothing else to recover); structured concurrency
 /// (stops cascade, scopes close).
 ///
@@ -79,10 +85,11 @@ use crate::task::{
 /// OpenCode's session status lives in memory only, so a restart forgets
 /// which subagents were running. Here there is no live state but the fold.
 ///
-/// **Bx.** Shared: a state that is a value, named by the journal position it
+/// **Bx.** Shared: a state that is a value, named by the brain time it
 /// was folded to, which anyone can hold without it changing under them.
 /// Not shared: it is not content-addressed or stored; it is always
-/// re-derivable from the journal, which is the only thing kept.
+/// re-derivable from the records the brain holds, which are the only thing
+/// kept.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
     last: Option<Seq>,
@@ -103,7 +110,14 @@ pub struct State {
     /// context (a fork, resume or aside) starts with its source's set, shared.
     heard: OrdMap<TaskId, OrdSet<ValueId>>,
     ranking: Ranking,
-    focus: OrdMap<FaceId, TaskId>,
+    focus: OrdMap<PlaceId, TaskId>,
+    /// The places the brain accepted as Max's faces.
+    faces: OrdSet<PlaceId>,
+    drafts: OrdMap<DeliveryId, Draft>,
+    /// Every value a kept record carried, so a later fact may name it
+    /// without carrying it again. A value only a collected record carried
+    /// ([`Durability::Latest`]) is not here: a fact naming it carries it.
+    kept_values: OrdSet<ValueId>,
     limited_until: Option<Timestamp>,
     open: Open,
 }
@@ -144,7 +158,7 @@ pub struct Mark {
 }
 
 impl Mark {
-    fn of(record: &Record) -> Mark {
+    pub(crate) fn of(record: &Stated) -> Mark {
         Mark {
             seq: record.seq,
             at: record.at,
@@ -185,10 +199,11 @@ impl CallRecord {
 pub struct Dispatch {
     /// The first send: since when it has been running.
     pub first: Mark,
-    /// The latest send, which decides whether it must be sent again.
+    /// The latest dispatch.
     pub last: Mark,
-    /// The instance it was last sent to; `None` for a limb the brain runs.
-    pub instance: Option<InstanceId>,
+    /// The place (the limb's running instance) it was last sent to; `None`
+    /// for a limb the brain runs.
+    pub instance: Option<PlaceId>,
 }
 
 /// How a call ended, and when.
@@ -322,7 +337,7 @@ pub enum Waiting {
 /// One thing the brain should do now. The whole of its loop: act on each,
 /// commit what happened, repeat. Each item stays in the list until the fact
 /// that does it is committed, so a restart needs nothing else, and an item
-/// an earlier one made moot is refused by the journal rather than checked
+/// an earlier one made moot is refused by the brain rather than checked
 /// again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Todo {
@@ -342,16 +357,16 @@ pub enum Todo {
     /// A request an earlier brain sent and never saw end: end it as
     /// [`Ending::Lost`], after which its task sends again.
     Lost(ModelCallId),
-    /// Send the call to its limb (`ToLimb::Run`), or for a limb the brain
-    /// runs, run it and commit its effects with the dispatch. A plugin's
-    /// call is due again whenever its limb has connected since it was last
-    /// sent.
+    /// Dispatch the call: a plugin's becomes a row of its limb's view
+    /// ([`State::limb_rows`]), which the limb holds across reconnections,
+    /// so it is dispatched once; for a limb the brain runs, run it and
+    /// commit its effects with the dispatch.
     Dispatch(CallId),
     /// The call's tool is not in its task's binding: settle it as failed,
     /// saying so.
     Unroutable(CallId),
-    /// Stop the call. If it was dispatched and its limb is connected, ask
-    /// it (`ToLimb::Stop`) and commit [`CallEvent::Stopping`]; if its limb
+    /// Stop the call. If it was dispatched and its limb is connected, commit
+    /// [`CallEvent::Stopping`], which its row in the limb's view shows; if its limb
     /// is unreached, settle it as unknown, so a dead limb never holds a
     /// task (its real outcome is still taken if it comes back); if it was
     /// never dispatched, settle it as interrupted.
@@ -388,30 +403,179 @@ impl State {
         self.open.tasks.iter().filter_map(|id| self.tasks.get(id))
     }
 
-    /// Fold `records` into a copy of this state, or refuse the first that
-    /// does not fold, with its index, and leave this state as it was. What
-    /// [`crate::journal::Journal::commit`] does, and what a face asks before
-    /// Max acts.
-    pub fn with(&self, records: &[Record]) -> Result<State, (usize, Rejected)> {
-        let mut next = self.clone();
-        for (index, record) in records.iter().enumerate() {
-            next.apply(record).map_err(|why| (index, why))?;
+    /// Fold one record of the brain's, or refuse it: who stated it, from
+    /// the place it came from; the values its facts name, each carried with
+    /// it or by a kept record; then each fact, in order. On a refusal this
+    /// state may be part way through the record, and the decider drops it.
+    pub(crate) fn fold(&mut self, folding: Folding<'_, Harness>) -> Result<(), Refusal> {
+        let Folding {
+            here,
+            clock,
+            at,
+            said,
+        } = folding;
+        let refuse = |fact: usize, why| Refusal {
+            fact: fact as u32,
+            why,
+        };
+        let mut seen = None;
+        for (i, fact) in said.facts.iter().enumerate() {
+            if let Fact::Seen(time) = fact {
+                // A view of this brain, as of a time it has written.
+                if seen.is_some() || time.place != here.place || time.n >= here.n {
+                    return Err(refuse(i, Rejected::Author));
+                }
+                seen = Some(*time);
+            }
         }
-        Ok(next)
+        let by = self
+            .author(here.place, at.place, seen)
+            .ok_or(refuse(0, Rejected::Author))?;
+        let given: BTreeMap<ValueId, usize> =
+            said.values.iter().map(|v| (v.id(), v.len())).collect();
+        for (i, fact) in said.facts.iter().enumerate() {
+            for value in fact.values() {
+                match given.get(&value) {
+                    Some(len) if *len > Bytes::LIMIT => {
+                        return Err(refuse(i, Rejected::TooLarge(value)));
+                    }
+                    Some(_) => {}
+                    None if self.kept_values.contains(&value) => {}
+                    None => return Err(refuse(i, Rejected::Missing(value))),
+                }
+            }
+        }
+        for (i, fact) in said.facts.iter().enumerate() {
+            let stated = Stated {
+                seq: Seq {
+                    n: here.n,
+                    i: i as u32,
+                },
+                at: clock,
+                by: by.clone(),
+                fact,
+                event: at.event(i as u32),
+            };
+            self.apply(&stated).map_err(|why| refuse(i, why))?;
+        }
+        if Harness::durability(at, said) == Durability::Kept {
+            self.kept_values.extend(given.into_keys());
+        }
+        Ok(())
     }
 
-    /// Fold one record, or refuse it. On a refusal this state may be part
-    /// way through the record: fold into a copy ([`State::with`]) to keep it.
-    pub fn apply(&mut self, record: &Record) -> Result<(), Rejected> {
-        let expected = self.next();
-        if record.seq != expected {
-            return Err(Rejected::OutOfOrder { expected });
+    /// Who speaks from `from` to the brain at `here`: the brain itself, the
+    /// limb the brain last connected as that place, or Max at a face.
+    fn author(&self, here: PlaceId, from: PlaceId, seen: Option<Time>) -> Option<Author> {
+        if from == here {
+            return Some(Author::Brain);
         }
-        if !self.authorised(&record.by, &record.fact) {
+        let limb = self.reach.iter().find_map(|(limb, reached)| {
+            matches!(reached.reach, Reach::Connected { instance } if instance == from)
+                .then_some(*limb)
+        });
+        match limb {
+            Some(limb) => Some(Author::Limb(limb)),
+            None => self
+                .faces
+                .contains(&from)
+                .then_some(Author::Max { face: from, seen }),
+        }
+    }
+
+    /// Max's draft `id`. Never refused for a race: a Send folds as the
+    /// delivery it makes, and when the session cannot take his words the
+    /// draft keeps them and says why.
+    fn fold_draft(
+        &mut self,
+        id: DeliveryId,
+        event: &DraftEvent,
+        record: &Stated,
+    ) -> Result<(), Rejected> {
+        match event {
+            DraftEvent::Opened { session } => {
+                minted(id.0, record)?;
+                if self.drafts.contains_key(&id) || self.deliveries.contains_key(&id) {
+                    return Err(Rejected::Exists);
+                }
+                if !self.tasks.contains_key(session) {
+                    return Err(Rejected::Unknown);
+                }
+                let draft = Draft {
+                    id,
+                    session: *session,
+                    text: None,
+                    sent: None,
+                    held: None,
+                    discarded: false,
+                    from: None,
+                };
+                self.drafts.insert(id, draft);
+            }
+            DraftEvent::Text(text) => {
+                let draft = self.drafts.get_mut(&id).ok_or(Rejected::Unknown)?;
+                draft.text = Some(*text);
+                draft.discarded = false;
+            }
+            DraftEvent::Send { text } => {
+                let mut draft = self.drafts.get(&id).ok_or(Rejected::Unknown)?.clone();
+                match &draft.sent {
+                    Some(sent) if sent.text == *text => {}
+                    Some(_) => {
+                        let successor = DeliveryId(record.event);
+                        let new = Draft {
+                            id: successor,
+                            session: draft.session,
+                            text: Some(*text),
+                            sent: None,
+                            held: None,
+                            discarded: false,
+                            from: Some(id),
+                        };
+                        self.drafts.insert(successor, new);
+                    }
+                    None => {
+                        let delivery = Delivery {
+                            id,
+                            to: draft.session,
+                            content: Content::Words(*text),
+                        };
+                        let fact = Fact::Delivery(delivery.clone());
+                        let as_delivery = Stated {
+                            fact: &fact,
+                            ..record.clone()
+                        };
+                        draft.text = Some(*text);
+                        match self.deliver(&delivery, &as_delivery) {
+                            Ok(()) => {
+                                draft.held = None;
+                                draft.sent = Some(Sent {
+                                    by: record.event,
+                                    text: *text,
+                                    at: Mark::of(record),
+                                });
+                            }
+                            Err(why) => draft.held = Some(why),
+                        }
+                        self.drafts.insert(id, draft);
+                    }
+                }
+            }
+            DraftEvent::Discarded => {
+                self.drafts.get_mut(&id).ok_or(Rejected::Unknown)?.discarded = true;
+            }
+        }
+        Ok(())
+    }
+
+    /// Fold one fact, or refuse it. On a refusal this state may be part
+    /// way through it.
+    pub(crate) fn apply(&mut self, record: &Stated) -> Result<(), Rejected> {
+        if !self.authorised(&record.by, record.fact) {
             return Err(Rejected::Author);
         }
         let mark = Mark::of(record);
-        match &record.fact {
+        match record.fact {
             Fact::Launched(launched) => {
                 if let Some(call) = launched.by
                     && !self.calls.contains_key(&call)
@@ -422,14 +586,28 @@ impl State {
                 // A connection belongs to the brain that made it.
                 self.reach.clear();
             }
-            Fact::Task(id, TaskEvent::Created(created)) => self.create(*id, created, record)?,
+            Fact::Task(id, TaskEvent::Created(created)) => {
+                minted(id.0, record)?;
+                self.create(*id, created, record)?
+            }
             Fact::Task(id, event) => self.task_event(*id, event, record)?,
             Fact::ModelCall(id, event) => self.fold_model_call(*id, event, record)?,
             Fact::Call(id, event) => self.fold_call(*id, event, record)?,
-            Fact::Delivery(delivery) => self.deliver(delivery, record)?,
+            Fact::Delivery(delivery) => {
+                minted(delivery.id.0, record)?;
+                self.deliver(delivery, record)?
+            }
             Fact::Change(change) => self.change(change, record)?,
-            Fact::Environment(environment) => self.define(environment)?,
+            Fact::Environment(environment) => {
+                if !self.environments.contains_key(&environment.id) {
+                    minted(environment.id.0, record)?;
+                }
+                self.define(environment)?
+            }
             Fact::Limb(limb) => {
+                if !self.limbs.contains_key(&limb.id) {
+                    minted(limb.id.0, record)?;
+                }
                 if self
                     .limbs
                     .values()
@@ -474,14 +652,24 @@ impl State {
                 );
             }
             Fact::Ranking(ranking) => self.ranking = ranking.clone(),
-            Fact::Focus(focus) => match focus.task {
-                Some(task) => {
-                    self.focus.insert(focus.face, task);
+            Fact::Face(place) => {
+                self.faces.insert(*place);
+            }
+            Fact::Seen(_) => {}
+            Fact::Draft(id, event) => self.fold_draft(*id, event, record)?,
+            Fact::Focus(focus) => {
+                let Author::Max { face, .. } = record.by else {
+                    return Err(Rejected::Author);
+                };
+                match focus.task {
+                    Some(task) => {
+                        self.focus.insert(face, task);
+                    }
+                    None => {
+                        self.focus.remove(&face);
+                    }
                 }
-                None => {
-                    self.focus.remove(&focus.face);
-                }
-            },
+            }
         }
         self.last = Some(record.seq);
         Ok(())
@@ -513,6 +701,8 @@ impl State {
                 })
                 | Fact::Task(_, TaskEvent::Drain(Drain::Stop(Stopper::Max)))
                 | Fact::Focus(_)
+                | Fact::Seen(_)
+                | Fact::Draft(..)
                 | Fact::Described { .. } => false,
                 Fact::Task(_, TaskEvent::Created(created)) => created.by.is_some(),
                 Fact::Call(_, CallEvent::Made(call)) => !matches!(call.caller, Caller::Max { .. }),
@@ -555,45 +745,41 @@ impl State {
                 Fact::Described { limb: of, .. } => of == limb,
                 _ => false,
             },
-            Author::Max { face, seen } => {
-                *seen < self.next()
-                    && match fact {
-                        Fact::Task(_, event) => match event {
-                            TaskEvent::Created(created) => {
-                                created.by.is_none()
-                                    && (created.scope == Scope::Max
-                                        || matches!(created.origin, Origin::Aside { .. }))
-                            }
-                            TaskEvent::Drain(drain) => {
-                                matches!(drain, Drain::ToMax | Drain::Stop(Stopper::Max))
-                            }
-                            TaskEvent::Moved(movement) => matches!(movement, Move::Rewind { .. }),
-                            TaskEvent::ModeSet(_) | TaskEvent::Renamed(_) | TaskEvent::Held(_) => {
-                                true
-                            }
-                        },
-                        Fact::Delivery(delivery) => matches!(
-                            delivery.content,
-                            Content::Words(_) | Content::Prompt(Prompt::Done)
-                        ),
-                        Fact::Call(_, CallEvent::Made(call)) => {
-                            matches!(call.caller, Caller::Max { .. })
-                        }
-                        Fact::Call(id, CallEvent::Settled(_)) => self
-                            .calls
-                            .get(id)
-                            .and_then(|c| c.limb)
-                            .is_some_and(|l| self.is_max(l)),
-                        Fact::Change(change) => self.is_max(change.resource.limb),
-                        Fact::Focus(focus) => focus.face == *face,
-                        Fact::Environment(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
-                        Fact::Launched(_)
-                        | Fact::ModelCall(..)
-                        | Fact::Call(..)
-                        | Fact::Described { .. }
-                        | Fact::Reach { .. } => false,
+            Author::Max { .. } => match fact {
+                Fact::Task(_, event) => match event {
+                    TaskEvent::Created(created) => {
+                        created.by.is_none()
+                            && (created.scope == Scope::Max
+                                || matches!(created.origin, Origin::Aside { .. }))
                     }
-            }
+                    TaskEvent::Drain(drain) => {
+                        matches!(drain, Drain::ToMax | Drain::Stop(Stopper::Max))
+                    }
+                    TaskEvent::Moved(movement) => matches!(movement, Move::Rewind { .. }),
+                    TaskEvent::ModeSet(_) | TaskEvent::Renamed(_) | TaskEvent::Held(_) => true,
+                },
+                Fact::Delivery(delivery) => matches!(
+                    delivery.content,
+                    Content::Words(_) | Content::Prompt(Prompt::Done)
+                ),
+                Fact::Call(_, CallEvent::Made(call)) => {
+                    matches!(call.caller, Caller::Max { .. })
+                }
+                Fact::Call(id, CallEvent::Settled(_)) => self
+                    .calls
+                    .get(id)
+                    .and_then(|c| c.limb)
+                    .is_some_and(|l| self.is_max(l)),
+                Fact::Change(change) => self.is_max(change.resource.limb),
+                Fact::Focus(_) | Fact::Seen(_) | Fact::Draft(..) => true,
+                Fact::Environment(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
+                Fact::Launched(_)
+                | Fact::ModelCall(..)
+                | Fact::Call(..)
+                | Fact::Described { .. }
+                | Fact::Reach { .. }
+                | Fact::Face(_) => false,
+            },
         }
     }
 
@@ -625,7 +811,7 @@ impl State {
         self.heard.entry(to).or_default().insert(words);
     }
 
-    fn create(&mut self, id: TaskId, created: &Created, record: &Record) -> Result<(), Rejected> {
+    fn create(&mut self, id: TaskId, created: &Created, record: &Stated) -> Result<(), Rejected> {
         if self.tasks.contains_key(&id) {
             return Err(Rejected::Exists);
         }
@@ -814,7 +1000,7 @@ impl State {
         &mut self,
         id: TaskId,
         event: &TaskEvent,
-        record: &Record,
+        record: &Stated,
     ) -> Result<(), Rejected> {
         let task = self.tasks.get(&id).ok_or(Rejected::Unknown)?;
         let mut root = None;
@@ -887,11 +1073,12 @@ impl State {
         &mut self,
         id: ModelCallId,
         event: &ModelCallEvent,
-        record: &Record,
+        record: &Stated,
     ) -> Result<(), Rejected> {
         let mark = Mark::of(record);
         match event {
             ModelCallEvent::Sent(call) => {
+                minted(id.0, record)?;
                 if self.model_calls.contains_key(&id) {
                     return Err(Rejected::Exists);
                 }
@@ -985,11 +1172,14 @@ impl State {
         &mut self,
         id: CallId,
         event: &CallEvent,
-        record: &Record,
+        record: &Stated,
     ) -> Result<(), Rejected> {
         let mark = Mark::of(record);
         match event {
-            CallEvent::Made(call) => self.make(id, call, record),
+            CallEvent::Made(call) => {
+                minted(id.0, record)?;
+                self.make(id, call, record)
+            }
             CallEvent::Dispatched => {
                 let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
                 if made.settled.is_some() {
@@ -1040,7 +1230,7 @@ impl State {
         }
     }
 
-    fn make(&mut self, id: CallId, call: &Call, record: &Record) -> Result<(), Rejected> {
+    fn make(&mut self, id: CallId, call: &Call, record: &Stated) -> Result<(), Rejected> {
         if self.calls.contains_key(&id) {
             return Err(Rejected::Exists);
         }
@@ -1136,7 +1326,7 @@ impl State {
         &mut self,
         id: CallId,
         outcome: &CallOutcome,
-        record: &Record,
+        record: &Stated,
     ) -> Result<(), Rejected> {
         let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
         let late = match &made.settled {
@@ -1203,7 +1393,7 @@ impl State {
         Ok(())
     }
 
-    fn deliver(&mut self, delivery: &Delivery, record: &Record) -> Result<(), Rejected> {
+    fn deliver(&mut self, delivery: &Delivery, record: &Stated) -> Result<(), Rejected> {
         if self.deliveries.contains_key(&delivery.id) {
             return Err(Rejected::Exists);
         }
@@ -1236,7 +1426,7 @@ impl State {
         Ok(())
     }
 
-    fn change(&mut self, change: &Change, record: &Record) -> Result<(), Rejected> {
+    fn change(&mut self, change: &Change, record: &Stated) -> Result<(), Rejected> {
         if !self.limbs.contains_key(&change.resource.limb) {
             return Err(Rejected::Unknown);
         }
@@ -1270,17 +1460,12 @@ impl State {
 
     // Reading.
 
-    /// The position the next record must have.
-    pub fn next(&self) -> Seq {
-        Seq(self.last.map_or(1, |s| s.0 + 1))
-    }
-
     /// The last position folded.
     pub fn last(&self) -> Option<Seq> {
         self.last
     }
 
-    /// The brain writing the journal now, and where it began.
+    /// The brain process writing now, and where it began.
     pub fn launch(&self) -> Option<(Mark, &Launched)> {
         self.launch
             .as_ref()
@@ -1293,7 +1478,7 @@ impl State {
 
     /// The context that ends at `head`, root first: exactly what a request
     /// with that head sent, given the values its entries name. Empty for an
-    /// entry the journal has never carried.
+    /// entry the brain has never carried.
     pub fn context(&self, head: EntryId) -> Vec<(EntryId, &Entry)> {
         let mut chain = Vec::new();
         let mut next = Some(head);
@@ -1404,8 +1589,27 @@ impl State {
         self.reach.get(&id)
     }
 
-    /// The instance a limb is connected to under this brain, and since when.
-    pub fn connected(&self, limb: LimbId) -> Option<(InstanceId, Mark)> {
+    /// What `limb` holds of the brain: each call dispatched to it and not
+    /// settled, and whether it is being stopped. Its watch list is the
+    /// brain's to add here ([`LimbRow::Watch`]).
+    pub fn limb_rows(&self, limb: LimbId) -> BTreeMap<LimbKey, LimbRow> {
+        self.open
+            .calls
+            .iter()
+            .filter_map(|id| Some((*id, self.calls.get(id)?)))
+            .filter(|(_, c)| c.limb == Some(limb) && c.dispatched.is_some())
+            .map(|(id, c)| {
+                let row = LimbRow::Call {
+                    call: c.call.clone(),
+                    stopping: c.stopping.is_some(),
+                };
+                (LimbKey::Call(id), row)
+            })
+            .collect()
+    }
+
+    /// The place a limb is connected as under this brain, and since when.
+    pub fn connected(&self, limb: LimbId) -> Option<(PlaceId, Mark)> {
         match self.reach.get(&limb)? {
             Reached {
                 reach: Reach::Connected { instance },
@@ -1426,8 +1630,37 @@ impl State {
     }
 
     /// The task a face shows Max.
-    pub fn focus(&self, face: FaceId) -> Option<TaskId> {
+    pub fn focus(&self, face: PlaceId) -> Option<TaskId> {
         self.focus.get(&face).copied()
+    }
+
+    /// Whether the brain accepted `place` as one of Max's faces.
+    pub fn is_face(&self, place: PlaceId) -> bool {
+        self.faces.contains(&place)
+    }
+
+    pub fn draft(&self, id: DeliveryId) -> Option<&Draft> {
+        self.drafts.get(&id)
+    }
+
+    /// Every draft, sent or not, in id order.
+    pub fn drafts(&self) -> impl Iterator<Item = &Draft> {
+        self.drafts.values()
+    }
+
+    /// What became of the Send at `send` of `draft`'s `text`, once the
+    /// brain has folded it.
+    pub fn fate(&self, draft: DeliveryId, send: EventId, text: ValueId) -> Option<Fate> {
+        let held = self.drafts.get(&draft)?;
+        if self.drafts.contains_key(&DeliveryId(send)) {
+            return Some(Fate::Successor);
+        }
+        match &held.sent {
+            Some(sent) if sent.by == send => Some(Fate::Delivered),
+            Some(sent) if sent.text == text => Some(Fate::Duplicate),
+            None if held.held.is_some() => Some(Fate::Held),
+            _ => None,
+        }
     }
 
     /// Until when the account is limited, if it is at `now`.
@@ -1653,7 +1886,7 @@ impl State {
 
     /// Everything the brain should do now.
     ///
-    /// Restart is not a mode: it is read off journal positions. A request
+    /// Restart is not a mode: it is read off the brain's positions. A request
     /// sent before the current [`Launched`] with no end was lost. A plugin
     /// call is due whenever its limb's current connection (which is always
     /// this brain's) began after the call was last sent, so a restart of
@@ -1738,10 +1971,9 @@ impl State {
             if interrupts(*id, &record.call, readers) {
                 let due = match (&record.dispatched, &limb.kind) {
                     (None, _) => true,
-                    (Some(_), LimbKind::Plugin { .. }) => match connection {
-                        Some(c) => record.stopping.is_none_or(|s| s.seq < c),
-                        None => true,
-                    },
+                    (Some(_), LimbKind::Plugin { .. }) => {
+                        connection.is_none() || record.stopping.is_none()
+                    }
                     (Some(_), _) => false,
                 };
                 if due {
@@ -1752,9 +1984,7 @@ impl State {
             let due = match &limb.kind {
                 LimbKind::Max => false,
                 LimbKind::Meta | LimbKind::Attention => record.dispatched.is_none(),
-                LimbKind::Plugin { .. } => {
-                    connection.is_some_and(|c| record.dispatched.is_none_or(|d| d.last.seq < c))
-                }
+                LimbKind::Plugin { .. } => connection.is_some() && record.dispatched.is_none(),
             };
             if due && self.acting_on(*id, &record.call) {
                 todo.push(Todo::Dispatch(*id));
@@ -1785,4 +2015,14 @@ fn interrupts(id: CallId, call: &Call, readers: &[&Task]) -> bool {
         }
         Some(Drain::Stop(_) | Drain::Fail(_)) => true,
     })
+}
+
+/// Whether `id`, which `record` creates, is `record`'s own event: an id is
+/// made only by the fact that creates its thing.
+fn minted(id: EventId, record: &Stated) -> Result<(), Rejected> {
+    if id == record.event {
+        Ok(())
+    } else {
+        Err(Rejected::Minted)
+    }
 }
