@@ -190,7 +190,7 @@ impl Fact {
             Fact::Face(_) | Fact::Seen(_) => {}
             Fact::Draft(_, event) => match event {
                 DraftEvent::Text(text) | DraftEvent::Send { text, .. } => values.push(*text),
-                DraftEvent::Opened { session: _ } | DraftEvent::Discarded => {}
+                DraftEvent::Opened { session: _, at: _ } | DraftEvent::Discarded => {}
             },
             Fact::Ranking(Ranking { order: _ }) => {}
             Fact::Focus(Focus { task: _ }) => {}
@@ -283,7 +283,8 @@ pub enum Rejected {
     Ambiguous,
     /// A new version of a limb that changes what kind of limb it is.
     Redefined,
-    /// A head, breakpoint or rewind that is not on the task's chain.
+    /// A head or breakpoint that is not on the task's chain, or a move back
+    /// to an entry the task has not been at.
     Detached,
     /// Routed to a task or limb it does not concern.
     NotForTask,

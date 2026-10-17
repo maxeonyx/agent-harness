@@ -361,6 +361,7 @@ impl Brain {
         let facts = vec![Fact::Task(
             id,
             TaskEvent::Created(Box::new(Created {
+                tuning: Default::default(),
                 name: start.name,
                 by: None,
                 scope: Scope::Max,
@@ -867,6 +868,7 @@ impl Brain {
             .expect("the task's environment")
             .params;
         let mut call = ModelCall {
+            model: None,
             task: id,
             base: head,
             appends,
@@ -1351,6 +1353,7 @@ and you cannot finish until it has.",
             let fresh = matches!(origin, Origin::Fresh { .. });
             let text = Bytes::from(member.mandate);
             let created = Created {
+                tuning: Default::default(),
                 name: format!("{}-{}", parent.name, member.name),
                 by: Some(call),
                 scope,

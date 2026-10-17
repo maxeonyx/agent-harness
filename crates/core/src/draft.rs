@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::context::EntryId;
 use crate::delivery::Read;
 use crate::fact::Rejected;
 use crate::id::{DeliveryId, EventId, ReplicaId, TaskId, ValueId};
@@ -26,8 +27,22 @@ use crate::state::Mark;
 /// phone and PC both editing and sending.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DraftEvent {
-    /// A new draft beside `session`.
-    Opened { session: TaskId },
+    /// A new draft beside `session`. With `at`, it is an edit: Max's words
+    /// to replace what followed that entry, staged like any draft, so the
+    /// chat is untouched until he sends it, his other face shows "editing",
+    /// and discarding it is cancelling the edit. Its Send moves the session
+    /// back to `at` ([`crate::task::Move::Back`]) and delivers the words
+    /// there, as one fact: refused together, and then the draft holds the
+    /// words and says why. At the session's start, the words become its
+    /// mandate, since they are its first message. A face opens one from one
+    /// of his messages, holding its words, at the entry the request that
+    /// rendered them extended; a race or a later Send's successor stays at
+    /// the same entry.
+    Opened {
+        session: TaskId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<EntryId>,
+    },
     /// The whole text when he paused typing. Only the newest is kept
     /// ([`crate::schema::Key::Draft`]); keystrokes in between are
     /// [`harness_substrate::Live`] if anything shows them. Its record's
@@ -54,6 +69,8 @@ pub enum DraftEvent {
 pub struct Draft {
     pub id: DeliveryId,
     pub session: TaskId,
+    /// The entry it would replace what followed: an edit.
+    pub at: Option<EntryId>,
     /// The newest text, in the brain's order.
     pub text: Option<ValueId>,
     /// Which face typed the newest text, and when the brain took it in:

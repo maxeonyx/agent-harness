@@ -29,8 +29,9 @@ use crate::state::{Mark, State};
 /// and a [`Life`]: starting, live in a [`Context`], or done. A task is an
 /// identity; its context is a value. The head moves through the context tree
 /// (a fork starts a task on its parent's response, a handover moves a task
-/// to a new root, a resume starts a task on another's last entry, a rewind
-/// moves it back), and none of that copies or edits a context.
+/// to a new root, a resume starts a task on another's last entry, Max moves
+/// it back to an entry it has been at: [`Move::Back`]), and none of that
+/// copies or edits a context.
 ///
 /// Creation and the first root are separate facts. A spawn creates its
 /// members in the batch that dispatches it, so a scope's membership is
@@ -87,7 +88,12 @@ pub struct Task {
     /// that call gave the mandate ([`State::call_owner`]).
     pub by: Option<CallId>,
     pub mode: Mode,
+    /// What it is told its job is, restated after each new root. Its
+    /// creation's, unless Max has since edited the first message of its
+    /// context ([`crate::draft::DraftEvent::Opened`] at its start).
     pub mandate: Mandate,
+    /// The model and effort Max chose for it, over its environment's.
+    pub tuning: crate::environment::Tuning,
     /// What Max last said here about pausing it and everything under it;
     /// `None` if he never has. Whether it is paused now is
     /// [`State::pause`], which also reads its ancestors.
@@ -117,7 +123,7 @@ pub enum Life {
     /// connected or described itself (its clone is being made). The brain
     /// gives it its first root once every one has
     /// ([`crate::state::Todo::Root`]). Max can stop it; it cannot be
-    /// interrupted, forked, resumed or rewound, and makes no calls.
+    /// interrupted, forked, resumed or moved back, and makes no calls.
     Starting,
     Live(Live),
     /// Finished. Its context is kept for a resume and for Max to read; a task
@@ -201,7 +207,7 @@ pub enum Phase {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Context {
     /// Where it began: its root, or the entry it was forked, resumed or
-    /// opened at. A rewind cannot go before it.
+    /// opened at. A move back cannot go before it.
     pub start: EntryId,
     pub head: EntryId,
     /// Which limb runs each of its tools. Made with its root and kept until
@@ -211,7 +217,7 @@ pub struct Context {
     /// The version of each resource it embodies, and what it has been told
     /// since. Persistent, so a fork's copy shares it until either changes.
     pub knows: OrdMap<ResourceKey, Known>,
-    /// What each request since `start` changed in `knows`, so a rewind
+    /// What each request since `start` changed in `knows`, so a move back
     /// restores what the earlier context embodied. Persistent, so folding a
     /// fact into a long-lived task does not copy its history.
     learned: Vector<Learned>,
@@ -662,6 +668,9 @@ pub enum TaskEvent {
     Created(Box<Created>),
     ModeSet(Mode),
     Renamed(String),
+    /// Max sets the model and effort its next requests run at
+    /// ([`crate::environment::Tuning`]), the whole setting at once.
+    Tuned(crate::environment::Tuning),
     Moved(Move),
     Drain(Drain),
     /// The deadline of the task's abandonment has come: from now nothing
@@ -753,6 +762,7 @@ impl TaskEvent {
                     origin: _,
                     mode: _,
                     mandate,
+                    tuning: _,
                 } = &**created;
                 let Mandate {
                     text,
@@ -766,7 +776,8 @@ impl TaskEvent {
             TaskEvent::Moved(Move::Handover { call: _, start } | Move::Root(start)) => {
                 start.values(out);
             }
-            TaskEvent::Moved(Move::Rewind { to: _ })
+            TaskEvent::Moved(Move::Back { to: _ })
+            | TaskEvent::Tuned(_)
             | TaskEvent::ModeSet(_)
             | TaskEvent::Renamed(_)
             | TaskEvent::Drain(_)
@@ -795,6 +806,11 @@ pub struct Created {
     pub origin: Origin,
     pub mode: Mode,
     pub mandate: Mandate,
+    /// The model and effort it runs at, over its environment's: chosen by
+    /// Max in the card that starts a chat. A fork, an aside or a resume
+    /// takes its source's where this says nothing.
+    #[serde(default)]
+    pub tuning: crate::environment::Tuning,
 }
 
 /// The head moved to an entry that does not extend it.
@@ -813,11 +829,59 @@ pub enum Move {
     /// accept, or a task with no handover tool (the scheduler, whose memory
     /// is the queue it observes).
     Root(Box<Start>),
-    /// Back to a response on the task's own chain since its start that
-    /// ended a model turn, so the next message is Max's. The abandoned
-    /// branch stays in the tree, and the context embodies again only what
-    /// it embodied there.
-    Rewind { to: EntryId },
+    /// Max puts the task back at an entry it has been at: its start, or an
+    /// entry one of its own requests sent or received since. Retry, edit,
+    /// going back and choosing between versions of a reply are each this
+    /// one move to a different entry; the path it leaves stays in the tree,
+    /// where a face shows it as another version. What follows is read off
+    /// the entry, so nothing beside it says what kind of move it was:
+    ///
+    /// - a response that ended a turn: Max's move ([`Phase::AwaitingMax`]),
+    ///   whatever the mode. Going back, or picking another version.
+    /// - the head of one of its requests: the model's move. The next
+    ///   request extends it with nothing new unless something is pending,
+    ///   so it is another sample of that response: a retry. On the head of
+    ///   the request that rendered Max's message, the whole turn is retried.
+    /// - a response with tool uses: the model's move, its round's results
+    ///   rendered again from their settlements, not run again.
+    /// - its start: the model's move, from the mandate.
+    ///
+    /// Only the context moves; the world keeps everything that happened.
+    /// The context embodies again exactly what it embodied at the entry, so
+    /// a file the left path read or wrote is a notice at the next request
+    /// like any other change. Whatever a request rendered on the path it
+    /// leaves that the path it lands on has not is pending again (a
+    /// background result, Max's action in the chat, a harness prompt),
+    /// except Max's own words, which he is leaving, and what came of calls
+    /// started on the left path. When the left path changed the world (its
+    /// calls wrote files, its background work still runs, it started
+    /// tasks), the next request says so ([`Note::Moved`]); a retry in a
+    /// chat that touched nothing is the same request as the first. Its
+    /// background work runs on, the task's to keep or stop, as through a
+    /// pause.
+    ///
+    /// While a request or round is outstanding, the move first stops that
+    /// round as an interrupt does, a spawn included: its members are
+    /// abandoned by Max, since nothing will read their results. It lands
+    /// once the round has exited (the task drains towards it), and a cut
+    /// response on the left path is not quoted to the model. Refused while
+    /// the task is starting, abandoning or failing, and once it is done.
+    ///
+    /// **Vision.** Max as a participant who "very, very frequently" changes
+    /// his mind: retry, edit and revert as in other chat apps, with nothing
+    /// lost, since every version stays in the tree and he can move back to
+    /// it; and a retry exposing the model's nondeterminism as another
+    /// record on one input ([`crate::model_call::ModelCall`]).
+    ///
+    /// **Existing harnesses.** claude.ai keeps a reply's versions as
+    /// siblings and an edit as a new branch. Claude Code's rewind truncates
+    /// the conversation to before a message and offers to restore the files
+    /// its own edit tools changed; OpenCode's revert restores a git snapshot
+    /// of the worktree. Here the files stay as they are and the context is
+    /// told; restoring them is a separate act a workspace limb could offer
+    /// Max, so going back to keep the code or to drop it are both one act.
+    #[serde(alias = "Rewind")]
+    Back { to: EntryId },
 }
 
 impl Task {
@@ -832,6 +896,7 @@ impl Task {
     ) -> Result<Task, Rejected> {
         let mut pending = Vec::new();
         let mut max_actions = Vec::new();
+        let mut tuning = created.tuning.clone();
         let (environment, places, life) = match &created.origin {
             Origin::Fresh {
                 environment,
@@ -839,6 +904,7 @@ impl Task {
             } => (*environment, places.clone(), Life::Starting),
             Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from } => {
                 let source = world.task(*from).ok_or(Rejected::Unknown)?;
+                tuning = source.tuning.or(&created.tuning);
                 let resume = matches!(created.origin, Origin::Resume { .. });
                 match (resume, source.is_done()) {
                     (true, false) => return Err(Rejected::NotFinished),
@@ -864,6 +930,7 @@ impl Task {
             by: created.by,
             mode: created.mode,
             mandate: created.mandate.clone(),
+            tuning,
             pause: None,
             created: mark,
             since: mark.at,
@@ -1065,6 +1132,7 @@ impl Task {
                 }
             }
             TaskEvent::Renamed(name) => self.name = name.clone(),
+            TaskEvent::Tuned(tuning) => self.tuning = tuning.clone(),
             TaskEvent::Moved(Move::Handover { call, start }) => {
                 let live = self.live_mut()?;
                 if live.drain.is_some() {
@@ -1086,7 +1154,7 @@ impl Task {
                 }
                 self.root(start, at, world)?;
             }
-            TaskEvent::Moved(Move::Rewind { to }) => {
+            TaskEvent::Moved(Move::Back { to }) => {
                 let live = self.live_mut()?;
                 if !waiting(&live.phase) {
                     return Err(Rejected::Busy);

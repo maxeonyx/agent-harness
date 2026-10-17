@@ -469,6 +469,12 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             }
             TaskEvent::ModeSet(mode) => format!("{} is now {mode:?}", name(*id)),
             TaskEvent::Renamed(new) => format!("{} renamed to {new}", name(*id)),
+            TaskEvent::Tuned(tuning) => format!(
+                "{} tuned to {} at {} effort",
+                name(*id),
+                tuning.model.as_deref().unwrap_or("its role's model"),
+                tuning.effort.map_or("its role's", |e| e.as_str()),
+            ),
             TaskEvent::Moved(Move::Root(start)) => {
                 format!("{} has a new root, on {}", name(*id), start.root.model)
             }
@@ -479,7 +485,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                     start.root.model
                 )
             }
-            TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
+            TaskEvent::Moved(Move::Back { to }) => format!("{} moved back to {to}", name(*id)),
             TaskEvent::Drain(Drain::ToMax { .. }) => format!("{} interrupted", name(*id)),
             TaskEvent::Drain(Drain::Abandon { by, within: 0 }) => {
                 format!("{} abandoned by {by:?}, now", name(*id))
@@ -581,7 +587,16 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Draft(id, event) => {
             use harness_core::draft::DraftEvent as E;
             match event {
-                E::Opened { session } => format!("draft {id} opened for {}", name(*session)),
+                E::Opened { session, at: None } => {
+                    format!("draft {id} opened for {}", name(*session))
+                }
+                E::Opened {
+                    session,
+                    at: Some(at),
+                } => format!(
+                    "draft {id} opened for {}, to edit after {at}",
+                    name(*session)
+                ),
                 E::Text(_) => format!("draft {id} edited"),
                 E::Send { .. } => format!("draft {id} sent"),
                 E::Discarded => format!("draft {id} discarded"),
