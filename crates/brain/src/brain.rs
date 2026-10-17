@@ -180,7 +180,7 @@ impl Brain {
         let (decider, divergences) = schema::Brain::open(store.replica(), store)
             .map_err(|e| format!("the database folds: {e}"))?;
         for d in &divergences {
-            eprintln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
+            errln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
         }
         let state = decider.state();
         let find =
@@ -292,7 +292,7 @@ impl Brain {
     /// Start the roles limb on a thread of its own, linked by a channel.
     fn host_roles(&mut self) {
         let Some(id) = self.roles else {
-            return eprintln!("harness-brain: no roles limb: a new database needs --roles");
+            return errln!("harness-brain: no roles limb: a new database needs --roles");
         };
         let limb = self.state().limb(id).expect("the roles limb").clone();
         let (wire, down) = mpsc::channel();
@@ -537,9 +537,9 @@ impl Brain {
         let within = if again { Duration::ZERO } else { policy::DRAIN };
         let name = signals::name(signal);
         if again {
-            eprintln!("harness-brain: {name} again: stopping now");
+            errln!("harness-brain: {name} again: stopping now");
         } else {
-            eprintln!(
+            errln!(
                 "harness-brain: {name}: shutting down; requests in flight have {}s to finish (again to stop now)",
                 within.as_secs()
             );
@@ -602,7 +602,7 @@ impl Brain {
                 self.limbs.insert(limb, process);
             }
             Err(e) => {
-                eprintln!("limb {limb}: its process cannot start: {e}");
+                errln!("limb {limb}: its process cannot start: {e}");
                 self.unreached(limb, format!("its process cannot start: {e}"));
             }
         }
@@ -633,7 +633,7 @@ impl Brain {
             };
             if !self.links.contains_key(&limb) && self.state().shutdown().is_none() {
                 let why = process.last_words();
-                eprintln!("limb {limb}: its process ended without connecting: {why}");
+                errln!("limb {limb}: its process ended without connecting: {why}");
                 self.unreached(limb, why);
             }
         }
@@ -648,7 +648,7 @@ impl Brain {
             build,
         } = hello;
         if self.state().limb(limb).is_none_or(|l| l.kind.is_brains()) {
-            return eprintln!("a link said it is limb {limb}, which is no plugin limb here");
+            return errln!("a link said it is limb {limb}, which is no plugin limb here");
         }
         self.links.insert(
             limb,
@@ -682,7 +682,7 @@ impl Brain {
             return;
         };
         self.links.remove(&limb);
-        eprintln!("limb {limb}: its link ended");
+        errln!("limb {limb}: its link ended");
         self.fact(Fact::Reach {
             limb,
             reach: Reach::Lost,
@@ -1051,7 +1051,7 @@ Check your workspace for what you had already done before carrying on."
         }
         batch.values.extend(value.map(Bytes));
         if quota.as_ref().is_some_and(|q| !q.on_plan) {
-            eprintln!("a response was billed outside the plan: sending nothing more");
+            errln!("a response was billed outside the plan: sending nothing more");
         }
         batch.facts.push(Fact::ModelCall(
             request,
@@ -1550,7 +1550,7 @@ and you cannot finish until it has.",
         let facts = match &record.what {
             Said::Said(batch) => batch.facts.clone(),
             Said::Unread(unread) => {
-                println!(
+                outln!(
                     "{:>7.1}s {from}  held unread: {}",
                     self.elapsed(),
                     unread.why
@@ -1563,12 +1563,12 @@ and you cannot finish until it has.",
             Ok(None) => {}
             Ok(Some(_)) => match self.decider.standing(from.replica).refused.get(&from.n) {
                 Some(why) => {
-                    println!("{:>7.1}s {from}  refused: {why}", self.elapsed());
+                    outln!("{:>7.1}s {from}  refused: {why}", self.elapsed());
                     self.publish();
                 }
                 None => self.changed(from, &facts),
             },
-            Err(e) => eprintln!("harness-brain: cannot store the record at {from}: {e}"),
+            Err(e) => errln!("harness-brain: cannot store the record at {from}: {e}"),
         }
     }
 
@@ -1639,7 +1639,7 @@ and you cannot finish until it has.",
                 .collect::<String>();
             line = format!("{line} {input}");
         }
-        println!("{:>7.1}s {at}  {line}", self.elapsed());
+        outln!("{:>7.1}s {at}  {line}", self.elapsed());
     }
 
     /// Print the result of the task this launch started once it is done.
@@ -1659,7 +1659,7 @@ and you cannot finish until it has.",
             TaskOutcome::Abandoned { by, report } => self.cancelled(*by, *report),
             other => format!("{other:?}"),
         };
-        println!("\n== the task is done; its result:\n\n{said}\n");
+        outln!("\n== the task is done; its result:\n\n{said}\n");
         self.reported = true;
     }
 
