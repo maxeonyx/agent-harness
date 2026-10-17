@@ -22,7 +22,7 @@ function look(t) {
   const since = w.since != null ? ` · ${ago(w.since)}` : "";
   const stopping = t.stop && w.kind !== "done" ? " cancelling" : "";
   switch (w.kind) {
-    case "model": return { cls: (w.streaming ? "working streaming" : "working") + stopping, text: (stopping ? "cancelling: " : "") + (w.streaming ? "writing" : "thinking") + since };
+    case "model": return { cls: (w.streaming ? "working streaming" : "working") + stopping, text: (stopping ? "abandoning: " : "") + (w.streaming ? "writing" : "thinking") + since };
     case "calls": {
       const kids = w.calls.flatMap((c) => c.children);
       if (kids.length) {
@@ -41,7 +41,7 @@ function look(t) {
     case "done": {
       const o = t.outcome || {};
       if (o.kind === "failed") return { cls: "done failed", text: `failed ${ago(w.since)} ago` };
-      if (o.kind === "cancelled") return { cls: "done cancelled", text: `cancelled ${ago(w.since)} ago` };
+      if (o.kind === "cancelled") return { cls: "done cancelled", text: `abandoned ${ago(w.since)} ago` };
       return { cls: "done", text: `done ${ago(w.since)} ago` };
     }
   }

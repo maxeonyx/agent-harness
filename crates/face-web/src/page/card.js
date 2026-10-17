@@ -99,6 +99,11 @@ function leave() {
 // ─── The card: who, how full, what it says, what Max writes ───────────────
 let logState = null;
 const title = $(".title", panel), mini = $(".mini", panel);
+// The task it belongs to, one click away.
+const up = el("button", "up");
+up.type = "button";
+title.after(up);
+up.onclick = () => { const p = parentOf(byId[openId] || {}); if (p) go(p); };
 function buildPanel(id) {
   logState = { id, head: undefined, rendered: [], rows: new Map(), group: null, exact: false, follow: true };
   logEl.replaceChildren();
@@ -107,6 +112,7 @@ function buildPanel(id) {
   $(".mix", panel).hidden = true;
   scrollEl.scrollTop = 0;
   panel.classList.toggle("fresh", id === NEW);
+  up.hidden = true;
   buildCompose(id);
   if (id === NEW) buildNew();
   else renderPanel();
@@ -121,6 +127,9 @@ function renderPanel() {
   mini.className = `mini ${l.cls}${needs ? " needs" : ""}`;
   if (!title.isContentEditable && title.textContent !== t.name) title.textContent = t.name;
   title.title = "Double-click to rename";
+  const parent = byId[parentOf(t)];
+  up.hidden = !parent;
+  if (parent && up.textContent !== `↑ ${parent.name}`) { up.textContent = `↑ ${parent.name}`; up.title = `Open ${parent.name}`; }
   const ctx = $(".ctx", panel);
   ctx.hidden = !t.tokens;
   if (t.tokens) {
@@ -216,35 +225,14 @@ async function renderMix(t) {
 }
 $(".ctx", panel).onclick = () => { const m = $(".mix", panel); m.hidden = !m.hidden; m.dataset.key = ""; if (!m.hidden && byId[openId]) renderMix(byId[openId]); };
 
-// What Max can do to the task itself, quietly under the box: pause it and
-// what is under it, cancel it and what it started, and, in a chat, say it
-// is done. A cancel asks once more; a second while it tidies up ends it now.
+// What Max can do to the task itself, as small icons beside the box.
 function renderControls(t) {
   const row = $(".acts", compose);
   if (!row) return;
-  const holder = heldBy(t);
-  const key = `${t.id}:${isDone(t)}:${holder?.id}:${t.mode}:${!!t.stop}:${t.stop?.hard}:${can.act}`;
+  const list = actionsOf(t), key = `${t.id}:${actionsKey(list)}`;
   if (row.dataset.key === key) return;
   row.dataset.key = key;
-  row.replaceChildren();
-  if (!can.act || isDone(t)) return;
-  const action = (label, tip, fact, confirm) => {
-    const b = el("button", null, label);
-    b.type = "button";
-    b.title = tip;
-    b.onclick = async () => {
-      if (confirm && !b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = `${label}?`; setTimeout(() => { b.classList.remove("armed"); b.textContent = label; }, 4000); return; }
-      b.classList.remove("armed"); b.textContent = label;
-      const why = await act(fact);
-      if (why) say(`${label}: ${why}`, true);
-    };
-    row.append(b);
-  };
-  if (holder) action("Resume", holder === t ? "It and everything under it carry on" : `Paused with ${holder.name}: it and everything under it carry on`, () => ({ Task: [holder.id, { Held: false }] }));
-  else action("Pause", "It and everything under it finish what is running, then wait", () => ({ Task: [t.id, { Held: true }] }));
-  if (!t.stop) action("Cancel", "It and everything it started stop, tidy up and report", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 120000 } } }] }), true);
-  else if (!t.stop.hard) action("Cancel now", "End it and everything it started now, with no tidy-up", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 0 } } }] }), true);
-  if (t.mode === "user-facing") action("Done", "It writes its result and finishes", (at) => ({ Delivery: { id: `${at}.0`, to: t.id, content: { Prompt: "Done" } } }));
+  row.replaceChildren(...list.map((a) => actionButton(a, false, (why) => say(why, true))));
 }
 
 // A task Max starts from what he wrote: its mandate his words, what he
