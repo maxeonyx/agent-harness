@@ -87,6 +87,9 @@ pub struct Wiring {
     pub dictation: Option<Dictation>,
     /// Live progress, from whoever runs things.
     pub feed: Feed,
+    /// The models on offer, newest first ([`harness_provider::Client::models`]),
+    /// which Max chooses a chat's from.
+    pub models: Vec<harness_provider::Model>,
 }
 
 /// What the brain hands the face after each fold.
@@ -148,7 +151,8 @@ impl<S: Source> Face<S> {
             if let Some(last) = folds.try_iter().last() {
                 folded = last;
             }
-            let rows = view::rows(&folded.state, &|id| self.source.value(id), now());
+            let value = |id| self.source.value(id);
+            let rows = view::rows(&folded.state, &value, &self.wiring.models, now());
             *self.state.write().unwrap_or_else(|e| e.into_inner()) = folded.state;
             *self.show() = Some(Arc::new(Shown {
                 as_of: folded.as_of,

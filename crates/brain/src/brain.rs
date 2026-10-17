@@ -137,6 +137,8 @@ pub struct Brain {
     web: LimbId,
     /// The roles limb, co-hosted.
     roles: Option<LimbId>,
+    /// What its roles' models resolve against.
+    models: roles::Models,
     /// The plugin limbs this brain has started, by id, until they exit.
     limbs: HashMap<LimbId, Process>,
     /// When a limb's process last ended without connecting.
@@ -172,6 +174,7 @@ impl Brain {
         store: Store,
         face: Sender<Folded>,
         client: Client,
+        models: roles::Models,
         state_dir: PathBuf,
         roles: Option<&Path>,
         start: Option<Start>,
@@ -254,6 +257,7 @@ impl Brain {
             max,
             web,
             roles,
+            models,
             limbs: HashMap::new(),
             failed: HashMap::new(),
             links: HashMap::new(),
@@ -296,6 +300,7 @@ impl Brain {
             return errln!("harness-brain: no roles limb: a new database needs --roles");
         };
         let limb = self.state().limb(id).expect("the roles limb").clone();
+        let models = self.models.clone();
         let (wire, down) = mpsc::channel();
         let conn = self.hosted;
         self.hosted -= 1;
@@ -313,7 +318,7 @@ impl Brain {
                 let said = link::Said::Up(Box::new(up));
                 let _ = events.send(Event(What::Link(conn, said)));
             };
-            roles::run(&limb, replica, down, up);
+            roles::run(&limb, replica, down, up, &models);
             let _ = events.send(Event(What::Link(conn, link::Said::Left)));
         });
     }
