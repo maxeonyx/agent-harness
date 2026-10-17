@@ -58,8 +58,6 @@ pub struct Truncated {
 pub struct Truncator {
     limits: Limits,
     pattern: Option<Regex>,
-    /// The number given to the first line, when lines are shown numbered.
-    numbered: Option<usize>,
     partial: Vec<u8>,
     lines: usize,
     matches: usize,
@@ -91,7 +89,6 @@ impl Truncator {
         Truncator {
             limits,
             pattern,
-            numbered: None,
             partial: Vec::new(),
             lines: 0,
             matches: 0,
@@ -104,12 +101,6 @@ impl Truncator {
             late: VecDeque::new(),
             after: 0,
         }
-    }
-
-    /// Show each line with its number, the first being `first`.
-    pub fn numbered(mut self, first: usize) -> Truncator {
-        self.numbered = Some(first);
-        self
     }
 
     /// Feed bytes as they arrive. Invalid UTF-8 is replaced, not refused.
@@ -229,9 +220,6 @@ impl Truncator {
             if hidden > 0 {
                 cut = true;
                 text.push_str(&marker(hidden, k.matches_before - matches));
-            }
-            if let Some(first) = self.numbered {
-                text.push_str(&format!("{:>6}\t", first + k.line - 1));
             }
             text.push_str(&k.text);
             text.push('\n');
