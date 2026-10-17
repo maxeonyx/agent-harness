@@ -49,7 +49,7 @@ function drawMap() {
         if (!more) { a.append(more = el("button", "more", "⌄")); more.title = "Unfold the project"; more.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); unfolded.add(id); refresh(); }); }
       } else more?.remove();
     } else {
-      a.className = `node sat working${faded}`;
+      a.className = `node sat working${n.call.owner === "max" ? " yours" : ""}${faded}`;
       a.style.setProperty("--d", `${SAT_DOT}px`);
       mark($(".g", a), "⋯");
       $(".name", a).textContent = satLabel(n);

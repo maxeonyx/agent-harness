@@ -12,10 +12,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{env, fs, thread};
 
+use harness_core::call::CallEvent;
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::draft::DraftEvent;
 use harness_core::fact::{Batch, Fact};
-use harness_core::id::{DeliveryId, ModelCallId, ReplicaId, TaskId, Timestamp};
+use harness_core::id::{CallId, DeliveryId, ModelCallId, ReplicaId, TaskId, Timestamp};
 use harness_core::live::Live;
 use harness_core::task::{Abandoner, Drain, TaskEvent};
 use harness_core::value::Bytes;
@@ -153,6 +154,15 @@ impl Device {
                     within: within.as_millis() as u64,
                 }),
             )],
+        })
+    }
+
+    /// Max stops a call: his own, one passed to him, or an agent's.
+    pub fn stop(&mut self, call: CallId) -> u64 {
+        println!("  {}: Max presses Stop on {call}", self.name);
+        self.say(Batch {
+            values: Vec::new(),
+            facts: vec![Fact::Call(call, CallEvent::Abandon)],
         })
     }
 

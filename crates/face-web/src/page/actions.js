@@ -21,6 +21,13 @@ function actionsOf(t) {
   if (t.mode === "user-facing" && !stopping) out.push({ icon: "tick", label: "Done", confirm: true, title: "It writes its result and finishes", facts: (at) => ({ Delivery: { id: `${at}.0`, to: t.id, content: { Prompt: "Done" } } }) });
   return out;
 }
+// What Max can do to background work: stop it. What an agent passed to him
+// is his to end; an agent's own he can stop too, and the agent is told.
+function callActionsOf(call) {
+  if (!can.act || call.status === "settled" || call.abandoned) return [];
+  const yours = call.owner === "max";
+  return [{ icon: "stop", label: "Stop", confirm: !yours, title: yours ? "Stop it: it was passed to you, so it is yours to end" : "Stop it: the agent that owns it gets its outcome", facts: () => ({ Call: [call.id, "Abandon"] }) }];
+}
 // Its loop would go on without Max: it is not waiting on him, paused or
 // finished.
 const runsOnItsOwn = (t) => !["max", "held", "parked", "done"].includes(t.waiting?.kind);

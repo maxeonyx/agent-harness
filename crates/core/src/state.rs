@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use imbl::{OrdMap, OrdSet};
 
 use crate::attention::{Queued, Ranking};
-use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome};
+use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome, Owner};
 use crate::context::{Entry, EntryId};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
@@ -180,12 +180,29 @@ pub struct CallRecord {
     /// ([`Todo::Unroutable`]).
     pub limb: Option<LimbId>,
     pub made: Mark,
+    /// Who it is for now: its caller's, until it is passed on.
+    pub owner: Owner,
+    /// Each time it was passed up the tree, oldest first.
+    pub passed: Vec<Handed>,
+    /// Its owner no longer wants it ([`CallEvent::Abandon`]).
+    pub abandoned: bool,
     pub dispatched: Option<Dispatch>,
     /// When its limb was last asked to stop it, and by when.
     pub stopping: Option<CallStop>,
     pub settled: Option<Settlement>,
     /// The real outcome of a call first settled as unknown.
     pub late: Option<Settlement>,
+}
+
+/// One hand-off of a background call ([`CallEvent::Passed`]): the task that
+/// owned it, who owns it since, and the passer's reason, which the receiver
+/// is shown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Handed {
+    pub by: TaskId,
+    pub to: Owner,
+    pub why: String,
+    pub at: Mark,
 }
 
 impl CallRecord {
@@ -876,6 +893,7 @@ impl State {
                 Fact::Call(_, CallEvent::Made(call)) => {
                     matches!(call.caller, Caller::Max { .. })
                 }
+                Fact::Call(_, CallEvent::Abandon) => true,
                 Fact::Call(id, CallEvent::Settled(_)) => self
                     .calls
                     .get(id)
@@ -1348,7 +1366,7 @@ impl State {
                     return Err(Rejected::Busy);
                 }
                 let readers: Vec<&Task> = self.live().filter(|t| t.awaits(id)).collect();
-                if interrupts(id, &made.call, &readers) {
+                if made.abandoned || interrupts(id, &made.call, &readers) {
                     return Err(Rejected::Draining);
                 }
                 let first = made.dispatched.map_or(mark, |d| d.first);
@@ -1376,8 +1394,64 @@ impl State {
                 });
                 Ok(())
             }
+            CallEvent::Passed { to, why } => self.pass(id, *to, why, record),
+            CallEvent::Abandon => {
+                let made = self.calls.get_mut(&id).ok_or(Rejected::Unknown)?;
+                if made.settled.is_some() {
+                    return Err(Rejected::Finished);
+                }
+                made.abandoned = true;
+                Ok(())
+            }
             CallEvent::Settled(outcome) => self.settle(id, outcome, record),
         }
+    }
+
+    /// A background call moves one level up the tree, from the task that
+    /// owns it to that task's owner, or to Max from a task he started.
+    fn pass(&mut self, id: CallId, to: Owner, why: &str, record: &Stated) -> Result<(), Rejected> {
+        let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
+        if made.settled.is_some() {
+            return Err(Rejected::Finished);
+        }
+        if made.abandoned || made.stopping.is_some() {
+            return Err(Rejected::Draining);
+        }
+        let Owner::Task(from) = made.owner else {
+            return Err(Rejected::NotForTask);
+        };
+        let passer = self.tasks.get(&from).ok_or(Rejected::Unknown)?;
+        if !passer.background.contains(&id) {
+            return Err(Rejected::NotForTask);
+        }
+        let up = match self.owner(from) {
+            Some(owner) => Owner::Task(owner),
+            None if passer.scope == Scope::Max => Owner::Max,
+            None => return Err(Rejected::WrongScope),
+        };
+        if to != up {
+            return Err(Rejected::WrongScope);
+        }
+        let mut readers = vec![passer.clone()];
+        if let Owner::Task(owner) = to {
+            readers.push(self.tasks.get(&owner).ok_or(Rejected::Unknown)?.clone());
+        }
+        for task in &mut readers {
+            task.apply(record, self)?;
+        }
+        for task in readers {
+            self.put(task);
+        }
+        if let Some(made) = self.calls.get_mut(&id) {
+            made.owner = to;
+            made.passed.push(Handed {
+                by: from,
+                to,
+                why: why.to_owned(),
+                at: Mark::of(record),
+            });
+        }
+        Ok(())
     }
 
     fn make(&mut self, id: CallId, call: &Call, record: &Stated) -> Result<(), Rejected> {
@@ -1399,7 +1473,7 @@ impl State {
                 }
                 context.binding.limb(&call.tool)
             }
-            Caller::Background { task, from } => {
+            Caller::Background { task, from, name } => {
                 let started = self.calls.get(from).ok_or(Rejected::Unknown)?;
                 if !matches!(started.call.caller, Caller::Agent { task: by, .. } if by == *task) {
                     return Err(Rejected::NotForTask);
@@ -1407,6 +1481,14 @@ impl State {
                 let task = self.tasks.get(task).ok_or(Rejected::Unknown)?;
                 if task.is_done() {
                     return Err(Rejected::Finished);
+                }
+                let named = |c: &CallId| {
+                    self.calls.get(c).is_some_and(|c| {
+                        matches!(&c.call.caller, Caller::Background { name: n, .. } if n == name)
+                    })
+                };
+                if !name.is_empty() && task.background.iter().any(named) {
+                    return Err(Rejected::Exists);
                 }
                 let context = task.context().ok_or(Rejected::Starting)?;
                 let limb = context.binding.limb(&call.tool);
@@ -1456,6 +1538,11 @@ impl State {
         if let Some(task) = reader {
             self.put(task);
         }
+        let owner = match &call.caller {
+            Caller::Agent { task, .. } | Caller::Background { task, .. } => Owner::Task(*task),
+            Caller::Max { .. } => Owner::Max,
+            Caller::Meta { call: by, .. } => self.calls.get(by).map_or(Owner::Max, |c| c.owner),
+        };
         self.open.calls.insert(id);
         self.calls.insert(
             id,
@@ -1463,6 +1550,9 @@ impl State {
                 call: call.clone(),
                 limb,
                 made: Mark::of(record),
+                owner,
+                passed: Vec::new(),
+                abandoned: false,
                 dispatched: None,
                 stopping: None,
                 settled: None,
@@ -1490,19 +1580,15 @@ impl State {
         // Who reads it: whoever awaits it now, or for a late outcome, the
         // context its first outcome reached, if it is still live.
         let readers: Vec<&Task> = if late {
-            match made.call.caller {
-                Caller::Agent { task, .. }
-                | Caller::Background { task, .. }
-                | Caller::Max {
-                    chat: Some(task), ..
-                } => self
-                    .tasks
-                    .get(&task)
-                    .filter(|t| !t.is_done())
-                    .into_iter()
-                    .collect(),
-                Caller::Max { chat: None, .. } | Caller::Meta { .. } => Vec::new(),
-            }
+            let reader = match (made.owner, &made.call.caller) {
+                (_, Caller::Max { chat, .. }) => *chat,
+                (_, Caller::Meta { .. }) | (Owner::Max, _) => None,
+                (Owner::Task(task), _) => Some(task),
+            };
+            (reader.and_then(|t| self.tasks.get(&t)))
+                .filter(|t| !t.is_done())
+                .into_iter()
+                .collect()
         } else {
             // A finished task still reads Max's actions in its chat.
             let chat = match made.call.caller {
@@ -1681,6 +1767,14 @@ impl State {
     }
 
     /// Every call, in id order.
+    /// Running background work agents have passed to Max ([`Owner::Max`]):
+    /// his to use and stop.
+    pub fn handed(&self) -> impl Iterator<Item = (CallId, &CallRecord)> {
+        (self.open.calls.iter())
+            .filter_map(|id| Some((*id, self.calls.get(id)?)))
+            .filter(|(_, r)| r.owner == Owner::Max && !r.passed.is_empty())
+    }
+
     pub fn calls(&self) -> impl Iterator<Item = (CallId, &CallRecord)> {
         self.calls.iter().map(|(id, record)| (*id, record))
     }
@@ -1868,13 +1962,13 @@ impl State {
         }
     }
 
-    /// The task a call belongs to: its agent, or for the harness's call, the
-    /// task whose call it runs for. Max's calls are his own.
+    /// The task a call belongs to now ([`Owner`]): its agent, the task it
+    /// was passed to, or for the harness's call, the task whose call it runs
+    /// for. `None` for Max's: his own, and what was passed to him.
     pub fn call_owner(&self, call: CallId) -> Option<TaskId> {
-        match &self.calls.get(&call)?.call.caller {
-            Caller::Agent { task, .. } | Caller::Background { task, .. } => Some(*task),
-            Caller::Max { .. } => None,
-            Caller::Meta { call, .. } => self.call_owner(*call),
+        match self.calls.get(&call)?.owner {
+            Owner::Task(task) => Some(task),
+            Owner::Max => None,
         }
     }
 
@@ -2197,7 +2291,7 @@ impl State {
             needed.insert(limb.id);
             let connection = self.connected(limb.id).map(|(_, mark)| mark.seq);
             let readers = readers.get(id).map_or(&[][..], Vec::as_slice);
-            if interrupts(*id, &record.call, readers) {
+            if record.abandoned || interrupts(*id, &record.call, readers) {
                 let due = match (&record.dispatched, &limb.kind) {
                     (None, _) => true,
                     (Some(_), LimbKind::Plugin { .. }) => match connection {

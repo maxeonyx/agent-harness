@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::build::{BuildId, Launch, Launched};
-use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
+use harness_core::call::{Call, CallEvent, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Description, Hello, LimbKey, LimbKind, LimbRow, Reach};
@@ -1151,7 +1151,7 @@ Finish tidying up and end your turn with your report.",
             return self.append(batch);
         }
         if call.tool == meta::BACKGROUND {
-            match meta::background_call(&parent, id, self.meta, &input) {
+            match meta::background_call(self.state(), &parent, id, self.meta, &input) {
                 Ok((started, input)) => {
                     let said = render::blocks(&[render::text(&format!(
                         "Started `{}` in the background: its result comes to you as a message when it settles, \
@@ -1178,6 +1178,26 @@ and you cannot finish until it has.",
                     return self.append(batch);
                 }
             }
+        }
+        if call.tool == meta::STOP || call.tool == meta::PASS {
+            let said = self.hand(&call.tool, &parent, &input, &mut batch);
+            let (model, outcome) = match said {
+                Ok(said) => {
+                    let said = render::blocks(&[render::text(&said)]);
+                    let output = Output {
+                        model: said.id(),
+                        full: None,
+                        observes: Vec::new(),
+                    };
+                    (said, Outcome::Completed(output))
+                }
+                Err(message) => render::failed(&message),
+            };
+            batch.values.push(model);
+            batch
+                .facts
+                .push(Fact::Call(id, CallEvent::Settled(outcome)));
+            return self.append(batch);
         }
         match self.members(id, &call.tool, &parent, &input, &mut batch) {
             Ok(names) if call.tool == meta::ADD_SIBLING => {
@@ -1209,6 +1229,48 @@ and you cannot finish until it has.",
             }
         }
         self.append(batch);
+    }
+
+    /// A `stop` or `pass` of one of `parent`'s running background calls:
+    /// its fact, appended to `batch`, and what the call says.
+    fn hand(
+        &self,
+        tool: &str,
+        parent: &Task,
+        input: &[u8],
+        batch: &mut Batch,
+    ) -> Result<String, String> {
+        let state = self.state();
+        let (target, why) = meta::owned(state, parent, input)?;
+        if tool == meta::STOP {
+            batch.facts.push(Fact::Call(target, CallEvent::Abandon));
+            return Ok(
+                "Stopping it: its outcome comes to you as a message when it settles.".into(),
+            );
+        }
+        let (to, whom) = match state.owner(parent.id) {
+            Some(owner) => {
+                let owner = state.task(owner).expect("the owning task");
+                if owner.drain().is_some() {
+                    return Err(format!(
+                        "`{}`, which started you, is stopping, so it cannot take it",
+                        owner.name
+                    ));
+                }
+                (
+                    Owner::Task(owner.id),
+                    format!("`{}`, which started you", owner.name),
+                )
+            }
+            None if parent.scope == Scope::Max => (Owner::Max, "Max".to_owned()),
+            None => return Err("there is no one above you to pass it to".into()),
+        };
+        batch
+            .facts
+            .push(Fact::Call(target, CallEvent::Passed { to, why }));
+        Ok(format!(
+            "Passed it to {whom}: it keeps running, it is theirs to use and stop, and its outcome goes to them."
+        ))
     }
 
     /// The facts creating a meta call's members, with a limb for each new

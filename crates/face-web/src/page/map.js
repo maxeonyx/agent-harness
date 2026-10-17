@@ -94,7 +94,7 @@ function derive() {
     }
     if (t.origin === "resume" && byId[t.from] && !chained(t)) edges.push({ from: live(t.from), to: t.id, kind: "continues" });
     const waits = awaited(t);
-    for (const b of t.background || []) {
+    for (const b of [...(t.background || []), ...(t.handed || [])]) {
       if (b.status === "settled" || b.tool === "spawn") continue;
       const id = `b:${b.id}`;
       nodes.set(id, { id, kind: "sat", call: b, task: t.id });
@@ -141,7 +141,7 @@ function sizeOf(n, comp) {
   const w = Math.min(210, Math.max(110, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
   return { w, h: (root ? ROOT_DOT : DOT) + (root ? 26 : 24) };
 }
-const satLabel = (n) => `${n.call.tool} ${gist(n.call.input)}`.trim();
+const satLabel = (n) => `${n.call.owner === "max" ? "yours: " : ""}${n.call.name || `${n.call.tool} ${gist(n.call.input)}`}`.trim();
 
 // Each project is laid out on its own, then the projects are shelved in
 // reading order, live ones first, in rows as wide as the screen: on a phone
