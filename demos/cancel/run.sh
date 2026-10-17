@@ -26,21 +26,22 @@ start=$(date +%s.%N)
 # its process group, so what is left of them is found by it.
 mark=HARNESS_OWNER_cancel_demo_$$
 unit=cancel-demo-$$
-trap 'systemctl --user stop "$unit" 2>/dev/null; demos/end.sh "$mark"' EXIT
+trap 'systemctl --user stop "$unit" 2>/dev/null || true; demos/end.sh "$mark"' EXIT
 left() {
-  local pids=()
+  local any=
+  printf "          %7s %7s %7s %-4s %-40s %s\n" PID PGID SID STAT UNIT COMMAND
   for e in /proc/[0-9]*/environ; do
     if grep -qz "^$mark=" "$e" 2>/dev/null; then
-      pids+=("$(basename "$(dirname "$e")")")
+      local p
+      p=$(basename "$(dirname "$e")")
+      # The unit is the last part of its cgroup: a service, or a limb's scope.
+      ps -o pid=,pgid=,sid=,stat=,args= -p "$p" | awk -v u="$(sed 's|.*/||' "/proc/$p/cgroup" 2>/dev/null)" \
+        '{ printf "          %7s %7s %7s %-4s %-40s", $1, $2, $3, $4, u; $1=$2=$3=$4=""; sub(/^ +/, ""); print " " $0 }'
+      any=1
     fi
   done
-  if [ ${#pids[@]} -eq 0 ]; then
-    echo "          (none)"
-  else
-    ps -o pid,pgid,sid,stat,unit:44,args -p "$(IFS=,; echo "${pids[*]}")" | sed 's/^/          /'
-  fi
+  [ -n "$any" ] || echo "          (none)"
 }
-
 c() { curl -sS --resolve "mx-hv-mj.local:$port:127.0.0.1" "$@"; }
 say() { printf "%6.1fs  %s\n" "$(awk "BEGIN { print $(date +%s.%N) - $start }")" "$*"; }
 q() { c "$url/view" | jq -r "$1"; }
@@ -138,11 +139,18 @@ finish d
 
 say "== E. The brain as a systemd service, restarted while a command runs"
 printf '%s\n' "Run \`./slow.sh\` with \`bash\` (it takes about a minute), then tell me in one line what its last line said." > "$dir/e.md"
+# The service starts the task when it makes the database, and only then.
+cat > "$dir/e.sh" <<EOF
+#!/usr/bin/env bash
+task=()
+[ -e $dir/e.sqlite ] || task=(--workspace $dir/repo --mandate $dir/e.md)
+exec $PWD/$brain --roles roles --role engineer --port $port --db $dir/e.sqlite "\${task[@]}"
+EOF
+chmod +x "$dir/e.sh"
 systemd-run --user --quiet --unit="$unit" --same-dir \
   --setenv="$mark=1" --setenv=XDG_STATE_HOME="$XDG_STATE_HOME" \
   -p StandardOutput=append:"$PWD/$dir/e.log" -p StandardError=append:"$PWD/$dir/e.log" \
-  "$PWD/$brain" --roles roles --role engineer --port "$port" \
-  --db "$dir/e.sqlite" --workspace "$dir/repo" --mandate "$dir/e.md"
+  "$PWD/$dir/e.sh"
 until grep -q "bash dispatched" "$dir/e.log" 2>/dev/null; do sleep 0.2; done
 sleep 2
 say "./slow.sh runs; systemctl --user restart $unit"
