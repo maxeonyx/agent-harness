@@ -190,7 +190,7 @@ class Browser {
   }
 
   // Where to put the pointer on what CSS matches: its middle, in view, not
-  // under anything else, and still, as Max waits for a card to land.
+  // under anything else, enabled, and still, as Max waits for a card to land.
   async point(css) {
     const deadline = Date.now() + 2000;
     let last = null;
@@ -207,6 +207,7 @@ class Browser {
     return this.eval(`(() => {
       const e = [...document.querySelectorAll(${JSON.stringify(css)})].find((e) => e.getClientRects().length > 0);
       if (e === undefined) return "nothing visible matches";
+      if (e.disabled) return "it is disabled" + (e.title ? ": " + e.title : "");
       e.scrollIntoView({ block: "center", inline: "center" });
       const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
       const top = document.elementFromPoint(x, y);
