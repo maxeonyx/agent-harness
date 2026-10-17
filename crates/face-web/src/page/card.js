@@ -1,11 +1,21 @@
+import { $, el, kTokens, logEl, panel, scrollEl } from "./base.js";
+import { act, can, digest } from "./tab.js";
+import { byId, graph, live, look, parentOf, unfolded, view } from "./map.js";
+import { cam, camFor, cardRect, cardShown, closing, coverCheck, dotRect, fly, framed, framing, heldAt, newPoint, refocus, seam, seamFor, setCardShown, setFramed, setSeam } from "./camera.js";
+import { nodeEls, rebuild, render } from "./draw.js";
+import { hideTip, hoverable } from "./hover.js";
+import { actionButton, actionsKey, actionsOf } from "./actions.js";
+import { blocksOf, contextOf, renderLog, stopFollowing } from "./log.js";
+import { buildCompose, compose, dictation, renderComposeState, say, stopDictation } from "./compose.js";
+import { buildNew } from "./newchat.js";
+
 // ─── Opening a node ────────────────────────────────────────────────────────
 // The URL names the open node, so back closes it and a middle click opens a
 // node in a tab of its own. Going from one card to another replaces the
 // entry, so back always goes to the map.
-const panel = $("#panel"), logEl = $(".log", panel), scrollEl = $(".scroll", panel);
-let openId = null, saved = null, moving = Promise.resolve(), stay = false;
+export let openId = null, saved = null, moving = Promise.resolve(), stay = false;
 // The card's id for a chat not started yet.
-const NEW = "new";
+export const NEW = "new";
 
 // Each entry this document pushes is marked as its own: back from it stays
 // in this page. Back from one it did not push (the page reloaded on a card)
@@ -17,13 +27,13 @@ function show(id) {
   else history.pushState({ node: id, doc: DOC }, "", `#${id}`);
   route();
 }
-function go(id) {
+export function go(id) {
   clearTimeout(closing);
   if (id !== NEW) id = live(id);
   if (id === openId) return;
   show(id);
 }
-function closeNode() {
+export function closeNode() {
   if (!openId) return;
   if (history.state?.node && history.state.doc === DOC) history.back();
   else { history.replaceState(null, "", location.pathname); route(); }
@@ -31,7 +41,7 @@ function closeNode() {
 addEventListener("popstate", route);
 addEventListener("hashchange", route);
 
-function route() {
+export function route() {
   const raw = location.hash.slice(1) || null;
   const id = raw && raw !== NEW ? live(raw) : raw;
   const known = id && (byId[id] || (id === NEW && view));
@@ -47,11 +57,11 @@ async function transition(to) {
   if (!to) {
     // Back to the map as it was: framing all of it, or where Max left it.
     const back = saved?.framed ? framing() : saved?.cam;
-    framed = !!saved?.framed;
+    setFramed(!!saved?.framed);
     const card = cardShown, dot = dotRect(from);
-    openId = null; seam = null; saved = null;
+    openId = null; setSeam(null); saved = null;
     await fly(back || null, { T: 200, cardFrom: card, cardTo: card && dot, box: card });
-    if (!openId) { panel.hidden = true; panel.style.clipPath = ""; panel.style.transform = ""; cardShown = null; coverCheck(); }
+    if (!openId) { panel.hidden = true; panel.style.clipPath = ""; panel.style.transform = ""; setCardShown(null); coverCheck(); }
     nodeEls.get(from)?.classList.remove("selected");
     render();
     return;
@@ -63,7 +73,7 @@ async function transition(to) {
   const was = cardShown, keep = stay && was;
   stay = false;
   openId = to;
-  seam = seamFor(to);
+  setSeam(seamFor(to));
   if (!seam) { openId = null; return; }
   const r = cardRect(seam);
   // Opened from the map, the card holds the node where it was on screen; a
@@ -71,7 +81,7 @@ async function transition(to) {
   // aside) takes the card's place as it is.
   const at = keep ? { x: r.x + r.w / 2, y: r.y, sx: cam.x + (was.x + was.w / 2) * cam.k, sy: cam.y + was.y * cam.k }
     : to === NEW ? { x: newPoint.x, y: newPoint.y - 14, sx: newPoint.sx, sy: newPoint.sy - 14 } : heldAt(to);
-  framed = false;
+  setFramed(false);
   panel.hidden = false;
   buildPanel(to);
   $("#empty").hidden = true;
@@ -82,12 +92,16 @@ async function transition(to) {
   if (!matchMedia("(pointer: coarse)").matches) $(".compose textarea", panel)?.focus({ preventScroll: true });
 }
 let pendingOpen = null;
-async function fly(to, opts) {
-  const f = glide(to, { ...opts, strong: true });
-  flight = f;
-  await f;
-  if (flight === f) flight = null;
+// Open the node a route asked for before the view knew it, once it does.
+export function openPending() {
+  if (!pendingOpen || !byId[pendingOpen]) return false;
+  const id = pendingOpen;
+  pendingOpen = null;
+  show(id);
+  return true;
 }
+// Go to a task made from the open card, the card keeping its place.
+export function goStaying(id) { stay = true; go(id); }
 // What an open card holds that closing it lets go.
 function leave() {
   stopFollowing();
@@ -97,8 +111,8 @@ function leave() {
 }
 
 // ─── The card: who, how full, what it says, what Max writes ───────────────
-let logState = null;
-const title = $(".title", panel), mini = $(".mini", panel);
+export let logState = null;
+export const title = $(".title", panel), mini = $(".mini", panel);
 // The task it belongs to, one click away.
 const up = el("button", "up");
 up.type = "button";
@@ -121,7 +135,7 @@ $(".x", panel).onclick = closeNode;
 hoverable(mini, () => openId);
 mini.onclick = refocus;
 
-function renderPanel() {
+export function renderPanel() {
   const t = byId[openId];
   if (!t) return;
   const l = look(t), needs = (view.queue || []).some((q) => live(q.task) === t.id);
@@ -242,7 +256,7 @@ function renderControls(t) {
 // while they work, as one more of them. What the record creates is named
 // by its time and the fact that creates it; `how` may make facts of its
 // own first (a new chat's limbs), and `after` rides along.
-async function start(how, text, files, after = []) {
+export async function start(how, text, files, after = []) {
   const mandate = digest(text), words = files.length ? JSON.stringify(files.map((a) => a.block)) : null;
   let id;
   const why = await act((at) => {
@@ -259,6 +273,6 @@ async function start(how, text, files, after = []) {
   if (!why) { pendingOpen = id; stay = true; }
   return why;
 }
-const aside = (t, text, files, after) => start({ name: `${t.name}-aside`, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } } }, text, files, after);
-const resume = (t, text, files, after) => start({ name: t.name, scope: "Max", origin: { Resume: { from: t.id } } }, text, files, after);
+export const aside = (t, text, files, after) => start({ name: `${t.name}-aside`, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } } }, text, files, after);
+export const resume = (t, text, files, after) => start({ name: t.name, scope: "Max", origin: { Resume: { from: t.id } } }, text, files, after);
 

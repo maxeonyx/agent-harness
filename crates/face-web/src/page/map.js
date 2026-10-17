@@ -1,3 +1,6 @@
+import { ago, clock, gist, phone } from "./base.js";
+import { openId } from "./card.js";
+
 // ─── The model: the view as a map ──────────────────────────────────────────
 // A node is a task, under the task that owns it. Background work a task
 // will hear back from hangs off it. Projects are the map's disconnected
@@ -7,17 +10,32 @@
 // together); dashed, a result that will arrive without anyone waiting for
 // it now (background work); dotted, a task continued by a resume; flowing,
 // waited on right now.
-let view = null;
-let byId = {};
-let graph = { nodes: new Map(), edges: [], comps: [] };
+export let view = null;
+// The tab's rows, one per object, as the page draws them.
+function assemble(v) {
+  const out = { as_of: v.as_of, seq: Number(v.as_of.split(".")[1]), tasks: [], scopes: {}, queue: [], drafts: [], environments: [], workspaces: [] };
+  for (const [key, row] of Object.entries(v.rows)) {
+    const id = key.slice(key.indexOf(":") + 1);
+    if (row.Task) out.tasks.push(row.Task);
+    else if (row.Scope) out.scopes[id] = row.Scope;
+    else if (row.Queue) out.queue = row.Queue;
+    else if (row.Harness) Object.assign(out, row.Harness);
+    else if (row.Draft) out.drafts.push({ id, ...row.Draft });
+  }
+  return out;
+}
+export function takeView(v) { view = assemble(v); }
+
+export let byId = {};
+export let graph = { nodes: new Map(), edges: [], comps: [] };
 // A chat of Max's he continued after it finished is one node: its newest
 // resume, whose context holds all of it. Each earlier one maps to it.
 let alias = {};
-const live = (id) => alias[id] || id;
+export const live = (id) => alias[id] || id;
 
 // What a task is doing, as the map shows it: classes for its dot, and the
 // words its hover says.
-function look(t) {
+export function look(t) {
   const w = t.waiting || {};
   const since = w.since != null ? ` · ${ago(w.since)}` : "";
   const stopping = t.stop && w.kind !== "done" ? " cancelling" : "";
@@ -49,19 +67,19 @@ function look(t) {
   return { cls: "", text: w.kind || "" };
 }
 // Under its owner, a task's name without the owner's name it starts with.
-const shortName = (t) => { const o = byId[parentOf(t)]; return o && t.name.startsWith(o.name + "-") ? t.name.slice(o.name.length + 1) : t.name; };
-const glyph = (t) => (t.environment || t.name || "?").trim()[0].toUpperCase();
+export const shortName = (t) => { const o = byId[parentOf(t)]; return o && t.name.startsWith(o.name + "-") ? t.name.slice(o.name.length + 1) : t.name; };
+export const glyph = (t) => (t.environment || t.name || "?").trim()[0].toUpperCase();
 // Tasks in the order they were created.
-const order = (a, b) => a.created.seq - b.created.seq;
-const isDone = (t) => t.waiting?.kind === "done";
+export const order = (a, b) => a.created.seq - b.created.seq;
+export const isDone = (t) => t.waiting?.kind === "done";
 // A resume Max made of one of his own chats: the same chat, continued.
 const chained = (t) => t.origin === "resume" && !t.owner && byId[t.from] && !byId[t.from].owner;
 // Who a task belongs to on the map: its scope's owner, or the task a resume
 // in Max's own scope continues.
-const parentOf = (t) => t.owner ? live(t.owner) : t.from && byId[t.from] && !chained(t) ? live(t.from) : null;
+export const parentOf = (t) => t.owner ? live(t.owner) : t.from && byId[t.from] && !chained(t) ? live(t.from) : null;
 const ancestry = (t) => { const out = []; for (let p = parentOf(t); p && byId[p] && out.length < 50; p = parentOf(byId[p])) out.unshift(byId[p]); return out; };
 // What pauses a task: itself, or the nearest paused task above it.
-const heldBy = (t) => !t.pause ? null : t.pause.by === t.id ? t : ancestry(t).find((a) => a.id === t.pause.by) || null;
+export const heldBy = (t) => !t.pause ? null : t.pause.by === t.id ? t : ancestry(t).find((a) => a.id === t.pause.by) || null;
 // The calls a task is waiting on right now.
 function awaited(t) {
   const w = t?.waiting || {};
@@ -71,9 +89,9 @@ function awaited(t) {
 // A finished project folds to its root once it has been finished a while:
 // a small card on the archive shelf, below everything live.
 const FOLD_AFTER = 30 * 60 * 1000;
-const unfolded = new Set();
+export const unfolded = new Set();
 
-function derive() {
+export function derive() {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
   alias = {};
   for (const t of [...view.tasks].sort(order)) {
@@ -127,13 +145,13 @@ function derive() {
 // ─── Layout: ELK, laid out again only when the shape changes ──────────────
 const elk = window.ELK ? new ELK() : null;
 const measure = (() => { const c = document.createElement("canvas").getContext("2d"); return (text, font) => { c.font = font; return c.measureText(text).width; }; })();
-const DOT = 30, ROOT_DOT = 38, SAT_DOT = 20;
-let positions = new Map();   // id -> {x, y, w, h}: laid out
-let shown = new Map();       // id -> {x, y}: drawn now (tweened)
+export const DOT = 30, ROOT_DOT = 38, SAT_DOT = 20;
+export let positions = new Map();   // id -> {x, y, w, h}: laid out
+export let shown = new Map();       // id -> {x, y}: drawn now (tweened)
 let shape = "";
 
 const CARD_H = 34;
-const cardStatus = (c) => `finished ${ago(c.last)} ago · ${c.tasks.length} task${c.tasks.length > 1 ? "s" : ""}`;
+export const cardStatus = (c) => `finished ${ago(c.last)} ago · ${c.tasks.length} task${c.tasks.length > 1 ? "s" : ""}`;
 function sizeOf(n, comp) {
   if (comp.folded) return { w: Math.min(240, Math.max(120, measure(shortName(n.t), "500 13px Georgia") + 34 + (comp.tasks.length > 1 ? 14 : 0))), h: CARD_H };
   if (n.kind === "sat") return { w: Math.min(160, Math.max(90, measure(satLabel(n), "12px sans-serif") + 10)), h: SAT_DOT + 22 };
@@ -141,7 +159,7 @@ function sizeOf(n, comp) {
   const w = Math.min(210, Math.max(110, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
   return { w, h: (root ? ROOT_DOT : DOT) + (root ? 26 : 24) };
 }
-const satLabel = (n) => `${n.call.owner === "max" ? "yours: " : ""}${n.call.name || `${n.call.tool} ${gist(n.call.input)}`}`.trim();
+export const satLabel = (n) => `${n.call.owner === "max" ? "yours: " : ""}${n.call.name || `${n.call.tool} ${gist(n.call.input)}`}`.trim();
 
 // Each project is laid out on its own, then the projects are shelved in
 // reading order, live ones first, in rows as wide as the screen: on a phone
@@ -156,7 +174,7 @@ const ELK_OPTIONS = {
   "elk.padding": "[top=0,left=0,bottom=0,right=0]",
 };
 const GAP = 90;
-async function layout() {
+export async function layout() {
   const parts = graph.comps.map((c) => {
     if (c.folded) { const z = sizeOf(graph.nodes.get(c.root.id), c); return { archived: c.last, children: [{ id: c.root.id, width: z.w, height: z.h }], edges: [] }; }
     const ns = c.folded ? [graph.nodes.get(c.root.id)] : depthFirst(c);
