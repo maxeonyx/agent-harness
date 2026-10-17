@@ -81,8 +81,8 @@ your scope.",
             said.push_str(&format!("\n- `{name}`: {what}"));
         }
         said.push_str(
-            "\n\nA fresh agent gets its own clone of your repository, on the `branch` you name, made from `base`; \
-it commits and pushes there.",
+            "\n\nA fresh agent gets its own clone of your repository (or of the clone `from` names), beside it, on the \
+`branch` you name, made from `base`; it commits and pushes there.",
         );
     }
     said.push_str(
@@ -127,7 +127,8 @@ and returns at once: the agent that started you gets its result with yours.",
             "role": { "type": "string", "enum": roles.iter().map(|(name, _)| name).collect::<Vec<_>>(), "description": "Start a fresh agent in this role. Omit, with `resume`, to fork yourself." },
             "resume": { "type": "string", "description": "The name of a finished agent you started, to continue it." },
             "branch": { "type": "string", "description": "A fresh agent's own branch, for its clone." },
-            "base": { "type": "string", "description": "What its branch is made from if it does not exist yet. Default `main`." }
+            "base": { "type": "string", "description": "What its branch is made from if it does not exist yet. Default `main`." },
+            "from": { "type": "string", "description": "The clone a fresh agent's clone is made from, and made beside: a directory, relative to your workspace. Default your workspace itself." }
         },
         "required": ["name", "mandate"]
     });
@@ -434,6 +435,8 @@ pub enum How {
         role: String,
         branch: Option<String>,
         base: String,
+        /// The clone its clone is made from, if not the parent's workspace.
+        from: Option<String>,
     },
     Resume(String),
 }
@@ -462,6 +465,7 @@ pub fn parse(tool: &str, input: &[u8]) -> Result<Spawn, String> {
                     role,
                     branch: field("branch"),
                     base: field("base").unwrap_or_else(|| "main".into()),
+                    from: field("from"),
                 },
                 (None, Some(from)) => How::Resume(from),
                 (None, None) => How::Fork,

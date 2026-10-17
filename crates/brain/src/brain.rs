@@ -1363,7 +1363,12 @@ and you cannot finish until it has.",
                         .ok_or(format!("you started no agent named `{name}`"))?;
                     Origin::Resume { from: from.id }
                 }
-                How::Fresh { role, branch, base } => {
+                How::Fresh {
+                    role,
+                    branch,
+                    base,
+                    from,
+                } => {
                     let env = state
                         .environments()
                         .find(|e| e.name == role)
@@ -1374,12 +1379,17 @@ and you cannot finish until it has.",
                             .clone()
                             .ok_or(format!("a fresh `{role}` needs a `branch` for its clone"))?;
                         // A workspace limb is named by its directory.
-                        let dir = parent
+                        let own = parent
                             .places
                             .get(kind)
                             .and_then(|l| state.limb(*l))
-                            .map(|l| PathBuf::from(&l.name))
-                            .ok_or(format!("you have no {kind} to clone from"))?;
+                            .map(|l| PathBuf::from(&l.name));
+                        let dir = match (own, &from) {
+                            (Some(own), Some(from)) => own.join(from),
+                            (own, from) => own
+                                .or(from.as_ref().map(PathBuf::from))
+                                .ok_or(format!("you have no {kind} to clone from"))?,
+                        };
                         let (from, dir) = clone_of(&dir, &branch);
                         let clone = Clone {
                             from,
