@@ -10,6 +10,7 @@ import { moving, NEW, openId, openPending, renderPanel, route } from "./card.js"
 import { liveReset } from "./log.js";
 import { settleLocal } from "./compose.js";
 import "./newchat.js";
+import "./hints.js";
 
 // ─── The page, started ─────────────────────────────────────────────────────
 export async function viewArrived(fresh) {

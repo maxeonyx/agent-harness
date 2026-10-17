@@ -226,7 +226,7 @@ function renderTray() {
   tray.replaceChildren(...attached.get(key).map((a, i) => {
     const chip = el("span", "att");
     if (a.block.type === "image") { const img = el("img"); img.src = `data:${a.block.source.media_type};base64,${a.block.source.data}`; chip.append(img); }
-    const x = el("button", null, "×"); x.type = "button"; x.title = "Remove";
+    const x = el("button", "x"); x.type = "button"; x.title = "Remove"; x.setAttribute("aria-label", "Remove");
     x.onclick = () => { const list = attached.get(key); list.splice(i, 1); attached.set(key, list); unstage(); renderTray(); };
     chip.append(el("span", null, a.name), x);
     return chip;
@@ -306,22 +306,58 @@ export function renderTune(t) {
   const key = `${now.model}|${now.effort}|${warm}|${now.env.name}`;
   if (pill.dataset.key === key) return;
   pill.dataset.key = key;
-  const cost = warm ? ` · rereads ${kTokens(warm)}` : "";
-  const pick = (title, list, chosen, name, field, cost = "") => {
-    const s = el("select", "pick"); s.title = title;
-    s.append(...list.map((v) => Object.assign(el("option", null, name(v) + (v === chosen ? "" : cost)), { value: v })));
-    s.value = chosen;
-    s.onchange = () => retune(t, now, field, s.value);
-    return s;
+  const cost = warm ? `rereads ${kTokens(warm)}` : "";
+  const pick = (list, chosen, name, field, cost = "") => {
+    const b = el("button", "pick", name(chosen)); b.type = "button";
+    b.onclick = () => menu(b, list.map((v) => ({ v, name: name(v), on: v === chosen, cost: v === chosen ? "" : cost })), (v) => retune(t, now, field, v));
+    return b;
   };
   const models = view.models.map((m) => m.id);
   if (!models.includes(now.model)) models.push(now.model);
   pill.title = warm ? `Changing the model reads the whole context again without the cache: ${kTokens(warm)} tokens` : "The model and effort its next request runs at";
   pill.replaceChildren(
-    pick("Its model", models, now.model, modelName, "model", cost),
-    el("span", "dot", "·"),
-    pick("How hard it thinks", view.efforts, now.effort, (e) => e, "effort"),
+    pick(models, now.model, modelName, "model", cost),
+    el("span", "sep"),
+    pick(view.efforts, now.effort, (e) => e, "effort"),
   );
+}
+// A choice from a short list: a menu over the control that opens it, which
+// goes at a choice, Escape, or a press anywhere else; its control again
+// closes it.
+let closeMenu = null;
+export function menu(opener, items, picked) {
+  const again = closeMenu?.opener === opener;
+  closeMenu?.();
+  if (again) return;
+  const list = el("div", "menu");
+  list.setAttribute("role", "menu");
+  for (const it of items) {
+    const b = el("button", it.on ? "on" : null, it.name); b.type = "button";
+    if (it.cost) b.append(el("span", "cost", it.cost));
+    b.onclick = () => { close(); if (!it.on) picked(it.v); };
+    list.append(b);
+  }
+  const away = (e) => { if (!list.contains(e.target) && e.target !== opener) close(); };
+  const keys = (e) => {
+    const all = [...list.children], i = all.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); opener.focus(); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); all[(i + (e.key === "ArrowDown" ? 1 : all.length - 1)) % all.length].focus(); }
+  };
+  function close() {
+    closeMenu = null;
+    list.remove(); opener.removeAttribute("aria-expanded");
+    removeEventListener("pointerdown", away, true); removeEventListener("keydown", keys, true); removeEventListener("resize", close);
+  }
+  closeMenu = Object.assign(close, { opener });
+  opener.setAttribute("aria-expanded", "true");
+  document.body.append(list);
+  // Above the control, where the composer has room; its left edge on the
+  // control's, kept on the screen.
+  const r = opener.getBoundingClientRect(), m = list.getBoundingClientRect();
+  list.style.left = `${Math.max(6, Math.min(innerWidth - m.width - 6, r.left))}px`;
+  list.style.bottom = `${innerHeight - r.top + 6}px`;
+  addEventListener("pointerdown", away, true); addEventListener("keydown", keys, true); addEventListener("resize", close);
+  (list.querySelector(".on") || list.firstChild).focus();
 }
 // The whole setting at once, with what is its role's left to the role.
 async function retune(t, now, field, value) {

@@ -55,6 +55,8 @@
 //   reply                until the open chat settles, as `settle`
 //   shot FILE            a PNG, for `read`
 //   eval JS              prints what the expression comes to
+//   cdp METHOD JSON      prints what a DevTools Protocol command returns:
+//                        cdp Page.getInstallabilityErrors {}
 //   sleep MS
 //
 // CSS means the first visible match; `CSS @N` the Nth (from 1), and
@@ -478,19 +480,8 @@ class Browser {
     this.check();
   }
 
-  // A select is chosen from, as its list would; anything else is typed into.
+  // Typed into, as Max types.
   async type(css, text) {
-    const chose = await this.eval(`(() => {
-      const e = ${pick(css)};
-      if (!(e instanceof HTMLSelectElement)) return null;
-      const names = [...e.options].map((o) => o.value);
-      if (!names.includes(${JSON.stringify(text)})) return "no option " + ${JSON.stringify(text)} + " among " + names.join(", ");
-      e.value = ${JSON.stringify(text)};
-      e.dispatchEvent(new Event("change", { bubbles: true }));
-      return "chosen";
-    })()`);
-    if (chose === "chosen") return;
-    if (chose !== null) fail(`${css}: ${chose}`);
     await this.click(css);
     await this.send("Input.insertText", { text });
     this.check();
@@ -555,7 +546,15 @@ const steps = {
   async chat(b, role, dir, words) {
     await b.click("#new");
     await b.until("the new chat's card", visible(".compose textarea"));
-    if (await b.eval(`document.querySelector("#n-role") !== null`)) await b.type("#n-role", role);
+    if (await b.eval(visible("#n-role"))) {
+      await b.click("#n-role");
+      const why = await b.eval(`(() => {
+        const all = [...document.querySelectorAll(".menu button")], it = all.find((o) => o.firstChild.textContent === ${JSON.stringify(role)});
+        if (!it) return "no role ${role} among " + all.map((o) => o.firstChild.textContent).join(", ");
+        it.click();
+      })()`);
+      if (why) fail(why);
+    }
     else if (role !== "-") fail(`there is no choice of role; use - for ${role}`);
     const places = await b.eval(`[...document.querySelectorAll(".compose .place")].map((p) => p.dataset.place)`);
     if (places.some((p) => p !== "workspace")) fail(`${role} names places this cannot fill: ${places.join(", ")}`);
@@ -584,6 +583,7 @@ const steps = {
   reply: async (b) => { await settle(b.brain, (await b.eval("location.hash")).slice(1)); b.check(); },
   shot: async (b, file) => { await b.shot(file); console.log(`shot ${path.resolve(file)}`); },
   eval: async (b, js) => console.log(JSON.stringify(await b.eval(js)) ?? "undefined"),
+  cdp: async (b, method, params) => console.log(JSON.stringify(await b.send(method, JSON.parse(params)))),
   sleep: (b, ms) => sleep(Number(ms)).then(() => b.check()),
 };
 
