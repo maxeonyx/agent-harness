@@ -8,7 +8,7 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | browser | a chat hands a browser agent an expense claim in real pages; the tab is passed to Max, who stops it | Sonnet low | about 10 requests, under 1 min |
 | cancel | abandoning tasks (with time to tidy, and past a deadline), Ctrl-C once and twice, a worker passed to Max, a systemd restart, and what still runs after each | scripted (`MODEL=sonnet/low`) | free, 3 min |
 | chat-moves | retry, a reply's versions, going back, and a retry that gave the same words; leaves the brain up to try edit and back | scripted | free, 30 s |
-| compaction | an agent compacts between steps and reports; Max's words and the reports are kept word for word | scripted (`MODEL=sonnet/low`) | free, 1 min (Sonnet: a few dozen requests, 2 min) |
+| compaction | an agent compacts between steps (`compact_and_continue`) and ends with its report (`compact_and_report`); Max's words and the reports are kept word for word | scripted (`MODEL=sonnet/low`) | free, 1 min (Sonnet: a few dozen requests, 2 min) |
 | dev-process | an orchestrator spawns an engineer and a designer in their own clones, decides the question left to Max, and reports; the brain serves on after | Sonnet low | about 12 requests, under 1 min to the report |
 | face-controls | pause, park, resume, interrupt, rank, focus and abandon on a live run, driven as a tab drives them (Rust example; it owns its brain process) | Sonnet low | a few dozen requests, 1.5 min |
 | home | Max's everyday harness: `dev/serve home 4320`, a long-lived brain on his home database | the roles' own | what he does in it |

@@ -789,15 +789,7 @@ impl Brain {
             words: &[],
             calls: &calls,
         };
-        // The report that ends the turn: `compact_and_report`'s, or the
-        // text of the response that called `compact`.
-        let report = ask.report.or_else(|| {
-            let head = task.head()?;
-            let text = self.visible(head);
-            (record_tool(self.state(), call) == Some(meta::COMPACT) && !text.trim().is_empty())
-                .then_some(text)
-        });
-        let report = report.map(|r| render::blocks(&[render::text(&r)]));
+        let report = ask.report.map(|r| render::blocks(&[render::text(&r)]));
         self.compacted(task, Some(call), onto, carry, values, report);
         true
     }
@@ -1988,10 +1980,6 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
 
 /// The results of a task's round that have not reached it, but `except`'s:
 /// what a compaction carries.
-fn record_tool(state: &harness_core::state::State, call: CallId) -> Option<&str> {
-    state.call(call).map(|c| c.call.tool.as_str())
-}
-
 fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
     task.pending
         .iter()

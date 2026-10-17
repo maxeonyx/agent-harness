@@ -1407,7 +1407,12 @@ impl Task {
     /// task between turns. Neither while it is stopping: its tidy-up turn
     /// is its last, with no next context. The task carries on, or keeps
     /// waiting.
-    fn compact(&mut self, compaction: &Compaction, at: Timestamp, world: &State) -> Result<(), Rejected> {
+    fn compact(
+        &mut self,
+        compaction: &Compaction,
+        at: Timestamp,
+        world: &State,
+    ) -> Result<(), Rejected> {
         let Task { pending, life, .. } = self;
         let Life::Live(live) = life else {
             return Err(Rejected::Starting);
@@ -1862,16 +1867,17 @@ impl Task {
         {
             return Err(Rejected::Busy);
         }
-        let ended_turn = round.is_empty()
-            && response.is_some_and(|m| {
-                matches!(
-                    m.ended.as_ref().map(|e| &e.ending),
-                    Some(Ending::Responded {
-                        stop: Stop::EndTurn,
-                        ..
-                    })
-                )
-            });
+        let ended_turn = world.reported(to)
+            || round.is_empty()
+                && response.is_some_and(|m| {
+                    matches!(
+                        m.ended.as_ref().map(|e| &e.ending),
+                        Some(Ending::Responded {
+                            stop: Stop::EndTurn,
+                            ..
+                        })
+                    )
+                });
 
         // What the path it lands on rendered, and what the path it leaves
         // rendered after the two part.

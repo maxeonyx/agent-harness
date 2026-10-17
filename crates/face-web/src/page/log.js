@@ -300,7 +300,7 @@ function toolRow(s, b, t) {
     row.insertBefore(chips, detail);
     row.chips = chips;
   }
-  if (b.name === "compact") {
+  if (b.name.startsWith("compact")) {
     const q = el("div", "card");
     q.append(el("div", "label", input.fresh ? "Compacting into a new context" : "Compacting"), markdown(input.summary || ""));
     row.insertBefore(q, detail);

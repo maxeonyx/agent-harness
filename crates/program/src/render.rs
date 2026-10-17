@@ -340,13 +340,18 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
 }
 
 /// The time, and how full the context was at the task's last response,
-/// unless a compaction has replaced that context since; and whether it
+/// unless a compaction has replaced that context since (the head is its
+/// carry, or the report after it); and whether it
 /// is full enough to warn the agent to compact ([`crate::policy::WARN_AT`]).
 fn clock(state: &State, task: &Task, now: &Now) -> (String, bool) {
     let used = state
         .last_turn(task.id)
         .and_then(|e| e.usage)
-        .filter(|_| !task.head().is_some_and(|h| state.compacted(h).is_some()))
+        .filter(|_| {
+            !task
+                .head()
+                .is_some_and(|h| state.compacted(h).is_some() || state.reported(h))
+        })
         .map(|u| u.input + u.cache_read + u.cache_write_short + u.cache_write_long + u.output);
     let Some(used) = used else {
         return (format!("[harness] {}.", now.time), false);
@@ -359,13 +364,9 @@ fn clock(state: &State, task: &Task, now: &Now) -> (String, bool) {
     );
     let full = used * 100 >= now.window * crate::policy::WARN_AT;
     if full {
-        let tool = if crate::meta::two_tools() {
-            "`compact_and_continue`, or `compact_and_report` if you are done"
-        } else {
-            "`compact`"
-        };
         said.push_str(&format!(
-            " It is {}% full: wrap up the step you are on soon, and then compact with {tool}. If it fills, the \
+            " It is {}% full: wrap up the step you are on soon, and then compact with `compact_and_continue`, \
+or `compact_and_report` if you are done. If it fills, the \
 harness compacts it for you, with no summary of yours, and what is only in your context is lost.",
             used * 100 / now.window
         ));
@@ -664,7 +665,7 @@ fn observed_now<'a>(
     })
 }
 
-/// A tool result for one of the task's own tool uses. A `compact` call's
+/// A tool result for one of the task's own tool uses. A compaction call's
 /// result reaches the model only when the compaction did not happen: the
 /// task is stopping, or Max moved it back to before it.
 fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
@@ -678,7 +679,7 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
         let said = if state.has_compacted(call) {
             "Max moved you back to before this compaction, so your context is as it was here. Carry on from here."
         } else if task.ends() {
-            "Not compacted: you are being stopped, and this is your last turn."
+            "Not compacted: you are being stopped, and this is your last turn. End it with your report as your last message."
         } else {
             "Not compacted."
         };
@@ -852,8 +853,8 @@ Start nothing new. This is your last turn."
             "Max is pausing this work for now. Bring it to a safe point: finish or undo what is half done, so \
 nothing is left broken or half-written, and start nothing new.{shared} Work you have running in the \
 background is yours to keep or stop: keep what should still be running when Max comes back. If you have \
-done much since your last checkpoint, `compact` first, so you resume from a short context. Then end your turn with a \
-short note of where things stand and what you will do next. You will wait, paused, until Max \
+done much since your last checkpoint, end with `compact_and_report`, so you resume from a short context; otherwise end \
+your turn. Either way, your last message is a short note of where things stand and what you will do next. You will wait, paused, until Max \
 resumes you; this is not the end of your task."
         ),
         Content::Prompt(Prompt::Resume) => {
@@ -943,15 +944,12 @@ fn mandate(state: &State, values: Values, task: &Task, carried: bool) -> String 
             siblings.join(", ")
         ));
     }
-    // A root made before `compact` existed does not bind it.
-    let binds = |tool| {
-        task.context()
-            .is_some_and(|c| c.binding.limb(tool).is_some())
-    };
-    let end = if binds(crate::meta::COMPACT_AND_REPORT) {
-        "end with `compact_and_report`. Its report is your result"
-    } else if binds(crate::meta::COMPACT) {
-        "end your turn with your result as your text, and `compact` in the same response. Your result"
+    // A root made before `compact_and_report` existed does not bind it.
+    let end = if task
+        .context()
+        .is_some_and(|c| c.binding.limb(crate::meta::COMPACT_AND_REPORT).is_some())
+    {
+        "end with `compact_and_report`. Its report is your result, and it"
     } else {
         "end your turn. Your last message is your result, and it"
     };

@@ -1485,10 +1485,11 @@ impl State {
         }
     }
 
-    /// Whether a model turn ended at `entry`: a response that ended it, or
-    /// the head an interrupt left.
+    /// Whether a model turn ended at `entry`: a response that ended it, a
+    /// compaction's report, or the head an interrupt left.
     pub fn ended_turn(&self, entry: EntryId) -> bool {
         self.open.interrupted.contains(&entry)
+            || self.reported(entry)
             || self.response(entry).is_some_and(|m| {
                 matches!(
                     &m.ended,
@@ -1501,6 +1502,17 @@ impl State {
                     })
                 )
             })
+    }
+
+    /// Whether `entry` is a compaction's report: an assistant message
+    /// right after a carry that no model call wrote.
+    pub fn reported(&self, entry: EntryId) -> bool {
+        self.response(entry).is_none()
+            && matches!(
+                self.entries.get(&entry),
+                Some(Entry::Message { parent, message })
+                    if message.role == crate::context::Role::Assistant && self.compactions.contains_key(parent)
+            )
     }
 
     /// The model call a response came from.
