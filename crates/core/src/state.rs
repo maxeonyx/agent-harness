@@ -17,7 +17,8 @@ use crate::journal::{Author, Fact, Launched, Record, Rejected};
 use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
 use crate::resource::{Change, ResourceKey, Version};
 use crate::task::{
-    Created, Drain, Life, Mode, Move, Origin, Phase, Scope, Start, Stopper, Task, TaskEvent, ends,
+    Created, Drain, Draining, Life, Mode, Move, Origin, Phase, Scope, Start, Stopper, Task,
+    TaskEvent, ends,
 };
 
 /// Everything the journal says is true now.
@@ -87,6 +88,8 @@ use crate::task::{
 pub struct State {
     last: Option<Seq>,
     launch: Option<(Mark, Launched)>,
+    /// When the current launch must have exited, once it is shutting down.
+    shutdown: Option<Timestamp>,
     entries: OrdMap<EntryId, Entry>,
     tasks: OrdMap<TaskId, Task>,
     calls: OrdMap<CallId, CallRecord>,
@@ -163,8 +166,8 @@ pub struct CallRecord {
     pub limb: Option<LimbId>,
     pub made: Mark,
     pub dispatched: Option<Dispatch>,
-    /// When its limb was last asked to stop it.
-    pub stopping: Option<Mark>,
+    /// When its limb was last asked to stop it, and by when.
+    pub stopping: Option<CallStop>,
     pub settled: Option<Settlement>,
     /// The real outcome of a call first settled as unknown.
     pub late: Option<Settlement>,
@@ -178,6 +181,15 @@ impl CallRecord {
             .or(self.settled.as_ref())
             .map(|s| &s.outcome)
     }
+}
+
+/// A call's stop under way ([`CallEvent::Stopping`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CallStop {
+    /// When its limb was last asked.
+    pub asked: Mark,
+    /// When it must be gone: the earliest deadline it has been given.
+    pub deadline: Timestamp,
 }
 
 /// A call's sends to its limb.
@@ -351,15 +363,26 @@ pub enum Todo {
     /// saying so.
     Unroutable(CallId),
     /// Stop the call. If it was dispatched and its limb is connected, ask
-    /// it (`ToLimb::Stop`) and commit [`CallEvent::Stopping`]; if its limb
-    /// is unreached, settle it as unknown, so a dead limb never holds a
-    /// task (its real outcome is still taken if it comes back); if it was
-    /// never dispatched, settle it as interrupted.
+    /// it (`ToLimb::Stop`) and commit [`CallEvent::Stopping`], with time to
+    /// stop gracefully before [`State::stop_by`] where its readers have a
+    /// deadline; if its limb is unreached, settle it as unknown, so a dead
+    /// limb never holds a task (its real outcome is still taken if it comes
+    /// back); if it was never dispatched, settle it as interrupted. Due
+    /// again after a reconnection, and when a reader's deadline comes before
+    /// the call's.
     Interrupt(CallId),
-    /// Stop reading the task's response.
+    /// Cut the request: its task is stopping or interrupted, or the brain's
+    /// shutdown deadline has come.
     Abandon(ModelCallId),
-    /// Stop a member of a scope whose owner is stopping.
+    /// Stop a member of a scope whose owner is stopping: with less time than
+    /// the owner has, and again whenever the owner's deadline comes sooner
+    /// than the member's.
     Stop(TaskId),
+    /// A stopping task has nothing of its own left running: deliver
+    /// [`Prompt::Stopping`], asking for its tidy-up turn.
+    Tidy(TaskId),
+    /// A stopping task's deadline has come: commit [`TaskEvent::Expired`].
+    Expire(TaskId),
     /// Every member of this spawn's scope is done: settle it with their
     /// outcomes.
     Settle(CallId),
@@ -419,8 +442,16 @@ impl State {
                     return Err(Rejected::Unknown);
                 }
                 self.launch = Some((mark, launched.clone()));
+                self.shutdown = None;
                 // A connection belongs to the brain that made it.
                 self.reach.clear();
+            }
+            Fact::Shutdown { within } => {
+                if self.launch.is_none() {
+                    return Err(Rejected::Unknown);
+                }
+                let deadline = crate::cancel::deadline(record.at, *within);
+                self.shutdown = Some(self.shutdown.map_or(deadline, |d| d.min(deadline)));
             }
             Fact::Task(id, TaskEvent::Created(created)) => self.create(*id, created, record)?,
             Fact::Task(id, event) => self.task_event(*id, event, record)?,
@@ -511,7 +542,12 @@ impl State {
                     content: Content::Words(_) | Content::Prompt(Prompt::Done),
                     ..
                 })
-                | Fact::Task(_, TaskEvent::Drain(Drain::Stop(Stopper::Max)))
+                | Fact::Task(
+                    _,
+                    TaskEvent::Drain(Drain::Stop {
+                        by: Stopper::Max, ..
+                    }),
+                )
                 | Fact::Focus(_)
                 | Fact::Described { .. } => false,
                 Fact::Task(_, TaskEvent::Created(created)) => created.by.is_some(),
@@ -564,9 +600,15 @@ impl State {
                                     && (created.scope == Scope::Max
                                         || matches!(created.origin, Origin::Aside { .. }))
                             }
-                            TaskEvent::Drain(drain) => {
-                                matches!(drain, Drain::ToMax | Drain::Stop(Stopper::Max))
-                            }
+                            TaskEvent::Drain(drain) => matches!(
+                                drain,
+                                Drain::ToMax
+                                    | Drain::Stop {
+                                        by: Stopper::Max,
+                                        ..
+                                    }
+                            ),
+                            TaskEvent::Expired => false,
                             TaskEvent::Moved(movement) => matches!(movement, Move::Rewind { .. }),
                             TaskEvent::ModeSet(_) | TaskEvent::Renamed(_) | TaskEvent::Held(_) => {
                                 true
@@ -588,6 +630,7 @@ impl State {
                         Fact::Focus(focus) => focus.face == *face,
                         Fact::Environment(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
                         Fact::Launched(_)
+                        | Fact::Shutdown { .. }
                         | Fact::ModelCall(..)
                         | Fact::Call(..)
                         | Fact::Described { .. }
@@ -633,6 +676,10 @@ impl State {
             Some(by) => Some(self.creator(by, created)?),
             None => None,
         };
+        // A stopping task starts nothing.
+        if creator.is_some_and(|c| ends(self.tasks.get(&c).and_then(Task::drain))) {
+            return Err(Rejected::Draining);
+        }
         match &created.origin {
             Origin::Fresh {
                 environment,
@@ -842,13 +889,21 @@ impl State {
             TaskEvent::Drain(Drain::ToMax) if self.scoped(task) => {
                 return Err(Rejected::Scoped);
             }
-            TaskEvent::Drain(Drain::Stop(Stopper::Owner)) => {
-                let ending = self
-                    .owner(id)
-                    .and_then(|o| self.tasks.get(&o))
-                    .is_some_and(|o| ends(o.drain()));
-                if !ending {
-                    return Err(Rejected::NotForTask);
+            TaskEvent::Drain(Drain::Stop {
+                by: Stopper::Owner,
+                within,
+            }) => {
+                let owner = self.owner(id).and_then(|o| self.tasks.get(&o));
+                match owner.and_then(Task::drain) {
+                    // Nothing a task owns outlives it.
+                    Some(Draining::Stopping(s)) => {
+                        let deadline = crate::cancel::deadline(record.at, *within);
+                        if deadline > s.deadline.max(record.at) {
+                            return Err(Rejected::Late);
+                        }
+                    }
+                    Some(Draining::Failing(_)) => {}
+                    Some(Draining::ToMax) | None => return Err(Rejected::NotForTask),
                 }
             }
             _ => {}
@@ -1026,7 +1081,7 @@ impl State {
                 }
                 Ok(())
             }
-            CallEvent::Stopping => {
+            CallEvent::Stopping { within } => {
                 let made = self.calls.get_mut(&id).ok_or(Rejected::Unknown)?;
                 if made.settled.is_some() {
                     return Err(Rejected::Finished);
@@ -1034,7 +1089,11 @@ impl State {
                 if made.dispatched.is_none() {
                     return Err(Rejected::Busy);
                 }
-                made.stopping = Some(mark);
+                let deadline = crate::cancel::deadline(record.at, *within);
+                made.stopping = Some(CallStop {
+                    asked: mark,
+                    deadline: made.stopping.map_or(deadline, |s| s.deadline.min(deadline)),
+                });
                 Ok(())
             }
             CallEvent::Settled(outcome) => self.settle(id, outcome, record),
@@ -1224,7 +1283,7 @@ impl State {
             Content::Prompt(Prompt::Unblocked) => {
                 self.open.unblocked.insert(delivery.to);
             }
-            Content::Prompt(Prompt::Done) => {}
+            Content::Prompt(Prompt::Done | Prompt::Stopping) => {}
         }
         self.deliveries.insert(
             delivery.id,
@@ -1286,6 +1345,12 @@ impl State {
         self.launch
             .as_ref()
             .map(|(mark, launched)| (*mark, launched))
+    }
+
+    /// When the brain writing the journal must have exited, once it is
+    /// shutting down ([`Fact::Shutdown`]).
+    pub fn shutdown(&self) -> Option<Timestamp> {
+        self.shutdown
     }
 
     pub fn entry(&self, id: EntryId) -> Option<&Entry> {
@@ -1696,12 +1761,28 @@ impl State {
                 {
                     todo.push(Todo::Send(task.id));
                 }
-                (Some(Phase::Thinking(call)), Some(_))
-                    if !self.model_calls.get(call).is_some_and(lost) =>
+                // The tidy-up turn: asked for once, then sent, held or not.
+                (Some(Phase::Ready), Some(Draining::Stopping(s))) if !s.hard => {
+                    if !s.told {
+                        todo.push(Todo::Tidy(task.id));
+                    } else if self.limited(now).is_none() {
+                        todo.push(Todo::Send(task.id));
+                    }
+                }
+                // Every request but a tidy-up turn's.
+                (Some(Phase::Thinking(call)), Some(drain))
+                    if !self.model_calls.get(call).is_some_and(lost)
+                        && !matches!(drain, Draining::Stopping(s) if s.tidying && !s.hard) =>
                 {
                     todo.push(Todo::Abandon(*call));
                 }
                 _ => {}
+            }
+            if let Some(Draining::Stopping(s)) = task.drain()
+                && !s.hard
+                && now >= s.deadline
+            {
+                todo.push(Todo::Expire(task.id));
             }
         }
         // In the order they were made, so a limb is sent one response's
@@ -1712,10 +1793,11 @@ impl State {
         open.sort_by_key(|(_, record)| record.made.seq);
         for (id, record) in open {
             if self.open.scopes.contains_key(&Scope::Spawn(*id)) {
-                let stopping = self
+                let owner = self
                     .call_owner(*id)
                     .and_then(|o| self.tasks.get(&o))
-                    .is_some_and(|o| ends(o.drain()));
+                    .and_then(Task::drain);
+                let stopping = ends(owner);
                 let live: Vec<&Task> = self
                     .members(Scope::Spawn(*id))
                     .filter(|m| !m.is_done())
@@ -1724,8 +1806,13 @@ impl State {
                 if live.is_empty() {
                     todo.push(Todo::Settle(*id));
                 } else if stopping {
-                    let stop = live.iter().filter(|m| !ends(m.drain()));
-                    todo.extend(stop.map(|m| Todo::Stop(m.id)));
+                    let due = |m: &&&Task| match (m.drain(), owner) {
+                        (Some(Draining::Stopping(m)), Some(Draining::Stopping(o))) => {
+                            !m.hard && m.deadline > o.deadline
+                        }
+                        (drain, _) => !ends(drain),
+                    };
+                    todo.extend(live.iter().filter(due).map(|m| Todo::Stop(m.id)));
                 } else if live.iter().all(aside) {
                     let unblock = live.iter().filter(|m| !self.open.unblocked.contains(&m.id));
                     todo.extend(unblock.map(|m| Todo::Unblock(m.id)));
@@ -1743,7 +1830,11 @@ impl State {
                 let due = match (&record.dispatched, &limb.kind) {
                     (None, _) => true,
                     (Some(_), LimbKind::Plugin { .. }) => match connection {
-                        Some(c) => record.stopping.is_none_or(|s| s.seq < c),
+                        Some(c) => record.stopping.is_none_or(|s| {
+                            s.asked.seq < c
+                                || needed_by(readers)
+                                    .is_some_and(|by| s.deadline > by.max(s.asked.at))
+                        }),
                         None => true,
                     },
                     (Some(_), _) => false,
@@ -1770,23 +1861,61 @@ impl State {
         });
         todo.extend(connect.map(Todo::Connect));
         todo.extend(starting);
+        // A brain shutting down starts nothing, and cuts what it has not
+        // been able to finish by its deadline.
+        if let Some(deadline) = self.shutdown {
+            todo.retain(|t| {
+                !matches!(
+                    t,
+                    Todo::Send(_) | Todo::Dispatch(_) | Todo::Root(_) | Todo::Connect(_)
+                )
+            });
+            if now >= deadline {
+                for task in self.live() {
+                    if let Some(Phase::Thinking(call)) = task.phase()
+                        && !self.model_calls.get(call).is_some_and(lost)
+                        && !todo.contains(&Todo::Abandon(*call))
+                    {
+                        todo.push(Todo::Abandon(*call));
+                    }
+                }
+            }
+        }
         todo
     }
+
+    /// By when every task reading the call needs it gone: the latest of
+    /// their stops' deadlines, or `None` where one has none (an interrupt, a
+    /// failure), when the brain's grace applies.
+    pub fn stop_by(&self, call: CallId) -> Option<Timestamp> {
+        let readers: Vec<&Task> = self.live().filter(|t| t.awaits(call)).collect();
+        needed_by(&readers)
+    }
+}
+
+fn needed_by(readers: &[&Task]) -> Option<Timestamp> {
+    let deadlines = readers.iter().map(|t| match t.drain() {
+        Some(Draining::Stopping(s)) => Some(s.deadline),
+        _ => None,
+    });
+    deadlines.collect::<Option<Vec<_>>>()?.into_iter().max()
 }
 
 /// Whether every live task reading this call is draining in a way that
 /// stops it. An interrupt stops the round, not background work; a stop
-/// stops both. A shared attachment runs on while any sibling still wants
-/// it. Max's own calls are never stopped for an agent.
+/// stops both, but for the calls of its tidy-up turn, until its deadline. A
+/// shared attachment runs on while any sibling still wants it. Max's own
+/// calls are never stopped for an agent.
 fn interrupts(id: CallId, call: &Call, readers: &[&Task]) -> bool {
     if matches!(call.caller, Caller::Max { .. }) || readers.is_empty() {
         return false;
     }
     readers.iter().all(|t| match t.drain() {
         None => false,
-        Some(Drain::ToMax) => {
+        Some(Draining::ToMax) => {
             matches!(t.phase(), Some(Phase::Acting(step)) if step.outstanding.contains(&id))
         }
-        Some(Drain::Stop(_) | Drain::Fail(_)) => true,
+        Some(Draining::Stopping(s)) => !s.tidying || s.hard,
+        Some(Draining::Failing(_)) => true,
     })
 }

@@ -1,37 +1,23 @@
-//! Running one command as a process tree the call owns.
+//! Running one command as a tree of processes the call owns.
 
 use std::collections::VecDeque;
 use std::io::{self, Read};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+use harness_core::id::CallId;
 use harness_core::value::Bytes;
+use harness_runtime::{Cancel, Ended as TreeEnded, Group, Wake};
 
 use crate::trunc::{Truncated, Truncator};
-
-/// A request to stop a running call.
-#[derive(Default)]
-pub struct Stop(AtomicBool);
-
-impl Stop {
-    pub fn set(&self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-
-    pub fn get(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
-    }
-}
 
 /// How a command ended.
 pub enum Ended {
     Exited(ExitStatus),
+    /// Its call was stopped.
     Stopped,
     TimedOut,
 }
@@ -41,126 +27,132 @@ pub struct Ran {
     pub output: Truncated,
     /// The whole output, when `output` left some of it out.
     pub full: Option<Vec<u8>>,
+    /// How what was left of its tree ended.
+    pub tree: TreeEnded,
 }
 
-/// How long a process tree gets to exit after `SIGTERM` before `SIGKILL`.
-const GRACE: Duration = Duration::from_secs(1);
-const POLL: Duration = Duration::from_millis(10);
+/// How long what a command leaves behind gets to exit after `SIGTERM`,
+/// when the command exits or reaches its time limit, before `SIGKILL`.
+const GRACE: Duration = Duration::from_secs(2);
 
-/// A command running as a process tree the call owns.
-pub struct Process {
-    child: Child,
-    group: libc::pid_t,
-    capture: Arc<Mutex<Option<Capture>>>,
-    finished: mpsc::Receiver<()>,
+/// The mark a call's processes carry in their environment, which the
+/// limb's next instance finds them by if this one is killed.
+pub fn mark(call: CallId) -> String {
+    call.to_string()
 }
 
-impl Process {
-    /// Start `command` with `bash -c` in `dir`, its stdout and stderr
-    /// merged as a terminal shows them.
-    ///
-    /// The command leads a process group of its own, and the group is the
-    /// call's: when the command exits, is stopped or times out, everything
-    /// still in the group is sent `SIGTERM`, then `SIGKILL`. A process that
-    /// leaves the group (`setsid`) is not the call's any more and is not
-    /// followed.
-    pub fn start(
-        command: &str,
-        dir: &Path,
-        truncator: Truncator,
-        mut progress: impl FnMut(&[u8]) + Send + 'static,
-    ) -> io::Result<Process> {
-        let (mut reader, writer) = io::pipe()?;
-        let mut builder = Command::new("bash");
-        builder
-            .arg("-c")
-            .arg(command)
-            .current_dir(dir)
-            .stdin(Stdio::null())
-            .stdout(writer.try_clone()?)
-            .stderr(writer)
-            .process_group(0);
-        let child = builder.spawn()?;
-        // The builder holds the pipe's write end; the output ends only once
-        // every holder has closed it.
-        drop(builder);
-        let group = child.id() as libc::pid_t;
-
-        let capture = Arc::new(Mutex::new(Some(Capture {
+/// Run `command` with `bash -c` in `dir` as the tree of processes `call`
+/// owns ([`Group`]), its stdout and stderr merged as a terminal shows them,
+/// until it exits, reaches `timeout`, or `cancel` is requested; then end
+/// what is left of the tree: `SIGTERM` to each process, and `SIGKILL` at
+/// the deadline (the cancel's, or a short grace). Returns only once nothing
+/// of the tree is left, or what is left has outlived `SIGKILL`.
+///
+/// One thread does it all, waiting in `poll` on the output, the leader's
+/// exit and the cancel at once.
+pub fn run(
+    call: CallId,
+    command: &str,
+    dir: &Path,
+    timeout: Duration,
+    cancel: &Cancel,
+    truncator: Truncator,
+    progress: impl FnMut(&[u8]),
+) -> io::Result<Ran> {
+    let (reader, writer) = io::pipe()?;
+    // SAFETY: fcntl on the pipe's read end, which this function owns.
+    unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
+    let mut builder = Command::new("bash");
+    builder
+        .arg("-c")
+        .arg(command)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(writer.try_clone()?)
+        .stderr(writer);
+    let mut group = Group::spawn(&mut builder, &mark(call))?;
+    // The builder holds the pipe's write end; the output ends only once
+    // every holder has closed it.
+    drop(builder);
+    let mut output = Output {
+        fd: reader.as_raw_fd(),
+        reader,
+        open: true,
+        capture: Capture {
             truncator,
             full: Full::default(),
-        })));
-        let (done, finished) = mpsc::channel();
-        let shared = capture.clone();
-        thread::spawn(move || {
-            let mut buffer = [0; 8192];
-            loop {
-                let n = match reader.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                };
-                let mut capture = shared.lock().unwrap_or_else(|e| e.into_inner());
-                let Some(capture) = capture.as_mut() else {
-                    break;
-                };
-                capture.feed(&buffer[..n]);
-                progress(&buffer[..n]);
+        },
+        progress,
+    };
+    let mut waiter = cancel.waiter()?;
+    let limit = Instant::now() + timeout;
+    let ended = loop {
+        output.drain();
+        if let Some(status) = group.exited() {
+            break Ended::Exited(status);
+        }
+        if cancel.is_requested() {
+            break Ended::Stopped;
+        }
+        let mut fds = vec![(group.exits(), libc::POLLIN)];
+        fds.extend(output.watch().map(|fd| (fd, libc::POLLIN)));
+        if waiter.wait(&fds, Some(limit))? == Wake::TimedOut {
+            break Ended::TimedOut;
+        }
+    };
+    let deadline = match ended {
+        Ended::Stopped => cancel.deadline().expect("a stop was requested"),
+        Ended::Exited(_) | Ended::TimedOut => Instant::now() + GRACE,
+    };
+    let tree = group.end(&mut waiter, deadline, Some(libc::SIGTERM), || {
+        output.drain();
+        output.watch()
+    })?;
+    // A process that left the tree's reach may hold the output open; it
+    // does not hold the call.
+    output.drain();
+    let capture = output.capture;
+    let truncated = capture.truncator.finish();
+    let full = truncated.cut.then(|| capture.full.finish());
+    Ok(Ran {
+        ended,
+        output: truncated,
+        full,
+        tree,
+    })
+}
+
+/// A command's output as it arrives.
+struct Output<P> {
+    reader: io::PipeReader,
+    fd: RawFd,
+    /// Until every writer has closed it.
+    open: bool,
+    capture: Capture,
+    progress: P,
+}
+
+impl<P: FnMut(&[u8])> Output<P> {
+    /// Take everything the pipe holds now.
+    fn drain(&mut self) {
+        let mut buffer = [0; 8192];
+        while self.open {
+            match self.reader.read(&mut buffer) {
+                Ok(0) => self.open = false,
+                Ok(n) => {
+                    self.capture.feed(&buffer[..n]);
+                    (self.progress)(&buffer[..n]);
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => self.open = false,
             }
-            let _ = done.send(());
-        });
-        Ok(Process {
-            child,
-            group,
-            capture,
-            finished,
-        })
+        }
     }
 
-    /// The process group, which is the leader's pid.
-    pub fn group(&self) -> libc::pid_t {
-        self.group
-    }
-
-    /// Wait for the command to exit, to be stopped, or to reach `timeout`;
-    /// then end whatever is left of its group.
-    pub fn wait(mut self, timeout: Duration, stop: &Stop) -> io::Result<Ran> {
-        let deadline = Instant::now() + timeout;
-        let ended = loop {
-            if let Some(status) = self.child.try_wait()? {
-                break Ended::Exited(status);
-            }
-            if stop.get() {
-                break Ended::Stopped;
-            }
-            if Instant::now() >= deadline {
-                break Ended::TimedOut;
-            }
-            thread::sleep(POLL);
-        };
-        let status = end_group(&mut self.child, self.group)?;
-        let ended = match ended {
-            Ended::Exited(_) => Ended::Exited(status),
-            stopped => stopped,
-        };
-
-        // A process that escaped the group may hold the output open; it
-        // does not hold the call.
-        let _ = self.finished.recv_timeout(GRACE);
-        let capture = self
-            .capture
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .expect("the output is taken once");
-        let output = capture.truncator.finish();
-        let full = output.cut.then(|| capture.full.finish());
-        Ok(Ran {
-            ended,
-            output,
-            full,
-        })
+    /// The descriptor to wake on for more.
+    fn watch(&self) -> Option<RawFd> {
+        self.open.then_some(self.fd)
     }
 }
 
@@ -213,63 +205,29 @@ impl Full {
     }
 }
 
-/// Make sure nothing of the group is left: ask it to stop, give it a
-/// moment, then kill what remains, and reap the leader.
-fn end_group(child: &mut Child, group: libc::pid_t) -> io::Result<ExitStatus> {
-    signal(group, libc::SIGTERM);
-    let deadline = Instant::now() + GRACE;
-    let mut status = None;
-    while Instant::now() < deadline {
-        if status.is_none() {
-            status = child.try_wait()?;
-        }
-        if status.is_some() && !signal(group, 0) {
-            break;
-        }
-        thread::sleep(POLL);
-    }
-    signal(group, libc::SIGKILL);
-    match status {
-        Some(status) => Ok(status),
-        None => child.wait(),
-    }
-}
-
-/// When a process started, in clock ticks since boot: with its pid, an
-/// identity no later process can have. `None` where there is no `/proc`.
-pub fn started(pid: libc::pid_t) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // Field 22; the fields after the command's closing parenthesis start at 3.
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(19)?.parse().ok()
-}
-
-/// Kill a group left by an instance that died while running it, if its
-/// leader is still the process that instance started.
-pub fn kill_orphan(group: libc::pid_t, start: u64) {
-    if started(group) == Some(start) {
-        signal(group, libc::SIGKILL);
-    }
-}
-
-/// Send `signal` to every process in `group`; whether any received it.
-fn signal(group: libc::pid_t, signal: libc::c_int) -> bool {
-    // SAFETY: kill has no memory effects; a negative pid names a group.
-    unsafe { libc::kill(-group, signal) == 0 }
-}
-
 /// The line a command's result ends with.
-pub fn describe(ended: &Ended, timeout: Duration) -> String {
-    match ended {
+pub fn describe(ran: &Ran, timeout: Duration, shutdown: bool) -> String {
+    let ended = match &ran.ended {
         Ended::Exited(status) => match (status.code(), status.signal()) {
             (Some(code), _) => format!("[exit code {code}]"),
             (None, Some(signal)) => format!("[killed by signal {signal}]"),
             (None, None) => "[ended]".into(),
         },
         Ended::TimedOut => format!(
-            "[stopped after {}s, the call's time limit; its processes were killed]",
+            "[stopped after {}s, the call's time limit]",
             timeout.as_secs()
         ),
-        Ended::Stopped => "[interrupted; its processes were killed]".into(),
-    }
+        Ended::Stopped if shutdown => "[interrupted: the harness shut down]".into(),
+        Ended::Stopped => "[interrupted]".into(),
+    };
+    let tree = match &ran.tree {
+        TreeEnded::Graceful => String::new(),
+        TreeEnded::Killed { survivors } if survivors.is_empty() => {
+            " [what it left running did not exit when asked, and was killed]".into()
+        }
+        TreeEnded::Killed { survivors } => {
+            format!(" [processes {survivors:?} it started survived SIGKILL and are still running]")
+        }
+    };
+    format!("{ended}{tree}")
 }

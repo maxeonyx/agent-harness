@@ -65,11 +65,14 @@ pub mod trunc;
 pub mod user;
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, PipeReader};
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::environment::{Description, FromLimb, Instruction, Limb, LimbKind, ToLimb};
@@ -80,8 +83,9 @@ use harness_core::value::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use harness_runtime::Cancel;
+
 use crate::record::{Calls, Recorded};
-use crate::shell::Stop;
 
 /// The resource kinds this limb owns.
 const FILE: &str = "file";
@@ -89,6 +93,10 @@ const INSTRUCTIONS: &str = "instructions";
 
 /// The plugin kind this limb is, which an environment's place names.
 pub const KIND: &str = "workspace";
+
+/// How long its calls get to stop when the limb shuts down without being
+/// told how long: its input closed, or it was signalled.
+pub const SHUTDOWN: Duration = Duration::from_secs(5);
 
 /// A workspace's own settings: the `config` of its [`Limb`] definition.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,8 +202,8 @@ pub struct Config {
 /// One running instance of the workspace limb.
 ///
 /// Everything it says goes to the `Sender` given at [`Workspace::open`],
-/// [`FromLimb::Hello`] first. Dropping it stops every running call and
-/// reaps its processes.
+/// [`FromLimb::Hello`] first. Dropping it stops every running call, within
+/// [`SHUTDOWN`], and waits until each has settled.
 pub struct Workspace {
     inner: Arc<Inner>,
 }
@@ -213,9 +221,11 @@ struct Inner {
     calls: Calls,
     out: Sender<FromLimb>,
     running: Mutex<HashMap<CallId, Running>>,
-    /// For each task, the end of its latest call: its next call waits for
-    /// it.
-    latest: Mutex<HashMap<TaskId, Receiver<()>>>,
+    /// For each task, the end of its latest call: it hangs up when that
+    /// call ends, and the task's next call waits for that.
+    latest: Mutex<HashMap<TaskId, PipeReader>>,
+    /// Shutting down: no new call runs, and a stopped one says why.
+    shutting_down: AtomicBool,
     /// The resources the brain asked to hear about, at the version last
     /// reported.
     watched: Mutex<HashMap<ResourceKey, Version>>,
@@ -225,7 +235,7 @@ struct Inner {
 }
 
 struct Running {
-    stop: Arc<Stop>,
+    cancel: Cancel,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -249,12 +259,19 @@ impl Workspace {
             out,
             running: Mutex::default(),
             latest: Mutex::default(),
+            shutting_down: AtomicBool::new(false),
             watched: Mutex::default(),
             files: Mutex::default(),
         };
-        // An instance that died mid-command left its process trees running.
-        for orphan in inner.calls.orphans()? {
-            shell::kill_orphan(orphan.group, orphan.start);
+        // An instance that was killed mid-command left its processes
+        // running, each carrying its call's mark.
+        for call in inner.calls.orphans()? {
+            let mark = shell::mark(call);
+            let mut waiter = Cancel::new().waiter()?;
+            let deadline = Instant::now() + SHUTDOWN;
+            let members = || harness_runtime::marked(&mark);
+            harness_runtime::end(&mut waiter, deadline, Some(libc::SIGTERM), members, || None)?;
+            inner.calls.ran(call);
         }
         inner.send(FromLimb::Hello {
             instance: inner.instance,
@@ -281,7 +298,8 @@ impl Workspace {
         let inner = &self.inner;
         match message {
             ToLimb::Run { id, call, input } => self.run(id, call, input),
-            ToLimb::Stop { call } => inner.stop(call),
+            ToLimb::Stop { call, within } => inner.stop(call, within),
+            ToLimb::Shutdown { within } => self.stop_all(Duration::from_millis(within)),
             ToLimb::Watch { known } => {
                 let mut report = Report::new(None);
                 let mut watched = lock(&inner.watched);
@@ -311,7 +329,8 @@ impl Workspace {
     fn run(&self, id: CallId, call: Call, input: Bytes) {
         let inner = &self.inner;
         let mut running = lock(&inner.running);
-        if running.contains_key(&id) {
+        // A limb shutting down starts nothing; the next instance runs it.
+        if running.contains_key(&id) || inner.shutting_down.load(Ordering::SeqCst) {
             return;
         }
         match inner.calls.get(id) {
@@ -333,59 +352,92 @@ impl Workspace {
             let outcome = report.failed(&format!("cannot record the call: {e}"));
             return inner.settle(report, outcome);
         }
-        let stop = Arc::new(Stop::default());
-        // Dropped when this call ends, which lets its task's next call go.
-        let (ended, after) = mpsc::channel::<()>();
-        let before = match call.caller {
-            Caller::Agent { task, .. } => lock(&inner.latest).insert(task, after),
-            _ => None,
+        let cancel = Cancel::new();
+        // This call's end: the writer, held until it has settled. The
+        // task's next call waits on the reader.
+        let (before, ended) = match (&call.caller, io::pipe()) {
+            (Caller::Agent { task, .. }, Ok((reader, writer))) => {
+                (lock(&inner.latest).insert(*task, reader), Some(writer))
+            }
+            _ => (None, None),
         };
         let thread = {
             let inner = self.inner.clone();
-            let stop = stop.clone();
+            let cancel = cancel.clone();
             thread::spawn(move || {
-                let _ended = ended;
-                if let Some(before) = before {
-                    let _ = before.recv();
-                }
                 let mut report = Report::new(Some(id));
-                let outcome = if stop.get() {
-                    Outcome::Interrupted { partial: None }
-                } else {
-                    inner.execute(id, &call, &input, &stop, &mut report)
+                let outcome = match after(before, &cancel) {
+                    Ok(()) => inner.execute(id, &call, &input, &cancel, &mut report),
+                    Err(_) => Outcome::Interrupted { partial: None },
                 };
                 inner.rescan(&mut report, call.tool == "bash");
                 inner.settle(report, outcome);
-                lock(&inner.running).remove(&id);
+                drop(ended);
+                let mut running = lock(&inner.running);
+                running.remove(&id);
+                // Orphans the limb adopted that have exited. Only while no
+                // call runs, so no call's own command can be among them.
+                if running.is_empty() {
+                    harness_runtime::reap_children();
+                }
             })
         };
         running.insert(
             id,
             Running {
-                stop,
+                cancel,
                 thread: Some(thread),
             },
         );
     }
 
-    /// Stop every running call, reap its processes, and wait for each to
-    /// settle.
-    pub fn shutdown(&self) {
-        let running: Vec<Running> = lock(&self.inner.running).drain().map(|(_, r)| r).collect();
-        for r in &running {
-            r.stop.set();
+    /// Stop every running call, each to be gone `within` from now, and run
+    /// no new one: what shutting down asks of the calls. Asked again with
+    /// less time, it makes each stop harder.
+    pub fn stop_all(&self, within: Duration) {
+        self.inner.shutting_down.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + within;
+        for running in lock(&self.inner.running).values() {
+            running.cancel.request(deadline);
         }
-        for mut r in running {
-            if let Some(thread) = r.thread.take() {
-                let _ = thread.join();
-            }
+    }
+
+    /// Wait until every call has settled and nothing it started is left.
+    pub fn join(&self) {
+        loop {
+            let thread = lock(&self.inner.running)
+                .values_mut()
+                .find_map(|r| r.thread.take());
+            let Some(thread) = thread else {
+                return;
+            };
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Wait until the call `before` ends (its pipe hangs up), unless this call
+/// is asked to stop first.
+fn after(before: Option<PipeReader>, cancel: &Cancel) -> io::Result<()> {
+    let Some(before) = before else {
+        return Ok(());
+    };
+    let mut waiter = cancel.waiter()?;
+    loop {
+        if cancel.is_requested() {
+            return Err(harness_runtime::Cancelled::error());
+        }
+        if waiter.wait(&[(before.as_raw_fd(), libc::POLLIN)], None)? == harness_runtime::Wake::Ready
+        {
+            return Ok(());
         }
     }
 }
 
 impl Drop for Workspace {
     fn drop(&mut self) {
-        self.shutdown();
+        self.stop_all(SHUTDOWN);
+        self.join();
     }
 }
 
@@ -478,9 +530,10 @@ impl Inner {
         self.send(FromLimb::Facts(batch));
     }
 
-    fn stop(&self, call: CallId) {
+    fn stop(&self, call: CallId, within: u64) {
         if let Some(running) = lock(&self.running).get(&call) {
-            return running.stop.set();
+            let deadline = Instant::now() + Duration::from_millis(within);
+            return running.cancel.request(deadline);
         }
         match self.calls.get(call) {
             Ok(Some(Recorded::Settled(batch))) => self.send(FromLimb::Facts(batch)),

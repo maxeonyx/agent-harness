@@ -209,6 +209,7 @@ impl journal::Store for Store {
 fn index(fact: &Fact) -> (&'static str, Option<String>) {
     match fact {
         Fact::Launched(_) => ("Launched", None),
+        Fact::Shutdown { .. } => ("Shutdown", None),
         Fact::Task(id, _) => ("Task", Some(id.to_string())),
         Fact::ModelCall(id, _) => ("ModelCall", Some(id.to_string())),
         Fact::Call(id, _) => ("Call", Some(id.to_string())),

@@ -91,7 +91,7 @@ say "the same post again, as a page whose connection dropped would retry it:"
 act "{\"Delivery\": {\"id\": \"$delivery\", \"to\": \"$top\", \"content\": {\"Words\": \"$digest\"}}}" "[$words]"
 
 say "== stop the other, $(name "$other")"
-act "{\"Task\": [\"$other\", {\"Drain\": {\"Stop\": \"Max\"}}]}"
+act "{\"Task\": [\"$other\", {\"Drain\": {\"Stop\": {\"by\": \"Max\", \"within\": 120000}}}]}"
 until_waiting "$other" done 60
 say "$(name "$other"): $(q ".tasks[] | select(.id == \"$other\") | .outcome | \"\(.kind) by \(.by)\"")"
 

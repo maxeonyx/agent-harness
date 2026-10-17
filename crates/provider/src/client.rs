@@ -1,25 +1,27 @@
 //! Sending a request and reading its stream.
 
 use std::io::{BufRead, BufReader, Read};
-use std::ops::ControlFlow;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use harness_core::context::{Entry, EntryId};
 use harness_core::id::{ModelCallId, Timestamp, ValueId};
 use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall, Quota, Usage, Window};
+use harness_runtime::{Cancel, Cancelled};
 
 use crate::login::Login;
 use crate::response::Assembly;
-use crate::{Error, request};
+use crate::{Error, http, request};
 
-const URL: &str = "https://api.anthropic.com/v1/messages";
+const HOST: &str = "api.anthropic.com";
+const PATH: &str = "/v1/messages";
 const UNIFIED: &str = "anthropic-ratelimit-unified-";
 
 /// The Messages API on the subscription login. Blocking, and shareable
 /// across threads: each request is one call to [`Client::send`].
 pub struct Client {
-    agent: ureq::Agent,
+    tls: Arc<rustls::ClientConfig>,
     login: Login,
 }
 
@@ -31,9 +33,6 @@ pub enum Progress {
     FirstByte,
     /// Visible text as it streams.
     Live(Live),
-    /// An event with no visible text (thinking, a tool's input): nothing to
-    /// show, and a chance to stop reading.
-    Streaming,
 }
 
 /// How a request ended: the fields of its [`ModelCallEvent::Ended`], and
@@ -50,11 +49,19 @@ pub struct Finished {
 
 impl Client {
     pub fn new(login: Login) -> Client {
-        let agent = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .build()
-            .into();
-        Client { agent, login }
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("ring supports the default protocol versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        Client {
+            tls: Arc::new(tls),
+            login,
+        }
     }
 
     /// Sends `call`, built by [`request::body`] from `base` (the context it
@@ -63,9 +70,12 @@ impl Client {
     ///
     /// `Err` means nothing was sent: the context or the login is unusable.
     /// Otherwise `on` sees [`Progress::FirstByte`] when `message_start`
-    /// arrives, then every event: its visible text as [`Live`], or
-    /// [`Progress::Streaming`]. `on` returning `Break` stops reading, and the
-    /// request ends [`Ending::Abandoned`] with the visible text so far.
+    /// arrives, then the visible text as [`Live`].
+    ///
+    /// Requesting `cancel` cuts the request at once, wherever it is blocked:
+    /// it ends [`Ending::Abandoned`] with the visible text so far and the
+    /// usage the stream had reported. A request has no graceful phase; its
+    /// owner decides whether to let it finish.
     ///
     /// A billing claim other than the plan's window is reported as
     /// [`Quota::on_plan`] `false`, and is a failure: the response is not read.
@@ -75,7 +85,8 @@ impl Client {
         call: &ModelCall,
         base: &[(EntryId, &Entry)],
         value: impl FnMut(ValueId) -> Option<Vec<u8>>,
-        mut on: impl FnMut(Progress) -> ControlFlow<()>,
+        cancel: &Cancel,
+        mut on: impl FnMut(Progress),
     ) -> Result<Finished, Error> {
         let body = request::body(call, base, value)?;
         let token = self.login.token()?;
@@ -85,27 +96,25 @@ impl Client {
             usage,
             quota,
         };
+        let cut = |e: std::io::Error, status| match Cancelled::is(&e) {
+            true => Ending::Abandoned { partial: None },
+            false => failed(status, e.to_string(), None),
+        };
 
-        let response = match self
-            .agent
-            .post(URL)
-            .header("authorization", &token.bearer())
-            .header("anthropic-version", "2023-06-01")
-            .header("anthropic-beta", "oauth-2025-04-20")
-            .header("content-type", "application/json")
-            .send(&body[..])
-        {
+        let bearer = token.bearer();
+        let headers = [
+            ("authorization", bearer.as_str()),
+            ("anthropic-version", "2023-06-01"),
+            ("anthropic-beta", "oauth-2025-04-20"),
+            ("content-type", "application/json"),
+            ("user-agent", concat!("harness/", env!("CARGO_PKG_VERSION"))),
+        ];
+        let response = match http::post(&self.tls, HOST, PATH, &headers, &body, cancel) {
             Ok(response) => response,
-            Err(e) => return Ok(end(failed(None, e.to_string(), None), None, None)),
+            Err(e) => return Ok(end(cut(e, None), None, None)),
         };
-        let status = response.status().as_u16();
-        let header = |name: &str| {
-            response
-                .headers()
-                .get(name)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned)
-        };
+        let status = response.status;
+        let header = |name: &str| response.header(name).map(str::to_owned);
         let ratio = |name: &str| header(&format!("{UNIFIED}{name}")).and_then(|v| v.parse().ok());
         let reset = |name: &str| {
             header(&format!("{UNIFIED}{name}-reset"))
@@ -134,10 +143,14 @@ impl Client {
         .flatten()
         .map(|s| Timestamp(s * 1000));
 
-        let mut reader = response.into_body().into_reader();
+        let mut reader = response.body;
         if status != 200 {
             let mut text = String::new();
-            let _ = reader.read_to_string(&mut text);
+            if let Err(e) = reader.read_to_string(&mut text)
+                && Cancelled::is(&e)
+            {
+                return Ok(end(Ending::Abandoned { partial: None }, None, quota));
+            }
             let message = serde_json::from_str::<serde_json::Value>(&text)
                 .ok()
                 .and_then(|v| v["error"]["message"].as_str().map(str::to_owned))
@@ -159,7 +172,18 @@ impl Client {
         let ending = loop {
             let (name, data) = match next_event(&mut lines) {
                 Some(Ok(event)) => event,
-                Some(Err(e)) => break failed(None, e.to_string(), None),
+                Some(Err(e)) if Cancelled::is(&e) => {
+                    let partial = assembly.visible();
+                    return Ok(Finished {
+                        ending: Ending::Abandoned {
+                            partial: partial.as_deref().map(ValueId::of),
+                        },
+                        value: partial,
+                        usage: assembly.usage(),
+                        quota,
+                    });
+                }
+                Some(Err(e)) => break cut(e, Some(status)),
                 None => break failed(Some(status), "the stream ended early".into(), None),
             };
             let parsed: serde_json::Value = match serde_json::from_str(&data) {
@@ -173,26 +197,14 @@ impl Client {
             if let Err(message) = assembly.apply(&name, &parsed) {
                 break failed(Some(status), message, None);
             }
-            if name == "message_start" && on(Progress::FirstByte).is_break() {
-                break Ending::Abandoned { partial: None };
+            if name == "message_start" {
+                on(Progress::FirstByte);
             }
-            let progress = match text_delta(&name, &parsed) {
-                Some(chunk) => Progress::Live(Live::Model {
+            if let Some(chunk) = text_delta(&name, &parsed) {
+                on(Progress::Live(Live::Model {
                     call: id,
                     chunk: chunk.to_owned(),
-                }),
-                None => Progress::Streaming,
-            };
-            if on(progress).is_break() {
-                let partial = assembly.visible();
-                return Ok(Finished {
-                    ending: Ending::Abandoned {
-                        partial: partial.as_deref().map(ValueId::of),
-                    },
-                    value: partial,
-                    usage: assembly.usage(),
-                    quota,
-                });
+                }));
             }
             if name == "message_stop" {
                 let response = assembly.content().and_then(|content| {

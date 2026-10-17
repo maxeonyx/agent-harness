@@ -1220,7 +1220,10 @@ function renderControls(t) {
   else if (t.waiting?.kind !== "max") button("Interrupt", "Stop at the next safe point and wait for you", () => ({ Task: [t.id, { Drain: "ToMax" }] }), "interrupted: your move once it stops");
   button(t.held ? "Release" : "Hold", "No new requests under it until released", () => ({ Task: [t.id, { Held: !byId[t.id].held }] }), t.held ? "released" : "held");
   if (t.mode === "user-facing") button("Done", "It writes its result and finishes", () => ({ Delivery: { id: mint(), to: t.id, content: { Prompt: "Done" } } }), "done: its last turn writes the result", true);
-  button("Stop", "Cancel it and everything it started", () => ({ Task: [t.id, { Drain: { Stop: "Max" } }] }), "stopping", true);
+  // A stop gives it two minutes to stop what it started and tidy up; Kill
+  // ends a stopping task now, with no tidy-up turn.
+  if (!t.stop) button("Stop", "Cancel it and everything it started: it tidies up and reports, within two minutes", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 120000 } } }] }), "stopping: it tidies up, then reports", true);
+  else if (!t.stop.hard) button("Kill", "End it and everything it started now, with no tidy-up turn", () => ({ Task: [t.id, { Drain: { Stop: { by: "Max", within: 0 } } }] }), "killed", true);
   box.append(answer);
 }
 
@@ -1580,7 +1583,7 @@ function renderTail(s, t) {
   if (bad) parts.push(Object.assign(el("div", "entry card ended", bad)));
   const o = t.outcome;
   if (o?.kind === "failed") parts.push(el("div", "entry card ended", `Failed: ${o.reason}`));
-  if (o?.kind === "cancelled") parts.push(el("div", "entry card ended", `Cancelled by ${o.by === "Max" ? "you" : "its owner stopping"}`));
+  if (o?.kind === "cancelled") parts.push(el("div", "entry card ended", `Cancelled by ${o.by === "Max" ? "you" : "its owner stopping"}${o.report ? "; its last message is its report" : ", before it could write a report"}`));
   if (!t.head && !isDone(t)) parts.push(el("div", "note", `Starting: ${look(t).text}`), mandateCard(t));
   const key = JSON.stringify([t.waiting?.kind, t.waiting?.call, (t.pending || []).length, ask?.id, bad, o, t.head]);
   if (tail.dataset.key !== key || parts.some((p) => p.classList?.contains("live-holder"))) {

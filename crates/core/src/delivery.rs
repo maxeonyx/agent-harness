@@ -99,4 +99,10 @@ pub enum Prompt {
     /// it was opened on is waiting only on it, and carries on once Max marks
     /// it done. Said once per aside ([`crate::state::Todo::Unblock`]).
     Unblocked,
+    /// The task is being cancelled, and everything it started has stopped:
+    /// leave what it was doing safe and understandable, then end the turn
+    /// with a report of where things stand, before the deadline. The one
+    /// turn a stopping task gets ([`crate::cancel`]); said once, by the
+    /// brain ([`crate::state::Todo::Tidy`]).
+    Stopping,
 }

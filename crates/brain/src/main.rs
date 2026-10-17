@@ -18,6 +18,12 @@
 //! [`ToLimb`]: harness_core::environment::ToLimb
 //! [`FromLimb`]: harness_core::environment::FromLimb
 //!
+//! Ctrl-C, `SIGTERM` or `SIGHUP` shuts the brain down: nothing new starts,
+//! the requests in flight have [`policy::DRAIN`] to finish, the limbs stop
+//! their commands and exit, and the process exits once none of it is left.
+//! A second signal cuts everything now. Tasks are not stopped: the next
+//! launch carries them on from the journal ([`harness_core::cancel`]).
+//!
 //! The face is served from the same process. After each commit the brain
 //! hands it the state, a persistent value it holds while the brain moves
 //! on, so Max watches exactly what the brain appended; the bytes facts name
@@ -138,6 +144,7 @@ fn run() -> Result<(), String> {
     .map_err(|e| format!("the certificate: {e}"))?;
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("port {port}: {e}"))?;
     let inbox = Inbox::new();
+    inbox.signals()?;
     let login = || Login::claude_code().map_err(|e| format!("the login: {}", e.0));
     let feed = Feed::default();
     let mut dictation = Dictation::new(login()?);
@@ -158,7 +165,7 @@ fn run() -> Result<(), String> {
     let mut brain = Brain::launch(
         store, commits, client, state_dir, &roles, start, inbox, feed,
     )?;
-    // The brain and the face it serves run until the process is killed.
+    // The face serves until the brain has shut down.
     thread::scope(|s| {
         s.spawn(|| face.follow(followed));
         s.spawn(|| {
@@ -168,6 +175,8 @@ fn run() -> Result<(), String> {
         });
         println!("face: https://mx-hv-mj.local:{port}");
         brain.run();
-    });
-    Ok(())
+        eprintln!("harness-brain: shut down");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        std::process::exit(0)
+    })
 }

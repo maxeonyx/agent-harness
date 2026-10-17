@@ -7,6 +7,7 @@ description = "The workspace limb: a shell and file tools in one directory, as c
 
 [dependencies]
 harness-core = { path = "../core" }
+harness-runtime = { path = "../runtime" }
 libc = "0.2"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
