@@ -351,28 +351,12 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
     let calls =
         |calls: &[CallId]| -> Vec<Value> { calls.iter().map(|c| call(state, value, *c)).collect() };
     match w {
-        Waiting::Starting { limbs, since } => {
-            let name = |l: &LimbId| {
-                state
-                    .limb(*l)
-                    .map_or_else(|| l.to_string(), |l| l.name.clone())
-            };
-            // A limb the brain cannot reach says why, so a task that will
-            // not start shows it.
-            let unreachable: Vec<Value> = limbs
-                .iter()
-                .filter_map(|l| match &state.reach(*l)?.reach {
-                    Reach::Unreachable { why } => Some(json!({"limb": name(l), "why": why})),
-                    _ => None,
-                })
-                .collect();
-            json!({
-                "kind": "starting",
-                "since": since.0,
-                "limbs": limbs.iter().map(name).collect::<Vec<_>>(),
-                "unreachable": unreachable,
-            })
-        }
+        Waiting::Starting { limbs, since } => json!({
+            "kind": "starting",
+            "since": since.0,
+            "limbs": limbs.iter().map(|(l, _)| limb_name(state, *l)).collect::<Vec<_>>(),
+            "failed": limbs.iter().filter_map(|(l, why)| Some(json!({"limb": limb_name(state, *l), "why": why.as_ref()?}))).collect::<Vec<_>>(),
+        }),
         Waiting::Brain { since } => json!({"kind": "harness", "since": since.0}),
         Waiting::Paused { since } => json!({"kind": "held", "since": since.0}),
         Waiting::Parked { since } => json!({"kind": "parked", "since": since.0}),
@@ -589,8 +573,8 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             match reach {
                 Reach::Connected { .. } => format!("{limb} connected"),
                 Reach::Lost => format!("{limb} lost"),
-                Reach::Unreachable { why } => {
-                    format!("{limb} unreachable: {why}")
+                Reach::Failed { why } => {
+                    format!("{limb} failed to start: {why}")
                 }
             }
         }
@@ -618,4 +602,11 @@ fn outcome(o: &CallOutcome) -> &'static str {
         CallOutcome::Interrupted { .. } => "interrupted",
         CallOutcome::Unknown => "ended unknown",
     }
+}
+
+/// A limb's name, or its id if it has none here.
+fn limb_name(state: &State, limb: LimbId) -> String {
+    state
+        .limb(limb)
+        .map_or_else(|| limb.to_string(), |l| l.name.clone())
 }

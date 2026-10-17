@@ -588,7 +588,7 @@ impl Brain {
                 ..
             } => {
                 let why = format!("on {destination}: limbs on other machines are not built yet");
-                return self.unreachable(limb, why);
+                return self.unreached(limb, why);
             }
             // Hosted in the brain's own process at launch.
             _ => return,
@@ -603,20 +603,21 @@ impl Brain {
             }
             Err(e) => {
                 eprintln!("limb {limb}: its process cannot start: {e}");
-                self.failed.insert(limb, Instant::now());
-                self.unreachable(limb, format!("its process cannot start: {e}"));
+                self.unreached(limb, format!("its process cannot start: {e}"));
             }
         }
     }
 
-    /// The brain could not reach `limb`, for this reason: stated when the
-    /// reason is new, so a task waiting on it shows why.
-    fn unreachable(&mut self, limb: LimbId, why: String) {
-        let reach = Reach::Unreachable { why };
-        if self.state().reach(limb).is_some_and(|r| r.reach == reach) {
-            return;
+    /// The brain could not reach `limb`: try again after [`RESTART`], and
+    /// record why, unless that is already the last thing recorded of it.
+    fn unreached(&mut self, limb: LimbId, why: String) {
+        self.failed.insert(limb, Instant::now());
+        if self.state().failed(limb) != Some(why.as_str()) {
+            self.fact(Fact::Reach {
+                limb,
+                reach: Reach::Failed { why },
+            });
         }
-        self.fact(Fact::Reach { limb, reach });
     }
 
     /// Let go of the limb processes that have exited.
@@ -633,8 +634,7 @@ impl Brain {
             if !self.links.contains_key(&limb) && self.state().shutdown().is_none() {
                 let why = process.last_words();
                 eprintln!("limb {limb}: its process ended without connecting: {why}");
-                self.failed.insert(limb, Instant::now());
-                self.unreachable(limb, why);
+                self.unreached(limb, why);
             }
         }
     }

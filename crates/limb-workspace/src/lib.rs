@@ -70,7 +70,7 @@ pub mod user;
 use std::collections::HashMap;
 use std::io::{self, PipeReader};
 use std::os::fd::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -254,23 +254,41 @@ struct Running {
     thread: Option<JoinHandle<()>>,
 }
 
+/// `dir` as an absolute path: `~/…` in `$HOME`.
+fn absolute(dir: &Path) -> io::Result<PathBuf> {
+    if let Ok(rest) = dir.strip_prefix("~") {
+        let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("no $HOME for `~`"))?;
+        return Ok(PathBuf::from(home).join(rest));
+    }
+    if dir.is_absolute() {
+        return Ok(dir.to_path_buf());
+    }
+    Err(io::Error::other(format!(
+        "{} is not an absolute path",
+        dir.display()
+    )))
+}
+
 impl Workspace {
-    /// Start an instance: make its clone if it has one to make, open its
-    /// log, and end what an earlier instance left running. Blocks while it
-    /// clones.
+    /// Start an instance: make its directory (its clone, if it has one to
+    /// make), open its log, and end what an earlier instance left running.
+    /// Blocks while it clones. A directory given as `~/…` is in `$HOME`; any
+    /// other must be absolute.
     pub fn open(config: Config, out: Out) -> io::Result<Workspace> {
         let Settings { dir, clone, skills } = config.settings;
-        if let Some(clone) = &clone {
-            git::clone(clone, &dir)?;
+        let dir = absolute(&dir)?;
+        match &clone {
+            Some(clone) => git::clone(clone, &dir)?,
+            None => std::fs::create_dir_all(&dir).map_err(|e| {
+                io::Error::new(e.kind(), format!("cannot make {}: {e}", dir.display()))
+            })?,
         }
         std::fs::create_dir_all(&config.state)?;
         let store = Store::open(config.state.join("limb.sqlite")).map_err(io::Error::other)?;
         let log = Log::open(store.replica(), store).map_err(io::Error::other)?;
         let inner = Inner {
             limb: config.limb,
-            root: dir
-                .canonicalize()
-                .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", dir.display())))?,
+            root: dir.canonicalize()?,
             clone,
             skills,
             kind: config.kind,

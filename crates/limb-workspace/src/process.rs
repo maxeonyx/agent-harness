@@ -9,6 +9,10 @@
 //! does not cover. Only a link gone for [`ABSENT`] means the brain is not
 //! coming back.
 //!
+//! A limb that cannot start (its directory cannot be made, its clone
+//! fails) exits saying why on its standard error, which the brain keeps in
+//! the limb's `log` and records as why it never connected.
+//!
 //! It exits only once nothing it started is left: the link gone for good,
 //! or a signal, it stops every running call (`SIGTERM` to each command's
 //! processes, `SIGKILL` at the deadline), waits for each to settle, ends

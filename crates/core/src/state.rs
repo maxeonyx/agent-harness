@@ -320,9 +320,10 @@ pub enum Waiting {
     /// On its limbs, before its first root: the plugin limbs it can reach
     /// that have not connected and described themselves (a clone being
     /// made, a process starting). Empty when they all have, and the brain
-    /// is rooting it.
+    /// is rooting it. Each says why its last process failed, if it did
+    /// ([`Reach::Failed`]): Max sees why it is stuck, and can stop it.
     Starting {
-        limbs: Vec<LimbId>,
+        limbs: Vec<(LimbId, Option<String>)>,
         since: Timestamp,
     },
     /// On the brain to send its next request.
@@ -1905,9 +1906,17 @@ impl State {
                 at,
             } => Some((*instance, *at)),
             Reached {
-                reach: Reach::Lost | Reach::Unreachable { .. },
+                reach: Reach::Lost | Reach::Failed { .. },
                 ..
             } => None,
+        }
+    }
+
+    /// Why a limb's process ended before it connected, if its last one did.
+    pub fn failed(&self, limb: LimbId) -> Option<&str> {
+        match &self.reach.get(&limb)?.reach {
+            Reach::Failed { why } => Some(why),
+            _ => None,
         }
     }
 
@@ -2106,6 +2115,7 @@ impl State {
                         .limbs_of(t)
                         .into_iter()
                         .filter(|l| !self.reached(*l))
+                        .map(|l| (l, self.failed(l).map(str::to_owned)))
                         .collect(),
                     since,
                 });

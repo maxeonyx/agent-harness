@@ -22,6 +22,8 @@ use harness_runtime::Group;
 pub struct Process {
     group: Group,
     log: PathBuf,
+    /// Where in `log` this process began.
+    from: usize,
 }
 
 impl Process {
@@ -32,9 +34,15 @@ impl Process {
             return Err(io::Error::other("only a plugin limb is a process"));
         };
         let program = std::env::current_exe()?.with_file_name(format!("harness-limb-{kind}"));
-        std::fs::create_dir_all(state)?;
         let log = state.join("log");
-        let out = File::options().create(true).append(true).open(&log)?;
+        let at = |e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", log.display()));
+        std::fs::create_dir_all(state).map_err(at)?;
+        let out = File::options()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .map_err(at)?;
+        let from = out.metadata()?.len() as usize;
         let mut command = Command::new(&program);
         command
             .arg(state)
@@ -45,13 +53,14 @@ impl Process {
             .stderr(out);
         let group = Group::spawn(&mut command, &format!("limb-{}", definition.id))
             .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", program.display())))?;
-        Ok(Process { group, log })
+        Ok(Process { group, log, from })
     }
 
     /// The last thing it printed, which for a limb that exited without
     /// connecting is why.
     pub fn last_words(&self) -> String {
-        let text = std::fs::read_to_string(&self.log).unwrap_or_default();
+        let text = std::fs::read(&self.log).unwrap_or_default();
+        let text = String::from_utf8_lossy(text.get(self.from..).unwrap_or_default());
         let last = text.lines().rev().find(|l| !l.trim().is_empty());
         match last {
             Some(line) => line.trim().to_string(),

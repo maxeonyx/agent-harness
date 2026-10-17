@@ -344,7 +344,7 @@ impl LimbKind {
 /// as it is and remotely through `ssh <destination>`: it starts the limb if
 /// no instance holds its state, then carries the link over its own stdin
 /// and stdout, and what it prints when it fails is the reason the brain
-/// records ([`Reach::Unreachable`]). So starting and reconnecting are one
+/// records ([`Reach::Failed`]). So starting and reconnecting are one
 /// act, local and remote are one path, and the limb's definition reaches it
 /// in its view ([`LimbRow::Definition`]), not on a command line. Starting a
 /// limb that is already running does nothing; two brains of one domain (an
@@ -426,11 +426,12 @@ pub enum Reach {
     /// The connection dropped. Calls sent to it stay sent; the throbber says
     /// "waiting on reconnect" rather than "running".
     Lost,
-    /// The brain tried to start or connect to it and could not, for this
-    /// reason, in the words of whatever failed: the host is down, SSH
-    /// refused, the clone could not be made, the program is missing. The
-    /// brain keeps trying; a task starting or waiting on it shows why.
-    Unreachable { why: String },
+    /// The brain could not reach it, saying why in the words of whatever
+    /// failed: its process could not start, or ended before it connected
+    /// (its directory could not be made, its clone failed, the program is
+    /// missing), or its host cannot be reached. The brain tries again while
+    /// a task needs it; a task starting on it shows why it is stuck.
+    Failed { why: String },
 }
 
 /// What a plugin limb says about itself, rendered into each root.
