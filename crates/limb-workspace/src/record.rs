@@ -1,4 +1,5 @@
-//! What the limb keeps on disk beside its log: marks of its calls.
+//! What the limb keeps on disk beside its log: marks of its calls, and the
+//! whole outputs its tools' views left some of out.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -73,6 +74,47 @@ fn calls(dir: &Path) -> io::Result<Vec<CallId>> {
         }
     }
     Ok(calls)
+}
+
+/// The whole outputs of the latest calls whose view left some out, a file
+/// per call, where the agent can `read` or `grep` them.
+pub struct Outputs {
+    dir: PathBuf,
+}
+
+/// Outputs kept; the oldest beyond this are removed.
+const OUTPUTS: usize = 100;
+
+impl Outputs {
+    pub fn open(dir: PathBuf) -> io::Result<Outputs> {
+        fs::create_dir_all(&dir)?;
+        Ok(Outputs { dir })
+    }
+
+    /// Keep `call`'s whole output, and say where.
+    pub fn keep(&self, call: CallId, bytes: &[u8]) -> io::Result<PathBuf> {
+        let path = self.dir.join(format!("{call}.txt"));
+        fs::write(&path, bytes)?;
+        self.prune();
+        Ok(path)
+    }
+
+    fn prune(&self) {
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return;
+        };
+        let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+            .collect();
+        if files.len() <= OUTPUTS {
+            return;
+        }
+        files.sort();
+        for (_, path) in &files[..files.len() - OUTPUTS] {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 /// Replace a file's content all at once: a reader sees the old bytes or the
