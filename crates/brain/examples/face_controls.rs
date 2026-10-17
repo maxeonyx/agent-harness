@@ -90,7 +90,9 @@ fn main() {
     );
     verdict(&mut max, "resume", released);
 
-    title("interrupt both children as soon as they are under way");
+    title(
+        "park the root once both children are under way: each brings its work to a safe point and waits",
+    );
     max.listen(Duration::from_secs(180), |d| children(d).len() == 2);
     let kids = children(&max);
     assert_eq!(kids.len(), 2, "the root spawned two children");
@@ -99,7 +101,42 @@ fn main() {
         max.listen(Duration::from_secs(120), |d| {
             d.turn(kid).is_some() && waiting(d, kid) != "starting"
         });
-        let turn = max.turn(kid).expect("the child's first request");
+    }
+    let parked = say_facts(
+        &mut max,
+        vec![Fact::Task(root, TaskEvent::Pause(Pause::Park))],
+    );
+    verdict(&mut max, "park", parked);
+    max.listen(Duration::from_secs(300), |d| {
+        kids.iter().all(|k| waiting(d, *k) == "parked")
+    });
+    for &kid in &kids {
+        say(&format!("{}: {}", name(&max, kid), waiting(&max, kid)));
+        assert_eq!(waiting(&max, kid), "parked", "{} parked", name(&max, kid));
+    }
+    // The turn that read the park prompt is over; resuming starts another.
+    let last: Vec<_> = kids.iter().map(|k| max.turn(*k)).collect();
+    let resumed = say_facts(
+        &mut max,
+        vec![Fact::Task(root, TaskEvent::Pause(Pause::Off))],
+    );
+    verdict(&mut max, "resume", resumed);
+    max.listen(Duration::from_secs(120), |d| {
+        kids.iter()
+            .zip(&last)
+            .all(|(k, l)| d.turn(*k).is_some() && d.turn(*k) != *l)
+    });
+    for &kid in &kids {
+        say(&format!(
+            "{}: carrying on, on '{}'",
+            name(&max, kid),
+            waiting(&max, kid)
+        ));
+    }
+
+    title("interrupt both children in their next request");
+    for &kid in &kids {
+        let turn = max.turn(kid).expect("the child's request");
         say(&format!(
             "interrupt {} while it is on '{}', naming its request {turn}",
             name(&max, kid),
@@ -282,7 +319,6 @@ fn main() {
 /// What the brain logs of Max's controls.
 const CONTROLS: &[&str] = &[
     " paused",
-    " parked",
     " resumed",
     " interrupted",
     "response cut",

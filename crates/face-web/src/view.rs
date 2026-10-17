@@ -471,7 +471,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             TaskEvent::Expired => format!("{} is past its deadline: stopped hard", name(*id)),
             TaskEvent::Drain(Drain::Fail(why)) => format!("{} failing: {why}", name(*id)),
             TaskEvent::Pause(Pause::Now) => format!("{} paused", name(*id)),
-            TaskEvent::Pause(Pause::Park) => format!("{} parked", name(*id)),
+            TaskEvent::Pause(Pause::Park) => format!("{} paused for now", name(*id)),
             TaskEvent::Pause(Pause::Off) => format!("{} resumed", name(*id)),
         },
         Fact::ModelCall(id, event) => {
