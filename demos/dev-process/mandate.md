@@ -5,6 +5,6 @@ textstats needs two things, which can go in parallel, so start them in one scope
 
 Quote this mandate to both of them: it is my own words. Keep it small and cheap: this is a demonstration of the process, not a product. And I type curly apostrophes, so “don’t” has to count as one word.
 
-One choice is Max's, and the README doesn't settle it: whether a lone apostrophe (`'` on its own) counts as a word. Don't wait for him: decide what you think best, tell the engineer, and ask Max in the background so he can overturn it.
+One choice is Max's, and the README doesn't settle it: whether a lone apostrophe (`'` on its own) counts as a word. Don't wait for him: decide what you think best, tell the engineer, and put the choice and why in your report so he can overturn it.
 
 When both are back, check that each branch is on origin (`git fetch` then `git log --oneline origin/<branch>`), and report in a few lines.

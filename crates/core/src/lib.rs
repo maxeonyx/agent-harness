@@ -22,7 +22,7 @@
 //! | A replica: the brain, a limb's instance, a face | [`id::ReplicaId`] | its own records ([`schema::Record`]); the brain includes the others' | the brain's [`state::State`], a persistent value any reader can hold; a follower's view of it |
 //! | A build of the brain | [`build::BuildId`]; its span opened by [`build::Launched`] | [`fact::Fact::Launched`], [`fact::Fact::Shutdown`] | [`state::State::launch`], [`state::State::shutdown`] |
 //! | A value | [`id::ValueId`] | none: immutable [`value::Bytes`], arriving in the [`fact::Batch`] that first names them | itself |
-//! | Max's words | a value he said | the delivery, mandate or answer that carried them | [`state::State::said`], [`state::State::heard`] |
+//! | Max's words | a value he said | the delivery, mandate or settlement that carried them | [`state::State::said`], [`state::State::heard`] |
 //! | A context | [`context::Entry`], named by [`context::EntryId`] | none: carried inside the fact that first sends or receives it | [`state::State::context`] |
 //! | A task | [`task::Task`] | [`task::TaskEvent`], and the facts below that concern it | [`task::Task`]: its [`task::Life`], folded by the brain's fold ([`schema::Harness`]) |
 //! | A request | [`model_call::ModelCall`] | [`model_call::ModelCallEvent`] | [`state::ModelCallRecord`] |
@@ -93,7 +93,7 @@
 //!   chat are calls to the agent's own tools, his controls over the tree are
 //!   task events he authors, and each of his facts records how far his face
 //!   had shown him ([`fact::Fact::Seen`]). Waiting on him is derived, so his queue is never out of step
-//!   with the tasks. Whatever he says (a message, a mandate, an answer) is a
+//!   with the tasks. Whatever he says (a message, a mandate) is a
 //!   value the fold remembers as his and as heard by the task he said it to,
 //!   so a task, the root one included, can hand it on verbatim as a quote
 //!   ([`task::Mandate::quotes`]) and nobody can forge one. A message is a
@@ -215,18 +215,19 @@
 //!   meanwhile is refused ([`fact::Rejected::Scoped`],
 //!   [`state::State::scoped`]) so the face can offer the aside; under
 //!   background scopes it would not arise.
-//! - A provisional choice is an ask of Max made in the background, which
-//!   queues him without blocking the asker ([`state::State::queue`]); the
-//!   other path is a hold that waits for him.
-//! - An autonomous turn that ends with background work running, an
-//!   unanswered ask of Max included: it lingers, told once
+//! - An agent needing Max faces him: a user-facing task ends its turn
+//!   with what it needs in its message ([`state::Waiting::Max`]); an
+//!   autonomous one tells its owner, which faces him or carries it up.
+//!   There is no question separate from a message, and no agent
+//!   interrupts him mid-turn.
+//! - An autonomous turn that ends with background work running: it
+//!   lingers, told once
 //!   ([`delivery::Prompt::Lingering`]), and decides whether to wait or stop
 //!   the work.
 //! - Where role files live (shared with Claude Code's `.claude/agents/`
 //!   during the transition, or the harness's own), and whether the
 //!   orchestrator's environment holds a shell or only meta tools and Max
 //!   ([`environment::Environment`]).
-//! - Which agents may ask Max mid-turn ([`environment::LimbKind::Max`]).
 //! - No tool is given to every agent implicitly; each comes from a limb.
 //! - Sending one draft from two faces at once: the first Send the brain
 //!   includes delivers it; a later Send of other words opens a new draft

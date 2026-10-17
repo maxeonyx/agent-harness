@@ -52,7 +52,6 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use harness_core::call::Caller;
 use harness_core::context::{Entry, EntryId, Note, Rendered};
 use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::fact::Refusal;
@@ -360,9 +359,6 @@ enum Author {
     /// Max's words, after the harness's label for them: the last of the
     /// run's blocks, as many as his words are.
     Max { words: ValueId, at: Timestamp },
-    /// Max's answer to a question asked in the background, in one block
-    /// with the harness's note.
-    Answer { words: ValueId },
     /// A standard prompt: Max's Done, or the stop an owner or Max made.
     Prompt(Prompt),
 }
@@ -429,20 +425,7 @@ fn author(state: &State, task: TaskId, from: &Rendered) -> Author {
             }) => Author::Prompt(*prompt),
             None => Author::Harness,
         },
-        Rendered::Call(call) => match state.call(*call) {
-            Some(record)
-                if state.is_ask(*call)
-                    && matches!(record.call.caller, Caller::Background { .. }) =>
-            {
-                match record.outcome().and_then(|o| o.output()) {
-                    Some(output) => Author::Answer {
-                        words: output.model,
-                    },
-                    None => Author::Call,
-                }
-            }
-            _ => Author::Call,
-        },
+        Rendered::Call(_) => Author::Call,
         // A task Max started, an aside or a resume, opens with his words.
         Rendered::Note(Note::Mandate) => match state.task(task) {
             Some(t) if t.by.is_none() => Author::Max {
@@ -490,13 +473,6 @@ fn authors(
                         Author::Mandate => json!({"by": "mandate"}),
                         Author::Brief => json!({"by": "brief"}),
                         Author::Prompt(p) => json!({"by": "prompt", "prompt": format!("{p:?}")}),
-                        Author::Answer { words } => {
-                            let said: Vec<String> = blocks(words)
-                                .iter()
-                                .filter_map(|b| b["text"].as_str().map(String::from))
-                                .collect();
-                            json!({"by": "answer", "said": said.join("\n")})
-                        }
                     },
                 })
                 .collect();
@@ -529,7 +505,34 @@ fn now() -> Timestamp {
     Timestamp(ms as i64)
 }
 
-const PAGE: &str = include_str!("page.html");
+/// The page: one document, one style sheet and one script, written as the
+/// pieces in `page/` and joined here in this order, so a piece runs exactly
+/// as if the whole were one file. Each piece is one area of the face; its
+/// first comment says which.
+const PAGE: &str = concat!(
+    include_str!("page/head.html"),
+    include_str!("page/base.css"),
+    include_str!("page/chrome.css"),
+    include_str!("page/map.css"),
+    include_str!("page/overlays.css"),
+    include_str!("page/card.css"),
+    include_str!("page/compose.css"),
+    include_str!("page/phone.css"),
+    include_str!("page/body.html"),
+    include_str!("page/base.js"),
+    include_str!("page/tab.js"),
+    include_str!("page/map.js"),
+    include_str!("page/camera.js"),
+    include_str!("page/draw.js"),
+    include_str!("page/hover.js"),
+    include_str!("page/chrome.js"),
+    include_str!("page/card.js"),
+    include_str!("page/log.js"),
+    include_str!("page/compose.js"),
+    include_str!("page/newchat.js"),
+    include_str!("page/main.js"),
+    include_str!("page/tail.html"),
+);
 /// The tab, as the page runs it.
 const TAB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tab.wasm"));
 

@@ -5,7 +5,7 @@
 //!   the wording of everything the harness says to a model.
 //! - [`policy`]: retries and backoff, breakpoint placement, fan-out gating
 //!   on first byte, and how long things get to stop.
-//! - [`meta`], [`max`], [`web`]: the limbs the brain implements itself,
+//! - [`meta`], [`web`]: the limbs the brain implements itself,
 //!   their tools and what their calls mean.
 //!
 //! **The boundary.** The crate does no I/O: no files, processes, sockets,
@@ -19,7 +19,6 @@
 //! What the provider requires of a request (its identity line) is the
 //! provider's, and given to [`render::root`] by the caller.
 
-pub mod max;
 pub mod meta;
 pub mod policy;
 pub mod render;

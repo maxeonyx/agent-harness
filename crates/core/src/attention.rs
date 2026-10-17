@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CallId, TaskId, Timestamp};
+use crate::id::{TaskId, Timestamp};
 
 /// The order in which waiting tasks should get Max's attention, as last
 /// decided, with a reason for each.
@@ -10,13 +10,12 @@ use crate::id::{CallId, TaskId, Timestamp};
 /// **Concept.** Max's queue is not stored. It is derived
 /// ([`crate::state::State::queue`]): a task is in it while Max owes it a
 /// word ([`crate::task::Task::owed_since`]: a user-facing turn ended, or he
-/// interrupted) or while it has an outstanding `ask` of his limb mid-turn.
-/// Each keeps the time it started waiting, so a task keeps its place
+/// interrupted). An agent facing him says what it needs from him in its
+/// message; a question is not a separate item. Each keeps the time it started waiting, so a task keeps its place
 /// through a harness turn (a handover before its cache expires) and leaves
 /// only when Max answers.
 ///
-/// The ranking only orders. It is keyed by task, so it never goes stale
-/// because a task asked a second question, and a ranked task that no longer
+/// The ranking only orders. It is keyed by task, so a ranked task that no longer
 /// waits drops out without anyone removing it. Tasks it has not placed come
 /// after the ranked ones, oldest first, so the next item exists the instant
 /// Max finishes one, and a slow, failed or usage-limited scheduler degrades
@@ -66,8 +65,6 @@ pub struct Queued {
     pub task: TaskId,
     /// Since when it has waited on him.
     pub since: Timestamp,
-    /// Its outstanding question, when it asked one mid-turn.
-    pub ask: Option<CallId>,
     /// The ranking's reason; `None` while unranked.
     pub why: Option<String>,
 }

@@ -1,0 +1,25 @@
+  /* The ground everything stands on: colours, type, the page itself. */
+  :root {
+    --ground: #f0eee6; --paper: #faf9f5; --white: #fffefb; --line: #e3dfd3; --ink: #141413;
+    --muted: #6b6a64; --faint: #a19f96; --maroon: #7a1f22; --hover: #e9e5d9;
+    --green: #4f8a55; --red: #b3352c;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    --ease: cubic-bezier(.2, .8, .2, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); -webkit-tap-highlight-color: transparent; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  .btn {
+    display: inline-flex; align-items: center; gap: .35em; padding: .3em .75em; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--paper); white-space: nowrap;
+  }
+  .btn:hover { background: var(--hover); }
+  .btn.armed { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  [hidden] { display: none !important; }
+  .icon { display: inline-grid; place-items: center; width: 2.15em; height: 2.15em; border-radius: 50%; color: var(--muted); flex: none; }
+  .icon:hover { background: var(--hover); color: var(--ink); }
+  .icon svg { width: 1.2em; height: 1.2em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+

@@ -238,12 +238,13 @@ pub enum LimbKind {
     /// The brain runs a meta call by appending its effects with its one
     /// dispatch, so it is never sent twice.
     Meta,
-    /// Max. Its agent tool is `ask`: a call he answers, which puts the caller
-    /// in his queue until he does. Its calls are never dispatched; his face
-    /// shows them, and his answer is the settlement he authors. Only agents
-    /// in an environment holding this limb can interrupt him mid-turn; any
-    /// user-facing task gets his attention by ending its turn. Provisional:
-    /// whether every environment holds it by default is Max's call.
+    /// Max as a limb: a call to it is his to settle, and the brain may only
+    /// withdraw one. It offers no tool, and the brain no longer defines it;
+    /// a journal that has one keeps it, described as offering nothing. An
+    /// agent gets Max's attention by facing him: a user-facing task ends
+    /// its turn, and what it needs from him (a question, a choice, a
+    /// report) is in its message ([`crate::state::Waiting::Max`]). An
+    /// autonomous agent tells its owner, which faces him or carries it up.
     ///
     /// Max's controls over the tree (stop, interrupt, hold, rename, mark
     /// done, rewind, resume, aside) are not tools of this limb. They are facts
@@ -253,10 +254,12 @@ pub enum LimbKind {
     /// Max's queue: read it, rank it, say why. The scheduler's only limb.
     /// Run by the brain like [`LimbKind::Meta`].
     Attention,
-    /// Tools the model provider runs inside a response (web search, web
-    /// fetch). The brain describes them; a root declares them like any
+    /// The model provider. The tools it runs inside a response (web search,
+    /// web fetch) are described by the brain and declared by a root like any
     /// tool, but their use and results are blocks of the response itself,
-    /// so they never become calls.
+    /// so they never become calls. What Max calls on it (reading the plan's
+    /// usage) is a call the brain runs off its thread, like a request; it
+    /// only reads, so one an earlier brain was running is run again.
     Provider,
     /// A workspace, a browser, a JavaScript sandbox, or anything else: a
     /// server of its own, running where its [`Host`] says, which the brain

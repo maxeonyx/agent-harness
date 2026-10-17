@@ -9,8 +9,8 @@ use harness_core::call::{Caller, Outcome as CallOutcome};
 use harness_core::delivery::Content;
 use harness_core::environment::LimbKind;
 use harness_core::fact::Fact;
-use harness_core::id::{CallId, TaskId, Timestamp, ToolUseId, ValueId};
-use harness_core::model_call::{Ending, ModelCallEvent};
+use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
+use harness_core::model_call::{Ending, ModelCallEvent, Window};
 use harness_core::state::{Ended, State, Waiting};
 use harness_core::task::{
     Drain, Draining, Input, Mode, Move, Origin, Outcome, Phase, Scope, Task, TaskEvent,
@@ -48,7 +48,6 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
             json!({
                 "task": q.task.to_string(),
                 "since": q.since.0,
-                "ask": q.ask.map(|a| call(state, value, a)),
                 "why": q.why,
             })
         })
@@ -72,12 +71,17 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
             })
         })
         .collect();
+    let provider = state
+        .limbs()
+        .find(|l| l.kind == LimbKind::Provider)
+        .map(|l| l.id);
     let harness = json!({
         "environments": environments,
         "workspaces": workspaces,
         "build": state.launch().map(|(_, l)| format!("build {:.12}", l.build.to_string())),
         "limited": state.limited(now).map(|t| t.0),
-        "usage": state.quota().map(usage),
+        "provider": provider.map(|l| l.to_string()),
+        "usage": usage(state, value, provider),
     });
     rows.insert(FaceKey::Harness, FaceRow::Harness(harness));
     // Each scope: the spawn call that opened it, and the tool use it
@@ -125,18 +129,79 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
     rows
 }
 
-/// The subscription as the latest response reported it.
-fn usage(ended: &Ended) -> Value {
-    let quota = ended.quota.as_ref();
-    let window = |w: Option<&harness_core::model_call::Window>| {
-        w.map(|w| json!({"used": w.used, "resets": w.resets.map(|t| t.0)}))
-    };
+/// The subscription's usage: the newer of what the latest response's
+/// headers reported and what Max's latest usage reading returned, each
+/// window by name, as of when; whether a reading is running; and why the
+/// last one failed, if none has succeeded since.
+fn usage(state: &State, value: Text, provider: Option<LimbId>) -> Value {
+    let window = |w: &Window| json!({"used": w.used, "resets": w.resets.map(|t| t.0)});
+    let mut at = None;
+    let mut windows = serde_json::Map::new();
+    let mut on_plan = true;
+    if let Some(ended) = state.quota()
+        && let Some(quota) = &ended.quota
+    {
+        at = Some(ended.at.at);
+        on_plan = quota.on_plan;
+        for (name, w) in [
+            ("five_hour", &quota.five_hour),
+            ("seven_day", &quota.seven_day),
+        ] {
+            if let Some(w) = w {
+                windows.insert(name.into(), window(w));
+            }
+        }
+    }
+    let (mut refreshing, mut failed) = (false, None);
+    let readings = state.calls().map(|(_, c)| c).filter(|c| {
+        provider.is_some_and(|p| c.limb == Some(p)) && matches!(c.call.caller, Caller::Max { .. })
+    });
+    for call in readings {
+        let Some(settled) = &call.settled else {
+            refreshing = true;
+            continue;
+        };
+        let output = settled.outcome.output();
+        let said = || {
+            output
+                .and_then(|o| text(value, o.model))
+                .map(|t| visible(&t))
+        };
+        match &settled.outcome {
+            CallOutcome::Completed(_) => {
+                failed = None;
+                let reading = output
+                    .and_then(|o| value(o.full?))
+                    .and_then(|b| serde_json::from_slice::<BTreeMap<String, Window>>(&b).ok());
+                if let Some(reading) = reading
+                    && at.is_none_or(|at| at.0 < settled.at.at.0)
+                {
+                    at = Some(settled.at.at);
+                    windows = reading
+                        .iter()
+                        .map(|(n, w)| (n.clone(), window(w)))
+                        .collect();
+                }
+            }
+            _ => failed = Some(said().unwrap_or_else(|| "it did not finish".into())),
+        }
+    }
     json!({
-        "at": ended.at.at.0,
-        "five_hour": window(quota.and_then(|q| q.five_hour.as_ref())),
-        "seven_day": window(quota.and_then(|q| q.seven_day.as_ref())),
-        "on_plan": quota.is_none_or(|q| q.on_plan),
+        "at": at.map(|t| t.0),
+        "windows": windows,
+        "on_plan": on_plan,
+        "refreshing": refreshing,
+        "failed": failed,
     })
+}
+
+/// The text of a content array's text blocks.
+fn visible(content: &str) -> String {
+    serde_json::from_str::<Vec<Value>>(content)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|b| b["text"].as_str())
+        .collect()
 }
 
 /// Why a task's last turn did not respond, if it did not.
@@ -297,10 +362,9 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
             "since": since.0,
             "calls": calls(c),
         }),
-        Waiting::Max { since, ask } => json!({
+        Waiting::Max { since } => json!({
             "kind": "max",
             "since": since.0,
-            "ask": ask.map(|a| call(state, value, a)),
         }),
         Waiting::Listening { background, since } => json!({
             "kind": "listening",

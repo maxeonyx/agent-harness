@@ -171,8 +171,7 @@ pub enum Phase {
     /// response and recorded on the request.
     Thinking(ModelCallId),
     /// The calls of one round are outstanding: a response's tool uses, or a
-    /// fresh context's attachments. A spawn is one of them, so is an ask of
-    /// Max.
+    /// fresh context's attachments. A spawn is one of them.
     Acting(Step),
     /// Max's move: a user-facing turn ended, or he interrupted.
     AwaitingMax,
