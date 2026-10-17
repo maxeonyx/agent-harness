@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use imbl::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
-use crate::call::{CallEvent, Caller, Outcome as CallOutcome};
+use crate::call::{CallEvent, Caller, Outcome as CallOutcome, Owner};
 use crate::context::{EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::Binding;
@@ -88,9 +88,10 @@ pub struct Task {
     pub by: Option<CallId>,
     pub mode: Mode,
     pub mandate: Mandate,
-    /// No new requests under this task until released; running work carries
-    /// on. Max pausing a subtree, or the brain after a long outage.
-    pub held: bool,
+    /// What Max last said here about pausing it and everything under it;
+    /// `None` if he never has. Whether it is paused now is
+    /// [`State::pause`], which also reads its ancestors.
+    pub pause: Option<Paused>,
     /// When it was created: the order of siblings and of Max's projects.
     pub created: Mark,
     /// When its life or phase last changed: how long the throbber has shown
@@ -146,6 +147,11 @@ pub struct Live {
     /// Requests that failed in a row; the brain's policy gives up at some
     /// count ([`Drain::Fail`]). The account's limit is not a failure.
     pub failures: u32,
+    /// It has been asked to park, by this delivery of
+    /// [`Prompt::Park`], and has not parked yet: it runs as if not paused
+    /// until the turn that reads it ends. Cleared when it is resumed or
+    /// interrupted.
+    pub parking: Option<DeliveryId>,
 }
 
 impl Live {
@@ -156,6 +162,7 @@ impl Live {
             drain: None,
             owed_since: None,
             failures: 0,
+            parking: None,
         }
     }
 }
@@ -164,8 +171,8 @@ impl Live {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
     /// The task's move: the brain builds and sends its next request, unless
-    /// it is held or the account is limited (derived, not stored here). A
-    /// stopping task is ready for its tidy-up turn.
+    /// it is paused or the account is limited (derived, not stored here). An
+    /// abandoned task is ready for its tidy-up turn.
     Ready,
     /// A request is in flight. The calls of its tool uses are made with its
     /// response and recorded on the request.
@@ -178,6 +185,12 @@ pub enum Phase {
     /// The turn ended and the task waits for something that wakes it: a
     /// change to what a standing task embodies, or background work.
     Listening,
+    /// Max parked it ([`Pause::Park`]) and its turn to reach a safe point
+    /// has ended: it waits for him to resume it, whatever its mode, so what
+    /// it said is never taken for its result. Inputs arriving meanwhile
+    /// wait with the resume ([`Prompt::Resume`]); only an abandon or an
+    /// interrupt moves it otherwise.
+    Parked,
 }
 
 /// The context a task is working in, and everything that belongs to it
@@ -494,6 +507,10 @@ pub enum Input {
     Late(CallId),
     /// One of Max's actions in its chat has settled. Rides along.
     MaxAction(CallId),
+    /// A member passed it one of its running background calls
+    /// ([`crate::call::CallEvent::Passed`]), which is its own from now on.
+    /// Rides along.
+    Passed(CallId),
     /// Max's words, or a turn the harness asks for. Wakes it.
     Delivery(DeliveryId),
 }
@@ -503,7 +520,7 @@ impl Input {
     pub fn wakes(&self) -> bool {
         match self {
             Input::Background(_) | Input::Late(_) | Input::Delivery(_) => true,
-            Input::Result(_) | Input::MaxAction(_) => false,
+            Input::Result(_) | Input::MaxAction(_) | Input::Passed(_) => false,
         }
     }
 
@@ -514,6 +531,7 @@ impl Input {
                 Rendered::Call(b),
             ) => a == b,
             (Input::Delivery(a), Rendered::Delivery(b)) => a == b,
+            (Input::Passed(a), Rendered::Note(Note::Passed { call: b })) => a == b,
             _ => false,
         }
     }
@@ -544,13 +562,16 @@ pub enum Drain {
     /// refused ([`Rejected::Finished`]), so a late one never stops the
     /// next turn.
     ToMax { turn: ModelCallId },
-    /// Cancel the task and everything it owns ([`crate::cancel`]): it must
-    /// have exited `within` milliseconds of this fact. Its request is cut,
-    /// its calls and members are stopped with less time, and it takes one
-    /// tidy-up turn ([`crate::delivery::Prompt::Stopping`]), if there is
-    /// time, before it ends [`Outcome::Cancelled`]. A second stop can only
-    /// bring the deadline forward; `within: 0` is a hard stop, with no turn.
-    Stop { by: Stopper, within: u64 },
+    /// The work is no longer wanted: abandon the task and everything it
+    /// owns ([`crate::cancel`]), which must have exited `within`
+    /// milliseconds of this fact. Its request is cut, its calls, background
+    /// work and members are stopped with less time, and it takes one tidy-up
+    /// turn ([`crate::delivery::Prompt::Tidy`]), if there is time, before it
+    /// ends [`Outcome::Abandoned`]. A second abandon can only bring the
+    /// deadline forward; `within: 0` is a hard stop, with no turn. It
+    /// outranks a pause: the tidy-up turn runs paused or not.
+    #[serde(alias = "Stop")]
+    Abandon { by: Abandoner, within: u64 },
     /// The brain cannot carry the task on: the provider rejects its context,
     /// the model refused, a limb it needs cannot be made, retries are
     /// exhausted.
@@ -562,16 +583,16 @@ pub enum Drain {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Draining {
     ToMax,
-    Stopping(Stopping),
+    Abandoning(Abandoning),
     Failing(String),
 }
 
-/// A task being cancelled, and how far through the stop protocol it is
+/// A task being abandoned, and how far through the stop protocol it is
 /// ([`crate::cancel`]): first everything it owns stops, then its tidy-up
 /// turn, then it ends; or, from its deadline, nothing more of its own runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Stopping {
-    pub by: Stopper,
+pub struct Abandoning {
+    pub by: Abandoner,
     /// When it must have exited: the earliest deadline it has been given.
     pub deadline: Timestamp,
     /// It has been asked for its tidy-up turn.
@@ -585,9 +606,9 @@ pub struct Stopping {
     pub hard: bool,
 }
 
-impl Stopping {
-    fn new(by: Stopper, at: Timestamp, within: u64) -> Stopping {
-        Stopping {
+impl Abandoning {
+    fn new(by: Abandoner, at: Timestamp, within: u64) -> Abandoning {
+        Abandoning {
             by,
             deadline: crate::cancel::deadline(at, within),
             told: false,
@@ -603,18 +624,18 @@ impl Stopping {
     }
 }
 
-/// Who stopped a task: only Max, or the stopping of its owner. No agent can
-/// stop a task it does not own, and a parent waiting on its scope makes no
-/// calls at all.
+/// Who abandoned a task: only Max, or the abandoning of its owner. No agent
+/// can abandon a task it does not own, and a parent waiting on its scope
+/// makes no calls at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Stopper {
+pub enum Abandoner {
     Max,
-    /// The task that owns its scope is stopping.
+    /// The task that owns its scope is being abandoned.
     Owner,
 }
 
-/// How a task ended. Each reaches its owner as this member's result; a
-/// cancellation says who, so a parent does not relaunch what Max stopped.
+/// How a task ended. Each reaches its owner as this member's result; an
+/// abandonment says who, so a parent does not relaunch what Max abandoned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Outcome {
     /// Its last message, the assistant entry `entry`.
@@ -624,11 +645,12 @@ pub enum Outcome {
     Failed {
         reason: String,
     },
-    /// `report` is the last message of its tidy-up turn: where it left
-    /// things. `None` when it had no turn: stopped before it started, or
-    /// at or past its deadline.
-    Cancelled {
-        by: Stopper,
+    /// Done, but abandoned: nobody wants the work any more. `report` is the
+    /// last message of its tidy-up turn: where it left things. `None` when
+    /// it had no turn: abandoned before it started, or at or past its
+    /// deadline.
+    Abandoned {
+        by: Abandoner,
         report: Option<EntryId>,
     },
 }
@@ -642,12 +664,82 @@ pub enum TaskEvent {
     Renamed(String),
     Moved(Move),
     Drain(Drain),
-    /// The deadline of the task's stop has come: from now nothing more of
-    /// its own runs, and everything it owns is stopped at once. The brain
-    /// states it at or after the deadline; Max's equivalent is a stop with
-    /// no time left.
+    /// The deadline of the task's abandonment has come: from now nothing
+    /// more of its own runs, and everything it owns is stopped at once. The
+    /// brain states it at or after the deadline; Max's equivalent is an
+    /// abandon with no time left.
     Expired,
-    Held(bool),
+    /// Max pauses or resumes the task and everything under it ([`Pause`]).
+    #[serde(alias = "Held")]
+    Pause(Pause),
+}
+
+/// Max's control over whether a subtree's agent loops run, as he last set
+/// it on one task. It applies to the task and everything under it, and
+/// along any chain the newest word wins ([`State::pause`]), so he can pause
+/// a whole tree and then resume one branch of it, or pause one branch
+/// inside a tree he is parking.
+///
+/// **Concept.** Pausing is not ending. A paused task's work is still
+/// wanted; nothing it owns is stopped, and nothing is lost. Its first click
+/// is [`Pause::Now`], the second [`Pause::Park`].
+///
+/// **Vision.** Max stays in charge of his usage and his attention without
+/// cost to the work: near the usage limit he freezes a tree at once and
+/// spends nothing more on it; leaving for the day he parks it, so each
+/// agent leaves its work safe and says where it stands; either resumes from
+/// exactly where it was. Background work is the agent's to keep or stop,
+/// since its life is not over; only an abandon closes everything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Pause {
+    /// Resume: the loops run. A task that parked is told it has been
+    /// resumed ([`crate::delivery::Prompt::Resume`]); any other carries on
+    /// as if nothing happened.
+    Off,
+    /// Nothing new starts under it: no request is sent and no call is
+    /// dispatched. Nothing running is cut: a response in flight finishes and
+    /// its tool uses wait undispatched, running calls finish and their
+    /// results wait, background work runs on. No turn is spent, and the
+    /// model is never told.
+    Now,
+    /// "Pause for now, please": as [`Pause::Now`], but each task under it
+    /// that is in the middle of its own loop is asked to bring its work to
+    /// a safe point ([`crate::delivery::Prompt::Park`]) and runs as if not
+    /// paused until that turn ends, when it is [`Phase::Parked`]. A task
+    /// waiting on Max, on its members or on background work is already at
+    /// rest and spends no turn.
+    Park,
+}
+
+impl<'de> Deserialize<'de> for Pause {
+    /// Also reads the `Held(bool)` facts an earlier build stated.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Pause, D::Error> {
+        #[derive(Deserialize)]
+        enum Named {
+            Off,
+            Now,
+            Park,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Held(bool),
+            Named(Named),
+        }
+        Ok(match Wire::deserialize(d)? {
+            Wire::Held(false) | Wire::Named(Named::Off) => Pause::Off,
+            Wire::Held(true) | Wire::Named(Named::Now) => Pause::Now,
+            Wire::Named(Named::Park) => Pause::Park,
+        })
+    }
+}
+
+/// What Max last said about pausing a task, and when: the newest word on a
+/// chain of tasks wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Paused {
+    pub pause: Pause,
+    pub at: Timestamp,
 }
 
 impl TaskEvent {
@@ -679,7 +771,7 @@ impl TaskEvent {
             | TaskEvent::Renamed(_)
             | TaskEvent::Drain(_)
             | TaskEvent::Expired
-            | TaskEvent::Held(_) => {}
+            | TaskEvent::Pause(_) => {}
         }
     }
 }
@@ -772,7 +864,7 @@ impl Task {
             by: created.by,
             mode: created.mode,
             mandate: created.mandate.clone(),
-            held: false,
+            pause: None,
             created: mark,
             since: mark.at,
             pending,
@@ -832,6 +924,18 @@ impl Task {
     }
 
     /// Since when Max has owed it a word, if he does.
+    /// Whether it is in the middle of its own loop, so parking it costs a
+    /// turn: a request in flight, a round of calls running, or results to
+    /// answer. A round waiting only on running members is not its own work
+    /// ([`State::scoped`] says so; the caller checks it).
+    pub fn mid_loop(&self) -> bool {
+        match self.phase() {
+            Some(Phase::Thinking(_) | Phase::Acting(_)) => true,
+            Some(Phase::Ready) => self.pending.iter().any(|p| matches!(p, Input::Result(_))),
+            _ => false,
+        }
+    }
+
     pub fn owed_since(&self) -> Option<Timestamp> {
         self.live().and_then(|l| l.owed_since)
     }
@@ -995,8 +1099,8 @@ impl Task {
             TaskEvent::Drain(drain) => match &mut self.life {
                 Life::Starting => match drain {
                     Drain::ToMax { .. } => return Err(Rejected::Starting),
-                    Drain::Stop { by, .. } => {
-                        let outcome = Outcome::Cancelled {
+                    Drain::Abandon { by, .. } => {
+                        let outcome = Outcome::Abandoned {
                             by: *by,
                             report: None,
                         };
@@ -1012,23 +1116,23 @@ impl Task {
                 Life::Live(live) => {
                     live.drain = Some(match (live.drain.take(), drain) {
                         // A stop under way can only be made harder.
-                        (Some(Draining::Stopping(mut s)), Drain::Stop { within, .. }) => {
+                        (Some(Draining::Abandoning(mut s)), Drain::Abandon { within, .. }) => {
                             s.tighten(at, *within);
-                            Draining::Stopping(s)
+                            Draining::Abandoning(s)
                         }
                         // Its tidy-up turn cannot be had.
-                        (Some(Draining::Stopping(mut s)), Drain::Fail(_)) => {
+                        (Some(Draining::Abandoning(mut s)), Drain::Fail(_)) => {
                             s.hard = true;
-                            Draining::Stopping(s)
+                            Draining::Abandoning(s)
                         }
                         // An ending outranks an interrupt; the first ending
                         // stands.
-                        (Some(ending @ (Draining::Stopping(_) | Draining::Failing(_))), _) => {
+                        (Some(ending @ (Draining::Abandoning(_) | Draining::Failing(_))), _) => {
                             ending
                         }
                         (_, Drain::ToMax { .. }) => Draining::ToMax,
-                        (_, Drain::Stop { by, within }) => {
-                            Draining::Stopping(Stopping::new(*by, at, *within))
+                        (_, Drain::Abandon { by, within }) => {
+                            Draining::Abandoning(Abandoning::new(*by, at, *within))
                         }
                         (_, Drain::Fail(reason)) => Draining::Failing(reason.clone()),
                     });
@@ -1040,7 +1144,7 @@ impl Task {
             },
             TaskEvent::Expired => {
                 let live = self.live_mut()?;
-                let Some(Draining::Stopping(stopping)) = &mut live.drain else {
+                let Some(Draining::Abandoning(stopping)) = &mut live.drain else {
                     return Err(Rejected::NotForTask);
                 };
                 if at < stopping.deadline {
@@ -1051,7 +1155,9 @@ impl Task {
                     self.drained(at);
                 }
             }
-            TaskEvent::Held(held) => self.held = *held,
+            TaskEvent::Pause(pause) => {
+                self.pause = Some(Paused { pause: *pause, at });
+            }
         }
         Ok(())
     }
@@ -1078,7 +1184,10 @@ impl Task {
                 response: None,
                 outstanding: start.awaits.clone(),
             })
-        } else if matches!(live.phase, Phase::AwaitingMax | Phase::Listening) {
+        } else if matches!(
+            live.phase,
+            Phase::AwaitingMax | Phase::Listening | Phase::Parked
+        ) {
             live.phase.clone()
         } else {
             Phase::Ready
@@ -1120,7 +1229,7 @@ impl Task {
                 match &mut live.drain {
                     None => {}
                     // Its tidy-up turn, once it has been asked for it.
-                    Some(Draining::Stopping(s)) if s.told && !s.hard => s.tidying = true,
+                    Some(Draining::Abandoning(s)) if s.told && !s.hard => s.tidying = true,
                     Some(_) => return Err(Rejected::Draining),
                 }
                 if live.phase != Phase::Ready {
@@ -1182,7 +1291,7 @@ impl Task {
                         live.failures += 1;
                         self.drained(at);
                     }
-                    Ending::Limited { .. } | Ending::Abandoned { .. } | Ending::Lost => {
+                    Ending::Limited { .. } | Ending::Cut { .. } | Ending::Lost => {
                         self.drained(at);
                     }
                 }
@@ -1223,7 +1332,23 @@ impl Task {
                 Ok(())
             }
             CallEvent::Settled(_) => self.settled(id, at),
-            CallEvent::Dispatched | CallEvent::Stopping { .. } => Err(Rejected::NotForTask),
+            CallEvent::Passed { to, .. } => {
+                if let Some(i) = self.background.iter().position(|c| *c == id) {
+                    self.background.remove(i);
+                } else if *to == Owner::Task(self.id) {
+                    if self.drain().is_some() {
+                        return Err(Rejected::Draining);
+                    }
+                    self.background.push(id);
+                    self.pending.push(Input::Passed(id));
+                } else {
+                    return Err(Rejected::NotForTask);
+                }
+                Ok(())
+            }
+            CallEvent::Dispatched | CallEvent::Stopping { .. } | CallEvent::Abandon => {
+                Err(Rejected::NotForTask)
+            }
         }
     }
 
@@ -1246,7 +1371,7 @@ impl Task {
             self.background.remove(i);
             self.pending.push(Input::Background(call));
             if self.drain().is_some() {
-                // Stopping: the last background call to settle lets it finish.
+                // Abandoning: the last background call to settle lets it finish.
                 if self.phase() == Some(&Phase::Listening) && self.background.is_empty() {
                     self.drained(at);
                 }
@@ -1266,11 +1391,31 @@ impl Task {
     }
 
     fn deliver(&mut self, delivery: &Delivery, by: &Author, at: Timestamp) -> Result<(), Rejected> {
-        if delivery.content == Content::Prompt(Prompt::Stopping) {
-            match &mut self.live_mut()?.drain {
-                Some(Draining::Stopping(s)) if !s.told && !s.hard => s.told = true,
+        match delivery.content {
+            Content::Prompt(Prompt::Tidy) => match &mut self.live_mut()?.drain {
+                Some(Draining::Abandoning(s)) if !s.told && !s.hard => s.told = true,
                 _ => return Err(Rejected::NotForTask),
+            },
+            Content::Prompt(Prompt::Park) => {
+                let live = self.live_mut()?;
+                if live.drain.is_some() || live.parking.is_some() || live.phase == Phase::Parked {
+                    return Err(Rejected::NotForTask);
+                }
+                live.parking = Some(delivery.id);
             }
+            Content::Prompt(Prompt::Resume) => {
+                let live = self.live_mut()?;
+                if live.parking.is_none() && live.phase != Phase::Parked {
+                    return Err(Rejected::NotForTask);
+                }
+                live.parking = None;
+                self.pending.push(Input::Delivery(delivery.id));
+                if self.phase() == Some(&Phase::Parked) {
+                    self.enter(Phase::Ready, at);
+                }
+                return Ok(());
+            }
+            _ => {}
         }
         self.pending.push(Input::Delivery(delivery.id));
         // Marking a task done hands it its last turn: it finishes when that
@@ -1309,8 +1454,8 @@ impl Task {
     fn turn_ended(&mut self, entry: EntryId, at: Timestamp, world: &State) {
         match self.drain() {
             // The tidy-up turn is over: its last message is the report.
-            Some(Draining::Stopping(s)) if s.tidying && !s.hard && self.background.is_empty() => {
-                let outcome = Outcome::Cancelled {
+            Some(Draining::Abandoning(s)) if s.tidying && !s.hard && self.background.is_empty() => {
+                let outcome = Outcome::Abandoned {
                     by: s.by,
                     report: Some(entry),
                 };
@@ -1318,6 +1463,14 @@ impl Task {
             }
             Some(_) => return self.drained(at),
             None => {}
+        }
+        // The turn that read the request to park ends parked.
+        if let Life::Live(live) = &mut self.life
+            && let Some(asked) = live.parking
+            && !self.pending.contains(&Input::Delivery(asked))
+        {
+            live.parking = None;
+            return self.enter(Phase::Parked, at);
         }
         if self.wakes() {
             // Max's words, or a prompt, arrived during the turn.
@@ -1364,19 +1517,20 @@ impl Task {
             None => self.enter(Phase::Ready, at),
             Some(Draining::ToMax) => {
                 live.drain = None;
+                live.parking = None;
                 self.await_max(at);
             }
-            Some(Draining::Stopping(_) | Draining::Failing(_)) if !self.background.is_empty() => {
+            Some(Draining::Abandoning(_) | Draining::Failing(_)) if !self.background.is_empty() => {
                 self.enter(Phase::Listening, at);
             }
-            Some(Draining::Stopping(s)) if s.hard => {
-                let outcome = Outcome::Cancelled {
+            Some(Draining::Abandoning(s)) if s.hard => {
+                let outcome = Outcome::Abandoned {
                     by: s.by,
                     report: None,
                 };
                 self.finish(outcome, at);
             }
-            Some(Draining::Stopping(_)) => self.enter(Phase::Ready, at),
+            Some(Draining::Abandoning(_)) => self.enter(Phase::Ready, at),
             Some(Draining::Failing(reason)) => self.finish(Outcome::Failed { reason }, at),
         }
     }
@@ -1407,12 +1561,15 @@ impl Task {
 
 /// Whether a live task is waiting for a move rather than running one.
 fn waiting(phase: &Phase) -> bool {
-    matches!(phase, Phase::Ready | Phase::AwaitingMax | Phase::Listening)
+    matches!(
+        phase,
+        Phase::Ready | Phase::AwaitingMax | Phase::Listening | Phase::Parked
+    )
 }
 
 /// Whether a drain ends the task, rather than handing the move to Max.
 pub(crate) fn ends(drain: Option<&Draining>) -> bool {
-    matches!(drain, Some(Draining::Stopping(_) | Draining::Failing(_)))
+    matches!(drain, Some(Draining::Abandoning(_) | Draining::Failing(_)))
 }
 
 /// Update what a context embodies from what a request newly included,

@@ -526,6 +526,7 @@ const PAGE: &str = concat!(
     include_str!("page/draw.js"),
     include_str!("page/hover.js"),
     include_str!("page/chrome.js"),
+    include_str!("page/actions.js"),
     include_str!("page/card.js"),
     include_str!("page/log.js"),
     include_str!("page/compose.js"),

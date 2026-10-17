@@ -1,11 +1,11 @@
 // ─── The model: the view as a map ──────────────────────────────────────────
-// A node is a task. A scope (the spawn call that owns its members) is a
-// junction under its owner. Background work a task will hear back from
-// hangs off it. Projects are the map's disconnected components.
+// A node is a task, under the task that owns it. Background work a task
+// will hear back from hangs off it. Projects are the map's disconnected
+// components.
 //
-// Edges: solid, a scope and its members (owned, settled together); dashed,
-// a result that will arrive without anyone waiting for it now (background
-// work); dotted, a task continued by a resume; flowing,
+// Edges: solid, a task and a member of a spawn it waits on (owned, settled
+// together); dashed, a result that will arrive without anyone waiting for
+// it now (background work); dotted, a task continued by a resume; flowing,
 // waited on right now.
 let view = null;
 let byId = {};
@@ -22,7 +22,7 @@ function look(t) {
   const since = w.since != null ? ` · ${ago(w.since)}` : "";
   const stopping = t.stop && w.kind !== "done" ? " cancelling" : "";
   switch (w.kind) {
-    case "model": return { cls: (w.streaming ? "working streaming" : "working") + stopping, text: (stopping ? "cancelling: " : "") + (w.streaming ? "writing" : "thinking") + since };
+    case "model": return { cls: (w.streaming ? "working streaming" : "working") + stopping, text: (stopping ? "abandoning: " : "") + (w.streaming ? "writing" : "thinking") + since };
     case "calls": {
       const kids = w.calls.flatMap((c) => c.children);
       if (kids.length) {
@@ -36,12 +36,13 @@ function look(t) {
     case "starting": return { cls: "starting", text: w.limbs.length ? `making ${w.limbs.join(", ")}` : "starting" };
     case "harness": return { cls: "working" + stopping, text: "harness" + since };
     case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `paused with ${h.name}` : "paused" }; }
+    case "parked": return { cls: "paused", text: "parked" + since };
     case "limited": return { cls: "paused", text: `limited until ${clock(w.until)}` };
     case "listening": return { cls: "listening" + stopping, text: w.calls.length ? `${w.calls.length} in the background` : "listening" };
     case "done": {
       const o = t.outcome || {};
       if (o.kind === "failed") return { cls: "done failed", text: `failed ${ago(w.since)} ago` };
-      if (o.kind === "cancelled") return { cls: "done cancelled", text: `cancelled ${ago(w.since)} ago` };
+      if (o.kind === "abandoned") return { cls: "done cancelled", text: `abandoned ${ago(w.since)} ago` };
       return { cls: "done", text: `done ${ago(w.since)} ago` };
     }
   }
@@ -60,7 +61,7 @@ const chained = (t) => t.origin === "resume" && !t.owner && byId[t.from] && !byI
 const parentOf = (t) => t.owner ? live(t.owner) : t.from && byId[t.from] && !chained(t) ? live(t.from) : null;
 const ancestry = (t) => { const out = []; for (let p = parentOf(t); p && byId[p] && out.length < 50; p = parentOf(byId[p])) out.unshift(byId[p]); return out; };
 // What pauses a task: itself, or the nearest paused task above it.
-const heldBy = (t) => t.held ? t : ancestry(t).reverse().find((a) => a.held) || null;
+const heldBy = (t) => !t.pause ? null : t.pause.by === t.id ? t : ancestry(t).find((a) => a.id === t.pause.by) || null;
 // The calls a task is waiting on right now.
 function awaited(t) {
   const w = t?.waiting || {};
@@ -82,21 +83,18 @@ function derive() {
   }
   const nodes = new Map(), edges = [];
   for (const t of view.tasks) if (!alias[t.id]) nodes.set(t.id, { id: t.id, kind: "task", t });
-  for (const [call, s] of Object.entries(view.scopes)) {
-    const owner = live(s.owner);
-    if (!byId[owner]) continue;
-    const members = view.tasks.filter((t) => t.scope === call && !alias[t.id]).sort(order);
-    const waiting = awaited(byId[s.owner]).has(call);
-    nodes.set(`s:${call}`, { id: `s:${call}`, kind: "scope", call, scope: s, members });
-    edges.push({ from: owner, to: `s:${call}`, kind: s.background ? "receives" : "owns", flow: waiting, made: s.made });
-    for (const m of members) edges.push({ from: `s:${call}`, to: m.id, kind: "owns", flow: waiting && !isDone(m), made: m.created.seq });
-  }
   for (const t of view.tasks) {
     if (alias[t.id]) continue;
-    if (t.scope && !view.scopes[t.scope] && t.owner) edges.push({ from: live(t.owner), to: t.id, kind: "owns", made: t.created.seq });
+    // A spawn's members hang from their owner; a background spawn's by a
+    // dashed edge, as its other background work does.
+    if (t.owner && byId[live(t.owner)]) {
+      const s = view.scopes[t.scope];
+      const flow = awaited(byId[t.owner]).has(t.scope) && !isDone(t);
+      edges.push({ from: live(t.owner), to: t.id, kind: s?.background ? "receives" : "owns", flow, made: t.created.seq });
+    }
     if (t.origin === "resume" && byId[t.from] && !chained(t)) edges.push({ from: live(t.from), to: t.id, kind: "continues" });
     const waits = awaited(t);
-    for (const b of t.background || []) {
+    for (const b of [...(t.background || []), ...(t.handed || [])]) {
       if (b.status === "settled" || b.tool === "spawn") continue;
       const id = `b:${b.id}`;
       nodes.set(id, { id, kind: "sat", call: b, task: t.id });
@@ -138,13 +136,12 @@ const CARD_H = 34;
 const cardStatus = (c) => `finished ${ago(c.last)} ago · ${c.tasks.length} task${c.tasks.length > 1 ? "s" : ""}`;
 function sizeOf(n, comp) {
   if (comp.folded) return { w: Math.min(240, Math.max(120, measure(shortName(n.t), "500 13px Georgia") + 34 + (comp.tasks.length > 1 ? 14 : 0))), h: CARD_H };
-  if (n.kind === "scope") return { w: 12, h: 12 };
   if (n.kind === "sat") return { w: Math.min(160, Math.max(90, measure(satLabel(n), "12px sans-serif") + 10)), h: SAT_DOT + 22 };
   const root = comp.root.id === n.id;
   const w = Math.min(210, Math.max(110, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
   return { w, h: (root ? ROOT_DOT : DOT) + (root ? 26 : 24) };
 }
-const satLabel = (n) => `${n.call.tool} ${gist(n.call.input)}`.trim();
+const satLabel = (n) => `${n.call.owner === "max" ? "yours: " : ""}${n.call.name || `${n.call.tool} ${gist(n.call.input)}`}`.trim();
 
 // Each project is laid out on its own, then the projects are shelved in
 // reading order, live ones first, in rows as wide as the screen: on a phone

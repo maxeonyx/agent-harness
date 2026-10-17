@@ -16,15 +16,19 @@
 //!
 //! | Level | Asked by | Cleans up | Confirms | Hard kill |
 //! |---|---|---|---|---|
-//! | Task | [`Drain::Stop`] | Its request is cut and its calls and members are stopped, then it takes one tidy-up turn ([`Prompt::Stopping`]) | [`Outcome::Cancelled`], with that turn's report | [`TaskEvent::Expired`]: no more requests, everything it owns stopped now |
+//! | Task | [`Drain::Abandon`] | Its request is cut and its calls and members are stopped, then it takes one tidy-up turn ([`Prompt::Tidy`]) | [`Outcome::Abandoned`], with that turn's report | [`TaskEvent::Expired`]: no more requests, everything it owns stopped now |
 //! | Call | [`CallEvent::Stopping`], a stopping [`LimbRow::Call`] in its limb's view | Its limb's: `SIGTERM` to its processes | Settled, interrupted, once its processes are gone | `SIGKILL` |
-//! | Request | [`Todo::Abandon`] | none: its socket is cut at once | [`ModelCallEvent::Ended`] | (the same) |
+//! | Request | [`Todo::Cut`] | none: its socket is cut at once | [`ModelCallEvent::Ended`] | (the same) |
 //! | Limb process | A signal, or no brain connected for 15 minutes | Stops every call | Exits once nothing it started is left | A second signal |
 //! | Brain process | `SIGINT`, `SIGTERM`, `SIGHUP`: [`Fact::Shutdown`] | Starts nothing; lets requests finish; closes its links, leaving its limbs' calls running | Exits once every request has | A second signal: the deadline is now |
 //!
-//! Two kinds of stop differ in whether the work is still wanted. A
-//! **cancel** ([`Drain::Stop`]) is an owner who no longer wants it: Max's
-//! Stop, or a stopping owner's. The task ends. A **shutdown**
+//! Three ways of stopping differ in whether the work is still wanted. An
+//! **abandon** ([`Drain::Abandon`]) is an owner who no longer wants it:
+//! Max's Abandon, or an abandoned owner's. The task ends, done but
+//! abandoned. A **pause** ([`Pause`]) is Max wanting it later: nothing new
+//! starts under the task and nothing running is cut, so it is not a stop
+//! of this protocol at all; parking adds one turn in which each agent
+//! brings its own work to a safe point. A **shutdown**
 //! ([`Fact::Shutdown`]) is a replica going away while its work is still
 //! wanted: Ctrl-C on the brain. Tasks are not stopped at all; what was
 //! running in the process is cut, recorded as such, and the next launch
@@ -44,20 +48,21 @@
 //! because only the agent knows what its work left half done; a misbehaving
 //! one is killed at its deadline all the same.
 //!
-//! **Bx.** A cancelled task's report is a value in its record like any
-//! result, and the cancel itself is a fact, not an exception that unwinds
+//! **Bx.** An abandoned task's report is a value in its record like any
+//! result, and the abandon itself is a fact, not an exception that unwinds
 //! state: what was done, what was cut and why stay readable. Unlike Bx's
 //! artifacts, a lifecycle and its deadlines change over time, so they live
 //! in the fold, not in the values.
 //!
-//! [`Drain::Stop`]: crate::task::Drain::Stop
-//! [`Prompt::Stopping`]: crate::delivery::Prompt::Stopping
-//! [`Outcome::Cancelled`]: crate::task::Outcome::Cancelled
+//! [`Drain::Abandon`]: crate::task::Drain::Abandon
+//! [`Prompt::Tidy`]: crate::delivery::Prompt::Tidy
+//! [`Outcome::Abandoned`]: crate::task::Outcome::Abandoned
 //! [`TaskEvent::Expired`]: crate::task::TaskEvent::Expired
 //! [`CallEvent::Stopping`]: crate::call::CallEvent::Stopping
 //! [`LimbRow::Call`]: crate::environment::LimbRow::Call
 //! [`Host`]: crate::environment::Host
-//! [`Todo::Abandon`]: crate::state::Todo::Abandon
+//! [`Todo::Cut`]: crate::state::Todo::Cut
+//! [`Pause`]: crate::task::Pause
 //! [`ModelCallEvent::Ended`]: crate::model_call::ModelCallEvent::Ended
 //! [`Fact::Shutdown`]: crate::fact::Fact::Shutdown
 //! [`State::todo`]: crate::state::State::todo

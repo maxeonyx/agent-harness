@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Stopping work, end to end, on real brains: Max stops a task whose
-# background worker saves its state; Max stops one whose process ignores
-# SIGTERM, with a deadline too short for it; and Ctrl-C, once and then
-# twice, on a brain in a terminal, then once more to see it carry on from
-# the cache. After each, every process the brain started is looked for.
+# Stopping work, end to end, on real brains: Max abandons a task whose
+# background worker saves its state; Max abandons one whose process ignores
+# SIGTERM, with a deadline too short for it; Ctrl-C, once and then twice,
+# on a brain in a terminal, then once more to see it carry on from the
+# cache; and an agent that passes its background worker to Max and
+# finishes, while the worker runs on until Max stops it. After each, every
+# process the brain started is looked for.
 # Watch at https://mx-hv-mj.local:4326.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -39,8 +41,8 @@ c() { curl -sS --resolve "mx-hv-mj.local:$port:127.0.0.1" "$@"; }
 say() { printf "%6.1fs  %s\n" "$(awk "BEGIN { print $(date +%s.%N) - $start }")" "$*"; }
 q() { c "$url/view" | jq -r "$1"; }
 root='.rows[] | .Task // empty | select(.owner == null)'
-# Max stops the root at a tab, with $1 ms to finish.
-stop() { target/release/examples/act "$port" stop "$1" | sed 's/^/          the brain: /'; }
+# Max abandons the root at a tab, with $1 ms to finish.
+abandon() { target/release/examples/act "$port" abandon "$1" | sed 's/^/          the brain: /'; }
 until_root() { # jq condition on the root task, seconds
   for _ in $(seq $(($2 * 2))); do
     [ "$(q "$root | $1" 2>/dev/null)" = true ] && return 0
@@ -69,23 +71,23 @@ finish() { # name
   sed 's/^/          /' "$dir/$1.log"
 }
 
-say "== A. Max stops a task whose background worker saves its state on SIGTERM"
+say "== A. Max abandons a task whose background worker saves its state on SIGTERM"
 launch a "Start \`./worker.sh\` in the background: call the \`background\` tool to run \`bash\` with the command \`./worker.sh\` and \`timeout_ms\` 600000. Then say in one line that it is running, and end your turn."
-say "Max presses Stop: two minutes to stop and tidy up"
-stop 120000
+say "Max presses Abandon: two minutes to stop and tidy up"
+abandon 120000
 until_root '.outcome != null' 180
-say "cancelled; worker.log:"
+say "abandoned; worker.log:"
 sed 's/^/          /' "$dir/repo/worker.log"
 say "left running:"
 left
 finish a
 
-say "== B. Max stops a task whose process ignores SIGTERM, with 6 seconds to do it"
+say "== B. Max abandons a task whose process ignores SIGTERM, with 6 seconds to do it"
 launch b "Start \`./stubborn.sh\` in the background: call the \`background\` tool to run \`bash\` with the command \`./stubborn.sh\` and \`timeout_ms\` 600000. Then say in one line that it is running, and end your turn."
-say "Max stops it with 6 s: its call gets three quarters of that, then SIGKILL"
-stop 6000
+say "Max abandons it with 6 s: its call gets three quarters of that, then SIGKILL"
+abandon 6000
 until_root '.outcome != null' 60
-say "cancelled: $(q "$root"' | .outcome | "by \(.by), \(if .report then "with" else "without" end) a report"')"
+say "abandoned: $(q "$root"' | .outcome | "by \(.by), \(if .report then "with" else "without" end) a report"')"
 say "left running:"
 left
 finish b
@@ -109,3 +111,23 @@ python3 demos/cancel/terminal.py "$dir/c3.log" "responded" 0 2 0.2 -- \
   env "$mark=1" "$brain" --roles roles --role engineer --port "$port" --db "$dir/c.sqlite"
 say "left running:"
 left
+
+say "== D. The agent passes its background worker to Max and finishes; the worker runs on until Max stops it"
+: > "$dir/repo/worker.log"
+launch d "Start \`./worker.sh\` in the background: call the \`background\` tool with the \`name\` \`worker\`, to run \`bash\` with the command \`./worker.sh\` and \`timeout_ms\` 600000. It is a server Max will go on using after you finish, so then pass it to Max with the \`pass\` tool, saying why. Then say in one line what you did, and end your turn."
+say "its own background work, and what it passed to Max:"
+q "$root | {background: [.background[].name], handed: [.handed[] | {name, owner, why: .passed.why}]}" | sed 's/^/          /'
+say "Max presses Done: it finishes, as nothing it owns still runs"
+target/release/examples/act "$port" done | sed 's/^/          the brain: /'
+until_root '.outcome != null' 180
+say "finished: $(q "$root | .outcome.kind"); left running:"
+left
+call=$(q "$root | .handed[0].id")
+say "Max stops the worker passed to him, $call"
+target/release/examples/act "$port" stop "$call" | sed 's/^/          the brain: /'
+until_root '(.handed | length) == 0' 120
+say "stopped; worker.log:"
+sed 's/^/          /' "$dir/repo/worker.log"
+say "left running:"
+left
+finish d

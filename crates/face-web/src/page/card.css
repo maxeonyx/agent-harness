@@ -5,24 +5,38 @@
     cursor: auto; touch-action: pan-x pan-y; will-change: transform;
   }
   #panel > .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em 1em; border-bottom: 1px solid var(--line); min-height: 2.9em; cursor: grab; }
-  .bar .mini { position: relative; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; background: var(--paper); }
-  .bar .mini::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid transparent; }
-  .bar .mini.working::after { border-top-color: var(--ink); animation: spin 1.2s linear infinite; }
-  .bar .mini.tool::after { border: 1.5px dashed rgba(20, 20, 19, .5); animation: spin 4s linear infinite; }
-  .bar .mini.starting { border-style: dashed; }
-  .bar .mini.needs { background: var(--maroon); border-color: var(--maroon); }
-  .bar .mini.paused { border-color: var(--faint); background: var(--ground); }
-  .bar .mini.done { background: var(--green); border-color: var(--green); }
-  .bar .mini.failed { background: var(--red); border-color: var(--red); }
-  .bar .mini.cancelled { background: var(--line); border-color: var(--faint); border-radius: 30%; }
+  .mini { cursor: pointer; position: relative; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; background: var(--paper); }
+  .mini::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid transparent; }
+  .mini.working::after { border-top-color: var(--ink); animation: spin 1.2s linear infinite; }
+  .mini.tool::after { border: 1.5px dashed rgba(20, 20, 19, .5); animation: spin 4s linear infinite; }
+  .mini.starting { border-style: dashed; }
+  .mini.needs { background: var(--maroon); border-color: var(--maroon); }
+  .mini.paused { border-color: var(--faint); background: var(--ground); }
+  .mini.done { background: var(--green); border-color: var(--green); }
+  .mini.failed { background: var(--red); border-color: var(--red); }
+  .mini.cancelled { background: var(--line); border-color: var(--faint); border-radius: 30%; }
+  /* The card asleep: one button, its name in what shows of it. */
+  #panel > .wake { display: none; }
+  #panel.asleep { touch-action: none; box-shadow: 0 0 0 2px var(--ink), 0 22px 60px rgba(40, 30, 20, .2); }
+  #panel.asleep > :not(.wake) { visibility: hidden; }
+  #panel.asleep > .wake { display: block; position: absolute; inset: 0; background: var(--paper); cursor: pointer; }
+  #panel.asleep > .wake:hover { background: var(--white); }
+  .wake > span { position: absolute; display: flex; align-items: center; gap: .5em; max-width: 90%; transform: translate(-50%, -50%); font-weight: 600; font-family: var(--serif); white-space: nowrap; }
+  .wake .mini { font-size: .8em; }
   .bar .title { flex: 1; min-width: 0; font: 600 16.5px/1.3 var(--serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+  .bar .up { flex: none; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); padding: .2em .5em; border-radius: 6px; }
+  .bar .up:hover { background: var(--hover); color: var(--ink); }
   .bar .title[contenteditable] { cursor: text; outline: 0; border-bottom: 1px solid var(--ink); text-overflow: clip; }
   .bar .ctx { display: grid; align-items: center; width: 3.6em; height: 1.6em; padding: 0 .35em; border-radius: 6px; }
   .bar .ctx:hover { background: var(--hover); }
   .bar .ctx i { display: block; height: .3em; border-radius: 1em; background: var(--line); overflow: hidden; }
   .bar .ctx b { display: block; height: 100%; background: var(--muted); }
   .bar .ctx.high b { background: var(--maroon); }
-  .bar .x { font-size: 20px; line-height: 1; width: 1.5em; height: 1.5em; border-radius: 8px; color: var(--muted); }
+  /* Close: inset .5em from the card's corner, so its radius is the card's
+     less that, and its × two strokes centred in it, not a glyph. */
+  .bar .x { display: grid; place-items: center; font-size: 0; width: 30px; height: 30px; margin-right: -.1em; border-radius: calc(18px - .5em); color: var(--muted); }
+  .bar .x::before, .bar .x::after { content: ""; grid-area: 1 / 1; width: 14px; height: 1.75px; border-radius: 1px; background: currentColor; transform: rotate(45deg); }
+  .bar .x::after { transform: rotate(-45deg); }
   .bar .x:hover { background: var(--hover); color: var(--ink); }
   #panel > .mix { border-bottom: 1px solid var(--line); padding: .7em 1.1em .8em; font-size: 12.5px; color: var(--muted); }
   .mix .stack { display: flex; height: .55em; border-radius: 1em; overflow: hidden; background: var(--line); margin: .45em 0 .6em; max-width: 40em; }
@@ -88,8 +102,10 @@
   .meta { font-size: 11.5px; color: var(--faint); margin: -.5em 0 1.1em; opacity: 0; transition: opacity .15s; }
   .chunk:hover .meta, .row:hover > .meta { opacity: 1; }
   .thought { font-size: 13px; color: var(--muted); margin: 0 0 .7em; }
-  .thought summary { cursor: pointer; list-style: none; }
-  .thought summary::before { content: "◌ "; }
+  .thought > summary { cursor: pointer; list-style: none; }
+  .thought > summary::before { content: "◌ "; }
+  .thought.root > summary::before { content: "▸ "; }
+  .thought.root[open] > summary::before { content: "▾ "; }
   .thought .plain { font-style: italic; margin: .3em 0 0 1.1em; }
   .steps { margin: 0 0 1.1em; border-left: 2px solid var(--line); padding-left: .2em; }
   .steps > .head { font-size: 12.5px; color: var(--muted); padding: .1em .5em .3em; cursor: pointer; }
@@ -109,6 +125,26 @@
   .row:not(.expanded) > .detail { display: none; }
   .io { font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f1ea; border: 1px solid var(--line); border-radius: 8px; padding: .55em .75em; margin: .3em 0; max-height: 28em; overflow: auto; }
   .io.err { border-color: var(--red); }
+  /* A call's fields, or a result that is data: each by its name. */
+  .args { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25em .8em; font-size: 13px; margin: .3em 0; }
+  .arg { display: contents; }
+  .arg > .k { font: 12px/1.6 var(--mono); color: var(--muted); }
+  .arg > .v, .arg > .io, .arg > .args { margin: 0; min-width: 0; }
+  .args .args { border-left: 2px solid var(--line); padding-left: .6em; }
+  .v { overflow-wrap: anywhere; line-height: 1.5; }
+  .v.long { white-space: pre-wrap; }
+  .v.code { font: 12px/1.6 var(--mono); }
+  .prose.v { font: 13.5px/1.5 var(--sans); }
+  .prose.v > * { margin: 0 0 .3em; }
+  /* The root, marked up: the system prompt, then each tool. */
+  .thought.root[open] > summary { margin-bottom: .5em; }
+  .card.system { color: var(--ink); max-height: 30em; overflow: auto; }
+  .card.system .prose { font-size: 14.5px; }
+  .tool-defs { margin: .8em 0 0; }
+  .tool-def { padding: .55em 0; border-top: 1px solid var(--line); color: var(--ink); }
+  .tool-def .tool { font: 600 12.5px var(--mono); margin-bottom: .2em; }
+  .tool-def .prose { font: 13.5px/1.5 var(--sans); }
+  .tool-def .schema > summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-top: .3em; }
   .io .k { color: var(--muted); }
   .rendered { border: 1px solid var(--line); border-radius: 8px; padding: .7em 1em; background: var(--white); margin: .3em 0; max-height: 34em; overflow: auto; }
   .rendered img { max-width: 100%; }

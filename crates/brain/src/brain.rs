@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::build::{BuildId, Launch, Launched};
-use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
+use harness_core::call::{Call, CallEvent, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Description, Hello, Host, LimbKey, LimbKind, LimbRow, Reach};
@@ -23,8 +23,8 @@ use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
 use harness_core::schema::{self, Record};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
-    Created, Drain, Draining, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome, Scope,
-    Start as TaskStart, Stopper, Task, TaskEvent,
+    Abandoner, Created, Drain, Draining, Input, Mandate, Mode, Move, Origin,
+    Outcome as TaskOutcome, Scope, Start as TaskStart, Task, TaskEvent,
 };
 use harness_core::value::Bytes;
 use harness_face_web::{Feed, Folded, Running};
@@ -482,16 +482,18 @@ impl Brain {
                 self.fail(call, &said);
             }
             Todo::Interrupt(call) => self.interrupt(call),
-            Todo::Abandon(request) => {
+            Todo::Cut(request) => {
                 if let Some((cancel, _)) = self.requests.get(&request) {
                     cancel.now();
                 }
             }
-            Todo::Stop(task) => self.stop_member(task),
-            Todo::Tidy(task) => self.prompt(task, Prompt::Stopping),
+            Todo::Abandon(task) => self.stop_member(task),
+            Todo::Tidy(task) => self.prompt(task, Prompt::Tidy),
             Todo::Expire(task) => self.fact(Fact::Task(task, TaskEvent::Expired)),
             Todo::Settle(call) => self.settle_scope(call),
             Todo::Linger(task) => self.prompt(task, Prompt::Lingering),
+            Todo::Park(task) => self.prompt(task, Prompt::Park),
+            Todo::Resume(task) => self.prompt(task, Prompt::Resume),
             Todo::Unblock(aside) => self.prompt(aside, Prompt::Unblocked),
         }
     }
@@ -513,12 +515,12 @@ impl Brain {
         let state = self.state();
         let owner = state.owner(task).and_then(|o| state.task(o));
         let within = match owner.and_then(Task::drain) {
-            Some(Draining::Stopping(s)) if s.hard => 0,
-            Some(Draining::Stopping(s)) => policy::share(now(), s.deadline),
+            Some(Draining::Abandoning(s)) if s.hard => 0,
+            Some(Draining::Abandoning(s)) => policy::share(now(), s.deadline),
             _ => policy::ms(policy::MEMBER_STOP),
         };
-        let stop = Drain::Stop {
-            by: Stopper::Owner,
+        let stop = Drain::Abandon {
+            by: Abandoner::Owner,
             within,
         };
         self.fact(Fact::Task(task, TaskEvent::Drain(stop)));
@@ -1186,7 +1188,7 @@ Finish tidying up and end your turn with your report.",
             return self.append(batch);
         }
         if call.tool == meta::BACKGROUND {
-            match meta::background_call(&parent, id, self.meta, &input) {
+            match meta::background_call(self.state(), &parent, id, self.meta, &input) {
                 Ok((started, input)) => {
                     let said = render::blocks(&[render::text(&format!(
                         "Started `{}` in the background: its result comes to you as a message when it settles, \
@@ -1213,6 +1215,26 @@ and you cannot finish until it has.",
                     return self.append(batch);
                 }
             }
+        }
+        if call.tool == meta::STOP || call.tool == meta::PASS {
+            let said = self.hand(&call.tool, &parent, &input, &mut batch);
+            let (model, outcome) = match said {
+                Ok(said) => {
+                    let said = render::blocks(&[render::text(&said)]);
+                    let output = Output {
+                        model: said.id(),
+                        full: None,
+                        observes: Vec::new(),
+                    };
+                    (said, Outcome::Completed(output))
+                }
+                Err(message) => render::failed(&message),
+            };
+            batch.values.push(model);
+            batch
+                .facts
+                .push(Fact::Call(id, CallEvent::Settled(outcome)));
+            return self.append(batch);
         }
         match self.members(id, &call.tool, &parent, &input, &mut batch) {
             Ok(names) if call.tool == meta::ADD_SIBLING => {
@@ -1244,6 +1266,48 @@ and you cannot finish until it has.",
             }
         }
         self.append(batch);
+    }
+
+    /// A `stop` or `pass` of one of `parent`'s running background calls:
+    /// its fact, appended to `batch`, and what the call says.
+    fn hand(
+        &self,
+        tool: &str,
+        parent: &Task,
+        input: &[u8],
+        batch: &mut Batch,
+    ) -> Result<String, String> {
+        let state = self.state();
+        let (target, why) = meta::owned(state, parent, input)?;
+        if tool == meta::STOP {
+            batch.facts.push(Fact::Call(target, CallEvent::Abandon));
+            return Ok(
+                "Stopping it: its outcome comes to you as a message when it settles.".into(),
+            );
+        }
+        let (to, whom) = match state.owner(parent.id) {
+            Some(owner) => {
+                let owner = state.task(owner).expect("the owning task");
+                if owner.drain().is_some() {
+                    return Err(format!(
+                        "`{}`, which started you, is stopping, so it cannot take it",
+                        owner.name
+                    ));
+                }
+                (
+                    Owner::Task(owner.id),
+                    format!("`{}`, which started you", owner.name),
+                )
+            }
+            None if parent.scope == Scope::Max => (Owner::Max, "Max".to_owned()),
+            None => return Err("there is no one above you to pass it to".into()),
+        };
+        batch
+            .facts
+            .push(Fact::Call(target, CallEvent::Passed { to, why }));
+        Ok(format!(
+            "Passed it to {whom}: it keeps running, it is theirs to use and stop, and its outcome goes to them."
+        ))
     }
 
     /// The facts creating a meta call's members, with a limb for each new
@@ -1357,7 +1421,7 @@ and you cannot finish until it has.",
                 let said = match t.outcome() {
                     Some(TaskOutcome::Result { entry }) => self.visible(*entry),
                     Some(TaskOutcome::Failed { reason }) => format!("Failed: {reason}"),
-                    Some(TaskOutcome::Cancelled { by, report }) => self.cancelled(*by, *report),
+                    Some(TaskOutcome::Abandoned { by, report }) => self.cancelled(*by, *report),
                     None => unreachable!("a scope settles when every member is done"),
                 };
                 (t.name.clone(), said)
@@ -1379,10 +1443,10 @@ and you cannot finish until it has.",
     }
 
     /// What a cancelled member says to the task that reads its result.
-    fn cancelled(&self, by: Stopper, report: Option<EntryId>) -> String {
+    fn cancelled(&self, by: Abandoner, report: Option<EntryId>) -> String {
         let by = match by {
-            Stopper::Max => "Cancelled by Max",
-            Stopper::Owner => "Cancelled, because you are being stopped",
+            Abandoner::Max => "Abandoned by Max",
+            Abandoner::Owner => "Abandoned, because you are being abandoned",
         };
         match report {
             Some(entry) => format!("{by}. Its report:\n\n{}", self.visible(entry)),
@@ -1592,7 +1656,7 @@ and you cannot finish until it has.",
         };
         let said = match outcome {
             TaskOutcome::Result { entry } => self.visible(*entry),
-            TaskOutcome::Cancelled { by, report } => self.cancelled(*by, *report),
+            TaskOutcome::Abandoned { by, report } => self.cancelled(*by, *report),
             other => format!("{other:?}"),
         };
         println!("\n== the task is done; its result:\n\n{said}\n");

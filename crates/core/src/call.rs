@@ -110,9 +110,17 @@ pub enum Caller {
     /// next request waits for it.
     Agent { task: TaskId, tool_use: ToolUseId },
     /// Background work a task started with its own call `from` to a meta
-    /// tool: the task cannot finish while it runs, and its settlement wakes
-    /// the task.
-    Background { task: TaskId, from: CallId },
+    /// tool, under `name`: whoever owns it ([`Owner`]) cannot finish while
+    /// it runs, and its settlement wakes them.
+    Background {
+        task: TaskId,
+        from: CallId,
+        /// What the task called it, unique among its owner's running
+        /// background work: how the agent, whoever it passes it to, and Max
+        /// refer to it.
+        #[serde(default)]
+        name: String,
+    },
     /// Max, in a chat with `chat` (his settlement rides into its next
     /// request), or from the tree, outside any context.
     Max { limb: LimbId, chat: Option<TaskId> },
@@ -120,6 +128,28 @@ pub enum Caller {
     /// brief or of a handover. Owned by that call, and shown to each
     /// receiving task as a tool call it made.
     Meta { call: CallId, limb: LimbId },
+}
+
+/// Who a call is for now: who reads its outcome, who may stop it or pass it
+/// on, and who cannot finish while it runs.
+///
+/// **Concept.** Every call has exactly one owner, and ownership follows the
+/// task tree: a call is first its caller's (Max's own calls are his), and
+/// only a running background call ever moves, one level up at a time, by
+/// its owner's own choice ([`CallEvent::Passed`]). So nothing runs that
+/// nobody owns, an owner that is abandoned takes everything it owns with
+/// it, and work outlives the agent that started it only because an agent
+/// said so.
+///
+/// **Vision.** Background work at a stop: an agent is never forced to kill
+/// its background work, and a resource (a dev server, a browser tab)
+/// becomes Max's obligation only when an agent he started explicitly hands
+/// it to him. Ownership is not tool access: a parent can own a tab without
+/// browser tools, and stop it all the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Owner {
+    Task(TaskId),
+    Max,
 }
 
 /// A fact in a call's life.
@@ -137,6 +167,20 @@ pub enum CallEvent {
     Stopping {
         within: u64,
     },
+    /// Its owner hands it one level up the tree ([`Owner`]), so it can run
+    /// on after the owner finishes: a dev server, a browser tab, a long
+    /// test run someone will still use. Only a running background call is
+    /// passed, by the task that owns it, to the task that owns that one, or
+    /// to Max from a task he started. `why` is the owner's reason, shown to
+    /// whoever receives it.
+    Passed {
+        to: Owner,
+        why: String,
+    },
+    /// Its owner no longer wants it: stop it now ([`crate::cancel`]), with
+    /// the brain's grace for a call. Stated for an agent that stops its own
+    /// background work, or by Max, for any call.
+    Abandon,
     /// How it ended, stated by the limb that ran it (or by the brain, for a
     /// call that never reached one). A second settlement is accepted only
     /// after [`Outcome::Unknown`]: the real outcome of a remote command that
@@ -149,7 +193,10 @@ impl CallEvent {
     pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
         match self {
             CallEvent::Made(call) => call.values(out),
-            CallEvent::Dispatched | CallEvent::Stopping { .. } => {}
+            CallEvent::Dispatched
+            | CallEvent::Stopping { .. }
+            | CallEvent::Passed { .. }
+            | CallEvent::Abandon => {}
             CallEvent::Settled(outcome) => outcome.values(out),
         }
     }

@@ -13,7 +13,7 @@ use crate::id::{CallId, ModelCallId};
 /// and the request is sent again or the call is sent again to its limb.
 /// What survives is what a participant acted on. When Max interrupts a
 /// response, the visible text he was reacting to is kept with the abandoned
-/// request ([`crate::model_call::Ending::Abandoned`]); a call's output is
+/// request ([`crate::model_call::Ending::Cut`]); a call's output is
 /// kept in its settlement. A limb sends it on the link that carries its
 /// records ([`harness_substrate::Up::Live`]); the brain forwards it to faces
 /// on theirs ([`harness_substrate::Down::Live`]).

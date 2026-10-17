@@ -9,6 +9,13 @@
     --ease: cubic-bezier(.2, .8, .2, 1);
   }
   * { box-sizing: border-box; }
+  /* Scrollbars thin and in the page's colours, wherever they appear. */
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-button { display: none; }
+  ::-webkit-scrollbar-thumb { background: rgba(20, 20, 19, .18); border: 2px solid transparent; border-radius: 9px; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: rgba(20, 20, 19, .36); }
+  @supports not selector(::-webkit-scrollbar) { * { scrollbar-width: thin; scrollbar-color: rgba(20, 20, 19, .22) transparent; } }
   html, body { margin: 0; height: 100%; overflow: hidden; }
   body { background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); -webkit-tap-highlight-color: transparent; }
   button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }

@@ -65,12 +65,18 @@
 //! - **Structured concurrency.** Spawn is a call. A parent waiting on
 //!   children is acting on one outstanding call; the scope closes when the
 //!   call settles, which it can only do once every member is done;
-//!   background work is a call the task watches and cannot finish while it
-//!   runs. Stopping is one protocol at every level, from a task down to a
+//!   background work is a call its owner watches and cannot finish while it
+//!   runs. Every call has one owner ([`call::Owner`]); an agent hands a
+//!   running background call up a level only by saying so, and what reaches
+//!   Max is his to stop. Stopping is one protocol at every level, from a task down to a
 //!   command's processes and the brain itself ([`cancel`]): a stop carries a
 //!   deadline that shrinks on the way down, everything owned confirms its
 //!   exit before its owner's tidy-up turn, and the deadline is a hard kill
-//!   that needs no cooperation. Members are created in
+//!   that needs no cooperation. Max has three controls over a subtree,
+//!   inherited down it: pause (nothing new starts, nothing running is cut,
+//!   no turn is spent), park (each agent in the middle of its own loop
+//!   takes one turn to reach a safe point, then waits; [`task::Pause`]),
+//!   and abandon (that protocol: the work is done, but abandoned). Members are created in
 //!   the batch that dispatches their spawn, so membership is atomic with
 //!   the scope. Only Max starts tasks in his scope; an agent starts, through
 //!   its own meta call, only forks of itself, resumes of its finished
@@ -222,8 +228,8 @@
 //!   interrupts him mid-turn.
 //! - An autonomous turn that ends with background work running: it
 //!   lingers, told once
-//!   ([`delivery::Prompt::Lingering`]), and decides whether to wait or stop
-//!   the work.
+//!   ([`delivery::Prompt::Lingering`]), and decides whether to wait for the
+//!   work, stop it, or pass it up ([`call::CallEvent::Passed`]).
 //! - Where role files live (shared with Claude Code's `.claude/agents/`
 //!   during the transition, or the harness's own), and whether the
 //!   orchestrator's environment holds a shell or only meta tools and Max

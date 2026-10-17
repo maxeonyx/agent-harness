@@ -129,7 +129,7 @@ in as few words as you can. Now reply only `ready`, and end your turn.",
     });
     pc.pump_until(|d| !matches!(d.tab.status(interrupt), Status::Pending));
     println!("  the interrupt naming {turn}: {}", status(&pc, interrupt));
-    let seen = brain.until("chat: response abandoned");
+    let seen = brain.until("chat: response cut");
     let first = seen.iter().any(|l| l.contains("first byte"));
     println!("  brain: {}", seen.last().unwrap());
     println!("  it had a first byte before it ended: {first}");

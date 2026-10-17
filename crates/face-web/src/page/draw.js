@@ -14,7 +14,7 @@ function drawMap() {
     if (!a) {
       a = el(n.kind === "task" ? "a" : "div", "node");
       a.append(el("span", "dot"), el("span", "name"));
-      $(".dot", a).append(el("span", "ring"));
+      $(".dot", a).append(el("span", "g"), el("span", "ring"));
       if (n.kind === "task") {
         a.href = `#${id}`;
         a.addEventListener("click", (e) => { if (e.button || e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); if (!drag?.moved) go(id); });
@@ -40,26 +40,29 @@ function drawMap() {
     if (n.kind === "task") {
       const t = n.t, l = look(t), root = roots.has(id), fc = folded.get(id), q = queue.indexOf(id);
       a.className = fc ? `node archived${l.cls.includes("failed") ? " failed" : ""}${faded}`
-        : `node ${l.cls}${q >= 0 ? " needs" : ""}${q === 0 ? " next" : ""}${trouble(t) ? " trouble" : ""}${root ? " root" : ""}${id === openId ? " selected" : ""}${faded}`;
+        : `node ${l.cls}${t.origin === "fork" ? " fork" : ""}${q >= 0 ? " needs" : ""}${q === 0 ? " next" : ""}${trouble(t) ? " trouble" : ""}${root ? " root" : ""}${id === openId ? " selected" : ""}${faded}`;
       a.style.setProperty("--d", `${root ? ROOT_DOT : DOT}px`);
-      const dot = $(".dot", a), g = l.cls === "paused" ? "‖" : glyph(t);
-      dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = g) : dot.prepend(document.createTextNode(g));
+      mark($(".g", a), l.cls === "paused" ? "pause" : glyph(t));
       $(".name", a).textContent = shortName(t);
       let more = $(".more", a);
       if (fc && fc.tasks.length > 1) {
         if (!more) { a.append(more = el("button", "more", "⌄")); more.title = "Unfold the project"; more.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); unfolded.add(id); refresh(); }); }
       } else more?.remove();
-    } else if (n.kind === "scope") {
-      a.className = `node scope${n.scope.background ? " background" : ""}${n.scope.settled ? " settled" : ""}${faded}`;
     } else {
-      a.className = `node sat working${faded}`;
+      a.className = `node sat working${n.call.owner === "max" ? " yours" : ""}${faded}`;
       a.style.setProperty("--d", `${SAT_DOT}px`);
-      const dot = $(".dot", a), g = "⋯";
-      dot.firstChild?.nodeType === 3 ? (dot.firstChild.textContent = g) : dot.prepend(document.createTextNode(g));
+      mark($(".g", a), "⋯");
       $(".name", a).textContent = satLabel(n);
     }
   }
   if (tipFor) fillTip();
+}
+// What a dot shows: a letter, or one of the icons by its name.
+function mark(g, what) {
+  if (g.dataset.what === what) return;
+  g.dataset.what = what;
+  if (ICONS[what]) g.innerHTML = `<svg viewBox="0 0 24 24">${ICONS[what]}</svg>`;
+  else g.textContent = what;
 }
 
 function anchor(id, end) {
@@ -67,7 +70,6 @@ function anchor(id, end) {
   const n = graph.nodes.get(id);
   if (!p || !n) return null;
   const cx = p.x + p.w / 2;
-  if (n.kind === "scope") return { x: cx, y: p.y + 6 };
   const d = n.kind === "sat" ? SAT_DOT : graph.comps.some((c) => c.root.id === id) ? ROOT_DOT : DOT;
   return end === "out" ? { x: cx, y: p.y + d + 2 } : { x: cx, y: p.y - 2 };
 }
@@ -87,8 +89,7 @@ function drawEdges() {
       continue;
     }
     // Out of the bottom of the source's dot, below its name, into the top of the target's.
-    const n = graph.nodes.get(e.from);
-    const sx = a.x, sy = n.kind === "task" || n.kind === "sat" ? (shown.get(e.from).y + shown.get(e.from).h - 4) : a.y;
+    const sx = a.x, sy = shown.get(e.from).y + shown.get(e.from).h - 4;
     const dy = Math.max(18, (b.y - sy) / 2);
     const path = svgEl("path");
     path.setAttribute("d", b.y > sy ? `M${sx},${sy} C${sx},${sy + dy} ${b.x},${b.y - dy} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x + 60},${a.y} ${b.x + 60},${b.y} ${b.x},${b.y}`);

@@ -17,7 +17,7 @@ use harness_core::live::Live;
 use harness_core::schema::{Brain, Harness};
 use harness_core::state::State;
 use harness_core::task::{
-    Created, Drain, Life, Mandate, Mode, Origin, Outcome, Scope, Stopper, TaskEvent,
+    Abandoner, Created, Drain, Life, Mandate, Mode, Origin, Outcome, Scope, TaskEvent,
 };
 use harness_core::value::Bytes;
 use harness_substrate::{Down, Log, Memory, Mirror, Publisher, Status, View, What};
@@ -94,7 +94,7 @@ fn rows(state: &State) -> BTreeMap<Key, Row> {
             Life::Starting => "starting".to_string(),
             Life::Live(_) => "live".to_string(),
             Life::Done {
-                outcome: Outcome::Cancelled { by, .. },
+                outcome: Outcome::Abandoned { by, .. },
                 ..
             } => format!("done: stopped by {by:?}"),
             Life::Done { .. } => "done".to_string(),
@@ -472,8 +472,8 @@ fn main() {
         values: vec![],
         facts: vec![Fact::Task(
             task,
-            TaskEvent::Drain(Drain::Stop {
-                by: Stopper::Max,
+            TaskEvent::Drain(Drain::Abandon {
+                by: Abandoner::Max,
                 within: 30_000,
             }),
         )],

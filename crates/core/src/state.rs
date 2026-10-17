@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use imbl::{OrdMap, OrdSet};
 
 use crate::attention::{Queued, Ranking};
-use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome};
+use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome, Owner};
 use crate::context::{Entry, EntryId};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
@@ -24,8 +24,8 @@ use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
 use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::schema::Harness;
 use crate::task::{
-    Created, Drain, Draining, Life, Mode, Move, Origin, Phase, Scope, Start, Stopper, Task,
-    TaskEvent, ends,
+    Abandoner, Created, Drain, Draining, Life, Mode, Move, Origin, Pause, Paused, Phase, Scope,
+    Start, Task, TaskEvent, ends,
 };
 use crate::value::Bytes;
 
@@ -180,12 +180,29 @@ pub struct CallRecord {
     /// ([`Todo::Unroutable`]).
     pub limb: Option<LimbId>,
     pub made: Mark,
+    /// Who it is for now: its caller's, until it is passed on.
+    pub owner: Owner,
+    /// Each time it was passed up the tree, oldest first.
+    pub passed: Vec<Handed>,
+    /// Its owner no longer wants it ([`CallEvent::Abandon`]).
+    pub abandoned: bool,
     pub dispatched: Option<Dispatch>,
     /// When its limb was last asked to stop it, and by when.
     pub stopping: Option<CallStop>,
     pub settled: Option<Settlement>,
     /// The real outcome of a call first settled as unknown.
     pub late: Option<Settlement>,
+}
+
+/// One hand-off of a background call ([`CallEvent::Passed`]): the task that
+/// owned it, who owns it since, and the passer's reason, which the receiver
+/// is shown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Handed {
+    pub by: TaskId,
+    pub to: Owner,
+    pub why: String,
+    pub at: Mark,
 }
 
 impl CallRecord {
@@ -312,8 +329,14 @@ pub enum Waiting {
     Brain {
         since: Timestamp,
     },
-    /// Held by Max, on itself or an ancestor.
-    Held {
+    /// Paused by Max, on itself or an ancestor ([`State::pause`]), between
+    /// steps of its loop: nothing new of its own starts until he resumes it.
+    Paused {
+        since: Timestamp,
+    },
+    /// Parked: it brought its work to a safe point and waits for Max to
+    /// resume it.
+    Parked {
         since: Timestamp,
     },
     /// On the subscription's limit.
@@ -393,18 +416,24 @@ pub enum Todo {
     /// interrupted. Due again when a reader's deadline comes before the
     /// call's.
     Interrupt(CallId),
-    /// Cut the request: its task is stopping or interrupted, or the brain's
-    /// shutdown deadline has come.
-    Abandon(ModelCallId),
-    /// Stop a member of a scope whose owner is stopping: with less time than
-    /// the owner has, and again whenever the owner's deadline comes sooner
-    /// than the member's.
-    Stop(TaskId),
-    /// A stopping task has nothing of its own left running: deliver
-    /// [`Prompt::Stopping`], asking for its tidy-up turn.
+    /// Cut the request: its task is abandoned or interrupted, or the
+    /// brain's shutdown deadline has come.
+    Cut(ModelCallId),
+    /// Abandon a member of a scope whose owner is being abandoned: with less
+    /// time than the owner has, and again whenever the owner's deadline
+    /// comes sooner than the member's.
+    Abandon(TaskId),
+    /// An abandoned task has nothing of its own left running: deliver
+    /// [`Prompt::Tidy`], asking for its tidy-up turn.
     Tidy(TaskId),
-    /// A stopping task's deadline has come: commit [`TaskEvent::Expired`].
+    /// An abandoned task's deadline has come: commit [`TaskEvent::Expired`].
     Expire(TaskId),
+    /// Max parked the task, it is in the middle of its own loop, and it has
+    /// not been asked yet: deliver [`Prompt::Park`].
+    Park(TaskId),
+    /// The task parked, or was asked to, and Max has resumed it: deliver
+    /// [`Prompt::Resume`].
+    Resume(TaskId),
     /// Every member of this spawn's scope is done: settle it with their
     /// outcomes.
     Settle(CallId),
@@ -784,8 +813,8 @@ impl State {
                 })
                 | Fact::Task(
                     _,
-                    TaskEvent::Drain(Drain::Stop {
-                        by: Stopper::Max, ..
+                    TaskEvent::Drain(Drain::Abandon {
+                        by: Abandoner::Max, ..
                     }),
                 )
                 | Fact::Focus(_)
@@ -849,14 +878,14 @@ impl State {
                     TaskEvent::Drain(drain) => matches!(
                         drain,
                         Drain::ToMax { .. }
-                            | Drain::Stop {
-                                by: Stopper::Max,
+                            | Drain::Abandon {
+                                by: Abandoner::Max,
                                 ..
                             }
                     ),
                     TaskEvent::Expired => false,
                     TaskEvent::Moved(movement) => matches!(movement, Move::Rewind { .. }),
-                    TaskEvent::ModeSet(_) | TaskEvent::Renamed(_) | TaskEvent::Held(_) => true,
+                    TaskEvent::ModeSet(_) | TaskEvent::Renamed(_) | TaskEvent::Pause(_) => true,
                 },
                 Fact::Delivery(delivery) => matches!(
                     delivery.content,
@@ -865,6 +894,7 @@ impl State {
                 Fact::Call(_, CallEvent::Made(call)) => {
                     matches!(call.caller, Caller::Max { .. })
                 }
+                Fact::Call(_, CallEvent::Abandon) => true,
                 Fact::Call(id, CallEvent::Settled(_)) => self
                     .calls
                     .get(id)
@@ -1153,14 +1183,14 @@ impl State {
                     return Err(Rejected::Scoped);
                 }
             }
-            TaskEvent::Drain(Drain::Stop {
-                by: Stopper::Owner,
+            TaskEvent::Drain(Drain::Abandon {
+                by: Abandoner::Owner,
                 within,
             }) => {
                 let owner = self.owner(id).and_then(|o| self.tasks.get(&o));
                 match owner.and_then(Task::drain) {
                     // Nothing a task owns outlives it.
-                    Some(Draining::Stopping(s)) => {
+                    Some(Draining::Abandoning(s)) => {
                         let deadline = crate::cancel::deadline(record.at, *within);
                         if deadline > s.deadline.max(record.at) {
                             return Err(Rejected::Late);
@@ -1337,7 +1367,7 @@ impl State {
                     return Err(Rejected::Busy);
                 }
                 let readers: Vec<&Task> = self.live().filter(|t| t.awaits(id)).collect();
-                if interrupts(id, &made.call, &readers) {
+                if made.abandoned || interrupts(id, &made.call, &readers) {
                     return Err(Rejected::Draining);
                 }
                 let (first, first_to) = made
@@ -1367,8 +1397,64 @@ impl State {
                 });
                 Ok(())
             }
+            CallEvent::Passed { to, why } => self.pass(id, *to, why, record),
+            CallEvent::Abandon => {
+                let made = self.calls.get_mut(&id).ok_or(Rejected::Unknown)?;
+                if made.settled.is_some() {
+                    return Err(Rejected::Finished);
+                }
+                made.abandoned = true;
+                Ok(())
+            }
             CallEvent::Settled(outcome) => self.settle(id, outcome, record),
         }
+    }
+
+    /// A background call moves one level up the tree, from the task that
+    /// owns it to that task's owner, or to Max from a task he started.
+    fn pass(&mut self, id: CallId, to: Owner, why: &str, record: &Stated) -> Result<(), Rejected> {
+        let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
+        if made.settled.is_some() {
+            return Err(Rejected::Finished);
+        }
+        if made.abandoned || made.stopping.is_some() {
+            return Err(Rejected::Draining);
+        }
+        let Owner::Task(from) = made.owner else {
+            return Err(Rejected::NotForTask);
+        };
+        let passer = self.tasks.get(&from).ok_or(Rejected::Unknown)?;
+        if !passer.background.contains(&id) {
+            return Err(Rejected::NotForTask);
+        }
+        let up = match self.owner(from) {
+            Some(owner) => Owner::Task(owner),
+            None if passer.scope == Scope::Max => Owner::Max,
+            None => return Err(Rejected::WrongScope),
+        };
+        if to != up {
+            return Err(Rejected::WrongScope);
+        }
+        let mut readers = vec![passer.clone()];
+        if let Owner::Task(owner) = to {
+            readers.push(self.tasks.get(&owner).ok_or(Rejected::Unknown)?.clone());
+        }
+        for task in &mut readers {
+            task.apply(record, self)?;
+        }
+        for task in readers {
+            self.put(task);
+        }
+        if let Some(made) = self.calls.get_mut(&id) {
+            made.owner = to;
+            made.passed.push(Handed {
+                by: from,
+                to,
+                why: why.to_owned(),
+                at: Mark::of(record),
+            });
+        }
+        Ok(())
     }
 
     fn make(&mut self, id: CallId, call: &Call, record: &Stated) -> Result<(), Rejected> {
@@ -1390,7 +1476,7 @@ impl State {
                 }
                 context.binding.limb(&call.tool)
             }
-            Caller::Background { task, from } => {
+            Caller::Background { task, from, name } => {
                 let started = self.calls.get(from).ok_or(Rejected::Unknown)?;
                 if !matches!(started.call.caller, Caller::Agent { task: by, .. } if by == *task) {
                     return Err(Rejected::NotForTask);
@@ -1398,6 +1484,14 @@ impl State {
                 let task = self.tasks.get(task).ok_or(Rejected::Unknown)?;
                 if task.is_done() {
                     return Err(Rejected::Finished);
+                }
+                let named = |c: &CallId| {
+                    self.calls.get(c).is_some_and(|c| {
+                        matches!(&c.call.caller, Caller::Background { name: n, .. } if n == name)
+                    })
+                };
+                if !name.is_empty() && task.background.iter().any(named) {
+                    return Err(Rejected::Exists);
                 }
                 let context = task.context().ok_or(Rejected::Starting)?;
                 let limb = context.binding.limb(&call.tool);
@@ -1447,6 +1541,11 @@ impl State {
         if let Some(task) = reader {
             self.put(task);
         }
+        let owner = match &call.caller {
+            Caller::Agent { task, .. } | Caller::Background { task, .. } => Owner::Task(*task),
+            Caller::Max { .. } => Owner::Max,
+            Caller::Meta { call: by, .. } => self.calls.get(by).map_or(Owner::Max, |c| c.owner),
+        };
         self.open.calls.insert(id);
         self.calls.insert(
             id,
@@ -1454,6 +1553,9 @@ impl State {
                 call: call.clone(),
                 limb,
                 made: Mark::of(record),
+                owner,
+                passed: Vec::new(),
+                abandoned: false,
                 dispatched: None,
                 stopping: None,
                 settled: None,
@@ -1481,19 +1583,15 @@ impl State {
         // Who reads it: whoever awaits it now, or for a late outcome, the
         // context its first outcome reached, if it is still live.
         let readers: Vec<&Task> = if late {
-            match made.call.caller {
-                Caller::Agent { task, .. }
-                | Caller::Background { task, .. }
-                | Caller::Max {
-                    chat: Some(task), ..
-                } => self
-                    .tasks
-                    .get(&task)
-                    .filter(|t| !t.is_done())
-                    .into_iter()
-                    .collect(),
-                Caller::Max { chat: None, .. } | Caller::Meta { .. } => Vec::new(),
-            }
+            let reader = match (made.owner, &made.call.caller) {
+                (_, Caller::Max { chat, .. }) => *chat,
+                (_, Caller::Meta { .. }) | (Owner::Max, _) => None,
+                (Owner::Task(task), _) => Some(task),
+            };
+            (reader.and_then(|t| self.tasks.get(&t)))
+                .filter(|t| !t.is_done())
+                .into_iter()
+                .collect()
         } else {
             // A finished task still reads Max's actions in its chat.
             let chat = match made.call.caller {
@@ -1554,7 +1652,7 @@ impl State {
             Content::Prompt(Prompt::Unblocked) => {
                 self.open.unblocked.insert(delivery.to);
             }
-            Content::Prompt(Prompt::Done | Prompt::Stopping) => {}
+            Content::Prompt(Prompt::Done | Prompt::Tidy | Prompt::Park | Prompt::Resume) => {}
         }
         self.deliveries.insert(
             delivery.id,
@@ -1672,6 +1770,14 @@ impl State {
     }
 
     /// Every call, in id order.
+    /// Running background work agents have passed to Max ([`Owner::Max`]):
+    /// his to use and stop.
+    pub fn handed(&self) -> impl Iterator<Item = (CallId, &CallRecord)> {
+        (self.open.calls.iter())
+            .filter_map(|id| Some((*id, self.calls.get(id)?)))
+            .filter(|(_, r)| r.owner == Owner::Max && !r.passed.is_empty())
+    }
+
     pub fn calls(&self) -> impl Iterator<Item = (CallId, &CallRecord)> {
         self.calls.iter().map(|(id, record)| (*id, record))
     }
@@ -1861,13 +1967,13 @@ impl State {
         }
     }
 
-    /// The task a call belongs to: its agent, or for the harness's call, the
-    /// task whose call it runs for. Max's calls are his own.
+    /// The task a call belongs to now ([`Owner`]): its agent, the task it
+    /// was passed to, or for the harness's call, the task whose call it runs
+    /// for. `None` for Max's: his own, and what was passed to him.
     pub fn call_owner(&self, call: CallId) -> Option<TaskId> {
-        match &self.calls.get(&call)?.call.caller {
-            Caller::Agent { task, .. } | Caller::Background { task, .. } => Some(*task),
-            Caller::Max { .. } => None,
-            Caller::Meta { call, .. } => self.call_owner(*call),
+        match self.calls.get(&call)?.owner {
+            Owner::Task(task) => Some(task),
+            Owner::Max => None,
         }
     }
 
@@ -1891,16 +1997,37 @@ impl State {
         ids.iter().filter_map(|id| self.tasks.get(id))
     }
 
-    /// Whether the task or any ancestor is held.
-    pub fn held(&self, task: TaskId) -> bool {
+    /// Whether Max has paused the task: the newest of what he said about
+    /// pausing it or any of its ancestors, with the task he said it on.
+    /// `None` when nothing pauses it.
+    pub fn pause(&self, task: TaskId) -> Option<(Pause, TaskId)> {
+        let mut newest: Option<(Paused, TaskId)> = None;
         let mut next = Some(task);
         while let Some(id) = next {
-            if self.tasks.get(&id).is_some_and(|t| t.held) {
-                return true;
+            if let Some(said) = self.tasks.get(&id).and_then(|t| t.pause)
+                && newest.is_none_or(|(n, _)| said.at > n.at)
+            {
+                newest = Some((said, id));
             }
             next = self.owner(id);
         }
-        false
+        newest
+            .filter(|(said, _)| said.pause != Pause::Off)
+            .map(|(said, id)| (said.pause, id))
+    }
+
+    /// Whether nothing new of the task's own may start now, because Max
+    /// paused it: no request, and no dispatch of its calls. An abandoned
+    /// task's tidy-up turn runs paused or not, and a task asked to park runs
+    /// until it has.
+    pub fn gated(&self, task: &Task) -> bool {
+        let abandoning = matches!(task.drain(), Some(Draining::Abandoning(_)));
+        let parking = task.live().is_some_and(|l| l.parking.is_some());
+        match self.pause(task.id) {
+            None => false,
+            Some((Pause::Park, _)) if parking => false,
+            Some(_) => !abandoning,
+        }
     }
 
     /// The limbs a task can reach now: its environment's, as currently
@@ -1949,6 +2076,14 @@ impl State {
             .is_some_and(|l| l.kind == LimbKind::Max)
     }
 
+    /// Whether a call waits undispatched because Max paused the task whose
+    /// work it is. His own calls are never withheld.
+    fn withheld(&self, call: CallId) -> bool {
+        (self.call_owner(call))
+            .and_then(|t| self.tasks.get(&t))
+            .is_some_and(|t| self.gated(t))
+    }
+
     /// A tool use is acted on only once its response is complete and its
     /// task is acting on it.
     fn acting_on(&self, id: CallId, call: &Call) -> bool {
@@ -1979,7 +2114,7 @@ impl State {
             Life::Live(live) => live,
         };
         Some(match &live.phase {
-            Phase::Ready if self.held(task) => Waiting::Held { since },
+            Phase::Ready if self.gated(t) => Waiting::Paused { since },
             Phase::Ready => match self.limited(now) {
                 Some(until) => Waiting::Limited { until, since },
                 None => Waiting::Brain { since },
@@ -2003,6 +2138,7 @@ impl State {
                 background: t.background.clone(),
                 since,
             },
+            Phase::Parked => Waiting::Parked { since },
         })
     }
 
@@ -2080,13 +2216,11 @@ impl State {
                 (Some(Phase::Listening), None) if lingering => {
                     todo.push(Todo::Linger(task.id));
                 }
-                (Some(Phase::Ready), None)
-                    if !self.held(task.id) && self.limited(now).is_none() =>
-                {
+                (Some(Phase::Ready), None) if !self.gated(task) && self.limited(now).is_none() => {
                     todo.push(Todo::Send(task.id));
                 }
-                // The tidy-up turn: asked for once, then sent, held or not.
-                (Some(Phase::Ready), Some(Draining::Stopping(s))) if !s.hard => {
+                // The tidy-up turn: asked for once, then sent, paused or not.
+                (Some(Phase::Ready), Some(Draining::Abandoning(s))) if !s.hard => {
                     if !s.told {
                         todo.push(Todo::Tidy(task.id));
                     } else if self.limited(now).is_none() {
@@ -2096,17 +2230,29 @@ impl State {
                 // Every request but a tidy-up turn's.
                 (Some(Phase::Thinking(call)), Some(drain))
                     if !self.model_calls.get(call).is_some_and(lost)
-                        && !matches!(drain, Draining::Stopping(s) if s.tidying && !s.hard) =>
+                        && !matches!(drain, Draining::Abandoning(s) if s.tidying && !s.hard) =>
                 {
-                    todo.push(Todo::Abandon(*call));
+                    todo.push(Todo::Cut(*call));
                 }
                 _ => {}
             }
-            if let Some(Draining::Stopping(s)) = task.drain()
+            if let Some(Draining::Abandoning(s)) = task.drain()
                 && !s.hard
                 && now >= s.deadline
             {
                 todo.push(Todo::Expire(task.id));
+            }
+            if let Some(live) = task.live()
+                && live.drain.is_none()
+            {
+                let asked = live.parking.is_some() || live.phase == Phase::Parked;
+                match self.pause(task.id) {
+                    Some((Pause::Park, _)) if !asked && task.mid_loop() && !self.scoped(task) => {
+                        todo.push(Todo::Park(task.id));
+                    }
+                    None if asked => todo.push(Todo::Resume(task.id)),
+                    _ => {}
+                }
             }
         }
         // In the order they were made, so a limb is sent one response's
@@ -2131,12 +2277,12 @@ impl State {
                     todo.push(Todo::Settle(*id));
                 } else if stopping {
                     let due = |m: &&&Task| match (m.drain(), owner) {
-                        (Some(Draining::Stopping(m)), Some(Draining::Stopping(o))) => {
+                        (Some(Draining::Abandoning(m)), Some(Draining::Abandoning(o))) => {
                             !m.hard && m.deadline > o.deadline
                         }
                         (drain, _) => !ends(drain),
                     };
-                    todo.extend(live.iter().filter(due).map(|m| Todo::Stop(m.id)));
+                    todo.extend(live.iter().filter(due).map(|m| Todo::Abandon(m.id)));
                 } else if live.iter().all(aside) {
                     let unblock = live.iter().filter(|m| !self.open.unblocked.contains(&m.id));
                     todo.extend(unblock.map(|m| Todo::Unblock(m.id)));
@@ -2150,7 +2296,7 @@ impl State {
             needed.insert(limb.id);
             let connection = self.connected(limb.id).map(|(_, mark)| mark.seq);
             let readers = readers.get(id).map_or(&[][..], Vec::as_slice);
-            if interrupts(*id, &record.call, readers) {
+            if record.abandoned || interrupts(*id, &record.call, readers) {
                 let due = match (&record.dispatched, &limb.kind) {
                     (None, _) => true,
                     (Some(_), LimbKind::Plugin { .. }) => match connection {
@@ -2175,7 +2321,7 @@ impl State {
                 LimbKind::Meta | LimbKind::Attention => record.dispatched.is_none(),
                 LimbKind::Plugin { .. } => connection.is_some() && record.dispatched.is_none(),
             };
-            if due && self.acting_on(*id, &record.call) {
+            if due && self.acting_on(*id, &record.call) && !self.withheld(*id) {
                 todo.push(Todo::Dispatch(*id));
             }
         }
@@ -2198,9 +2344,9 @@ impl State {
                 for task in self.live() {
                     if let Some(Phase::Thinking(call)) = task.phase()
                         && !self.model_calls.get(call).is_some_and(lost)
-                        && !todo.contains(&Todo::Abandon(*call))
+                        && !todo.contains(&Todo::Cut(*call))
                     {
-                        todo.push(Todo::Abandon(*call));
+                        todo.push(Todo::Cut(*call));
                     }
                 }
             }
@@ -2219,7 +2365,7 @@ impl State {
 
 fn needed_by(readers: &[&Task]) -> Option<Timestamp> {
     let deadlines = readers.iter().map(|t| match t.drain() {
-        Some(Draining::Stopping(s)) => Some(s.deadline),
+        Some(Draining::Abandoning(s)) => Some(s.deadline),
         _ => None,
     });
     deadlines.collect::<Option<Vec<_>>>()?.into_iter().max()
@@ -2239,7 +2385,7 @@ fn interrupts(id: CallId, call: &Call, readers: &[&Task]) -> bool {
         Some(Draining::ToMax) => {
             matches!(t.phase(), Some(Phase::Acting(step)) if step.outstanding.contains(&id))
         }
-        Some(Draining::Stopping(s)) => !s.tidying || s.hard,
+        Some(Draining::Abandoning(s)) => !s.tidying || s.hard,
         Some(Draining::Failing(_)) => true,
     })
 }

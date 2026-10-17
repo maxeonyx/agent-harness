@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use harness_core::call::{Caller, Outcome as CallOutcome};
+use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::delivery::Content;
 use harness_core::environment::LimbKind;
 use harness_core::fact::Fact;
@@ -13,7 +13,7 @@ use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
 use harness_core::state::{Ended, State, Waiting};
 use harness_core::task::{
-    Drain, Draining, Input, Mode, Move, Origin, Outcome, Phase, Scope, Task, TaskEvent,
+    Drain, Draining, Input, Mode, Move, Origin, Outcome, Pause, Phase, Scope, Task, TaskEvent,
 };
 use harness_face_tab::{DraftRow, FaceKey, FaceRow};
 use serde_json::{Value, json};
@@ -217,7 +217,7 @@ fn trouble(ended: &Ended) -> Value {
             },
         }),
         Ending::Limited { until } => json!({"at": ended.at.at.0, "until": until.0}),
-        Ending::Responded { .. } | Ending::Abandoned { .. } | Ending::Lost => Value::Null,
+        Ending::Responded { .. } | Ending::Cut { .. } | Ending::Lost => Value::Null,
     }
 }
 
@@ -231,8 +231,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
     let outcome = match t.outcome() {
         Some(Outcome::Result { .. }) => json!({"kind": "result"}),
         Some(Outcome::Failed { reason }) => json!({"kind": "failed", "reason": reason}),
-        Some(Outcome::Cancelled { by, report }) => {
-            json!({"kind": "cancelled", "by": format!("{by:?}"), "report": report.is_some()})
+        Some(Outcome::Abandoned { by, report }) => {
+            json!({"kind": "abandoned", "by": format!("{by:?}"), "report": report.is_some()})
         }
         None => Value::Null,
     };
@@ -268,16 +268,24 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
         "window": state.environment(t.environment).map(|e| harness_provider::context_window(&e.model)),
         "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
-        "held": t.held,
+        // Whether Max has paused it, how, and on which task: itself or an
+        // ancestor.
+        "pause": state.pause(t.id).map(|(how, by)| json!({
+            "how": match how {
+                Pause::Park => "park",
+                Pause::Now | Pause::Off => "now",
+            },
+            "by": by.to_string(),
+        })),
         "scoped": scoped,
         "draining": t.drain().map(|d| match d {
             Draining::ToMax => "to Max".to_string(),
-            Draining::Stopping(s) => format!("stop ({:?})", s.by),
+            Draining::Abandoning(s) => format!("abandon ({:?})", s.by),
             Draining::Failing(reason) => format!("fail: {reason}"),
         }),
         // How far through its stop it is, and by when it must have exited.
         "stop": match t.drain() {
-            Some(Draining::Stopping(s)) => json!({
+            Some(Draining::Abandoning(s)) => json!({
                 "by": format!("{:?}", s.by),
                 "deadline": s.deadline.0,
                 "tidying": s.tidying,
@@ -289,6 +297,12 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "trouble": last.map_or(Value::Null, trouble),
         "pending": pending_words(state, value, t),
         "background": t.background.iter().map(|c| call(state, value, *c)).collect::<Vec<_>>(),
+        // What it passed to Max that still runs: his now.
+        "handed": state
+            .handed()
+            .filter(|(_, r)| r.passed.last().is_some_and(|h| h.by == t.id))
+            .map(|(c, _)| call(state, value, c))
+            .collect::<Vec<_>>(),
         "tokens": last.and_then(|e| e.usage).map(|u| json!({
             "context": u.input + u.cache_read + u.cache_write_short + u.cache_write_long,
             "output": u.output,
@@ -343,7 +357,8 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
             "limbs": limbs.iter().map(|l| state.limb(*l).map_or_else(|| l.to_string(), |l| l.name.clone())).collect::<Vec<_>>(),
         }),
         Waiting::Brain { since } => json!({"kind": "harness", "since": since.0}),
-        Waiting::Held { since } => json!({"kind": "held", "since": since.0}),
+        Waiting::Paused { since } => json!({"kind": "held", "since": since.0}),
+        Waiting::Parked { since } => json!({"kind": "parked", "since": since.0}),
         Waiting::Limited { until, since } => {
             json!({"kind": "limited", "until": until.0, "since": since.0})
         }
@@ -396,6 +411,16 @@ fn call(state: &State, value: Text, id: CallId) -> Value {
         "made": record.made.at.0,
         "status": status,
         "children": children,
+        "name": match &record.call.caller {
+            Caller::Background { name, .. } => Some(name),
+            _ => None,
+        },
+        "owner": match record.owner {
+            Owner::Task(task) => task.to_string(),
+            Owner::Max => "max".into(),
+        },
+        "passed": record.passed.last().map(|h| json!({"by": h.by.to_string(), "why": h.why})),
+        "abandoned": record.abandoned,
     })
 }
 
@@ -418,7 +443,12 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                         None => "the harness".into(),
                     },
                 };
-                format!("{by}'s {}", c.call.tool)
+                match &c.call.caller {
+                    Caller::Background { name, .. } if !name.is_empty() => {
+                        format!("{by}'s {} `{name}`", c.call.tool)
+                    }
+                    _ => format!("{by}'s {}", c.call.tool),
+                }
             },
         )
     };
@@ -451,18 +481,19 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             }
             TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
             TaskEvent::Drain(Drain::ToMax { .. }) => format!("{} interrupted", name(*id)),
-            TaskEvent::Drain(Drain::Stop { by, within: 0 }) => {
-                format!("{} stopped by {by:?}, now", name(*id))
+            TaskEvent::Drain(Drain::Abandon { by, within: 0 }) => {
+                format!("{} abandoned by {by:?}, now", name(*id))
             }
-            TaskEvent::Drain(Drain::Stop { by, within }) => format!(
-                "{} stopped by {by:?}, to exit within {}s",
+            TaskEvent::Drain(Drain::Abandon { by, within }) => format!(
+                "{} abandoned by {by:?}, to exit within {}s",
                 name(*id),
                 within / 1000
             ),
             TaskEvent::Expired => format!("{} is past its deadline: stopped hard", name(*id)),
             TaskEvent::Drain(Drain::Fail(why)) => format!("{} failing: {why}", name(*id)),
-            TaskEvent::Held(true) => format!("{} held", name(*id)),
-            TaskEvent::Held(false) => format!("{} released", name(*id)),
+            TaskEvent::Pause(Pause::Now) => format!("{} paused", name(*id)),
+            TaskEvent::Pause(Pause::Park) => format!("{} paused for now", name(*id)),
+            TaskEvent::Pause(Pause::Off) => format!("{} resumed", name(*id)),
         },
         Fact::ModelCall(id, event) => {
             let task = state.model_call(*id).map(|m| name(m.call.task));
@@ -489,7 +520,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                             None => format!("{task}: request failed: {message}"),
                         },
                         Ending::Limited { .. } => format!("{task}: limited by the account"),
-                        Ending::Abandoned { .. } => format!("{task}: response abandoned"),
+                        Ending::Cut { .. } => format!("{task}: response cut"),
                         Ending::Lost => format!("{task}: request lost"),
                     }
                 }
@@ -503,6 +534,14 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                 E::Stopping { within } => {
                     format!("{} stopping, within {}s", call_name(*id), within / 1000)
                 }
+                E::Passed { to, why } => {
+                    let to = match to {
+                        Owner::Task(task) => name(*task),
+                        Owner::Max => "Max".into(),
+                    };
+                    format!("{} passed to {to}: {why}", call_name(*id))
+                }
+                E::Abandon => format!("{} abandoned", call_name(*id)),
                 E::Settled(o) => format!("{} {}", call_name(*id), outcome(o)),
             }
         }

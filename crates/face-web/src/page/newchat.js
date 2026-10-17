@@ -1,9 +1,10 @@
 // ─── A new chat, in Max's own scope ───────────────────────────────────────
 // A double click on the ground, or +, opens a small card there on a chat
-// that does not exist yet: the same staging box as every chat, its role and
-// directory beside the send, its draft and attachments kept like theirs.
-// Sending starts it: the words are its mandate, what is attached reaches it
-// with them, and the card becomes the chat where it is.
+// that does not exist yet: the same staging box as every chat, beside the
+// send its role and a field for each place that role names (a workspace's
+// is its directory), its draft and attachments kept like theirs. Sending
+// starts it: the words are its mandate, what is attached reaches it with
+// them, and the card becomes the chat where it is.
 function buildNew() {
   title.textContent = "New chat";
   title.title = "";
@@ -15,16 +16,25 @@ function buildNew() {
   role.append(...view.environments.map((e) => Object.assign(el("option", null, e.name), { value: e.name })));
   role.value = drafts.get("new:role") || (view.environments.some((e) => e.name === "chat") ? "chat" : view.environments[0]?.name);
   role.hidden = view.environments.length < 2;
-  const dir = el("input", "pick"); dir.id = "n-dir"; dir.placeholder = "directory"; dir.title = "Where it works";
-  dir.value = drafts.get("new:dir");
-  dir.setAttribute("list", "n-dirs");
-  const dirs = el("datalist"); dirs.id = "n-dirs";
-  dirs.append(...view.workspaces.map((w) => Object.assign(el("option"), { value: w.dir })));
-  const needs = () => { dir.hidden = !view.environments.find((e) => e.name === role.value)?.places.length; };
-  role.onchange = () => { drafts.set("new:role", role.value); needs(); };
-  dir.oninput = () => drafts.set("new:dir", dir.value);
-  needs();
-  picks.replaceChildren(role, dir, dirs);
+  const places = el("span");
+  places.style.display = "contents";
+  const fill = () => places.replaceChildren(...placesOf(role.value).flatMap(placeField));
+  role.onchange = () => { drafts.set("new:role", role.value); fill(); };
+  fill();
+  picks.replaceChildren(role, places);
+}
+const placesOf = (role) => view.environments.find((e) => e.name === role)?.places || [];
+// A place's field: a workspace's is a directory, offered from those known.
+function placeField(place) {
+  const f = el("input", "pick place"); f.dataset.place = place;
+  f.placeholder = place === "workspace" ? "directory" : place; f.title = `Its ${place}`;
+  f.value = drafts.get(`new:${place}`) || "";
+  f.oninput = () => drafts.set(`new:${place}`, f.value);
+  if (place !== "workspace") return [f];
+  const list = el("datalist"); list.id = `n-${place}`;
+  list.append(...view.workspaces.map((w) => Object.assign(el("option"), { value: w.dir })));
+  f.setAttribute("list", list.id);
+  return [f, list];
 }
 // A name from the first words of a mandate, to its first clause's end.
 const nameFrom = (text) => {
@@ -33,17 +43,19 @@ const nameFrom = (text) => {
 };
 async function startNew(text, files) {
   const env = view.environments.find((e) => e.name === $("#n-role").value);
-  const dir = $("#n-dir").value.trim();
   if (!env) return say("choose a role", true);
-  if (env.places.length && !dir) return say(`it needs a directory for its ${env.places[0]}`, true);
+  const given = Object.fromEntries([...compose.querySelectorAll(".place")].map((f) => [f.dataset.place, f.value.trim()]));
+  const missing = env.places.find((p) => !given[p]);
+  if (missing) return say(`it needs its ${missing}`, true);
   if (!text.trim()) return say("write what it is for", true);
   takeWords(NEW);
   const why = await start((next, out) => {
     const places = {};
     for (const place of env.places) {
-      const known = view.workspaces.find((w) => w.dir === dir);
+      const name = given[place];
+      const known = place === "workspace" && view.workspaces.find((w) => w.dir === name);
       const limb = known ? known.id : next();
-      if (!known) out.push({ Limb: { id: limb, name: dir, kind: { Plugin: { kind: place, config: JSON.stringify({ dir }) } } } });
+      if (!known) out.push({ Limb: { id: limb, name, kind: { Plugin: { kind: place, config: JSON.stringify({ dir: name }) } } } });
       places[place] = limb;
     }
     return { name: nameFrom(text), scope: "Max", origin: { Fresh: { environment: env.id, places } } };
