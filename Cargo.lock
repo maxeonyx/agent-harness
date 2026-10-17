@@ -258,6 +258,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-relaunch-spike"
+version = "0.0.0"
+dependencies = [
+ "harness-core",
+ "harness-provider",
+ "harness-substrate",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "harness-store"
 version = "0.0.0"
 dependencies = [

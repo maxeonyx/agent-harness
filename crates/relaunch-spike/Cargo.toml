@@ -1,0 +1,29 @@
+[package]
+name = "harness-relaunch-spike"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+description = "Spike: one brain, many builds. Make-before-break relaunch under a supervisor, rollback that never bricks, and the cache still hit across both."
+
+[[bin]]
+name = "spike"
+path = "src/main.rs"
+
+[features]
+# Each feature makes a different build, as an agent's edit would.
+# A fix in how notices are rendered.
+render-v2 = []
+# A fold bug: the build panics once it has opened the database.
+crash-on-open = []
+# A new fact older builds have no word for.
+new-fact = []
+# A rendering bug: every request it sends is refused by the provider.
+bad-requests = []
+
+[dependencies]
+harness-core = { path = "../core" }
+harness-substrate = { path = "../substrate" }
+harness-provider = { path = "../provider" }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
