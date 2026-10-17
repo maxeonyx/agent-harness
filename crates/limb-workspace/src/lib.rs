@@ -9,7 +9,9 @@
 //! a write or edit whose caller has not seen the current version is
 //! [refused](Outcome::Refused) before it touches anything. A caller who has
 //! never seen an existing file is treated as having seen it absent, so
-//! nothing is overwritten blind. Forks share their source's workspace; the
+//! nothing is overwritten blind. The refusal shows the file as a read
+//! would, which counts as seeing it, so a retry written after it goes
+//! through. Forks share their source's workspace; the
 //! notices and refusals are how siblings coordinate in it.
 //!
 //! Everything it says is records of its own replica, about itself, its own
@@ -594,11 +596,15 @@ impl Report {
     }
 
     pub(crate) fn completed(&mut self, said: &str, observes: Vec<Observation>) -> Outcome {
-        Outcome::Completed(Output {
+        Outcome::Completed(self.output(said, observes))
+    }
+
+    pub(crate) fn output(&mut self, said: &str, observes: Vec<Observation>) -> Output {
+        Output {
             model: self.text(said),
             full: None,
             observes,
-        })
+        }
     }
 
     pub(crate) fn failed(&mut self, message: &str) -> Outcome {
@@ -847,6 +853,9 @@ struct Own {
     /// share, and what those calls have observed so far.
     response: Time,
     observed: Vec<Observation>,
+    /// What that response's refusals have shown, which the later ones of
+    /// it need not show again.
+    shown: Vec<Observation>,
     /// When its latest commands ran, oldest first.
     commands: VecDeque<(SystemTime, SystemTime)>,
 }
@@ -890,14 +899,23 @@ impl Inner {
         let own = own.entry(*task).or_insert_with(|| Own {
             response: id.0.at,
             observed: Vec::new(),
+            shown: Vec::new(),
             commands: VecDeque::new(),
         });
         if own.response != id.0.at {
             own.response = id.0.at;
             own.observed.clear();
+            own.shown.clear();
         }
-        if let Some(output) = outcome.output() {
-            own.observed.extend(output.observes.iter().cloned());
+        match outcome {
+            Outcome::Refused {
+                shown: Some(shown), ..
+            } => own.shown.extend(shown.observes.iter().cloned()),
+            outcome => {
+                if let Some(output) = outcome.output() {
+                    own.observed.extend(output.observes.iter().cloned());
+                }
+            }
         }
         if call.tool == "bash" {
             own.commands.push_back(ran);
@@ -905,6 +923,23 @@ impl Inner {
                 own.commands.pop_front();
             }
         }
+    }
+
+    /// Whether an earlier refusal of call `id`'s response showed what
+    /// `observes` names.
+    pub(crate) fn shown_before(
+        &self,
+        id: CallId,
+        caller: &Caller,
+        observes: &[Observation],
+    ) -> bool {
+        let Caller::Agent { task, .. } = caller else {
+            return false;
+        };
+        lock(&self.own)
+            .get(task)
+            .filter(|own| own.response == id.0.at)
+            .is_some_and(|own| observes.iter().all(|o| own.shown.contains(o)))
     }
 
     /// Whether `caller`'s own command last changed `path`: it changed while

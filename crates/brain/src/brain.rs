@@ -233,7 +233,8 @@ impl Brain {
                 .as_ref()
                 != Some(wanted)
         {
-            facts.push(Fact::Limb(wanted.definition(id)));
+            let limb = state.limb(id).expect("found among the limbs");
+            facts.push(Fact::Limb(reconfigured(limb, wanted)));
         }
         let browser = define(&mut facts, browser_limb, &|id| {
             wanted.clone().unwrap_or_default().definition(id)
@@ -256,7 +257,7 @@ impl Brain {
                     limbs.extend(shared);
                     if limbs != settings.limbs {
                         let settings = roles::Settings { limbs, ..settings };
-                        facts.push(Fact::Limb(settings.definition(id)));
+                        facts.push(Fact::Limb(reconfigured(limb, &settings)));
                     }
                 }
                 Some(id)
@@ -1741,4 +1742,18 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
     let name = format!("{repo}-{}", branch.replace('/', "-"));
     let parent = dir.parent().unwrap_or(dir);
     (from, parent.join(name))
+}
+
+/// A new version of `limb` with `settings` as its config: the same kind on
+/// the same host as the version recorded, which a journal from before
+/// hosts were recorded reads as `Local`.
+fn reconfigured(
+    limb: &harness_core::environment::Limb,
+    settings: &impl serde::Serialize,
+) -> harness_core::environment::Limb {
+    let mut limb = limb.clone();
+    if let LimbKind::Plugin { config, .. } = &mut limb.kind {
+        *config = serde_json::to_string(settings).expect("settings are JSON");
+    }
+    limb
 }

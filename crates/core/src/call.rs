@@ -219,6 +219,12 @@ pub enum Outcome {
     /// is always safe.
     Refused {
         current: Vec<Observation>,
+        /// The fresh look, when the limb gives one: what reading the
+        /// current state returns, which the context then embodies like a
+        /// read's result, so a retry written after it goes through. Not
+        /// held by the later calls of the same response, which were written
+        /// before it was seen.
+        shown: Option<Output>,
     },
     /// Stopped while running, because it was asked or because its limb gave
     /// up on it (the output says which); it may have had partial effects.
@@ -245,12 +251,21 @@ impl Outcome {
         }
     }
 
+    /// What its caller's context sees of it: what it returned, or what a
+    /// refusal showed.
+    pub fn seen(&self) -> Option<&Output> {
+        match self {
+            Outcome::Refused { shown, .. } => shown.as_ref(),
+            outcome => outcome.output(),
+        }
+    }
+
     fn values(&self, out: &mut Vec<ValueId>) {
         if let Some(Output {
             model,
             full,
             observes: _,
-        }) = self.output()
+        }) = self.seen()
         {
             out.push(*model);
             out.extend(*full);
