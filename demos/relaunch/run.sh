@@ -16,7 +16,7 @@ unit=harness-$name.service
 home=${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness
 work=$repo/.demo-relaunch.ignore
 step() { printf '\n== %s\n' "$*"; }
-view() { curl -sk "https://localhost:$port/view" | jq -c '.rows.harness.Harness | {source, probation}'; }
+view() { curl -sk "https://localhost:$port/view" | jq -c '.rows.harness.Harness | {source, relaunch, probation, superseded}'; }
 
 systemctl --user -q is-active "$unit" && systemctl --user stop "$unit"
 rm -rf "$work" "$home/$name"
