@@ -171,12 +171,17 @@ const centrePoint = () => ({ x: (innerWidth / 2 - cam.x) / cam.k, y: (innerHeigh
 // Room kept right of the card for the task's controls, which float there
 // (on a phone they float inside it).
 const controlsRoom = () => phone() ? 0 : 48;
-// A new chat's card is short; on a phone its tuning wraps to a line of its own.
+// A chat's card is as tall as the window; a new chat's, as what it holds at
+// its width, so its fields can wrap and its words grow without spilling.
 function cardSize(id) {
   const m = phone() ? 6 : 16;
   const W = Math.min(id === NEW ? 640 : 880, innerWidth - 2 * m - controlsRoom());
-  const H = id === NEW ? (phone() ? 200 : 168) : innerHeight - 2 * m;
+  const H = id === NEW ? contentHeight(W) : innerHeight - 2 * m;
   return { W, H };
+}
+function contentHeight(W) {
+  panel.style.width = `${W}px`;
+  return [...panel.children].reduce((h, c) => h + c.offsetHeight, panel.offsetHeight - panel.clientHeight);
 }
 export function seamFor(id) {
   let o;
@@ -254,20 +259,22 @@ export function coverCheck() {
   document.body.classList.toggle("covered", covered);
 }
 
-// The card fits the window it is in: a phone's keyboard opening shrinks it.
-addEventListener("resize", () => {
+// The card fits the window it is in, a phone's keyboard opening shrinks it,
+// and a new chat's card grows and shrinks with what it holds.
+addEventListener("resize", () => { reseat(); refresh(); });
+new ResizeObserver(reseat).observe($(".compose", panel));
+function reseat() {
   const next = openId && seam && seamFor(openId);
-  if (next) {
-    const was = cardShown;
-    seam = next;
-    const r = cardRect(seam);
-    placeCard(r);
-    cardShown = r;
-    cam = camFor(r, was && { x: r.x + r.w / 2, y: r.y, sx: cam.x + (was.x + was.w / 2) * cam.k, sy: cam.y + was.y * cam.k });
-    applyCamera();
-  }
+  if (!next || (next.W === seam.W && next.H === seam.H)) return;
+  const was = cardShown;
+  seam = next;
+  const r = cardRect(seam);
+  placeCard(r);
+  cardShown = r;
+  cam = camFor(r, was && { x: r.x + r.w / 2, y: r.y, sx: cam.x + (was.x + was.w / 2) * cam.k, sy: cam.y + was.y * cam.k });
+  applyCamera();
   refresh();
-});
+}
 
 // ─── The card asleep ───────────────────────────────────────────────────────
 // Zoomed out too far to read, or moved mostly off screen, the open card is
