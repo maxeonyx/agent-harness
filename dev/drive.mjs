@@ -328,7 +328,7 @@ class Browser {
       "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
       "--ignore-certificate-errors", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",
       `--window-size=${size.width},${size.height}`, "about:blank",
-    ], { stdio: "ignore", env: { ...process.env, [brain.mark]: "1", [PAGE]: String(process.pid) } });
+    ], { stdio: "ignore", env: { ...process.env, [brain.mark]: "1" } });
     const b = new Browser(proc, profile, size, log);
     b.brain = brain;
     for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
@@ -496,23 +496,27 @@ class Browser {
     fs.writeFileSync(file, Buffer.from(data, "base64"));
   }
 
-  // Chromium and every process it started: each carries this run's pid.
+  // Chromium and every process it started, each of which names its
+  // profile; the profile goes once they have, as one still writing would
+  // put it back.
   close() {
-    for (const pid of marked(PAGE, String(process.pid))) {
-      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    for (let i = 0; i < 100; i++) {
+      const left = naming(this.profile);
+      if (left.length === 0) break;
+      for (const pid of left) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+      }
+      Atomics.wait(pause, 0, 0, 20);
     }
     fs.rmSync(this.profile, { recursive: true, force: true });
   }
 }
 
-// What a page run's Chromium carries: the pid of the run that started it.
-const PAGE = "HARNESS_DRIVE_PAGE";
-
-// The pids of the processes whose environment says `name=value`.
-function marked(name, value) {
-  const want = `${name}=${value}`;
+// The pids of the processes whose command line names `text`.
+function naming(text) {
   return fs.readdirSync("/proc").filter((d) => /^\d+$/.test(d)).filter((d) => {
-    try { return fs.readFileSync(`/proc/${d}/environ`, "latin1").split("\0").includes(want); } catch { return false; }
+    try { return fs.readFileSync(`/proc/${d}/cmdline`, "utf8").includes(text); } catch { return false; }
   }).map(Number);
 }
 
