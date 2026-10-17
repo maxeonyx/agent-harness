@@ -108,7 +108,8 @@ pub fn rows(
             .collect::<Vec<_>>(),
         "efforts": Effort::ALL,
         "workspaces": workspaces,
-        "build": state.launch().map(|(_, l)| format!("build {:.12}", l.build.to_string())),
+        "launch": state.launch().map(|(_, l)| l),
+        "probation": state.probation().verdict(),
         "source": source,
         "limited": state.limited(now).map(|t| t.0),
         "provider": provider.map(|l| l.to_string()),
@@ -489,7 +490,10 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         )
     };
     match fact {
-        Fact::Launched(l) => format!("brain launched, build {:.12}", l.build.to_string()),
+        Fact::Launched(l) => match &l.source {
+            Some(source) => format!("brain launched, {source}"),
+            None => format!("brain launched, build {:.12}", l.build.to_string()),
+        },
         Fact::Shutdown { within } => format!("brain shutting down, within {}s", within / 1000),
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {
@@ -617,7 +621,10 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Reach { limb, reach } => {
             let limb = state.limb(*limb).map_or("?".into(), |l| l.name.clone());
             match reach {
-                Reach::Connected { .. } => format!("{limb} connected"),
+                Reach::Connected {
+                    build: Some(build), ..
+                } => format!("{limb} connected, build {:.12}", build.to_string()),
+                Reach::Connected { build: None, .. } => format!("{limb} connected"),
                 Reach::Lost => format!("{limb} lost"),
                 Reach::Failed { why } => {
                     format!("{limb} failed to start: {why}")

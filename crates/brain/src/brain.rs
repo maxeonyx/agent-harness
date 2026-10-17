@@ -1,7 +1,7 @@
 //! The loop: act on each item of the to-do list, commit what happened,
 //! repeat.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -134,6 +134,9 @@ pub struct Brain {
     limbs: HashMap<LimbId, Process>,
     /// When the brain last failed to reach a limb.
     failed: HashMap<LimbId, Instant>,
+    /// The limbs whose link ended while they were superseded: their
+    /// ending is a move to the build the brain starts, not a failure.
+    moving: HashSet<LimbId>,
     /// The limbs connected now.
     links: HashMap<LimbId, Link>,
     /// The next number for a process link, counting up from 1.
@@ -190,6 +193,8 @@ impl Brain {
             .map_err(|e| format!("the brain's own executable: {e}"))?;
         let mut facts = vec![Fact::Launched(Launched {
             build: BuildId::of(&exe),
+            source: crate::SOURCE.parse().ok(),
+            limbs: limb_builds(),
             how: Launch::Started,
         })];
         let define =
@@ -284,6 +289,7 @@ impl Brain {
             models,
             limbs: HashMap::new(),
             failed: HashMap::new(),
+            moving: HashSet::new(),
             links: HashMap::new(),
             attached: 1,
             hosted: Conn::MAX,
@@ -565,7 +571,9 @@ impl Brain {
             let Some(process) = self.limbs.remove(&limb) else {
                 continue;
             };
-            if !success && self.state().shutdown().is_none() {
+            if self.moving.remove(&limb) {
+                self.connect(limb);
+            } else if !success && self.state().shutdown().is_none() {
                 self.unreached(limb, process.last_words());
             }
         }
@@ -624,6 +632,9 @@ impl Brain {
         };
         let link = self.links.remove(&limb).expect("found");
         errln!("limb {limb}: its link ended");
+        if self.state().superseded(limb).is_some() {
+            self.moving.insert(limb);
+        }
         if link.unsaid.is_some() {
             return;
         }
@@ -1698,8 +1709,22 @@ and you cannot finish until it has.",
                 standing: self.decider.standing(link.replica),
                 rows,
             };
-            if let Some(down) = link.publisher.publish(view) {
-                let _ = link.wire.send(down);
+            // `Superseded` changes on a line of its own: a limb of a build
+            // before it cannot read it, and drops that line whole.
+            let mut before = view.clone();
+            let held = link
+                .publisher
+                .shipped()
+                .and_then(|v| v.rows.get(&LimbKey::Superseded))
+                .cloned();
+            match held {
+                Some(row) => before.rows.insert(LimbKey::Superseded, row),
+                None => before.rows.remove(&LimbKey::Superseded),
+            };
+            for view in [before, view] {
+                if let Some(down) = link.publisher.publish(view) {
+                    let _ = link.wire.send(down);
+                }
             }
         }
     }
@@ -1810,6 +1835,34 @@ pub fn now() -> Timestamp {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64),
     )
+}
+
+/// The executable the brain starts for each kind of plugin limb: each
+/// `harness-limb-<kind>` beside its own, by digest. A limb connected with
+/// other bytes is superseded ([`harness_core::state::State::superseded`]).
+fn limb_builds() -> BTreeMap<String, BuildId> {
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf))
+    else {
+        return BTreeMap::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return BTreeMap::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            // Not cargo's `.d` files beside them in a target directory.
+            let kind = name
+                .strip_prefix("harness-limb-")
+                .filter(|k| !k.contains('.'))?;
+            let kind = kind.to_owned();
+            let bytes = std::fs::read(entry.path()).ok()?;
+            Some((kind, BuildId::of(&bytes)))
+        })
+        .collect()
 }
 
 /// A new replica, for a face or a co-hosted limb this launch: 64 random bits.

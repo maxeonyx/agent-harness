@@ -309,6 +309,14 @@ impl harness_limb::Kind for Browser {
         Ok(ship)
     }
 
+    fn holds(&self) -> bool {
+        // A browser it launched dies with it, and Max's tabs in it.
+        let inner = &self.inner;
+        !lock(&inner.running).is_empty()
+            || !lock(&inner.held).is_empty()
+            || lock(&inner.process).is_some()
+    }
+
     fn stop_all(&self, within: Duration) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         let deadline = Instant::now() + within;

@@ -211,6 +211,8 @@ fn launched() -> Batch {
         values: vec![],
         facts: vec![Fact::Launched(Launched {
             build: BuildId::of(b"crash-demo"),
+            source: None,
+            limbs: Default::default(),
             how: Launch::Started,
         })],
     }

@@ -498,6 +498,12 @@ impl Workspace {
         );
     }
 
+    /// Whether a call runs, or a process one left (a server it started
+    /// with `setsid`, adopted by the limb) does.
+    pub fn holds(&self) -> bool {
+        !lock(&self.inner.running).is_empty() || !harness_runtime::children().is_empty()
+    }
+
     /// Stop every running call, each to be gone `within` from now, and run
     /// no new one: what shutting down asks of the calls. Asked again with
     /// less time, it makes each stop harder.

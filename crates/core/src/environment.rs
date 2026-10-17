@@ -613,6 +613,7 @@ pub enum LimbKey {
     Watch,
     Definition,
     Environment(EnvironmentId),
+    Superseded,
 }
 
 /// One row of what a limb holds of the brain: what the brain wants of it,
@@ -667,6 +668,18 @@ pub enum LimbRow {
     /// resources: what a limb holding role definitions restates only when
     /// its files differ.
     Environment(Environment),
+    /// The brain would start the executable `by` for this limb, not the
+    /// one it runs ([`crate::state::State::superseded`]): exit, releasing
+    /// its state, once nothing it holds would die with it (no call running,
+    /// no resource bound to its process, such as a browser's tab). The
+    /// brain's next attach then starts `by`. A limb whose work never ends
+    /// stays on its build, which facts make safe, not fast.
+    ///
+    /// **Vision.** "Live editing": a fix to a limb reaches the agents using
+    /// it at their next call after a relaunch, without killing their
+    /// running commands, and round 2's limbs that kept running their old
+    /// build are gone.
+    Superseded { by: BuildId },
 }
 
 impl std::fmt::Display for LimbKey {
@@ -677,6 +690,7 @@ impl std::fmt::Display for LimbKey {
             LimbKey::Watch => f.write_str("watch"),
             LimbKey::Definition => f.write_str("definition"),
             LimbKey::Environment(id) => write!(f, "environment:{id}"),
+            LimbKey::Superseded => f.write_str("superseded"),
         }
     }
 }
@@ -686,11 +700,12 @@ impl std::str::FromStr for LimbKey {
 
     fn from_str(text: &str) -> Result<LimbKey, ParseError> {
         let invalid = ParseError {
-            expected: "a row: call:{id}, value:{id}, watch, definition or environment:{id}",
+            expected: "a row: call:{id}, value:{id}, watch, definition, superseded or environment:{id}",
         };
         Ok(match text.split_once(':') {
             None if text == "watch" => LimbKey::Watch,
             None if text == "definition" => LimbKey::Definition,
+            None if text == "superseded" => LimbKey::Superseded,
             Some(("call", id)) => LimbKey::Call(id.parse()?),
             Some(("value", id)) => LimbKey::Value(id.parse()?),
             Some(("environment", id)) => LimbKey::Environment(id.parse()?),

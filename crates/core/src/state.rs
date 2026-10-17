@@ -10,7 +10,7 @@ use crate::context::{Entry, EntryId, Note, Rendered, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
-use crate::build::{Launch, Launched};
+use crate::build::{BuildId, Launch, Launched, Probation, Verdict};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::environment::{
     Audience, Description, Environment, Limb, LimbKey, LimbKind, LimbRow, Reach,
@@ -96,6 +96,8 @@ use crate::value::Bytes;
 pub struct State {
     last: Option<Seq>,
     launch: Option<(Mark, Launched)>,
+    /// What the current launch has shown since it began.
+    probation: Probation,
     /// When the current launch must have exited, once it is shutting down.
     shutdown: Option<Timestamp>,
     entries: OrdMap<EntryId, Entry>,
@@ -774,6 +776,7 @@ impl State {
             return Err(Rejected::Author);
         }
         let mark = Mark::of(record);
+        self.probation.see(record);
         match record.fact {
             Fact::Launched(launched) => {
                 if let Launch::Relaunched { by: Some(call), .. } = launched.how
@@ -782,6 +785,7 @@ impl State {
                     return Err(Rejected::Unknown);
                 }
                 self.launch = Some((mark, launched.clone()));
+                self.probation = Probation::default();
                 self.shutdown = None;
                 // A connection belongs to the brain that made it.
                 self.reach.clear();
@@ -2028,6 +2032,42 @@ impl State {
             .map(|(mark, launched)| (*mark, launched))
     }
 
+    /// What the current launch has shown since it began: whether its build
+    /// is proven ([`Probation::verdict`]).
+    pub fn probation(&self) -> &Probation {
+        &self.probation
+    }
+
+    /// The executable the current launch would start for `limb`, when the
+    /// limb is connected running another and the launch's build is proven:
+    /// it should exit once nothing it holds would die with it, so the next
+    /// attach starts this one. `None` while the build is on probation (a
+    /// build that goes back never moves a limb back), for a limb on the
+    /// launch's own build, one that did not say what it runs, or a kind the
+    /// launch has no executable for.
+    pub fn superseded(&self, limb: LimbId) -> Option<BuildId> {
+        if !matches!(self.probation.verdict(), Verdict::Proven { .. }) {
+            return None;
+        }
+        let Some(Reached {
+            reach:
+                Reach::Connected {
+                    build: Some(running),
+                    ..
+                },
+            ..
+        }) = self.reach.get(&limb)
+        else {
+            return None;
+        };
+        let LimbKind::Plugin { kind, .. } = &self.limbs.get(&limb)?.kind else {
+            return None;
+        };
+        let (_, launched) = self.launch.as_ref()?;
+        let wanted = *launched.limbs.get(kind)?;
+        (wanted != *running).then_some(wanted)
+    }
+
     /// When the brain writing the journal must have exited, once it is
     /// shutting down ([`Fact::Shutdown`]).
     pub fn shutdown(&self) -> Option<Timestamp> {
@@ -2202,6 +2242,9 @@ impl State {
         }
         if !known.is_empty() {
             rows.insert(LimbKey::Watch, LimbRow::Watch { known });
+        }
+        if let Some(by) = self.superseded(limb) {
+            rows.insert(LimbKey::Superseded, LimbRow::Superseded { by });
         }
         for env in self.environments.values() {
             if env.source.as_ref().is_some_and(|s| s.resource.limb == limb) {
