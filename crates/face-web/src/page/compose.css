@@ -1,5 +1,7 @@
-  /* What Max writes: a staging area, kept until he sends it. Beside it, what
-     he can do to the task itself, small, and dictate and send, large. */
+  /* What Max writes: a staging area, kept until he sends it, with dictate and
+     send beside it, large. What he can do to the task itself floats on the
+     map, outside the card to the right of the box; on a phone, where the card
+     fills the screen, it floats above the box's right end. */
   .compose { padding: .2em 1em .6em; }
   .compose .box { max-width: 48rem; margin: 0 auto; background: var(--white); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 2px 10px rgba(40, 30, 20, .06); padding: .6em .55em .4em .95em; }
   .compose .box:focus-within { border-color: #c9c4b4; box-shadow: 0 2px 14px rgba(40, 30, 20, .1); }
@@ -19,9 +21,16 @@
   .compose .line { display: flex; align-items: flex-end; gap: .4em; }
   .compose textarea { display: block; flex: 1; min-width: 0; align-self: center; border: 0; outline: 0; resize: none; background: transparent; font: 15px/1.5 var(--sans); color: var(--ink); min-height: 1.5em; max-height: 40vh; padding: .1em .4em .1em 0; }
   .compose .side { display: flex; align-items: center; justify-content: flex-end; gap: .3em; flex: none; }
-  .compose .acts { display: flex; align-items: center; gap: .15em; }
+  .compose .acts { position: absolute; left: calc(100% + 10px); bottom: .6em; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
   .compose .acts:empty { display: none; }
-  @media (max-width: 760px) { .compose .side { flex-wrap: wrap; } .compose .acts { flex-basis: 100%; justify-content: flex-end; } }
+  .compose .acts .act { height: 36px; border: 1px solid var(--line); box-shadow: 0 2px 10px rgba(40, 30, 20, .12); }
+  .compose .acts .act:not(.armed) { width: 36px; background: var(--white); }
+  .compose .acts .act:not(.armed):hover { background: var(--hover); color: var(--ink); }
+  .compose .acts .act svg { width: 18px; height: 18px; }
+  @media (max-width: 760px) {
+    .compose { position: relative; }
+    .compose .acts { left: auto; right: .9em; bottom: calc(100% + 4px); flex-direction: row; }
+  }
   .compose .mic, .compose .send { width: 40px; height: 40px; }
   .compose .mic svg, .compose .send svg { width: 20px; height: 20px; }
   .compose .queue { width: 32px; height: 32px; border: 1.5px solid var(--ink); color: var(--ink); }
