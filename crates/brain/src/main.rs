@@ -20,7 +20,7 @@
 //! thread of the brain, linked by a channel ([`roles`]).
 //!
 //! Ctrl-C, `SIGTERM` or `SIGHUP` shuts the brain down: nothing new starts,
-//! the requests in flight have [`policy::DRAIN`] to finish, the limbs stop
+//! the requests in flight have [`harness_program::policy::DRAIN`] to finish, the limbs stop
 //! their commands by the same deadline and exit, and the process exits
 //! once none of it is left. A second signal cuts everything now. Tasks are
 //! not stopped: the next launch carries them on ([`harness_core::cancel`]).
@@ -34,12 +34,13 @@
 //! Each request's streamed events and each command's output as it prints
 //! go to the face's live feed, never to the database.
 //!
-//! **Policy** lives in two modules, and nowhere else:
-//! - [`policy`]: retries and backoff, breakpoint placement, fan-out
-//!   gating on first byte, and where a clone goes;
-//! - [`render`]: what a request renders beyond the results it must, and the
-//!   wording of everything the harness says to a model, including the
-//!   fork framing the fork-framing spike measured.
+//! **The session's program** is not here. What a request renders, the
+//! wording of everything the harness says to a model, the meta, Max and web
+//! limbs' tools, and the policy the core leaves open live in
+//! `harness-program`, which does no I/O and builds for wasm32; the brain
+//! only calls it. What is left here is I/O: the database, the provider,
+//! limb processes and sockets, the face, signals, and where a new clone
+//! goes on disk.
 //!
 //! ```text
 //! harness-brain --db DB [--port 4321] [--roles DIR] [--sample WAV]
@@ -54,13 +55,8 @@
 
 mod brain;
 mod link;
-mod max;
-mod meta;
-mod policy;
 mod process;
-mod render;
 mod roles;
-mod web;
 
 use std::net::{IpAddr, TcpListener};
 use std::path::PathBuf;

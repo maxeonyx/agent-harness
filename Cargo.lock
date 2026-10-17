@@ -205,6 +205,7 @@ dependencies = [
  "harness-face-tab",
  "harness-face-web",
  "harness-limb-workspace",
+ "harness-program",
  "harness-provider",
  "harness-runtime",
  "harness-store",
@@ -261,6 +262,14 @@ dependencies = [
  "libc",
  "regex",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "harness-program"
+version = "0.0.0"
+dependencies = [
+ "harness-core",
  "serde_json",
 ]
 
