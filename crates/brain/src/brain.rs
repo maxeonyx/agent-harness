@@ -1567,25 +1567,30 @@ and you cannot finish until it has.",
         });
     }
 
-    /// The calls a member's result carries: those of the compaction its
-    /// result follows, if it wrote it straight after compacting.
+    /// The calls a member's result carries: those of the compaction it
+    /// carries on from, if no response of its own came between.
     fn attached(&self, result: EntryId) -> Vec<CallId> {
         let state = self.state();
-        let Some(compacted) = state
-            .entry(result)
-            .and_then(Entry::parent)
-            .and_then(|carry| state.compacted(carry))
-        else {
-            return Vec::new();
-        };
-        compacted
-            .renders
-            .iter()
-            .filter_map(|span| match span.from {
-                Rendered::Call(call) => Some(call),
+        let mut at = state.entry(result).and_then(Entry::parent);
+        while let Some(entry) = at {
+            if let Some(compacted) = state.compacted(entry) {
+                return compacted
+                    .renders
+                    .iter()
+                    .filter_map(|span| match span.from {
+                        Rendered::Call(call) => Some(call),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            at = match state.entry(entry) {
+                Some(Entry::Message { parent, message }) if message.role == Role::User => {
+                    Some(*parent)
+                }
                 _ => None,
-            })
-            .collect()
+            };
+        }
+        Vec::new()
     }
 
     /// What a cancelled member says to the task that reads its result.

@@ -271,9 +271,35 @@ impl Context {
     /// this one did, where the root does not say otherwise. Keeping what it
     /// embodied keeps the notices and the stale-write refusals true: the
     /// summary was written from those versions.
-    fn compacted(&self, onto: &Onto, head: EntryId) -> Context {
+    ///
+    /// Onto a checkpoint, what the replaced branch learned is now learned
+    /// at the carry: the summary was written from it, so the context still
+    /// embodies it, until a move leaves the carry.
+    fn compacted(&self, onto: &Onto, head: EntryId, world: &State) -> Context {
         let mut context = match onto {
-            Onto::Checkpoint(_) => self.clone(),
+            Onto::Checkpoint(at) => {
+                let mut context = self.clone();
+                let mut before: Vec<(ResourceKey, Option<Known>)> = Vec::new();
+                while context
+                    .learned
+                    .last()
+                    .is_some_and(|l| !world.descends(*at, l.head))
+                {
+                    let Some(learned) = context.learned.pop_back() else {
+                        break;
+                    };
+                    // Popped latest first, so a later pop's value is the
+                    // earlier one.
+                    for (resource, old) in learned.before {
+                        before.retain(|(k, _)| *k != resource);
+                        before.push((resource, old));
+                    }
+                }
+                if !before.is_empty() {
+                    context.learned.push_back(Learned { head, before });
+                }
+                context
+            }
             Onto::Fresh(start) => {
                 let mut rooted = Context::rooted(start);
                 rooted.knows = rooted.knows.union(self.knows.clone());
@@ -351,15 +377,9 @@ impl Context {
             }
         }
         let known = self.learned.last().map_or(self.start, |l| l.head);
-        let mut path = Vec::new();
-        let mut at = Some(to);
-        while let Some(entry) = at.filter(|e| *e != known) {
-            path.push(entry);
-            at = world.entry(entry).and_then(Entry::parent);
-        }
-        for head in path.into_iter().rev() {
-            if let Some(renders) = world.rendered(task, head) {
-                learn(self, renders, head, world)?;
+        for (entry, at) in world.path(task, to, &|e| e == known).into_iter().rev() {
+            if let Some(renders) = world.rendered(task, entry) {
+                learn(self, renders, at, world)?;
             }
         }
         Ok(())
@@ -1404,7 +1424,7 @@ impl Task {
             return Err(Rejected::Unanswered);
         }
         let carry = compaction.carry_entry().id();
-        let mut context = live.context.compacted(&compaction.onto, carry);
+        let mut context = live.context.compacted(&compaction.onto, carry, world);
         learn(&mut context, &compaction.renders, carry, world)?;
         live.context = context;
         pending.retain(|p| !matches!(p, Input::Result(_)));
@@ -1899,20 +1919,16 @@ fn learn(
 }
 
 /// What the requests and compactions of `task` on the path to `head`
-/// rendered, back to where it meets the path to `stop` (or to its root).
+/// rendered, back to where it meets the path to `stop` (or to its root),
+/// counting each carry's replaced branch as on the path.
 fn renders(world: &State, task: TaskId, head: EntryId, stop: Option<EntryId>) -> Vec<Rendered> {
-    let mut out = Vec::new();
-    let mut at = Some(head);
-    while let Some(entry) = at {
-        if stop.is_some_and(|s| world.descends(s, entry)) {
-            break;
-        }
-        if let Some(renders) = world.rendered(task, entry) {
-            out.extend(renders.iter().map(|s| s.from.clone()));
-        }
-        at = world.entry(entry).and_then(Entry::parent);
-    }
-    out
+    let stop = |e: EntryId| stop.is_some_and(|s| world.descends(s, e));
+    world
+        .path(task, head, &stop)
+        .into_iter()
+        .filter_map(|(entry, _)| world.rendered(task, entry))
+        .flat_map(|renders| renders.iter().map(|s| s.from.clone()))
+        .collect()
 }
 
 /// What a request on a path Max left rendered becomes when the path he

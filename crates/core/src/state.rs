@@ -163,6 +163,9 @@ struct Open {
     requests: OrdMap<EntryId, ModelCallId>,
     /// The model call whose response made each agent call.
     made_in: OrdMap<CallId, ModelCallId>,
+    /// The heads at which an interrupt ended a task's turn: where Max's
+    /// next words begin a turn, as after an answer.
+    interrupted: OrdSet<EntryId>,
     /// The agent calls whose work changed a resource: each change's call,
     /// or the agent call its background work runs under.
     changed: OrdSet<CallId>,
@@ -493,6 +496,13 @@ pub enum Todo {
 impl State {
     /// Store a task's new state, and whether it is still open.
     fn put(&mut self, task: Task) {
+        if let Some(old) = self.tasks.get(&task.id)
+            && matches!(old.drain(), Some(Draining::ToMax))
+            && task.drain().is_none()
+            && let Some(head) = task.head()
+        {
+            self.open.interrupted.insert(head);
+        }
         if task.is_done() {
             self.open.tasks.remove(&task.id);
         } else {
@@ -1397,6 +1407,35 @@ impl State {
         self.compactions.values().any(|c| c.by == Some(call))
     }
 
+    /// The entries on `task`'s chain from `head` back to where `stop` first
+    /// holds, latest first, each with the entry of that chain it counts as:
+    /// itself, or the carry of the task's compaction that replaced the
+    /// branch it is on. A carry stands for the branch it replaced, since
+    /// the summary was written from it, so the walk goes through that
+    /// branch too, back to its checkpoint.
+    pub fn path(
+        &self,
+        task: TaskId,
+        head: EntryId,
+        stop: &dyn Fn(EntryId) -> bool,
+    ) -> Vec<(EntryId, EntryId)> {
+        let mut out = Vec::new();
+        let mut at = Some(head);
+        while let Some(entry) = at.filter(|e| !stop(*e)) {
+            out.push((entry, entry));
+            at = self.entry(entry).and_then(Entry::parent);
+            if let (Some(c), Some(checkpoint)) =
+                (self.compactions.get(&entry).filter(|c| c.task == task), at)
+                && !matches!(self.entry(checkpoint), Some(Entry::Root(_)))
+            {
+                let within = |e: EntryId| stop(e) || self.descends(checkpoint, e);
+                let branch = self.path(task, c.from, &within);
+                out.extend(branch.into_iter().map(|(e, _)| (e, entry)));
+            }
+        }
+        out
+    }
+
     /// What `task` rendered to reach `entry`: the spans of its request that
     /// appended up to it, or of its compaction whose carry it is.
     pub fn rendered(&self, task: TaskId, entry: EntryId) -> Option<&[Span]> {
@@ -1409,20 +1448,22 @@ impl State {
         }
     }
 
-    /// Whether `entry` is a response that ended a model turn.
+    /// Whether a model turn ended at `entry`: a response that ended it, or
+    /// the head an interrupt left.
     pub fn ended_turn(&self, entry: EntryId) -> bool {
-        self.response(entry).is_some_and(|m| {
-            matches!(
-                &m.ended,
-                Some(Ended {
-                    ending: Ending::Responded {
-                        stop: Stop::EndTurn,
+        self.open.interrupted.contains(&entry)
+            || self.response(entry).is_some_and(|m| {
+                matches!(
+                    &m.ended,
+                    Some(Ended {
+                        ending: Ending::Responded {
+                            stop: Stop::EndTurn,
+                            ..
+                        },
                         ..
-                    },
-                    ..
-                })
-            )
-        })
+                    })
+                )
+            })
     }
 
     /// The model call a response came from.
@@ -1474,9 +1515,7 @@ impl State {
     /// changed in the world, which the move does not undo.
     pub fn left(&self, task: TaskId, from: EntryId, to: EntryId) -> Left {
         let mut left = Left::default();
-        let mut at = Some(from);
-        while let Some(entry) = at.filter(|e| !self.descends(to, *e)) {
-            at = self.entry(entry).and_then(Entry::parent);
+        for (entry, _) in self.path(task, from, &|e| self.descends(to, e)) {
             let Some(response) = self.response(entry).filter(|m| m.call.task == task) else {
                 continue;
             };

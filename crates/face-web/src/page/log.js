@@ -201,7 +201,9 @@ function compacted(s, parent, from, t, framing) {
     if (!replaced.open || replaced.dataset.done) return;
     replaced.dataset.done = "1";
     const chain = (await contextOf(from)) || [];
-    const at = chain.findIndex((e) => e.id === parent);
+    // A fresh compaction's new root is not on the old chain: all of it
+    // after its root was replaced.
+    const at = Math.max(chain.findIndex((e) => e.id === parent), 0);
     const sub = { rows: new Map(), group: null, rendered: chain.slice(0, at + 1).map((e) => ({ id: e.id })), exact: false };
     const body = el("div", "chunk");
     for (let i = at + 1; i < chain.length; i++) entry(sub, body, chain[i], i, t, chain[i - 1].id);
