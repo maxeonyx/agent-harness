@@ -35,8 +35,11 @@ use serde::Serialize;
 
 use crate::{Config, Kind, SHUTDOWN, Settings, Workspace, instant};
 
-/// How long the link may stay down before the limb takes the brain as gone.
-pub const ABSENT: Duration = Duration::from_secs(10);
+/// How long the link may stay down before the limb takes the brain as gone:
+/// long enough for a crashed brain to be restarted by hand, so a restart
+/// never costs a limb its running calls. A brain that shuts down cleanly
+/// tells its limbs to go, so only a brain that died leaves them waiting.
+pub const ABSENT: Duration = Duration::from_secs(15 * 60);
 
 /// How often it tries to reconnect.
 const RETRY: Duration = Duration::from_millis(200);
