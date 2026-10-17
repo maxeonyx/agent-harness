@@ -388,7 +388,7 @@ fn observed_now<'a>(
         state
             .call(*call)
             .and_then(|c| c.outcome())
-            .and_then(Outcome::output)
+            .and_then(Outcome::seen)
             .is_some_and(|o| {
                 o.observes
                     .iter()
@@ -426,15 +426,22 @@ fn outcome_content(values: Values, outcome: &Outcome) -> (Value, bool) {
     match outcome {
         Outcome::Completed(output) => (blocks(output.model), false),
         Outcome::Failed(output) => (blocks(output.model), true),
-        Outcome::Refused { current } => {
+        Outcome::Refused { current, shown } => {
             let names: Vec<_> = current.iter().map(|o| o.resource.name.as_str()).collect();
-            (
-                said(&format!(
-                    "Refused, with no effect: {} changed since you last saw it, or you have not seen it through `read`, `write` or `edit` (a command's output does not count). Read it, then retry.",
-                    names.join(", ")
-                )),
-                true,
-            )
+            let why = format!(
+                "Refused, with no effect: {} changed since you last saw it, or you had not seen it through `read`, `write` or `edit` (a command's output does not count).",
+                names.join(", ")
+            );
+            let Some(shown) = shown else {
+                return (said(&format!("{why} Read it, then retry.")), true);
+            };
+            let mut content = said(&format!(
+                "{why} As it is now, which counts as having read it: retry if your change still applies."
+            ));
+            if let (Value::Array(items), Value::Array(more)) = (&mut content, blocks(shown.model)) {
+                items.extend(more);
+            }
+            (content, true)
         }
         Outcome::Interrupted { partial } => {
             let mut content = partial.as_ref().map_or(json!([]), |o| blocks(o.model));
