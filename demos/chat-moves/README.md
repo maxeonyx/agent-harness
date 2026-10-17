@@ -1,6 +1,6 @@
 # Moving a chat: retry, edit, back, versions
 
-`demos/chat-moves/run.sh`, then open https://mx-hv-mj.local:4362/ and start a chat ("Pick a random number between 1 and 1000").
+`demos/chat-moves/run.sh` starts a test brain on port 4362 (`PORT=…` for another), starts a chat ("Write a new four-word poem."), and retries its reply, so it has two versions. Open https://mx-hv-mj.local:4362/ and try the rest; `node dev/drive.mjs down 4362` ends it.
 
 Hover a message in the open card:
 
