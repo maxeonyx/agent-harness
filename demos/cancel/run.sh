@@ -4,8 +4,9 @@
 # SIGTERM, with a deadline too short for it; Ctrl-C, once and then twice,
 # on a brain in a terminal, then once more to see it carry on from the
 # cache; and an agent that passes its background worker to Max and
-# finishes, while the worker runs on until Max stops it. After each, every
-# process the brain started is looked for.
+# finishes, while the worker runs on until Max stops it; and a brain run
+# as a systemd service, restarted while a command runs. After each, every
+# process the brain started is looked for, with the unit it is in.
 # Watch at https://mx-hv-mj.local:4326.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -17,12 +18,15 @@ brain=target/release/harness-brain
 rm -rf "$dir"
 mkdir -p "$dir"
 demos/cancel/scratch.sh "$dir/repo"
+# The limbs keep their state here, not with Max's own.
+export XDG_STATE_HOME=$PWD/$dir/state
 start=$(date +%s.%N)
 
 # Everything a demo brain starts inherits this mark, however it escapes
 # its process group, so what is left of them is found by it.
-mark=HARNESS_OWNER_cancel-demo-$$
-trap 'demos/end.sh "$mark"' EXIT
+mark=HARNESS_OWNER_cancel_demo_$$
+unit=cancel-demo-$$
+trap 'systemctl --user stop "$unit" 2>/dev/null; demos/end.sh "$mark"' EXIT
 left() {
   local pids=()
   for e in /proc/[0-9]*/environ; do
@@ -33,7 +37,7 @@ left() {
   if [ ${#pids[@]} -eq 0 ]; then
     echo "          (none)"
   else
-    ps -o pid,pgid,sid,stat,args -p "$(IFS=,; echo "${pids[*]}")" | sed 's/^/          /'
+    ps -o pid,pgid,sid,stat,unit:44,args -p "$(IFS=,; echo "${pids[*]}")" | sed 's/^/          /'
   fi
 }
 
@@ -131,3 +135,21 @@ sed 's/^/          /' "$dir/repo/worker.log"
 say "left running:"
 left
 finish d
+
+say "== E. The brain as a systemd service, restarted while a command runs"
+printf '%s\n' "Run \`./slow.sh\` with \`bash\` (it takes about a minute), then tell me in one line what its last line said." > "$dir/e.md"
+systemd-run --user --quiet --unit="$unit" --same-dir \
+  --setenv="$mark=1" --setenv=XDG_STATE_HOME="$XDG_STATE_HOME" \
+  -p StandardOutput=append:"$PWD/$dir/e.log" -p StandardError=append:"$PWD/$dir/e.log" \
+  "$PWD/$brain" --roles roles --role engineer --port "$port" \
+  --db "$dir/e.sqlite" --workspace "$dir/repo" --mandate "$dir/e.md"
+until grep -q "bash dispatched" "$dir/e.log" 2>/dev/null; do sleep 0.2; done
+sleep 2
+say "./slow.sh runs; systemctl --user restart $unit"
+systemctl --user restart "$unit"
+say "restarted; left running:"
+left
+until_root '.waiting.kind == "max"' 180
+say "the result reached the restarted brain; its log:"
+sed 's/^/          /' "$dir/e.log"
+systemctl --user stop "$unit"

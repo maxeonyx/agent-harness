@@ -252,10 +252,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-limb"
+version = "0.0.0"
+dependencies = [
+ "harness-core",
+ "harness-runtime",
+ "harness-store",
+ "harness-substrate",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "harness-limb-workspace"
 version = "0.0.0"
 dependencies = [
  "harness-core",
+ "harness-limb",
  "harness-runtime",
  "harness-store",
  "harness-substrate",

@@ -1,75 +1,88 @@
-//! A plugin limb the brain started: `harness-limb-<kind>`, found beside the
-//! brain's own executable, given its state directory, the brain's socket
-//! and its definition. It connects back over the socket ([`crate::link`]);
-//! the brain knows nothing of a limb but its definition and its link.
+//! A plugin limb the brain is linked to: `harness-limb-<kind> attach
+//! <limb>`, found beside the brain's own executable, run as a child whose
+//! stdin and stdout are the link ([`crate::link`]) and whose stderr is why,
+//! if it fails. It starts the limb if it is not running ([`harness_limb`]);
+//! the limb lives on its own after that, and the brain knows nothing of it
+//! but its definition and its link.
 //!
-//! The limb is the leader of a process group of its own, so Ctrl-C in the
-//! brain's terminal reaches only the brain, and a brain that exits or dies
-//! leaves its limbs running, to reconnect to the next. Everything the limb
-//! starts carries its mark, so the whole tree is found whatever left its
-//! group. What it prints goes to `log` in its state directory, not to the
-//! brain's terminal, which it outlives.
+//! The child leads a process group of its own, so Ctrl-C in the brain's
+//! terminal reaches only the brain. The brain exiting closes the child's
+//! stdin, which ends the link and nothing else.
 
-use std::fs::File;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::io::{self, BufRead, BufReader};
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use harness_core::environment::{Limb, LimbKind};
-use harness_runtime::Group;
 
-/// A limb's process tree.
+use crate::link::{self, Conn, Said};
+
+/// One link to a limb, through the `attach` child carrying it.
 pub struct Process {
-    group: Group,
-    log: PathBuf,
-    /// Where in `log` this process began.
-    from: usize,
+    child: Child,
+    /// The last line it printed on stderr.
+    said: Arc<Mutex<String>>,
 }
 
 impl Process {
-    /// Start the limb `definition` defines, keeping its log in `state`, to
-    /// connect to `socket`.
-    pub fn start(definition: &Limb, state: &Path, socket: &Path) -> io::Result<Process> {
+    /// Attach to the limb `definition` defines, saying what the link says
+    /// to `said` as connection `conn`.
+    pub fn attach(
+        definition: &Limb,
+        conn: Conn,
+        said: impl Fn(Conn, Said) + Send + 'static,
+    ) -> io::Result<Process> {
         let LimbKind::Plugin { kind, .. } = &definition.kind else {
             return Err(io::Error::other("only a plugin limb is a process"));
         };
         let program = std::env::current_exe()?.with_file_name(format!("harness-limb-{kind}"));
-        let log = state.join("log");
-        let at = |e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", log.display()));
-        std::fs::create_dir_all(state).map_err(at)?;
-        let out = File::options()
-            .create(true)
-            .append(true)
-            .open(&log)
-            .map_err(at)?;
-        let from = out.metadata()?.len() as usize;
-        let mut command = Command::new(&program);
-        command
-            .arg(state)
-            .arg(socket)
-            .arg(serde_json::to_string(definition).expect("a limb serialises"))
-            .stdin(Stdio::null())
-            .stdout(out.try_clone()?)
-            .stderr(out);
-        let group = Group::spawn(&mut command, &format!("limb-{}", definition.id))
+        let mut child = Command::new(&program)
+            .arg("attach")
+            .arg(definition.id.to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
             .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", program.display())))?;
-        Ok(Process { group, log, from })
+        let (Some(stdin), Some(stdout), Some(stderr)) =
+            (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        else {
+            unreachable!("all three are piped");
+        };
+        let last = Arc::new(Mutex::new(String::new()));
+        let heard = last.clone();
+        let limb = definition.id;
+        thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if !line.trim().is_empty() {
+                    eprintln!("limb {limb}: {line}");
+                    *heard.lock().unwrap_or_else(|e| e.into_inner()) = line.trim().to_string();
+                }
+            }
+        });
+        thread::spawn(move || {
+            if let Err(e) = link::follow(conn, stdout, stdin, &said) {
+                eprintln!("limb {limb}'s link: {e}");
+            }
+            said(conn, Said::Left);
+        });
+        Ok(Process { child, said: last })
     }
 
-    /// The last thing it printed, which for a limb that exited without
-    /// connecting is why.
+    /// The last thing it printed: why, for one that failed.
     pub fn last_words(&self) -> String {
-        let text = std::fs::read(&self.log).unwrap_or_default();
-        let text = String::from_utf8_lossy(text.get(self.from..).unwrap_or_default());
-        let last = text.lines().rev().find(|l| !l.trim().is_empty());
-        match last {
-            Some(line) => line.trim().to_string(),
-            None => format!("it exited saying nothing; see {}", self.log.display()),
+        let said = self.said.lock().unwrap_or_else(|e| e.into_inner());
+        match said.as_str() {
+            "" => "it ended saying nothing".into(),
+            said => said.to_string(),
         }
     }
 
-    /// Whether its process has exited.
-    pub fn exited(&mut self) -> bool {
-        self.group.exited().is_some()
+    /// How it ended, once it has.
+    pub fn exited(&mut self) -> Option<ExitStatus> {
+        self.child.try_wait().ok().flatten()
     }
 }

@@ -384,20 +384,22 @@ impl LimbKind {
 /// shared: nothing is signed, and a limb's instance is a mutable timeline,
 /// not an artifact.
 ///
-/// **Not built yet.** The brain still listens on a socket of its own, a
-/// limb's process dials it, and its state sits beside the brain's
-/// database; there is no lock on a limb's state; its definition reaches it
-/// on its command line, so a new version waits for a new process; an `Ssh`
-/// limb is never reached, and is shown unreachable saying so; and a limb
-/// started by a brain running as a service is in the service's process
-/// group, so restarting the service ends it. A brain shutting down already
-/// leaves its limbs' calls running.
+/// **Built** in `harness-limb`, for limbs on the brain's machine. Where
+/// there is a systemd user manager, each limb runs in a scope of its own,
+/// so restarting a brain's service leaves it running.
+///
+/// **Not built yet.** An `Ssh` limb is never reached, and is shown
+/// unreachable saying so. A limb takes its definition from the first link
+/// only, so a new version waits for a new process. Without a user manager
+/// (WSL may have none), a limb started by a brain's service is in the
+/// service's cgroup, and restarting the service ends it. No limb's state
+/// is retired.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Host {
     /// A thread of the brain's own process, linked by a channel: the roles
     /// limb, which reads role files so the brain reads none.
     Brain,
-    /// A process on the brain's machine, reached on its socket.
+    /// A process on the brain's machine.
     #[default]
     Local,
     /// A process on another machine, started and reached through

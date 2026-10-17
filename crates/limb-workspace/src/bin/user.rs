@@ -1,4 +1,4 @@
 //! The user limb's process.
 fn main() -> std::process::ExitCode {
-    harness_limb_workspace::process::main(harness_limb_workspace::user::KIND)
+    harness_limb::main::<harness_limb_workspace::Workspace>(harness_limb_workspace::user::KIND)
 }
