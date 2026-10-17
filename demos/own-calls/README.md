@@ -18,3 +18,4 @@ Two engineers on the scripted model (no cost) work in one directory: A runs `man
   - a `write` to `f.txt` after A's own `rm`.
 - **A big file.** `big.txt` has 20000 lines, too many to show whole. A refused `edit` of line 15000 shows the file from 20 lines before it, up to `read`'s 64 KiB. The retry completes.
 - **A binary file.** A refused `write` to `blob.bin` shows `(a binary file of 3 bytes, not shown)`.
+- **Several replacements in one `edit`.** The first edit of `three.txt` makes three replacements and writes them together. The second fails on its second replacement, because `beta` is already `B`. The result names that replacement and shows the file, and nothing is written: the file stays `A`/`B`/`C`, with the first replacement not applied either.

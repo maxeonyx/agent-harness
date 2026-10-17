@@ -76,7 +76,7 @@ fn main() {
     brain.call(
         &mut b,
         "edit",
-        json!({ "path": "src/lib.rs", "old": "a: i32, b: i32", "new": "a: i64, b: i64" }),
+        json!({ "path": "src/lib.rs", "edits": [{ "old": "a: i32, b: i32", "new": "a: i64, b: i64" }] }),
     );
     brain.call(&mut b, "grep", json!({ "pattern": "fn \\w+" }));
 
@@ -84,12 +84,12 @@ fn main() {
     brain.call(
         &mut a,
         "edit",
-        json!({ "path": "src/lib.rs", "old": "-> i32", "new": "-> i64" }),
+        json!({ "path": "src/lib.rs", "edits": [{ "old": "-> i32", "new": "-> i64" }] }),
     );
     brain.call(
         &mut a,
         "edit",
-        json!({ "path": "src/lib.rs", "old": "-> i32", "new": "-> i64" }),
+        json!({ "path": "src/lib.rs", "edits": [{ "old": "-> i32", "new": "-> i64" }] }),
     );
 
     title(
@@ -122,7 +122,7 @@ fn main() {
     brain.call(
         &mut b,
         "edit",
-        json!({ "path": "src/lib.rs", "old": "b + a", "new": "a + b" }),
+        json!({ "path": "src/lib.rs", "edits": [{ "old": "b + a", "new": "a + b" }] }),
     );
     println!(
         "\n  A made that change itself, so A's context knows it, and A's own edit goes through:"
@@ -130,7 +130,7 @@ fn main() {
     brain.call(
         &mut a,
         "edit",
-        json!({ "path": "src/lib.rs", "old": "b + a", "new": "a + b" }),
+        json!({ "path": "src/lib.rs", "edits": [{ "old": "b + a", "new": "a + b" }] }),
     );
 
     title(
