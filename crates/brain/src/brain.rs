@@ -773,7 +773,7 @@ impl Brain {
                 return None;
             };
             let record = &self.state().call(call)?.call;
-            if !meta::compacts(&record.tool)
+            if record.tool != meta::COMPACT
                 || !matches!(
                     self.state().call(call)?.outcome(),
                     Some(Outcome::Completed(_))
@@ -781,7 +781,7 @@ impl Brain {
             {
                 return None;
             }
-            let ask = meta::compaction(&record.tool, &self.value(record.input)).ok()?;
+            let ask = meta::compaction(&self.value(record.input)).ok()?;
             Some((call, ask))
         });
         let Some((call, ask)) = asked else {
@@ -803,30 +803,23 @@ impl Brain {
         };
         let calls = round(task, Some(call));
         let carry = render::Carry {
-            summary: ask.summary.as_deref(),
+            summary: Some(&ask.summary),
             why,
             words: &[],
             calls: &calls,
-            report: ask.report,
         };
-        // The report is the message the response that asked wrote.
-        let report = ask
-            .report
-            .then(|| task.head().map(|h| self.visible(h)))
-            .flatten();
-        self.compacted(task, Some(call), onto, carry, report.as_deref(), values);
+        self.compacted(task, Some(call), onto, carry, values);
         true
     }
 
     /// State a compaction of `task` onto `onto`, carrying `carry` with Max's
-    /// words from what it replaces, and ending the turn with `report`.
+    /// words from what it replaces.
     fn compacted(
         &mut self,
         task: &Task,
         by: Option<CallId>,
         onto: Onto,
         carry: render::Carry,
-        report: Option<&str>,
         mut values: Vec<Bytes>,
     ) {
         let since = match &onto {
@@ -840,16 +833,13 @@ impl Brain {
         };
         let turn = render::carry(self.state(), &|v| self.value(v), task, &carry);
         let content = render::blocks(&turn.blocks);
-        let report = report.map(|r| render::blocks(&[render::text(r)]));
         let compaction = Compaction {
             by,
             onto,
             carry: content.id(),
             renders: turn.renders,
-            report: report.as_ref().map(Bytes::id),
         };
         values.push(content);
-        values.extend(report);
         self.moved(task.id, Move::Compact(Box::new(compaction)), values);
     }
 
@@ -940,10 +930,9 @@ impl Brain {
                             why: render::Why::Full,
                             words: &[],
                             calls: &calls,
-                            report: false,
                         };
                         let onto = Onto::Fresh(Box::new(start));
-                        self.compacted(&task, None, onto, carry, None, values);
+                        self.compacted(&task, None, onto, carry, values);
                     }
                 };
             }
@@ -1223,20 +1212,8 @@ Finish tidying up and end your turn with your report.",
         }
         let input = self.value(call.input);
         // A compaction happens once its round is over ([`Brain::compact`]).
-        if meta::compacts(&call.tool) {
-            let wrote = parent
-                .head()
-                .is_some_and(|h| !self.visible(h).trim().is_empty());
-            let said = match meta::compaction(&call.tool, &input) {
-                Ok(ask) if ask.report && !wrote => {
-                    let (model, failed) = render::failed(
-                        "Not compacted: write your report as your message in the same response, before calling \
-`compact_and_report`.",
-                    );
-                    batch.values.push(model);
-                    batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-                    return self.append(batch);
-                }
+        if call.tool == meta::COMPACT {
+            let said = match meta::compaction(&input) {
                 Ok(_) => "Compacting once this round is over.".to_string(),
                 Err(why) => {
                     let (model, failed) = render::failed(&format!("Not compacted: {why}."));
@@ -1542,15 +1519,14 @@ and you cannot finish until it has.",
         });
     }
 
-    /// The calls a member's result carries: those its last compaction
-    /// carried, when that compaction reported its result.
+    /// The calls a member's result carries: those of the compaction its
+    /// result follows, if it wrote it straight after compacting.
     fn attached(&self, result: EntryId) -> Vec<CallId> {
         let state = self.state();
         let Some(compacted) = state
             .entry(result)
             .and_then(Entry::parent)
             .and_then(|carry| state.compacted(carry))
-            .filter(|c| c.report == Some(result))
         else {
             return Vec::new();
         };

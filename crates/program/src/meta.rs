@@ -4,9 +4,8 @@
 //! fresh agents in the roles its environment starts, or resumes of its
 //! finished children, and which settles with every member's result once
 //! the last is done. `add_sibling` adds one task to the caller's own scope
-//! and returns at once. `compact_and_continue` and `compact_and_report`
-//! compact the caller's context once their round is over
-//! ([`harness_core::task::Compaction`]). `background` makes a named call
+//! and returns at once. `compact` compacts the caller's context once its
+//! round is over ([`harness_core::task::Compaction`]). `background` makes a named call
 //! to one of the caller's other tools that no round waits on: its result
 //! arrives as a message, and its owner cannot finish until it has. `stop`
 //! abandons one of those calls, and `pass` hands one up the tree
@@ -29,8 +28,7 @@ use crate::render::{blocks, text};
 
 pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
-pub const COMPACT_AND_CONTINUE: &str = "compact_and_continue";
-pub const COMPACT_AND_REPORT: &str = "compact_and_report";
+pub const COMPACT: &str = "compact";
 pub const BACKGROUND: &str = "background";
 pub const STOP: &str = "stop";
 pub const PASS: &str = "pass";
@@ -71,20 +69,18 @@ Each of Max's messages, mandates and answers is labelled `max-…`: name it in `
     }
     said.push_str(
         "\n\nYour context keeps checkpoints: its first message, each message that began one of your turns (Max's \
-words, or whatever woke you), and each compaction. `compact_and_continue` replaces everything after the latest \
-checkpoint with a summary you write, and you carry on in the same turn. Use it whenever you finish a step of your \
-work, before the next: your context stays short and cheap, and nothing up to the checkpoint is lost, so summarise only \
-the step: what you did, what you found and decided and why, what is left, and anything you will need to look at \
-again. Max's words after the checkpoint, the results of the other calls in the same response, and your running \
-background work are carried with it as they are, so do not retell them: to take a file into the compacted context as \
-it is now, read it in the same response. `compact_and_report` does the same and ends \
-your turn: write your report as your message in the same response, before the call, and it stays as your message \
-after the compaction. Max reads it, or, if you were started by another agent, it \
-is your result and you are done, and what you read in the same response reaches that agent with it. Its summary is \
-optional when the report says all you need to remember.\n\n\
-With `fresh: true` either one starts a new context instead, from your role, your mandate, Max's words and your summary \
-alone. Use it when even your checkpoints have grown long; the summary must then carry everything else you need. A \
-change to your role's definition takes effect then.",
+words, or whatever woke you), and each compaction. `compact` replaces everything after the latest checkpoint with a \
+summary you write, and you carry on from it in the same turn. Use it whenever you finish a step of your work, before \
+the next, and when your work is done, before your report: your context stays short and cheap, and nothing up to the \
+checkpoint is lost, so summarise only the step: what you did, what you found and decided and why, what is left, and \
+anything you will need to look at again or report. Max's words after the checkpoint, the results of the other calls \
+in the same response, and your running background work are carried with it as they are, so do not retell them: to \
+take a file into the compacted context as it is now, read it in the same response. Your report is then your last \
+message, after the summary: Max reads it, or, if you were started by another agent, it is your result, and what you \
+read alongside that last `compact` reaches that agent with it.\n\n\
+With `fresh: true` it starts a new context instead, from your role, your mandate, Max's words and your summary alone. \
+Use it when even your checkpoints have grown long; the summary must then carry everything else you need. A change to \
+your role's definition takes effect then.",
     );
     said.push_str(
         "\n\n`background` runs one of your other tools without waiting for it, under a `name` you give it: it returns \
@@ -129,31 +125,16 @@ and returns at once: the agent that started you gets its result with yours.",
             "required": ["tasks"]
         }
     });
-    let fresh = json!({
-        "type": "boolean",
-        "description": "Start a new context instead, from your role, your mandate, Max's words and your summary alone."
-    });
-    let compact_and_continue = json!({
-        "name": COMPACT_AND_CONTINUE,
-        "description": "Replace your work since your latest checkpoint with your summary of it, and carry on in the same turn. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
+    let compact = json!({
+        "name": COMPACT,
+        "description": "Replace your work since your latest checkpoint with your summary of it, and carry on from the summary in the same turn: with your next step, or, if your work is done, with your report as your last message. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "summary": { "type": "string", "description": "What you did since the checkpoint, what you found and decided and why, and what is left: what you need to carry on." },
-                "fresh": fresh
+                "summary": { "type": "string", "description": "What you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, or to report." },
+                "fresh": { "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and your summary alone." }
             },
             "required": ["summary"]
-        }
-    });
-    let compact_and_report = json!({
-        "name": COMPACT_AND_REPORT,
-        "description": "End your turn: replace your work since your latest checkpoint with your summary of it, keeping the message you wrote in this response, before this call, as your report. If another agent started you, the report is your result and you are done. The results of other calls in the same response are carried with it, and reach that agent with your report.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "summary": { "type": "string", "description": "What you need to remember beyond your report, if anything." },
-                "fresh": fresh
-            }
         }
     });
     let background = json!({
@@ -194,8 +175,7 @@ and returns at once: the agent that started you gets its result with yours.",
     });
     let mut tools = vec![
         tool(SPAWN, spawn),
-        tool(COMPACT_AND_CONTINUE, compact_and_continue),
-        tool(COMPACT_AND_REPORT, compact_and_report),
+        tool(COMPACT, compact),
         tool(BACKGROUND, background),
         tool(STOP, stop),
         tool(PASS, pass),
@@ -240,39 +220,24 @@ fn tool(name: &str, definition: Value) -> Tool {
     }
 }
 
-/// What a compaction call asks for.
+/// What a `compact` call asks for.
 pub struct Compact {
-    pub summary: Option<String>,
-    /// It ends the turn, keeping the message its response wrote as the
-    /// report.
-    pub report: bool,
+    pub summary: String,
     pub fresh: bool,
 }
 
-/// Whether `tool` is one of the compaction tools.
-pub fn compacts(tool: &str) -> bool {
-    tool == COMPACT_AND_CONTINUE || tool == COMPACT_AND_REPORT
-}
-
-/// A compaction call's input, or why it cannot compact.
-pub fn compaction(tool: &str, input: &[u8]) -> Result<Compact, String> {
+/// A `compact` call's input, or why it cannot compact.
+pub fn compaction(input: &[u8]) -> Result<Compact, String> {
     let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
-    let field = |name: &str| {
-        value[name]
-            .as_str()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-    };
-    let compact = Compact {
-        summary: field("summary"),
-        report: tool == COMPACT_AND_REPORT,
+    let summary = value["summary"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("`summary` must say what you need to carry on")?;
+    Ok(Compact {
+        summary: summary.to_owned(),
         fresh: value["fresh"].as_bool().unwrap_or(false),
-    };
-    if !compact.report && compact.summary.is_none() {
-        return Err("`summary` must say what you need to carry on".into());
-    }
-    Ok(compact)
+    })
 }
 
 /// A background call's name, its tool and its input.

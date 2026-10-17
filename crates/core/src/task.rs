@@ -790,13 +790,11 @@ impl TaskEvent {
                     onto,
                     carry,
                     renders: _,
-                    report,
                 } = &**compaction;
                 if let Onto::Fresh(start) = onto {
                     start.values(out);
                 }
                 out.push(*carry);
-                out.extend(*report);
             }
             TaskEvent::Moved(Move::Rewind { to: _ })
             | TaskEvent::ModeSet(_)
@@ -838,8 +836,7 @@ pub enum Move {
     Root(Box<Start>),
     Compact(Box<Compaction>),
     /// Back to a response on the task's own chain since its start that
-    /// ended a model turn, or a compaction's report, so the next message is
-    /// Max's. The abandoned branch stays in the tree, and the context
+    /// ended a model turn, so the next message is Max's. The abandoned branch stays in the tree, and the context
     /// embodies again only what it embodied there.
     Rewind {
         to: EntryId,
@@ -855,11 +852,11 @@ pub enum Move {
 /// message is appended there: the carry, which holds the agent's summary,
 /// Max's words from what it replaced, verbatim, the output of every call of
 /// the round whose tool uses it replaced, and the background work the task
-/// still owns. Optionally an assistant message follows, the report, which
-/// ends the turn: the text the agent wrote in the response that asked for
-/// the compaction, kept as its message with the tool use dropped. Max reads
-/// it as it streams and as the last message before the compacted work, and
-/// an autonomous task's result is it. Nothing is deleted: what was replaced is the branch that ended at
+/// still owns. The agent carries on from the carry in the same turn: with
+/// its next step, or, when its work is done, with its report, which ends
+/// the turn as any answer does. So a report written after a compaction
+/// follows the carry, it is what Max reads and an autonomous task's result,
+/// and it says only what the agent still knows. Nothing is deleted: what was replaced is the branch that ended at
 /// the old head, still in the tree for Max and the face to read, and the
 /// carry's renders say where each block came from.
 ///
@@ -908,9 +905,6 @@ pub struct Compaction {
     pub carry: ValueId,
     /// What `carry`'s blocks were rendered from, in block order.
     pub renders: Vec<Span>,
-    /// The content of an assistant message appended after the carry, which
-    /// ends the model turn: the text blocks of the response that asked.
-    pub report: Option<ValueId>,
 }
 
 /// Where a compaction resumes the context.
@@ -937,24 +931,6 @@ impl Compaction {
                 content: self.carry,
             },
         }
-    }
-
-    /// The entries it appends, each with its id: the carry, then the report.
-    pub fn entries(&self) -> Vec<(EntryId, Entry)> {
-        let carry = self.carry_entry();
-        let at = carry.id();
-        let mut out = vec![(at, carry)];
-        if let Some(content) = self.report {
-            let report = Entry::Message {
-                parent: at,
-                message: Message {
-                    role: Role::Assistant,
-                    content,
-                },
-            };
-            out.push((report.id(), report));
-        }
-        out
     }
 }
 
@@ -1210,7 +1186,7 @@ impl Task {
                 self.root(start, at, world)?;
             }
             TaskEvent::Moved(Move::Compact(compaction)) => {
-                self.compact(compaction, at, world)?;
+                self.compact(compaction, world)?;
             }
             TaskEvent::Moved(Move::Rewind { to }) => {
                 let live = self.live_mut()?;
@@ -1317,14 +1293,9 @@ impl Task {
     /// The agent compacts once the round of its compaction call is over,
     /// carrying every other result of that round; the harness compacts a
     /// task between turns. Neither while it is stopping: its tidy-up turn
-    /// is its last, with no next context. A report ends the turn as a
-    /// response would; otherwise the task carries on, or keeps waiting.
-    fn compact(
-        &mut self,
-        compaction: &Compaction,
-        at: Timestamp,
-        world: &State,
-    ) -> Result<(), Rejected> {
+    /// is its last, with no next context. The task carries on, or keeps
+    /// waiting.
+    fn compact(&mut self, compaction: &Compaction, world: &State) -> Result<(), Rejected> {
         let Task { pending, life, .. } = self;
         let Life::Live(live) = life else {
             return Err(Rejected::Starting);
@@ -1350,17 +1321,11 @@ impl Task {
         if dropped {
             return Err(Rejected::Unanswered);
         }
-        let entries = compaction.entries();
-        let carry = entries[0].0;
+        let carry = compaction.carry_entry().id();
         let mut context = live.context.compacted(&compaction.onto, carry);
         learn(&mut context, &[], &compaction.renders, carry, world)?;
-        let (head, _) = *entries.last().expect("a carry");
-        context.head = head;
         live.context = context;
         pending.retain(|p| !matches!(p, Input::Result(_)));
-        if compaction.report.is_some() {
-            self.turn_ended(head, at, world);
-        }
         Ok(())
     }
 

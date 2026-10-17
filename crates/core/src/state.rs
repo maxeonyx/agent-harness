@@ -140,9 +140,6 @@ pub struct Compacted {
     pub by: Option<CallId>,
     /// What the carry's blocks were rendered from.
     pub renders: Vec<Span>,
-    /// The report entry after the carry, if it ended the turn with one.
-    pub report: Option<EntryId>,
-    pub at: Mark,
 }
 
 /// What is still in motion, kept as the fold goes, so the views over live
@@ -1169,7 +1166,7 @@ impl State {
                 root = Some(&start.root);
             }
             TaskEvent::Moved(Move::Compact(compaction)) => {
-                compacted = Some(self.check_compaction(id, task, compaction, record)?);
+                compacted = Some(self.check_compaction(id, task, compaction)?);
                 if let Onto::Fresh(start) = &compaction.onto {
                     root = Some(&start.root);
                 }
@@ -1187,7 +1184,6 @@ impl State {
                 if named.call.task != id {
                     return Err(Rejected::NotForTask);
                 }
-                // A turn ends with an answer, or with a compaction's report.
                 let ended = self.model_calls.values().any(|m| {
                     m.call.task == id
                         && m.sent.seq >= named.sent.seq
@@ -1198,10 +1194,7 @@ impl State {
                                 ..
                             })
                         )
-                }) || self
-                    .compactions
-                    .values()
-                    .any(|c| c.task == id && c.report.is_some() && c.at.seq >= named.sent.seq);
+                });
                 if ended {
                     return Err(Rejected::Finished);
                 }
@@ -1233,9 +1226,9 @@ impl State {
         if let Some(root) = root {
             self.entries.insert(root.id(), Entry::Root(root.clone()));
         }
-        if let Some((entries, kept)) = compacted {
-            self.compactions.insert(entries[0].0, kept);
-            self.entries.extend(entries);
+        if let Some((carry, kept)) = compacted {
+            self.compactions.insert(carry.id(), kept);
+            self.entries.insert(carry.id(), carry);
         }
         self.put(task);
         Ok(())
@@ -1249,8 +1242,7 @@ impl State {
         id: TaskId,
         task: &Task,
         compaction: &Compaction,
-        record: &Stated,
-    ) -> Result<(Vec<(EntryId, Entry)>, Compacted), Rejected> {
+    ) -> Result<(Entry, Compacted), Rejected> {
         let context = task.context().ok_or(Rejected::Starting)?;
         if let Some(call) = compaction.by {
             let made = self.calls.get(&call).ok_or(Rejected::Unknown)?;
@@ -1290,16 +1282,13 @@ impl State {
                 Rendered::Delivery(_) | Rendered::Note(_) => return Err(Rejected::NotForTask),
             }
         }
-        let entries = compaction.entries();
         let kept = Compacted {
             task: id,
             from: context.head,
             by: compaction.by,
             renders: compaction.renders.clone(),
-            report: entries.get(1).map(|(e, _)| *e),
-            at: Mark::of(record),
         };
-        Ok((entries, kept))
+        Ok((compaction.carry_entry(), kept))
     }
 
     /// The task's latest checkpoint: the last entry on its chain since its
@@ -1308,20 +1297,14 @@ impl State {
     /// **Concept.** A checkpoint is an entry worth keeping verbatim: the
     /// head of the context's first request (its mandate, or a fork's), the
     /// head of each request that began a model turn (Max's message, or
-    /// whatever woke it), and the last entry of each compaction (its carry,
-    /// or its report). Derived from the tree and the requests, never
+    /// whatever woke it), and each compaction's carry. Derived from the tree and the requests, never
     /// stated, so a fork, a rewind or a restart needs nothing kept for it.
     /// `None` until the context's first request has been sent.
     pub fn checkpoint(&self, task: &Task) -> Option<EntryId> {
         let context = task.context()?;
         let mut next = Some(context.head);
         while let Some(id) = next {
-            if self
-                .compactions
-                .get(&id)
-                .is_some_and(|c| c.report.is_none())
-                || self.reported(id)
-            {
+            if self.compactions.contains_key(&id) {
                 return Some(id);
             }
             if let Some(request) = self.request(id)
@@ -1337,36 +1320,25 @@ impl State {
         None
     }
 
-    /// Whether `entry` is a compaction's report.
-    fn reported(&self, entry: EntryId) -> bool {
-        self.entries
-            .get(&entry)
-            .and_then(Entry::parent)
-            .and_then(|carry| self.compactions.get(&carry))
-            .is_some_and(|c| c.report == Some(entry))
-    }
-
     /// The compaction whose carry is `entry`.
     pub fn compacted(&self, entry: EntryId) -> Option<&Compacted> {
         self.compactions.get(&entry)
     }
 
-    /// Whether `entry` ended a model turn: a response that did, or a
-    /// compaction's report.
+    /// Whether `entry` is a response that ended a model turn.
     pub fn ended_turn(&self, entry: EntryId) -> bool {
-        self.reported(entry)
-            || self.response(entry).is_some_and(|m| {
-                matches!(
-                    &m.ended,
-                    Some(Ended {
-                        ending: Ending::Responded {
-                            stop: Stop::EndTurn,
-                            ..
-                        },
+        self.response(entry).is_some_and(|m| {
+            matches!(
+                &m.ended,
+                Some(Ended {
+                    ending: Ending::Responded {
+                        stop: Stop::EndTurn,
                         ..
-                    })
-                )
-            })
+                    },
+                    ..
+                })
+            )
+        })
     }
 
     /// The model call a response came from.

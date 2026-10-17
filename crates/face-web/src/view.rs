@@ -483,12 +483,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                     Onto::Checkpoint(_) => "onto its latest checkpoint".to_string(),
                     Onto::Fresh(start) => format!("onto a new root, on {}", start.root.model),
                 };
-                let report = if c.report.is_some() {
-                    ", and reported"
-                } else {
-                    ""
-                };
-                format!("{} compacted {onto}{by}{report}", name(*id))
+                format!("{} compacted {onto}{by}", name(*id))
             }
             TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
             TaskEvent::Drain(Drain::ToMax { .. }) => format!("{} interrupted", name(*id)),

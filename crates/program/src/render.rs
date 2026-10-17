@@ -299,8 +299,7 @@ goes back to the context you were forked from with their results. He wrote (`{}`
 
 /// What a compaction carries forward, and why.
 pub struct Carry<'a> {
-    /// The agent's summary; `None` for a compaction the harness made, or a
-    /// report that says it all.
+    /// The agent's summary; `None` for a compaction the harness made.
     pub summary: Option<&'a str>,
     /// Who compacted, and onto what.
     pub why: Why,
@@ -308,8 +307,6 @@ pub struct Carry<'a> {
     pub words: &'a [ValueId],
     /// Settled calls whose tool uses it replaced: the round's other results.
     pub calls: &'a [CallId],
-    /// It ends the turn with a report, after the carry.
-    pub report: bool,
 }
 
 /// Who compacted, and onto what.
@@ -353,9 +350,6 @@ again from your role and your mandate, without a summary. Check your workspace f
 carrying on."
             .to_owned(),
     };
-    if carry.summary.is_none() && carry.report {
-        framing.push_str(" Your report follows.");
-    }
     if !carry.words.is_empty() {
         framing.push_str(" Max's words from that work follow, as he wrote them.");
     }
@@ -689,9 +683,9 @@ Start nothing new. This is your last turn."
         Content::Prompt(Prompt::Park) => format!(
             "Max is pausing this work for now. Bring it to a safe point: finish or undo what is half done, so \
 nothing is left broken or half-written, and start nothing new.{shared} Work you have running in the \
-background is yours to keep or stop: keep what should still be running when Max comes back. Then end your \
-turn with a short note of where things stand and what you will do next, with `compact_and_report` if you have \
-done much since your last checkpoint, so you resume from a short context. You will wait, paused, until Max \
+background is yours to keep or stop: keep what should still be running when Max comes back. If you have \
+done much since your last checkpoint, `compact` first, so you resume from a short context. Then end your turn with a \
+short note of where things stand and what you will do next. You will wait, paused, until Max \
 resumes you; this is not the end of your task."
         ),
         Content::Prompt(Prompt::Resume) => {
@@ -776,8 +770,8 @@ fn mandate(state: &State, values: Values, task: &Task, carried: bool) -> String 
         ));
     }
     said_.push_str(&format!(
-        "\n\nWhen your part is done, end your turn, or end it with `compact_and_report`. Your last message is your \
-result, and it goes to `{owner_name}`."
+        "\n\nWhen your part is done, `compact`, then end your turn. Your last message is your result, and it goes \
+to `{owner_name}`."
     ));
     said_
 }

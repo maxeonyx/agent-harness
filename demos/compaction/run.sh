@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One agent works in two steps and compacts between them, then reports with
-# `compact_and_report`; Max answers, and it compacts and reports again.
+# One agent works in two steps and compacts between them, then compacts and
+# reports; Max answers, and it compacts and reports again.
 # Watch it at https://mx-hv-mj.local:4321 (another port: PORT=4400).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
