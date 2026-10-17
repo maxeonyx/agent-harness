@@ -186,6 +186,9 @@ impl Brain {
         let browser_limb = find(
             &|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == harness_limb_browser::KIND),
         );
+        let builds_limb = find(
+            &|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == harness_limb_builds::KIND),
+        );
         let roles_limb =
             find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == roles::KIND));
         let at = decider.next();
@@ -245,11 +248,26 @@ impl Brain {
         let browser = define(&mut facts, browser_limb, &|id| {
             wanted.clone().unwrap_or_default().definition(id)
         });
+        // The builds limb relaunches the brain's own service: the unit
+        // this process runs in, which a new version follows.
+        let unit = harness_limb_builds::Settings::here();
+        if let Some(id) = builds_limb
+            && state
+                .limb(id)
+                .and_then(harness_limb_builds::Settings::of)
+                .as_ref()
+                != Some(&unit)
+        {
+            let limb = state.limb(id).expect("found among the limbs");
+            facts.push(Fact::Limb(reconfigured(limb, &unit)));
+        }
+        let builds = define(&mut facts, builds_limb, &|id| unit.definition(id));
         let shared: std::collections::BTreeMap<String, LimbId> = [
             ("meta", meta),
             ("user", user),
             ("web", web),
             ("browser", browser),
+            ("builds", builds),
         ]
         .into_iter()
         .map(|(n, l)| (n.to_string(), l))
