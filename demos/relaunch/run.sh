@@ -74,7 +74,7 @@ for _ in $(seq 240); do
     [[ -n $said ]] && break
     sleep 1
 done
-echo "$said"
+echo "${said%%\\n*}"
 
 step "end: stop the brain and delete the demo's builds"
 systemctl --user stop "$unit"

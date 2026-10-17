@@ -261,7 +261,7 @@ impl Takeover {
             Err(e) => format!("and {} would not start again: {e}", self.old.commit),
         };
         format!(
-            "{} failed its probation: {why}. {how}; requests it left unanswered are sent again.",
+            "{} failed its probation: {why}. {how}; what it left unanswered is sent again.",
             self.new.commit
         )
     }
@@ -508,22 +508,28 @@ fn systemctl(args: &[&str]) -> Result<String, String> {
     run(Command::new("systemctl").arg("--user").args(args))
 }
 
-/// What the unit printed last since `since`, after a colon, if anything.
+/// Why the unit's process ended since `since`, after a colon: systemd's
+/// word on how it exited, and a panic if it printed one.
 fn last_words(unit: &str, since: Instant) -> String {
     let secs = SystemTime::now()
         .checked_sub(since.elapsed())
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_secs());
     let out = Command::new("journalctl")
-        .args(["--user", "-u", unit, "--no-pager", "-o", "cat", "-n", "3"])
+        .args(["--user", "-u", unit, "--no-pager", "-o", "cat"])
         .arg(format!("--since=@{secs}"))
         .output();
-    match out {
-        Ok(out) if !out.stdout.is_empty() => {
-            let text = String::from_utf8_lossy(&out.stdout);
-            format!(", saying: {}", text.trim().replace('\n', " / "))
-        }
-        _ => String::new(),
+    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    let said: Vec<&str> = text
+        .as_deref()
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains("panicked") || l.contains("Main process exited"))
+        .map(|l| l.trim_start_matches(&format!("{unit}: ")).trim())
+        .collect();
+    match said.is_empty() {
+        true => String::new(),
+        false => format!(", saying: {}", said.join(" / ")),
     }
 }
 
