@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
@@ -19,12 +20,11 @@ use harness_core::id::{
     CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
 };
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop};
-use harness_core::resource::Observation;
 use harness_core::schema::{self, Record};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
-    Context, Created, Drain, Draining, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome,
-    Scope, Start as TaskStart, Stopper, Task, TaskEvent,
+    Created, Drain, Draining, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome, Scope,
+    Start as TaskStart, Stopper, Task, TaskEvent,
 };
 use harness_core::value::Bytes;
 use harness_face_web::{Feed, Folded, Running};
@@ -37,9 +37,9 @@ use harness_provider::{Client, Finished, Progress};
 use harness_runtime::{Cancel, signals};
 use harness_store::Store;
 
-use crate::meta::{self, How};
-use crate::{max, web};
-use crate::{policy, render, roles};
+use crate::roles;
+use harness_program::meta::{self, How};
+use harness_program::{max, policy, render, web};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
@@ -297,7 +297,7 @@ impl Brain {
         self.hosted -= 1;
         let replica = mint_replica();
         let events = self.events.clone();
-        self.joined(conn, Hello { limb: id, replica }, Wire::Channel(wire));
+        self.joined(conn, Hello { limb: id, replica }, wire);
         thread::spawn(move || {
             let up = |up| {
                 let said = link::Said::Up(Box::new(up));
@@ -696,15 +696,17 @@ impl Brain {
         }
         let refs: Vec<(LimbId, &Description)> = described.iter().map(|(l, d)| (*l, d)).collect();
         let role = String::from_utf8_lossy(&self.value(env.role)).into_owned();
-        Some(render::root(&env.model, &role, &refs).map(|new| {
-            let start = TaskStart {
-                root: new.root,
-                binding: new.binding,
-                observes: env.source.iter().cloned().chain(new.observes).collect(),
-                awaits: Vec::new(),
-            };
-            (start, new.values)
-        }))
+        Some(
+            render::root(harness_provider::IDENTITY, &env.model, &role, &refs).map(|new| {
+                let start = TaskStart {
+                    root: new.root,
+                    binding: new.binding,
+                    observes: env.source.iter().cloned().chain(new.observes).collect(),
+                    awaits: Vec::new(),
+                };
+                (start, new.values)
+            }),
+        )
     }
 
     /// Say a move to a new root. Its limbs watch what it embodies through
@@ -1042,7 +1044,7 @@ Check your workspace for what you had already done before carrying on."
                         task: task.id,
                         tool_use: ToolUseId(field(b, "id")),
                     },
-                    expects: expects(context, context.binding.limb(&tool)),
+                    expects: meta::expects(context, context.binding.limb(&tool)),
                     tool,
                     input: input.id(),
                 };
@@ -1082,7 +1084,7 @@ Check your workspace for what you had already done before carrying on."
         };
         // Only a stopping task's tidy-up turn makes calls while it ends.
         if parent.ends() {
-            let (model, failed) = failed(
+            let (model, failed) = render::failed(
                 "You are being stopped: nothing new can start, and there is no next context. \
 Finish tidying up and end your turn with your report.",
             );
@@ -1108,7 +1110,7 @@ Finish tidying up and end your turn with your report.",
             return self.append(batch);
         }
         if call.tool == meta::BACKGROUND {
-            match background(&parent, id, self.meta, &input) {
+            match meta::background_call(&parent, id, self.meta, &input) {
                 Ok((started, input)) => {
                     let said = render::blocks(&[render::text(&format!(
                         "Started `{}` in the background: its result comes to you as a message when it settles, \
@@ -1129,7 +1131,7 @@ and you cannot finish until it has.",
                     return self.append(batch);
                 }
                 Err(message) => {
-                    let (model, failed) = failed(&message);
+                    let (model, failed) = render::failed(&message);
                     batch.values.push(model);
                     batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
                     return self.append(batch);
@@ -1155,7 +1157,7 @@ and you cannot finish until it has.",
             }
             Ok(_) => {}
             Err(message) => {
-                let (model, failed) = failed(&message);
+                let (model, failed) = render::failed(&message);
                 batch = Batch {
                     values: vec![model],
                     facts: vec![
@@ -1192,7 +1194,7 @@ and you cannot finish until it has.",
         let quotes = spawn
             .quotes
             .iter()
-            .map(|label| quoted(state, parent, label))
+            .map(|label| meta::quoted(state, parent, label))
             .collect::<Result<Vec<_>, String>>()?;
         let mut names = Vec::new();
         for member in spawn.members {
@@ -1228,7 +1230,7 @@ and you cannot finish until it has.",
                             .and_then(|l| state.limb(*l))
                             .map(|l| PathBuf::from(&l.name))
                             .ok_or(format!("you have no {kind} to clone from"))?;
-                        let (from, dir) = policy::clone_of(&dir, &branch);
+                        let (from, dir) = clone_of(&dir, &branch);
                         let clone = Clone {
                             from,
                             branch,
@@ -1338,7 +1340,7 @@ and you cannot finish until it has.",
 
     /// Settle a call the brain answers itself as failed, saying why.
     fn fail(&mut self, id: CallId, said: &str) {
-        let (model, failed) = failed(said);
+        let (model, failed) = render::failed(said);
         self.append(Batch {
             values: vec![model],
             facts: vec![Fact::Call(id, CallEvent::Settled(failed))],
@@ -1472,7 +1474,7 @@ and you cannot finish until it has.",
                 rows,
             };
             if let Some(down) = link.publisher.publish(view) {
-                link.wire.ship(down);
+                let _ = link.wire.send(down);
             }
         }
     }
@@ -1560,17 +1562,6 @@ fn ends(fact: &Fact) -> Option<Running> {
     }
 }
 
-/// A failed outcome saying why, and its output's bytes.
-fn failed(said: &str) -> (Bytes, Outcome) {
-    let model = render::blocks(&[render::text(said)]);
-    let output = Output {
-        model: model.id(),
-        full: None,
-        observes: Vec::new(),
-    };
-    (model, Outcome::Failed(output))
-}
-
 /// A user message of these bytes, which go in the batch.
 fn user(content: Bytes, values: &mut Vec<Bytes>) -> Message {
     let message = Message {
@@ -1589,72 +1580,6 @@ pub fn now() -> Timestamp {
     )
 }
 
-/// What a call to `limb` expects: the versions the context knows of its
-/// resources.
-fn expects(context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
-    context
-        .knows
-        .iter()
-        .filter(|(r, _)| Some(r.limb) == limb)
-        .map(|(resource, known)| Observation {
-            resource: resource.clone(),
-            version: known.has,
-        })
-        .collect()
-}
-
-/// A `background` call's input as the call it starts, with its input's
-/// bytes: routed by the caller's binding, never to the meta limb.
-fn background(
-    parent: &Task,
-    from: CallId,
-    meta: LimbId,
-    input: &[u8],
-) -> Result<(Call, Bytes), String> {
-    let (tool, input) = meta::background(input)?;
-    let context = parent.context().ok_or("you have no context")?;
-    let limb = context
-        .binding
-        .limb(&tool)
-        .ok_or(format!("you have no tool `{tool}`"))?;
-    if limb == meta {
-        return Err(format!("`{tool}` cannot run in the background"));
-    }
-    let call = Call {
-        caller: Caller::Background {
-            task: parent.id,
-            from,
-        },
-        expects: expects(context, Some(limb)),
-        tool,
-        input: input.id(),
-    };
-    Ok((call, input))
-}
-
-/// Max's words a label names, among those `parent` has heard: his messages,
-/// the mandates he gave, his answers, and what briefs quoted.
-fn quoted(state: &State, parent: &Task, label: &str) -> Result<ValueId, String> {
-    let words = state.deliveries().filter_map(|d| match d.delivery.content {
-        Content::Words(words) => Some(words),
-        Content::Prompt(_) => None,
-    });
-    let mandates = state
-        .tasks()
-        .flat_map(|t| [t.mandate.text].into_iter().chain(t.mandate.quotes.clone()));
-    let answers = state
-        .calls()
-        .filter_map(|(_, c)| c.outcome()?.output().map(|o| o.model));
-    words
-        .chain(mandates)
-        .chain(answers)
-        .filter(|v| state.heard(parent.id, *v))
-        .find(|v| render::label(*v) == label)
-        .ok_or(format!(
-            "no words of Max's you have heard are labelled `{label}`"
-        ))
-}
-
 /// A new replica, for a face or a co-hosted limb this launch: 64 random bits.
 fn mint_replica() -> ReplicaId {
     let mut bytes = [0; 8];
@@ -1662,4 +1587,27 @@ fn mint_replica() -> ReplicaId {
         .and_then(|mut f| f.read_exact(&mut bytes))
         .expect("/dev/urandom reads");
     ReplicaId(u64::from_le_bytes(bytes))
+}
+
+/// A new clone for an agent started from a workspace at `dir`: cloned from
+/// what `dir` itself was cloned from (or `dir`, if it has no `origin`), into
+/// a sibling directory named for the repository and the branch, the way
+/// Max names his (`agent-harness` on `dev-x` is `agent-harness-dev-x`).
+pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
+    let from = Command::new("git")
+        .args(["-C", &dir.to_string_lossy(), "remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| dir.to_string_lossy().into_owned());
+    let repo = from
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or("clone")
+        .trim_end_matches(".git");
+    let name = format!("{repo}-{}", branch.replace('/', "-"));
+    let parent = dir.parent().unwrap_or(dir);
+    (from, parent.join(name))
 }

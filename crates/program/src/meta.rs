@@ -12,9 +12,13 @@
 //! `Dispatched`, so a crash leaves both or neither, and a restart never
 //! spawns twice.
 
+use harness_core::call::{Call, Caller};
+use harness_core::delivery::Content;
 use harness_core::environment::{Audience, Description, Instruction, Limb, LimbKind, Tool};
-use harness_core::id::{Digest, LimbId};
+use harness_core::id::{CallId, Digest, LimbId, ValueId};
 use harness_core::resource::{Observation, ResourceKey, Version};
+use harness_core::state::State;
+use harness_core::task::{Context, Task};
 use harness_core::value::Bytes;
 use serde_json::{Value, json};
 
@@ -278,4 +282,70 @@ pub fn result(members: &[(String, String)]) -> Bytes {
         .map(|(name, said)| format!("## {name}\n\n{said}"))
         .collect();
     blocks(&[text(&body.join("\n\n"))])
+}
+
+/// What a call to `limb` expects: the versions the context knows of its
+/// resources.
+pub fn expects(context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
+    context
+        .knows
+        .iter()
+        .filter(|(r, _)| Some(r.limb) == limb)
+        .map(|(resource, known)| Observation {
+            resource: resource.clone(),
+            version: known.has,
+        })
+        .collect()
+}
+
+/// A `background` call's input as the call it starts, with its input's
+/// bytes: routed by the caller's binding, never to the meta limb.
+pub fn background_call(
+    parent: &Task,
+    from: CallId,
+    meta: LimbId,
+    input: &[u8],
+) -> Result<(Call, Bytes), String> {
+    let (tool, input) = background(input)?;
+    let context = parent.context().ok_or("you have no context")?;
+    let limb = context
+        .binding
+        .limb(&tool)
+        .ok_or(format!("you have no tool `{tool}`"))?;
+    if limb == meta {
+        return Err(format!("`{tool}` cannot run in the background"));
+    }
+    let call = Call {
+        caller: Caller::Background {
+            task: parent.id,
+            from,
+        },
+        expects: expects(context, Some(limb)),
+        tool,
+        input: input.id(),
+    };
+    Ok((call, input))
+}
+
+/// Max's words a label names, among those `parent` has heard: his messages,
+/// the mandates he gave, his answers, and what briefs quoted.
+pub fn quoted(state: &State, parent: &Task, label: &str) -> Result<ValueId, String> {
+    let words = state.deliveries().filter_map(|d| match d.delivery.content {
+        Content::Words(words) => Some(words),
+        Content::Prompt(_) => None,
+    });
+    let mandates = state
+        .tasks()
+        .flat_map(|t| [t.mandate.text].into_iter().chain(t.mandate.quotes.clone()));
+    let answers = state
+        .calls()
+        .filter_map(|(_, c)| c.outcome()?.output().map(|o| o.model));
+    words
+        .chain(mandates)
+        .chain(answers)
+        .filter(|v| state.heard(parent.id, *v))
+        .find(|v| crate::render::label(*v) == label)
+        .ok_or(format!(
+            "no words of Max's you have heard are labelled `{label}`"
+        ))
 }

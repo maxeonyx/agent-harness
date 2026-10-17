@@ -2,7 +2,7 @@
 //! a model. Policy: the core fixes what must be rendered (every result of
 //! the last round) and leaves the rest here.
 
-use harness_core::call::{Caller, Outcome};
+use harness_core::call::{Caller, Outcome, Output};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Binding, Description};
@@ -13,7 +13,6 @@ use harness_core::resource::Observation;
 use harness_core::state::{Delivered, Stale, State};
 use harness_core::task::{Draining, Input, Origin, Scope, Stopper, Task};
 use harness_core::value::Bytes;
-use harness_provider::IDENTITY;
 use serde_json::{Value, json};
 
 /// The bytes of a stored value.
@@ -62,8 +61,13 @@ pub struct NewRoot {
     pub values: Vec<Bytes>,
 }
 
-pub fn root(model: &str, role: &str, limbs: &[(LimbId, &Description)]) -> Result<NewRoot, String> {
-    let mut system = vec![text(IDENTITY), text(role)];
+pub fn root(
+    identity: &str,
+    model: &str,
+    role: &str,
+    limbs: &[(LimbId, &Description)],
+) -> Result<NewRoot, String> {
+    let mut system = vec![text(identity), text(role)];
     let mut observes = Vec::new();
     for (_, description) in limbs {
         for instruction in &description.instructions {
@@ -564,4 +568,15 @@ pub fn visible(content: &[u8]) -> String {
         .filter_map(|b| b["text"].as_str())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A failed outcome saying why, and its output's bytes.
+pub fn failed(said: &str) -> (Bytes, Outcome) {
+    let model = blocks(&[text(said)]);
+    let output = Output {
+        model: model.id(),
+        full: None,
+        observes: Vec::new(),
+    };
+    (model, Outcome::Failed(output))
 }
