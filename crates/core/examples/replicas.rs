@@ -276,6 +276,7 @@ fn main() {
             places: vec![],
             starts: vec![],
             source: None,
+            description: String::new(),
         })],
     });
     let environment = EnvironmentId(environment.event(0));

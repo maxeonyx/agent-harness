@@ -220,6 +220,7 @@ pub struct Role {
     pub path: String,
     pub version: Version,
     pub name: String,
+    pub description: String,
     /// As the file names it: an alias, an id, or `scripted`.
     pub model: String,
     /// How hard it thinks: its request parameters' `output_config.effort`.
@@ -308,6 +309,7 @@ fn parse(text: &str) -> Result<Role, String> {
         path: String::new(),
         version: Version::Gone,
         name: one("name").ok_or("no `name`")?,
+        description: one("description").unwrap_or_default(),
         model,
         effort,
         limbs: list("limbs"),
@@ -366,6 +368,7 @@ fn environments(
         let env = Environment {
             id: ids[r.name.as_str()],
             name: r.name.clone(),
+            description: r.description.clone(),
             role: role.id(),
             model: models.resolve(&r.model, existing(&r.name).map(|e| e.model.as_str())),
             params: params.id(),
