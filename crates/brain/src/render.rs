@@ -6,8 +6,8 @@ use harness_core::call::{Caller, Outcome};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::environment::{Binding, Description};
+use harness_core::fact::Author;
 use harness_core::id::{CallId, LimbId, Timestamp, ValueId};
-use harness_core::journal::Author;
 use harness_core::model_call::{Ending, Stop};
 use harness_core::resource::Observation;
 use harness_core::state::{Delivered, Stale, State};
@@ -20,16 +20,16 @@ use serde_json::{Value, json};
 pub type Values<'a> = &'a dyn Fn(ValueId) -> Vec<u8>;
 
 /// Where Max's words fall in the agent's work: during a turn, the tool
-/// calls it made after the journal position his face had shown him, and
+/// calls it made after the brain time his face had shown him, and
 /// whether he asked them to wait for its turn's end.
 fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> String {
-    let Author::Max { seen, .. } = delivered.by else {
+    let (Author::Max, Some(seen)) = (delivered.by, delivered.seen) else {
         return String::new();
     };
     let mut unseen: Vec<_> = state
         .calls()
         .filter_map(|(_, c)| match &c.call.caller {
-            Caller::Agent { task: t, tool_use } if *t == task.id && c.made.seq > seen => {
+            Caller::Agent { task: t, tool_use } if *t == task.id && c.made.seq.n > seen.n => {
                 Some((c.made.seq, tool_use.0.as_str()))
             }
             _ => None,

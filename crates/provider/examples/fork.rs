@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::context::{Entry, EntryId, Message, Role, Root};
-use harness_core::id::{ModelCallId, TaskId, ValueId};
+use harness_core::id::{ModelCallId, PlaceId, TaskId, ValueId};
 use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall};
 use harness_provider::{Client, Finished, IDENTITY, Login, Progress};
@@ -17,6 +17,9 @@ use serde_json::json;
 
 /// What the journal and the value store hold, in miniature: the entries the
 /// fold has learnt and the bytes they name.
+/// The place this example's ids are of: it records nothing.
+const EXAMPLE: PlaceId = PlaceId(1);
+
 #[derive(Default)]
 struct Store {
     entries: HashMap<EntryId, Entry>,
@@ -82,7 +85,7 @@ fn main() {
         let head = message.id_after(base);
         let breakpoints = marks.iter().chain([&head]).copied().collect();
         ModelCall {
-            task: TaskId::generate(),
+            task: TaskId(EXAMPLE.origin().event(0)),
             base,
             appends: vec![message],
             renders: vec![],
@@ -152,7 +155,7 @@ fn turn(
     println!("[{:6.2}s] {label}: Sent", secs(start));
     let finished = client
         .send(
-            ModelCallId::generate(),
+            ModelCallId(EXAMPLE.origin().event(label.len() as u32)),
             call,
             &store.context(call.base),
             |id| store.values.get(&id).cloned(),

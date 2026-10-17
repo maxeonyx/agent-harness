@@ -355,6 +355,7 @@ pub enum LimbKey {
     /// The bytes of a value a call row names.
     Value(ValueId),
     Watch,
+    Environment(EnvironmentId),
     Shutdown,
 }
 
@@ -393,6 +394,10 @@ pub enum LimbRow {
     Shutdown { by: Timestamp },
     /// A value's bytes.
     Value(Bytes),
+    /// The current version of an environment read from this limb's
+    /// resources: what a limb holding role definitions restates only when
+    /// its files differ.
+    Environment(Environment),
 }
 
 /// What the brain ships a limb over its link.

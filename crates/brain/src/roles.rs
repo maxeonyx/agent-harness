@@ -1,5 +1,8 @@
-//! Role files: the definitions of the kinds of agent, read into
-//! [`Environment`] versions.
+//! The roles limb: the definitions of the kinds of agent, read from role
+//! files into [`Environment`] versions, which it states as facts of its
+//! own. Co-hosted: it runs on a thread of the brain's process, on a link of
+//! values over a channel, so the brain itself reads nothing but its
+//! database.
 //!
 //! A role file is Claude Code's agent file with the harness's keys added, so
 //! one file defines a role for both while the work moves between them:
@@ -18,22 +21,128 @@
 //! ```
 //!
 //! `limbs` name the limbs every task of the kind shares, which the brain
-//! runs or defines itself (`meta`, `user`); `places` name the plugin kinds
-//! each task is given a limb of its own of (`workspace`: a clone); `starts` names the roles it can start fresh tasks in. Claude Code
+//! runs or defines itself (`meta`, `max`, `user`); `places` name the plugin
+//! kinds each task is given a limb of its own of (`workspace`: a clone);
+//! `starts` names the roles it can start fresh tasks in. Claude Code
 //! ignores the keys it does not know.
 //!
-//! A role file is a resource of the meta limb, the brain's own: each
-//! version of an environment records the file's version it was read from
-//! ([`Environment::source`]), and the brain states each new version as a
-//! change, so a task whose root embodies the old one is told.
+//! A role file is a resource of this limb: each version of an environment
+//! records the file's version it was read from ([`Environment::source`]),
+//! and the limb states each new version with a change to the file, so a
+//! task whose root embodies the old one is told. The brain's rows for it
+//! are the environments it stated ([`LimbRow::Environment`]): it restates
+//! a role only when its file says something else.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::Duration;
 
-use harness_core::environment::Environment;
-use harness_core::id::{Digest, EnvironmentId, LimbId};
-use harness_core::resource::{Observation, ResourceKey, Version};
+use harness_core::environment::{Environment, Limb, LimbDown, LimbKey, LimbKind, LimbRow, LimbUp};
+use harness_core::fact::{Batch, Fact, Refusal};
+use harness_core::id::{Digest, EnvironmentId, LimbId, PlaceId, Time};
+use harness_core::resource::{Change, Observation, ResourceKey, Version};
+use harness_core::schema::Harness;
 use harness_core::value::Bytes;
+use harness_substrate::{Log, Memory, Replica, Up};
+use serde::{Deserialize, Serialize};
+
+/// The plugin kind it is.
+pub const KIND: &str = "roles";
+
+/// How often the role files are read again.
+const EVERY: Duration = Duration::from_secs(2);
+
+/// The roles limb's settings: the `config` of its definition.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Settings {
+    pub dir: PathBuf,
+    /// The shared limbs a role may name, by the name it uses.
+    pub limbs: BTreeMap<String, LimbId>,
+}
+
+impl Settings {
+    pub fn definition(&self, id: LimbId) -> Limb {
+        Limb {
+            id,
+            name: "roles".into(),
+            kind: LimbKind::Plugin {
+                kind: KIND.into(),
+                config: serde_json::to_string(self).expect("settings are JSON"),
+            },
+        }
+    }
+
+    pub fn of(limb: &Limb) -> Option<Settings> {
+        match &limb.kind {
+            LimbKind::Plugin { kind, config } if kind == KIND => serde_json::from_str(config).ok(),
+            _ => None,
+        }
+    }
+}
+
+/// Run the roles limb `limb` as the place `here`, on a link: what the brain
+/// ships arrives on `down`, and what it says goes to `up`. Its log is in
+/// memory, so each run is a new place: everything it says, it derives
+/// again from its files. Returns once the brain shuts down or lets go of
+/// the link.
+pub fn run(limb: &Limb, here: PlaceId, down: Receiver<LimbDown>, up: impl Fn(LimbUp)) {
+    let Some(settings) = Settings::of(limb) else {
+        return eprintln!("the roles limb's settings do not parse");
+    };
+    let mut log: Log<Harness, Memory<Harness>> =
+        Log::open(here, Memory::default()).expect("memory opens");
+    let mut rows: Replica<LimbKey, LimbRow, Refusal> = Replica::default();
+    let mut error: Option<String> = None;
+    loop {
+        match down.recv_timeout(EVERY) {
+            Ok(shipped) => {
+                let connected = matches!(shipped, LimbDown::View(_));
+                rows.apply(shipped);
+                let Some(view) = rows.view() else { continue };
+                if connected {
+                    for record in log.unsent(&view.standing).unwrap_or_default() {
+                        up(Up::Record(record));
+                    }
+                }
+                for (n, why) in &view.standing.refused {
+                    eprintln!("the brain refused the roles limb's record {n}: {why}");
+                }
+                let _ = log.cover(&view.standing);
+                if view.rows.contains_key(&LimbKey::Shutdown) {
+                    return;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+        let Some(view) = rows.view() else { continue };
+        let current: Vec<&Environment> = view
+            .rows
+            .values()
+            .filter_map(|r| match r {
+                LimbRow::Environment(env) => Some(env),
+                _ => None,
+            })
+            .collect();
+        let said = read(&settings.dir).and_then(|roles| {
+            let batch = environments(&roles, &current, &settings.limbs, limb.id, log.next())?;
+            if batch.facts.is_empty() {
+                return Ok(());
+            }
+            let record = log
+                .say(crate::brain::now(), |_| batch)
+                .map_err(|e| e.to_string())?;
+            up(Up::Record(record));
+            Ok(())
+        });
+        let now = said.err();
+        if now.is_some() && now != error {
+            eprintln!("the roles are unchanged: {}", now.as_deref().unwrap_or(""));
+        }
+        error = now;
+    }
+}
 
 /// One role file, parsed.
 pub struct Role {
@@ -149,30 +258,45 @@ fn model_id(alias: &str) -> String {
     .into()
 }
 
-/// Each role as an environment version, with the bytes it names: ids reused
-/// by name from `current`, so a role's id outlives edits to it. `limb`
-/// resolves a shared limb's name; `meta` owns the role files.
-pub fn environments(
+/// The batch that brings the environments up to the role files: each role
+/// that is new or says something else, as a new version, with the change to
+/// its file. Ids are kept by name from `current`; a new role's is its
+/// fact's event at `at`, the record the batch is said in. `limbs` resolves
+/// a shared limb's name; `owner` is this limb, whose resources the files
+/// are.
+fn environments(
     roles: &[Role],
-    current: &[Environment],
-    limb: &dyn Fn(&str) -> Option<LimbId>,
-    meta: LimbId,
-) -> Result<(Vec<Environment>, Vec<Bytes>), String> {
-    let ids: BTreeMap<&str, EnvironmentId> = roles
+    current: &[&Environment],
+    limbs: &BTreeMap<String, LimbId>,
+    owner: LimbId,
+    at: Time,
+) -> Result<Batch, String> {
+    let existing = |name: &str| current.iter().find(|e| e.name == name);
+    // New roles first, so each one's fact is at the index its id names.
+    let mut order: Vec<&Role> = roles
         .iter()
-        .map(|r| {
-            let id = current
-                .iter()
-                .find(|e| e.name == r.name)
-                .map_or_else(EnvironmentId::generate, |e| e.id);
+        .filter(|r| existing(&r.name).is_none())
+        .collect();
+    let fresh = order.len();
+    order.extend(roles.iter().filter(|r| existing(&r.name).is_some()));
+    let ids: BTreeMap<&str, EnvironmentId> = order
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let id = existing(&r.name).map_or_else(|| EnvironmentId(at.event(i as u32)), |e| e.id);
             (r.name.as_str(), id)
         })
         .collect();
-    let mut values = Vec::new();
-    let mut out = Vec::new();
-    for r in roles {
+    let mut batch = Batch::default();
+    let mut changes = Vec::new();
+    for (i, r) in order.into_iter().enumerate() {
         let role = Bytes::from(r.prompt.as_str());
         let params = Bytes::from(r.params.as_str());
+        let resource = ResourceKey {
+            limb: owner,
+            kind: "role".into(),
+            name: r.path.clone(),
+        };
         let env = Environment {
             id: ids[r.name.as_str()],
             name: r.name.clone(),
@@ -182,7 +306,12 @@ pub fn environments(
             limbs: r
                 .limbs
                 .iter()
-                .map(|l| limb(l).ok_or(format!("{}: no limb `{l}`", r.name)))
+                .map(|l| {
+                    limbs
+                        .get(l)
+                        .copied()
+                        .ok_or(format!("{}: no limb `{l}`", r.name))
+                })
                 .collect::<Result<_, _>>()?,
             places: r.places.clone(),
             starts: r
@@ -195,16 +324,25 @@ pub fn environments(
                 })
                 .collect::<Result<_, _>>()?,
             source: Some(Observation {
-                resource: ResourceKey {
-                    limb: meta,
-                    kind: "role".into(),
-                    name: r.path.clone(),
-                },
+                resource: resource.clone(),
                 version: r.version,
             }),
         };
-        values.extend([role, params]);
-        out.push(env);
+        let old = existing(&r.name);
+        if i >= fresh && old == Some(&&env) {
+            continue;
+        }
+        if old.and_then(|e| e.source.as_ref()).map(|s| s.version) != Some(r.version) {
+            changes.push(Fact::Change(Change {
+                resource,
+                version: r.version,
+                by: None,
+                content: None,
+            }));
+        }
+        batch.values.extend([role, params]);
+        batch.facts.push(Fact::Environment(env));
     }
-    Ok((out, values))
+    batch.facts.extend(changes);
+    Ok(batch)
 }

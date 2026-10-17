@@ -81,6 +81,15 @@ pub enum Error<R, E> {
     Storage(E),
 }
 
+impl<R: std::fmt::Display, E: std::fmt::Display> std::fmt::Display for Error<R, E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Refused(why) => write!(f, "refused: {why}"),
+            Error::Storage(e) => write!(f, "storage: {e}"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Holder {
     at: Time,
@@ -217,6 +226,15 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
         Time {
             place: self.here,
             n: self.next - 1,
+        }
+    }
+
+    /// The time its own next record will have, so what that record
+    /// creates can be named before it is said.
+    pub fn next(&self) -> Time {
+        Time {
+            place: self.here,
+            n: self.next,
         }
     }
 
