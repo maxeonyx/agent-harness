@@ -14,6 +14,8 @@
 // scripted model, which costs nothing, unless told (`sonnet`; a role's
 // effort stays its file's). Its database outlives `up`, so the next `up`
 // relaunches a rebuilt brain on the same chats; `down --wipe` forgets them.
+// Its face serves the page from crates/face-web/src/page as it is on disk
+// (`--page`), so an edit to the page shows on reload, with no rebuild.
 //
 // `chat` starts a chat as Max does at a tab, with no browser (the `act`
 // example): in ROLE, in a workspace over DIR or in no place, with WORDS as
@@ -33,11 +35,15 @@
 //   click CSS / hover CSS / type CSS TEXT / key KEY (Enter, Escape, Tab, a letter)
 //   wait CSS             until something it matches is visible
 //   gone CSS             until nothing it matches is visible
+//   box CSS              prints where it is and its size, in CSS pixels
 //   text WORDS           until the page shows the words
 //   reply                until the open chat settles, as `settle`
 //   shot FILE            a PNG, for `read`
 //   eval JS              prints what the expression comes to
 //   sleep MS
+//
+// CSS means the first visible match; `CSS @N` the Nth (from 1), and
+// `CSS @last` the last: `click ".moves .mv @last"`.
 //
 // It fails, with a screenshot in .drive.ignore/PORT/failed.png, the
 // page's errors and its console, at the first step that cannot be done,
@@ -75,7 +81,8 @@ async function up(port, args) {
   const log = path.join(place, "brain.log");
   const out = fs.openSync(log, "a");
   const brain = spawn(path.join(repo, "target/release/harness-brain"),
-    ["--roles", path.join(repo, "roles"), "--db", path.join(place, "brain.sqlite"), "--port", String(port), "--model", model],
+    ["--roles", path.join(repo, "roles"), "--db", path.join(place, "brain.sqlite"), "--port", String(port), "--model", model,
+      "--page", path.join(repo, "crates/face-web/src/page")],
     { detached: true, stdio: ["ignore", out, out], env: { ...process.env, [markOf(port)]: "1" } });
   brain.unref();
   let exited = null;
@@ -297,7 +304,7 @@ class Browser {
 
   async where(css) {
     return this.eval(`(() => {
-      const e = [...document.querySelectorAll(${JSON.stringify(css)})].find((e) => e.getClientRects().length > 0);
+      const e = ${pick(css)};
       if (e === undefined) return "nothing visible matches";
       if (e.disabled) return "it is disabled" + (e.title ? ": " + e.title : "");
       e.scrollIntoView({ block: "center", inline: "center" });
@@ -332,7 +339,7 @@ class Browser {
   // A select is chosen from, as its list would; anything else is typed into.
   async type(css, text) {
     const chose = await this.eval(`(() => {
-      const e = document.querySelector(${JSON.stringify(css)});
+      const e = ${pick(css)};
       if (!(e instanceof HTMLSelectElement)) return null;
       const names = [...e.options].map((o) => o.value);
       if (!names.includes(${JSON.stringify(text)})) return "no option " + ${JSON.stringify(text)} + " among " + names.join(", ");
@@ -374,7 +381,14 @@ function described(d) {
 }
 
 let timeout = 60_000;
-const visible = (css) => `[...document.querySelectorAll(${JSON.stringify(css)})].some((e) => e.getClientRects().length > 0)`;
+// The element `CSS`, `CSS @N` or `CSS @last` names among the visible
+// matches, as a JS expression: undefined if there is none.
+function pick(target) {
+  const [, css, which] = target.match(/^(.*?)(?:\s+@(\d+|last))?$/s);
+  const all = `[...document.querySelectorAll(${JSON.stringify(css)})].filter((e) => e.getClientRects().length > 0)`;
+  return which === undefined ? `${all}[0]` : which === "last" ? `${all}.at(-1)` : `${all}[${Number(which) - 1}]`;
+}
+const visible = (css) => `(${pick(css)} !== undefined)`;
 
 // Each step: how many words it takes, and what it does with them.
 const steps = {
@@ -401,6 +415,11 @@ const steps = {
   key: (b, name) => b.key(name),
   wait: (b, css) => b.until(css, visible(css)),
   gone: (b, css) => b.until(`${css} to go`, `!${visible(css)}`),
+  box: async (b, css) => {
+    const r = await b.eval(`(() => { const e = ${pick(css)}; if (e === undefined) return null; const r = e.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].map((n) => Math.round(n * 10) / 10); })()`);
+    if (r === null) fail(`${css}: nothing visible matches`);
+    console.log(`box ${css}: x ${r[0]} y ${r[1]} width ${r[2]} height ${r[3]}`);
+  },
   text: (b, words) => b.until(JSON.stringify(words), `document.body.innerText.includes(${JSON.stringify(words)})`),
   reply: async (b) => { await settle(b.port, (await b.eval("location.hash")).slice(1)); b.check(); },
   shot: async (b, file) => { await b.shot(file); console.log(`shot ${path.resolve(file)}`); },
