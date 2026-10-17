@@ -11,6 +11,7 @@ function applyCamera() {
   map.style.backgroundPosition = `${x}px ${y}px`;
   placeMarks();
   coverCheck();
+  sleepCheck();
 }
 // The map is moved only by the camera, never by the browser scrolling it to
 // show what has focus.
@@ -55,7 +56,7 @@ function fit(fly = true) {
 // its log scrolls, while its header drags the map like the ground does.
 const pointers = new Map();
 let drag = null;
-const cards = (e) => e.target.closest?.("#panel") && (!e.target.closest("#panel > .bar") || e.target.closest("button, [contenteditable]"));
+const cards = (e) => e.target.closest?.("#panel") && !asleep && (!e.target.closest("#panel > .bar") || e.target.closest("button, [contenteditable]"));
 map.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 && e.pointerType === "mouse") return;
   if (cards(e)) return;
@@ -99,7 +100,7 @@ map.addEventListener("pointerup", lift);
 map.addEventListener("pointercancel", lift);
 function pinchOf() { const [a, b] = [...pointers.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)) }; }
 map.addEventListener("wheel", (e) => {
-  if (e.target.closest("#panel") && !e.ctrlKey) return;
+  if (e.target.closest("#panel") && !e.ctrlKey && !asleep) return;
   e.preventDefault();
   settle();
   hideTip();
@@ -228,6 +229,50 @@ function coverCheck() {
     covered = b > innerHeight - 60 && t < innerHeight && (l < usageRight + 24 || r > innerWidth - 120);
   }
   document.body.classList.toggle("covered", covered);
+}
+
+// ─── The card asleep ───────────────────────────────────────────────────────
+// Zoomed out too far to read, or moved mostly off screen, the open card is
+// one button where it is: its name, marked as the open one. A click fits the
+// camera to it again; zooming or moving back wakes it on its own.
+const wake = el("button", "wake"), wakeLabel = el("span");
+wake.type = "button";
+wake.title = "Back to it";
+wake.append(wakeLabel);
+$("#panel").append(wake);
+let asleep = false;
+wake.addEventListener("click", () => { if (!drag?.moved) refocus(); });
+function refocus() {
+  if (!openId || !seam) return;
+  framed = false;
+  fly(camFor(cardRect(seam)), { T: 320 });
+}
+function sleepCheck() {
+  let sleep = false;
+  if (openId && cardShown && !flight) {
+    const r = cardShown, k = cam.k;
+    const l = cam.x + r.x * k, t = cam.y + r.y * k, w = r.w * k, h = r.h * k;
+    const vl = Math.max(0, l), vt = Math.max(0, t), vr = Math.min(innerWidth, l + w), vb = Math.min(innerHeight, t + h);
+    const seen = Math.max(0, vr - vl) * Math.max(0, vb - vt) / (w * h);
+    // A little apart, so it does not flicker at the edge.
+    sleep = asleep ? k < .75 || seen < .6 : k < .7 || seen < .5;
+    // Its name in the middle of what shows of it, at a size that reads.
+    if (sleep && seen > 0) {
+      wakeLabel.style.left = `${((vl + vr) / 2 - l) / k}px`;
+      wakeLabel.style.top = `${((vt + vb) / 2 - t) / k}px`;
+      wakeLabel.style.fontSize = `${16 / k}px`;
+    }
+  }
+  if (sleep) {
+    const t = byId[openId], key = t ? `${look(t).cls}\n${t.name}` : "";
+    if (wakeLabel.dataset.key !== key) {
+      wakeLabel.dataset.key = key;
+      wakeLabel.replaceChildren(el("i", `mini ${t ? look(t).cls : "starting"}`), t ? t.name : "New chat");
+    }
+  }
+  if (sleep === asleep) return;
+  asleep = sleep;
+  panel.classList.toggle("asleep", sleep);
 }
 
 // ─── Motion ────────────────────────────────────────────────────────────────
