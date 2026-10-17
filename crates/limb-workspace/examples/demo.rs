@@ -552,6 +552,7 @@ impl Brain {
                 call,
                 stopping: None,
                 first_sent_to: self.instance.expect("an instance has connected"),
+                owner: None,
             },
         );
         self.publish();
