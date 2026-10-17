@@ -1153,9 +1153,11 @@ Finish tidying up and end your turn with your report.",
         let input = self.value(call.input);
         // A compaction happens once its round is over ([`Brain::compact`]).
         if meta::compacts(&call.tool) {
-            let asked = if meta::repeats(self.state(), &parent) {
+            let asked = if call.tool == meta::COMPACT_AND_CONTINUE
+                && meta::repeats(self.state(), &parent)
+            {
                 Err("you compacted last and have made no other call since, so there is nothing to replace. \
-Carry on with your next step, or, if your work is done, end your turn with your report as your last message"
+Carry on with your next step, or, if your work is done, call `compact_and_report`"
                     .to_string())
             } else {
                 meta::compaction(&call.tool, &input).map(|_| ())

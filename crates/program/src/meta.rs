@@ -18,6 +18,7 @@
 //! spawns twice.
 
 use harness_core::call::{Call, Caller};
+use harness_core::context::Rendered;
 use harness_core::delivery::Content;
 use harness_core::environment::{Audience, Description, Instruction, Limb, LimbKind, Tool};
 use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
@@ -111,8 +112,8 @@ were started by another agent, it is your result, and what you read alongside it
 everything the reader needs in the report: they never see the summary.\n\n\
 With `fresh: true` either tool starts a new context instead, from your role, your mandate, Max's words and your \
 summary alone. Use it when even your checkpoints have grown long; the summary must then carry everything else you \
-need. A change to your role's definition takes effect then. A compaction right after another, with no other call \
-between, is refused: there is nothing to replace.\n\n\
+need. A change to your role's definition takes effect then. A `compact_and_continue` right after another compaction, with no other \
+call since or alongside it, is refused: there is nothing to replace.\n\n\
 Each result of a call you make ends with its label, such as `[call-3fa2c1]`. `attach` gives back the outputs of the \
 calls you name by label, exactly as the harness recorded them, so whoever reads your work sees the real output (the \
 log line, the command's output) rather than your retelling of it. Attach alongside `compact_and_report`, or alone \
@@ -293,23 +294,28 @@ pub struct Compact {
 }
 
 /// Whether a compaction by `task` now would only repeat its last one: its
-/// latest checkpoint is a compaction's carry, and every call it has made
-/// since is a compaction, so there is nothing to replace. This is what an
-/// agent compacting in a loop looks like.
+/// latest checkpoint is a compaction's carry that holds no call's output,
+/// and every call it has made since is a compaction, so there is nothing
+/// to replace. This is what an
+/// agent compacting in a loop looks like; only `compact_and_continue` can
+/// loop, since `compact_and_report` ends the turn.
 pub fn repeats(state: &State, task: &Task) -> bool {
     let (Some(checkpoint), Some(head)) = (state.checkpoint(task), task.head()) else {
         return false;
     };
-    state.compacted(checkpoint).is_some()
-        && !state.calls().any(|(id, record)| {
-            matches!(record.call.caller, Caller::Agent { task: t, .. } if t == task.id)
-                && !compacts(&record.call.tool)
-                && state.origin(id).is_some_and(|response| {
-                    response != checkpoint
-                        && state.descends(head, response)
-                        && state.descends(response, checkpoint)
-                })
-        })
+    state.compacted(checkpoint).is_some_and(|c| {
+        !c.renders
+            .iter()
+            .any(|span| matches!(span.from, Rendered::Call(_)))
+    }) && !state.calls().any(|(id, record)| {
+        matches!(record.call.caller, Caller::Agent { task: t, .. } if t == task.id)
+            && !compacts(&record.call.tool)
+            && state.origin(id).is_some_and(|response| {
+                response != checkpoint
+                    && state.descends(head, response)
+                    && state.descends(response, checkpoint)
+            })
+    })
 }
 
 /// A compaction call's input, or why it cannot compact.
