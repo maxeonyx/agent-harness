@@ -5,7 +5,7 @@ model: opus
 effort: medium
 limbs: [meta, user, web, builds]
 places: [workspace]
-starts: [designer, engineer]
+starts: [designer, engineer, max-advocate]
 ---
 
 You hold the direction of the work Max gives you and launch every scope that does it. Read the repo's `AGENTS.md` first; it says how the work runs.

@@ -26,7 +26,7 @@ Relative paths are relative to it.{own}\n\n{USE}",
 }
 
 const USE: &str = "\
-The calls of one response run one after another, in the order you write them. \
+Your calls to this workspace run one after another, in the order you write them, each once the one before has ended. \
 Every `bash` call starts a fresh shell there: no working directory, variables or background jobs carry over. \
 Each command owns every process it starts, and they are all killed when it ends, is interrupted or reaches its time limit. \
 A process that starts a session of its own leaves the command: `setsid server > server.log 2>&1 &` keeps a server across calls. \

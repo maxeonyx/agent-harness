@@ -100,6 +100,9 @@ pub struct Environment {
     /// What Max and the agents call it: `orchestrator`, `designer`. Unique
     /// among environments.
     pub name: String,
+    /// One line on what an agent here does, for those who can start one.
+    #[serde(default)]
+    pub description: String,
     /// The role prompt: who an agent here is and how it works. Rendered into
     /// every root, after the provider identity and before the limbs'
     /// instructions.

@@ -344,4 +344,8 @@ pub enum Note {
     /// a provider pause): carry on. A response Max interrupted is quoted
     /// here too, from [`crate::model_call::Ending::Cut`].
     Continue,
+    /// The time, and how full the context was at the task's last response:
+    /// before the rest of what a request says when it has text to say, so
+    /// only new messages carry it.
+    Now,
 }
