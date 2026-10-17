@@ -48,7 +48,6 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
             json!({
                 "task": q.task.to_string(),
                 "since": q.since.0,
-                "ask": q.ask.map(|a| call(state, value, a)),
                 "why": q.why,
             })
         })
@@ -297,10 +296,9 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
             "since": since.0,
             "calls": calls(c),
         }),
-        Waiting::Max { since, ask } => json!({
+        Waiting::Max { since } => json!({
             "kind": "max",
             "since": since.0,
-            "ask": ask.map(|a| call(state, value, a)),
         }),
         Waiting::Listening { background, since } => json!({
             "kind": "listening",

@@ -410,12 +410,6 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
         .collect();
     let what = match record.call.caller {
         Caller::Max { .. } => format!("Max ran `{}` here", record.call.tool),
-        Caller::Background { .. } if record.call.tool == crate::max::ASK => {
-            let label = outcome.output().map_or(String::new(), |o| label(o.model));
-            format!(
-                "Max answered the question you asked in the background (`{label}` quotes it in a brief)"
-            )
-        }
         Caller::Background { .. } => {
             format!("Your background `{}` call has settled", record.call.tool)
         }

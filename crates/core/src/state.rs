@@ -334,10 +334,12 @@ pub enum Waiting {
         calls: Vec<CallId>,
         since: Timestamp,
     },
-    /// On Max, since `since`: its turn ended, he interrupted, or it asked.
+    /// Facing Max, since `since`: its user-facing turn ended or he
+    /// interrupted, and the move is his. Whatever it wants from him (a
+    /// question, a report, a choice to make) is in its last message; there
+    /// is no separate question.
     Max {
         since: Timestamp,
-        ask: Option<CallId>,
     },
     /// On a change to what it embodies, or the background work it started.
     Listening {
@@ -407,9 +409,8 @@ pub enum Todo {
     /// Every member of an aside's scope but the asides is done, and it has
     /// not been told: deliver [`Prompt::Unblocked`].
     Unblock(TaskId),
-    /// An autonomous task ended its turn with background work running (an
-    /// unanswered ask of Max included) and has not been told what that
-    /// means: deliver [`Prompt::Lingering`].
+    /// An autonomous task ended its turn with background work running and
+    /// has not been told what that means: deliver [`Prompt::Lingering`].
     Linger(TaskId),
 }
 
@@ -1506,7 +1507,7 @@ impl State {
             self.put(task);
         }
         let mark = Mark::of(record);
-        // Max's answer to a question is his words, heard by whoever asked.
+        // A settlement Max authors is his words, heard by the caller's task.
         if let Author::Max = record.by
             && let Some(output) = outcome.output()
             && let Some(asker) = self.call_owner(id)
@@ -1933,25 +1934,12 @@ impl State {
         }
     }
 
-    /// Whether a call asks Max something.
-    pub fn is_ask(&self, call: CallId) -> bool {
-        self.calls
-            .get(&call)
-            .and_then(|c| c.limb)
-            .is_some_and(|l| self.is_max(l))
-    }
-
+    /// Whether a limb is Max: his to settle calls on and change resources
+    /// of ([`LimbKind::Max`]).
     fn is_max(&self, limb: LimbId) -> bool {
         self.limbs
             .get(&limb)
             .is_some_and(|l| l.kind == LimbKind::Max)
-    }
-
-    /// The task's outstanding question to Max: one its round waits on, or
-    /// one it asked in the background and carried on (a provisional choice
-    /// he may overturn).
-    fn ask(&self, task: &Task) -> Option<CallId> {
-        task.awaited().find(|c| self.is_ask(*c))
     }
 
     /// A tool use is acted on only once its response is complete and its
@@ -1997,22 +1985,12 @@ impl State {
                     streaming: sent.first_byte.is_some(),
                 }
             }
-            Phase::Acting(step) => match step.outstanding.iter().find(|c| self.is_ask(**c)) {
-                Some(ask) => Waiting::Max {
-                    since: live
-                        .owed_since
-                        .or(self.calls.get(ask).map(|c| c.made.at))
-                        .unwrap_or(since),
-                    ask: Some(*ask),
-                },
-                None => Waiting::Calls {
-                    calls: step.outstanding.clone(),
-                    since,
-                },
+            Phase::Acting(step) => Waiting::Calls {
+                calls: step.outstanding.clone(),
+                since,
             },
             Phase::AwaitingMax => Waiting::Max {
                 since: live.owed_since.unwrap_or(since),
-                ask: None,
             },
             Phase::Listening => Waiting::Listening {
                 background: t.background.clone(),
@@ -2021,18 +1999,14 @@ impl State {
         })
     }
 
-    /// Max's queue, in order: every live task he owes a word or that has
-    /// asked him something, mid-turn or in the background.
+    /// Max's queue, in order: every live task facing him, whose move is his.
     pub fn queue(&self) -> Vec<Queued> {
         let queued = self
             .live()
             .filter_map(|t| {
-                let ask = self.ask(t);
-                let asked = ask.and_then(|a| self.calls.get(&a)).map(|c| c.made.at);
                 Some(Queued {
                     task: t.id,
-                    since: t.owed_since().or(asked)?,
-                    ask,
+                    since: t.owed_since()?,
                     why: None,
                 })
             })

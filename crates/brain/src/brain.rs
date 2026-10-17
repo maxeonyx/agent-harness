@@ -39,7 +39,7 @@ use harness_store::Store;
 
 use crate::roles;
 use harness_program::meta::{self, How};
-use harness_program::{max, policy, render, web};
+use harness_program::{policy, render, web};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
@@ -128,8 +128,9 @@ pub struct Brain {
     /// Each request's streamed events, for the face.
     feed: Feed,
     meta: LimbId,
-    /// Max's limb: his answers to `ask`.
-    max: LimbId,
+    /// Max's limb, in a journal that has one: described as offering
+    /// nothing ([`LimbKind::Max`]).
+    max: Option<LimbId>,
     /// The provider's web search and fetch.
     web: LimbId,
     /// The roles limb, co-hosted.
@@ -183,6 +184,7 @@ impl Brain {
         let find =
             |is: &dyn Fn(&LimbKind) -> bool| state.limbs().find(|l| is(&l.kind)).map(|l| l.id);
         let meta = find(&|k| *k == LimbKind::Meta);
+        // A journal from before Max stopped being a limb with a tool.
         let max = find(&|k| *k == LimbKind::Max);
         let web = find(&|k| *k == LimbKind::Provider);
         let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
@@ -209,7 +211,6 @@ impl Brain {
                 })
             };
         let meta = define(&mut facts, meta, &meta::definition);
-        let max = define(&mut facts, max, &max::definition);
         let web = define(&mut facts, web, &web::definition);
         let roles_dir = roles
             .map(|dir| {
@@ -230,7 +231,7 @@ impl Brain {
             (None, Some(dir)) => {
                 let settings = roles::Settings {
                     dir,
-                    limbs: [("meta", meta), ("max", max), ("user", user), ("web", web)]
+                    limbs: [("meta", meta), ("user", user), ("web", web)]
                         .into_iter()
                         .map(|(n, l)| (n.to_string(), l))
                         .collect(),
@@ -650,8 +651,11 @@ impl Brain {
     /// What a limb tells a root of `task`: the meta limb is described per
     /// environment, a plugin as it last said.
     fn description(&self, task: &Task, limb: LimbId) -> Option<Description> {
-        if limb == self.max {
-            return Some(max::description(limb));
+        if Some(limb) == self.max {
+            return Some(Description {
+                instructions: Vec::new(),
+                tools: Vec::new(),
+            });
         }
         if limb == self.web {
             return Some(web::description());

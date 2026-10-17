@@ -75,8 +75,7 @@ pub struct Stated<'a> {
 /// The brain states what it decides and observes: its own replica. A limb
 /// states facts about its own calls and resources, and no others: the
 /// replica the brain last connected it as ([`crate::environment::Reach`]).
-/// Max states his words, his calls, his answers to asks and his controls
-/// over the tree, from a replica the brain accepted as one of his faces
+/// Max states his words, his calls and his controls over the tree, from a replica the brain accepted as one of his faces
 /// ([`Fact::Face`]). A record from any other replica is refused
 /// ([`Rejected::Author`]). Which face is the record's own replica, and what
 /// it had shown him is the record's [`Fact::Seen`]: both are in

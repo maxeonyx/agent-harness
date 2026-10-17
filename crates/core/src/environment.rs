@@ -237,12 +237,13 @@ pub enum LimbKind {
     /// The brain runs a meta call by appending its effects with its one
     /// dispatch, so it is never sent twice.
     Meta,
-    /// Max. Its agent tool is `ask`: a call he answers, which puts the caller
-    /// in his queue until he does. Its calls are never dispatched; his face
-    /// shows them, and his answer is the settlement he authors. Only agents
-    /// in an environment holding this limb can interrupt him mid-turn; any
-    /// user-facing task gets his attention by ending its turn. Provisional:
-    /// whether every environment holds it by default is Max's call.
+    /// Max as a limb: a call to it is his to settle, and the brain may only
+    /// withdraw one. It offers no tool, and the brain no longer defines it;
+    /// a journal that has one keeps it, described as offering nothing. An
+    /// agent gets Max's attention by facing him: a user-facing task ends
+    /// its turn, and what it needs from him (a question, a choice, a
+    /// report) is in its message ([`crate::state::Waiting::Max`]). An
+    /// autonomous agent tells its owner, which faces him or carries it up.
     ///
     /// Max's controls over the tree (stop, interrupt, hold, rename, mark
     /// done, rewind, resume, aside) are not tools of this limb. They are facts

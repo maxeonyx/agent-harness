@@ -88,12 +88,10 @@ pub enum Prompt {
     /// aside, what came of the talk since it was opened). It makes the task
     /// autonomous, so the turn it asks for is its last.
     Done,
-    /// An autonomous turn ended with background work still running (an ask
-    /// of Max included): it will wake the task when it ends, and the task
-    /// cannot finish before; stop it if it is not needed. Said once per task
-    /// ([`crate::state::Todo::Linger`]). This is how an agent whose
-    /// provisional choice Max has not answered decides whether to wait for
-    /// him.
+    /// An autonomous turn ended with background work still running: it will
+    /// wake the task when it ends, and the task cannot finish before; stop
+    /// it if it is not needed. Said once per task
+    /// ([`crate::state::Todo::Linger`]).
     Lingering,
     /// Every other member of the scope this aside is in is done: the task
     /// it was opened on is waiting only on it, and carries on once Max marks
