@@ -347,15 +347,28 @@ fn clock(state: &State, task: &Task, now: &Now) -> String {
         .and_then(|e| e.usage)
         .filter(|_| !task.head().is_some_and(|h| state.compacted(h).is_some()))
         .map(|u| u.input + u.cache_read + u.cache_write_short + u.cache_write_long + u.output);
-    match used {
-        Some(used) => format!(
-            "[harness] {}. Your context: {} of {} tokens.",
-            now.time,
-            tokens(used),
-            tokens(now.window)
-        ),
-        None => format!("[harness] {}.", now.time),
+    let Some(used) = used else {
+        return format!("[harness] {}.", now.time);
+    };
+    let mut said = format!(
+        "[harness] {}. Your context: {} of {} tokens.",
+        now.time,
+        tokens(used),
+        tokens(now.window)
+    );
+    if used * 100 >= now.window * crate::policy::WARN_AT {
+        let tool = if crate::meta::two_tools() {
+            "`compact_and_continue`, or `compact_and_report` if you are done"
+        } else {
+            "`compact`"
+        };
+        said.push_str(&format!(
+            " It is {}% full: wrap up the step you are on soon, and then compact with {tool}. If it fills, the \
+harness compacts it for you, with no summary of yours, and what is only in your context is lost.",
+            used * 100 / now.window
+        ));
     }
+    said
 }
 
 /// A token count, short: `48k`, `1M`.
@@ -659,7 +672,7 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
     };
     let outcome = record.outcome().expect("a pending result is settled");
     let (mut content, error) = outcome_content(values, outcome);
-    if record.call.tool == crate::meta::COMPACT && matches!(outcome, Outcome::Completed(_)) {
+    if crate::meta::compacts(&record.call.tool) && matches!(outcome, Outcome::Completed(_)) {
         let said = if state.has_compacted(call) {
             "Max moved you back to before this compaction, so your context is as it was here. Carry on from here."
         } else if task.ends() {
@@ -929,13 +942,19 @@ fn mandate(state: &State, values: Values, task: &Task, carried: bool) -> String 
         ));
     }
     // A root made before `compact` existed does not bind it.
-    let compact = task
-        .context()
-        .is_some_and(|c| c.binding.limb(crate::meta::COMPACT).is_some());
-    let then = if compact { "`compact`, then " } else { "" };
+    let binds = |tool| {
+        task.context()
+            .is_some_and(|c| c.binding.limb(tool).is_some())
+    };
+    let end = if binds(crate::meta::COMPACT_AND_REPORT) {
+        "end with `compact_and_report`. Its report is your result"
+    } else if binds(crate::meta::COMPACT) {
+        "end your turn with your result as your text, and `compact` in the same response. Your result"
+    } else {
+        "end your turn. Your last message is your result, and it"
+    };
     said_.push_str(&format!(
-        "\n\nWhen your part is done, {then}end your turn. Your last message is your result, and it goes \
-to `{owner_name}`."
+        "\n\nWhen your part is done, {end} goes to `{owner_name}`."
     ));
     said_
 }

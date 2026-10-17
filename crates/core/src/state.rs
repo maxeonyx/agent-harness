@@ -1326,9 +1326,12 @@ impl State {
         if let Some(root) = root {
             self.entries.insert(root.id(), Entry::Root(root.clone()));
         }
-        if let Some((carry, kept)) = compacted {
+        if let Some((carry, kept, report)) = compacted {
             self.compactions.insert(carry.id(), kept);
             self.entries.insert(carry.id(), carry);
+            if let Some(report) = report {
+                self.entries.insert(report.id(), report);
+            }
         }
         self.put(task);
         Ok(())
@@ -1342,7 +1345,7 @@ impl State {
         id: TaskId,
         task: &Task,
         compaction: &Compaction,
-    ) -> Result<(Entry, Compacted), Rejected> {
+    ) -> Result<(Entry, Compacted, Option<Entry>), Rejected> {
         let context = task.context().ok_or(Rejected::Starting)?;
         if let Some(call) = compaction.by {
             let made = self.calls.get(&call).ok_or(Rejected::Unknown)?;
@@ -1388,7 +1391,7 @@ impl State {
             by: compaction.by,
             renders: compaction.renders.clone(),
         };
-        Ok((compaction.carry_entry(), kept))
+        Ok((compaction.carry_entry(), kept, compaction.report_entry()))
     }
 
     /// The task's latest checkpoint: the last entry on its chain since its

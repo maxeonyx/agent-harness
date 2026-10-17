@@ -29,6 +29,20 @@ use crate::render::{blocks, text};
 pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
 pub const COMPACT: &str = "compact";
+pub const COMPACT_AND_CONTINUE: &str = "compact_and_continue";
+pub const COMPACT_AND_REPORT: &str = "compact_and_report";
+
+/// Spike switch: `HARNESS_COMPACT=two` binds `compact_and_continue` and
+/// `compact_and_report`; otherwise one `compact`, whose response's text,
+/// if any, is the report that ends the turn.
+pub fn two_tools() -> bool {
+    std::env::var("HARNESS_COMPACT").is_ok_and(|v| v == "two")
+}
+
+/// Whether `tool` is a compaction tool.
+pub fn compacts(tool: &str) -> bool {
+    [COMPACT, COMPACT_AND_CONTINUE, COMPACT_AND_REPORT].contains(&tool)
+}
 pub const BACKGROUND: &str = "background";
 pub const STOP: &str = "stop";
 pub const PASS: &str = "pass";
@@ -54,9 +68,10 @@ You can start other agents with `spawn`. One call starts a scope: a list of task
 and its result is each one's result (its last message), once every one of them has finished. Your other calls in \
 the same response run alongside it, and their results wait with its. While they run you wait, so put everything \
 that can run in parallel into one call.\n\n\
-Do the steps of your own work yourself, one after another, and compact between them (below). Fork for parts that \
-can run at the same time, or to explore something whose details you will not need afterwards. Start a fresh agent \
-for a larger task, or for work in another role.\n\n\
+Fork for parts that can run at the same time, and for sequential steps too: a step whose details you will not \
+need afterwards, only its result (an exploration, a search, a build and its checks), is a fork of one task, and your \
+own context keeps just that result. Do a step yourself when what you learn in it carries into the next. Start a \
+fresh agent for a larger task, or for work in another role.\n\n\
 Each task is a fork of you, a fresh agent, or a resume of an agent you started before that has finished. \
 A fork continues from this exact point of your context: it knows everything you know, so its mandate can be short, \
 and it shares your cache, so it is cheap. It works in your directory with you. \
@@ -78,21 +93,15 @@ your scope.",
 it commits and pushes there.",
         );
     }
-    said.push_str(
+    said.push_str(&format!(
         "\n\nYour context keeps checkpoints: its first message, each message that began one of your turns (Max's \
-words, or whatever woke you), and each compaction. `compact` replaces everything after the latest checkpoint with a \
-summary you write, and you carry on from it in the same turn. Use it whenever you finish a step of your work, before \
-the next, and when your work is done, before your report: your context stays short and cheap, and nothing up to the \
-checkpoint is lost, so summarise only the step: what you did, what you found and decided and why, what is left, and \
-anything you will need to look at again or report. Max's words after the checkpoint, the results of the other calls \
-in the same response, and your running background work are carried with it as they are, so do not retell them: to \
-take a file into the compacted context as it is now, read it in the same response. Your report is then your last \
-message, after the summary: Max reads it, or, if you were started by another agent, it is your result, and what you \
-read alongside that last `compact` reaches that agent with it.\n\n\
-With `fresh: true` it starts a new context instead, from your role, your mandate, Max's words and your summary alone. \
+words, or whatever woke you), and each compaction. {}\n\n\
+{fresh} it starts a new context instead, from your role, your mandate, Max's words and your summary alone. \
 Use it when even your checkpoints have grown long; the summary must then carry everything else you need. A change to \
 your role's definition takes effect then.",
-    );
+        compacting(),
+        fresh = if two_tools() { "With `fresh: true` either tool" } else { "With `fresh: true`" },
+    ));
     said.push_str(
         "\n\n`background` runs one of your other tools without waiting for it, under a `name` you give it: it returns \
 at once, and the tool's result reaches you as a message when it settles. You cannot finish while background work you \
@@ -136,16 +145,37 @@ and returns at once: the agent that started you gets its result with yours.",
             "required": ["tasks"]
         }
     });
+    let summary = json!({ "type": "string", "description": "What you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on." });
+    let fresh = json!({ "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and your summary alone." });
     let compact = json!({
         "name": COMPACT,
-        "description": "Replace your work since your latest checkpoint with your summary of it, and carry on from the summary in the same turn: with your next step, or, if your work is done, with your report as your last message. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
+        "description": "Replace your work since your latest checkpoint with your summary of it. With no text in the response, carry on from the summary in the same turn. With text, that text is your report: your turn ends with it as your last message, after the summary. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
+        "input_schema": {
+            "type": "object",
+            "properties": { "summary": summary, "fresh": fresh },
+            "required": ["summary"]
+        }
+    });
+    let compact_and_continue = json!({
+        "name": COMPACT_AND_CONTINUE,
+        "description": "Replace your work since your latest checkpoint with your summary of it, and carry on from the summary in the same turn, with your next step. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
+        "input_schema": {
+            "type": "object",
+            "properties": { "summary": summary, "fresh": fresh },
+            "required": ["summary"]
+        }
+    });
+    let compact_and_report = json!({
+        "name": COMPACT_AND_REPORT,
+        "description": "When your work is done: replace your work since your latest checkpoint with your summary of it, and end your turn with your report as your last message, after the summary. The results of other calls in the same response are carried with it.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "summary": { "type": "string", "description": "What you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, or to report." },
-                "fresh": { "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and your summary alone." }
+                "summary": summary,
+                "report": { "type": "string", "description": "Your report: what the reader (Max, or the agent that started you) needs to know. It is your last message; they never see the summary." },
+                "fresh": fresh
             },
-            "required": ["summary"]
+            "required": ["summary", "report"]
         }
     });
     let background = json!({
@@ -184,13 +214,18 @@ and returns at once: the agent that started you gets its result with yours.",
             "required": ["call", "why"]
         }
     });
-    let mut tools = vec![
-        tool(SPAWN, spawn),
-        tool(COMPACT, compact),
+    let mut tools = vec![tool(SPAWN, spawn)];
+    if two_tools() {
+        tools.push(tool(COMPACT_AND_CONTINUE, compact_and_continue));
+        tools.push(tool(COMPACT_AND_REPORT, compact_and_report));
+    } else {
+        tools.push(tool(COMPACT, compact));
+    }
+    tools.extend([
         tool(BACKGROUND, background),
         tool(STOP, stop),
         tool(PASS, pass),
-    ];
+    ]);
     if member {
         let sibling = json!({
             "name": ADD_SIBLING,
@@ -223,6 +258,37 @@ and returns at once: the agent that started you gets its result with yours.",
     }
 }
 
+/// What the instructions say of compacting, in the design bound.
+fn compacting() -> &'static str {
+    if two_tools() {
+        "`compact_and_continue` replaces everything after the latest checkpoint with a summary you write, and you \
+carry on from it in the same turn. Use it whenever you finish a step of your work and move to the next: your context \
+stays short and cheap, and nothing up to the checkpoint is lost, so summarise only the step: what you did, what you \
+found and decided and why, what is left, and anything you will need to look at again or report. Compact when you \
+really switch from one task to another, or when your context has grown long, even if it is mostly results already. \
+Max's words after the checkpoint, the results of the other calls in the same response, and your running background \
+work are carried with it as they are, so do not retell them: to take a file into the compacted context as it is now, \
+read it in the same response.\n\n\
+When your work is done, call `compact_and_report` instead, with your summary and your report: it compacts and ends \
+your turn, and the report is your last message in the new context, right after the summary. Max reads it, or, if you \
+were started by another agent, it is your result, and what you read alongside it reaches that agent with it. Put \
+everything the reader needs in the report: they never see the summary."
+    } else {
+        "`compact` replaces everything after the latest checkpoint with a summary you write. Use it whenever you \
+finish a step of your work and move to the next: your context stays short and cheap, and nothing up to the \
+checkpoint is lost, so summarise only the step: what you did, what you found and decided and why, what is left, and \
+anything you will need to look at again or report. Compact when you really switch from one task to another, or when \
+your context has grown long, even if it is mostly results already. Max's words after the checkpoint, the results of \
+the other calls in the same response, and your running background work are carried with it as they are, so do not \
+retell them: to take a file into the compacted context as it is now, read it in the same response.\n\n\
+A response with `compact` and no text carries on from the summary in the same turn. When your work is done, write \
+your report as the text of your last response and call `compact` in it too: the harness compacts, and your turn ends \
+with the report as your last message in the new context, right after the summary. Max reads it, or, if you were \
+started by another agent, it is your result, and what you read alongside it reaches that agent with it. Any text \
+beside `compact` is taken as your report and ends your turn, so write none while you carry on."
+    }
+}
+
 fn tool(name: &str, definition: Value) -> Tool {
     Tool {
         name: name.into(),
@@ -231,23 +297,34 @@ fn tool(name: &str, definition: Value) -> Tool {
     }
 }
 
-/// What a `compact` call asks for.
+/// What a compaction call asks for.
 pub struct Compact {
     pub summary: String,
     pub fresh: bool,
+    /// `compact_and_report`'s report, which ends the turn.
+    pub report: Option<String>,
 }
 
-/// A `compact` call's input, or why it cannot compact.
-pub fn compaction(input: &[u8]) -> Result<Compact, String> {
+/// A compaction call's input, or why it cannot compact.
+pub fn compaction(tool: &str, input: &[u8]) -> Result<Compact, String> {
     let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
-    let summary = value["summary"]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or("`summary` must say what you need to carry on")?;
+    let field = |k: &str| {
+        value[k]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let summary = field("summary").ok_or("`summary` must say what you need to carry on")?;
+    let report = if tool == COMPACT_AND_REPORT {
+        Some(field("report").ok_or("`report` must be your report")?)
+    } else {
+        None
+    };
     Ok(Compact {
-        summary: summary.to_owned(),
+        summary,
         fresh: value["fresh"].as_bool().unwrap_or(false),
+        report,
     })
 }
 

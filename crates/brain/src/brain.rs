@@ -753,7 +753,7 @@ impl Brain {
                 return None;
             };
             let record = &self.state().call(call)?.call;
-            if record.tool != meta::COMPACT
+            if !meta::compacts(&record.tool)
                 || self.state().has_compacted(call)
                 || !matches!(
                     self.state().call(call)?.outcome(),
@@ -762,7 +762,7 @@ impl Brain {
             {
                 return None;
             }
-            let ask = meta::compaction(&self.value(record.input)).ok()?;
+            let ask = meta::compaction(&record.tool, &self.value(record.input)).ok()?;
             Some((call, ask))
         });
         let Some((call, ask)) = asked else {
@@ -789,7 +789,16 @@ impl Brain {
             words: &[],
             calls: &calls,
         };
-        self.compacted(task, Some(call), onto, carry, values);
+        // The report that ends the turn: `compact_and_report`'s, or the
+        // text of the response that called `compact`.
+        let report = ask.report.or_else(|| {
+            let head = task.head()?;
+            let text = self.visible(head);
+            (record_tool(self.state(), call) == Some(meta::COMPACT) && !text.trim().is_empty())
+                .then_some(text)
+        });
+        let report = report.map(|r| render::blocks(&[render::text(&r)]));
+        self.compacted(task, Some(call), onto, carry, values, report);
         true
     }
 
@@ -802,6 +811,7 @@ impl Brain {
         onto: Onto,
         carry: render::Carry,
         mut values: Vec<Bytes>,
+        report: Option<Bytes>,
     ) {
         let since = match &onto {
             Onto::Checkpoint(at) => Some(*at),
@@ -819,8 +829,10 @@ impl Brain {
             onto,
             carry: content.id(),
             renders: turn.renders,
+            report: report.as_ref().map(Bytes::id),
         };
         values.push(content);
+        values.extend(report);
         self.moved(task.id, Move::Compact(Box::new(compaction)), values);
     }
 
@@ -907,7 +919,7 @@ impl Brain {
                             calls: &calls,
                         };
                         let onto = Onto::Fresh(Box::new(start));
-                        self.compacted(&task, None, onto, carry, values);
+                        self.compacted(&task, None, onto, carry, values, None);
                     }
                 };
             }
@@ -1148,8 +1160,8 @@ Finish tidying up and end your turn with your report.",
         }
         let input = self.value(call.input);
         // A compaction happens once its round is over ([`Brain::compact`]).
-        if call.tool == meta::COMPACT {
-            let said = match meta::compaction(&input) {
+        if meta::compacts(&call.tool) {
+            let said = match meta::compaction(&call.tool, &input) {
                 Ok(_) => "Compacting once this round is over.".to_string(),
                 Err(why) => {
                     let (model, failed) = render::failed(&format!("Not compacted: {why}."));
@@ -1976,6 +1988,10 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
 
 /// The results of a task's round that have not reached it, but `except`'s:
 /// what a compaction carries.
+fn record_tool(state: &harness_core::state::State, call: CallId) -> Option<&str> {
+    state.call(call).map(|c| c.call.tool.as_str())
+}
+
 fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
     task.pending
         .iter()

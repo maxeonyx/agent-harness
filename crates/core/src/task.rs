@@ -842,11 +842,13 @@ impl TaskEvent {
                     onto,
                     carry,
                     renders: _,
+                    report,
                 } = &**compaction;
                 if let Onto::Fresh(start) = onto {
                     start.values(out);
                 }
                 out.push(*carry);
+                out.extend(report);
             }
             TaskEvent::Moved(Move::Back { to: _ })
             | TaskEvent::Tuned(_)
@@ -1012,6 +1014,11 @@ pub struct Compaction {
     pub carry: ValueId,
     /// What `carry`'s blocks were rendered from, in block order.
     pub renders: Vec<Span>,
+    /// The content of an assistant message after the carry that ends the
+    /// turn: the report the agent left with its compaction, its last
+    /// message in the new context. `None` carries on in the same turn.
+    #[serde(default)]
+    pub report: Option<ValueId>,
 }
 
 /// Where a compaction resumes the context.
@@ -1038,6 +1045,17 @@ impl Compaction {
                 content: self.carry,
             },
         }
+    }
+
+    /// The entry the report is: an assistant message after the carry.
+    pub fn report_entry(&self) -> Option<Entry> {
+        Some(Entry::Message {
+            parent: self.carry_entry().id(),
+            message: Message {
+                role: Role::Assistant,
+                content: self.report?,
+            },
+        })
     }
 }
 
@@ -1289,7 +1307,7 @@ impl Task {
                 self.root(start, at, world)?;
             }
             TaskEvent::Moved(Move::Compact(compaction)) => {
-                self.compact(compaction, world)?;
+                self.compact(compaction, at, world)?;
             }
             TaskEvent::Moved(Move::Back { to }) => self.back(*to, at, world)?,
             TaskEvent::Drain(drain) => match &mut self.life {
@@ -1389,7 +1407,7 @@ impl Task {
     /// task between turns. Neither while it is stopping: its tidy-up turn
     /// is its last, with no next context. The task carries on, or keeps
     /// waiting.
-    fn compact(&mut self, compaction: &Compaction, world: &State) -> Result<(), Rejected> {
+    fn compact(&mut self, compaction: &Compaction, at: Timestamp, world: &State) -> Result<(), Rejected> {
         let Task { pending, life, .. } = self;
         let Life::Live(live) = life else {
             return Err(Rejected::Starting);
@@ -1420,6 +1438,11 @@ impl Task {
         learn(&mut context, &compaction.renders, carry, world)?;
         live.context = context;
         pending.retain(|p| !matches!(p, Input::Result(_)));
+        if let Some(report) = compaction.report_entry() {
+            let entry = report.id();
+            self.live_mut()?.context.head = entry;
+            self.turn_ended(entry, at, world);
+        }
         Ok(())
     }
 
