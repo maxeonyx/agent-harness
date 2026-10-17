@@ -158,6 +158,42 @@ function renderOthers() {
     }
     return card;
   }));
+  // The box holds an edit of one of his messages: say so, and offer to drop it.
+  const row = (view?.drafts || []).find((d) => d.id === mine);
+  if (mine && (row?.at || editing.has(mine))) {
+    const bar = el("div", "other editing");
+    bar.append(el("span", "said", "Editing your message: sending it replaces that message and what followed, which stays as another version"));
+    const cancel = el("button", "btn", "Cancel edit");
+    cancel.onclick = async () => {
+      leaving.add(mine); editing.delete(mine); local.delete(mine);
+      box.value = prev = ""; autosize(); renderTray(); renderOthers();
+      await act({ Draft: [mine, "Discarded"] });
+      renderOthers(); syncCompose();
+    };
+    bar.append(cancel);
+    others.prepend(bar);
+  }
+}
+// Edit one of Max's messages: a draft at the entry before it, holding his
+// words, which becomes the box's. Its Send moves the chat back there and
+// says them, as one fact; what he was typing stays a draft beside it.
+const editing = new Set(); // edit drafts this tab opened, until their rows arrive
+async function editMessage(session, at, text) {
+  if (box?.dataset.key !== session || !at) return;
+  const blocked = unmovable(byId[session]);
+  if (blocked) return say(`Edit: ${blocked}`, true);
+  const value = JSON.stringify({ text, attached: [] });
+  let id = null;
+  const why = await act((now) => {
+    id = `${now}.0`;
+    local.set(id, { text, attached: [], v: 1, saved: 1, n: Number(now.split(".")[1]) });
+    editing.add(id);
+    bound.set(session, id);
+    return [{ Draft: [id, { Opened: { session, at } }] }, { Draft: [id, { Text: digest(value) }] }];
+  }, [value]);
+  if (why) { local.delete(id); editing.delete(id); bound.delete(session); return say(`Edit: ${why}`, true); }
+  box.value = prev = text; unstage(); autosize(); renderTray(); renderOthers();
+  box.focus();
 }
 
 const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];

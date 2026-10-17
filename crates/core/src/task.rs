@@ -7,7 +7,7 @@ use imbl::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome, Owner};
-use crate::context::{EntryId, Message, Note, Rendered, Role, Root, Span};
+use crate::context::{Entry, EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use crate::environment::Binding;
 use crate::fact::{Author, Fact, Rejected, Stated};
@@ -221,6 +221,11 @@ pub struct Context {
     /// restores what the earlier context embodied. Persistent, so folding a
     /// fact into a long-lived task does not copy its history.
     learned: Vector<Learned>,
+    /// Max moved it here from this entry ([`Move::Back`]), and the path it
+    /// left changed the world, which its next request must say
+    /// ([`Note::Moved`]). Kept across further moves until a request is sent,
+    /// so the note names the furthest point it left.
+    pub moved: Option<EntryId>,
 }
 
 impl Context {
@@ -242,6 +247,7 @@ impl Context {
                 })
                 .collect(),
             learned: Vector::new(),
+            moved: None,
         }
     }
 
@@ -254,6 +260,7 @@ impl Context {
             binding: self.binding.clone(),
             knows: self.knows.clone(),
             learned: Vector::new(),
+            moved: None,
         }
     }
 
@@ -302,9 +309,11 @@ impl Context {
         }
     }
 
-    /// Move the head back to `to`, and embody again only what the context
-    /// embodied there.
-    fn rewind(&mut self, to: EntryId, world: &State) {
+    /// Move the head to `to`, on this path or another, and embody exactly
+    /// what the context embodied there: undo what the requests it leaves
+    /// learned, back to where the paths part, then learn again what the
+    /// requests of `task` on the path to `to` learned.
+    fn move_to(&mut self, to: EntryId, task: TaskId, world: &State) -> Result<(), Rejected> {
         self.head = to;
         while self
             .learned
@@ -321,6 +330,19 @@ impl Context {
                 };
             }
         }
+        let known = self.learned.last().map_or(self.start, |l| l.head);
+        let mut path = Vec::new();
+        let mut at = Some(to);
+        while let Some(entry) = at.filter(|e| *e != known) {
+            path.push(entry);
+            at = world.entry(entry).and_then(Entry::parent);
+        }
+        for head in path.into_iter().rev() {
+            if let Some(request) = world.request(head).filter(|m| m.call.task == task) {
+                learn(self, &request.call.renders, head, world)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -860,12 +882,12 @@ pub enum Move {
     /// background work runs on, the task's to keep or stop, as through a
     /// pause.
     ///
-    /// While a request or round is outstanding, the move first stops that
-    /// round as an interrupt does, a spawn included: its members are
-    /// abandoned by Max, since nothing will read their results. It lands
-    /// once the round has exited (the task drains towards it), and a cut
-    /// response on the left path is not quoted to the model. Refused while
-    /// the task is starting, abandoning or failing, and once it is done.
+    /// Refused while a request or round is outstanding
+    /// ([`Rejected::Busy`]): Max stops the task first. (The target is a
+    /// move that stops the round itself, as an interrupt does, and lands
+    /// once it has exited; it waits on the redesign of stopping.) Refused
+    /// too while the task is starting, abandoning or failing, and once it
+    /// is done.
     ///
     /// **Vision.** Max as a participant who "very, very frequently" changes
     /// his mind: retry, edit and revert as in other chat apps, with nothing
@@ -1154,16 +1176,7 @@ impl Task {
                 }
                 self.root(start, at, world)?;
             }
-            TaskEvent::Moved(Move::Back { to }) => {
-                let live = self.live_mut()?;
-                if !waiting(&live.phase) {
-                    return Err(Rejected::Busy);
-                }
-                live.context.rewind(*to, world);
-                self.drop_results();
-                // The head is a response that ended a turn: the next word is Max's.
-                self.await_max(at);
-            }
+            TaskEvent::Moved(Move::Back { to }) => self.back(*to, at, world)?,
             TaskEvent::Drain(drain) => match &mut self.life {
                 Life::Starting => match drain {
                     Drain::ToMax { .. } => return Err(Rejected::Starting),
@@ -1313,10 +1326,24 @@ impl Task {
                 {
                     return Err(Rejected::Unanswered);
                 }
+                if call.renders.iter().any(|r| {
+                    matches!(r.from, Rendered::Delivery(d) if !pending.contains(&Input::Delivery(d)))
+                }) {
+                    return Err(Rejected::NotForTask);
+                }
+                if let Some(from) = live.context.moved
+                    && !call
+                        .renders
+                        .iter()
+                        .any(|r| r.from == Rendered::Note(Note::Moved { from }))
+                {
+                    return Err(Rejected::Unanswered);
+                }
                 let head = call.head();
-                learn(&mut live.context, pending, &call.renders, head, world)?;
+                learn(&mut live.context, &call.renders, head, world)?;
                 pending.retain(|p| !rendered(p));
                 live.context.head = head;
+                live.context.moved = None;
                 self.enter(Phase::Thinking(id), at);
             }
             ModelCallEvent::FirstByte => {}
@@ -1622,6 +1649,78 @@ impl Task {
         }
     }
 
+    /// Max puts the task at `to` ([`Move::Back`]), which the brain's state
+    /// has checked it has been at. What follows is read off the entry.
+    fn back(&mut self, to: EntryId, at: Timestamp, world: &State) -> Result<(), Rejected> {
+        let id = self.id;
+        let Task { pending, life, .. } = self;
+        let Life::Live(live) = life else {
+            return Err(Rejected::Finished);
+        };
+        if live.drain.is_some() {
+            return Err(Rejected::Draining);
+        }
+        // Stopping the round first is Draining::Moving, not built: Max
+        // stops a busy task himself before moving it.
+        if !waiting(&live.phase) {
+            return Err(Rejected::Busy);
+        }
+        let context = &mut live.context;
+        let at_start = to == context.start;
+        let response = world
+            .response(to)
+            .filter(|m| m.call.task == id && !at_start);
+        // A response with tool uses: its round's results, rendered again.
+        let round = response.map(|m| m.calls.clone()).unwrap_or_default();
+        if round
+            .iter()
+            .any(|c| world.call(*c).and_then(|c| c.outcome()).is_none())
+        {
+            return Err(Rejected::Busy);
+        }
+        let ended_turn = round.is_empty()
+            && response.is_some_and(|m| {
+                matches!(
+                    m.ended.as_ref().map(|e| &e.ending),
+                    Some(Ending::Responded {
+                        stop: Stop::EndTurn,
+                        ..
+                    })
+                )
+            });
+
+        // What the path it lands on rendered, and what the path it leaves
+        // rendered after the two part.
+        let landed = renders(world, id, to, None);
+        let left = renders(world, id, context.head, Some(to));
+        pending.retain(|p| !matches!(p, Input::Result(_)) && !landed.iter().any(|r| p.is(r)));
+        for r in &left {
+            if landed.contains(r) {
+                continue;
+            }
+            if let Some(input) = requeue(world, r, to, &round)
+                && !pending.contains(&input)
+            {
+                pending.push(input);
+            }
+        }
+        pending.extend(round.iter().map(|c| Input::Result(*c)));
+
+        let from = context.moved.unwrap_or(context.head);
+        context.move_to(to, id, world)?;
+        context.moved = (!world.left(id, from, to).is_empty()).then_some(from);
+        live.failures = 0;
+        if live.phase == Phase::Parked {
+            return Ok(());
+        }
+        if ended_turn {
+            self.await_max(at);
+        } else {
+            self.enter(Phase::Ready, at);
+        }
+        Ok(())
+    }
+
     fn drop_results(&mut self) {
         self.pending.retain(|p| !matches!(p, Input::Result(_)));
     }
@@ -1644,7 +1743,6 @@ pub(crate) fn ends(drain: Option<&Draining>) -> bool {
 /// remembering what it was before.
 fn learn(
     context: &mut Context,
-    pending: &[Input],
     renders: &[Span],
     head: EntryId,
     world: &State,
@@ -1667,11 +1765,7 @@ fn learn(
                     }
                 }
             }
-            Rendered::Delivery(delivery) => {
-                if !pending.contains(&Input::Delivery(*delivery)) {
-                    return Err(Rejected::NotForTask);
-                }
-            }
+            Rendered::Delivery(_) => {}
             Rendered::Note(Note::Stale { told, shown }) => {
                 context.tell(told, &mut before);
                 context.observe(shown, &mut before);
@@ -1686,4 +1780,53 @@ fn learn(
         context.learned.push_back(Learned { head, before });
     }
     Ok(())
+}
+
+/// What the requests of `task` on the path to `head` rendered, back to where
+/// it meets the path to `stop` (or to its root).
+fn renders(world: &State, task: TaskId, head: EntryId, stop: Option<EntryId>) -> Vec<Rendered> {
+    let mut out = Vec::new();
+    let mut at = Some(head);
+    while let Some(entry) = at {
+        if stop.is_some_and(|s| world.descends(s, entry)) {
+            break;
+        }
+        if let Some(request) = world.request(entry).filter(|m| m.call.task == task) {
+            out.extend(request.call.renders.iter().map(|s| s.from.clone()));
+        }
+        at = world.entry(entry).and_then(Entry::parent);
+    }
+    out
+}
+
+/// What a request on a path Max left rendered becomes when the path he
+/// lands on (at `to`) has not: pending again, except his own words, which he
+/// is leaving, what came of work started on the left path, and the task's
+/// pause, which the move does not change.
+fn requeue(world: &State, rendered: &Rendered, to: EntryId, round: &[CallId]) -> Option<Input> {
+    match rendered {
+        Rendered::Call(call) => {
+            if round.contains(call) {
+                return None;
+            }
+            let origin = world.origin(*call);
+            if origin.is_some_and(|response| !world.descends(to, response)) {
+                return None;
+            }
+            Some(match world.call(*call)?.call.caller {
+                Caller::Max { .. } => Input::MaxAction(*call),
+                // A tool use on the path it lands on, whose real outcome
+                // came late.
+                Caller::Agent { .. } if origin.is_some() => Input::Late(*call),
+                Caller::Background { .. } => Input::Background(*call),
+                _ => return None,
+            })
+        }
+        Rendered::Delivery(id) => match world.delivery(*id)?.delivery.content {
+            Content::Words(_) | Content::Prompt(Prompt::Park | Prompt::Resume) => None,
+            Content::Prompt(_) => Some(Input::Delivery(*id)),
+        },
+        Rendered::Note(Note::Passed { call }) => Some(Input::Passed(*call)),
+        Rendered::Note(_) => None,
+    }
 }
