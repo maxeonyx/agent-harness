@@ -17,7 +17,8 @@
 # new brain serves its face.
 #
 # ~/.local/share/agent-harness/NAME/build links to the build NAME runs, so
-# its `act` is ~/.local/share/agent-harness/NAME/build/bin/act.
+# its `act` is ~/.local/share/agent-harness/NAME/build/bin/act. Each serve
+# deletes the builds nothing runs or links to, but the three newest.
 # Its log: journalctl --user -u harness-NAME.
 set -euo pipefail
 
@@ -65,6 +66,18 @@ fi
 systemctl --user reset-failed "$unit" 2>/dev/null || true
 [[ -z $(ss -Hltn "sport = :$port") ]] || die "something else listens on port $port"
 ln -sfn "$build" "$data/build"
+
+# Prune the builds nothing uses: none a NAME/build links to, none a
+# running process (a brain, or a limb that outlived its brain) runs from,
+# and not the three newest of the rest.
+in_use=$(
+    { readlink -f "$home"/*/build; readlink /proc/[0-9]*/exe; } 2>/dev/null |
+        grep -o "^$home/builds/[0-9a-f]*" | sort -u
+) || true
+unused=$(ls -1dt "$home"/builds/[0-9a-f]* | grep -vxF "${in_use:-/}" | tail -n +4) || true
+for old in $unused; do
+    chmod -R u+w "$old" && rm -rf "$old" && echo "pruned ${old##*/}"
+done
 
 # KillMode=mixed: the stop's SIGTERM goes to the brain alone, which ends
 # its links to limbs itself; the limbs run in units of their own.
