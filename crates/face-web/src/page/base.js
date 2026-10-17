@@ -26,6 +26,7 @@ const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   toward: '<path d="M9 5l7 7-7 7"/>',
+  pause: '<rect x="6.5" y="5" width="3.6" height="14" rx="1.8" fill="currentColor" stroke="none"/><rect x="13.9" y="5" width="3.6" height="14" rx="1.8" fill="currentColor" stroke="none"/>',
 };
 function icon(name, cls, title) {
   const b = el("button", `icon ${cls || ""}`);

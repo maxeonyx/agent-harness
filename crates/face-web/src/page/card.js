@@ -113,6 +113,7 @@ function buildPanel(id) {
 }
 $(".x", panel).onclick = closeNode;
 hoverable(mini, () => openId);
+mini.onclick = refocus;
 
 function renderPanel() {
   const t = byId[openId];

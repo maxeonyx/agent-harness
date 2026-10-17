@@ -1,11 +1,11 @@
 // ─── The model: the view as a map ──────────────────────────────────────────
-// A node is a task. A scope (the spawn call that owns its members) is a
-// junction under its owner. Background work a task will hear back from
-// hangs off it. Projects are the map's disconnected components.
+// A node is a task, under the task that owns it. Background work a task
+// will hear back from hangs off it. Projects are the map's disconnected
+// components.
 //
-// Edges: solid, a scope and its members (owned, settled together); dashed,
-// a result that will arrive without anyone waiting for it now (background
-// work); dotted, a task continued by a resume; flowing,
+// Edges: solid, a task and a member of a spawn it waits on (owned, settled
+// together); dashed, a result that will arrive without anyone waiting for
+// it now (background work); dotted, a task continued by a resume; flowing,
 // waited on right now.
 let view = null;
 let byId = {};
@@ -82,18 +82,15 @@ function derive() {
   }
   const nodes = new Map(), edges = [];
   for (const t of view.tasks) if (!alias[t.id]) nodes.set(t.id, { id: t.id, kind: "task", t });
-  for (const [call, s] of Object.entries(view.scopes)) {
-    const owner = live(s.owner);
-    if (!byId[owner]) continue;
-    const members = view.tasks.filter((t) => t.scope === call && !alias[t.id]).sort(order);
-    const waiting = awaited(byId[s.owner]).has(call);
-    nodes.set(`s:${call}`, { id: `s:${call}`, kind: "scope", call, scope: s, members });
-    edges.push({ from: owner, to: `s:${call}`, kind: s.background ? "receives" : "owns", flow: waiting, made: s.made });
-    for (const m of members) edges.push({ from: `s:${call}`, to: m.id, kind: "owns", flow: waiting && !isDone(m), made: m.created.seq });
-  }
   for (const t of view.tasks) {
     if (alias[t.id]) continue;
-    if (t.scope && !view.scopes[t.scope] && t.owner) edges.push({ from: live(t.owner), to: t.id, kind: "owns", made: t.created.seq });
+    // A spawn's members hang from their owner; a background spawn's by a
+    // dashed edge, as its other background work does.
+    if (t.owner && byId[live(t.owner)]) {
+      const s = view.scopes[t.scope];
+      const flow = awaited(byId[t.owner]).has(t.scope) && !isDone(t);
+      edges.push({ from: live(t.owner), to: t.id, kind: s?.background ? "receives" : "owns", flow, made: t.created.seq });
+    }
     if (t.origin === "resume" && byId[t.from] && !chained(t)) edges.push({ from: live(t.from), to: t.id, kind: "continues" });
     const waits = awaited(t);
     for (const b of t.background || []) {
@@ -138,7 +135,6 @@ const CARD_H = 34;
 const cardStatus = (c) => `finished ${ago(c.last)} ago · ${c.tasks.length} task${c.tasks.length > 1 ? "s" : ""}`;
 function sizeOf(n, comp) {
   if (comp.folded) return { w: Math.min(240, Math.max(120, measure(shortName(n.t), "500 13px Georgia") + 34 + (comp.tasks.length > 1 ? 14 : 0))), h: CARD_H };
-  if (n.kind === "scope") return { w: 12, h: 12 };
   if (n.kind === "sat") return { w: Math.min(160, Math.max(90, measure(satLabel(n), "12px sans-serif") + 10)), h: SAT_DOT + 22 };
   const root = comp.root.id === n.id;
   const w = Math.min(210, Math.max(110, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));

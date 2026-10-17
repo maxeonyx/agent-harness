@@ -34,6 +34,9 @@
     transition: transform .2s var(--ease), background .3s, border-color .3s, color .3s;
   }
   .node:hover .dot { transform: scale(1.1); }
+  .node .g svg { display: block; width: 1.3em; height: 1.3em; }
+  /* A fork: its owner's context, copied. Its dot is a copy, offset from the one behind it. */
+  .node.fork .dot { box-shadow: 4px -4px 0 -1.5px var(--paper), 4px -4px 0 0 rgba(20, 20, 19, .5); }
   .node .name { margin-top: 5px; font: 600 13.5px/1.2 var(--serif); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .node.root .name { font-size: 15.5px; }
   .node .ring { position: absolute; inset: -5px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
@@ -68,10 +71,6 @@
   .node.archived .dot { display: none; }
   .node.archived .name { margin: 0; font: 500 13px/1.2 var(--serif); color: var(--muted); }
   .node.archived .more { position: absolute; right: .25em; top: 50%; transform: translateY(-50%); margin: 0; }
-  .node.scope { pointer-events: none; }
-  .node.scope .dot { --d: 9px; background: var(--ink); border: 0; }
-  .node.scope.background .dot { background: var(--paper); border: 1.5px solid var(--ink); }
-  .node.scope.settled .dot { background: var(--green); opacity: .6; }
   .node.sat .dot { font: 600 11px/1 var(--sans); border-style: dashed; }
   .node.sat .name { font: 12px/1.2 var(--sans); color: var(--muted); font-weight: 400; }
   .node.enter { animation: grow .45s var(--ease); }
