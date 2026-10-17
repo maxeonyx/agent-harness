@@ -7,7 +7,8 @@
 //! through the provider, dispatches calls to limbs, runs the meta limb's
 //! calls itself, and settles scopes. It reads nothing from disk but its
 //! database and its own executable, whose digest is the build it records
-//! launching ([`harness_core::build::Launched`]), and keeps nothing a restart would need anywhere else. A
+//! launching ([`harness_core::build::Launched`]) (and, given `--page`, the
+//! page's files, for an edit to show on reload), and keeps nothing a restart would need anywhere else. A
 //! relaunch is no special case: the to-do list of the folded database says
 //! each unfinished request was lost, and each limb that reconnects is
 //! shipped the calls it holds rows for.
@@ -100,7 +101,7 @@ impl Source for Values {
 /// What `harness-brain --help` prints. `--model scripted` is
 /// [`harness_provider::SCRIPTED`].
 const USAGE: &str = "\
-usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL]
+usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL] [--page DIR]
                      [--workspace DIR --mandate FILE [--name NAME] [--role ROLE]]
 
   --db DB          the database; a new one is made if none is there
@@ -111,11 +112,19 @@ usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model M
                    nothing (it answers from a script in the chat)
   --sample WAV     a recording the page offers to dictate, for a machine with
                    no microphone
+  --page DIR       serve the page's files from DIR (crates/face-web/src/page)
+                   as they are on disk, so an edit shows on reload, instead of
+                   the ones built in
   --workspace DIR  with --mandate, start a task in Max's scope as his: a chat
   --mandate FILE   with him in DIR, whose mandate is FILE's words
   --name NAME      that task's name (default: its role)
   --role ROLE      that task's role (default: orchestrator)
   --help           print this
+
+HARNESS_BROWSER    the harness's browser: an endpoint to attach to
+                   (host:port, http://… or ws://…) or a browser to launch;
+                   empty for Playwright's headless shell. A changed value is a
+                   new version of the browser limb; unset keeps the one it has
 ";
 
 fn main() -> ExitCode {
@@ -132,7 +141,7 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let (mut db, mut port, mut workspace, mut mandate, mut name) = (None, None, None, None, None);
     let (mut roles, mut role) = (None, "orchestrator".to_string());
-    let (mut sample, mut model) = (None, None);
+    let (mut sample, mut model, mut page) = (None, None, None);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
@@ -145,6 +154,7 @@ fn run() -> Result<(), String> {
             "--role" => role = value()?,
             "--sample" => sample = Some(PathBuf::from(value()?)),
             "--model" => model = Some(value()?),
+            "--page" => page = Some(PathBuf::from(value()?)),
             "--help" | "-h" => {
                 outln!("{}", USAGE.trim_end());
                 return Ok(());
@@ -197,6 +207,7 @@ fn run() -> Result<(), String> {
             dictation: Some(dictation),
             feed: feed.clone(),
             models: offered.clone(),
+            page,
         },
     );
     // The Windows host, read again for each connection: DHCP can move it.

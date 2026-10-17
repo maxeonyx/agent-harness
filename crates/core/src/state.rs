@@ -2178,6 +2178,7 @@ impl State {
                     call: c.call.clone(),
                     stopping: c.stopping.map(|s| s.deadline),
                     first_sent_to: c.dispatched?.first_to?,
+                    owner: Some(c.owner),
                 };
                 Some((LimbKey::Call(id), row))
             })

@@ -62,6 +62,10 @@ struct Grep {
 /// next would pass it. The tool's description states it.
 pub(crate) const READ_BUDGET: usize = 64 * 1024;
 
+/// Lines a refused edit's look starts before its `old`, in a file too
+/// large to show whole.
+const LEAD: usize = 20;
+
 /// The largest image `read` shows: the provider's limit on an image, as
 /// base64, is 5 MB.
 const IMAGE_BUDGET: usize = 3 * 1024 * 1024;
@@ -91,8 +95,8 @@ impl Inner {
         let result = match call.tool.as_str() {
             "bash" => parse(input).and_then(|i| self.bash(id, i, cancel, report)),
             "read" => parse(input).and_then(|i| self.read(i, report)),
-            "write" => parse(input).and_then(|i| self.write(i, call, report)),
-            "edit" => parse(input).and_then(|i| self.edit(i, call, report)),
+            "write" => parse(input).and_then(|i| self.write(id, i, call, report)),
+            "edit" => parse(input).and_then(|i| self.edit(id, i, call, report)),
             "grep" => parse(input).and_then(|i| self.grep(id, i, cancel, report)),
             other => Err(format!("this workspace has no tool `{other}`")),
         };
@@ -201,6 +205,10 @@ impl Inner {
         if bytes.is_empty() {
             return Ok(report.completed("(empty file)", observes));
         }
+        if bytes[..bytes.len().min(8192)].contains(&0) {
+            let said = format!("(a binary file of {} bytes, not shown)", bytes.len());
+            return Ok(report.completed(&said, observes));
+        }
         let content = String::from_utf8_lossy(&bytes);
         let offset = input.offset.unwrap_or(1).max(1);
         let lines = content
@@ -210,7 +218,13 @@ impl Inner {
         Ok(report.completed(&budgeted(lines, offset, true), observes))
     }
 
-    fn write(&self, input: Write, call: &Call, report: &mut Report) -> Result<Outcome, String> {
+    fn write(
+        &self,
+        id: CallId,
+        input: Write,
+        call: &Call,
+        report: &mut Report,
+    ) -> Result<Outcome, String> {
         let place = self.place(&input.path);
         let _files = lock(&self.files);
         let current =
@@ -222,7 +236,7 @@ impl Inner {
             let said = format!("{} already has this content.", input.path);
             return Ok(report.completed(&said, self.observations(&place.name, target)));
         }
-        if let Some(refused) = self.refuse(&place, current, call) {
+        if let Some(refused) = self.refuse(id, &place, current, call, None, report) {
             return Ok(refused);
         }
         if let Some(parent) = place.path.parent() {
@@ -240,12 +254,18 @@ impl Inner {
         Ok(report.completed(&said, self.observations(&place.name, target)))
     }
 
-    fn edit(&self, input: Edit, call: &Call, report: &mut Report) -> Result<Outcome, String> {
+    fn edit(
+        &self,
+        id: CallId,
+        input: Edit,
+        call: &Call,
+        report: &mut Report,
+    ) -> Result<Outcome, String> {
         let place = self.place(&input.path);
         let _files = lock(&self.files);
         let current =
             version(&place.path).map_err(|e| format!("cannot read {}: {e}", input.path))?;
-        if let Some(refused) = self.refuse(&place, current, call) {
+        if let Some(refused) = self.refuse(id, &place, current, call, Some(&input.old), report) {
             return Ok(refused);
         }
         let bytes =
@@ -364,21 +384,71 @@ impl Inner {
     }
 
     /// The refusal of a write or edit whose caller has not seen `current`,
-    /// unless its own command made it.
-    fn refuse(&self, place: &Place, current: Version, call: &Call) -> Option<Outcome> {
+    /// unless its own command made it. It shows the file as `read` would,
+    /// from a little before `near` (an edit's `old`) when the whole would
+    /// not fit, so the caller has seen it once the refusal reaches it.
+    fn refuse(
+        &self,
+        id: CallId,
+        place: &Place,
+        current: Version,
+        call: &Call,
+        near: Option<&str>,
+        report: &mut Report,
+    ) -> Option<Outcome> {
         let key = &self.keys(&place.name)[0];
         let expected = call
             .expects
             .iter()
             .find(|o| &o.resource == key)
             .map_or(Version::Gone, |o| o.version);
-        let refused = expected != current && !self.made_by(&call.caller, &place.path);
-        refused.then(|| Outcome::Refused {
+        if expected == current || self.made_by(&call.caller, &place.path) {
+            return None;
+        }
+        let shown = match current {
+            Version::Gone => Some(report.output(
+                "(it does not exist now)",
+                self.observations(&place.name, Version::Gone),
+            )),
+            Version::Is(_) => self.look(place, near, report),
+        };
+        let shown = shown.map(
+            |shown| match self.shown_before(id, &call.caller, &shown.observes) {
+                true => report.output(
+                    "(as shown with the earlier refusal of this response)",
+                    shown.observes,
+                ),
+                false => shown,
+            },
+        );
+        Some(Outcome::Refused {
             current: vec![Observation {
                 resource: key.clone(),
                 version: current,
             }],
+            shown,
         })
+    }
+
+    /// What `read` returns of a file, from a little before the first line
+    /// holding `near` when the file is over the budget.
+    fn look(&self, place: &Place, near: Option<&str>, report: &mut Report) -> Option<Output> {
+        let offset = near.and_then(|near| {
+            let bytes = fs::read(&place.path).ok()?;
+            (bytes.len() > READ_BUDGET).then_some(())?;
+            let content = String::from_utf8_lossy(&bytes);
+            let at = content.find(near)?;
+            Some(content[..at].lines().count().saturating_sub(LEAD).max(1))
+        });
+        let read = Read {
+            path: place.path.to_string_lossy().into_owned(),
+            offset,
+            limit: None,
+        };
+        match self.read(read, report) {
+            Ok(Outcome::Completed(output)) => Some(output),
+            _ => None,
+        }
     }
 
     pub(crate) fn observations(&self, name: &str, version: Version) -> Vec<Observation> {

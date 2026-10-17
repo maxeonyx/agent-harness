@@ -47,10 +47,11 @@ mod http;
 mod live;
 mod view;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use std::thread;
@@ -90,6 +91,10 @@ pub struct Wiring {
     /// The models on offer, newest first ([`harness_provider::Client::models`]),
     /// which Max chooses a chat's from.
     pub models: Vec<harness_provider::Model>,
+    /// Where to read the page's files (`crates/face-web/src/page`) from on
+    /// each request, so an edit shows on reload; `None` serves the ones
+    /// built in.
+    pub page: Option<PathBuf>,
 }
 
 /// What the brain hands the face after each fold.
@@ -162,16 +167,43 @@ impl<S: Source> Face<S> {
         }
     }
 
+    /// One of the page's files, by its name in `page/`: from disk, read now,
+    /// if [`Wiring::page`] says where; otherwise as built in.
+    fn page_file(&self, name: &str) -> io::Result<Cow<'static, str>> {
+        let missing = || io::Error::new(ErrorKind::NotFound, format!("no page file {name}"));
+        match &self.wiring.page {
+            // Only a name in the directory, never a path out of it.
+            Some(dir) if !name.contains('/') && !name.starts_with('.') => {
+                std::fs::read_to_string(dir.join(name))
+                    .map(Cow::Owned)
+                    .map_err(|e| io::Error::new(e.kind(), format!("page file {name}: {e}")))
+            }
+            Some(_) => Err(missing()),
+            None => PAGE
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, text)| Cow::Borrowed(*text))
+                .ok_or_else(missing),
+        }
+    }
+
     /// Serve one connection: read its request, answer it.
     pub fn handle(&self, stream: impl Socket) -> io::Result<()> {
         let (request, mut stream) = http::read_request(stream)?;
         match request.path.as_str() {
-            "/" => http::respond(
-                &mut stream,
-                "text/html; charset=utf-8",
-                PAGE.as_bytes(),
-                false,
-            ),
+            "/" => match DOCUMENT
+                .iter()
+                .map(|name| self.page_file(name))
+                .collect::<io::Result<String>>()
+            {
+                Ok(document) => http::respond(
+                    &mut stream,
+                    "text/html; charset=utf-8",
+                    document.as_bytes(),
+                    false,
+                ),
+                Err(e) => http::refuse(&mut stream, "500 Internal Server Error", &e.to_string()),
+            },
             "/tab.wasm" => http::respond(&mut stream, "application/wasm", TAB, false),
             "/wiring" => {
                 let dictation = self.wiring.dictation.as_ref();
@@ -202,16 +234,16 @@ impl<S: Source> Face<S> {
                 )
             }
             path => {
-                if let Some(script) = path
-                    .strip_prefix("/page/")
-                    .and_then(|name| SCRIPTS.iter().find(|(n, _)| *n == name))
-                {
-                    return http::respond(
-                        &mut stream,
-                        "text/javascript; charset=utf-8",
-                        script.1.as_bytes(),
-                        false,
-                    );
+                if let Some(name) = path.strip_prefix("/page/") {
+                    let kind = match name.rsplit_once('.') {
+                        Some((_, "js")) => "text/javascript; charset=utf-8",
+                        Some((_, "css")) => "text/css; charset=utf-8",
+                        _ => "text/html; charset=utf-8",
+                    };
+                    return match self.page_file(name) {
+                        Ok(text) => http::respond(&mut stream, kind, text.as_bytes(), false),
+                        Err(_) => http::not_found(&mut stream),
+                    };
                 }
                 if let Some(head) = path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
                     return self.context(&mut stream, head);
@@ -667,24 +699,25 @@ fn now() -> Timestamp {
     Timestamp(ms as i64)
 }
 
-/// The page: one document and its style sheet, joined from the pieces in
-/// `page/` in this order. Its script is the modules `page/*.js`, served at
-/// `/page/<name>`: `main.js` starts the page, and each module imports what
-/// it uses from the others, so a name lives in one module and says where.
-const PAGE: &str = concat!(
-    include_str!("page/head.html"),
-    include_str!("page/base.css"),
-    include_str!("page/chrome.css"),
-    include_str!("page/map.css"),
-    include_str!("page/overlays.css"),
-    include_str!("page/card.css"),
-    include_str!("page/compose.css"),
-    include_str!("page/phone.css"),
-    include_str!("page/body.html"),
-    include_str!("page/tail.html"),
-);
-/// The page's modules, by name: every `page/*.js`, listed by `build.rs`.
-const SCRIPTS: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/scripts.rs"));
+/// The page's files, built in: every file in `page/`, by name, as
+/// `build.rs` lists them. [`Wiring::page`] reads them from disk instead.
+const PAGE: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/page.rs"));
+/// The page's document and its style sheet, joined from these files in this
+/// order. Its script is the modules `page/*.js`, served at `/page/<name>`:
+/// `main.js` starts the page, and each module imports what it uses from the
+/// others, so a name lives in one module and says where.
+const DOCUMENT: &[&str] = &[
+    "head.html",
+    "base.css",
+    "chrome.css",
+    "map.css",
+    "overlays.css",
+    "card.css",
+    "compose.css",
+    "phone.css",
+    "body.html",
+    "tail.html",
+];
 /// The tab, as the page runs it.
 const TAB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tab.wasm"));
 
