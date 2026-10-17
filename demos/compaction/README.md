@@ -12,7 +12,7 @@ What it does:
 2. The brain starts one agent, a chat with Max, on `mandate.md`: write the package in two steps, one after the other, run `./check.sh` after each, and compact before the next step. When both pass, commit, then compact and report.
 3. After step 1 the agent calls `compact` with a summary. Once that round is over the harness moves its head back to its latest checkpoint, which here is its first message, and appends the carry: a user message holding the summary. The agent carries on in the same turn, with step 1's tool calls gone from its context. The next request reads the cached prefix up to the checkpoint.
 4. After step 2 it compacts again. The checkpoint is now the first carry, so that carry is kept as it was, and only step 2 is replaced. Then it writes its report, from its summary, as its last message: an ordinary answer that ends the turn, so it streams as text and lands after the carry.
-5. Max answers through a tab (`act PORT say …`). The agent works, then compacts and reports again. Max's words and both reports are kept word for word; only the tool calls between them go.
+5. Max answers through a tab (`act PORT say CHAT …`). The agent works, then compacts and reports again. Max's words and both reports are kept word for word; only the tool calls between them go.
 6. Max presses **Done**, and the agent's last turn writes its result.
 
 `context.sh` prints the context the face shows: one line per entry, who wrote it, and its text. Click the dashed "compacted" card in the face to see the work it replaced. That work is still in the tree, and the card fetches it from `/context/<old head>`.

@@ -24,7 +24,7 @@ env "$mark=1" "$brain" --roles roles --db "$dir/brain.sqlite" --port "$port" > "
 pid=$!
 # Max starts the chat at a tab once this brain serves (not another on the port).
 until grep -q '^face: ' "$dir/brain.log"; do kill -0 "$pid" 2>/dev/null || { cat "$dir/brain.log"; exit 1; }; sleep 0.2; done
-target/release/examples/act "$port" chat orchestrator "$PWD/$dir/repo" "$(cat demos/compaction/mandate.md)" > /dev/null
+chat=$(target/release/examples/act "$port" chat orchestrator "$PWD/$dir/repo" "$(cat demos/compaction/mandate.md)" | sed -n 's/^chat //p')
 await
 grep -E 'compacted|Max sends' "$dir/brain.log" || true
 echo
@@ -33,7 +33,7 @@ demos/compaction/context.sh "$port"
 
 echo
 echo "== Max answers"
-target/release/examples/act "$port" say "Thanks. Add \`textstats.wordcount.unique(text: str) -> int\`, the number of distinct words, with a test, run the check, commit, and report again."
+target/release/examples/act "$port" say "$chat" "Thanks. Add \`textstats.wordcount.unique(text: str) -> int\`, the number of distinct words, with a test, run the check, commit, and report again."
 sleep 2
 await
 echo
