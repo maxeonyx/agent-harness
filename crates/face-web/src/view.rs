@@ -215,12 +215,10 @@ fn usage(state: &State, value: Text, provider: Option<LimbId>) -> Value {
     let window = |w: &Window| json!({"used": w.used, "resets": w.resets.map(|t| t.0)});
     let mut at = None;
     let mut windows = serde_json::Map::new();
-    let mut on_plan = true;
     if let Some(ended) = state.quota()
         && let Some(quota) = &ended.quota
     {
         at = Some(ended.at.at);
-        on_plan = quota.on_plan;
         for (name, w) in [
             ("five_hour", &quota.five_hour),
             ("seven_day", &quota.seven_day),
@@ -267,7 +265,6 @@ fn usage(state: &State, value: Text, provider: Option<LimbId>) -> Value {
     json!({
         "at": at.map(|t| t.0),
         "windows": windows,
-        "on_plan": on_plan,
         "refreshing": refreshing,
         "failed": failed,
     })

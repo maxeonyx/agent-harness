@@ -78,7 +78,6 @@ export function renderUsage() {
   if (failed && !busy) usageCard.append(el("div", "failed", failed));
   span.classList.toggle("busy", !!busy);
   usageAlarms.replaceChildren();
-  if (u && !u.on_plan) usageAlarms.append(el("span", "alarm", "billed outside the plan: nothing more is sent"));
   if (view.limited) usageAlarms.append(el("span", "alarm", `limited until ${clock(view.limited)} · carries on by itself`));
   setUsageRight(span.getBoundingClientRect().right);
 }

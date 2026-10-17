@@ -1,6 +1,6 @@
 //! A root, a two-turn conversation, then two forks of its last response,
 //! the second sent at the first's FirstByte. Prints each request's facts,
-//! its text as it streams, its cache reads and writes and whether it was billed to the plan.
+//! its text as it streams, its cache reads and writes and the plan's usage.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -8,8 +8,7 @@ use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::context::{Entry, EntryId, Message, Role, Root};
-use harness_core::id::{ModelCallId, ReplicaId, TaskId, ValueId};
-use harness_core::live::Live;
+use harness_core::id::{ReplicaId, TaskId, ValueId};
 use harness_core::model_call::{Ending, ModelCall};
 use harness_provider::{Client, Finished, IDENTITY, Login, Progress, resolve};
 use harness_runtime::Cancel;
@@ -161,7 +160,6 @@ fn turn(
     println!("[{:6.2}s] {label}: Sent", secs(start));
     let finished = client
         .send(
-            ModelCallId(EXAMPLE.origin().event(label.len() as u32)),
             call,
             &store.context(call.base),
             |id| store.values.get(&id).cloned(),
@@ -174,14 +172,13 @@ fn turn(
                             let _ = tx.send(());
                         }
                     }
-                    Progress::Live(Live::Model { chunk, .. }) => {
+                    Progress::Text(chunk) => {
                         line.push_str(&chunk);
                         while let Some(n) = line.find('\n') {
                             println!("[{:6.2}s] {label} > {}", secs(start), &line[..n]);
                             line.drain(..=n);
                         }
                     }
-                    Progress::Live(_) => {}
                 }
                 let _ = std::io::stdout().flush();
             },
@@ -193,13 +190,12 @@ fn turn(
     let quota = finished.quota.clone().unwrap_or_else(|| fail("no quota"));
     let usage = finished.usage.unwrap_or_default();
     println!(
-        "[{:6.2}s] {label}: Ended  cache_read={} cache_write={} input={} output={}  on_plan={} 5h={:?} 7d={:?}",
+        "[{:6.2}s] {label}: Ended  cache_read={} cache_write={} input={} output={}  5h={:?} 7d={:?}",
         secs(start),
         usage.cache_read,
         usage.cache_write_short + usage.cache_write_long,
         usage.input,
         usage.output,
-        quota.on_plan,
         quota.five_hour.map(|w| w.used),
         quota.seven_day.map(|w| w.used),
     );
