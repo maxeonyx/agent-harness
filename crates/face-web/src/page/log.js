@@ -88,6 +88,9 @@ function entry(s, into, e, index, t, parent) {
   if (e.role === "user") {
     const by = e.by || [];
     let run = null; // Max's bubble or the mandate's card a block continues
+    // A compaction's carry keeps his words from what it replaced: his, but
+    // editing or retrying them would replace the carry.
+    const carry = by.some((w) => w?.by === "compacted");
     blocks.forEach((b, k) => {
       const who = by[k] || { by: "harness" };
       if (run && run.by !== who.by) run = null;
@@ -102,7 +105,7 @@ function entry(s, into, e, index, t, parent) {
         if (run) { $(".bubble", run.el).textContent += `\n${words}`; return; }
         run = { by: "max", el: said(words, clock(who.at)) };
         // His message: edit it, or run its turn again.
-        if (!$(".moves", into)) {
+        if (!carry && !$(".moves", into)) {
           const bubble = $(".bubble", run.el);
           run.el.append(moves([
             ["✎", "Edit", "Edit this message: the box holds it, and sending replaces it and what followed", () => editMessage(t.id, parent, bubble.textContent)],

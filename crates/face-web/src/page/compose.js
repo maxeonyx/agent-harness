@@ -286,8 +286,9 @@ export function buildCompose(id) {
 // ─── Model and effort ──────────────────────────────────────────────────────
 // The pill under the send: the model and effort the chat's next request
 // runs at, "Opus · high". Each is a choice of its own; choosing its role's
-// leaves it to the role. While its cache is warm, each other choice says
-// what it costs: the whole context read again without the cache. A new
+// leaves it to the role. While its cache is warm, each other model says what
+// it costs: the whole context read again without the cache. Effort is not in
+// the cached prefix, so changing it costs nothing. A new
 // chat's choice is kept with its draft and goes into the fact that starts
 // it.
 export const modelName = (id) => view.models?.find((m) => m.id === id)?.name || id;
@@ -306,7 +307,7 @@ export function renderTune(t) {
   if (pill.dataset.key === key) return;
   pill.dataset.key = key;
   const cost = warm ? ` · rereads ${kTokens(warm)}` : "";
-  const pick = (title, list, chosen, name, field) => {
+  const pick = (title, list, chosen, name, field, cost = "") => {
     const s = el("select", "pick"); s.title = title;
     s.append(...list.map((v) => Object.assign(el("option", null, name(v) + (v === chosen ? "" : cost)), { value: v })));
     s.value = chosen;
@@ -315,9 +316,9 @@ export function renderTune(t) {
   };
   const models = view.models.map((m) => m.id);
   if (!models.includes(now.model)) models.push(now.model);
-  pill.title = warm ? `Changing either reads the whole context again without the cache: ${kTokens(warm)} tokens` : "The model and effort its next request runs at";
+  pill.title = warm ? `Changing the model reads the whole context again without the cache: ${kTokens(warm)} tokens` : "The model and effort its next request runs at";
   pill.replaceChildren(
-    pick("Its model", models, now.model, modelName, "model"),
+    pick("Its model", models, now.model, modelName, "model", cost),
     el("span", "dot", "·"),
     pick("How hard it thinks", view.efforts, now.effort, (e) => e, "effort"),
   );

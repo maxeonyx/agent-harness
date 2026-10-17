@@ -6,21 +6,24 @@ import { go, NEW } from "./card.js";
 
 // ─── Telling Max when he is not looking ───────────────────────────────────
 // When something newly waits on him and this tab is not in front, the
-// system says so, and a click brings the tab forward with it open. The
-// browser asks his permission at his first touch of the page.
+// system says so, through the page's service worker (`sw.js`): a phone's
+// browser shows a notification from nowhere else. A click brings the tab
+// forward with that chat open. The browser asks his permission at his first
+// touch of the page.
 let notified = null;
+const worker = navigator.serviceWorker?.register("/page/sw.js").catch((e) => console.warn(`no notifications: ${e}`));
+navigator.serviceWorker?.addEventListener("message", (e) => { if (byId[e.data?.open]) go(e.data.open); });
+navigator.serviceWorker?.startMessages();
 addEventListener("pointerdown", () => { if (window.Notification?.permission === "default") Notification.requestPermission(); }, { once: true });
-export function notify(queue) {
+export async function notify(queue) {
   const before = notified;
   notified = new Set(queue.map((q) => q.task));
   if (!before || !document.hidden || window.Notification?.permission !== "granted") return;
+  const reg = await worker;
   for (const q of queue) {
     const t = byId[q.task];
-    if (before.has(q.task) || !t) continue;
-    try {
-      const n = new Notification(t.name, { body: "Your turn", tag: t.id });
-      n.onclick = () => { focus(); n.close(); go(t.id); };
-    } catch { /* a phone's browser notifies only from a service worker */ }
+    if (before.has(q.task) || !t || !reg) continue;
+    reg.showNotification(t.name, { body: q.why || "Your turn", tag: t.id, data: t.id }).catch((e) => console.warn(`not notified: ${e}`));
   }
 }
 
