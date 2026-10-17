@@ -18,23 +18,23 @@ The brain reads nothing from disk but its database: the roles and the workspace 
 
 ## Real output
 
-A run at 16:46 NZT on 2026-10-17.
+A run at 17:27 NZT on 2026-10-17.
 
 ```
 == launch 1: a new database, and a chat with Max
-  brain 1 launched (pid 1286189), log target/spine-demo/launch1.log
-  pc: tab 846d89cedadf8fd5 linked
-  phone: tab 21b78b0d97c3561b linked
+  brain 1 launched (pid 1312803), log target/spine-demo/launch1.log
+  pc: tab 6fb90e286bdd5eb9 linked
+  phone: tab 88d8d305c9ed70de linked
 
 == 1. The phone dictates; the PC finishes the words and sends them
-  the PC's replica holds the phone's draft 21b78b0d97c3561b.1.0: "[{\"text\":\"Reply with one word:\",\"type\":\"text\"}]"
+  the PC's replica holds the phone's draft 88d8d305c9ed70de.1.0: "[{\"text\":\"Reply with one word:\",\"type\":\"text\"}]"
   PC: its Send is included; its replica has no draft row: sent
-  phone: the draft row is gone from its replica too (as of 70bb3f622fa93a7d.13): sent
-  agent: chat: responded, EndTurn, 0 calls (4 in, 7673 cached, 6 out)
+  phone: the draft row is gone from its replica too (as of 2f4fa3d0d638846b.13): sent
+  agent: chat: responded, EndTurn, 0 calls (4 in, 9608 cached, 6 out)
 
 == 6. A request interrupted before its first byte
   pc: Max sends "Count from 1 to 40, one number per line."
-  the interrupt naming 70bb3f622fa93a7d.22.0: is included
+  the interrupt naming 2f4fa3d0d638846b.22.0: is included
   brain: chat: response abandoned
   it had a first byte before it ended: false
 
@@ -44,11 +44,11 @@ A run at 16:46 NZT on 2026-10-17.
   harness-brain: SIGINT: shutting down; requests in flight have 300s to finish (again to stop now)
   harness-brain: shut down
   brain exited: exit status: 0
-  brain 2 launched (pid 1286230), log target/spine-demo/launch2.log
+  brain 2 launched (pid 1314481), log target/spine-demo/launch2.log
   pc: linked again
   phone: linked again
-  agent, after the restart: chat: responded, EndTurn, 0 calls (2 in, 7790 cached, 234 out)
-  usage of 70bb3f622fa93a7d.37.0, the first request of this launch: {"cache_read":7790,"cache_write_long":117,"cache_write_short":0,"input":2,"output":234}
+  agent, after the restart: chat: responded, EndTurn, 0 calls (2 in, 9771 cached, 120 out)
+  usage of 2f4fa3d0d638846b.37.0, the first request of this launch: {"cache_read":9771,"cache_write_long":146,"cache_write_short":0,"input":2,"output":120}
 
 == 5. Ctrl-C twice mid-request: the brain exits at once, and the next launch sends it again
   pc: Max sends "Name three fruits, one per line."
@@ -58,17 +58,17 @@ A run at 16:46 NZT on 2026-10-17.
   harness-brain: SIGINT again: stopping now
   harness-brain: shut down
   brain exited: exit status: 0
-  brain 3 launched (pid 1286263), log target/spine-demo/launch3.log
+  brain 3 launched (pid 1314603), log target/spine-demo/launch3.log
   pc: linked again
   phone: linked again
-  agent, after the restart: chat: responded, EndTurn, 0 calls (4 in, 7907 cached, 14 out)
-  usage of 70bb3f622fa93a7d.54.0, the first request of this launch: {"cache_read":7907,"cache_write_long":317,"cache_write_short":0,"input":4,"output":14}
+  agent, after the restart: chat: responded, EndTurn, 0 calls (4 in, 9917 cached, 14 out)
+  usage of 2f4fa3d0d638846b.54.0, the first request of this launch: {"cache_read":9917,"cache_write_long":201,"cache_write_short":0,"input":4,"output":14}
 
 == 2. Done on a chat the brain already finished
   pc: Max presses Done
   PC: its Done is included
   phone: Max presses Done
-  phone, which had seen the brain as of 70bb3f622fa93a7d.13: its Done is refused, in its own standing: fact 0 refused: addresses something already finished
+  phone, which had seen the brain as of 2f4fa3d0d638846b.13: its Done is refused, in its own standing: fact 0 refused: addresses something already finished
   ** kill -INT the brain
   harness-brain: SIGINT: shutting down; requests in flight have 300s to finish (again to stop now)
   harness-brain: shut down
