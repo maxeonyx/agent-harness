@@ -144,8 +144,9 @@ pub struct Brain {
     attached: Conn,
     /// The next number for a co-hosted link, counting down from the top.
     hosted: Conn,
-    /// The context of each request without a first byte yet: fan-out gating.
-    cold: HashMap<ModelCallId, std::collections::HashSet<EntryId>>,
+    /// The model and context of each request without a first byte yet:
+    /// fan-out gating.
+    cold: HashMap<ModelCallId, (String, std::collections::HashSet<EntryId>)>,
     /// Each request in flight: the thread that sends it, joined when it
     /// reports how it ended, and its stop.
     requests: HashMap<ModelCallId, (Cancel, JoinHandle<()>)>,
@@ -174,7 +175,7 @@ impl Brain {
         let (decider, divergences) = schema::Brain::open(store.replica(), store)
             .map_err(|e| format!("the database folds: {e}"))?;
         for d in &divergences {
-            eprintln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
+            errln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
         }
         let state = decider.state();
         let find =
@@ -278,7 +279,7 @@ impl Brain {
     /// Start the roles limb on a thread of its own, linked by a channel.
     fn host_roles(&mut self) {
         let Some(id) = self.roles else {
-            return eprintln!("harness-brain: no roles limb: a new database needs --roles");
+            return errln!("harness-brain: no roles limb: a new database needs --roles");
         };
         let limb = self.state().limb(id).expect("the roles limb").clone();
         let (wire, down) = mpsc::channel();
@@ -353,6 +354,7 @@ impl Brain {
         let facts = vec![Fact::Task(
             id,
             TaskEvent::Created(Box::new(Created {
+                tuning: Default::default(),
                 name: start.name,
                 by: None,
                 scope: Scope::Max,
@@ -523,9 +525,9 @@ impl Brain {
         let within = if again { Duration::ZERO } else { policy::DRAIN };
         let name = signals::name(signal);
         if again {
-            eprintln!("harness-brain: {name} again: stopping now");
+            errln!("harness-brain: {name} again: stopping now");
         } else {
-            eprintln!(
+            errln!(
                 "harness-brain: {name}: shutting down; requests in flight have {}s to finish (again to stop now)",
                 within.as_secs()
             );
@@ -588,7 +590,7 @@ impl Brain {
                 self.limbs.insert(limb, process);
             }
             Err(e) => {
-                eprintln!("limb {limb}: cannot attach: {e}");
+                errln!("limb {limb}: cannot attach: {e}");
                 self.unreached(limb, format!("cannot attach: {e}"));
             }
         }
@@ -633,7 +635,7 @@ impl Brain {
             build,
         } = hello;
         if self.state().limb(limb).is_none_or(|l| l.kind.is_brains()) {
-            return eprintln!("a link said it is limb {limb}, which is no plugin limb here");
+            return errln!("a link said it is limb {limb}, which is no plugin limb here");
         }
         self.links.insert(
             limb,
@@ -667,7 +669,7 @@ impl Brain {
             return;
         };
         self.links.remove(&limb);
-        eprintln!("limb {limb}: its link ended");
+        errln!("limb {limb}: its link ended");
         self.fact(Fact::Reach {
             limb,
             reach: Reach::Lost,
@@ -727,7 +729,13 @@ impl Brain {
         let refs: Vec<(LimbId, &Description)> = described.iter().map(|(l, d)| (*l, d)).collect();
         let role = String::from_utf8_lossy(&self.value(env.role)).into_owned();
         Some(
-            render::root(harness_provider::IDENTITY, &env.model, &role, &refs).map(|new| {
+            render::root(
+                harness_provider::IDENTITY,
+                task.tuning.model(env),
+                &role,
+                &refs,
+            )
+            .map(|new| {
                 let start = TaskStart {
                     root: new.root,
                     binding: new.binding,
@@ -805,7 +813,13 @@ impl Brain {
                 return;
             }
         }
-        match last.as_ref().map(|e| &e.ending) {
+        // What follows is read off the head: the response it is, if any.
+        let at_head = self
+            .state()
+            .response(head)
+            .and_then(|m| m.ended.as_ref())
+            .map(|e| e.ending.clone());
+        match &at_head {
             Some(Ending::Responded {
                 stop: Stop::Refused,
                 ..
@@ -833,16 +847,28 @@ impl Brain {
             }
             _ => {}
         }
-        if policy::hold(head, self.cold.values()) {
+        let env = self
+            .state()
+            .environment(task.environment)
+            .expect("the task's environment");
+        let model = task.tuning.model(env).to_owned();
+        let params = env.params;
+        if policy::hold(
+            head,
+            &model,
+            self.cold.values().map(|(m, c)| (m.as_str(), c)),
+        ) {
             return;
         }
 
-        // A new root after earlier requests starts again from the mandate.
+        // The first request of a context renders its beginning: at its
+        // start, however often it has been sent from there. A root after
+        // an earlier context also says where that one ended.
+        let first = task.context().is_some_and(|c| c.start == head);
         let seed = match self.state().entry(head) {
-            Some(Entry::Root(_)) => self.seed(id),
+            Some(Entry::Root(_)) => self.seed(id, head),
             _ => None,
         };
-        let first = last.is_none() || seed.is_some();
         let mut values = Vec::new();
         let mut appends = Vec::new();
         let mut renders = Vec::new();
@@ -883,12 +909,29 @@ impl Brain {
             appends.push(user(render::blocks(&turn.blocks), &mut values));
         }
         renders.extend(turn.renders);
-        let params = self
-            .state()
-            .environment(task.environment)
-            .expect("the task's environment")
-            .params;
+        // Max's effort, when it is not the environment's, as parameters of
+        // its own.
+        let params = match task.tuning.effort {
+            Some(effort) => {
+                let named = self.value(params);
+                match harness_provider::with_effort(&named, effort) {
+                    Some(tuned) if harness_provider::effort(&named) != Some(effort) => {
+                        let tuned = Bytes::from(tuned);
+                        let id = tuned.id();
+                        values.push(tuned);
+                        id
+                    }
+                    _ => params,
+                }
+            }
+            None => params,
+        };
+        let rooted = match &self.state().context(head)[0].1 {
+            Entry::Root(root) => root.model != model,
+            Entry::Message { .. } => unreachable!("a context starts at a root"),
+        };
         let mut call = ModelCall {
+            model: rooted.then_some(model.clone()),
             task: id,
             base: head,
             appends,
@@ -928,7 +971,10 @@ impl Brain {
             named.into_iter().map(|v| (v, self.value(v))).collect();
         self.cold.insert(
             request,
-            base.iter().map(|(id, _)| *id).chain(appended).collect(),
+            (
+                model,
+                base.iter().map(|(id, _)| *id).chain(appended).collect(),
+            ),
         );
         let cancel = Cancel::new();
         let client = self.client.clone();
@@ -958,11 +1004,11 @@ impl Brain {
     /// Where the task's old context ended, and the note it handed over
     /// with, or why it ended without one: what a new root after earlier
     /// requests begins with.
-    fn seed(&self, task: TaskId) -> Option<render::Seed> {
+    fn seed(&self, task: TaskId, root: EntryId) -> Option<render::Seed> {
         let (_, last) = self
             .state()
             .model_calls()
-            .filter(|(_, m)| m.call.task == task)
+            .filter(|(_, m)| m.call.task == task && !self.state().descends(m.call.base, root))
             .max_by_key(|(_, m)| m.sent.seq)?;
         let handover = last
             .calls
@@ -1036,7 +1082,7 @@ Check your workspace for what you had already done before carrying on."
         }
         batch.values.extend(value.map(Bytes));
         if quota.as_ref().is_some_and(|q| !q.on_plan) {
-            eprintln!("a response was billed outside the plan: sending nothing more");
+            errln!("a response was billed outside the plan: sending nothing more");
         }
         batch.facts.push(Fact::ModelCall(
             request,
@@ -1373,6 +1419,7 @@ and you cannot finish until it has.",
             let fresh = matches!(origin, Origin::Fresh { .. });
             let text = Bytes::from(member.mandate);
             let created = Created {
+                tuning: Default::default(),
                 name: format!("{}-{}", parent.name, member.name),
                 by: Some(call),
                 scope,
@@ -1535,7 +1582,7 @@ and you cannot finish until it has.",
         let facts = match &record.what {
             Said::Said(batch) => batch.facts.clone(),
             Said::Unread(unread) => {
-                println!(
+                outln!(
                     "{:>7.1}s {from}  held unread: {}",
                     self.elapsed(),
                     unread.why
@@ -1548,12 +1595,12 @@ and you cannot finish until it has.",
             Ok(None) => {}
             Ok(Some(_)) => match self.decider.standing(from.replica).refused.get(&from.n) {
                 Some(why) => {
-                    println!("{:>7.1}s {from}  refused: {why}", self.elapsed());
+                    outln!("{:>7.1}s {from}  refused: {why}", self.elapsed());
                     self.publish();
                 }
                 None => self.changed(from, &facts),
             },
-            Err(e) => eprintln!("harness-brain: cannot store the record at {from}: {e}"),
+            Err(e) => errln!("harness-brain: cannot store the record at {from}: {e}"),
         }
     }
 
@@ -1624,7 +1671,7 @@ and you cannot finish until it has.",
                 .collect::<String>();
             line = format!("{line} {input}");
         }
-        println!("{:>7.1}s {at}  {line}", self.elapsed());
+        outln!("{:>7.1}s {at}  {line}", self.elapsed());
     }
 
     /// Print the result of the task this launch started once it is done.
@@ -1644,7 +1691,7 @@ and you cannot finish until it has.",
             TaskOutcome::Abandoned { by, report } => self.cancelled(*by, *report),
             other => format!("{other:?}"),
         };
-        println!("\n== the task is done; its result:\n\n{said}\n");
+        outln!("\n== the task is done; its result:\n\n{said}\n");
         self.reported = true;
     }
 

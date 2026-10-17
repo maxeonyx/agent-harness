@@ -89,6 +89,7 @@ pub fn body(
         system,
         tools,
     } = root;
+    let model = call.model.as_ref().unwrap_or(model);
     let system = marked(bytes(*system)?, root_id)?;
     check_identity(&system)?;
     let tools = bytes(*tools)?;
@@ -155,6 +156,10 @@ fn members(params: &[u8]) -> Result<&[u8], RequestError> {
     let text = params.trim_ascii();
     Ok(text[1..text.len() - 1].trim_ascii())
 }
+
+/// How long a breakpoint's cache entry lives after its last read: the
+/// `ttl` [`mark`] asks for.
+pub const CACHED_FOR_MS: i64 = 60 * 60 * 1000;
 
 /// `blocks` (a JSON array of objects) with `cache_control` added to its last
 /// block, spliced in before that block's closing brace, for an hour: long

@@ -49,7 +49,7 @@ use crate::value::Bytes;
 ///
 /// It holds the context tree itself ([`State::entry`], [`State::context`]),
 /// learned from the facts that carry entries, so a request's head, a
-/// breakpoint and a rewind are checked against the tree, and a face renders
+/// breakpoint and a move back are checked against the tree, and a face renders
 /// any context from the fold and the value store alone.
 ///
 /// What it guarantees, by refusing every record that would break it: a task
@@ -142,6 +142,14 @@ struct Open {
     scopes: OrdMap<Scope, Vec<TaskId>>,
     /// The model call each response came from.
     responses: OrdMap<EntryId, ModelCallId>,
+    /// The first model call to send each request head; a resend of a head
+    /// (a retry with nothing new) is not one.
+    requests: OrdMap<EntryId, ModelCallId>,
+    /// The model call whose response made each agent call.
+    made_in: OrdMap<CallId, ModelCallId>,
+    /// The agent calls whose work changed a resource: each change's call,
+    /// or the agent call its background work runs under.
+    changed: OrdSet<CallId>,
     /// Each task's last model call to end.
     last_turn: OrdMap<TaskId, ModelCallId>,
     /// Tasks told they are lingering ([`Prompt::Lingering`]).
@@ -150,6 +158,26 @@ struct Open {
     unblocked: OrdSet<TaskId>,
     /// The last model call to report the quota.
     quota: Option<ModelCallId>,
+}
+
+/// What a path Max moved a task off changed in the world
+/// ([`State::left`]): what its next request tells it
+/// ([`crate::context::Note::Moved`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Left {
+    /// Its tool calls that changed files, directly or through their
+    /// background work.
+    pub wrote: Vec<CallId>,
+    /// Background work started on it that still runs.
+    pub running: Vec<CallId>,
+    /// Tasks started on it.
+    pub started: Vec<TaskId>,
+}
+
+impl Left {
+    pub fn is_empty(&self) -> bool {
+        self.wrote.is_empty() && self.running.is_empty() && self.started.is_empty()
+    }
 }
 
 /// Where and when something was recorded. The position orders it against
@@ -540,6 +568,7 @@ impl State {
         let draft = Draft {
             id,
             session: raced.session,
+            at: raced.at,
             text: Some(*text),
             typed: None,
             sent: None,
@@ -579,7 +608,7 @@ impl State {
         record: &Stated,
     ) -> Result<(), Rejected> {
         match event {
-            DraftEvent::Opened { session } => {
+            DraftEvent::Opened { session, at } => {
                 minted(id.0, record)?;
                 if self.drafts.contains_key(&id) || self.deliveries.contains_key(&id) {
                     return Err(Rejected::Exists);
@@ -590,6 +619,7 @@ impl State {
                 let draft = Draft {
                     id,
                     session: *session,
+                    at: *at,
                     text: None,
                     typed: None,
                     sent: None,
@@ -624,6 +654,7 @@ impl State {
                         let new = Draft {
                             id: successor,
                             session: draft.session,
+                            at: draft.at,
                             text: Some(*text),
                             typed: None,
                             sent: None,
@@ -650,7 +681,7 @@ impl State {
                             by: record.event.at.replica,
                             at: Mark::of(record),
                         });
-                        match self.deliver(&delivery, &as_delivery) {
+                        match self.send_words(draft.at, &delivery, &as_delivery) {
                             Ok(()) => {
                                 draft.held = None;
                                 draft.sent = Some(Sent {
@@ -670,6 +701,44 @@ impl State {
             }
         }
         Ok(())
+    }
+
+    /// Deliver a draft's words. An edit's (a draft opened at an entry) Send
+    /// first moves its session back there, and at the session's start its
+    /// words become the mandate rather than a delivery: all of it, or none.
+    fn send_words(
+        &mut self,
+        at: Option<EntryId>,
+        delivery: &Delivery,
+        record: &Stated,
+    ) -> Result<(), Rejected> {
+        let Some(to) = at else {
+            return self.deliver(delivery, record);
+        };
+        let session = delivery.to;
+        let saved = self.tasks.get(&session).ok_or(Rejected::Unknown)?.clone();
+        let event = TaskEvent::Moved(Move::Back { to });
+        let fact = Fact::Task(session, event.clone());
+        let back = Stated {
+            fact: &fact,
+            ..record.clone()
+        };
+        self.task_event(session, &event, &back)?;
+        let at_start = saved.context().is_some_and(|c| c.start == to);
+        let sent = match (at_start, &delivery.content) {
+            (true, Content::Words(words)) => {
+                let mut task = self.tasks.get(&session).ok_or(Rejected::Unknown)?.clone();
+                task.mandate.text = *words;
+                self.put(task);
+                self.say(*words, session, Mark::of(record));
+                Ok(())
+            }
+            _ => self.deliver(delivery, record),
+        };
+        if sent.is_err() {
+            self.put(saved);
+        }
+        sent
     }
 
     /// Fold one fact, or refuse it. On a refusal this state may be part
@@ -885,8 +954,11 @@ impl State {
                             }
                     ),
                     TaskEvent::Expired => false,
-                    TaskEvent::Moved(movement) => matches!(movement, Move::Rewind { .. }),
-                    TaskEvent::ModeSet(_) | TaskEvent::Renamed(_) | TaskEvent::Pause(_) => true,
+                    TaskEvent::Moved(movement) => matches!(movement, Move::Back { .. }),
+                    TaskEvent::ModeSet(_)
+                    | TaskEvent::Renamed(_)
+                    | TaskEvent::Tuned(_)
+                    | TaskEvent::Pause(_) => true,
                 },
                 Fact::Delivery(delivery) => matches!(
                     delivery.content,
@@ -1153,11 +1225,8 @@ impl State {
                 self.check_start(task, start)?;
                 root = Some(&start.root);
             }
-            TaskEvent::Moved(Move::Rewind { to }) => {
-                let on_chain = task
-                    .context()
-                    .is_some_and(|c| self.descends(c.head, *to) && self.descends(*to, c.start));
-                if !on_chain || !self.ended_turn(*to) {
+            TaskEvent::Moved(Move::Back { to }) => {
+                if !self.been_at(task, *to) {
                     return Err(Rejected::Detached);
                 }
             }
@@ -1212,25 +1281,79 @@ impl State {
         Ok(())
     }
 
-    /// Whether some request's response is `entry` and ended its model turn.
-    fn ended_turn(&self, entry: EntryId) -> bool {
-        self.response(entry).is_some_and(|m| {
-            matches!(
-                &m.ended,
-                Some(Ended {
-                    ending: Ending::Responded {
-                        stop: Stop::EndTurn,
-                        ..
-                    },
-                    ..
-                })
-            )
-        })
-    }
-
     /// The model call a response came from.
     pub fn response(&self, entry: EntryId) -> Option<&ModelCallRecord> {
         self.model_calls.get(self.open.responses.get(&entry)?)
+    }
+
+    /// The first model call whose request ended at `entry`.
+    pub fn request(&self, entry: EntryId) -> Option<&ModelCallRecord> {
+        self.model_calls.get(self.open.requests.get(&entry)?)
+    }
+
+    /// The agent call whose work `call` is part of: itself, or the call
+    /// its background work or meta call runs under.
+    pub fn agent_call(&self, mut call: CallId) -> CallId {
+        while let Some(record) = self.calls.get(&call) {
+            match record.call.caller {
+                Caller::Background { from, .. } => call = from,
+                Caller::Meta { call: by, .. } => call = by,
+                _ => break,
+            }
+        }
+        call
+    }
+
+    /// The response whose tool use started the work `call` is part of.
+    pub fn origin(&self, call: CallId) -> Option<EntryId> {
+        let made_in = self.open.made_in.get(&self.agent_call(call))?;
+        self.model_calls.get(made_in)?.response
+    }
+
+    /// Whether `task` has been at `entry`, so Max can move it back there
+    /// ([`Move::Back`]): its context's start, or a request or response of
+    /// its own since.
+    pub fn been_at(&self, task: &Task, entry: EntryId) -> bool {
+        task.live().is_some_and(|live| {
+            let start = live.context.start;
+            entry == start
+                || (self.descends(entry, start)
+                    && self
+                        .request(entry)
+                        .or_else(|| self.response(entry))
+                        .is_some_and(|m| m.call.task == task.id))
+        })
+    }
+
+    /// What the path from `from` that a move of `task` to `to` leaves
+    /// changed in the world, which the move does not undo.
+    pub fn left(&self, task: TaskId, from: EntryId, to: EntryId) -> Left {
+        let mut left = Left::default();
+        let mut at = Some(from);
+        while let Some(entry) = at.filter(|e| !self.descends(to, *e)) {
+            at = self.entry(entry).and_then(Entry::parent);
+            let Some(response) = self.response(entry).filter(|m| m.call.task == task) else {
+                continue;
+            };
+            for call in &response.calls {
+                if self.open.changed.contains(call) {
+                    left.wrote.push(*call);
+                }
+                left.running.extend(
+                    self.open
+                        .calls
+                        .iter()
+                        .filter(|c| self.agent_call(**c) == *call),
+                );
+                left.started.extend(
+                    self.tasks
+                        .values()
+                        .filter(|t| t.by == Some(*call))
+                        .map(|t| t.id),
+                );
+            }
+        }
+        left
     }
 
     fn fold_model_call(
@@ -1262,6 +1385,9 @@ impl State {
                 self.put(task);
                 for (entry_id, entry) in entries {
                     self.entries.insert(entry_id, entry);
+                }
+                if !call.appends.is_empty() && !self.open.requests.contains_key(&call.head()) {
+                    self.open.requests.insert(call.head(), id);
                 }
                 self.open.model_calls.insert(id);
                 self.model_calls.insert(
@@ -1538,6 +1664,7 @@ impl State {
             && let Some(sent) = self.model_calls.get_mut(&request)
         {
             sent.calls.push(id);
+            self.open.made_in.insert(id, request);
         }
         if let Some(task) = reader {
             self.put(task);
@@ -1675,6 +1802,9 @@ impl State {
             && !self.calls.contains_key(&by)
         {
             return Err(Rejected::Unknown);
+        }
+        if let Some(by) = change.by {
+            self.open.changed.insert(self.agent_call(by));
         }
         let mut woken = Vec::new();
         for task in self.live() {

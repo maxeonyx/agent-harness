@@ -7,12 +7,12 @@
 # finishes, while the worker runs on until Max stops it; and a brain run
 # as a systemd service, restarted while a command runs. After each, every
 # process the brain started is looked for, with the unit it is in.
-# Watch at https://mx-hv-mj.local:4326.
+# Watch at https://mx-hv-mj.local:4346.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example act
 dir=target/cancel-demo
-port=${PORT:-4326}
+port=${PORT:-4346}
 url=https://mx-hv-mj.local:$port
 brain=target/release/harness-brain
 rm -rf "$dir"

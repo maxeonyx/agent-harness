@@ -62,7 +62,7 @@ pub fn follow(
         let line = line?;
         match serde_json::from_str(&line) {
             Ok(up) => said(conn, Said::Up(Box::new(up))),
-            Err(e) => eprintln!(
+            Err(e) => errln!(
                 "limb {} said something unreadable ({e}): {line}",
                 hello.limb
             ),

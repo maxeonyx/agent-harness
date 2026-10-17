@@ -58,14 +58,14 @@ impl Process {
         thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 if !line.trim().is_empty() {
-                    eprintln!("limb {limb}: {line}");
+                    errln!("limb {limb}: {line}");
                     *heard.lock().unwrap_or_else(|e| e.into_inner()) = line.trim().to_string();
                 }
             }
         });
         thread::spawn(move || {
             if let Err(e) = link::follow(conn, stdout, stdin, &said) {
-                eprintln!("limb {limb}'s link: {e}");
+                errln!("limb {limb}'s link: {e}");
             }
             said(conn, Said::Left);
         });

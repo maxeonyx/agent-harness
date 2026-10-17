@@ -44,7 +44,7 @@
 //! goes on disk.
 //!
 //! ```text
-//! harness-brain --db DB [--port 4321] [--roles DIR] [--sample WAV]
+//! harness-brain --db DB --port PORT [--roles DIR] [--sample WAV]
 //!               [--workspace DIR --mandate FILE [--name NAME] [--role ROLE]]
 //! ```
 //! A new database needs `--roles`, the directory the roles limb reads; an
@@ -54,12 +54,31 @@
 //! so its briefs can quote it. `--sample` offers the page a recording to
 //! dictate, for a machine with no microphone.
 
+/// Print a line to stdout, dropping it once nothing reads it: `println!`
+/// panics on a closed pipe, and losing the reader of the brain's output
+/// must never stop the brain, least of all from shutting down.
+macro_rules! outln {
+    ($($line:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($line)*);
+    }};
+}
+
+/// Print a line to stderr, dropping it once nothing reads it, as `outln!`.
+macro_rules! errln {
+    ($($line:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($line)*);
+    }};
+}
+
 mod brain;
 mod link;
 mod process;
 mod roles;
 
 use std::net::{IpAddr, TcpListener};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Mutex, mpsc};
@@ -86,7 +105,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("harness-brain: {e}");
+            errln!("harness-brain: {e}");
             ExitCode::FAILURE
         }
     }
@@ -94,15 +113,14 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let (mut db, mut port, mut workspace, mut mandate, mut name) =
-        (None, 4321u16, None, None, None);
+    let (mut db, mut port, mut workspace, mut mandate, mut name) = (None, None, None, None, None);
     let (mut roles, mut role) = (None, "orchestrator".to_string());
     let mut sample = None;
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
             "--db" => db = Some(PathBuf::from(value()?)),
-            "--port" => port = value()?.parse().map_err(|e| format!("--port: {e}"))?,
+            "--port" => port = Some(value()?.parse().map_err(|e| format!("--port: {e}"))?),
             "--workspace" => workspace = Some(PathBuf::from(value()?)),
             "--mandate" => mandate = Some(PathBuf::from(value()?)),
             "--name" => name = Some(value()?),
@@ -113,6 +131,7 @@ fn run() -> Result<(), String> {
         }
     }
     let db = db.ok_or("--db is required")?;
+    let port: u16 = port.ok_or("--port is required")?;
     let start = match (workspace, mandate) {
         (Some(workspace), Some(mandate)) => Some(Start {
             workspace,
@@ -156,18 +175,19 @@ fn run() -> Result<(), String> {
     let allow = |peer: IpAddr| Some(peer) == harness_face_web::default_gateway().map(IpAddr::V4);
     let client = Client::new(login()?);
     let mut brain = Brain::launch(store, folds, client, roles.as_deref(), start, inbox, feed)?;
-    // The face serves until the brain has shut down.
+    // The face serves until the brain has shut down or panicked: the scope
+    // would wait for the face forever, so the process exits from inside it.
     thread::scope(|s| {
         s.spawn(|| face.follow(followed));
         s.spawn(|| {
             if let Err(e) = harness_face_web::serve(&face, listener, tls, allow) {
-                eprintln!("harness-brain: the face stopped serving: {e}");
+                errln!("harness-brain: the face stopped serving: {e}");
             }
         });
-        println!("face: https://mx-hv-mj.local:{port}");
-        brain.run();
-        eprintln!("harness-brain: shut down");
+        outln!("face: https://mx-hv-mj.local:{port}");
+        let ran = panic::catch_unwind(AssertUnwindSafe(|| brain.run()));
+        errln!("harness-brain: shut down");
         let _ = std::io::Write::flush(&mut std::io::stdout());
-        std::process::exit(0)
+        std::process::exit(if ran.is_ok() { 0 } else { 101 })
     })
 }

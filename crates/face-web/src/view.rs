@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::delivery::Content;
-use harness_core::environment::{LimbKind, Reach};
+use harness_core::environment::{Effort, Environment, LimbKind, Reach};
 use harness_core::fact::Fact;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
@@ -23,6 +23,23 @@ type Text<'a> = &'a dyn Fn(ValueId) -> Option<Vec<u8>>;
 
 fn text(value: Text, id: ValueId) -> Option<String> {
     value(id).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The model and effort a task's next request runs at, and while its cache
+/// is warm, until when and how many tokens a change would reread without it.
+fn tuning(value: Text, t: &Task, env: &Environment, last: Option<&Ended>) -> Value {
+    let warm = last.and_then(|ended| {
+        let u = ended.usage?;
+        Some(json!({
+            "until": ended.at.at.0 + harness_provider::request::CACHED_FOR_MS,
+            "tokens": u.input + u.cache_read + u.cache_write_short + u.cache_write_long + u.output,
+        }))
+    });
+    json!({
+        "model": t.tuning.model(env),
+        "effort": t.tuning.effort.or_else(|| harness_provider::effort(&value(env.params)?)),
+        "warm": warm,
+    })
 }
 
 /// Every tab's rows, as of the state: each task, each spawn's scope, Max's
@@ -67,6 +84,7 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
                 "id": e.id.to_string(),
                 "name": e.name,
                 "model": e.model,
+                "effort": value(e.params).and_then(|p| harness_provider::effort(&p)),
                 "places": e.places,
             })
         })
@@ -77,6 +95,8 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
         .map(|l| l.id);
     let harness = json!({
         "environments": environments,
+        "models": harness_provider::MODELS.map(|m| json!({"id": m.id, "name": m.name})),
+        "efforts": Effort::ALL,
         "workspaces": workspaces,
         "build": state.launch().map(|(_, l)| format!("build {:.12}", l.build.to_string())),
         "limited": state.limited(now).map(|t| t.0),
@@ -123,6 +143,7 @@ pub fn rows(state: &State, value: Text, now: Timestamp) -> BTreeMap<FaceKey, Fac
             text: d.text.and_then(|id| text(value, id)),
             held: d.held.as_ref().map(|why| why.to_string()),
             from: d.from,
+            at: d.at,
         };
         rows.insert(FaceKey::Draft(d.id), FaceRow::Draft(row));
     }
@@ -266,7 +287,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "mandate": text(value, t.mandate.text),
         "head": t.head().map(|h| h.to_string()),
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
-        "window": state.environment(t.environment).map(|e| harness_provider::context_window(&e.model)),
+        "window": state.environment(t.environment).map(|e| harness_provider::context_window(t.tuning.model(e))),
+        "tuning": state.environment(t.environment).map(|e| tuning(value, t, e, last)),
         "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
         // Whether Max has paused it, how, and on which task: itself or an
         // ancestor.
@@ -470,6 +492,12 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             }
             TaskEvent::ModeSet(mode) => format!("{} is now {mode:?}", name(*id)),
             TaskEvent::Renamed(new) => format!("{} renamed to {new}", name(*id)),
+            TaskEvent::Tuned(tuning) => format!(
+                "{} tuned to {} at {} effort",
+                name(*id),
+                tuning.model.as_deref().unwrap_or("its role's model"),
+                tuning.effort.map_or("its role's", |e| e.as_str()),
+            ),
             TaskEvent::Moved(Move::Root(start)) => {
                 format!("{} has a new root, on {}", name(*id), start.root.model)
             }
@@ -480,7 +508,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                     start.root.model
                 )
             }
-            TaskEvent::Moved(Move::Rewind { .. }) => format!("{} rewound", name(*id)),
+            TaskEvent::Moved(Move::Back { to }) => format!("{} moved back to {to}", name(*id)),
             TaskEvent::Drain(Drain::ToMax { .. }) => format!("{} interrupted", name(*id)),
             TaskEvent::Drain(Drain::Abandon { by, within: 0 }) => {
                 format!("{} abandoned by {by:?}, now", name(*id))
@@ -585,7 +613,16 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Draft(id, event) => {
             use harness_core::draft::DraftEvent as E;
             match event {
-                E::Opened { session } => format!("draft {id} opened for {}", name(*session)),
+                E::Opened { session, at: None } => {
+                    format!("draft {id} opened for {}", name(*session))
+                }
+                E::Opened {
+                    session,
+                    at: Some(at),
+                } => format!(
+                    "draft {id} opened for {}, to edit after {at}",
+                    name(*session)
+                ),
                 E::Text(_) => format!("draft {id} edited"),
                 E::Send { .. } => format!("draft {id} sent"),
                 E::Discarded => format!("draft {id} discarded"),

@@ -125,6 +125,56 @@ fn main() {
         "edit",
         json!({ "path": "src/lib.rs", "old": "b + a", "new": "a + b" }),
     );
+    println!(
+        "\n  A made that change itself, so A's context knows it, and A's own edit goes through:"
+    );
+    brain.call(
+        &mut a,
+        "edit",
+        json!({ "path": "src/lib.rs", "old": "b + a", "new": "a + b" }),
+    );
+
+    title(
+        "read: whole numbered lines up to 64 KiB, a long line never cut in its middle, an image as an image",
+    );
+    let long = format!("short\n{}END\nafter\n", "x".repeat(300));
+    fs::write(scratch.join("work/long.txt"), &long).unwrap();
+    brain.call(&mut a, "read", json!({ "path": "long.txt" }));
+    let many: String = (1..=20_000).map(|n| format!("line {n}\n")).collect();
+    fs::write(scratch.join("work/many.txt"), many).unwrap();
+    brain.call(
+        &mut a,
+        "read",
+        json!({ "path": "many.txt", "offset": 9000, "limit": 3 }),
+    );
+    println!(
+        "\n  the whole of a 20 000-line file, stopped at the budget (its last two lines shown here):"
+    );
+    let call = brain.dispatch(&mut a, "read", json!({ "path": "many.txt" }));
+    let outcome = loop {
+        if let Some(outcome) = brain.settled.remove(&call) {
+            break outcome;
+        }
+        brain.take();
+    };
+    let output = outcome.output().expect("the read completed");
+    let content: Value = serde_json::from_slice(&brain.values[&output.model]).unwrap();
+    let text = content[0]["text"].as_str().unwrap();
+    text.lines()
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>()
+        .iter()
+        .rev()
+        .for_each(|l| println!("    │ {l}"));
+    let png = [
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R', 0,
+        0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1F, 0x15, 0xC4, 0x89, 0, 0, 0, 0x0A, b'I', b'D',
+        b'A', b'T', 0x78, 0x9C, 0x63, 0, 1, 0, 0, 5, 0, 1, 0x0D, 0x0A, 0x2D, 0xB4, 0, 0, 0, 0,
+        b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82,
+    ];
+    fs::write(scratch.join("work/dot.png"), png).unwrap();
+    brain.call(&mut a, "read", json!({ "path": "dot.png" }));
 
     title("Long output, cut to head + tail + the lines matching the agent's grep");
     let tests = "for i in $(seq 1 2000); do if [ $i = 1234 ]; then echo \"test parser::nested_quotes ... FAILED\"; else echo \"test case_$i ... ok\"; fi; done; exit 101";
@@ -161,6 +211,23 @@ fn main() {
     brain.publish();
     brain.settle(&mut a, call);
     println!("  afterwards: {}", after(&pids));
+
+    title("A server started with setsid outlives its command, until stopped by its pid");
+    brain.call(
+        &mut a,
+        "bash",
+        json!({ "command": "setsid sleep 300 > /dev/null 2>&1 & echo $! > server.pid; echo started $(cat server.pid)", "grep": "" }),
+    );
+    brain.call(
+        &mut a,
+        "bash",
+        json!({ "command": "kill -0 $(cat server.pid) && echo still running in the next call", "grep": "" }),
+    );
+    brain.call(
+        &mut a,
+        "bash",
+        json!({ "command": "kill $(cat server.pid); sleep 0.2; ps -o stat= -p $(cat server.pid) | grep -qv Z && echo running || echo stopped", "grep": "" }),
+    );
 
     title("The limb is killed mid-command; the next instance ends what it left and settles");
     brain.disconnect();
@@ -573,8 +640,17 @@ fn show(
     };
     if let Some(output) = &output {
         let content: Value = serde_json::from_slice(&values[&output.model]).unwrap();
-        for line in content[0]["text"].as_str().unwrap().lines() {
-            println!("    │ {line}");
+        match content[0]["type"].as_str() {
+            Some("image") => println!(
+                "    │ [an image block: {}, {} bytes of base64]",
+                content[0]["source"]["media_type"],
+                content[0]["source"]["data"].as_str().unwrap().len()
+            ),
+            _ => content[0]["text"]
+                .as_str()
+                .unwrap()
+                .lines()
+                .for_each(|line| println!("    │ {line}")),
         }
         for o in &output.observes {
             if o.resource.kind == "file" {

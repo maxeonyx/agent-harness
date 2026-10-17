@@ -35,7 +35,6 @@ struct Read {
     path: String,
     offset: Option<usize>,
     limit: Option<usize>,
-    grep: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +57,14 @@ struct Grep {
     pattern: String,
     path: Option<String>,
 }
+
+/// The most text one `read` returns: whole lines, each numbered, until the
+/// next would pass it. The tool's description states it.
+pub(crate) const READ_BUDGET: usize = 64 * 1024;
+
+/// The largest image `read` shows: the provider's limit on an image, as
+/// base64, is 5 MB.
+const IMAGE_BUDGET: usize = 3 * 1024 * 1024;
 
 /// A path as the tools see it: where it is, and its resource name (relative
 /// to the root when inside it).
@@ -169,26 +176,41 @@ impl Inner {
                 })
                 .collect();
             names.sort();
-            let mut truncator = Truncator::new(Limits::default(), None);
-            names.iter().for_each(|n| truncator.line(n));
-            return Ok(report.completed(&truncator.finish().text, Vec::new()));
+            return Ok(report.completed(
+                &budgeted(names.iter().map(String::as_str), 1, false),
+                Vec::new(),
+            ));
         }
         let bytes = fs::read(&place.path).map_err(|e| format!("cannot read {shown}: {e}"))?;
-        let version = Version::Is(Digest::of(&bytes));
+        let observes = self.observations(&place.name, Version::Is(Digest::of(&bytes)));
+        if let Some(media) = image(&bytes) {
+            if bytes.len() > IMAGE_BUDGET {
+                return Err(format!(
+                    "{shown} is a {} KiB image; an image is shown only up to {} KiB. Scale it down first.",
+                    bytes.len() / 1024,
+                    IMAGE_BUDGET / 1024
+                ));
+            }
+            let blocks = serde_json::json!([{
+                "type": "image",
+                "source": { "type": "base64", "media_type": media, "data": base64(&bytes) },
+            }]);
+            return Ok(Outcome::Completed(Output {
+                model: report.value(blocks.to_string().into_bytes()),
+                full: None,
+                observes,
+            }));
+        }
+        if bytes.is_empty() {
+            return Ok(report.completed("(empty file)", observes));
+        }
         let content = String::from_utf8_lossy(&bytes);
         let offset = input.offset.unwrap_or(1).max(1);
         let lines = content
             .lines()
             .skip(offset - 1)
             .take(input.limit.unwrap_or(usize::MAX));
-        let mut truncator =
-            Truncator::new(Limits::default(), pattern(input.grep.as_deref())?).numbered(offset);
-        lines.for_each(|l| truncator.line(l));
-        let mut shown = truncator.finish().text;
-        if bytes.is_empty() {
-            shown = "(empty file)".into();
-        }
-        Ok(report.completed(&shown, self.observations(&place.name, version)))
+        Ok(report.completed(&budgeted(lines, offset, true), observes))
     }
 
     fn write(
@@ -383,6 +405,91 @@ fn pattern(grep: Option<&str>) -> Result<Option<Regex>, String> {
 
 /// Resolve `.` and `..` without touching the disk, since the path may not
 /// exist yet.
+/// `lines` from line `first` on, whole, until [`READ_BUDGET`]; then where
+/// to read on. A single line longer than the budget is shown up to it, and
+/// says how much of it is left out.
+fn budgeted<'a>(lines: impl Iterator<Item = &'a str>, first: usize, numbered: bool) -> String {
+    let mut text = String::new();
+    for (n, line) in (first..).zip(lines) {
+        let number = if numbered {
+            format!("{n:>6}\t")
+        } else {
+            String::new()
+        };
+        if text.len() + number.len() + line.len() + 1 > READ_BUDGET {
+            if text.is_empty() {
+                let end = (0..=READ_BUDGET - number.len())
+                    .rev()
+                    .find(|&i| line.is_char_boundary(i))
+                    .unwrap_or(0);
+                return format!(
+                    "{number}{}\n[line {n} goes on for {} more bytes than a read returns ({} KiB)]",
+                    &line[..end],
+                    line.len() - end,
+                    READ_BUDGET / 1024
+                );
+            }
+            let on = if numbered {
+                format!("; read on with offset {n}")
+            } else {
+                String::new()
+            };
+            return format!(
+                "{text}[stopped before line {n}: a read returns at most {} KiB{on}]",
+                READ_BUDGET / 1024
+            );
+        }
+        text.push_str(&number);
+        text.push_str(line);
+        text.push('\n');
+    }
+    text
+}
+
+/// The media type of an image the provider can be shown, by its first bytes.
+fn image(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
+        [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
+        [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
+        [
+            b'R',
+            b'I',
+            b'F',
+            b'F',
+            _,
+            _,
+            _,
+            _,
+            b'W',
+            b'E',
+            b'B',
+            b'P',
+            ..,
+        ] => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Standard base64, padded.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(match i <= chunk.len() {
+                true => ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char,
+                false => '=',
+            });
+        }
+    }
+    out
+}
+
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for part in path.components() {

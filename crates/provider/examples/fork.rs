@@ -85,6 +85,7 @@ fn main() {
         let head = message.id_after(base);
         let breakpoints = marks.iter().chain([&head]).copied().collect();
         ModelCall {
+            model: None,
             task: TaskId(EXAMPLE.origin().event(0)),
             base,
             appends: vec![message],

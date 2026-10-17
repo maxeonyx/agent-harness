@@ -113,7 +113,7 @@ impl Device {
         self.say(Batch {
             values: vec![words.clone()],
             facts: vec![
-                Fact::Draft(draft, DraftEvent::Opened { session }),
+                Fact::Draft(draft, DraftEvent::Opened { session, at: None }),
                 Fact::Draft(
                     draft,
                     DraftEvent::Send {

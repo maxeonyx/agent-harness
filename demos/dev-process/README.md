@@ -4,7 +4,7 @@
 demos/dev-process/run.sh
 ```
 
-Then open https://mx-hv-mj.local:4325 and watch the map (another port: `PORT=4400`; a new run: `FRESH=1`). It takes about three minutes on Opus and spends a few dozen requests of the subscription. The face keeps serving the finished run until you stop it.
+Then open https://mx-hv-mj.local:4345 and watch the map (another port: `PORT=4400`; a new run: `FRESH=1`). It takes about three minutes on Opus and spends a few dozen requests of the subscription. The face keeps serving the finished run until you stop it.
 
 What it does:
 
