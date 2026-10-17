@@ -220,6 +220,7 @@ name = "harness-core"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "harness-substrate",
  "imbl",
  "serde",
 ]
@@ -263,6 +264,13 @@ dependencies = [
  "harness-core",
  "rusqlite",
  "serde_json",
+]
+
+[[package]]
+name = "harness-substrate"
+version = "0.0.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
