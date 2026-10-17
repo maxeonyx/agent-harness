@@ -52,7 +52,7 @@ fn main() {
     // Scripted unless `MODEL` names a real one: then each message asks in
     // words, and the restarts read the prompt cache.
     let model = device::model("scripted");
-    let roles = role_args(&dir, &model);
+    let roles = role_args(&model);
     let ask = |real: &'static str, script: &'static str| match model.as_str() {
         "scripted" => script,
         _ => real,

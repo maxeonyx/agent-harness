@@ -17,13 +17,14 @@
 //
 // `up` builds the harness, ends what the brain left running, and starts it
 // again on its database and this clone's roles/, every role on MODEL: the
-// scripted model, which costs nothing, unless told (`sonnet`; a role's
-// effort stays its file's). It keeps the brain's port if that is free, or
-// takes a free one in 4340-4499 (DRIVE_PORTS=LOW-HIGH for others), and succeeds once this launch's log says
-// it serves (`face: …`), or fails with the log's tail. The database outlives
-// `up`, so the next `up` relaunches a rebuilt brain on the same chats;
-// `down` ends everything of the brain's, and `down --wipe` forgets it. The
-// face serves the page from crates/face-web/src/page as it is on disk
+// scripted model, which costs nothing, unless told (`sonnet/low`, or
+// `sonnet` to keep each role's effort: the brain's `--model`). It keeps
+// the brain's port if that is free, or takes a free one in 4340-4499
+// (DRIVE_PORTS=LOW-HIGH for others), and succeeds once this launch's log
+// says it serves (`face: …`), or fails with the log's tail. The database
+// outlives `up`, so the next `up` relaunches a rebuilt brain on the same
+// chats; `down` ends everything of the brain's, and `down --wipe` forgets
+// it. The face serves the page from crates/face-web/src/page as it is on disk
 // (`--page`), so an edit to the page shows on reload, with no rebuild.
 //
 // `chat` starts a chat as Max does at a tab, with no browser (the `act`

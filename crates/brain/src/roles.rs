@@ -96,6 +96,8 @@ pub struct Models {
     /// The model every role runs on, over its file's: `--model scripted`
     /// for a brain that costs nothing.
     pub every: Option<String>,
+    /// The effort every role runs at, over its file's: `--model sonnet/low`.
+    pub effort: Option<Effort>,
 }
 
 impl Models {
@@ -220,8 +222,8 @@ pub struct Role {
     pub name: String,
     /// As the file names it: an alias, an id, or `scripted`.
     pub model: String,
-    /// The request parameters, as the exact JSON object every turn sends.
-    pub params: String,
+    /// How hard it thinks: its request parameters' `output_config.effort`.
+    pub effort: Effort,
     pub limbs: Vec<String>,
     pub places: Vec<String>,
     pub starts: Vec<String>,
@@ -307,12 +309,7 @@ fn parse(text: &str) -> Result<Role, String> {
         version: Version::Gone,
         name: one("name").ok_or("no `name`")?,
         model,
-        params: serde_json::json!({
-            "max_tokens": 64000,
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": effort},
-        })
-        .to_string(),
+        effort,
         limbs: list("limbs"),
         places: list("places"),
         starts: list("starts"),
@@ -354,7 +351,13 @@ fn environments(
     let mut changes = Vec::new();
     for (i, r) in order.into_iter().enumerate() {
         let role = Bytes::from(r.prompt.as_str());
-        let params = Bytes::from(r.params.as_str());
+        let effort = models.effort.unwrap_or(r.effort);
+        let params = serde_json::json!({
+            "max_tokens": 64000,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": effort},
+        });
+        let params = Bytes::from(params.to_string());
         let resource = ResourceKey {
             limb: owner,
             kind: "role".into(),
