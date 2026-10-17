@@ -58,6 +58,15 @@ impl<S: Schema, St: Storage<S>> Log<S, St> {
         self.here
     }
 
+    /// The time its next record will have, so what that record creates
+    /// can be named before it is said.
+    pub fn next(&self) -> Time {
+        Time {
+            place: self.here,
+            n: self.next,
+        }
+    }
+
     /// Write the next record, stored before it is returned for shipping.
     /// `said` is given the record's time, so what it creates is named by it.
     pub fn say(

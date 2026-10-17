@@ -827,6 +827,12 @@ impl State {
                         })
                 }
                 Fact::Described { limb: of, .. } => of == limb,
+                // A limb that holds role definitions states the
+                // environments read from them.
+                Fact::Environment(env) => env
+                    .source
+                    .as_ref()
+                    .is_some_and(|s| s.resource.limb == *limb),
                 _ => false,
             },
             Author::Max => match fact {
@@ -1727,7 +1733,8 @@ impl State {
     /// settled, with its stop's deadline; the resources of its that live
     /// contexts embody, with every version the brain holds of each (its
     /// current one where one is recorded, otherwise each a live context
-    /// embodies); and the brain's shutdown. The bytes of the values the
+    /// embodies); the environments read from its resources; and the
+    /// brain's shutdown. The bytes of the values the
     /// call rows name ([`LimbRow::Value`]) are the store's, so the brain
     /// adds them.
     pub fn limb_rows(&self, limb: LimbId) -> BTreeMap<LimbKey, LimbRow> {
@@ -1760,6 +1767,14 @@ impl State {
         }
         if !known.is_empty() {
             rows.insert(LimbKey::Watch, LimbRow::Watch { known });
+        }
+        for env in self.environments.values() {
+            if env.source.as_ref().is_some_and(|s| s.resource.limb == limb) {
+                rows.insert(
+                    LimbKey::Environment(env.id),
+                    LimbRow::Environment(env.clone()),
+                );
+            }
         }
         if let Some(by) = self.shutdown {
             rows.insert(LimbKey::Shutdown, LimbRow::Shutdown { by });

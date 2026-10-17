@@ -207,7 +207,9 @@ dependencies = [
  "harness-provider",
  "harness-runtime",
  "harness-store",
+ "harness-substrate",
  "libc",
+ "serde",
  "serde_json",
 ]
 

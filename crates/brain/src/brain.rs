@@ -1,7 +1,8 @@
 //! The loop: act on each item of the to-do list, commit what happened,
 //! repeat.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -11,23 +12,25 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
-use harness_core::environment::{Description, Environment, FromLimb, LimbKind, Reach, ToLimb};
+use harness_core::environment::{Description, Hello, LimbKey, LimbKind, LimbRow, Reach};
+use harness_core::fact::{Batch, Fact, Launched, Refusal};
 use harness_core::id::{
-    CallId, DeliveryId, FaceId, InstanceId, LimbId, ModelCallId, Seq, TaskId, Timestamp, ToolUseId,
-    ValueId,
+    CallId, DeliveryId, LimbId, ModelCallId, PlaceId, TaskId, Time, Timestamp, ToolUseId, ValueId,
 };
-use harness_core::journal::{self, Author, Batch, Fact, Launched, Record};
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop};
-use harness_core::resource::{Change, Observation, ResourceKey};
+use harness_core::resource::Observation;
+use harness_core::schema::{self, Record};
 use harness_core::state::{State, Todo};
 use harness_core::task::{
     Context, Created, Drain, Draining, Input, Mandate, Mode, Move, Origin, Outcome as TaskOutcome,
     Scope, Start as TaskStart, Stopper, Task, TaskEvent,
 };
 use harness_core::value::Bytes;
-use harness_face_web::{Act, Feed, Running};
+use harness_face_web::{Feed, Folded, Running};
 use harness_limb_workspace::{Clone, Settings, user};
+use harness_substrate::{Publisher, Up, View, What as Said};
 
+use crate::link::{self, Conn, Wire};
 use crate::process::Process;
 use harness_provider::{Client, Finished, Progress};
 use harness_runtime::{Cancel, signals};
@@ -40,28 +43,27 @@ use crate::{policy, render, roles};
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
 const TICK: Duration = Duration::from_millis(250);
-/// How often the role files are read again.
-const ROLES_EVERY: Duration = Duration::from_secs(2);
 
-/// What reaches the loop from the threads it started, and from faces.
+/// How long after launch the brain waits for the limbs an earlier brain
+/// left running to reconnect, before starting its own.
+const REATTACH: Duration = Duration::from_secs(2);
+
+/// How long the brain waits before starting again a limb whose process
+/// ended without connecting.
+const RESTART: Duration = Duration::from_secs(30);
+
+/// What reaches the loop from the threads it started, from its limbs'
+/// links, and from faces.
 pub struct Event(What);
 
 enum What {
-    Limb(LimbId, FromLimb),
-    /// A plugin limb's process has stopped talking.
-    Exited(LimbId),
+    Link(Conn, link::Said),
     FirstByte(ModelCallId),
     Finished(ModelCallId, Result<Finished, harness_provider::Error>),
     /// A signal asking the brain's process to stop.
     Signal(libc::c_int),
-    /// A batch of Max's facts from a face, answered with whether the journal
-    /// took it.
-    Max {
-        face: FaceId,
-        seen: Seq,
-        batch: Batch,
-        reply: Sender<Result<(), String>>,
-    },
+    /// A record from one of Max's tabs.
+    Tab(Box<Record>),
 }
 
 /// The loop's inbox, made before the brain so a face can hold its sender.
@@ -76,9 +78,12 @@ impl Inbox {
         Inbox { events, inbox }
     }
 
-    /// How Max's facts from the faces reach the brain.
-    pub fn max(&self) -> Max {
-        Max(self.events.clone())
+    /// Where Max's tabs' records go: the brain, which includes each.
+    pub fn include(&self) -> Box<dyn Fn(Record) + Send + Sync> {
+        let events = self.events.clone();
+        Box::new(move |record| {
+            let _ = events.send(Event(What::Tab(Box::new(record))));
+        })
     }
 
     /// Have `SIGINT`, `SIGTERM` and `SIGHUP` reach the brain as events: the
@@ -93,25 +98,6 @@ impl Inbox {
     }
 }
 
-/// Max's facts, through the brain: each batch is committed as his, as far
-/// as his face had seen, or refused back to him.
-pub struct Max(Sender<Event>);
-
-impl Act for Max {
-    fn act(&self, face: FaceId, seen: Seq, batch: Batch) -> Result<(), String> {
-        let (reply, answer) = mpsc::channel();
-        let max = What::Max {
-            face,
-            seen,
-            batch,
-            reply,
-        };
-        let stopped = "the brain has stopped".to_string();
-        self.0.send(Event(max)).map_err(|_| stopped.clone())?;
-        answer.recv().map_err(|_| stopped)?
-    }
-}
-
 /// A task the command line starts in Max's scope, as his: a role, a
 /// directory to work in, and a mandate. Like every task he starts, it is a
 /// chat with him, done when he says.
@@ -122,13 +108,19 @@ pub struct Start {
     pub mandate: String,
 }
 
-type Refused = journal::Error<harness_store::Error>;
+/// One limb's link, while it is connected.
+struct Link {
+    conn: Conn,
+    place: PlaceId,
+    wire: Wire,
+    publisher: Publisher<LimbKey, LimbRow, Refusal>,
+}
 
-/// One brain: the only writer of its journal.
+/// One brain: the decider of everything its places say.
 pub struct Brain {
-    journal: journal::Journal<Store>,
-    /// The face, handed the state after each commit.
-    face: Sender<State>,
+    decider: schema::Brain<Store>,
+    /// The face, handed the state after each change.
+    face: Sender<Folded>,
     client: Arc<Client>,
     events: Sender<Event>,
     inbox: Receiver<Event>,
@@ -137,21 +129,22 @@ pub struct Brain {
     meta: LimbId,
     /// Max's limb: his answers to `ask`.
     max: LimbId,
-    /// The user limb: `~/.claude`.
-    user: LimbId,
-    /// Where the role files are, and when they were last read.
-    roles: PathBuf,
-    roles_read: Instant,
-    /// Why the role files last could not be read, said once.
-    roles_error: Option<String>,
-    /// The plugin limbs this brain has started, by id.
+    /// The roles limb, co-hosted.
+    roles: Option<LimbId>,
+    /// The plugin limbs this brain has started, by id, until they exit.
     limbs: HashMap<LimbId, Process>,
-    /// Those started that have not said hello yet: a clone being made.
-    connecting: HashSet<LimbId>,
-    /// Where each limb keeps its record of calls: `<state>/<limb>`.
+    /// When a limb's process last ended without connecting.
+    failed: HashMap<LimbId, Instant>,
+    /// The limbs connected now.
+    links: HashMap<LimbId, Link>,
+    /// The next number for a co-hosted link: process links count up from
+    /// 1, these down from the top.
+    hosted: Conn,
+    /// Where each limb keeps its log: `<state>/<limb>`, and the socket.
     state_dir: PathBuf,
+    socket: PathBuf,
     /// The context of each request without a first byte yet: fan-out gating.
-    cold: HashMap<ModelCallId, HashSet<EntryId>>,
+    cold: HashMap<ModelCallId, std::collections::HashSet<EntryId>>,
     /// Each request in flight: the thread that sends it, joined when it
     /// reports how it ended, and its stop.
     requests: HashMap<ModelCallId, (Cancel, JoinHandle<()>)>,
@@ -163,81 +156,115 @@ pub struct Brain {
 }
 
 impl Brain {
-    /// Fold the journal, define the roles read from `roles`, and start the
-    /// command line's task. What the last writer left in flight is on the
+    /// Fold what the database holds, define the brain's own limbs if it is
+    /// new (the roles limb over `roles`), listen for limbs, and start the
+    /// command line's task. What the last brain left in flight is on the
     /// to-do list.
     #[allow(clippy::too_many_arguments)]
     pub fn launch(
         store: Store,
-        face: Sender<State>,
+        face: Sender<Folded>,
         client: Client,
         state_dir: PathBuf,
-        roles: &Path,
+        roles: Option<&Path>,
         start: Option<Start>,
         Inbox { events, inbox }: Inbox,
         feed: Feed,
     ) -> Result<Brain, String> {
-        let journal =
-            journal::Journal::open(store).map_err(|e| format!("the journal folds: {e}"))?;
-        let _ = face.send(journal.state().clone());
-        let shared = |is: &dyn Fn(&LimbKind) -> bool| {
-            let state = journal.state();
-            state
-                .environments()
-                .flat_map(|e| e.limbs.iter())
-                .copied()
-                .find(|l| state.limb(*l).is_some_and(|l| is(&l.kind)))
+        let (decider, divergences) = schema::Brain::open(store.place(), store)
+            .map_err(|e| format!("the database folds: {e}"))?;
+        for d in &divergences {
+            eprintln!(
+                "harness-brain: the record at {} folds differently in this build, and is skipped: {}",
+                d.at, d.why
+            );
+        }
+        let state = decider.state();
+        let find =
+            |is: &dyn Fn(&LimbKind) -> bool| state.limbs().find(|l| is(&l.kind)).map(|l| l.id);
+        let meta = find(&|k| *k == LimbKind::Meta);
+        let max = find(&|k| *k == LimbKind::Max);
+        let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
+        let roles_limb =
+            find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == roles::KIND));
+        std::fs::create_dir_all(&state_dir).map_err(|e| format!("{state_dir:?}: {e}"))?;
+        let socket = state_dir.join("limbs.sock");
+        let at = decider.next();
+        let mut facts = vec![Fact::Launched(Launched {
+            build: concat!("harness-brain ", env!("CARGO_PKG_VERSION")).into(),
+            by: None,
+        })];
+        let define =
+            |facts: &mut Vec<Fact>,
+             found: Option<LimbId>,
+             limb: &dyn Fn(LimbId) -> harness_core::environment::Limb| {
+                found.unwrap_or_else(|| {
+                    let id = LimbId(at.event(facts.len() as u32));
+                    facts.push(Fact::Limb(limb(id)));
+                    id
+                })
+            };
+        let meta = define(&mut facts, meta, &meta::definition);
+        let max = define(&mut facts, max, &max::definition);
+        let home = std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?;
+        let config = PathBuf::from(home).join(".claude");
+        let user = define(&mut facts, user_limb, &|id| {
+            Settings::user(id, config.clone())
+        });
+        let roles = match (roles_limb, roles) {
+            (Some(id), _) => Some(id),
+            (None, Some(dir)) => {
+                let dir = dir
+                    .canonicalize()
+                    .map_err(|e| format!("the roles {dir:?}: {e}"))?;
+                let settings = roles::Settings {
+                    dir,
+                    limbs: [("meta", meta), ("max", max), ("user", user)]
+                        .into_iter()
+                        .map(|(n, l)| (n.to_string(), l))
+                        .collect(),
+                };
+                Some(define(&mut facts, None, &|id| settings.definition(id)))
+            }
+            (None, None) => None,
         };
-        let meta = shared(&|k| *k == LimbKind::Meta);
-        let max = shared(&|k| *k == LimbKind::Max);
-        let user_limb =
-            shared(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let mut brain = Brain {
-            journal,
+            decider,
             face,
             client: Arc::new(client),
             events,
             inbox,
             feed,
-            meta: meta.unwrap_or_else(LimbId::generate),
-            max: max.unwrap_or_else(LimbId::generate),
-            user: LimbId::generate(),
-            roles: roles.to_path_buf(),
-            roles_read: Instant::now(),
-            roles_error: None,
+            meta,
+            max,
+            roles,
             limbs: HashMap::new(),
-            connecting: HashSet::new(),
+            failed: HashMap::new(),
+            links: HashMap::new(),
+            hosted: Conn::MAX,
             state_dir,
+            socket,
             cold: HashMap::new(),
             requests: HashMap::new(),
             root: None,
             started: Instant::now(),
             reported: false,
         };
-        let mut facts = vec![Fact::Launched(Launched {
-            build: concat!("harness-brain ", env!("CARGO_PKG_VERSION")).into(),
-            by: None,
-        })];
-        if meta.is_none() {
-            facts.push(Fact::Limb(meta::definition(brain.meta)));
-        }
-        if max.is_none() {
-            facts.push(Fact::Limb(max::definition(brain.max)));
-        }
-        let user_id = user_limb.unwrap_or_else(LimbId::generate);
-        if user_limb.is_none() {
-            let home = std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?;
-            let config = PathBuf::from(home).join(".claude");
-            facts.push(Fact::Limb(Settings::user(user_id, config)));
-        }
-        brain.user = user_id;
         brain.append(Batch {
             values: Vec::new(),
             facts,
         });
-        brain.define()?;
+        let events = brain.events.clone();
+        link::listen(&brain.socket, move |conn, said| {
+            let _ = events.send(Event(What::Link(conn, said)));
+        })
+        .map_err(|e| format!("the limbs' socket {:?}: {e}", brain.socket))?;
+        brain.host_roles();
         brain.root = match start {
-            Some(start) => Some(brain.start(start)?),
+            Some(start) => {
+                brain.await_role(&start.role);
+                Some(brain.start(start)?)
+            }
             None => brain
                 .state()
                 .tasks()
@@ -247,28 +274,73 @@ impl Brain {
         Ok(brain)
     }
 
+    /// Start the roles limb on a thread of its own, linked by a channel.
+    fn host_roles(&mut self) {
+        let Some(id) = self.roles else {
+            return eprintln!("harness-brain: no roles limb: a new database needs --roles");
+        };
+        let limb = self.state().limb(id).expect("the roles limb").clone();
+        let (wire, down) = mpsc::channel();
+        let conn = self.hosted;
+        self.hosted -= 1;
+        let place = mint_place();
+        let events = self.events.clone();
+        self.joined(conn, Hello { limb: id, place }, Wire::Channel(wire));
+        thread::spawn(move || {
+            let up = |up| {
+                let said = link::Said::Up(Box::new(up));
+                let _ = events.send(Event(What::Link(conn, said)));
+            };
+            roles::run(&limb, place, down, up);
+            let _ = events.send(Event(What::Link(conn, link::Said::Left)));
+        });
+    }
+
+    /// Take in what arrives until the roles limb has stated `role`, for a
+    /// while: on a new database, it has only just started reading.
+    fn await_role(&mut self, role: &str) {
+        let until = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < until && !self.state().environments().any(|e| e.name == role) {
+            if let Ok(event) = self.inbox.recv_timeout(TICK) {
+                self.handle(event);
+            }
+        }
+    }
+
     /// Start a task in Max's scope, as Max: through the command line, a
-    /// face with no page.
+    /// face with no page, which is a place of its own.
     fn start(&mut self, start: Start) -> Result<TaskId, String> {
         let env = self
             .state()
             .environments()
             .find(|e| e.name == start.role)
-            .ok_or(format!("no role `{}`", start.role))?
+            .ok_or(format!(
+                "no role `{}` (the roles limb states them once it has read its files)",
+                start.role
+            ))?
             .clone();
         let dir = start
             .workspace
             .canonicalize()
             .map_err(|e| format!("the workspace {:?}: {e}", start.workspace))?;
-        let mut facts = Vec::new();
+        // The workspace limbs are the brain's to define, in its own record.
+        let at = self.decider.next();
+        let mut defined = Vec::new();
         let mut places = BTreeMap::new();
         for kind in &env.places {
-            let limb = self.workspace_limb(&dir, None, &mut facts);
+            let limb = self.workspace_limb(&dir, None, at, &mut defined);
             places.insert(kind.clone(), limb);
         }
+        let face = mint_place();
+        defined.push(Fact::Face(face));
+        self.append(Batch {
+            values: Vec::new(),
+            facts: defined,
+        });
         let mandate = Bytes::from(start.mandate);
-        let id = TaskId::generate();
-        facts.push(Fact::Task(
+        let said = Time { place: face, n: 1 };
+        let id = TaskId(said.event(0));
+        let facts = vec![Fact::Task(
             id,
             TaskEvent::Created(Box::new(Created {
                 name: start.name,
@@ -285,21 +357,32 @@ impl Brain {
                     quotes: Vec::new(),
                 },
             })),
-        ));
-        let values = vec![mandate];
-        let max = Author::Max {
-            face: FaceId(0),
-            seen: self.state().last().unwrap_or(Seq(0)),
+        )];
+        let record = Record {
+            at: said,
+            clock: now(),
+            what: Said::Said(Batch {
+                values: vec![mandate],
+                facts,
+            }),
         };
-        self.commit(max, Batch { values, facts })
-            .map_err(|e| format!("the task is refused: {e}"))?;
-        Ok(id)
+        self.include(record);
+        match self.decider.standing(face).refused.get(&1) {
+            Some(why) => Err(format!("the task is refused: {why}")),
+            None => Ok(id),
+        }
     }
 
     /// The workspace limb for `dir`, which is its name: the one already
-    /// defined, or a new one whose definition goes in `facts`, made by
-    /// cloning if `clone`.
-    fn workspace_limb(&self, dir: &Path, clone: Option<Clone>, facts: &mut Vec<Fact>) -> LimbId {
+    /// defined, or a new one whose definition goes in `facts`, to be said
+    /// in the brain's record at `at`, made by cloning if `clone`.
+    fn workspace_limb(
+        &self,
+        dir: &Path,
+        clone: Option<Clone>,
+        at: Time,
+        facts: &mut Vec<Fact>,
+    ) -> LimbId {
         let name = dir.to_string_lossy();
         let new = facts.iter().find_map(|f| match f {
             Fact::Limb(l) if l.name == name => Some(l.id),
@@ -308,7 +391,7 @@ impl Brain {
         if let Some(id) = new.or_else(|| self.state().limb_named(&name).map(|l| l.id)) {
             return id;
         }
-        let id = LimbId::generate();
+        let id = LimbId(at.event(facts.len() as u32));
         let settings = Settings {
             dir: dir.to_path_buf(),
             clone,
@@ -324,16 +407,7 @@ impl Brain {
             if self.down() {
                 return;
             }
-            if self.roles_read.elapsed() > ROLES_EVERY {
-                let error = self.define().err();
-                if error.is_some() && error != self.roles_error {
-                    eprintln!(
-                        "the roles are unchanged: {}",
-                        error.as_deref().unwrap_or("")
-                    );
-                }
-                self.roles_error = error;
-            }
+            self.reap();
             self.work();
             self.report();
             match self.inbox.recv_timeout(TICK) {
@@ -348,49 +422,7 @@ impl Brain {
     }
 
     fn state(&self) -> &State {
-        self.journal.state()
-    }
-
-    /// Read the role files, and commit each role whose file changed as a
-    /// new version of its environment, with the change to the file, so a
-    /// task whose context embodies the old version is told.
-    fn define(&mut self) -> Result<(), String> {
-        self.roles_read = Instant::now();
-        let (meta, max, user) = (self.meta, self.max, self.user);
-        let current: Vec<Environment> = self.state().environments().cloned().collect();
-        let (defined, values) = roles::environments(
-            &roles::read(&self.roles)?,
-            &current,
-            &|name| match name {
-                "meta" => Some(meta),
-                "max" => Some(max),
-                "user" => Some(user),
-                _ => None,
-            },
-            meta,
-        )?;
-        let mut facts = Vec::new();
-        for env in defined {
-            if self.state().environment(env.id) == Some(&env) {
-                continue;
-            }
-            if let Some(source) = &env.source
-                && self.state().resource(&source.resource).map(|c| c.version)
-                    != Some(source.version)
-            {
-                facts.push(Fact::Change(Change {
-                    resource: source.resource.clone(),
-                    version: source.version,
-                    by: None,
-                    content: None,
-                }));
-            }
-            facts.push(Fact::Environment(env));
-        }
-        if !facts.is_empty() {
-            self.append(Batch { values, facts });
-        }
-        Ok(())
+        self.decider.state()
     }
 
     fn work(&mut self) {
@@ -442,7 +474,7 @@ impl Brain {
     /// Ask a task for a turn.
     fn prompt(&mut self, to: TaskId, prompt: Prompt) {
         self.fact(Fact::Delivery(Delivery {
-            id: DeliveryId::generate(),
+            id: DeliveryId(self.decider.next().event(0)),
             to,
             content: Content::Prompt(prompt),
             read: Read::Next,
@@ -475,11 +507,7 @@ impl Brain {
     /// carries them on.
     fn signal(&mut self, signal: libc::c_int) {
         let again = self.state().shutdown().is_some();
-        let (within, limbs) = if again {
-            (Duration::ZERO, Duration::ZERO)
-        } else {
-            (policy::DRAIN, policy::LIMB_SHUTDOWN)
-        };
+        let within = if again { Duration::ZERO } else { policy::DRAIN };
         let name = signals::name(signal);
         if again {
             eprintln!("harness-brain: {name} again: stopping now");
@@ -489,18 +517,15 @@ impl Brain {
                 within.as_secs()
             );
         }
+        // The limbs see it in their rows, and stop by its deadline.
         self.fact(Fact::Shutdown {
             within: policy::ms(within),
         });
-        for limb in self.limbs.values() {
-            limb.shutdown(limbs);
-        }
     }
 
-    /// Whether the brain has shut down: no request, limb or connection is
-    /// left. At its deadline, and the grace after it, what is left is
-    /// killed, and a request that will not end is left to the process's
-    /// exit.
+    /// Whether the brain has shut down: no request, limb or link is left.
+    /// At its deadline, and the grace after it, what is left is killed,
+    /// and a request that will not end is left to the process's exit.
     fn down(&mut self) -> bool {
         let Some(deadline) = self.state().shutdown() else {
             return false;
@@ -511,96 +536,99 @@ impl Brain {
                 eprintln!("harness-brain: limb {limb} did not exit in time: killed");
                 process.kill();
             }
-            self.connecting.clear();
         }
-        killed || (self.requests.is_empty() && self.limbs.is_empty() && self.connecting.is_empty())
+        killed || (self.requests.is_empty() && self.limbs.is_empty() && self.links.is_empty())
     }
 
     // Limbs.
 
-    /// Start a plugin limb's process. It says hello once it is ready,
-    /// which may take a while (a clone to make).
+    /// Start a plugin limb's process, which connects back when it is ready:
+    /// that may take a while (a clone to make). Not while one is running,
+    /// nor just after launch, while the limbs an earlier brain left running
+    /// reconnect, nor soon after its process ended without connecting.
     fn connect(&mut self, limb: LimbId) {
-        if self.limbs.contains_key(&limb) || !self.connecting.insert(limb) {
+        let recently = |at: &Instant| at.elapsed() < RESTART;
+        if self.links.contains_key(&limb)
+            || self.limbs.contains_key(&limb)
+            || self.started.elapsed() < REATTACH
+            || self.failed.get(&limb).is_some_and(recently)
+            || Some(limb) == self.roles
+        {
             return;
         }
         let definition = self.state().limb(limb).expect("a limb to connect");
-        let events = self.events.clone();
-        let said = move |message: Option<FromLimb>| {
-            let what = match message {
-                Some(message) => What::Limb(limb, message),
-                None => What::Exited(limb),
-            };
-            let _ = events.send(Event(what));
-        };
-        match Process::start(definition, &self.state_dir.join(limb.to_string()), said) {
+        match Process::start(
+            definition,
+            &self.state_dir.join(limb.to_string()),
+            &self.socket,
+        ) {
             Ok(process) => {
                 self.limbs.insert(limb, process);
             }
             Err(e) => {
-                self.connecting.remove(&limb);
-                self.unreachable(limb, format!("its process cannot start: {e}"));
+                eprintln!("limb {limb}: its process cannot start: {e}");
+                self.failed.insert(limb, Instant::now());
             }
         }
     }
 
-    fn opened(&mut self, limb: LimbId, instance: InstanceId) {
-        self.connecting.remove(&limb);
-        if !self.limbs.contains_key(&limb) {
-            return;
+    /// Let go of the limb processes that have exited.
+    fn reap(&mut self) {
+        let exited: Vec<LimbId> = self
+            .limbs
+            .iter_mut()
+            .filter_map(|(id, p)| p.exited().then_some(*id))
+            .collect();
+        for limb in exited {
+            self.limbs.remove(&limb);
+            if !self.links.contains_key(&limb) && self.state().shutdown().is_none() {
+                eprintln!("limb {limb}: its process ended without connecting (its error is above)");
+                self.failed.insert(limb, Instant::now());
+            }
+        }
+    }
+
+    /// A limb connected as `hello.place`: its records are the limb's from
+    /// now on, and it is shipped a whole view.
+    fn joined(&mut self, conn: Conn, hello: Hello, wire: Wire) {
+        let Hello { limb, place } = hello;
+        if self.state().limb(limb).is_none_or(|l| l.kind.is_brains()) {
+            return eprintln!("a link said it is limb {limb}, which is no plugin limb here");
+        }
+        self.links.insert(
+            limb,
+            Link {
+                conn,
+                place,
+                wire,
+                publisher: Publisher::default(),
+            },
+        );
+        if self.state().connected(limb).map(|(p, _)| p) == Some(place) {
+            return self.publish();
         }
         self.fact(Fact::Reach {
             limb,
-            reach: Reach::Connected { instance },
+            reach: Reach::Connected { instance: place },
         });
-        // Report what changed while no brain was listening.
-        let resources: Vec<ResourceKey> = self
-            .state()
-            .tasks()
-            .filter(|t| !t.is_done())
-            .filter_map(|t| t.context())
-            .flat_map(|c| c.knows.keys())
-            .filter(|r| r.limb == limb)
-            .cloned()
-            .collect();
-        self.watch(resources);
     }
 
-    /// A limb's process has stopped talking. One that never said hello
-    /// cannot start, unless the brain told it to shut down first; one that
-    /// did is lost, and started again when needed.
-    fn exited(&mut self, limb: LimbId) {
-        self.limbs.remove(&limb);
-        if self.connecting.remove(&limb) {
-            if self.state().shutdown().is_some() {
-                return;
-            }
-            let why = "its process ended before it was ready (its error is above)";
-            return self.unreachable(limb, why.into());
-        }
-        eprintln!("limb {limb}: its process ended");
+    /// A link ended. If it was its limb's current one, the limb is lost
+    /// until it connects again.
+    fn left(&mut self, conn: Conn) {
+        let Some(limb) = self
+            .links
+            .iter()
+            .find_map(|(l, link)| (link.conn == conn).then_some(*l))
+        else {
+            return;
+        };
+        self.links.remove(&limb);
+        eprintln!("limb {limb}: its link ended");
         self.fact(Fact::Reach {
             limb,
             reach: Reach::Lost,
         });
-    }
-
-    /// A limb cannot be started: every live task that needs it fails.
-    fn unreachable(&mut self, limb: LimbId, why: String) {
-        eprintln!("limb {limb}: {why}");
-        let failing: Vec<TaskId> = self
-            .state()
-            .tasks()
-            .filter(|t| !t.is_done() && t.drain().is_none())
-            .filter(|t| self.state().limbs_of(t).contains(&limb))
-            .map(|t| t.id)
-            .collect();
-        for task in failing {
-            self.fact(Fact::Task(
-                task,
-                TaskEvent::Drain(Drain::Fail(format!("a limb it needs cannot start: {why}"))),
-            ));
-        }
     }
 
     /// What a limb tells a root of `task`: the meta limb is described per
@@ -660,17 +688,13 @@ impl Brain {
         }))
     }
 
-    /// Commit a move to a new root, and watch what it embodies.
+    /// Say a move to a new root. Its limbs watch what it embodies through
+    /// their rows.
     fn moved(&mut self, id: TaskId, movement: Move, values: Vec<Bytes>) {
-        let observes = match &movement {
-            Move::Root(start) | Move::Handover { start, .. } => start.observes.clone(),
-            Move::Rewind { .. } => Vec::new(),
-        };
         self.append(Batch {
             values,
             facts: vec![Fact::Task(id, TaskEvent::Moved(movement))],
         });
-        self.watch(observes.into_iter().map(|o| o.resource).collect());
     }
 
     /// The task's handover call, if the round that made it is over: the next
@@ -829,7 +853,7 @@ impl Brain {
             .collect();
         call.breakpoints = policy::breakpoints(root, &shared, call.head());
 
-        let request = ModelCallId::generate();
+        let request = ModelCallId(self.decider.next().event(0));
         self.append(Batch {
             values,
             facts: vec![Fact::ModelCall(request, ModelCallEvent::Sent(call.clone()))],
@@ -935,6 +959,7 @@ Check your workspace for what you had already done before carrying on."
             .expect("a request this brain sent")
             .call
             .task;
+        let at = self.decider.next();
         let mut batch = Batch::default();
         let Finished {
             ending,
@@ -954,9 +979,8 @@ Check your workspace for what you had already done before carrying on."
         if let (Ending::Responded { .. }, Some(content)) = (&ending, &value) {
             for (call, input) in self.tool_uses(task, content) {
                 batch.values.push(input);
-                batch
-                    .facts
-                    .push(Fact::Call(CallId::generate(), CallEvent::Made(call)));
+                let id = CallId(at.event(batch.facts.len() as u32));
+                batch.facts.push(Fact::Call(id, CallEvent::Made(call)));
             }
         }
         batch.values.extend(value.map(Bytes));
@@ -1017,11 +1041,7 @@ Check your workspace for what you had already done before carrying on."
         if limb == self.meta {
             return self.spawn(id, &call);
         }
-        let Some(workspace) = self.limbs.get(&limb) else {
-            return eprintln!("call {id}: its limb {limb} is not running here; not dispatched");
-        };
-        let input = Bytes(self.value(call.input));
-        workspace.send(&ToLimb::Run { id, call, input });
+        // The limb runs it from its row.
         self.fact(Fact::Call(id, CallEvent::Dispatched));
     }
 
@@ -1082,8 +1102,9 @@ and you cannot finish until it has.",
                         observes: Vec::new(),
                     };
                     batch.values.extend([said, input]);
+                    let made = CallId(self.decider.next().event(batch.facts.len() as u32));
                     batch.facts.extend([
-                        Fact::Call(CallId::generate(), CallEvent::Made(started)),
+                        Fact::Call(made, CallEvent::Made(started)),
                         Fact::Call(id, CallEvent::Settled(Outcome::Completed(output))),
                     ]);
                     return self.append(batch);
@@ -1147,6 +1168,7 @@ and you cannot finish until it has.",
             _ => Scope::Spawn(call),
         };
         let state = self.state();
+        let at = self.decider.next();
         let brief = spawn.brief.map(Bytes::from);
         let quotes = spawn
             .quotes
@@ -1193,7 +1215,7 @@ and you cannot finish until it has.",
                             branch,
                             base: base.clone(),
                         };
-                        let limb = self.workspace_limb(&dir, Some(clone), &mut batch.facts);
+                        let limb = self.workspace_limb(&dir, Some(clone), at, &mut batch.facts);
                         places.insert(kind.clone(), limb);
                     }
                     Origin::Fresh {
@@ -1217,10 +1239,10 @@ and you cannot finish until it has.",
                 },
             };
             batch.values.push(text);
-            batch.facts.push(Fact::Task(
-                TaskId::generate(),
-                TaskEvent::Created(Box::new(created)),
-            ));
+            let id = TaskId(at.event(batch.facts.len() as u32));
+            batch
+                .facts
+                .push(Fact::Task(id, TaskEvent::Created(Box::new(created))));
             names.push(member.name);
         }
         batch.values.extend(brief);
@@ -1291,10 +1313,8 @@ and you cannot finish until it has.",
             Some(by) => policy::share(now(), by),
             None => policy::ms(policy::CALL_GRACE),
         };
+        // The limb stops it from its row.
         self.fact(Fact::Call(id, CallEvent::Stopping { within }));
-        if let Some(workspace) = limb.and_then(|l| self.limbs.get(&l)) {
-            workspace.send(&ToLimb::Stop { call: id, within });
-        }
     }
 
     /// Settle a call the brain answers itself as failed, saying why.
@@ -1313,84 +1333,30 @@ and you cannot finish until it has.",
             What::FirstByte(request) => self.first_byte(request),
             What::Finished(request, finished) => self.finished(request, finished),
             What::Signal(signal) => self.signal(signal),
-            What::Max {
-                face,
-                seen,
-                batch,
-                reply,
-            } => {
-                // Max acts on a picture that may be out of date: a refusal
-                // (the task finished meanwhile) is his to see, not a bug.
-                let done = self
-                    .commit(Author::Max { face, seen }, batch)
-                    .map_err(|e| match e {
-                        journal::Error::Refused { why, .. } => why.to_string(),
-                        e => e.to_string(),
-                    });
-                let _ = reply.send(done);
-            }
-            What::Limb(limb, FromLimb::Hello { instance }) => self.opened(limb, instance),
-            What::Exited(limb) => self.exited(limb),
-            What::Limb(limb, FromLimb::Facts(batch)) => self.limb_facts(limb, batch),
-            What::Limb(_, FromLimb::Live(live)) => self.feed.push(live),
-        }
-    }
-
-    /// Commit what a limb says about its calls and files. A repeat after a
-    /// reconnection is refused by the journal and dropped.
-    fn limb_facts(&mut self, limb: LimbId, batch: Batch) {
-        let observed: Vec<ResourceKey> = batch
-            .facts
-            .iter()
-            .filter_map(|f| match f {
-                Fact::Call(_, CallEvent::Settled(outcome)) => outcome.output(),
-                _ => None,
-            })
-            .flat_map(|o| o.observes.iter().map(|o| o.resource.clone()))
-            .collect();
-        match self.commit(Author::Limb(limb), batch) {
-            Ok(()) => self.watch(observed),
-            Err(e) => eprintln!("limb {limb}'s facts are refused: {e}"),
-        }
-    }
-
-    /// Ask each limb to report changes to these resources, telling it every
-    /// version the journal holds of each: its current version where one is
-    /// recorded, otherwise each version a live context embodies.
-    fn watch(&self, resources: Vec<ResourceKey>) {
-        let state = self.state();
-        let mut known: HashMap<LimbId, Vec<Observation>> = HashMap::new();
-        for resource in resources {
-            let versions: Vec<_> = match state.resource(&resource) {
-                Some(current) => vec![current.version],
-                None => state
-                    .tasks()
-                    .filter(|t| !t.is_done())
-                    .filter_map(|t| t.context()?.knows.get(&resource))
-                    .map(|k| k.has)
-                    .collect(),
-            };
-            let of = known.entry(resource.limb).or_default();
-            for version in versions {
-                let o = Observation {
-                    resource: resource.clone(),
-                    version,
-                };
-                if !of.contains(&o) {
-                    of.push(o);
+            What::Tab(record) => {
+                // A tab new to the brain is one of Max's faces.
+                let place = record.at.place;
+                if !self.state().is_face(place) {
+                    self.fact(Fact::Face(place));
                 }
+                self.include(*record);
             }
-        }
-        for (limb, known) in known {
-            if let Some(workspace) = self.limbs.get(&limb) {
-                workspace.send(&ToLimb::Watch { known });
-            }
+            What::Link(conn, link::Said::Joined(hello, wire)) => self.joined(conn, hello, wire),
+            What::Link(conn, link::Said::Up(up)) => match *up {
+                // Only the current link speaks for its limb.
+                Up::Record(record) if self.links.values().any(|l| l.conn == conn) => {
+                    self.include(record)
+                }
+                Up::Record(_) => {}
+                Up::Live(live) => self.feed.push(live.live),
+            },
+            What::Link(conn, link::Said::Left) => self.left(conn),
         }
     }
 
-    // The journal.
+    // The brain's records.
 
-    /// Commit one of the brain's own facts that names no value.
+    /// Say one of the brain's own facts that names no value.
     fn fact(&mut self, fact: Fact) {
         self.append(Batch {
             values: Vec::new(),
@@ -1398,45 +1364,99 @@ and you cannot finish until it has.",
         });
     }
 
-    /// Commit the brain's own batch. A refusal is a bug in the brain:
-    /// nothing is appended, and it stops.
+    /// Say the brain's own batch, at [`schema::Brain::next`], which the ids
+    /// it creates are minted from. A refusal is a bug in the brain: nothing
+    /// is written, and it stops.
     fn append(&mut self, batch: Batch) {
         let shown: String = format!("{:?}", batch.facts).chars().take(600).collect();
-        if let Err(e) = self.commit(Author::Brain, batch) {
-            panic!("the journal refuses the brain's batch ({e}): {shown}");
-        }
-    }
-
-    /// Commit a batch. What it starts running gets a place in the live
-    /// feed before a face can see it start; what it ends leaves the feed
-    /// once the journal holds how it ended.
-    fn commit(&mut self, by: Author, batch: Batch) -> Result<(), Refused> {
         let started: Vec<Running> = batch.facts.iter().filter_map(starts).collect();
         for running in &started {
             self.feed.start(*running);
         }
-        let records = match self.journal.commit(by, batch, now()) {
-            Ok(records) => records,
-            Err(e) => {
-                for running in started {
-                    self.feed.end(running);
-                }
-                return Err(e);
-            }
+        let facts = batch.facts.clone();
+        let at = match self.decider.say(now(), |_| batch) {
+            Ok(at) => at,
+            Err(e) => panic!("the brain refuses its own batch ({e}): {shown}"),
         };
-        for record in &records {
-            self.log(record);
-            if let Some(running) = ends(&record.fact) {
+        self.changed(at, &facts);
+    }
+
+    /// Include a record from a limb or a tab. A refusal is the place's to
+    /// see, in its standing; it is not a bug.
+    fn include(&mut self, record: Record) {
+        let from = record.at;
+        let facts = match &record.what {
+            Said::Said(batch) => batch.facts.clone(),
+            Said::Included(_) => Vec::new(),
+        };
+        match self.decider.include(now(), record) {
+            Ok(None) => {}
+            Ok(Some(_)) => match self.decider.standing(from.place).refused.get(&from.n) {
+                Some(why) => {
+                    println!("{:>7.1}s {from}  refused: {why}", self.elapsed());
+                    self.publish();
+                }
+                None => self.changed(from, &facts),
+            },
+            Err(e) => eprintln!("harness-brain: cannot store the record at {from}: {e}"),
+        }
+    }
+
+    /// After the brain's state moved on by `facts`, said at `at`: log them,
+    /// end the live progress of what they ended, and publish.
+    fn changed(&mut self, at: Time, facts: &[Fact]) {
+        for fact in facts {
+            self.log(at, fact);
+            if let Some(running) = ends(fact) {
                 self.feed.end(running);
             }
         }
-        let _ = self.face.send(self.state().clone());
-        Ok(())
+        self.publish();
     }
 
-    fn log(&self, record: &Record) {
-        let mut line = harness_face_web::describe(self.state(), record);
-        if let Fact::Call(id, CallEvent::Made(call)) = &record.fact
+    /// Hand the face the state, and ship each linked limb what changed in
+    /// its rows.
+    fn publish(&mut self) {
+        let state = self.state().clone();
+        let as_of = self.decider.head();
+        let _ = self.face.send(Folded {
+            state: state.clone(),
+            as_of,
+            standing: self.decider.standings().clone(),
+        });
+        let store = self.decider.storage();
+        for (limb, link) in &mut self.links {
+            let mut rows = state.limb_rows(*limb);
+            let inputs: Vec<ValueId> = rows
+                .values()
+                .filter_map(|r| match r {
+                    LimbRow::Call { call, .. } => Some(call.input),
+                    _ => None,
+                })
+                .collect();
+            for id in inputs {
+                if let Ok(Some(bytes)) = store.value(id) {
+                    rows.insert(LimbKey::Value(id), LimbRow::Value(Bytes(bytes)));
+                }
+            }
+            let view = View {
+                as_of,
+                standing: self.decider.standing(link.place),
+                rows,
+            };
+            if let Some(down) = link.publisher.publish(view) {
+                link.wire.ship(down);
+            }
+        }
+    }
+
+    fn elapsed(&self) -> f64 {
+        self.started.elapsed().as_secs_f64()
+    }
+
+    fn log(&self, at: Time, fact: &Fact) {
+        let mut line = harness_face_web::describe(self.state(), fact);
+        if let Fact::Call(id, CallEvent::Made(call)) = fact
             && self
                 .state()
                 .call(*id)
@@ -1449,11 +1469,7 @@ and you cannot finish until it has.",
                 .collect::<String>();
             line = format!("{line} {input}");
         }
-        println!(
-            "{:>7.1}s {:>5}  {line}",
-            self.started.elapsed().as_secs_f64(),
-            record.seq.0
-        );
+        println!("{:>7.1}s {at}  {line}", self.elapsed());
     }
 
     /// Print the result of the task this launch started once it is done.
@@ -1479,8 +1495,8 @@ and you cannot finish until it has.",
 
     /// A stored value's bytes. Every value a fact names is stored.
     fn value(&self, id: ValueId) -> Vec<u8> {
-        self.journal
-            .store()
+        self.decider
+            .storage()
             .value(id)
             .unwrap_or_else(|e| panic!("the store reads: {e}"))
             .unwrap_or_else(|| panic!("the value {id} is stored"))
@@ -1538,7 +1554,7 @@ fn user(content: Bytes, values: &mut Vec<Bytes>) -> Message {
     message
 }
 
-fn now() -> Timestamp {
+pub fn now() -> Timestamp {
     Timestamp(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1610,4 +1626,13 @@ fn quoted(state: &State, parent: &Task, label: &str) -> Result<ValueId, String> 
         .ok_or(format!(
             "no words of Max's you have heard are labelled `{label}`"
         ))
+}
+
+/// A new place, for a face or a co-hosted limb this launch: 64 random bits.
+fn mint_place() -> PlaceId {
+    let mut bytes = [0; 8];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .expect("/dev/urandom reads");
+    PlaceId(u64::from_le_bytes(bytes))
 }
