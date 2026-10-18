@@ -14,7 +14,8 @@ import { go } from "./card.js";
 // click (a long press, on touch) opens it pinned at the pointer, its
 // actions as rows, until Escape or a click elsewhere.
 const tip = $("#tip");
-export let tipFor = null, tipTimer = 0, tipClosing = 0, leftAt = null;
+export let tipFor = null;
+let tipTimer = 0, tipClosing = 0, leftAt = null;
 export function hoverable(target, id) {
   target.style.webkitTouchCallout = "none";
   target.addEventListener("pointerenter", (e) => {

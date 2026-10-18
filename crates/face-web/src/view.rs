@@ -3,7 +3,7 @@
 //!
 //! Ids are sent as strings: JSON numbers cannot hold them.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::delivery::Content;
@@ -43,9 +43,9 @@ fn tuning(value: Text, t: &Task, env: &Environment, last: Option<&Ended>) -> Val
     })
 }
 
-/// Every tab's rows, as of the state: each task, each spawn's scope, Max's
-/// queue, the harness as a whole, and his drafts that can still be sent or
-/// were held. `models` are the ones on offer, newest first.
+/// Every tab's rows, as of the state: each task, Max's queue, the harness
+/// as a whole, and his drafts that can still be sent or were held.
+/// `models` are the ones on offer, newest first.
 pub fn rows(
     state: &State,
     value: Text,
@@ -122,33 +122,6 @@ pub fn rows(
         "usage": usage(state, value, provider),
     });
     rows.insert(FaceKey::Harness, FaceRow::Harness(harness));
-    // Each scope: the spawn call that opened it, and the tool use it
-    // answers, so a page can put a scope's members beside the spawn in its
-    // owner's context.
-    let spawns: BTreeSet<CallId> = state
-        .tasks()
-        .filter_map(|t| match t.scope {
-            Scope::Spawn(call) => Some(call),
-            Scope::Max => None,
-        })
-        .collect();
-    for id in spawns {
-        let Some(record) = state.call(id) else {
-            continue;
-        };
-        let (task, background) = match record.call.caller {
-            Caller::Agent { task, .. } => (task, false),
-            Caller::Background { task, .. } => (task, true),
-            Caller::Max { .. } | Caller::Meta { .. } => continue,
-        };
-        let scope = json!({
-            "owner": task.to_string(),
-            "background": background,
-            "made": record.made.seq.n,
-            "settled": record.settled.is_some(),
-        });
-        rows.insert(FaceKey::Scope(id), FaceRow::Scope(scope));
-    }
     // A sent draft is a delivery in its session; a discarded one is gone.
     // What is left can still be sent, or was held with its words kept: a
     // finished session's draft is the words that continue it.
@@ -168,10 +141,6 @@ pub fn rows(
     rows
 }
 
-/// The subscription's usage: the newer of what the latest response's
-/// headers reported and what Max's latest usage reading returned, each
-/// window by name, as of when; whether a reading is running; and why the
-/// last one failed, if none has succeeded since.
 /// Where the latest relaunch of the brain stands, as far as it concerns the
 /// build running now: `under way` while the builds limb is building and
 /// rehearsing it; `took over` once it settled in this launch's span, when
@@ -211,6 +180,10 @@ fn relaunch(state: &State, value: Text) -> Value {
     }
 }
 
+/// The subscription's usage: the newer of what the latest response's
+/// headers reported and what Max's latest usage reading returned, each
+/// window by name, as of when; whether a reading is running; and why the
+/// last one failed, if none has succeeded since.
 fn usage(state: &State, value: Text, provider: Option<LimbId>) -> Value {
     let window = |w: &Window| json!({"used": w.used, "resets": w.resets.map(|t| t.0)});
     let mut at = None;
@@ -342,11 +315,11 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "head": t.head().map(|h| h.to_string()),
         "compactions": t.head().map_or(0, |h| state.compactions_on(t.id, h)),
         // When its last request ended: a retry can end where it began.
-        "turn": last.map(|e| e.at.seq.n),
+        "ended": last.map(|e| e.at.seq.n),
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
         "window": state.environment(t.environment).map(|e| harness_provider::context_window(t.tuning.model(e))),
         "tuning": state.environment(t.environment).map(|e| tuning(value, t, e, last)),
-        "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
+        "places": t.places.iter().map(|(place, limb)| (place.clone(), limb_name(state, *limb))).collect::<BTreeMap<String, String>>(),
         // Whether Max has paused it, how, and on which task: itself or an
         // ancestor.
         "pause": state.pause(t.id).map(|(how, by)| json!({
@@ -357,19 +330,9 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
             "by": by.to_string(),
         })),
         "scoped": scoped,
-        "draining": t.drain().map(|d| match d {
-            Draining::ToMax => "to Max".to_string(),
-            Draining::Abandoning(s) => format!("abandon ({:?})", s.by),
-            Draining::Failing(reason) => format!("fail: {reason}"),
-        }),
-        // How far through its stop it is, and by when it must have exited.
+        // Whether its abandon is past its deadline, or had none: stopped hard.
         "stop": match t.drain() {
-            Some(Draining::Abandoning(s)) => json!({
-                "by": format!("{:?}", s.by),
-                "deadline": s.deadline.0,
-                "tidying": s.tidying,
-                "hard": s.hard,
-            }),
+            Some(Draining::Abandoning(s)) => json!({"hard": s.hard}),
             _ => Value::Null,
         },
         "failures": t.live().map_or(0, |l| l.failures),
@@ -658,11 +621,11 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Environment(e) => format!("environment {} defined", e.name),
         Fact::Limb(l) => format!("limb {} defined", l.name),
         Fact::Described { limb, description } => {
-            let limb = state.limb(*limb).map_or("?".into(), |l| l.name.clone());
+            let limb = limb_name(state, *limb);
             format!("{limb} described: {} tools", description.tools.len())
         }
         Fact::Reach { limb, reach } => {
-            let limb = state.limb(*limb).map_or("?".into(), |l| l.name.clone());
+            let limb = limb_name(state, *limb);
             match reach {
                 Reach::Connected {
                     build: Some(build), ..

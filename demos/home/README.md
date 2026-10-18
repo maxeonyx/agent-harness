@@ -8,10 +8,10 @@ Then open https://mx-hv-mj.local:4320. It is `dev/serve home 4320`: one long-liv
 
 What to do:
 
-1. **+** (bottom right; or double-click anywhere) opens a new chat. Pick its role (`chat` is the everyday one) and the directory it works in, then write, dictate or attach in the box as in any chat. **Start** (Ctrl+Enter) starts it: your words are what it is for, and it is named from its first words unless you name it.
+1. **+** (bottom right; or double-click anywhere) opens a new chat. Pick its role (`chat` is the everyday one) and the directory it works in, then write, dictate or attach in the box as in any chat. **Send**, pressed twice (Enter, twice), starts it: your words are what it is for, and it is named from its first words unless you name it.
 2. The chat opens and the agent works. It searches the web itself when the answer depends on anything current; each search shows as a step with what it found, and its answer links each source.
-3. The box is a staging area: Enter is a new line, and nothing is sent until you send it. While the agent works, **Send now** (Ctrl+Enter) reaches it at its next request and **At turn end** (Ctrl+Shift+Enter) waits for its turn to end. Either way it is told how far into its work you wrote.
-4. A chat is done when you press **Done**. Until then it waits on you, and the **needs you** pill at the top right lists every chat whose move is yours.
+3. The box is a staging area: nothing is sent until you send it, and each send takes two presses, the first staging what you wrote and the second sending what you saw staged. Shift+Enter is a new line (on a phone, Enter is). While the agent works, **Send** (Enter) reaches it at its next request and **Queue** (Alt+Enter) waits for its turn to end. Either way it is told how far into its work you wrote.
+4. A chat is done when you press **Done**. Until then it waits on you: the tab's title counts every chat whose move is yours, a mark at the screen's edge points to each one off screen, and with the page hidden each one is a notification.
 5. The context gauge in an open chat's header says how full its context is; click it for what fills it. The plan's 5-hour and weekly usage are at the bottom.
 6. The **Opus · high** pill under the send is the model and effort the chat's next request runs at; a new chat's card has it too, starting from its role's. Change either at any time, from the PC or the phone. While the chat's cache is warm (an hour after its last response), each other choice says how many tokens it rereads without the cache. Each response's line says what it ran at: `02:27 · 1.1s · Sonnet medium · 8.6k context · 4 out`.
 7. **Ctrl+K** (or **/**) finds a chat by its name or by anything said in it, yours or the agent's. The matching chats list under the box, newest first, each with the words that matched; the arrows choose, and Enter or a click opens the chat scrolled to that place.
@@ -22,7 +22,7 @@ The model and dictation use the claude.ai login in `~/.claude/.credentials.json`
 
 It serves with the shared wildcard certificate in `~/.config/dev-certs/shared-local/` and accepts only this machine and the Windows host (the default route's gateway).
 
-On a machine with no microphone, `SAMPLE=1 demos/home/run.sh` offers **Dictate the sample**, which streams `sample.wav` (13 s of Piper speech) to the dictation endpoint at real time; `node demos/home/dictate-sample.mjs [port]` does the same without a browser, and `speak.sh` regenerates the recording from `sample.txt`.
+On a machine with no microphone, `SAMPLE=1 demos/home/run.sh` offers **Dictate the sample**, which streams `sample.wav` (13 s of Piper speech) to the dictation endpoint at real time (`demos/phone` dictates it in a headless page), and `speak.sh` regenerates the recording from `sample.txt`.
 
 ## A real run
 

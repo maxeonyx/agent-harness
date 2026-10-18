@@ -94,7 +94,8 @@ export async function startNew(text, files) {
 // arrows choose; Esc lets it go. The words are searched by the face
 // (`/find`), which holds every context; the page holds only the open one.
 const findEl = $("#find"), foundEl = $("#found");
-export let finding = "", found = new Set(), hits = [], chosen = 0, asking = 0;
+export let finding = "", found = new Set();
+let hits = [], chosen = 0, asking = 0;
 // The entry to bring into view once its chat's log has it.
 let reveal = null;
 export function startFind() { findEl.hidden = false; findEl.focus(); findEl.select(); }

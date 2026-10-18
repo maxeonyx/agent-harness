@@ -1,6 +1,6 @@
 # Demos
 
-Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its README says what to watch. Shell demos start their brain as a test brain (`node dev/drive.mjs up --brain NAME`), which prints its link; a real-model demo runs on Sonnet at low effort, and `MODEL=…` (`haiku/low`, `scripted`) picks another. Costs are on Max's subscription.
+Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its README (or, without one, its `run.sh`'s top comment) says what to watch. A shell demo starts its brain as a test brain (`node dev/drive.mjs up --brain NAME`), which prints its link, unless what it shows is how a brain starts (`home`, `reboot`, `relaunch`, parts of `cancel`); a real-model demo runs on Sonnet at low effort, and `MODEL=…` (`haiku/low`, `scripted`) picks another. Costs are on Max's subscription.
 
 | Demo | What it shows | Model | Cost, time |
 |---|---|---|---|

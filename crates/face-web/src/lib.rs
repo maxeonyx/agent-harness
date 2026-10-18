@@ -12,8 +12,8 @@
 //!
 //! **Rows.** After every fold the brain hands the face a [`Folded`]: the
 //! state, the brain time it is as of, and every replica's standing. The face
-//! derives the rows once ([`view::rows`]: each task, each scope, the queue,
-//! the harness, Max's drafts), and each link's [`Publisher`] ships its tab
+//! derives the rows once ([`view::rows`]: each task, the queue, the
+//! harness, Max's drafts), and each link's [`Publisher`] ships its tab
 //! what changed: a whole [`View`] on connecting, then steps. Nothing about
 //! a tab is kept here while it is away: it reconnects to a whole view and
 //! ships what the view's standing does not include.
@@ -68,7 +68,8 @@ use harness_substrate::{Live, Publisher, Standing};
 use serde_json::{Value, json};
 use tungstenite::{Message, WebSocket};
 
-pub use dictation::{Dictation, Edit, Socket, edits};
+pub use dictation::Dictation;
+use dictation::Socket;
 pub use live::{Feed, Running};
 pub use view::describe;
 
@@ -79,7 +80,6 @@ pub trait Source: Send + Sync + 'static {
 }
 
 /// What a face is wired to.
-#[derive(Default)]
 pub struct Wiring {
     /// Where each tab's records go: the brain, which states that the tab
     /// is Max's if it is new to it, includes the record, and answers with
@@ -136,10 +136,6 @@ const TURN: Duration = Duration::from_millis(20);
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
 impl<S: Source> Face<S> {
-    pub fn new(source: S) -> Arc<Face<S>> {
-        Face::with(source, Wiring::default())
-    }
-
     /// A face that includes, dictates and shows live progress as `wiring`
     /// allows.
     pub fn with(source: S, wiring: Wiring) -> Arc<Face<S>> {
@@ -197,7 +193,7 @@ impl<S: Source> Face<S> {
     }
 
     /// Serve one connection: read its request, answer it.
-    pub fn handle(&self, stream: impl Socket) -> io::Result<()> {
+    fn handle(&self, stream: impl Socket) -> io::Result<()> {
         let (request, mut stream) = http::read_request(stream)?;
         match request.path.as_str() {
             "/" => match DOCUMENT
@@ -294,14 +290,12 @@ impl<S: Source> Face<S> {
                             include(record);
                         }
                     }
-                    Ok(Up::Live(_)) => {}
                     // A link speaks for its own replica, in the schema's words.
                     _ => return Ok(()),
                 },
                 Ok(Message::Close(_)) => return Ok(()),
                 Ok(_) => {}
-                Err(tungstenite::Error::Io(e))
-                    if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                Err(e) if dictation::would_block(&e) => {}
                 Err(_) => return Ok(()),
             }
             let shown = self.show().clone();
@@ -338,14 +332,7 @@ impl<S: Source> Face<S> {
     /// The rows as of the last fold, by key, for a script that only looks.
     fn view(&self, stream: &mut impl Write) -> io::Result<()> {
         let shown = self.show().clone();
-        let view = shown.map(|s| {
-            let rows: serde_json::Map<String, Value> = s
-                .rows
-                .iter()
-                .map(|(k, r)| (k.to_string(), json!(r)))
-                .collect();
-            json!({ "as_of": s.as_of, "rows": rows })
-        });
+        let view = shown.map(|s| json!({ "as_of": s.as_of, "rows": s.rows }));
         let body = serde_json::to_vec(&view).expect("a JSON value serialises");
         http::respond(stream, "application/json", &body, false)
     }

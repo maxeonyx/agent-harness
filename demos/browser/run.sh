@@ -24,7 +24,7 @@ waits_on_max() { [ "$(c /view 2>/dev/null | jq -r "$root | .waiting.kind")" = ma
 echo "== Max asks a chat, in the chat role:"
 cat "$dir/mandate.md"
 echo
-chat=$(drive chat chat - "$(cat "$dir/mandate.md")")
+chat=$(drive chat chat "$dir" "$(cat "$dir/mandate.md")")
 until waits_on_max; do sleep 1; done
 grep -E 'browser|tab|passed|spawn|responded' "$at/brain.log" | cut -c1-170
 echo
