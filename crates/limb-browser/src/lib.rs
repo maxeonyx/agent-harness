@@ -35,10 +35,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use harness_core::call::{Call, Caller, Outcome, Output, Owner};
@@ -46,7 +45,7 @@ use harness_core::environment::{Description, Instruction, Limb, LimbKey, LimbRow
 use harness_core::fact::{Batch, Fact};
 use harness_core::id::{CallId, Digest, LimbId, TaskId};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
-use harness_limb::{CallRow, Report, Rows, Voice, instant, lock};
+use harness_limb::{Calls, Report, Rows, Voice, lock};
 use harness_runtime::Cancel;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
@@ -148,12 +147,8 @@ struct Inner {
     loads: Mutex<HashMap<String, u64>>,
     /// The tabs running `tab` calls hold, by call.
     held: Mutex<HashMap<CallId, Held>>,
-    running: Mutex<HashMap<CallId, Running>>,
-    /// For each task, the end of its latest call: its next call waits for
-    /// it, so a response's tool uses run in the order it wrote them.
-    latest: Mutex<HashMap<TaskId, Receiver<()>>>,
+    calls: Calls,
     watched: Mutex<HashMap<ResourceKey, Version>>,
-    shutting_down: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -174,16 +169,13 @@ struct Held {
     target: Option<String>,
 }
 
-struct Running {
-    cancel: Cancel,
-    thread: Option<JoinHandle<()>>,
-}
-
 impl harness_limb::Kind for Browser {
     fn open(definition: &Limb, voice: Arc<Voice>, state: &Path) -> Result<Browser, String> {
         let settings = Settings::of(definition).ok_or("the definition is not a browser's")?;
         let (events, inbox) = mpsc::channel();
         let inner = Arc::new(Inner {
+            calls: Calls::open(voice.clone(), &state.join("started"), || {})
+                .map_err(|e| e.to_string())?,
             voice,
             settings: Mutex::new(settings),
             state: state.to_path_buf(),
@@ -194,12 +186,8 @@ impl harness_limb::Kind for Browser {
             sessions: Mutex::default(),
             loads: Mutex::default(),
             held: Mutex::default(),
-            running: Mutex::default(),
-            latest: Mutex::default(),
             watched: Mutex::default(),
-            shutting_down: AtomicBool::new(false),
         });
-        std::fs::create_dir_all(inner.marks()).map_err(|e| e.to_string())?;
         inner.connect()?;
         let weak = Arc::downgrade(&inner);
         thread::spawn(move || {
@@ -220,146 +208,42 @@ impl harness_limb::Kind for Browser {
             inner.voice.describe(inner.describe());
         }
         for row in inner.voice.calls(rows) {
-            self.call(row);
+            // The owner of a call already running moves when it is passed.
+            if let Some(held) = lock(&inner.held).get_mut(&row.id) {
+                held.owner = row.owner;
+            }
+            let (id, call, owner) = (row.id, row.call.clone(), row.owner);
+            let inner = self.inner.clone();
+            let rerun = tools::rerun(&call.tool);
+            self.inner
+                .calls
+                .call(row, rerun, move |input, cancel, report| {
+                    let outcome = inner.execute(id, &call, &input.0, owner, cancel, report);
+                    lock(&inner.held).remove(&id);
+                    outcome
+                });
         }
         if let Some(LimbRow::Watch { known }) = rows.rows.get(&LimbKey::Watch) {
             inner.watch(known);
         }
-        // A call the brain no longer asks for has settled there.
-        let running = lock(&inner.running);
-        for call in inner.started() {
-            if !running.contains_key(&call) && !rows.rows.contains_key(&LimbKey::Call(call)) {
-                let _ = std::fs::remove_file(inner.marks().join(call.to_string()));
-            }
-        }
+        inner.calls.forget(rows);
     }
 
     fn holds(&self) -> bool {
         // A browser it launched dies with it, and Max's tabs in it.
         let inner = &self.inner;
-        !lock(&inner.running).is_empty()
-            || !lock(&inner.held).is_empty()
-            || lock(&inner.process).is_some()
+        inner.calls.any() || !lock(&inner.held).is_empty() || lock(&inner.process).is_some()
     }
 
     fn stop_all(&self, within: Duration) {
-        self.inner.shutting_down.store(true, Ordering::SeqCst);
-        let deadline = Instant::now() + within;
-        for running in lock(&self.inner.running).values() {
-            running.cancel.request(deadline);
-        }
+        self.inner.calls.stop_all(within);
     }
 
     fn join(&self) {
-        loop {
-            let thread = lock(&self.inner.running)
-                .values_mut()
-                .find_map(|r| r.thread.take());
-            let Some(thread) = thread else { break };
-            let _ = thread.join();
-        }
+        self.inner.calls.join();
         if let Some(mut process) = lock(&self.inner.process).take() {
             let _ = process.kill();
             let _ = process.wait();
-        }
-    }
-}
-
-impl Browser {
-    /// One call row: run it at most once, however often it arrives.
-    fn call(&self, row: CallRow) {
-        let CallRow {
-            id,
-            call,
-            input,
-            stopping,
-            owner,
-            earlier,
-        } = row;
-        let inner = &self.inner;
-        let mut running = lock(&inner.running);
-        if let Some(held) = lock(&inner.held).get_mut(&id) {
-            held.owner = owner;
-        }
-        if let Some(running) = running.get(&id) {
-            if let Some(by) = stopping {
-                running.cancel.request(instant(by));
-            }
-            return;
-        }
-        if inner.voice.settled(id) {
-            return;
-        }
-        let mark = inner.marks().join(id.to_string());
-        let started = earlier || mark.exists();
-        if stopping.is_some() {
-            let outcome = if started {
-                Outcome::Unknown
-            } else {
-                Outcome::Interrupted { partial: None }
-            };
-            return inner.voice.settle(Report::new(Some(id)), outcome);
-        }
-        if inner.shutting_down.load(Ordering::SeqCst) {
-            return;
-        }
-        if started && !tools::rerun(&call.tool) {
-            return inner.voice.settle(Report::new(Some(id)), Outcome::Unknown);
-        }
-        let mut report = Report::new(Some(id));
-        let Some(input) = input.cloned() else {
-            let outcome = report.failed("the brain sent the call without its input");
-            return inner.voice.settle(report, outcome);
-        };
-        if let Err(e) = std::fs::write(&mark, []) {
-            let outcome = report.failed(&format!("cannot record the call: {e}"));
-            return inner.voice.settle(report, outcome);
-        }
-        let cancel = Cancel::new();
-        let (before, ended) = match &call.caller {
-            Caller::Agent { task, .. } => {
-                let (ended, end) = mpsc::channel::<()>();
-                (lock(&inner.latest).insert(*task, end), Some(ended))
-            }
-            _ => (None, None),
-        };
-        let thread = {
-            let inner = self.inner.clone();
-            let cancel = cancel.clone();
-            let call = call.clone();
-            thread::spawn(move || {
-                let mut report = Report::new(Some(id));
-                let outcome = match after(before, &cancel) {
-                    true => inner.execute(id, &call, &input.0, owner, &cancel, &mut report),
-                    false => Outcome::Interrupted { partial: None },
-                };
-                inner.voice.settle(report, outcome);
-                lock(&inner.held).remove(&id);
-                drop(ended);
-                lock(&inner.running).remove(&id);
-            })
-        };
-        running.insert(
-            id,
-            Running {
-                cancel,
-                thread: Some(thread),
-            },
-        );
-    }
-}
-
-/// Wait for the task's call before this one to end, unless this one is
-/// asked to stop first. Whether to go on.
-fn after(before: Option<Receiver<()>>, cancel: &Cancel) -> bool {
-    let Some(before) = before else { return true };
-    loop {
-        if cancel.is_requested() {
-            return false;
-        }
-        match before.recv_timeout(Duration::from_millis(100)) {
-            Err(RecvTimeoutError::Timeout) => {}
-            _ => return true,
         }
     }
 }
@@ -372,20 +256,6 @@ enum Who {
 }
 
 impl Inner {
-    fn marks(&self) -> PathBuf {
-        self.state.join("started")
-    }
-
-    fn started(&self) -> Vec<CallId> {
-        std::fs::read_dir(self.marks())
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     /// Take a new version of the definition: a browser elsewhere is
     /// reached from the next call on, and the tabs in the old one are gone.
     fn define(&self, definition: &Limb) {

@@ -151,7 +151,7 @@ impl Inner {
         if !matches!(&ran.tree, TreeEnded::Killed { survivors } if !survivors.is_empty()) {
             self.marks.ran(call);
         }
-        let shutdown = self.shutting_down.load(std::sync::atomic::Ordering::SeqCst);
+        let shutdown = self.calls.shutting_down();
         let ended = shell::describe(&ran, timeout, shutdown);
         let (view, full) = self.shown(call, ran.output, report);
         let output = Output {

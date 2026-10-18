@@ -17,9 +17,11 @@
 //! the limb's address and its lock at once.
 
 mod attach;
+mod calls;
 mod serve;
 mod voice;
 
+pub use calls::Calls;
 pub use voice::{CallRow, Instance, Report, Rows, Voice, definition, instant, lock, now, settings};
 
 use std::fs::File;
