@@ -54,11 +54,7 @@ pub enum DraftEvent {
     Text(ValueId),
     /// Deliver exactly `text`: the words on his screen, whatever another
     /// device typed meanwhile, for the session to read when `read` says.
-    Send {
-        text: ValueId,
-        #[serde(default)]
-        read: Read,
-    },
+    Send { text: ValueId, read: Read },
     /// He threw it away. Text typed into it afterwards, on another device
     /// that had not seen the discard, brings it back.
     Discarded,

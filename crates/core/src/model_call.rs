@@ -209,7 +209,6 @@ pub enum Ending {
     /// brain is shutting down. Nothing was kept as the model's; the visible
     /// text Max may have been reacting to is kept here and quoted to the
     /// model next.
-    #[serde(alias = "Abandoned")]
     Cut { partial: Option<ValueId> },
     /// Sent by an earlier brain, which ended before it did. Nothing from it
     /// was kept.

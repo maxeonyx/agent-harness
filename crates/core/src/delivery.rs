@@ -44,7 +44,6 @@ pub struct Delivery {
     pub to: TaskId,
     pub content: Content,
     /// When the task reads it.
-    #[serde(default)]
     pub read: Read,
 }
 

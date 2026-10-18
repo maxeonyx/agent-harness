@@ -741,7 +741,6 @@ pub enum TaskEvent {
     /// abandon with no time left.
     Expired,
     /// Max pauses or resumes the task and everything under it ([`Pause`]).
-    #[serde(alias = "Held")]
     Pause(Pause),
 }
 
@@ -946,7 +945,6 @@ pub enum Move {
     /// of the worktree. Here the files stay as they are and the context is
     /// told; restoring them is a separate act a workspace limb could offer
     /// Max, so going back to keep the code or to drop it are both one act.
-    #[serde(alias = "Rewind")]
     Back {
         to: EntryId,
     },
