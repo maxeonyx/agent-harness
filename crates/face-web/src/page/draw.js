@@ -110,7 +110,7 @@ export function drawEdges() {
     const sx = a.x, sy = shown.get(e.from).y + shown.get(e.from).h - 4;
     const dy = Math.max(18, (b.y - sy) / 2);
     const d = b.y > sy ? `M${sx},${sy} C${sx},${sy + dy} ${b.x},${b.y - dy} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x + 60},${a.y} ${b.x + 60},${b.y} ${b.x},${b.y}`;
-    const cls = `edge ${e.kind}${e.flow ? " flow" : ""}${e.max ? " max" : ""}`;
+    const cls = `edge ${e.kind}${e.flow ? " flow" : ""}`;
     // A fork's edge is hollow: its owner's context, carried down into it.
     // A fresh agent's is a line: it starts from its mandate alone.
     for (const part of graph.nodes.get(e.to)?.t?.origin === "fork" ? [" tube", " core"] : [""]) {

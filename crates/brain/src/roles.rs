@@ -21,12 +21,11 @@
 //! ```
 //!
 //! `limbs` name the limbs every task of the kind shares, which the brain
-//! runs or defines itself (`meta`, `max`, `user`, and `web`: the
-//! provider's web search and fetch); `places` name the plugin kinds each
+//! runs or defines itself (`meta`, `user`, `browser`, `builds`, and `web`:
+//! the provider's web search and fetch); `places` name the plugin kinds each
 //! task is given a limb of its own of (`workspace`: a directory, a clone or
-//! one holding clones); `starts`
-//! names the roles it can start fresh tasks in. Claude Code
-//! ignores the keys it does not know.
+//! one holding clones); `starts` names the roles it can start fresh tasks
+//! in. Claude Code ignores the keys it does not know.
 //!
 //! A role file is a resource of this limb: each version of an environment
 //! records the file's version it was read from ([`Environment::source`]),

@@ -14,11 +14,11 @@ use harness_provider::{Client, Finished, IDENTITY, Login, Progress, resolve};
 use harness_runtime::Cancel;
 use serde_json::json;
 
-/// What the journal and the value store hold, in miniature: the entries the
-/// fold has learnt and the bytes they name.
 /// The replica this example's ids are of: it records nothing.
 const EXAMPLE: ReplicaId = ReplicaId(1);
 
+/// What the journal and the value store hold, in miniature: the entries the
+/// fold has learnt and the bytes they name.
 #[derive(Default)]
 struct Store {
     entries: HashMap<EntryId, Entry>,

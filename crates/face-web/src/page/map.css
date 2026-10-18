@@ -20,7 +20,6 @@
   path.edge.receives { stroke-dasharray: 5 5; }
   path.edge.continues { stroke-dasharray: 1.5 4.5; stroke-linecap: round; stroke: rgba(20, 20, 19, .28); }
   path.edge.flow { stroke: rgba(20, 20, 19, .62); stroke-dasharray: 2 7; stroke-linecap: round; stroke-width: 2; animation: flow .9s linear infinite; }
-  path.edge.flow.max { stroke: var(--maroon); }
   /* A fork's edge, hollow: a wide stroke with the ground down its middle,
      or, while it is awaited, what flows along it. */
   path.edge.tube { stroke-width: 5; stroke: rgba(20, 20, 19, .26); }

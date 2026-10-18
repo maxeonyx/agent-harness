@@ -20,7 +20,7 @@ To serve a finished run again: `node dev/drive.mjs up --brain brain`. A database
 
 What the agents were told, from the store (`entry.content`, cut):
 
-The fork's first message, in the framing the fork-framing spike measured: a neutral answer to the spawn, then its part as user text.
+The fork's first message: a neutral answer to the spawn, then its part as user text.
 ```
 [{"content":"Started wordcount, palindromes.","tool_use_id":"toolu_016w…","type":"tool_result"},{"text":"You are now `orchestrator-wordcount`, a fork of `orchestrator`. Everything above is `orchestrator`'s context; from here you do one part of its work, and only that part.\n\nYour part:\nWrite textstats/wordcount.py …
 ```
