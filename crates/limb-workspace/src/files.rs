@@ -13,12 +13,13 @@ use regex::Regex;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use harness_limb::{Report, lock};
 use harness_runtime::{Cancel, Ended as TreeEnded};
 
+use crate::Inner;
 use crate::record::replace;
 use crate::shell::{self, Ended};
 use crate::trunc::{Truncated, Truncator};
-use crate::{Inner, Report, lock};
 
 const DEFAULT_TIMEOUT: u64 = 120_000;
 const MAX_TIMEOUT: u64 = 600_000;
@@ -129,7 +130,7 @@ impl Inner {
             };
             let chunk = String::from_utf8_lossy(&tail[..whole]).into_owned();
             tail.drain(..whole);
-            self.live(Live::Call { call, chunk });
+            self.voice.live(Live::Call { call, chunk });
         };
         // Without this record, an instance killed now would leave the tree
         // running with nobody to end it.
@@ -525,8 +526,6 @@ fn pattern(grep: Option<&str>) -> Result<Option<Regex>, String> {
     }
 }
 
-/// Resolve `.` and `..` without touching the disk, since the path may not
-/// exist yet.
 /// The line to show `content` from so that `near`, or failing that its
 /// first line, is in view: from a little before it, when the whole of
 /// `content` would not fit in [`READ_BUDGET`].
@@ -588,21 +587,7 @@ fn image(bytes: &[u8]) -> Option<&'static str> {
         [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
         [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
         [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
-        [
-            b'R',
-            b'I',
-            b'F',
-            b'F',
-            _,
-            _,
-            _,
-            _,
-            b'W',
-            b'E',
-            b'B',
-            b'P',
-            ..,
-        ] => Some("image/webp"),
+        _ if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") => Some("image/webp"),
         _ => None,
     }
 }
@@ -626,6 +611,8 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// Resolve `.` and `..` without touching the disk, since the path may not
+/// exist yet.
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for part in path.components() {

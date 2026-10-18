@@ -45,7 +45,7 @@ use harness_store::Store;
 use harness_substrate::{Log, Up};
 use serde_json::Value;
 
-use crate::{ABSENT, Kind, SHUTDOWN, State};
+use crate::{ABSENT, Instance, Kind, SHUTDOWN, State};
 
 /// One connection, numbered by the limb.
 type Conn = u64;
@@ -122,7 +122,7 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
     loop {
         if let Some(by) = superseded
             && !limb_.stopping()
-            && limb_.kind.as_ref().is_some_and(|k| !k.holds())
+            && limb_.kind.as_ref().is_some_and(|k| !k.kind().holds())
         {
             eprintln!(
                 "harness-limb-{kind}: superseded by build {:.12}: shutting down",
@@ -211,7 +211,7 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
 /// The limb's state as the loop holds it: its records, and the kind once a
 /// brain has defined it.
 struct Served<K> {
-    kind: Option<Arc<K>>,
+    kind: Option<Arc<Instance<K>>>,
     /// Its records, until the kind opens on them.
     log: Option<Log<Harness, Store>>,
     state: State,
@@ -250,7 +250,7 @@ impl<K: Kind> Served<K> {
                 let _ = events.send(Event::Up(Box::new(up)));
             });
             let log = self.log.take().expect("records until the kind opens");
-            match K::open(definition, log, self.state.dir(), out) {
+            match Instance::open(definition, log, self.state.dir(), out) {
                 Ok(kind) => self.kind = Some(Arc::new(kind)),
                 Err(why) => {
                     // Nothing has started: the limb cannot, and says why.
@@ -268,7 +268,7 @@ impl<K: Kind> Served<K> {
                      its state was lost or restored, so it starts again as a new replica",
                     restored.upto, restored.next
                 );
-                kind.stop_all(SHUTDOWN);
+                kind.kind().stop_all(SHUTDOWN);
                 drop(self.kind.take());
                 for suffix in ["", "-wal", "-shm"] {
                     let mut path = self.state.records().into_os_string();
@@ -296,12 +296,12 @@ impl<K: Kind> Served<K> {
             let _ = self.events.send(Event::Stopped);
             return;
         };
-        kind.stop_all(within);
+        kind.kind().stop_all(within);
         if first {
             let events = self.events.clone();
             let cancel = self.cancel.clone();
             thread::spawn(move || {
-                kind.join();
+                kind.kind().join();
                 end_adopted(&cancel);
                 let _ = events.send(Event::Stopped);
             });
