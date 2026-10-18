@@ -75,8 +75,7 @@ pub fn root(
             observes.push(instruction.observes.clone());
         }
     }
-    let (binding, tools) =
-        Binding::new(limbs).map_err(|tool| format!("two limbs offer the tool `{tool}`"))?;
+    let (binding, tools) = Binding::new(limbs).map_err(|d| d.to_string())?;
     let system = blocks(&system);
     let tools = Bytes::from(tools);
     Ok(NewRoot {
