@@ -1529,7 +1529,7 @@ impl State {
 
     /// The agent call whose work `call` is part of: itself, or the call
     /// its background work or meta call runs under.
-    pub fn agent_call(&self, mut call: CallId) -> CallId {
+    fn agent_call(&self, mut call: CallId) -> CallId {
         while let Some(record) = self.calls.get(&call) {
             match record.call.caller {
                 Caller::Background { from, .. } => call = from,
@@ -1550,7 +1550,7 @@ impl State {
     /// ([`Move::Back`]): its context's start, or a request, response or
     /// compaction of its own since. Back to the head a compaction replaced
     /// undoes it.
-    pub fn been_at(&self, task: &Task, entry: EntryId) -> bool {
+    fn been_at(&self, task: &Task, entry: EntryId) -> bool {
         task.live().is_some_and(|live| {
             let start = live.context.start;
             entry == start
@@ -2161,16 +2161,10 @@ impl State {
         self.tasks.values()
     }
 
-    /// The tasks not done.
-    pub fn live_tasks(&self) -> impl Iterator<Item = &Task> {
-        self.live()
-    }
-
     pub fn call(&self, id: CallId) -> Option<&CallRecord> {
         self.calls.get(&id)
     }
 
-    /// Every call, in id order.
     /// Running background work agents have passed to Max ([`Owner::Max`]):
     /// his to use and stop.
     pub fn handed(&self) -> impl Iterator<Item = (CallId, &CallRecord)> {
@@ -2433,7 +2427,7 @@ impl State {
     /// paused it: no request, and no dispatch of its calls. An abandoned
     /// task's tidy-up turn runs paused or not, and a task asked to park runs
     /// until it has.
-    pub fn gated(&self, task: &Task) -> bool {
+    fn gated(&self, task: &Task) -> bool {
         let abandoning = matches!(task.drain(), Some(Draining::Abandoning(_)));
         let parking = task.live().is_some_and(|l| l.parking.is_some());
         match self.pause(task.id) {

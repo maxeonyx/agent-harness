@@ -680,8 +680,7 @@ pub enum LimbRow {
     ///
     /// **Vision.** "Live editing": a fix to a limb reaches the agents using
     /// it at their next call after a relaunch, without killing their
-    /// running commands, and round 2's limbs that kept running their old
-    /// build are gone.
+    /// running commands, and no limb runs an old build for good.
     Superseded { by: BuildId },
 }
 

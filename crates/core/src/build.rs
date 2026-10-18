@@ -180,9 +180,9 @@ impl FromStr for Source {
 /// once nothing it holds would die with it.
 ///
 /// **Vision.** "A version of a program is just subsumed by the versioning
-/// that's already implemented in the data model"; limbs that keep running
-/// their old build after a relaunch, round 2's finding, are a view of this
-/// fact rather than a mechanism of their own.
+/// that's already implemented in the data model"; a limb still running an
+/// older build after a relaunch is a view of this fact rather than a
+/// mechanism of its own.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Launched {
     pub build: BuildId,
@@ -465,6 +465,6 @@ pub struct Refused {
 /// Whether a provider's refusal with `status` is the fault of the build
 /// that rendered the request: a client error, other than a timeout or a
 /// limit, which the same request from another build may not get.
-pub fn blames_build(status: u16) -> bool {
+fn blames_build(status: u16) -> bool {
     (400..500).contains(&status) && !matches!(status, 408 | 429)
 }
