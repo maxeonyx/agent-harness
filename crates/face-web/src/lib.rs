@@ -12,8 +12,8 @@
 //!
 //! **Rows.** After every fold the brain hands the face a [`Folded`]: the
 //! state, the brain time it is as of, and every replica's standing. The face
-//! derives the rows once ([`view::rows`]: each task, each scope, the queue,
-//! the harness, Max's drafts), and each link's [`Publisher`] ships its tab
+//! derives the rows once ([`view::rows`]: each task, the queue, the
+//! harness, Max's drafts), and each link's [`Publisher`] ships its tab
 //! what changed: a whole [`View`] on connecting, then steps. Nothing about
 //! a tab is kept here while it is away: it reconnects to a whole view and
 //! ships what the view's standing does not include.

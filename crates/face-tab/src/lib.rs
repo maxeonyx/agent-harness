@@ -33,7 +33,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 use harness_core::fact::{Batch, Refusal};
-use harness_core::id::{CallId, DeliveryId, ParseError, TaskId, Timestamp};
+use harness_core::id::{DeliveryId, ParseError, TaskId, Timestamp};
 use harness_core::live::Live;
 use harness_core::schema::{Harness, Record};
 use harness_substrate::{Log, Mirror, ReplicaId, Restored, Standing, Status, Storage, Time};
@@ -54,8 +54,6 @@ pub enum FaceKey {
     /// Max's queue, in order.
     Queue,
     Task(TaskId),
-    /// A spawn's scope: the junction under its owner.
-    Scope(CallId),
     Draft(DeliveryId),
 }
 
@@ -69,7 +67,6 @@ pub enum FaceRow {
     Harness(Value),
     Queue(Value),
     Task(Value),
-    Scope(Value),
     Draft(DraftRow),
 }
 
@@ -254,7 +251,6 @@ impl fmt::Display for FaceKey {
             FaceKey::Harness => f.write_str("harness"),
             FaceKey::Queue => f.write_str("queue"),
             FaceKey::Task(id) => write!(f, "task:{id}"),
-            FaceKey::Scope(id) => write!(f, "scope:{id}"),
             FaceKey::Draft(id) => write!(f, "draft:{id}"),
         }
     }
@@ -265,13 +261,12 @@ impl FromStr for FaceKey {
 
     fn from_str(text: &str) -> Result<FaceKey, ParseError> {
         let invalid = ParseError {
-            expected: "a row: harness, queue, task:{id}, scope:{id} or draft:{id}",
+            expected: "a row: harness, queue, task:{id} or draft:{id}",
         };
         Ok(match text.split_once(':') {
             None if text == "harness" => FaceKey::Harness,
             None if text == "queue" => FaceKey::Queue,
             Some(("task", id)) => FaceKey::Task(id.parse()?),
-            Some(("scope", id)) => FaceKey::Scope(id.parse()?),
             Some(("draft", id)) => FaceKey::Draft(id.parse()?),
             _ => return Err(invalid),
         })

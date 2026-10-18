@@ -13,11 +13,10 @@ import { openId } from "./card.js";
 export let view = null;
 // The tab's rows, one per object, as the page draws them.
 function assemble(v) {
-  const out = { as_of: v.as_of, seq: Number(v.as_of.split(".")[1]), tasks: [], scopes: {}, queue: [], drafts: [], environments: [], workspaces: [] };
+  const out = { as_of: v.as_of, seq: Number(v.as_of.split(".")[1]), tasks: [], queue: [], drafts: [], environments: [], workspaces: [] };
   for (const [key, row] of Object.entries(v.rows)) {
     const id = key.slice(key.indexOf(":") + 1);
     if (row.Task) out.tasks.push(row.Task);
-    else if (row.Scope) out.scopes[id] = row.Scope;
     else if (row.Queue) out.queue = row.Queue;
     else if (row.Harness) Object.assign(out, row.Harness);
     else if (row.Draft) out.drafts.push({ id, ...row.Draft });
@@ -106,9 +105,8 @@ export function derive() {
     // A spawn's members hang from their owner; a background spawn's by a
     // dashed edge, as its other background work does.
     if (t.owner && byId[live(t.owner)]) {
-      const s = view.scopes[t.scope];
       const flow = awaited(byId[t.owner]).has(t.scope) && !isDone(t);
-      edges.push({ from: live(t.owner), to: t.id, kind: s?.background ? "receives" : "owns", flow, made: t.created.seq });
+      edges.push({ from: live(t.owner), to: t.id, kind: t.received ? "receives" : "owns", flow, made: t.created.seq });
     }
     if (t.origin === "resume" && byId[t.from] && !chained(t)) edges.push({ from: live(t.from), to: t.id, kind: "continues" });
     const waits = awaited(t);
@@ -177,7 +175,7 @@ const GAP = 90;
 export async function layout() {
   const parts = graph.comps.map((c) => {
     if (c.folded) { const z = sizeOf(graph.nodes.get(c.root.id), c); return { archived: c.last, children: [{ id: c.root.id, width: z.w, height: z.h }], edges: [] }; }
-    const ns = c.folded ? [graph.nodes.get(c.root.id)] : depthFirst(c);
+    const ns = depthFirst(c);
     const ids = new Set(ns.map((n) => n.id));
     const children = ns.map((n) => { const z = sizeOf(n, c); return { id: n.id, width: z.w, height: z.h }; });
     // Only what owns what is laid out, so each project is a tree; a

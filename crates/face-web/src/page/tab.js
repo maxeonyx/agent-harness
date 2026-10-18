@@ -34,17 +34,9 @@ export const digest = (text) => tabCall("digest", text).out;
 const db = new Promise((ok, fail) => {
   const open = indexedDB.open("harness-tabs", 2);
   open.onupgradeneeded = (e) => {
-    if (!e.oldVersion) return open.result.createObjectStore("records", { keyPath: "at" }).createIndex("replica", "replica");
-    // Version 1 called a record's replica its place.
-    const store = open.transaction.objectStore("records");
-    store.deleteIndex("place");
-    store.createIndex("replica", "replica");
-    store.openCursor().onsuccess = ({ target: { result: c } }) => {
-      if (!c) return;
-      const { place, ...rest } = c.value;
-      c.update({ ...rest, replica: place });
-      c.continue();
-    };
+    // An older layout is dropped: the brain holds every record it took.
+    if (e.oldVersion) open.result.deleteObjectStore("records");
+    open.result.createObjectStore("records", { keyPath: "at" }).createIndex("replica", "replica");
   };
   open.onsuccess = () => ok(open.result);
   open.onerror = () => fail(open.error);
@@ -144,7 +136,7 @@ class Replica {
 // This tab's replica: kept in sessionStorage across reloads, and held by a
 // Web Lock, so a duplicated tab (which copies sessionStorage) becomes a
 // replica of its own. A replica is per tab per brain: IndexedDB is per origin.
-const mintPlace = () => [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
+const mintReplica = () => [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
 function hold(id) {
   return new Promise((ok) => navigator.locks.request(`replica:${id}`, { ifAvailable: true }, (lock) => {
     ok(!!lock);
@@ -155,7 +147,7 @@ export let tab = null;
 export async function boot() {
   wasm = (await WebAssembly.instantiateStreaming(fetch("/tab.wasm"))).instance.exports;
   let id = sessionStorage.getItem("replica");
-  if (!id || !(await hold(id))) { do id = mintPlace(); while (!(await hold(id))); }
+  if (!id || !(await hold(id))) { do id = mintReplica(); while (!(await hold(id))); }
   sessionStorage.setItem("replica", id);
   tab = await Replica.open(id, viewArrived);
   restoreLocal();
@@ -189,7 +181,7 @@ async function restored(replica) {
   if (replica !== tab) { replica.close(); return forget(replica.id); }
   tab.close();
   await forget(tab.id);
-  let id; do id = mintPlace(); while (!(await hold(id)));
+  let id; do id = mintReplica(); while (!(await hold(id)));
   sessionStorage.setItem("replica", id);
   tab = await Replica.open(id, viewArrived);
   tab.connect();
