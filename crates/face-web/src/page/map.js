@@ -102,11 +102,10 @@ export function derive() {
   for (const t of view.tasks) if (!alias[t.id]) nodes.set(t.id, { id: t.id, kind: "task", t });
   for (const t of view.tasks) {
     if (alias[t.id]) continue;
-    // A spawn's members hang from their owner; a background spawn's by a
-    // dashed edge, as its other background work does.
+    // A spawn's members hang from their owner.
     if (t.owner && byId[live(t.owner)]) {
       const flow = awaited(byId[t.owner]).has(t.scope) && !isDone(t);
-      edges.push({ from: live(t.owner), to: t.id, kind: t.received ? "receives" : "owns", flow, made: t.created.seq });
+      edges.push({ from: live(t.owner), to: t.id, kind: "owns", flow, made: t.created.seq });
     }
     if (t.origin === "resume" && byId[t.from] && !chained(t)) edges.push({ from: live(t.from), to: t.id, kind: "continues" });
     const waits = awaited(t);

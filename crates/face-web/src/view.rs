@@ -44,7 +44,8 @@ fn tuning(value: Text, t: &Task, env: &Environment, last: Option<&Ended>) -> Val
 }
 
 /// Every tab's rows, as of the state: each task, Max's queue, the harness
-/// as a whole, and his drafts that can still be sent or were held. `models` are the ones on offer, newest first.
+/// as a whole, and his drafts that can still be sent or were held.
+/// `models` are the ones on offer, newest first.
 pub fn rows(
     state: &State,
     value: Text,
@@ -309,14 +310,6 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "scope": match t.scope {
             Scope::Max => None,
             Scope::Spawn(call) => Some(call.to_string()),
-        },
-        // Whether the spawn that made it was a background call, which it
-        // reports to as it goes.
-        "received": match t.scope {
-            Scope::Spawn(call) => state
-                .call(call)
-                .is_some_and(|c| matches!(c.call.caller, Caller::Background { .. })),
-            Scope::Max => false,
         },
         "mandate": text(value, t.mandate.text),
         "head": t.head().map(|h| h.to_string()),
