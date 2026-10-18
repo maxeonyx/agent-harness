@@ -760,7 +760,7 @@ pub enum TaskEvent {
 /// agent leaves its work safe and says where it stands; either resumes from
 /// exactly where it was. Background work is the agent's to keep or stop,
 /// since its life is not over; only an abandon closes everything.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Pause {
     /// Resume: the loops run. A task that parked is told it has been
     /// resumed ([`crate::delivery::Prompt::Resume`]); any other carries on
@@ -779,29 +779,6 @@ pub enum Pause {
     /// waiting on Max, on its members or on background work is already at
     /// rest and spends no turn.
     Park,
-}
-
-impl<'de> Deserialize<'de> for Pause {
-    /// Also reads the `Held(bool)` facts an earlier build stated.
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Pause, D::Error> {
-        #[derive(Deserialize)]
-        enum Named {
-            Off,
-            Now,
-            Park,
-        }
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Wire {
-            Held(bool),
-            Named(Named),
-        }
-        Ok(match Wire::deserialize(d)? {
-            Wire::Held(false) | Wire::Named(Named::Off) => Pause::Off,
-            Wire::Held(true) | Wire::Named(Named::Now) => Pause::Now,
-            Wire::Named(Named::Park) => Pause::Park,
-        })
-    }
 }
 
 /// What Max last said about pausing a task, and when: the newest word on a
@@ -1032,7 +1009,7 @@ pub enum Onto {
 
 impl Compaction {
     /// The entry the carry is: a user message after `onto`.
-    pub fn carry_entry(&self) -> Entry {
+    pub(crate) fn carry_entry(&self) -> Entry {
         Entry::Message {
             parent: match &self.onto {
                 Onto::Checkpoint(at) => *at,
@@ -1046,7 +1023,7 @@ impl Compaction {
     }
 
     /// The entry the report is: an assistant message after the carry.
-    pub fn report_entry(&self) -> Option<Entry> {
+    pub(crate) fn report_entry(&self) -> Option<Entry> {
         Some(Entry::Message {
             parent: self.carry_entry().id(),
             message: Message {
@@ -1168,7 +1145,7 @@ impl Task {
     /// turn: a request in flight, a round of calls running, or results to
     /// answer. A round waiting only on running members is not its own work
     /// ([`State::scoped`] says so; the caller checks it).
-    pub fn mid_loop(&self) -> bool {
+    pub(crate) fn mid_loop(&self) -> bool {
         match self.phase() {
             Some(Phase::Thinking(_) | Phase::Acting(_)) => true,
             Some(Phase::Ready) => self.pending.iter().any(|p| matches!(p, Input::Result(_))),
@@ -1195,7 +1172,7 @@ impl Task {
             .copied()
     }
 
-    pub fn awaits(&self, call: CallId) -> bool {
+    pub(crate) fn awaits(&self, call: CallId) -> bool {
         self.awaited().any(|c| c == call)
     }
 
