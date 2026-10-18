@@ -14,7 +14,9 @@ use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
-use harness_core::environment::{Description, Hello, Host, LimbKey, LimbKind, LimbRow, Reach};
+use harness_core::environment::{
+    Description, Hello, Host, Limb, LimbKey, LimbKind, LimbRow, Reach,
+};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{
     CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
@@ -52,9 +54,7 @@ const RESTART: Duration = Duration::from_secs(30);
 
 /// What reaches the loop from the threads it started, from its limbs'
 /// links, and from faces.
-pub struct Event(What);
-
-enum What {
+pub enum Event {
     Link(Conn, link::Said),
     FirstByte(ModelCallId),
     Finished(ModelCallId, Result<Finished, harness_provider::Error>),
@@ -82,7 +82,7 @@ impl Inbox {
     pub fn include(&self) -> Box<dyn Fn(Record) + Send + Sync> {
         let events = self.events.clone();
         Box::new(move |record| {
-            let _ = events.send(Event(What::Tab(Box::new(record))));
+            let _ = events.send(Event::Tab(Box::new(record)));
         })
     }
 
@@ -92,7 +92,7 @@ impl Inbox {
         let events = self.events.clone();
         let stops = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
         signals::forward(&stops, move |s| {
-            let _ = events.send(Event(What::Signal(s)));
+            let _ = events.send(Event::Signal(s));
         })
         .map_err(|e| format!("signals: {e}"))
     }
@@ -201,9 +201,7 @@ impl Brain {
             how: launch_how(state),
         })];
         let define =
-            |facts: &mut Vec<Fact>,
-             found: Option<LimbId>,
-             limb: &dyn Fn(LimbId) -> harness_core::environment::Limb| {
+            |facts: &mut Vec<Fact>, found: Option<LimbId>, limb: &dyn Fn(LimbId) -> Limb| {
                 found.unwrap_or_else(|| {
                     let id = LimbId(at.event(facts.len() as u32));
                     facts.push(Fact::Limb(limb(id)));
@@ -233,16 +231,13 @@ impl Brain {
         let wanted = std::env::var("HARNESS_BROWSER")
             .ok()
             .map(|word| harness_limb_browser::Settings::parse(&word));
-        if let Some(id) = browser_limb
-            && let Some(wanted) = &wanted
-            && state
-                .limb(id)
-                .and_then(harness_limb_browser::Settings::of)
-                .as_ref()
-                != Some(wanted)
-        {
-            let limb = state.limb(id).expect("found among the limbs");
-            facts.push(Fact::Limb(reconfigured(limb, wanted)));
+        if let Some(wanted) = &wanted {
+            facts.extend(changed(
+                state,
+                browser_limb,
+                wanted,
+                harness_limb_browser::Settings::of,
+            ));
         }
         let browser = define(&mut facts, browser_limb, &|id| {
             wanted.clone().unwrap_or_default().definition(id)
@@ -250,16 +245,12 @@ impl Brain {
         // The builds limb relaunches the brain's own service: the unit
         // this process runs in, which a new version follows.
         let unit = harness_limb_builds::Settings::here();
-        if let Some(id) = builds_limb
-            && state
-                .limb(id)
-                .and_then(harness_limb_builds::Settings::of)
-                .as_ref()
-                != Some(&unit)
-        {
-            let limb = state.limb(id).expect("found among the limbs");
-            facts.push(Fact::Limb(reconfigured(limb, &unit)));
-        }
+        facts.extend(changed(
+            state,
+            builds_limb,
+            &unit,
+            harness_limb_builds::Settings::of,
+        ));
         let builds = define(&mut facts, builds_limb, &|id| unit.definition(id));
         let shared: BTreeMap<String, LimbId> = [
             ("meta", meta),
@@ -345,10 +336,10 @@ impl Brain {
         thread::spawn(move || {
             let up = |up| {
                 let said = link::Said::Up(Box::new(up));
-                let _ = events.send(Event(What::Link(conn, said)));
+                let _ = events.send(Event::Link(conn, said));
             };
             roles::run(&limb, replica, down, up, &models);
-            let _ = events.send(Event(What::Link(conn, link::Said::Left)));
+            let _ = events.send(Event::Link(conn, link::Said::Left));
         });
     }
 
@@ -550,7 +541,7 @@ impl Brain {
         self.attached += 1;
         let events = self.events.clone();
         let said = move |conn, said| {
-            let _ = events.send(Event(What::Link(conn, said)));
+            let _ = events.send(Event::Link(conn, said));
         };
         match Process::attach(&definition, conn, said) {
             Ok(process) => {
@@ -971,7 +962,7 @@ impl Brain {
                 &stop,
                 |progress| match progress {
                     Progress::FirstByte => {
-                        let _ = events.send(Event(What::FirstByte(request)));
+                        let _ = events.send(Event::FirstByte(request));
                     }
                     Progress::Text(chunk) => feed.push(Live::Model {
                         call: request,
@@ -979,7 +970,7 @@ impl Brain {
                     }),
                 },
             );
-            let _ = events.send(Event(What::Finished(request, finished)));
+            let _ = events.send(Event::Finished(request, finished));
         });
         self.requests.insert(request, (cancel, thread));
     }
@@ -1104,7 +1095,7 @@ impl Brain {
         let events = self.events.clone();
         thread::spawn(move || {
             let reading = client.usage(&Cancel::new());
-            let _ = events.send(Event(What::Usage(id, reading)));
+            let _ = events.send(Event::Usage(id, reading));
         });
     }
 
@@ -1535,13 +1526,13 @@ and you cannot finish until it has.",
 
     // What arrives.
 
-    fn handle(&mut self, Event(event): Event) {
+    fn handle(&mut self, event: Event) {
         match event {
-            What::FirstByte(request) => self.first_byte(request),
-            What::Finished(request, finished) => self.finished(request, finished),
-            What::Usage(call, reading) => self.read(call, reading),
-            What::Signal(signal) => self.signal(signal),
-            What::Tab(record) => {
+            Event::FirstByte(request) => self.first_byte(request),
+            Event::Finished(request, finished) => self.finished(request, finished),
+            Event::Usage(call, reading) => self.read(call, reading),
+            Event::Signal(signal) => self.signal(signal),
+            Event::Tab(record) => {
                 // A tab new to the brain is one of Max's faces.
                 let replica = record.at.replica;
                 if !self.state().is_face(replica) {
@@ -1549,13 +1540,13 @@ and you cannot finish until it has.",
                 }
                 self.include(*record);
             }
-            What::Link(conn, link::Said::Joined(hello, wire)) => self.joined(conn, hello, wire),
-            What::Link(conn, link::Said::Up(up)) => match *up {
+            Event::Link(conn, link::Said::Joined(hello, wire)) => self.joined(conn, hello, wire),
+            Event::Link(conn, link::Said::Up(up)) => match *up {
                 // Only the current link speaks for its limb.
                 Up::Record(record) => self.heard(conn, record),
                 Up::Live(live) => self.feed.push(live.live),
             },
-            What::Link(conn, link::Said::Left) => self.left(conn),
+            Event::Link(conn, link::Said::Left) => self.left(conn),
         }
     }
 
@@ -2033,12 +2024,21 @@ fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
         .collect()
 }
 
+/// A new version of the limb `found`, if its settings are not `wanted`
+/// ([`reconfigured`]).
+fn changed<S: PartialEq + serde::Serialize>(
+    state: &State,
+    found: Option<LimbId>,
+    wanted: &S,
+    of: impl Fn(&Limb) -> Option<S>,
+) -> Option<Fact> {
+    let limb = state.limb(found?)?;
+    (of(limb).as_ref() != Some(wanted)).then(|| Fact::Limb(reconfigured(limb, wanted)))
+}
+
 /// A new version of `limb` with `settings` as its config: the same kind on
 /// the same host as the version recorded.
-fn reconfigured(
-    limb: &harness_core::environment::Limb,
-    settings: &impl serde::Serialize,
-) -> harness_core::environment::Limb {
+fn reconfigured(limb: &Limb, settings: &impl serde::Serialize) -> Limb {
     let mut limb = limb.clone();
     if let LimbKind::Plugin { config, .. } = &mut limb.kind {
         *config = serde_json::to_string(settings).expect("settings are JSON");
