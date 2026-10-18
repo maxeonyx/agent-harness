@@ -610,8 +610,10 @@ fn authors(
 /// after: the last response the task had on that path, or failing one, the
 /// last request. And for each response the model gave more than once, how
 /// many times (`tries`): an entry is its bytes, so a retry that says the
-/// same words is the same version, asked again. Read whole on every change
-/// of head and every request that ends, since either can add to it.
+/// same words is the same version, asked again. A compaction's carry is no
+/// version of what it replaced: going back past a checkpoint is not a
+/// choice Max makes here. Read whole on every change of head and every
+/// request that ends, since either can add to it.
 fn versions(state: &State, task: TaskId) -> Value {
     let Some(start) = state.task(task).and_then(|t| t.context()).map(|c| c.start) else {
         return json!({});
@@ -637,7 +639,7 @@ fn versions(state: &State, task: TaskId) -> Value {
                     break;
                 };
                 let siblings = children.entry(parent).or_default();
-                if !siblings.contains(&child) {
+                if !siblings.contains(&child) && state.compacted(child).is_none() {
                     siblings.push(child);
                 }
                 // A response outranks a request; a later one an earlier.

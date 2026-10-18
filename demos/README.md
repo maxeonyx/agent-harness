@@ -9,6 +9,7 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | browser | a chat hands a browser agent an expense claim in real pages; the tab is passed to Max, who stops it | Sonnet low | about 10 requests, under 1 min |
 | cancel | abandoning tasks (with time to tidy, and past a deadline), Ctrl-C once and twice, a worker passed to Max, a systemd restart, and what still runs after each | scripted (`MODEL=sonnet/low`) | free, 3 min |
 | chat-engineer | a chat in a workspace directory starts an engineer `from` the clone there, which commits in its own clone made beside it | Sonnet low | 3 requests, under 1 min |
+| chat-fresh | a chat in a plain directory hands a fresh `chat` a task: it works in the same directory, no clone; a role it cannot start is refused, naming the roles it can | scripted | free, 20 s |
 | chat-moves | retry, a reply's versions, going back, and a retry that gave the same words; leaves the brain up to try edit and back | scripted | free, 30 s |
 | composer | the composer: stacked dictate and send with the scrollbar at the box's edge, the one model and effort pill with its menus, styled hints; leaves the brain up | scripted | free, 30 s |
 | compaction | an agent compacts between steps (`compact_and_continue`) and ends with its report (`compact_and_report`); Max's words and the reports are kept word for word; a compaction loop is refused | scripted (`MODEL=sonnet/low`) | free, 1 min (Sonnet: a few dozen requests, 2 min) |

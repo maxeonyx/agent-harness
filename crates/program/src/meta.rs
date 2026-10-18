@@ -90,8 +90,8 @@ your scope.",
             said.push_str(&format!("\n- `{name}`: {what}"));
         }
         said.push_str(
-            "\n\nA fresh agent gets its own clone of your repository (or of the clone `from` names), beside it, on the \
-`branch` you name, made from `base`; it commits and pushes there.",
+            "\n\nA fresh agent works in your directory (or the one `from` names), as a fork does; given a `branch`, it \
+gets its own clone of that repository instead, beside it, on that branch, made from `base`, and commits and pushes there.",
         );
     }
     said.push_str(
@@ -141,9 +141,9 @@ and returns at once: the agent that started you gets its result with yours.",
             "mandate": { "type": "string", "description": "What this agent must do, and how to check it is done." },
             "role": { "type": "string", "enum": roles.iter().map(|(name, _)| name).collect::<Vec<_>>(), "description": "Start a fresh agent in this role. Omit, with `resume`, to fork yourself." },
             "resume": { "type": "string", "description": "The name of a finished agent you started, to continue it." },
-            "branch": { "type": "string", "description": "A fresh agent's own branch, for its clone." },
+            "branch": { "type": "string", "description": "A fresh agent's own branch, for its own clone. Omit it to have it work in your directory." },
             "base": { "type": "string", "description": "What its branch is made from if it does not exist yet. Default `main`." },
-            "from": { "type": "string", "description": "The clone a fresh agent's clone is made from, and made beside: a directory, relative to your workspace. Default your workspace itself." }
+            "from": { "type": "string", "description": "A directory, relative to your workspace, that a fresh agent works in or, with a `branch`, clones and clones beside. Default your workspace itself." }
         },
         "required": ["name", "mandate"]
     });

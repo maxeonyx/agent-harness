@@ -1302,9 +1302,7 @@ and you cannot finish until it has.",
         let Err(why) = self.say(batch) else {
             return;
         };
-        let (model, failed) = render::failed(&format!(
-            "Nothing was done: the harness refuses it ({why})."
-        ));
+        let (model, failed) = render::failed(&format!("Nothing was done: {why}."));
         self.append(Batch {
             values: vec![model],
             facts: vec![
@@ -1404,15 +1402,26 @@ and you cannot finish until it has.",
                     base,
                     from,
                 } => {
-                    let env = state
+                    let own = state
+                        .environment(parent.environment)
+                        .expect("a task's environment");
+                    let starts: Vec<_> = state
                         .environments()
-                        .find(|e| e.name == role)
-                        .ok_or(format!("there is no role `{role}`"))?;
+                        .filter(|e| own.starts.contains(&e.id))
+                        .collect();
+                    let env = *starts.iter().find(|e| e.name == role).ok_or_else(|| {
+                        let names: Vec<&str> = starts.iter().map(|e| e.name.as_str()).collect();
+                        let can = match names.is_empty() {
+                            true => "only forks of itself".to_owned(),
+                            false => names.join(", "),
+                        };
+                        format!(
+                            "{} cannot start a fresh `{role}`: it can start {can}",
+                            own.name
+                        )
+                    })?;
                     let mut places = BTreeMap::new();
                     for kind in &env.places {
-                        let branch = branch
-                            .clone()
-                            .ok_or(format!("a fresh `{role}` needs a `branch` for its clone"))?;
                         // A workspace limb is named by its directory.
                         let own = parent
                             .places
@@ -1423,15 +1432,22 @@ and you cannot finish until it has.",
                             (Some(own), Some(from)) => own.join(from),
                             (own, from) => own
                                 .or(from.as_ref().map(PathBuf::from))
-                                .ok_or(format!("you have no {kind} to clone from"))?,
+                                .ok_or(format!("you have no {kind} to share or clone from"))?,
                         };
-                        let (from, dir) = clone_of(&dir, &branch);
-                        let clone = Clone {
-                            from,
-                            branch,
-                            base: base.clone(),
+                        // Without a branch it works where it is pointed, as a fork does.
+                        let (dir, clone) = match &branch {
+                            None => (dir, None),
+                            Some(branch) => {
+                                let (from, dir) = clone_of(&dir, branch);
+                                let clone = Clone {
+                                    from,
+                                    branch: branch.clone(),
+                                    base: base.clone(),
+                                };
+                                (dir, Some(clone))
+                            }
                         };
-                        let limb = self.workspace_limb(&dir, Some(clone), at, &mut batch.facts);
+                        let limb = self.workspace_limb(&dir, clone, at, &mut batch.facts);
                         places.insert(kind.clone(), limb);
                     }
                     Origin::Fresh {
@@ -1653,7 +1669,7 @@ and you cannot finish until it has.",
     fn append(&mut self, batch: Batch) {
         let shown: String = format!("{:?}", batch.facts).chars().take(600).collect();
         if let Err(why) = self.say(batch) {
-            panic!("the brain refuses its own batch (refused: {why}): {shown}");
+            panic!("the brain refuses its own batch ({why:?}): {shown}");
         }
     }
 
