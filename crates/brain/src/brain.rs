@@ -146,7 +146,7 @@ pub struct Brain {
     hosted: Conn,
     /// The model and context of each request without a first byte yet:
     /// fan-out gating.
-    cold: HashMap<ModelCallId, (String, std::collections::HashSet<EntryId>)>,
+    cold: HashMap<ModelCallId, (String, HashSet<EntryId>)>,
     /// Each request in flight: the thread that sends it, joined when it
     /// reports how it ended, and its stop.
     requests: HashMap<ModelCallId, (Cancel, JoinHandle<()>)>,
@@ -179,7 +179,6 @@ impl Brain {
         let find =
             |is: &dyn Fn(&LimbKind) -> bool| state.limbs().find(|l| is(&l.kind)).map(|l| l.id);
         let meta = find(&|k| *k == LimbKind::Meta);
-        // A journal from before Max stopped being a limb with a tool.
         let max = find(&|k| *k == LimbKind::Max);
         let web = find(&|k| *k == LimbKind::Provider);
         let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
@@ -262,7 +261,7 @@ impl Brain {
             facts.push(Fact::Limb(reconfigured(limb, &unit)));
         }
         let builds = define(&mut facts, builds_limb, &|id| unit.definition(id));
-        let shared: std::collections::BTreeMap<String, LimbId> = [
+        let shared: BTreeMap<String, LimbId> = [
             ("meta", meta),
             ("user", user),
             ("web", web),
@@ -273,15 +272,13 @@ impl Brain {
         .map(|(n, l)| (n.to_string(), l))
         .collect();
         let roles = match (roles_limb, roles_dir) {
-            // A roles limb defined before a shared limb was is told of it,
-            // and `--roles` moves it to another directory.
+            // The roles limb names the shared limbs as they are now, and
+            // `--roles` moves it to another directory.
             (Some(id), dir) => {
                 let limb = state.limb(id).expect("found among the limbs");
                 if let Some(settings) = roles::Settings::of(limb) {
-                    let mut limbs = settings.limbs.clone();
-                    limbs.extend(shared);
                     let dir = dir.unwrap_or_else(|| settings.dir.clone());
-                    let wanted = roles::Settings { dir, limbs };
+                    let wanted = roles::Settings { dir, limbs: shared };
                     if wanted != settings {
                         facts.push(Fact::Limb(reconfigured(limb, &wanted)));
                     }
@@ -789,7 +786,7 @@ impl Brain {
             words: &[],
             calls: &calls,
         };
-        let report = ask.report.map(|r| render::blocks(&[render::text(&r)]));
+        let report = ask.report.map(|r| words(&r));
         self.compacted(task, Some(call), onto, carry, values, report);
         true
     }
@@ -1143,19 +1140,16 @@ impl Brain {
             values: Vec::new(),
             facts: vec![Fact::Call(id, CallEvent::Dispatched)],
         };
-        // Only a stopping task's tidy-up turn makes calls while it ends.
-        if parent.ends() {
-            let (model, failed) = render::failed(
-                "You are being stopped: nothing new can start, and there is no next context. \
-Finish tidying up and end your turn with your report.",
-            );
-            batch.values.push(model);
-            batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-            return self.answer(id, batch);
-        }
         let input = self.value(call.input);
-        // A compaction happens once its round is over ([`Brain::compact`]).
-        if meta::compacts(&call.tool) {
+        let said = if parent.ends() {
+            // Only a stopping task's tidy-up turn makes calls while it ends.
+            Err(
+                "You are being stopped: nothing new can start, and there is no next context. \
+Finish tidying up and end your turn with your report."
+                    .to_string(),
+            )
+        } else if meta::compacts(&call.tool) {
+            // A compaction happens once its round is over ([`Brain::compact`]).
             let asked = if call.tool == meta::COMPACT_AND_CONTINUE
                 && meta::repeats(self.state(), &parent)
             {
@@ -1165,136 +1159,48 @@ Carry on with your next step, or, if your work is done, call `compact_and_report
             } else {
                 meta::compaction(&call.tool, &input).map(|_| ())
             };
-            let said = match asked {
-                Ok(()) => "Compacting once this round is over.".to_string(),
-                Err(why) => {
-                    let (model, failed) = render::failed(&format!("Not compacted: {why}."));
-                    batch.values.push(model);
-                    batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-                    return self.answer(id, batch);
-                }
-            };
-            let said = render::blocks(&[render::text(&said)]);
-            let output = Output {
-                model: said.id(),
-                full: None,
-                observes: Vec::new(),
-            };
-            batch.values.push(said);
-            batch.facts.push(Fact::Call(
-                id,
-                CallEvent::Settled(Outcome::Completed(output)),
-            ));
-            return self.answer(id, batch);
-        }
-        if call.tool == meta::ATTACH {
-            let said = meta::attach(self.state(), &|v| self.value(v), &parent, &input);
-            let (model, outcome) = match said {
-                Ok(said) => {
-                    let output = Output {
-                        model: said.id(),
-                        full: None,
-                        observes: Vec::new(),
-                    };
-                    (said, Outcome::Completed(output))
-                }
-                Err(message) => render::failed(&message),
-            };
-            batch.values.push(model);
-            batch
-                .facts
-                .push(Fact::Call(id, CallEvent::Settled(outcome)));
-            return self.answer(id, batch);
-        }
-        if call.tool == meta::BACKGROUND {
-            match meta::background_call(self.state(), &parent, id, self.meta, &input) {
-                Ok((started, input)) => {
-                    let said = render::blocks(&[render::text(&format!(
+            asked
+                .map(|()| words("Compacting once this round is over."))
+                .map_err(|why| format!("Not compacted: {why}."))
+        } else if call.tool == meta::ATTACH {
+            meta::attach(self.state(), &|v| self.value(v), &parent, &input)
+        } else if call.tool == meta::BACKGROUND {
+            meta::background_call(self.state(), &parent, id, self.meta, &input).map(
+                |(started, input)| {
+                    let said = words(&format!(
                         "Started `{}` in the background: its result comes to you as a message when it settles, \
 and you cannot finish until it has.",
                         started.tool
-                    ))]);
-                    let output = Output {
-                        model: said.id(),
-                        full: None,
-                        observes: Vec::new(),
-                    };
-                    batch.values.extend([said, input]);
+                    ));
                     let made = CallId(self.decider.next().event(batch.facts.len() as u32));
-                    batch.facts.extend([
-                        Fact::Call(made, CallEvent::Made(started)),
-                        Fact::Call(id, CallEvent::Settled(Outcome::Completed(output))),
-                    ]);
-                    return self.answer(id, batch);
+                    batch.values.push(input);
+                    batch.facts.push(Fact::Call(made, CallEvent::Made(started)));
+                    said
+                },
+            )
+        } else if call.tool == meta::STOP || call.tool == meta::PASS {
+            self.hand(&call.tool, &parent, &input, &mut batch)
+                .map(|said| words(&said))
+        } else if call.tool == meta::SPAWN || call.tool == meta::ADD_SIBLING {
+            match self.members(id, &call.tool, &parent, &input, &mut batch) {
+                Ok(names) if call.tool == meta::ADD_SIBLING => {
+                    Ok(words(&format!("Added {} to your scope.", names.join(", "))))
                 }
+                // A spawn settles when its scope does.
+                Ok(_) => return self.answer(id, batch),
                 Err(message) => {
-                    let (model, failed) = render::failed(&message);
-                    batch.values.push(model);
-                    batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-                    return self.answer(id, batch);
+                    batch.values.clear();
+                    batch.facts.truncate(1);
+                    Err(message)
                 }
             }
-        }
-        if call.tool == meta::STOP || call.tool == meta::PASS {
-            let said = self.hand(&call.tool, &parent, &input, &mut batch);
-            let (model, outcome) = match said {
-                Ok(said) => {
-                    let said = render::blocks(&[render::text(&said)]);
-                    let output = Output {
-                        model: said.id(),
-                        full: None,
-                        observes: Vec::new(),
-                    };
-                    (said, Outcome::Completed(output))
-                }
-                Err(message) => render::failed(&message),
-            };
-            batch.values.push(model);
-            batch
-                .facts
-                .push(Fact::Call(id, CallEvent::Settled(outcome)));
-            return self.answer(id, batch);
-        }
-        // A tool an older root declared that the harness no longer has.
-        if call.tool != meta::SPAWN && call.tool != meta::ADD_SIBLING {
-            let said = format!("The harness no longer has `{}`.", call.tool);
-            let (model, failed) = render::failed(&said);
-            batch.values.push(model);
-            batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-            return self.answer(id, batch);
-        }
-        match self.members(id, &call.tool, &parent, &input, &mut batch) {
-            Ok(names) if call.tool == meta::ADD_SIBLING => {
-                let said = render::blocks(&[render::text(&format!(
-                    "Added {} to your scope.",
-                    names.join(", ")
-                ))]);
-                let output = Output {
-                    model: said.id(),
-                    full: None,
-                    observes: Vec::new(),
-                };
-                batch.values.push(said);
-                batch.facts.push(Fact::Call(
-                    id,
-                    CallEvent::Settled(Outcome::Completed(output)),
-                ));
-            }
-            Ok(_) => {}
-            Err(message) => {
-                let (model, failed) = render::failed(&message);
-                batch = Batch {
-                    values: vec![model],
-                    facts: vec![
-                        Fact::Call(id, CallEvent::Dispatched),
-                        Fact::Call(id, CallEvent::Settled(failed)),
-                    ],
-                };
-            }
-        }
-        self.answer(id, batch);
+        } else {
+            // A tool a root declared that the harness does not have.
+            Err(format!("The harness has no `{}`.", call.tool))
+        };
+        settle(id, said, &mut batch);
+        self.answer(id, batch)
     }
-
     /// Say the batch a meta call's dispatch makes. What an agent asks for
     /// may be what the state refuses: then the call fails with why, and
     /// nothing else is written.
@@ -2090,6 +1996,31 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
     (from, parent.join(name))
 }
 
+/// One text block saying `said`: what a call the brain runs answers.
+fn words(said: &str) -> Bytes {
+    render::blocks(&[render::text(said)])
+}
+
+/// Settle a call the brain runs in `batch`: completed, saying what `said`
+/// holds, or failed, saying why.
+fn settle(id: CallId, said: Result<Bytes, String>, batch: &mut Batch) {
+    let (model, outcome) = match said {
+        Ok(model) => {
+            let output = Output {
+                model: model.id(),
+                full: None,
+                observes: Vec::new(),
+            };
+            (model, Outcome::Completed(output))
+        }
+        Err(why) => render::failed(&why),
+    };
+    batch.values.push(model);
+    batch
+        .facts
+        .push(Fact::Call(id, CallEvent::Settled(outcome)));
+}
+
 /// The results of a task's round that have not reached it, but `except`'s:
 /// what a compaction carries.
 fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
@@ -2103,8 +2034,7 @@ fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
 }
 
 /// A new version of `limb` with `settings` as its config: the same kind on
-/// the same host as the version recorded, which a journal from before
-/// hosts were recorded reads as `Local`.
+/// the same host as the version recorded.
 fn reconfigured(
     limb: &harness_core::environment::Limb,
     settings: &impl serde::Serialize,
