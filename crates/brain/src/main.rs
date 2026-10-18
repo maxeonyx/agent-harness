@@ -8,8 +8,8 @@
 //! calls itself, and settles scopes. It reads nothing from disk but its
 //! database and its own executable, whose digest is the build it records
 //! launching ([`harness_core::build::Launched`]) (and, given `--page`, the
-//! page's files, for an edit to show on reload), and keeps nothing a restart would need anywhere else. A
-//! relaunch is no special case: the to-do list of the folded database says
+//! page's files, for an edit to show on reload), and keeps nothing a
+//! restart would need anywhere else. A relaunch is no special case: the to-do list of the folded database says
 //! each unfinished request was lost, and each limb that reconnects is
 //! shipped the calls it holds rows for.
 //!
@@ -37,8 +37,8 @@
 //! go to the face's live feed, never to the database.
 //!
 //! **The session's program** is not here. What a request renders, the
-//! wording of everything the harness says to a model, the meta, Max and web
-//! limbs' tools, and the policy the core leaves open live in
+//! wording of everything the harness says to a model, the meta and web limbs'
+//! tools, and the policy the core leaves open live in
 //! `harness-program`, which does no I/O and builds for wasm32; the brain
 //! only calls it. What is left here is I/O: the database, the provider,
 //! limb links, the face, signals, and where a new clone

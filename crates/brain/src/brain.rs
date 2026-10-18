@@ -121,9 +121,6 @@ pub struct Brain {
     /// Each request's streamed events, for the face.
     feed: Feed,
     meta: LimbId,
-    /// Max's limb, in a journal that has one: described as offering
-    /// nothing ([`LimbKind::Max`]).
-    max: Option<LimbId>,
     /// The provider: web search and fetch, and Max's usage reading.
     web: LimbId,
     /// The roles limb, co-hosted.
@@ -179,7 +176,6 @@ impl Brain {
         let find =
             |is: &dyn Fn(&LimbKind) -> bool| state.limbs().find(|l| is(&l.kind)).map(|l| l.id);
         let meta = find(&|k| *k == LimbKind::Meta);
-        let max = find(&|k| *k == LimbKind::Max);
         let web = find(&|k| *k == LimbKind::Provider);
         let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let browser_limb = find(
@@ -290,7 +286,6 @@ impl Brain {
             inbox,
             feed,
             meta,
-            max,
             web,
             roles,
             models,
@@ -654,12 +649,6 @@ impl Brain {
     /// What a limb tells a root of `task`: the meta limb is described per
     /// environment, a plugin as it last said.
     fn description(&self, task: &Task, limb: LimbId) -> Option<Description> {
-        if Some(limb) == self.max {
-            return Some(Description {
-                instructions: Vec::new(),
-                tools: Vec::new(),
-            });
-        }
         if limb == self.web {
             return Some(web::description());
         }
@@ -1181,6 +1170,7 @@ and you cannot finish until it has.",
                 // A spawn settles when its scope does.
                 Ok(_) => return self.answer(id, batch),
                 Err(message) => {
+                    // Of what the refused call wrote, only its dispatch stands.
                     batch.values.clear();
                     batch.facts.truncate(1);
                     Err(message)
