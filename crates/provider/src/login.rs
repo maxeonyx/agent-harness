@@ -28,13 +28,9 @@ impl Login {
     /// Claude Code's login, `~/.claude/.credentials.json`.
     pub fn claude_code() -> Result<Login, LoginError> {
         let home = std::env::var_os("HOME").ok_or(LoginError("HOME is not set".into()))?;
-        Ok(Login::at(
-            PathBuf::from(home).join(".claude/.credentials.json"),
-        ))
-    }
-
-    pub fn at(path: impl Into<PathBuf>) -> Login {
-        Login { path: path.into() }
+        Ok(Login {
+            path: PathBuf::from(home).join(".claude/.credentials.json"),
+        })
     }
 
     /// The current access token, or why there is none.

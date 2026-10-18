@@ -434,7 +434,7 @@ fn ceil(text: &str, mut at: usize) -> usize {
 }
 
 /// A background call's name, its tool and its input.
-pub fn background(input: &[u8]) -> Result<(String, String, Bytes), String> {
+fn background(input: &[u8]) -> Result<(String, String, Bytes), String> {
     let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
     let name = value["name"]
         .as_str()
@@ -559,7 +559,7 @@ pub fn parse(tool: &str, input: &[u8]) -> Result<Spawn, String> {
 }
 
 /// The task names a spawn's input gives, for the neutral answer a fork sees.
-pub fn names(tool: &str, input: &[u8]) -> Vec<String> {
+pub(crate) fn names(tool: &str, input: &[u8]) -> Vec<String> {
     parse(tool, input)
         .map(|s| s.members.into_iter().map(|m| m.name).collect())
         .unwrap_or_default()

@@ -180,14 +180,13 @@ impl FromStr for Source {
 /// once nothing it holds would die with it.
 ///
 /// **Vision.** "A version of a program is just subsumed by the versioning
-/// that's already implemented in the data model"; limbs that keep running
-/// their old build after a relaunch, round 2's finding, are a view of this
-/// fact rather than a mechanism of their own.
+/// that's already implemented in the data model"; a limb still running an
+/// older build after a relaunch is a view of this fact rather than a
+/// mechanism of its own.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Launched {
     pub build: BuildId,
     /// What it was built from, when it knows.
-    #[serde(default)]
     pub source: Option<Source>,
     #[serde(default)]
     pub limbs: BTreeMap<String, BuildId>,
@@ -260,7 +259,7 @@ pub struct Probation {
 impl Probation {
     /// Fold one fact of the span, said by a limb if `by_limb`. Facts of
     /// other spans are not shown it.
-    pub fn see(&mut self, by_limb: bool, trial: Trial) {
+    pub(crate) fn see(&mut self, by_limb: bool, trial: Trial) {
         if self.refused.is_some() || self.proven().is_some() {
             return;
         }
@@ -387,7 +386,7 @@ pub struct Glimpsed {
 }
 
 impl Glimpsed {
-    pub fn trials(&self) -> impl Iterator<Item = Trial> + '_ {
+    pub(crate) fn trials(&self) -> impl Iterator<Item = Trial> + '_ {
         self.facts.iter().filter_map(|glance| match glance {
             Glance::Trial(fact) => fact.trial(),
             Glance::Other(IgnoredAny) => None,

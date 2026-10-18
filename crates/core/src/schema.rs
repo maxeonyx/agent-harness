@@ -15,7 +15,7 @@ use crate::state::State;
 /// **Concept.** The one vocabulary of the brain, its limbs and Max's faces,
 /// on the one data flow. Who said a record is derived from where it came
 /// from; what each author may say is checked by the fold; the values a
-/// record's facts name travel with it. On main the brain is the only
+/// record's facts name travel with it. The brain is the only
 /// decider, so it owns every object two replicas could act on at once: a
 /// task's life, a call's place in it, a draft. A limb decides only what is
 /// its own (how a call it ran ended), and its outcome merges with the
