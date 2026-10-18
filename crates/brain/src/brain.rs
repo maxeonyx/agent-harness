@@ -1128,8 +1128,11 @@ impl Brain {
     /// dispatch, or it fails at once with nothing created. An `add_sibling`
     /// settles in that batch too.
     fn spawn(&mut self, id: CallId, call: &Call) {
+        // The state lets Max call any tool of a limb the brain runs, and
+        // the meta limb offers him none.
         let Caller::Agent { task: parent, .. } = call.caller else {
-            unreachable!("only agents call the meta limb")
+            let said = format!("The harness offers Max no tool `{}`.", call.tool);
+            return self.fail(id, &said);
         };
         let parent = self
             .state()
