@@ -14,7 +14,9 @@ use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
-use harness_core::environment::{Description, Hello, Host, LimbKey, LimbKind, LimbRow, Reach};
+use harness_core::environment::{
+    Description, Hello, Host, Limb, LimbKey, LimbKind, LimbRow, Reach,
+};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{
     CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
@@ -52,9 +54,7 @@ const RESTART: Duration = Duration::from_secs(30);
 
 /// What reaches the loop from the threads it started, from its limbs'
 /// links, and from faces.
-pub struct Event(What);
-
-enum What {
+pub enum Event {
     Link(Conn, link::Said),
     FirstByte(ModelCallId),
     Finished(ModelCallId, Result<Finished, harness_provider::Error>),
@@ -82,7 +82,7 @@ impl Inbox {
     pub fn include(&self) -> Box<dyn Fn(Record) + Send + Sync> {
         let events = self.events.clone();
         Box::new(move |record| {
-            let _ = events.send(Event(What::Tab(Box::new(record))));
+            let _ = events.send(Event::Tab(Box::new(record)));
         })
     }
 
@@ -92,7 +92,7 @@ impl Inbox {
         let events = self.events.clone();
         let stops = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
         signals::forward(&stops, move |s| {
-            let _ = events.send(Event(What::Signal(s)));
+            let _ = events.send(Event::Signal(s));
         })
         .map_err(|e| format!("signals: {e}"))
     }
@@ -121,9 +121,6 @@ pub struct Brain {
     /// Each request's streamed events, for the face.
     feed: Feed,
     meta: LimbId,
-    /// Max's limb, in a journal that has one: described as offering
-    /// nothing ([`LimbKind::Max`]).
-    max: Option<LimbId>,
     /// The provider: web search and fetch, and Max's usage reading.
     web: LimbId,
     /// The roles limb, co-hosted.
@@ -146,7 +143,7 @@ pub struct Brain {
     hosted: Conn,
     /// The model and context of each request without a first byte yet:
     /// fan-out gating.
-    cold: HashMap<ModelCallId, (String, std::collections::HashSet<EntryId>)>,
+    cold: HashMap<ModelCallId, (String, HashSet<EntryId>)>,
     /// Each request in flight: the thread that sends it, joined when it
     /// reports how it ended, and its stop.
     requests: HashMap<ModelCallId, (Cancel, JoinHandle<()>)>,
@@ -179,8 +176,6 @@ impl Brain {
         let find =
             |is: &dyn Fn(&LimbKind) -> bool| state.limbs().find(|l| is(&l.kind)).map(|l| l.id);
         let meta = find(&|k| *k == LimbKind::Meta);
-        // A journal from before Max stopped being a limb with a tool.
-        let max = find(&|k| *k == LimbKind::Max);
         let web = find(&|k| *k == LimbKind::Provider);
         let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
         let browser_limb = find(
@@ -202,9 +197,7 @@ impl Brain {
             how: launch_how(state),
         })];
         let define =
-            |facts: &mut Vec<Fact>,
-             found: Option<LimbId>,
-             limb: &dyn Fn(LimbId) -> harness_core::environment::Limb| {
+            |facts: &mut Vec<Fact>, found: Option<LimbId>, limb: &dyn Fn(LimbId) -> Limb| {
                 found.unwrap_or_else(|| {
                     let id = LimbId(at.event(facts.len() as u32));
                     facts.push(Fact::Limb(limb(id)));
@@ -234,16 +227,13 @@ impl Brain {
         let wanted = std::env::var("HARNESS_BROWSER")
             .ok()
             .map(|word| harness_limb_browser::Settings::parse(&word));
-        if let Some(id) = browser_limb
-            && let Some(wanted) = &wanted
-            && state
-                .limb(id)
-                .and_then(harness_limb_browser::Settings::of)
-                .as_ref()
-                != Some(wanted)
-        {
-            let limb = state.limb(id).expect("found among the limbs");
-            facts.push(Fact::Limb(reconfigured(limb, wanted)));
+        if let Some(wanted) = &wanted {
+            facts.extend(changed(
+                state,
+                browser_limb,
+                wanted,
+                harness_limb_browser::Settings::of,
+            ));
         }
         let browser = define(&mut facts, browser_limb, &|id| {
             wanted.clone().unwrap_or_default().definition(id)
@@ -251,18 +241,14 @@ impl Brain {
         // The builds limb relaunches the brain's own service: the unit
         // this process runs in, which a new version follows.
         let unit = harness_limb_builds::Settings::here();
-        if let Some(id) = builds_limb
-            && state
-                .limb(id)
-                .and_then(harness_limb_builds::Settings::of)
-                .as_ref()
-                != Some(&unit)
-        {
-            let limb = state.limb(id).expect("found among the limbs");
-            facts.push(Fact::Limb(reconfigured(limb, &unit)));
-        }
+        facts.extend(changed(
+            state,
+            builds_limb,
+            &unit,
+            harness_limb_builds::Settings::of,
+        ));
         let builds = define(&mut facts, builds_limb, &|id| unit.definition(id));
-        let shared: std::collections::BTreeMap<String, LimbId> = [
+        let shared: BTreeMap<String, LimbId> = [
             ("meta", meta),
             ("user", user),
             ("web", web),
@@ -273,15 +259,13 @@ impl Brain {
         .map(|(n, l)| (n.to_string(), l))
         .collect();
         let roles = match (roles_limb, roles_dir) {
-            // A roles limb defined before a shared limb was is told of it,
-            // and `--roles` moves it to another directory.
+            // The roles limb names the shared limbs as they are now, and
+            // `--roles` moves it to another directory.
             (Some(id), dir) => {
                 let limb = state.limb(id).expect("found among the limbs");
                 if let Some(settings) = roles::Settings::of(limb) {
-                    let mut limbs = settings.limbs.clone();
-                    limbs.extend(shared);
                     let dir = dir.unwrap_or_else(|| settings.dir.clone());
-                    let wanted = roles::Settings { dir, limbs };
+                    let wanted = roles::Settings { dir, limbs: shared };
                     if wanted != settings {
                         facts.push(Fact::Limb(reconfigured(limb, &wanted)));
                     }
@@ -302,7 +286,6 @@ impl Brain {
             inbox,
             feed,
             meta,
-            max,
             web,
             roles,
             models,
@@ -348,10 +331,10 @@ impl Brain {
         thread::spawn(move || {
             let up = |up| {
                 let said = link::Said::Up(Box::new(up));
-                let _ = events.send(Event(What::Link(conn, said)));
+                let _ = events.send(Event::Link(conn, said));
             };
             roles::run(&limb, replica, down, up, &models);
-            let _ = events.send(Event(What::Link(conn, link::Said::Left)));
+            let _ = events.send(Event::Link(conn, link::Said::Left));
         });
     }
 
@@ -437,7 +420,7 @@ impl Brain {
                     "There is no tool `{}` in this context.",
                     self.call(call).tool
                 );
-                self.fail(call, &said);
+                self.fail_call(call, &said);
             }
             Todo::Interrupt(call) => self.interrupt(call),
             Todo::Cut(request) => {
@@ -553,7 +536,7 @@ impl Brain {
         self.attached += 1;
         let events = self.events.clone();
         let said = move |conn, said| {
-            let _ = events.send(Event(What::Link(conn, said)));
+            let _ = events.send(Event::Link(conn, said));
         };
         match Process::attach(&definition, conn, said) {
             Ok(process) => {
@@ -666,12 +649,6 @@ impl Brain {
     /// What a limb tells a root of `task`: the meta limb is described per
     /// environment, a plugin as it last said.
     fn description(&self, task: &Task, limb: LimbId) -> Option<Description> {
-        if Some(limb) == self.max {
-            return Some(Description {
-                instructions: Vec::new(),
-                tools: Vec::new(),
-            });
-        }
         if limb == self.web {
             return Some(web::description());
         }
@@ -693,11 +670,26 @@ impl Brain {
     /// A starting task's first root, once every limb it reaches has
     /// described itself.
     fn root(&mut self, id: TaskId) {
-        match self.start_of(id) {
-            None => {}
-            Some(Err(why)) => self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
-            Some(Ok((start, values))) => self.moved(id, Move::Root(Box::new(start)), values),
+        if let Some((start, values)) = self.restart(id) {
+            self.moved(id, Move::Root(Box::new(start)), values);
         }
+    }
+
+    /// A new root for the task ([`Brain::start_of`]), or `None` while a limb
+    /// has not described itself, or when it cannot be rendered: then the
+    /// task fails.
+    fn restart(&mut self, id: TaskId) -> Option<(TaskStart, Vec<Bytes>)> {
+        match self.start_of(id)? {
+            Ok(start) => Some(start),
+            Err(why) => {
+                self.fail_task(id, why);
+                None
+            }
+        }
+    }
+
+    fn fail_task(&mut self, id: TaskId, why: impl Into<String>) {
+        self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why.into()))));
     }
 
     /// A new root for the task from its environment's current version and
@@ -771,15 +763,9 @@ impl Brain {
         let checkpoint = self.state().checkpoint(task).filter(|_| !ask.fresh);
         let (onto, values, why) = match checkpoint {
             Some(at) => (Onto::Checkpoint(at), Vec::new(), render::Why::Checkpoint),
-            None => match self.start_of(task.id) {
+            None => match self.restart(task.id) {
                 None => return true,
-                Some(Err(why)) => {
-                    self.fact(Fact::Task(task.id, TaskEvent::Drain(Drain::Fail(why))));
-                    return true;
-                }
-                Some(Ok((start, values))) => {
-                    (Onto::Fresh(Box::new(start)), values, render::Why::Fresh)
-                }
+                Some((start, values)) => (Onto::Fresh(Box::new(start)), values, render::Why::Fresh),
             },
         };
         let calls = round(task, Some(call));
@@ -789,7 +775,7 @@ impl Brain {
             words: &[],
             calls: &calls,
         };
-        let report = ask.report.map(|r| render::blocks(&[render::text(&r)]));
+        let report = ask.report.map(|r| words(&r));
         self.compacted(task, Some(call), onto, carry, values, report);
         true
     }
@@ -840,8 +826,7 @@ impl Brain {
         let head = task.head().expect("a ready task has a context");
         let failures = task.live().map_or(0, |l| l.failures);
         if failures >= policy::GIVE_UP {
-            let reason = format!("the provider failed {failures} times in a row");
-            return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
+            return self.fail_task(id, format!("the provider failed {failures} times in a row"));
         }
         // Nothing is in flight for a ready task, so every turn has ended.
         let last = self.state().last_turn(id).cloned();
@@ -871,10 +856,7 @@ impl Brain {
                     stop: Stop::Refused,
                     ..
                 },
-            )) => {
-                let reason = "the model declined to go on".to_string();
-                return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
-            }
+            )) => return self.fail_task(id, "the model declined to go on"),
             // A context the provider no longer accepts starts again from a
             // new root, with the mandate, Max's words and its calls' results.
             Some((
@@ -896,24 +878,20 @@ impl Brain {
                     } else {
                         "its context does not fit the model's window even started afresh"
                     };
-                    let reason = reason.to_string();
-                    return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
+                    return self.fail_task(id, reason);
                 }
-                return match self.start_of(id) {
-                    None => {}
-                    Some(Err(why)) => self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
-                    Some(Ok((start, values))) => {
-                        let calls = round(&task, None);
-                        let carry = render::Carry {
-                            summary: None,
-                            why: render::Why::Full,
-                            words: &[],
-                            calls: &calls,
-                        };
-                        let onto = Onto::Fresh(Box::new(start));
-                        self.compacted(&task, None, onto, carry, values, None);
-                    }
-                };
+                if let Some((start, values)) = self.restart(id) {
+                    let calls = round(&task, None);
+                    let carry = render::Carry {
+                        summary: None,
+                        why: render::Why::Full,
+                        words: &[],
+                        calls: &calls,
+                    };
+                    let onto = Onto::Fresh(Box::new(start));
+                    self.compacted(&task, None, onto, carry, values, None);
+                }
+                return;
             }
             _ => {}
         }
@@ -974,7 +952,7 @@ impl Brain {
                 &stop,
                 |progress| match progress {
                     Progress::FirstByte => {
-                        let _ = events.send(Event(What::FirstByte(request)));
+                        let _ = events.send(Event::FirstByte(request));
                     }
                     Progress::Text(chunk) => feed.push(Live::Model {
                         call: request,
@@ -982,7 +960,7 @@ impl Brain {
                     }),
                 },
             );
-            let _ = events.send(Event(What::Finished(request, finished)));
+            let _ = events.send(Event::Finished(request, finished));
         });
         self.requests.insert(request, (cancel, thread));
     }
@@ -1100,14 +1078,14 @@ impl Brain {
     fn read_usage(&mut self, id: CallId, call: &Call) {
         if call.tool != web::USAGE {
             let said = format!("The provider offers Max no tool `{}`.", call.tool);
-            return self.fail(id, &said);
+            return self.fail_call(id, &said);
         }
         self.fact(Fact::Call(id, CallEvent::Dispatched));
         let client = self.client.clone();
         let events = self.events.clone();
         thread::spawn(move || {
             let reading = client.usage(&Cancel::new());
-            let _ = events.send(Event(What::Usage(id, reading)));
+            let _ = events.send(Event::Usage(id, reading));
         });
     }
 
@@ -1120,7 +1098,7 @@ impl Brain {
                     facts: vec![Fact::Call(id, CallEvent::Settled(outcome))],
                 });
             }
-            Err(why) => self.fail(id, &format!("Could not read the plan's usage: {why}")),
+            Err(why) => self.fail_call(id, &format!("Could not read the plan's usage: {why}")),
         }
     }
 
@@ -1132,7 +1110,7 @@ impl Brain {
         // the meta limb offers him none.
         let Caller::Agent { task: parent, .. } = call.caller else {
             let said = format!("The harness offers Max no tool `{}`.", call.tool);
-            return self.fail(id, &said);
+            return self.fail_call(id, &said);
         };
         let parent = self
             .state()
@@ -1143,19 +1121,16 @@ impl Brain {
             values: Vec::new(),
             facts: vec![Fact::Call(id, CallEvent::Dispatched)],
         };
-        // Only a stopping task's tidy-up turn makes calls while it ends.
-        if parent.ends() {
-            let (model, failed) = render::failed(
-                "You are being stopped: nothing new can start, and there is no next context. \
-Finish tidying up and end your turn with your report.",
-            );
-            batch.values.push(model);
-            batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-            return self.answer(id, batch);
-        }
         let input = self.value(call.input);
-        // A compaction happens once its round is over ([`Brain::compact`]).
-        if meta::compacts(&call.tool) {
+        let said = if parent.ends() {
+            // Only a stopping task's tidy-up turn makes calls while it ends.
+            Err(
+                "You are being stopped: nothing new can start, and there is no next context. \
+Finish tidying up and end your turn with your report."
+                    .to_string(),
+            )
+        } else if meta::compacts(&call.tool) {
+            // A compaction happens once its round is over ([`Brain::compact`]).
             let asked = if call.tool == meta::COMPACT_AND_CONTINUE
                 && meta::repeats(self.state(), &parent)
             {
@@ -1165,136 +1140,49 @@ Carry on with your next step, or, if your work is done, call `compact_and_report
             } else {
                 meta::compaction(&call.tool, &input).map(|_| ())
             };
-            let said = match asked {
-                Ok(()) => "Compacting once this round is over.".to_string(),
-                Err(why) => {
-                    let (model, failed) = render::failed(&format!("Not compacted: {why}."));
-                    batch.values.push(model);
-                    batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-                    return self.answer(id, batch);
-                }
-            };
-            let said = render::blocks(&[render::text(&said)]);
-            let output = Output {
-                model: said.id(),
-                full: None,
-                observes: Vec::new(),
-            };
-            batch.values.push(said);
-            batch.facts.push(Fact::Call(
-                id,
-                CallEvent::Settled(Outcome::Completed(output)),
-            ));
-            return self.answer(id, batch);
-        }
-        if call.tool == meta::ATTACH {
-            let said = meta::attach(self.state(), &|v| self.value(v), &parent, &input);
-            let (model, outcome) = match said {
-                Ok(said) => {
-                    let output = Output {
-                        model: said.id(),
-                        full: None,
-                        observes: Vec::new(),
-                    };
-                    (said, Outcome::Completed(output))
-                }
-                Err(message) => render::failed(&message),
-            };
-            batch.values.push(model);
-            batch
-                .facts
-                .push(Fact::Call(id, CallEvent::Settled(outcome)));
-            return self.answer(id, batch);
-        }
-        if call.tool == meta::BACKGROUND {
-            match meta::background_call(self.state(), &parent, id, self.meta, &input) {
-                Ok((started, input)) => {
-                    let said = render::blocks(&[render::text(&format!(
+            asked
+                .map(|()| words("Compacting once this round is over."))
+                .map_err(|why| format!("Not compacted: {why}."))
+        } else if call.tool == meta::ATTACH {
+            meta::attach(self.state(), &|v| self.value(v), &parent, &input)
+        } else if call.tool == meta::BACKGROUND {
+            meta::background_call(self.state(), &parent, id, self.meta, &input).map(
+                |(started, input)| {
+                    let said = words(&format!(
                         "Started `{}` in the background: its result comes to you as a message when it settles, \
 and you cannot finish until it has.",
                         started.tool
-                    ))]);
-                    let output = Output {
-                        model: said.id(),
-                        full: None,
-                        observes: Vec::new(),
-                    };
-                    batch.values.extend([said, input]);
+                    ));
                     let made = CallId(self.decider.next().event(batch.facts.len() as u32));
-                    batch.facts.extend([
-                        Fact::Call(made, CallEvent::Made(started)),
-                        Fact::Call(id, CallEvent::Settled(Outcome::Completed(output))),
-                    ]);
-                    return self.answer(id, batch);
+                    batch.values.push(input);
+                    batch.facts.push(Fact::Call(made, CallEvent::Made(started)));
+                    said
+                },
+            )
+        } else if call.tool == meta::STOP || call.tool == meta::PASS {
+            self.hand(&call.tool, &parent, &input, &mut batch)
+                .map(|said| words(&said))
+        } else if call.tool == meta::SPAWN || call.tool == meta::ADD_SIBLING {
+            match self.members(id, &call.tool, &parent, &input, &mut batch) {
+                Ok(names) if call.tool == meta::ADD_SIBLING => {
+                    Ok(words(&format!("Added {} to your scope.", names.join(", "))))
                 }
+                // A spawn settles when its scope does.
+                Ok(_) => return self.answer(id, batch),
                 Err(message) => {
-                    let (model, failed) = render::failed(&message);
-                    batch.values.push(model);
-                    batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-                    return self.answer(id, batch);
+                    // Of what the refused call wrote, only its dispatch stands.
+                    batch.values.clear();
+                    batch.facts.truncate(1);
+                    Err(message)
                 }
             }
-        }
-        if call.tool == meta::STOP || call.tool == meta::PASS {
-            let said = self.hand(&call.tool, &parent, &input, &mut batch);
-            let (model, outcome) = match said {
-                Ok(said) => {
-                    let said = render::blocks(&[render::text(&said)]);
-                    let output = Output {
-                        model: said.id(),
-                        full: None,
-                        observes: Vec::new(),
-                    };
-                    (said, Outcome::Completed(output))
-                }
-                Err(message) => render::failed(&message),
-            };
-            batch.values.push(model);
-            batch
-                .facts
-                .push(Fact::Call(id, CallEvent::Settled(outcome)));
-            return self.answer(id, batch);
-        }
-        // A tool an older root declared that the harness no longer has.
-        if call.tool != meta::SPAWN && call.tool != meta::ADD_SIBLING {
-            let said = format!("The harness no longer has `{}`.", call.tool);
-            let (model, failed) = render::failed(&said);
-            batch.values.push(model);
-            batch.facts.push(Fact::Call(id, CallEvent::Settled(failed)));
-            return self.answer(id, batch);
-        }
-        match self.members(id, &call.tool, &parent, &input, &mut batch) {
-            Ok(names) if call.tool == meta::ADD_SIBLING => {
-                let said = render::blocks(&[render::text(&format!(
-                    "Added {} to your scope.",
-                    names.join(", ")
-                ))]);
-                let output = Output {
-                    model: said.id(),
-                    full: None,
-                    observes: Vec::new(),
-                };
-                batch.values.push(said);
-                batch.facts.push(Fact::Call(
-                    id,
-                    CallEvent::Settled(Outcome::Completed(output)),
-                ));
-            }
-            Ok(_) => {}
-            Err(message) => {
-                let (model, failed) = render::failed(&message);
-                batch = Batch {
-                    values: vec![model],
-                    facts: vec![
-                        Fact::Call(id, CallEvent::Dispatched),
-                        Fact::Call(id, CallEvent::Settled(failed)),
-                    ],
-                };
-            }
-        }
-        self.answer(id, batch);
+        } else {
+            // A tool a root declared that the harness does not have.
+            Err(format!("The harness has no `{}`.", call.tool))
+        };
+        settle(id, said, &mut batch);
+        self.answer(id, batch)
     }
-
     /// Say the batch a meta call's dispatch makes. What an agent asks for
     /// may be what the state refuses: then the call fails with why, and
     /// nothing else is written.
@@ -1619,7 +1507,7 @@ and you cannot finish until it has.",
     }
 
     /// Settle a call the brain answers itself as failed, saying why.
-    fn fail(&mut self, id: CallId, said: &str) {
+    fn fail_call(&mut self, id: CallId, said: &str) {
         let (model, failed) = render::failed(said);
         self.append(Batch {
             values: vec![model],
@@ -1629,13 +1517,13 @@ and you cannot finish until it has.",
 
     // What arrives.
 
-    fn handle(&mut self, Event(event): Event) {
+    fn handle(&mut self, event: Event) {
         match event {
-            What::FirstByte(request) => self.first_byte(request),
-            What::Finished(request, finished) => self.finished(request, finished),
-            What::Usage(call, reading) => self.read(call, reading),
-            What::Signal(signal) => self.signal(signal),
-            What::Tab(record) => {
+            Event::FirstByte(request) => self.first_byte(request),
+            Event::Finished(request, finished) => self.finished(request, finished),
+            Event::Usage(call, reading) => self.read(call, reading),
+            Event::Signal(signal) => self.signal(signal),
+            Event::Tab(record) => {
                 // A tab new to the brain is one of Max's faces.
                 let replica = record.at.replica;
                 if !self.state().is_face(replica) {
@@ -1643,13 +1531,13 @@ and you cannot finish until it has.",
                 }
                 self.include(*record);
             }
-            What::Link(conn, link::Said::Joined(hello, wire)) => self.joined(conn, hello, wire),
-            What::Link(conn, link::Said::Up(up)) => match *up {
+            Event::Link(conn, link::Said::Joined(hello, wire)) => self.joined(conn, hello, wire),
+            Event::Link(conn, link::Said::Up(up)) => match *up {
                 // Only the current link speaks for its limb.
                 Up::Record(record) => self.heard(conn, record),
                 Up::Live(live) => self.feed.push(live.live),
             },
-            What::Link(conn, link::Said::Left) => self.left(conn),
+            Event::Link(conn, link::Said::Left) => self.left(conn),
         }
     }
 
@@ -2090,6 +1978,31 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
     (from, parent.join(name))
 }
 
+/// One text block saying `said`: what a call the brain runs answers.
+fn words(said: &str) -> Bytes {
+    render::blocks(&[render::text(said)])
+}
+
+/// Settle a call the brain runs in `batch`: completed, saying what `said`
+/// holds, or failed, saying why.
+fn settle(id: CallId, said: Result<Bytes, String>, batch: &mut Batch) {
+    let (model, outcome) = match said {
+        Ok(model) => {
+            let output = Output {
+                model: model.id(),
+                full: None,
+                observes: Vec::new(),
+            };
+            (model, Outcome::Completed(output))
+        }
+        Err(why) => render::failed(&why),
+    };
+    batch.values.push(model);
+    batch
+        .facts
+        .push(Fact::Call(id, CallEvent::Settled(outcome)));
+}
+
 /// The results of a task's round that have not reached it, but `except`'s:
 /// what a compaction carries.
 fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
@@ -2102,13 +2015,21 @@ fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
         .collect()
 }
 
+/// A new version of the limb `found`, if its settings are not `wanted`
+/// ([`reconfigured`]).
+fn changed<S: PartialEq + serde::Serialize>(
+    state: &State,
+    found: Option<LimbId>,
+    wanted: &S,
+    of: impl Fn(&Limb) -> Option<S>,
+) -> Option<Fact> {
+    let limb = state.limb(found?)?;
+    (of(limb).as_ref() != Some(wanted)).then(|| Fact::Limb(reconfigured(limb, wanted)))
+}
+
 /// A new version of `limb` with `settings` as its config: the same kind on
-/// the same host as the version recorded, which a journal from before
-/// hosts were recorded reads as `Local`.
-fn reconfigured(
-    limb: &harness_core::environment::Limb,
-    settings: &impl serde::Serialize,
-) -> harness_core::environment::Limb {
+/// the same host as the version recorded.
+fn reconfigured(limb: &Limb, settings: &impl serde::Serialize) -> Limb {
     let mut limb = limb.clone();
     if let LimbKind::Plugin { config, .. } = &mut limb.kind {
         *config = serde_json::to_string(settings).expect("settings are JSON");

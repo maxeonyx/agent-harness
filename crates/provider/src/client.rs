@@ -365,9 +365,7 @@ impl Client {
         };
         Ok(end(ending, assembly.usage(), quota))
     }
-}
 
-impl Client {
     /// The plan's usage, read from its own endpoint: each window it reports,
     /// by name (`five_hour`, `seven_day`, `seven_day_opus`, ...), as a
     /// fraction used and when it resets. A window it reports as `null` is

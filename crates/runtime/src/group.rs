@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::process::{ChildStdin, ChildStdout, Command, ExitStatus};
+use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use crate::cancel::Waiter;
@@ -18,8 +18,7 @@ const RESCAN: Duration = Duration::from_millis(100);
 /// left is reported as surviving.
 const KILL_WAIT: Duration = Duration::from_secs(2);
 
-/// A tree of processes one owner started: a command a call runs, or a limb
-/// the brain runs.
+/// A tree of processes one owner started: a command a call runs.
 ///
 /// **Concept.** The process level of the stop protocol
 /// ([`harness_core::cancel`]). Its leader leads a process group of its own,
@@ -43,8 +42,6 @@ pub struct Group {
     /// detachable.
     session: Option<libc::pid_t>,
     status: Option<ExitStatus>,
-    /// The leader's piped stdin and stdout, until its owner takes them.
-    pipes: (Option<ChildStdin>, Option<ChildStdout>),
 }
 
 /// How a tree ended.
@@ -64,9 +61,7 @@ impl Group {
     pub fn spawn(command: &mut Command, mark: &str) -> io::Result<Group> {
         let mark = format!("{MARK}{mark}");
         command.env(&mark, "1").process_group(0);
-        let mut child = command.spawn()?;
-        let leader = child.id() as libc::pid_t;
-        let pipes = (child.stdin.take(), child.stdout.take());
+        let leader = command.spawn()?.id() as libc::pid_t;
         // The leader is an unreaped child, so its pid is still its own.
         let pidfd = pidfd(leader)?;
         Ok(Group {
@@ -75,7 +70,6 @@ impl Group {
             mark,
             session: None,
             status: None,
-            pipes,
         })
     }
 
@@ -87,17 +81,6 @@ impl Group {
         // SAFETY: getsid on the leader, an unreaped child.
         self.session = Some(unsafe { libc::getsid(self.leader) });
         self
-    }
-
-    /// The leader's stdin and stdout, where the command piped them: the
-    /// owner's line to it. Once.
-    pub fn pipes(&mut self) -> (Option<ChildStdin>, Option<ChildStdout>) {
-        (self.pipes.0.take(), self.pipes.1.take())
-    }
-
-    /// The leader's pid, which is the group's id.
-    pub fn id(&self) -> libc::pid_t {
-        self.leader
     }
 
     /// The leader's pidfd, readable once it has exited.
