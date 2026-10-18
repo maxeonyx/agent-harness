@@ -2,7 +2,7 @@
 
 A personal agent harness. Max's vision is the gist https://gist.github.com/maxeonyx/014463e0964bebd0add4b914971c492f — his own notes, and the driver. Derive what he wants from it; don't treat a sentence in it as a rule. Build the right thing in the spirit of what he said, not what he literally said. `vision-critique.md` is an outside review of the gist that does exactly this: evidence, not a ruling.
 
-The repo was reset on 2026-10-16 (NZT). The earlier attempt is the unconnected branch `v1` (plus `forked-subagents`, `handoffs`, `provider-cache-probe`): evidence of what earlier agents tried and measured, none of it accepted by Max, and none of its process or framing carries over.
+The repo was reset on 2026-10-16 (NZT). The earlier attempt is the unconnected tag `archive/handoffs` (which contains `v1` and `forked-subagents`) and the tag `archive/provider-cache-probe`: evidence of what earlier agents tried and measured, none of it accepted by Max, and none of its process or framing carries over.
 
 ## What is settled
 
