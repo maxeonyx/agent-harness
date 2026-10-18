@@ -15,22 +15,29 @@
 //! ([`State`]): the lock one instance holds while it runs, the socket it
 //! listens on, its records, and the log of what it printed. So the state is
 //! the limb's address and its lock at once.
+//!
+//! An [`Instance`] holds the brain's rows for the limb and its records,
+//! which a kind says through its [`Voice`]; a kind that runs calls runs
+//! them with [`Calls`].
 
 mod attach;
+mod calls;
 mod serve;
+mod voice;
+
+pub use calls::Calls;
+pub use voice::{CallRow, Instance, Report, Rows, Voice, definition, instant, lock, now, settings};
 
 use std::fs::File;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
-use harness_core::environment::{Limb, LimbDown, LimbUp};
+use harness_core::environment::{Limb, LimbUp};
 use harness_core::id::LimbId;
-use harness_core::schema::{Harness, Record};
-use harness_store::Store;
-use harness_substrate::{Log, Restored};
 
 /// How long a limb runs on with no brain linked: long enough for a crashed
 /// brain to be restarted by hand, so a restart never costs a limb its
@@ -46,19 +53,16 @@ pub type Out = Box<dyn Fn(LimbUp) + Send + Sync>;
 
 /// One kind of limb: what it does with the rows a brain ships it.
 pub trait Kind: Sized + Send + Sync + 'static {
-    /// Open an instance on its definition, the first the brain ships:
-    /// make what it works in, and say its records into `log`. What it
+    /// Open an instance on its definition, the first the brain ships: make
+    /// what it works in, and say its records through `voice`. What it
     /// returns on failure is why the limb cannot start.
-    fn open(
-        definition: &Limb,
-        log: Log<Harness, Store>,
-        state: &Path,
-        out: Out,
-    ) -> Result<Self, String>;
+    fn open(definition: &Limb, voice: Arc<Voice>, state: &Path) -> Result<Self, String>;
 
-    /// Take in what the brain shipped and act on it, returning the records
-    /// to ship that the brain's standing does not cover.
-    fn apply(&self, down: LimbDown) -> Result<Vec<Record>, Restored>;
+    /// Act on the brain's rows as they now stand: run the calls it has no
+    /// record of, stop those asked to stop, watch what is asked.
+    /// `connected`: the rows begin a link, on which it describes itself.
+    /// Never blocks on a call.
+    fn apply(&self, rows: &Rows, connected: bool);
 
     /// Whether anything would die with the process: a running call, or what
     /// one left running (a server, a browser and its tabs). A superseded

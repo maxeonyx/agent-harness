@@ -13,10 +13,11 @@ use harness_core::call::Outcome;
 use harness_core::environment::{Audience, Tool};
 use harness_core::id::Digest;
 use harness_core::resource::Version;
+use harness_limb::Report;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{Inner, Report};
+use crate::Inner;
 
 /// The plugin kind of a user limb.
 pub const KIND: &str = "user";

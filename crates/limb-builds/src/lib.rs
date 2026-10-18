@@ -26,22 +26,17 @@ pub mod relaunch;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use harness_core::call::{Call, CallEvent, Outcome, Output};
-use harness_core::environment::{
-    Audience, Description, Host, Instruction, Limb, LimbDown, LimbKey, LimbKind, LimbRow, Tool,
-};
-use harness_core::fact::{Batch, Fact, Refusal};
-use harness_core::id::{CallId, Digest, LimbId, Timestamp};
+use harness_core::call::Outcome;
+use harness_core::environment::{Audience, Description, Instruction, Limb, LimbKey, LimbRow, Tool};
+use harness_core::fact::{Batch, Fact};
+use harness_core::id::{CallId, Digest, LimbId};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
-use harness_core::schema::{Harness, Record};
 use harness_core::value::Bytes;
-use harness_limb::Out;
-use harness_store::Store;
-use harness_substrate::{Log, Mirror, Restored, Up};
+use harness_limb::{CallRow, Report, Rows, Voice, lock};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -80,113 +75,55 @@ impl Settings {
     }
 
     pub fn of(limb: &Limb) -> Option<Settings> {
-        match &limb.kind {
-            LimbKind::Plugin { kind, config, .. } if kind == KIND => {
-                serde_json::from_str(config).ok()
-            }
-            _ => None,
-        }
+        harness_limb::settings(limb, KIND)
     }
 
     pub fn definition(&self, id: LimbId) -> Limb {
-        Limb {
-            id,
-            name: KIND.into(),
-            kind: LimbKind::Plugin {
-                kind: KIND.into(),
-                config: serde_json::to_string(self).expect("settings are JSON"),
-                host: Host::Local,
-            },
-        }
+        harness_limb::definition(id, KIND, KIND, self)
     }
 }
 
 /// One running instance of the builds limb.
 pub struct Builds {
     inner: Arc<Inner>,
-    rows: Mutex<Mirror<LimbKey, LimbRow, Refusal>>,
 }
 
 struct Inner {
-    limb: LimbId,
+    voice: Arc<Voice>,
     settings: Mutex<Settings>,
     state: PathBuf,
-    log: Mutex<Log<Harness, Store>>,
-    out: Out,
     /// The relaunch running, through its watch, by call.
     running: Mutex<HashMap<CallId, JoinHandle<()>>>,
     shutting_down: AtomicBool,
 }
 
 impl harness_limb::Kind for Builds {
-    fn open(
-        definition: &Limb,
-        log: Log<Harness, Store>,
-        state: &Path,
-        out: Out,
-    ) -> Result<Builds, String> {
+    fn open(definition: &Limb, voice: Arc<Voice>, state: &Path) -> Result<Builds, String> {
         let settings = Settings::of(definition).ok_or("the definition is not a builds limb's")?;
         let inner = Arc::new(Inner {
-            limb: definition.id,
+            voice,
             settings: Mutex::new(settings),
             state: state.to_path_buf(),
-            log: Mutex::new(log),
-            out,
             running: Mutex::default(),
             shutting_down: AtomicBool::new(false),
         });
         std::fs::create_dir_all(inner.marks()).map_err(|e| e.to_string())?;
-        Ok(Builds {
-            inner,
-            rows: Mutex::default(),
-        })
+        Ok(Builds { inner })
     }
 
-    fn apply(&self, down: LimbDown) -> Result<Vec<Record>, Restored> {
+    fn apply(&self, rows: &Rows, connected: bool) {
         let inner = &self.inner;
-        let mut ship = Vec::new();
-        let connected = matches!(down, LimbDown::View(_));
-        let mut rows = lock(&self.rows);
-        rows.apply(down);
-        let Some(view) = rows.view() else {
-            return Ok(ship);
-        };
-        {
-            let mut log = lock(&inner.log);
-            if connected {
-                ship = log.unsent(&view.standing)?;
-            }
-            for (n, why) in &view.standing.refused {
-                eprintln!("the brain refused this limb's record {n}: {why}");
-            }
-            if let Err(e) = log.cover(&view.standing) {
-                eprintln!("cannot collect the log: {e}");
-            }
-        }
-        if let Some(LimbRow::Definition(definition)) = view.rows.get(&LimbKey::Definition)
+        if let Some(LimbRow::Definition(definition)) = rows.rows.get(&LimbKey::Definition)
             && let Some(settings) = Settings::of(definition)
         {
             *lock(&inner.settings) = settings;
         }
         if connected {
-            inner.say(Batch {
-                values: Vec::new(),
-                facts: vec![Fact::Described {
-                    limb: inner.limb,
-                    description: inner.describe(),
-                }],
-            });
+            inner.voice.describe(inner.describe());
         }
-        for (key, row) in &view.rows {
-            if let (LimbKey::Call(id), LimbRow::Call { call, stopping, .. }) = (key, row) {
-                let input = match view.rows.get(&LimbKey::Value(call.input)) {
-                    Some(LimbRow::Value(bytes)) => Some(bytes.clone()),
-                    _ => None,
-                };
-                Inner::call(inner, *id, call, input, stopping.is_some());
-            }
+        for row in inner.voice.calls(rows) {
+            Inner::call(inner, row);
         }
-        Ok(ship)
     }
 
     fn holds(&self) -> bool {
@@ -217,22 +154,29 @@ impl Inner {
     /// One call row: run it at most once, however often it arrives. A
     /// relaunch the limb has a mark of and no thread for was cut off when
     /// an instance of the limb ended: what it did is unknown.
-    fn call(self: &Arc<Self>, id: CallId, call: &Call, input: Option<Bytes>, stopping: bool) {
+    fn call(self: &Arc<Self>, row: CallRow) {
+        let CallRow {
+            id,
+            call,
+            input,
+            stopping,
+            ..
+        } = row;
         let mut running = lock(&self.running);
-        if running.contains_key(&id) || self.settled(id) {
+        if running.contains_key(&id) || self.voice.settled(id) {
             return;
         }
-        let mut report = Report::default();
+        let mut report = Report::new(Some(id));
         let mark = self.marks().join(id.to_string());
         if mark.exists() {
             let outcome = report.failed(
                 "the builds limb ended while this relaunch was under way: \
                  what it did is unknown; the brain's view says which build runs",
             );
-            return self.settle(id, report, outcome);
+            return self.settle(report, outcome);
         }
-        if stopping {
-            return self.settle(id, report, Outcome::Interrupted { partial: None });
+        if stopping.is_some() {
+            return self.settle(report, Outcome::Interrupted { partial: None });
         }
         if self.shutting_down.load(Ordering::SeqCst) {
             return;
@@ -249,17 +193,17 @@ impl Inner {
             (Ok(request), Some(unit)) => (request, unit),
             (Err(why), _) => {
                 let outcome = report.failed(&why);
-                return self.settle(id, report, outcome);
+                return self.settle(report, outcome);
             }
             (Ok(_), None) => {
                 let outcome =
                     report.failed("no systemd unit runs this brain, so it cannot be relaunched");
-                return self.settle(id, report, outcome);
+                return self.settle(report, outcome);
             }
         };
         if let Err(e) = std::fs::write(&mark, []) {
             let outcome = report.failed(&format!("cannot record the call: {e}"));
-            return self.settle(id, report, outcome);
+            return self.settle(report, outcome);
         }
         let inner = self.clone();
         let thread = thread::spawn(move || {
@@ -271,13 +215,13 @@ impl Inner {
 
     fn relaunch(&self, id: CallId, unit: &str, request: &Request) {
         let say = |line: &str| eprintln!("{unit}: {line}");
-        let mut report = Report::default();
+        let mut report = Report::new(Some(id));
         let takeover = match relaunch::take_over(unit, &request.clone, request.back, Some(id), &say)
         {
             Ok(takeover) => takeover,
             Err(why) => {
                 let outcome = report.failed(&why);
-                return self.settle(id, report, outcome);
+                return self.settle(report, outcome);
             }
         };
         let (old, new) = (takeover.old.commit.clone(), takeover.new.commit.clone());
@@ -288,14 +232,14 @@ impl Inner {
              go back to {old}, and you will be told why as a change of `{unit}`."
         );
         let outcome = report.completed(&said, vec![self.observe(unit, &new)]);
-        self.settle(id, report, outcome);
+        self.settle(report, outcome);
         match takeover.watch() {
             Ended::Proven => say(&format!("{new} is proven")),
             Ended::Back(why) => {
                 say(&why);
                 let content = Bytes(why.into_bytes());
                 let observed = self.observe(unit, &old);
-                self.say(Batch {
+                self.voice.say(Batch {
                     facts: vec![Fact::Change(Change {
                         resource: observed.resource,
                         version: observed.version,
@@ -313,7 +257,7 @@ impl Inner {
     fn observe(&self, unit: &str, commit: &str) -> Observation {
         Observation {
             resource: ResourceKey {
-                limb: self.limb,
+                limb: self.voice.limb(),
                 kind: SERVICE.into(),
                 name: unit.into(),
             },
@@ -338,7 +282,7 @@ from the build before, and goes back on its own.\n",
             instructions: vec![Instruction {
                 observes: Observation {
                     resource: ResourceKey {
-                        limb: self.limb,
+                        limb: self.voice.limb(),
                         kind: "instructions".into(),
                         name: String::new(),
                     },
@@ -350,30 +294,10 @@ from the build before, and goes back on its own.\n",
         }
     }
 
-    fn say(&self, batch: Batch) {
-        let record = lock(&self.log).say(now(), |_| batch);
-        match record {
-            Ok(record) => (self.out)(Up::Record(record)),
-            Err(e) => eprintln!("cannot write the limb's log: {e}"),
-        }
-    }
-
-    fn settled(&self, call: CallId) -> bool {
-        let log = lock(&self.log);
-        log.records().any(|r| match &r.what {
-            harness_substrate::What::Said(batch) => batch
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::Call(id, CallEvent::Settled(_)) if *id == call)),
-            _ => false,
-        })
-    }
-
-    fn settle(&self, call: CallId, report: Report, outcome: Outcome) {
-        self.say(Batch {
-            values: report.values,
-            facts: vec![Fact::Call(call, CallEvent::Settled(outcome))],
-        });
+    /// Settle the report's call, and forget its mark.
+    fn settle(&self, report: Report, outcome: Outcome) {
+        let call = report.call().expect("a settlement is a call's");
+        self.voice.settle(report, outcome);
         let _ = std::fs::remove_file(self.marks().join(call.to_string()));
     }
 }
@@ -401,51 +325,4 @@ fn tool() -> Tool {
         definition: definition.to_string(),
         audience: Audience::Agent,
     }
-}
-
-/// The bytes one call says: the values its outcome names.
-#[derive(Default)]
-struct Report {
-    values: Vec<Bytes>,
-}
-
-impl Report {
-    fn text(&mut self, text: &str) -> harness_core::id::ValueId {
-        let bytes = Bytes(
-            json!([{ "type": "text", "text": text }])
-                .to_string()
-                .into_bytes(),
-        );
-        let id = bytes.id();
-        self.values.push(bytes);
-        id
-    }
-
-    fn completed(&mut self, said: &str, observes: Vec<Observation>) -> Outcome {
-        Outcome::Completed(Output {
-            model: self.text(said),
-            full: None,
-            observes,
-        })
-    }
-
-    fn failed(&mut self, message: &str) -> Outcome {
-        Outcome::Failed(Output {
-            model: self.text(message),
-            full: None,
-            observes: Vec::new(),
-        })
-    }
-}
-
-fn now() -> Timestamp {
-    Timestamp(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as i64),
-    )
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
 }

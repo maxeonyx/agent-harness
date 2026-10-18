@@ -15,10 +15,11 @@
 //! notices and refusals are how siblings coordinate in it.
 //!
 //! Everything it says is records of its own replica, about itself, its own
-//! calls and its files, kept in its own [`Log`] until the brain has
-//! included them: its [`Description`] on each connection; a settlement,
-//! with the bytes of its output, and a [`Change`] naming the call for each
-//! file the call wrote, in one batch. What it hears is the brain's rows for
+//! calls and its files, kept in its own log ([`harness_limb::Voice`])
+//! until the brain has included them: its [`Description`] on each
+//! connection; a settlement, with the bytes of its output, and a
+//! [`harness_core::resource::Change`] naming the call for each file the
+//! call wrote, in one batch. What it hears is the brain's rows for
 //! it ([`LimbRow`]): the calls to run and the resources to watch.
 //!
 //! Access control is the definition and nothing else: the limb has no
@@ -26,19 +27,12 @@
 //! holds this limb or does not.
 //!
 //! It runs as a server of its own ([`harness_limb`]), `harness-limb-workspace` or
-//! `harness-limb-user` ([`process`]).
+//! `harness-limb-user`.
 //!
-//! A call is run on its own thread, after the calls its task made before it
-//! in the same workspace have ended: a model writes one response's tool uses
-//! in the order it means them to happen (write a file, then commit it), so
-//! they run in that order. Background work and other tasks run alongside.
-//! Each call is marked on disk as started before it has any effect, and
-//! settled in the log before it stops running. So a call row runs at most
-//! once, however often a crash of the brain or of the limb makes it arrive:
-//! it is left to the settlement the log holds, left
-//! running, run for the first time, rerun if its tool allows
-//! ([`tools::rerun`]), or settled as [`Outcome::Unknown`] when the instance
-//! running it was cut off. Never a failure that did not happen.
+//! Its calls run as a limb's do ([`harness_limb::Calls`]): in the order
+//! each task wrote them, and each at most once however often a crash makes
+//! it arrive, rerun after a crash only if its tool allows
+//! ([`tools::rerun`]).
 //!
 //! **Vision.** No permission prompts; process trees owned by their call;
 //! interrupted calls whose outcome is unknown kept distinct from failed
@@ -62,38 +56,27 @@
 
 mod files;
 mod git;
-pub mod process;
 mod record;
 mod shell;
-pub mod tools;
-pub mod trunc;
+mod tools;
+mod trunc;
 pub mod user;
 
 use std::collections::{HashMap, VecDeque};
-use std::io::{self, PipeReader};
-use std::os::fd::AsRawFd;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
-use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
-use harness_core::environment::{
-    Description, Host, Instruction, Limb, LimbDown, LimbKey, LimbKind, LimbRow,
-};
-use harness_core::fact::{Batch, Fact, Refusal};
-use harness_core::id::{CallId, Digest, LimbId, ReplicaId, TaskId, Timestamp, ValueId};
-use harness_core::live::Live;
-use harness_core::resource::{Change, Observation, ResourceKey, Version};
-use harness_core::schema::{Harness, Record};
+use harness_core::call::{Call, Caller, Outcome};
+use harness_core::environment::{Description, Instruction, Limb, LimbKey, LimbRow};
+use harness_core::id::{CallId, Digest, LimbId, TaskId};
+use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
-use harness_store::Store;
-use harness_substrate::{Log, Mirror, Restored, Time, Up};
+use harness_substrate::Time;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
-use harness_limb::{Out, SHUTDOWN};
+use harness_limb::{Calls, Report, Rows, SHUTDOWN, Voice, lock};
 use harness_runtime::Cancel;
 
 use crate::record::{Marks, Outputs};
@@ -133,16 +116,6 @@ pub struct Clone {
 }
 
 impl Settings {
-    /// The settings a limb definition holds.
-    pub fn of(limb: &Limb) -> Option<Settings> {
-        match &limb.kind {
-            LimbKind::Plugin { kind, config, .. } if Kind::of(kind).is_some() => {
-                serde_json::from_str(config).ok()
-            }
-            _ => None,
-        }
-    }
-
     /// The definition of a workspace limb, as the fact that declares it.
     pub fn definition(&self, id: LimbId, name: &str) -> Limb {
         self.limb(id, name, Kind::Workspace)
@@ -159,22 +132,14 @@ impl Settings {
     }
 
     fn limb(&self, id: LimbId, name: &str, kind: Kind) -> Limb {
-        Limb {
-            id,
-            name: name.into(),
-            kind: LimbKind::Plugin {
-                kind: kind.name().into(),
-                config: serde_json::to_string(self).expect("settings are JSON"),
-                host: Host::Local,
-            },
-        }
+        harness_limb::definition(id, name, kind.name(), self)
     }
 }
 
 /// The two plugin kinds this crate runs: one implementation over a
 /// directory, with different tools and instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
+enum Kind {
     /// An agent's working directory, with the coding tools.
     Workspace,
     /// Max's own agent configuration ([`user`]).
@@ -182,15 +147,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn of(name: &str) -> Option<Kind> {
-        match name {
-            KIND => Some(Kind::Workspace),
-            user::KIND => Some(Kind::User),
-            _ => None,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             Kind::Workspace => KIND,
             Kind::User => user::KIND,
@@ -198,29 +155,15 @@ impl Kind {
     }
 }
 
-/// Where a workspace runs and keeps its records.
-pub struct Config {
-    pub limb: LimbId,
-    pub kind: Kind,
-    pub settings: Settings,
-    /// Where the limb keeps its marks of calls: its state. Outside the
-    /// directory, so the agents' files stay theirs.
-    pub state: PathBuf,
-}
-
-/// One running instance of the workspace limb.
-///
-/// A follower of the brain: it says its records into its own [`Log`] and
-/// ships each through `out`; the brain ships back its rows
-/// ([`Workspace::apply`]). Dropping it stops every running call, within
-/// [`SHUTDOWN`], and waits until each has settled.
+/// One running instance of the workspace limb: a [`harness_limb::Kind`].
+/// Dropping it stops every running call, within [`SHUTDOWN`], and waits
+/// until each has settled.
 pub struct Workspace {
     inner: Arc<Inner>,
-    rows: Mutex<Mirror<LimbKey, LimbRow, Refusal>>,
 }
 
 struct Inner {
-    limb: LimbId,
+    voice: Arc<Voice>,
     root: PathBuf,
     /// The clone it was made as, which its instructions say is the agent's
     /// own.
@@ -228,29 +171,17 @@ struct Inner {
     /// The file naming the skills a user limb offers.
     skills: Option<PathBuf>,
     kind: Kind,
+    calls: Calls,
     marks: Marks,
     outputs: Outputs,
-    log: Mutex<Log<Harness, Store>>,
-    out: Out,
-    running: Mutex<HashMap<CallId, Running>>,
-    /// For each task, the end of its latest call: it hangs up when that
-    /// call ends, and the task's next call waits for that.
-    latest: Mutex<HashMap<TaskId, PipeReader>>,
     /// What each task's own calls did, so that it is not refused for it.
     own: Mutex<HashMap<TaskId, Own>>,
-    /// Shutting down: no new call runs, and a stopped one says why.
-    shutting_down: AtomicBool,
     /// The resources the brain asked to hear about, at the version last
     /// reported.
     watched: Mutex<HashMap<ResourceKey, Version>>,
     /// Held across a file tool's check and its write, so two calls cannot
     /// both pass the check on one version.
     files: Mutex<()>,
-}
-
-struct Running {
-    cancel: Cancel,
-    thread: Option<JoinHandle<()>>,
 }
 
 /// `dir` as an absolute path: `~/…` in `$HOME`.
@@ -268,13 +199,65 @@ fn absolute(dir: &Path) -> io::Result<PathBuf> {
     )))
 }
 
+impl harness_limb::Kind for Workspace {
+    /// Make its directory (its clone, if it has one to make), and end what
+    /// an earlier instance left running. Blocks while it clones. A
+    /// directory given as `~/…` is in `$HOME`; any other must be absolute.
+    /// Its marks of calls are in its `state`, outside the directory, so the
+    /// agents' files stay theirs.
+    fn open(definition: &Limb, voice: Arc<Voice>, state: &Path) -> Result<Workspace, String> {
+        let (kind, settings) = [Kind::Workspace, Kind::User]
+            .into_iter()
+            .find_map(|k| Some((k, harness_limb::settings(definition, k.name())?)))
+            .ok_or("the definition is not a workspace or user limb's")?;
+        Workspace::open(kind, settings, voice, state).map_err(|e| e.to_string())
+    }
+
+    /// A whole view begins a link: the limb describes itself on it.
+    fn apply(&self, rows: &Rows, connected: bool) {
+        let inner = &self.inner;
+        if connected {
+            inner.voice.describe(inner.describe());
+        }
+        for row in inner.voice.calls(rows) {
+            let (id, call) = (row.id, row.call.clone());
+            let inner = self.inner.clone();
+            let rerun = tools::rerun(&call.tool);
+            self.inner
+                .calls
+                .call(row, rerun, move |input, cancel, report| {
+                    inner.run(id, call, input, cancel, report)
+                });
+        }
+        if let Some(LimbRow::Watch { known }) = rows.rows.get(&LimbKey::Watch) {
+            inner.watch(known);
+        }
+        inner.calls.forget(rows);
+    }
+
+    /// Whether a call runs, or a process one left (a server it started
+    /// with `setsid`, adopted by the limb) does.
+    fn holds(&self) -> bool {
+        self.inner.calls.any() || !harness_runtime::children().is_empty()
+    }
+
+    fn stop_all(&self, within: Duration) {
+        self.inner.calls.stop_all(within);
+    }
+
+    fn join(&self) {
+        self.inner.calls.join();
+    }
+}
+
 impl Workspace {
-    /// Start an instance on its records `log`: make its directory (its clone,
-    /// if it has one to make), and end what an earlier instance left running.
-    /// Blocks while it clones. A directory given as `~/…` is in `$HOME`; any
-    /// other must be absolute.
-    pub fn open(config: Config, log: Log<Harness, Store>, out: Out) -> io::Result<Workspace> {
-        let Settings { dir, clone, skills } = config.settings;
+    fn open(
+        kind: Kind,
+        settings: Settings,
+        voice: Arc<Voice>,
+        state: &Path,
+    ) -> io::Result<Workspace> {
+        let Settings { dir, clone, skills } = settings;
         let dir = absolute(&dir)?;
         match &clone {
             Some(clone) => git::clone(clone, &dir)?,
@@ -282,21 +265,23 @@ impl Workspace {
                 io::Error::new(e.kind(), format!("cannot make {}: {e}", dir.display()))
             })?,
         }
-        std::fs::create_dir_all(&config.state)?;
+        std::fs::create_dir_all(state)?;
         let inner = Inner {
-            limb: config.limb,
+            voice: voice.clone(),
             root: dir.canonicalize()?,
             clone,
             skills,
-            kind: config.kind,
-            marks: Marks::open(config.state.join("calls"))?,
-            outputs: Outputs::open(config.state.join("outputs"))?,
-            log: Mutex::new(log),
-            out,
-            running: Mutex::default(),
-            latest: Mutex::default(),
+            kind,
+            // Orphans the limb adopted that have exited, reaped only while
+            // no call runs, so no call's own command can be among them.
+            calls: Calls::open(
+                voice.clone(),
+                &state.join("calls/started"),
+                harness_runtime::reap_children,
+            )?,
+            marks: Marks::open(state.join("calls/running"))?,
+            outputs: Outputs::open(state.join("outputs"))?,
             own: Mutex::default(),
-            shutting_down: AtomicBool::new(false),
             watched: Mutex::default(),
             files: Mutex::default(),
         };
@@ -312,376 +297,43 @@ impl Workspace {
         }
         Ok(Workspace {
             inner: Arc::new(inner),
-            rows: Mutex::default(),
         })
-    }
-
-    /// The replica its records are of, the same across instances on one
-    /// state directory.
-    pub fn replica(&self) -> ReplicaId {
-        lock(&self.inner.log).here()
-    }
-
-    pub fn limb(&self) -> LimbId {
-        self.inner.limb
-    }
-
-    /// Take in what the brain shipped, and act on the rows: run each call
-    /// it holds a row for and has no record of, stop those it asks to
-    /// stop, watch what it asks. A whole view begins a connection: the
-    /// limb ships what the brain has not included, then describes itself.
-    /// Never blocks on a call.
-    pub fn apply(&self, down: LimbDown) -> Result<Vec<Record>, Restored> {
-        let inner = &self.inner;
-        let mut ship = Vec::new();
-        let connected = matches!(down, LimbDown::View(_));
-        let mut replica = lock(&self.rows);
-        replica.apply(down);
-        let Some(view) = replica.view() else {
-            return Ok(ship);
-        };
-        {
-            let mut log = lock(&inner.log);
-            if connected {
-                ship = log.unsent(&view.standing)?;
-            }
-            for (n, why) in &view.standing.refused {
-                eprintln!("the brain refused this limb's record {n}: {why}");
-            }
-            if let Err(e) = log.cover(&view.standing) {
-                eprintln!("cannot collect the log: {e}");
-            }
-        }
-        if connected {
-            inner.say(Batch {
-                values: Vec::new(),
-                facts: vec![Fact::Described {
-                    limb: inner.limb,
-                    description: inner.describe(),
-                }],
-            });
-        }
-        for (key, row) in &view.rows {
-            match (key, row) {
-                (
-                    LimbKey::Call(id),
-                    LimbRow::Call {
-                        call,
-                        stopping,
-                        first_sent_to,
-                        ..
-                    },
-                ) => {
-                    let input = match &view.rows.get(&LimbKey::Value(call.input)) {
-                        Some(LimbRow::Value(bytes)) => Some(bytes),
-                        _ => None,
-                    };
-                    let earlier = *first_sent_to != self.replica();
-                    self.call(*id, call, input, *stopping, earlier);
-                }
-                (LimbKey::Watch, LimbRow::Watch { known }) => inner.watch(known),
-                _ => {}
-            }
-        }
-        // A call the brain no longer asks for has settled there.
-        let running = lock(&inner.running);
-        for call in inner.marks.started() {
-            if !running.contains_key(&call) && !view.rows.contains_key(&LimbKey::Call(call)) {
-                inner.marks.forget(call);
-            }
-        }
-        Ok(ship)
-    }
-
-    /// One call row: run it at most once, however often it arrives, and
-    /// stop it when the row says so. `earlier`: it was first sent to an
-    /// instance of this limb whose state is lost, which may have run it.
-    fn call(
-        &self,
-        id: CallId,
-        call: &Call,
-        input: Option<&Bytes>,
-        stopping: Option<Timestamp>,
-        earlier: bool,
-    ) {
-        let inner = &self.inner;
-        let mut running = lock(&inner.running);
-        if let Some(running) = running.get(&id) {
-            if let Some(by) = stopping {
-                running.cancel.request(instant(by));
-            }
-            return;
-        }
-        // Checked after `running`: a call's thread settles before it stops
-        // running.
-        if inner.settled(id) {
-            return;
-        }
-        let started = earlier || inner.marks.is_started(id);
-        if stopping.is_some() {
-            let outcome = if started {
-                Outcome::Unknown
-            } else {
-                Outcome::Interrupted { partial: None }
-            };
-            return inner.settle(Report::new(Some(id)), outcome);
-        }
-        // A limb shutting down starts nothing; the next instance runs it.
-        if inner.shutting_down.load(Ordering::SeqCst) {
-            return;
-        }
-        // Cut off while an earlier instance ran it.
-        if started && !tools::rerun(&call.tool) {
-            return inner.settle(Report::new(Some(id)), Outcome::Unknown);
-        }
-        let Some(input) = input.cloned() else {
-            let mut report = Report::new(Some(id));
-            let outcome = report.failed("the brain sent the call without its input");
-            return inner.settle(report, outcome);
-        };
-        if let Err(e) = inner.marks.start(id) {
-            let mut report = Report::new(Some(id));
-            let outcome = report.failed(&format!("cannot record the call: {e}"));
-            return inner.settle(report, outcome);
-        }
-        let cancel = Cancel::new();
-        // This call's end: the writer, held until it has settled. The
-        // task's next call waits on the reader.
-        let (before, ended) = match (&call.caller, io::pipe()) {
-            (Caller::Agent { task, .. }, Ok((reader, writer))) => {
-                (lock(&inner.latest).insert(*task, reader), Some(writer))
-            }
-            _ => (None, None),
-        };
-        let thread = {
-            let inner = self.inner.clone();
-            let cancel = cancel.clone();
-            let call = call.clone();
-            thread::spawn(move || {
-                let mut report = Report::new(Some(id));
-                let started = SystemTime::now();
-                let mut outcome = match after(before, &cancel) {
-                    Ok(()) => {
-                        let call = inner.as_written(id, call.clone());
-                        inner.execute(id, &call, &input.0, &cancel, &mut report)
-                    }
-                    Err(_) => Outcome::Interrupted { partial: None },
-                };
-                let ran = (started, SystemTime::now());
-                let made = inner.rescan(&mut report, call.tool == "bash");
-                if let Outcome::Completed(output)
-                | Outcome::Failed(output)
-                | Outcome::Interrupted {
-                    partial: Some(output),
-                } = &mut outcome
-                {
-                    output.observes.extend(made);
-                }
-                inner.did(id, &call, &outcome, ran);
-                inner.settle(report, outcome);
-                drop(ended);
-                let mut running = lock(&inner.running);
-                running.remove(&id);
-                // Orphans the limb adopted that have exited. Only while no
-                // call runs, so no call's own command can be among them.
-                if running.is_empty() {
-                    harness_runtime::reap_children();
-                }
-            })
-        };
-        running.insert(
-            id,
-            Running {
-                cancel,
-                thread: Some(thread),
-            },
-        );
-    }
-
-    /// Whether a call runs, or a process one left (a server it started
-    /// with `setsid`, adopted by the limb) does.
-    pub fn holds(&self) -> bool {
-        !lock(&self.inner.running).is_empty() || !harness_runtime::children().is_empty()
-    }
-
-    /// Stop every running call, each to be gone `within` from now, and run
-    /// no new one: what shutting down asks of the calls. Asked again with
-    /// less time, it makes each stop harder.
-    pub fn stop_all(&self, within: Duration) {
-        self.inner.shutting_down.store(true, Ordering::SeqCst);
-        let deadline = Instant::now() + within;
-        for running in lock(&self.inner.running).values() {
-            running.cancel.request(deadline);
-        }
-    }
-
-    /// Wait until every call has settled and nothing it started is left.
-    pub fn join(&self) {
-        loop {
-            let thread = lock(&self.inner.running)
-                .values_mut()
-                .find_map(|r| r.thread.take());
-            let Some(thread) = thread else {
-                return;
-            };
-            let _ = thread.join();
-        }
-    }
-}
-
-/// Wait until the call `before` ends (its pipe hangs up), unless this call
-/// is asked to stop first.
-fn after(before: Option<PipeReader>, cancel: &Cancel) -> io::Result<()> {
-    let Some(before) = before else {
-        return Ok(());
-    };
-    let mut waiter = cancel.waiter()?;
-    loop {
-        if cancel.is_requested() {
-            return Err(harness_runtime::Cancelled::error());
-        }
-        if waiter.wait(&[(before.as_raw_fd(), libc::POLLIN)], None)? == harness_runtime::Wake::Ready
-        {
-            return Ok(());
-        }
     }
 }
 
 impl Drop for Workspace {
     fn drop(&mut self) {
-        self.stop_all(SHUTDOWN);
-        self.join();
-    }
-}
-
-/// The wall clock, as records carry it.
-pub fn now() -> Timestamp {
-    Timestamp(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as i64),
-    )
-}
-
-/// The moment a record's clock names.
-pub fn instant(at: Timestamp) -> Instant {
-    Instant::now() + Duration::from_millis(at.0.saturating_sub(now().0).max(0) as u64)
-}
-
-/// What one call, or one answer to a [`LimbRow::Watch`], says: the bytes its
-/// output names and the files that changed.
-pub(crate) struct Report {
-    call: Option<CallId>,
-    values: Vec<Bytes>,
-    changes: Vec<Change>,
-}
-
-impl Report {
-    fn new(call: Option<CallId>) -> Report {
-        Report {
-            call,
-            values: Vec::new(),
-            changes: Vec::new(),
-        }
-    }
-
-    pub(crate) fn value(&mut self, bytes: Vec<u8>) -> ValueId {
-        let bytes = Bytes(bytes);
-        let id = bytes.id();
-        self.values.push(bytes);
-        id
-    }
-
-    /// A tool result's content: one text block.
-    pub(crate) fn text(&mut self, text: &str) -> ValueId {
-        self.value(
-            json!([{ "type": "text", "text": text }])
-                .to_string()
-                .into_bytes(),
-        )
-    }
-
-    pub(crate) fn completed(&mut self, said: &str, observes: Vec<Observation>) -> Outcome {
-        Outcome::Completed(self.output(said, observes))
-    }
-
-    pub(crate) fn output(&mut self, said: &str, observes: Vec<Observation>) -> Output {
-        Output {
-            model: self.text(said),
-            full: None,
-            observes,
-        }
-    }
-
-    pub(crate) fn failed(&mut self, message: &str) -> Outcome {
-        Outcome::Failed(Output {
-            model: self.text(message),
-            full: None,
-            observes: Vec::new(),
-        })
-    }
-
-    /// `resource` is now at `version`, by this report's call.
-    fn changed(&mut self, resource: ResourceKey, version: Version) {
-        self.changes.retain(|c| c.resource != resource);
-        self.changes.push(Change {
-            resource,
-            version,
-            by: self.call,
-            content: None,
-            wakes: false,
-        });
-    }
-
-    /// The facts, led by the settlement when there is one.
-    fn batch(self, settled: Vec<Fact>) -> Batch {
-        Batch {
-            values: self.values,
-            facts: settled
-                .into_iter()
-                .chain(self.changes.into_iter().map(Fact::Change))
-                .collect(),
-        }
+        self.inner.calls.stop_all(SHUTDOWN);
+        self.inner.calls.join();
     }
 }
 
 impl Inner {
-    /// Say a batch at this limb's replica: stored, then shipped.
-    fn say(&self, batch: Batch) {
-        let record = lock(&self.log).say(now(), |_| batch);
-        match record {
-            Ok(record) => (self.out)(Up::Record(record)),
-            // A call left unsettled is found started and cut off by the
-            // next instance, which is still true.
-            Err(e) => eprintln!("cannot write the limb's log: {e}"),
+    /// Run one call on its input: as its caller wrote it, noting what it
+    /// made and what it did.
+    fn run(
+        &self,
+        id: CallId,
+        call: Call,
+        input: &Bytes,
+        cancel: &Cancel,
+        report: &mut Report,
+    ) -> Outcome {
+        let started = SystemTime::now();
+        let written = self.as_written(id, call.clone());
+        let mut outcome = self.execute(id, &written, &input.0, cancel, report);
+        let ran = (started, SystemTime::now());
+        let made = self.rescan(report, call.tool == "bash");
+        if let Outcome::Completed(output)
+        | Outcome::Failed(output)
+        | Outcome::Interrupted {
+            partial: Some(output),
+        } = &mut outcome
+        {
+            output.observes.extend(made);
         }
-    }
-
-    /// Ship what a running call has output so far.
-    pub(crate) fn live(&self, live: Live) {
-        let after = lock(&self.log).records().last().map(|r| r.at);
-        if let Some(after) = after {
-            (self.out)(Up::Live(harness_substrate::Live { after, live }));
-        }
-    }
-
-    /// Whether this limb has said how the call ended and the brain has not
-    /// yet included it.
-    fn settled(&self, call: CallId) -> bool {
-        let log = lock(&self.log);
-        log.records().any(|r| match &r.what {
-            harness_substrate::What::Said(batch) => batch
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::Call(id, CallEvent::Settled(_)) if *id == call)),
-            harness_substrate::What::Included(_) | harness_substrate::What::Unread(_) => false,
-        })
-    }
-
-    /// Say how a call ended.
-    fn settle(&self, report: Report, outcome: Outcome) {
-        let call = report.call.expect("a settlement is a call's");
-        self.say(report.batch(vec![Fact::Call(call, CallEvent::Settled(outcome))]));
+        self.did(id, &call, &outcome, ran);
+        outcome
     }
 
     /// Watch what the brain's live contexts embody: report each resource
@@ -702,12 +354,12 @@ impl Inner {
                 .iter()
                 .all(|k| k.resource != o.resource || k.version != version);
             if new {
-                report.changed(o.resource.clone(), version);
+                report.changed(o.resource.clone(), version, false);
             }
         }
         drop(watched);
-        if !report.changes.is_empty() {
-            self.say(report.batch(Vec::new()));
+        if !report.changes().is_empty() {
+            self.voice.say(report.batch(Vec::new()));
         }
     }
 
@@ -775,7 +427,7 @@ impl Inner {
 
     fn key(&self, kind: &str, name: &str) -> ResourceKey {
         ResourceKey {
-            limb: self.limb,
+            limb: self.voice.limb(),
             kind: kind.into(),
             name: name.into(),
         }
@@ -811,7 +463,7 @@ impl Inner {
     /// A file moved, written by the report's call.
     pub(crate) fn changed(&self, report: &mut Report, name: &str, version: Version) {
         for resource in self.keys(name) {
-            report.changed(resource, version);
+            report.changed(resource, version, true);
         }
     }
 
@@ -824,26 +476,19 @@ impl Inner {
     fn rescan(&self, report: &mut Report, command: bool) -> Vec<Observation> {
         let mut made = Vec::new();
         let mut watched = lock(&self.watched);
-        for change in &report.changes {
+        for change in report.changes() {
             if let Some(known) = watched.get_mut(&change.resource) {
                 *known = change.version;
             }
         }
-        let by = report.call.filter(|_| command);
         for (resource, known) in watched.iter_mut() {
             let Some(version) = self.version_of(resource) else {
                 continue;
             };
             if version != *known {
                 *known = version;
-                report.changes.push(Change {
-                    resource: resource.clone(),
-                    version,
-                    by,
-                    content: None,
-                    wakes: false,
-                });
-                if by.is_some() {
+                report.changed(resource.clone(), version, command);
+                if command {
                     made.push(Observation {
                         resource: resource.clone(),
                         version,
@@ -967,8 +612,4 @@ impl Inner {
                 .any(|(start, end)| (*start - COARSE..=*end).contains(&modified))
         })
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
 }

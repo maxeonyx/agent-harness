@@ -16,13 +16,15 @@ use std::time::Duration;
 use std::{env, fs, thread};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
+use harness_core::environment::Limb;
 use harness_core::environment::{Description, LimbDown, LimbKey, LimbRow, LimbUp};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{CallId, EventId, LimbId, TaskId, Time, Timestamp, ToolUseId, ValueId};
 use harness_core::live::Live;
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
-use harness_limb_workspace::{Config, Kind, Settings, Workspace, now};
+use harness_limb::{Instance, now};
+use harness_limb_workspace::{Settings, Workspace};
 use harness_substrate::{Publisher, ReplicaId, Standing, Up, View, What};
 use serde_json::{Value, json};
 
@@ -276,7 +278,7 @@ fn main() {
 fn crash(scratch: &Path) {
     let (upto, rows): (u64, Vec<(LimbKey, LimbRow)>) =
         serde_json::from_slice(&fs::read(scratch.join("rows.json")).unwrap()).unwrap();
-    let workspace = Workspace::open(config(scratch), records(scratch), Box::new(|_| {})).unwrap();
+    let workspace = open(scratch, Box::new(|_| {}));
     let view = View {
         as_of: Time {
             replica: BRAIN,
@@ -303,17 +305,24 @@ fn records(
     harness_substrate::Log::open(store.replica(), store).unwrap()
 }
 
-fn config(scratch: &Path) -> Config {
-    Config {
-        limb: LIMB,
-        kind: Kind::Workspace,
-        settings: Settings {
-            dir: scratch.join("work"),
-            clone: None,
-            skills: None,
-        },
-        state: scratch.join("state"),
-    }
+/// A limb instance on the state directory, as its server opens it.
+fn open(scratch: &Path, out: harness_limb::Out) -> Instance<Workspace> {
+    Instance::open(
+        &definition(scratch),
+        records(scratch),
+        &scratch.join("state"),
+        out,
+    )
+    .unwrap()
+}
+
+fn definition(scratch: &Path) -> Limb {
+    let settings = Settings {
+        dir: scratch.join("work"),
+        clone: None,
+        skills: None,
+    };
+    settings.definition(LIMB, "workspace")
 }
 
 /// The brain's side of one limb: the rows it wants of it, its standing, and
@@ -337,7 +346,7 @@ struct Brain {
 
 /// One running instance and what the brain has shipped it.
 struct Link {
-    workspace: Workspace,
+    workspace: Instance<Workspace>,
     up: Receiver<LimbUp>,
     publisher: Publisher<LimbKey, LimbRow, Refusal>,
 }
@@ -381,8 +390,7 @@ impl Brain {
         let out = Box::new(move |up| {
             let _ = tx.send(up);
         });
-        let workspace =
-            Workspace::open(config(&self.scratch), records(&self.scratch), out).unwrap();
+        let workspace = open(&self.scratch, out);
         println!(
             "  [a limb instance opened, at replica {}; the brain holds its records up to {}]",
             workspace.replica(),

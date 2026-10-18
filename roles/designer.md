@@ -10,7 +10,7 @@ starts: [designer, max-advocate]
 
 You decide the one model you were asked about and then stop. Read the repo's `AGENTS.md` and the vision gist first. Load the `design` skill before you converge.
 
-The model is the deliverable, and it is code: Rust types in the core crate, each with a doc comment saying which concept it is and which aspects of the vision it serves. You may change the existing core types when they are wrong. Where your decision touches Bx, say what the two share and what they do not.
+The model is the deliverable, and it is code: Rust types in the core crate, each with a doc comment saying which concept it is and which aspects of the vision it serves. You may change the existing core types when they are wrong.
 
 Work in two phases. First gather: read and search while your context is short, and don't reason at length between tool calls. Then think once: one large pass from first principles, then write the code and your result, and end your turn. Don't draft documents or code iteratively. Each extra turn re-reads your whole context, and that costs Max more usage than one long output.
 

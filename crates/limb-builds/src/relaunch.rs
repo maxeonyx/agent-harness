@@ -471,9 +471,7 @@ fn fold_span(db: &Path) -> Result<(Option<Seq>, Verdict, bool), String> {
         .map_err(|e| format!("folding {}: {e}", db.display()))?;
     let state = decider.state();
     let launch = state.launch().map(|(mark, _)| mark);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as i64);
+    let now = harness_limb::now().0;
     let unanswered = launch.is_some_and(|l| {
         state.model_calls().any(|(_, m)| {
             m.sent.seq > l.seq
