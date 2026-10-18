@@ -15,6 +15,10 @@
 //! ([`State`]): the lock one instance holds while it runs, the socket it
 //! listens on, its records, and the log of what it printed. So the state is
 //! the limb's address and its lock at once.
+//!
+//! An [`Instance`] holds the brain's rows for the limb and its records,
+//! which a kind says through its [`Voice`]; a kind that runs calls runs
+//! them with [`Calls`].
 
 mod attach;
 mod calls;

@@ -15,10 +15,11 @@
 //! notices and refusals are how siblings coordinate in it.
 //!
 //! Everything it says is records of its own replica, about itself, its own
-//! calls and its files, kept in its own [`Log`] until the brain has
-//! included them: its [`Description`] on each connection; a settlement,
-//! with the bytes of its output, and a [`Change`] naming the call for each
-//! file the call wrote, in one batch. What it hears is the brain's rows for
+//! calls and its files, kept in its own log ([`harness_limb::Voice`])
+//! until the brain has included them: its [`Description`] on each
+//! connection; a settlement, with the bytes of its output, and a
+//! [`harness_core::resource::Change`] naming the call for each file the
+//! call wrote, in one batch. What it hears is the brain's rows for
 //! it ([`LimbRow`]): the calls to run and the resources to watch.
 //!
 //! Access control is the definition and nothing else: the limb has no

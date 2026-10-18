@@ -29,7 +29,7 @@
 
 mod cdp;
 mod chrome;
-pub mod tools;
+mod tools;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -114,11 +114,11 @@ impl Settings {
 
     /// Where the browser is, in words for the instructions.
     fn place(&self) -> String {
-        match (&self.endpoint, &self.chrome) {
-            (Some(endpoint), _) => {
+        match &self.endpoint {
+            Some(endpoint) => {
                 format!("a browser at {endpoint}, which Max can see and use while you work")
             }
-            (None, _) => "a browser on this machine with no window: Max cannot see it".into(),
+            None => "a browser on this machine with no window: Max cannot see it".into(),
         }
     }
 }

@@ -9,7 +9,6 @@ description = "The workspace limb: a shell and file tools in one directory, as c
 harness-core = { path = "../core" }
 harness-limb = { path = "../limb" }
 harness-runtime = { path = "../runtime" }
-harness-store = { path = "../store" }
 harness-substrate = { path = "../substrate" }
 libc = "0.2"
 regex = "1"
@@ -23,3 +22,6 @@ path = "src/bin/workspace.rs"
 [[bin]]
 name = "harness-limb-user"
 path = "src/bin/user.rs"
+
+[dev-dependencies]
+harness-store = { path = "../store" }
