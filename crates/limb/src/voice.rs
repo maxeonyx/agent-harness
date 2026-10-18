@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harness_core::call::{Call, CallEvent, Outcome, Output, Owner};
-use harness_core::environment::{Description, Limb, LimbDown, LimbKey, LimbRow};
+use harness_core::environment::{Description, Host, Limb, LimbDown, LimbKey, LimbKind, LimbRow};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{CallId, LimbId, ReplicaId, Timestamp, ValueId};
 use harness_core::live::Live;
@@ -281,7 +281,7 @@ impl<K: Kind> Instance<K> {
 /// A plugin's settings: the `config` of a definition of kind `kind`.
 pub fn settings<T: serde::de::DeserializeOwned>(limb: &Limb, kind: &str) -> Option<T> {
     match &limb.kind {
-        harness_core::environment::LimbKind::Plugin {
+        LimbKind::Plugin {
             kind: k, config, ..
         } if k == kind => serde_json::from_str(config).ok(),
         _ => None,
@@ -293,10 +293,10 @@ pub fn definition(id: LimbId, name: &str, kind: &str, settings: &impl serde::Ser
     Limb {
         id,
         name: name.into(),
-        kind: harness_core::environment::LimbKind::Plugin {
+        kind: LimbKind::Plugin {
             kind: kind.into(),
             config: serde_json::to_string(settings).expect("settings are JSON"),
-            host: harness_core::environment::Host::Local,
+            host: Host::Local,
         },
     }
 }

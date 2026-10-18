@@ -116,11 +116,6 @@ pub struct Clone {
 }
 
 impl Settings {
-    /// The settings a limb definition holds.
-    pub fn of(limb: &Limb) -> Option<Settings> {
-        harness_limb::settings(limb, KIND).or_else(|| harness_limb::settings(limb, user::KIND))
-    }
-
     /// The definition of a workspace limb, as the fact that declares it.
     pub fn definition(&self, id: LimbId, name: &str) -> Limb {
         self.limb(id, name, Kind::Workspace)
@@ -211,16 +206,10 @@ impl harness_limb::Kind for Workspace {
     /// Its marks of calls are in its `state`, outside the directory, so the
     /// agents' files stay theirs.
     fn open(definition: &Limb, voice: Arc<Voice>, state: &Path) -> Result<Workspace, String> {
-        let kind = match &definition.kind {
-            harness_core::environment::LimbKind::Plugin { kind, .. } if kind == KIND => {
-                Kind::Workspace
-            }
-            harness_core::environment::LimbKind::Plugin { kind, .. } if kind == user::KIND => {
-                Kind::User
-            }
-            _ => return Err("the definition is not of a workspace or user limb".into()),
-        };
-        let settings = Settings::of(definition).ok_or("the definition's settings do not parse")?;
+        let (kind, settings) = [Kind::Workspace, Kind::User]
+            .into_iter()
+            .find_map(|k| Some((k, harness_limb::settings(definition, k.name())?)))
+            .ok_or("the definition is not a workspace or user limb's")?;
         Workspace::open(kind, settings, voice, state).map_err(|e| e.to_string())
     }
 
@@ -314,9 +303,8 @@ impl Workspace {
 
 impl Drop for Workspace {
     fn drop(&mut self) {
-        use harness_limb::Kind as _;
-        self.stop_all(SHUTDOWN);
-        self.join();
+        self.inner.calls.stop_all(SHUTDOWN);
+        self.inner.calls.join();
     }
 }
 
