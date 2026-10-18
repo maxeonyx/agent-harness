@@ -79,7 +79,6 @@ pub trait Source: Send + Sync + 'static {
 }
 
 /// What a face is wired to.
-#[derive(Default)]
 pub struct Wiring {
     /// Where each tab's records go: the brain, which states that the tab
     /// is Max's if it is new to it, includes the record, and answers with
@@ -136,10 +135,6 @@ const TURN: Duration = Duration::from_millis(20);
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
 impl<S: Source> Face<S> {
-    pub fn new(source: S) -> Arc<Face<S>> {
-        Face::with(source, Wiring::default())
-    }
-
     /// A face that includes, dictates and shows live progress as `wiring`
     /// allows.
     pub fn with(source: S, wiring: Wiring) -> Arc<Face<S>> {

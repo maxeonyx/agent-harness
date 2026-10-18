@@ -22,7 +22,7 @@ The model and dictation use the claude.ai login in `~/.claude/.credentials.json`
 
 It serves with the shared wildcard certificate in `~/.config/dev-certs/shared-local/` and accepts only this machine and the Windows host (the default route's gateway).
 
-On a machine with no microphone, `SAMPLE=1 demos/home/run.sh` offers **Dictate the sample**, which streams `sample.wav` (13 s of Piper speech) to the dictation endpoint at real time; `node demos/home/dictate-sample.mjs [port]` does the same without a browser, and `speak.sh` regenerates the recording from `sample.txt`.
+On a machine with no microphone, `SAMPLE=1 demos/home/run.sh` offers **Dictate the sample**, which streams `sample.wav` (13 s of Piper speech) to the dictation endpoint at real time (`demos/phone` dictates it in a headless page), and `speak.sh` regenerates the recording from `sample.txt`.
 
 ## A real run
 
