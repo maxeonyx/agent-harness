@@ -356,7 +356,9 @@ impl std::fmt::Display for Rejected {
             Rejected::Early => "the deadline has not come",
             Rejected::Unanswered => "leaves a tool use unanswered",
             Rejected::WrongScope => "not allowed in that scope",
-            Rejected::CannotStart => "its creator cannot start that",
+            Rejected::CannotStart => {
+                "an agent may start only a fork of itself, a resume of an agent it started, or a fresh agent in a role its own role starts"
+            }
             Rejected::WrongEnvironment => "outside the task's environment",
             Rejected::Unoffered => "the limb does not offer that tool to that caller",
             Rejected::Unroutable => "no limb runs that tool in its context",
@@ -388,6 +390,6 @@ pub struct Refusal {
 
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "fact {} refused: {}", self.fact, self.why)
+        self.why.fmt(f)
     }
 }
