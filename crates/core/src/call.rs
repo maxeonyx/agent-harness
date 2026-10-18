@@ -123,7 +123,6 @@ pub enum Caller {
         /// What the task called it, unique among its owner's running
         /// background work: how the agent, whoever it passes it to, and Max
         /// refer to it.
-        #[serde(default)]
         name: String,
     },
     /// Max, in a chat with `chat` (his settlement rides into its next

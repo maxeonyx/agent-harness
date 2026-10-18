@@ -44,7 +44,6 @@ pub struct Delivery {
     pub to: TaskId,
     pub content: Content,
     /// When the task reads it.
-    #[serde(default)]
     pub read: Read,
 }
 
@@ -102,7 +101,6 @@ pub enum Prompt {
     /// report of where things stand, before the deadline. The one turn an
     /// abandoned task gets ([`crate::cancel`]); said once, by the brain
     /// ([`crate::state::Todo::Tidy`]).
-    #[serde(alias = "Stopping")]
     Tidy,
     /// Max parked the task ([`crate::task::Pause::Park`]): bring the work to
     /// a safe point, start nothing new, keep or stop its background work as

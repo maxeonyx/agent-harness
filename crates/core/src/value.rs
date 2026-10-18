@@ -17,9 +17,8 @@ use crate::id::ValueId;
 /// is text (a tool's output, a JSON input, a role prompt, Max's words), so in
 /// JSON these bytes are a string when they are UTF-8, which is exact and
 /// readable on the limb wire and in a face's network log, and
-/// `{"base64": "..."}` otherwise (a pasted image, recorded audio). A binary
-/// encoding gets the raw bytes. Nothing else in the harness writes bytes by
-/// hand.
+/// `{"base64": "..."}` otherwise (a pasted image, recorded audio). Nothing
+/// else in the harness writes bytes by hand.
 ///
 /// No value is larger than [`Bytes::LIMIT`]. That is the contract between
 /// whoever produces bytes and everyone who holds them: a limb cuts a
@@ -104,9 +103,6 @@ impl fmt::Debug for Bytes {
 
 impl Serialize for Bytes {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if !serializer.is_human_readable() {
-            return serializer.serialize_bytes(&self.0);
-        }
         match std::str::from_utf8(&self.0) {
             Ok(text) => serializer.serialize_str(text),
             Err(_) => {
@@ -120,11 +116,7 @@ impl Serialize for Bytes {
 
 impl<'de> Deserialize<'de> for Bytes {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Bytes, D::Error> {
-        if deserializer.is_human_readable() {
-            deserializer.deserialize_any(BytesVisitor)
-        } else {
-            deserializer.deserialize_byte_buf(BytesVisitor)
-        }
+        deserializer.deserialize_any(BytesVisitor)
     }
 }
 
@@ -134,7 +126,7 @@ impl<'de> Visitor<'de> for BytesVisitor {
     type Value = Bytes;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a string, {\"base64\": ...}, or bytes")
+        f.write_str("a string or {\"base64\": ...}")
     }
 
     fn visit_str<E: de::Error>(self, text: &str) -> Result<Bytes, E> {
@@ -143,14 +135,6 @@ impl<'de> Visitor<'de> for BytesVisitor {
 
     fn visit_string<E: de::Error>(self, text: String) -> Result<Bytes, E> {
         Ok(Bytes::from(text))
-    }
-
-    fn visit_bytes<E: de::Error>(self, bytes: &[u8]) -> Result<Bytes, E> {
-        Ok(Bytes(bytes.to_vec()))
-    }
-
-    fn visit_byte_buf<E: de::Error>(self, bytes: Vec<u8>) -> Result<Bytes, E> {
-        Ok(Bytes(bytes))
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Bytes, A::Error> {
