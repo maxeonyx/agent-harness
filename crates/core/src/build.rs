@@ -187,7 +187,6 @@ impl FromStr for Source {
 pub struct Launched {
     pub build: BuildId,
     /// What it was built from, when it knows.
-    #[serde(default)]
     pub source: Option<Source>,
     #[serde(default)]
     pub limbs: BTreeMap<String, BuildId>,

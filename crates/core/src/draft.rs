@@ -40,7 +40,7 @@ pub enum DraftEvent {
     /// the same entry.
     Opened {
         session: TaskId,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         at: Option<EntryId>,
     },
     /// The whole text when he paused typing. Only the newest is kept

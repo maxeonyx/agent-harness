@@ -172,9 +172,9 @@ pub struct Environment {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tuning {
     /// The provider's name for the model, as a root names it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<Effort>,
 }
 
@@ -543,7 +543,6 @@ pub enum Reach {
     /// build older than the brain's is a limb that outlived a relaunch.
     Connected {
         instance: ReplicaId,
-        #[serde(default)]
         build: Option<BuildId>,
     },
     /// The connection dropped. Calls sent to it stay sent; the throbber says
@@ -653,7 +652,6 @@ pub enum LimbRow {
         call: Call,
         stopping: Option<Timestamp>,
         first_sent_to: ReplicaId,
-        #[serde(default)]
         owner: Option<Owner>,
     },
     /// Watch these resources: what live contexts embody. `known` is every
@@ -746,6 +744,5 @@ pub type LimbUp = harness_substrate::Up<crate::schema::Harness, crate::live::Liv
 pub struct Hello {
     pub limb: LimbId,
     pub replica: ReplicaId,
-    #[serde(default)]
     pub build: Option<BuildId>,
 }

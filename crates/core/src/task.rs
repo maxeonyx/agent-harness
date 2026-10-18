@@ -992,7 +992,6 @@ pub struct Compaction {
     /// The content of an assistant message after the carry that ends the
     /// turn: the report the agent left with its compaction, its last
     /// message in the new context. `None` carries on in the same turn.
-    #[serde(default)]
     pub report: Option<ValueId>,
 }
 
