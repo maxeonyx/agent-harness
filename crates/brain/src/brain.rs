@@ -425,7 +425,7 @@ impl Brain {
                     "There is no tool `{}` in this context.",
                     self.call(call).tool
                 );
-                self.fail(call, &said);
+                self.fail_call(call, &said);
             }
             Todo::Interrupt(call) => self.interrupt(call),
             Todo::Cut(request) => {
@@ -681,11 +681,26 @@ impl Brain {
     /// A starting task's first root, once every limb it reaches has
     /// described itself.
     fn root(&mut self, id: TaskId) {
-        match self.start_of(id) {
-            None => {}
-            Some(Err(why)) => self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
-            Some(Ok((start, values))) => self.moved(id, Move::Root(Box::new(start)), values),
+        if let Some((start, values)) = self.restart(id) {
+            self.moved(id, Move::Root(Box::new(start)), values);
         }
+    }
+
+    /// A new root for the task ([`Brain::start_of`]), or `None` while a limb
+    /// has not described itself, or when it cannot be rendered: then the
+    /// task fails.
+    fn restart(&mut self, id: TaskId) -> Option<(TaskStart, Vec<Bytes>)> {
+        match self.start_of(id)? {
+            Ok(start) => Some(start),
+            Err(why) => {
+                self.fail_task(id, why);
+                None
+            }
+        }
+    }
+
+    fn fail_task(&mut self, id: TaskId, why: impl Into<String>) {
+        self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why.into()))));
     }
 
     /// A new root for the task from its environment's current version and
@@ -759,15 +774,9 @@ impl Brain {
         let checkpoint = self.state().checkpoint(task).filter(|_| !ask.fresh);
         let (onto, values, why) = match checkpoint {
             Some(at) => (Onto::Checkpoint(at), Vec::new(), render::Why::Checkpoint),
-            None => match self.start_of(task.id) {
+            None => match self.restart(task.id) {
                 None => return true,
-                Some(Err(why)) => {
-                    self.fact(Fact::Task(task.id, TaskEvent::Drain(Drain::Fail(why))));
-                    return true;
-                }
-                Some(Ok((start, values))) => {
-                    (Onto::Fresh(Box::new(start)), values, render::Why::Fresh)
-                }
+                Some((start, values)) => (Onto::Fresh(Box::new(start)), values, render::Why::Fresh),
             },
         };
         let calls = round(task, Some(call));
@@ -828,8 +837,7 @@ impl Brain {
         let head = task.head().expect("a ready task has a context");
         let failures = task.live().map_or(0, |l| l.failures);
         if failures >= policy::GIVE_UP {
-            let reason = format!("the provider failed {failures} times in a row");
-            return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
+            return self.fail_task(id, format!("the provider failed {failures} times in a row"));
         }
         // Nothing is in flight for a ready task, so every turn has ended.
         let last = self.state().last_turn(id).cloned();
@@ -859,10 +867,7 @@ impl Brain {
                     stop: Stop::Refused,
                     ..
                 },
-            )) => {
-                let reason = "the model declined to go on".to_string();
-                return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
-            }
+            )) => return self.fail_task(id, "the model declined to go on"),
             // A context the provider no longer accepts starts again from a
             // new root, with the mandate, Max's words and its calls' results.
             Some((
@@ -884,24 +889,20 @@ impl Brain {
                     } else {
                         "its context does not fit the model's window even started afresh"
                     };
-                    let reason = reason.to_string();
-                    return self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(reason))));
+                    return self.fail_task(id, reason);
                 }
-                return match self.start_of(id) {
-                    None => {}
-                    Some(Err(why)) => self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why)))),
-                    Some(Ok((start, values))) => {
-                        let calls = round(&task, None);
-                        let carry = render::Carry {
-                            summary: None,
-                            why: render::Why::Full,
-                            words: &[],
-                            calls: &calls,
-                        };
-                        let onto = Onto::Fresh(Box::new(start));
-                        self.compacted(&task, None, onto, carry, values, None);
-                    }
-                };
+                if let Some((start, values)) = self.restart(id) {
+                    let calls = round(&task, None);
+                    let carry = render::Carry {
+                        summary: None,
+                        why: render::Why::Full,
+                        words: &[],
+                        calls: &calls,
+                    };
+                    let onto = Onto::Fresh(Box::new(start));
+                    self.compacted(&task, None, onto, carry, values, None);
+                }
+                return;
             }
             _ => {}
         }
@@ -1088,7 +1089,7 @@ impl Brain {
     fn read_usage(&mut self, id: CallId, call: &Call) {
         if call.tool != web::USAGE {
             let said = format!("The provider offers Max no tool `{}`.", call.tool);
-            return self.fail(id, &said);
+            return self.fail_call(id, &said);
         }
         self.fact(Fact::Call(id, CallEvent::Dispatched));
         let client = self.client.clone();
@@ -1108,7 +1109,7 @@ impl Brain {
                     facts: vec![Fact::Call(id, CallEvent::Settled(outcome))],
                 });
             }
-            Err(why) => self.fail(id, &format!("Could not read the plan's usage: {why}")),
+            Err(why) => self.fail_call(id, &format!("Could not read the plan's usage: {why}")),
         }
     }
 
@@ -1120,7 +1121,7 @@ impl Brain {
         // the meta limb offers him none.
         let Caller::Agent { task: parent, .. } = call.caller else {
             let said = format!("The harness offers Max no tool `{}`.", call.tool);
-            return self.fail(id, &said);
+            return self.fail_call(id, &said);
         };
         let parent = self
             .state()
@@ -1516,7 +1517,7 @@ and you cannot finish until it has.",
     }
 
     /// Settle a call the brain answers itself as failed, saying why.
-    fn fail(&mut self, id: CallId, said: &str) {
+    fn fail_call(&mut self, id: CallId, said: &str) {
         let (model, failed) = render::failed(said);
         self.append(Batch {
             values: vec![model],
