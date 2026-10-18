@@ -111,18 +111,15 @@ impl Said {
     }
 }
 
-/// A message's text blocks, joined; a bare string is its own text.
+/// A message's text blocks, joined.
 fn said(content: &[u8]) -> String {
-    match serde_json::from_slice::<Value>(content) {
-        Ok(Value::String(s)) => s,
-        Ok(Value::Array(blocks)) => blocks
-            .iter()
-            .filter(|b| b["type"] == "text")
-            .filter_map(|b| b["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
+    serde_json::from_slice::<Vec<Value>>(content)
+        .unwrap_or_default()
+        .iter()
+        .filter(|b| b["type"] == "text")
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Lowercased one char for one char, so char positions carry over.

@@ -140,10 +140,6 @@ pub fn rows(
     rows
 }
 
-/// The subscription's usage: the newer of what the latest response's
-/// headers reported and what Max's latest usage reading returned, each
-/// window by name, as of when; whether a reading is running; and why the
-/// last one failed, if none has succeeded since.
 /// Where the latest relaunch of the brain stands, as far as it concerns the
 /// build running now: `under way` while the builds limb is building and
 /// rehearsing it; `took over` once it settled in this launch's span, when
@@ -183,6 +179,10 @@ fn relaunch(state: &State, value: Text) -> Value {
     }
 }
 
+/// The subscription's usage: the newer of what the latest response's
+/// headers reported and what Max's latest usage reading returned, each
+/// window by name, as of when; whether a reading is running; and why the
+/// last one failed, if none has succeeded since.
 fn usage(state: &State, value: Text, provider: Option<LimbId>) -> Value {
     let window = |w: &Window| json!({"used": w.used, "resets": w.resets.map(|t| t.0)});
     let mut at = None;

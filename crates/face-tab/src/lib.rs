@@ -87,7 +87,6 @@ pub struct DraftRow {
     /// The draft whose Send, or concurrent edit, opened this one.
     pub from: Option<DeliveryId>,
     /// For an edit, the entry its Send moves the session back to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<harness_core::context::EntryId>,
 }
 

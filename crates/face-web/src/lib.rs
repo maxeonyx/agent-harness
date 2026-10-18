@@ -68,7 +68,8 @@ use harness_substrate::{Live, Publisher, Standing};
 use serde_json::{Value, json};
 use tungstenite::{Message, WebSocket};
 
-pub use dictation::{Dictation, Edit, Socket, edits};
+pub use dictation::Dictation;
+use dictation::Socket;
 pub use live::{Feed, Running};
 pub use view::describe;
 
@@ -192,7 +193,7 @@ impl<S: Source> Face<S> {
     }
 
     /// Serve one connection: read its request, answer it.
-    pub fn handle(&self, stream: impl Socket) -> io::Result<()> {
+    fn handle(&self, stream: impl Socket) -> io::Result<()> {
         let (request, mut stream) = http::read_request(stream)?;
         match request.path.as_str() {
             "/" => match DOCUMENT
@@ -289,14 +290,12 @@ impl<S: Source> Face<S> {
                             include(record);
                         }
                     }
-                    Ok(Up::Live(_)) => {}
                     // A link speaks for its own replica, in the schema's words.
                     _ => return Ok(()),
                 },
                 Ok(Message::Close(_)) => return Ok(()),
                 Ok(_) => {}
-                Err(tungstenite::Error::Io(e))
-                    if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                Err(e) if dictation::would_block(&e) => {}
                 Err(_) => return Ok(()),
             }
             let shown = self.show().clone();
@@ -333,14 +332,7 @@ impl<S: Source> Face<S> {
     /// The rows as of the last fold, by key, for a script that only looks.
     fn view(&self, stream: &mut impl Write) -> io::Result<()> {
         let shown = self.show().clone();
-        let view = shown.map(|s| {
-            let rows: serde_json::Map<String, Value> = s
-                .rows
-                .iter()
-                .map(|(k, r)| (k.to_string(), json!(r)))
-                .collect();
-            json!({ "as_of": s.as_of, "rows": rows })
-        });
+        let view = shown.map(|s| json!({ "as_of": s.as_of, "rows": s.rows }));
         let body = serde_json::to_vec(&view).expect("a JSON value serialises");
         http::respond(stream, "application/json", &body, false)
     }
