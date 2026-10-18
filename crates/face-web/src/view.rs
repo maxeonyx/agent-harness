@@ -326,7 +326,7 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "environment": state.environment(t.environment).map(|e| e.name.clone()),
         "window": state.environment(t.environment).map(|e| harness_provider::context_window(t.tuning.model(e))),
         "tuning": state.environment(t.environment).map(|e| tuning(value, t, e, last)),
-        "places": t.places.iter().map(|(place, limb)| (place.clone(), state.limb(*limb).map_or_else(|| limb.to_string(), |l| l.name.clone()))).collect::<std::collections::BTreeMap<String, String>>(),
+        "places": t.places.iter().map(|(place, limb)| (place.clone(), limb_name(state, *limb))).collect::<BTreeMap<String, String>>(),
         // Whether Max has paused it, how, and on which task: itself or an
         // ancestor.
         "pause": state.pause(t.id).map(|(how, by)| json!({
@@ -628,11 +628,11 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Environment(e) => format!("environment {} defined", e.name),
         Fact::Limb(l) => format!("limb {} defined", l.name),
         Fact::Described { limb, description } => {
-            let limb = state.limb(*limb).map_or("?".into(), |l| l.name.clone());
+            let limb = limb_name(state, *limb);
             format!("{limb} described: {} tools", description.tools.len())
         }
         Fact::Reach { limb, reach } => {
-            let limb = state.limb(*limb).map_or("?".into(), |l| l.name.clone());
+            let limb = limb_name(state, *limb);
             match reach {
                 Reach::Connected {
                     build: Some(build), ..
