@@ -106,7 +106,7 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
     .map_err(|e| format!("signals: {e}"))?;
 
     let mut limb_ = Served::<K> {
-        kind: None,
+        instance: None,
         log: Some(open_log(&state)?),
         state,
         events: events.clone(),
@@ -122,7 +122,7 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
     loop {
         if let Some(by) = superseded
             && !limb_.stopping()
-            && limb_.kind.as_ref().is_some_and(|k| !k.kind().holds())
+            && limb_.instance.as_ref().is_some_and(|i| !i.kind().holds())
         {
             eprintln!(
                 "harness-limb-{kind}: superseded by build {:.12}: shutting down",
@@ -208,11 +208,11 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
     }
 }
 
-/// The limb's state as the loop holds it: its records, and the kind once a
-/// brain has defined it.
+/// The limb's state as the loop holds it: its records, and the instance
+/// once a brain has defined it.
 struct Served<K> {
-    kind: Option<Arc<Instance<K>>>,
-    /// Its records, until the kind opens on them.
+    instance: Option<Arc<Instance<K>>>,
+    /// Its records, until the instance opens on them.
     log: Option<Log<Harness, Store>>,
     state: State,
     events: Sender<Event>,
@@ -237,7 +237,7 @@ impl<K: Kind> Served<K> {
 
     /// Hand a down to the kind, opening it on the first view's definition.
     fn apply(&mut self, down: LimbDown) -> Result<Vec<harness_core::schema::Record>, Fresh> {
-        if self.kind.is_none() {
+        if self.instance.is_none() {
             let LimbDown::View(view) = &down else {
                 return Ok(Vec::new());
             };
@@ -249,9 +249,9 @@ impl<K: Kind> Served<K> {
             let out = Box::new(move |up| {
                 let _ = events.send(Event::Up(Box::new(up)));
             });
-            let log = self.log.take().expect("records until the kind opens");
+            let log = self.log.take().expect("records until the instance opens");
             match Instance::open(definition, log, self.state.dir(), out) {
-                Ok(kind) => self.kind = Some(Arc::new(kind)),
+                Ok(instance) => self.instance = Some(Arc::new(instance)),
                 Err(why) => {
                     // Nothing has started: the limb cannot, and says why.
                     eprintln!("{why}");
@@ -259,8 +259,8 @@ impl<K: Kind> Served<K> {
                 }
             }
         }
-        let kind = self.kind.as_ref().expect("opened");
-        match kind.apply(down) {
+        let instance = self.instance.as_ref().expect("opened");
+        match instance.apply(down) {
             Ok(unsent) => Ok(unsent),
             Err(restored) => {
                 eprintln!(
@@ -268,8 +268,8 @@ impl<K: Kind> Served<K> {
                      its state was lost or restored, so it starts again as a new replica",
                     restored.upto, restored.next
                 );
-                kind.kind().stop_all(SHUTDOWN);
-                drop(self.kind.take());
+                instance.kind().stop_all(SHUTDOWN);
+                drop(self.instance.take());
                 for suffix in ["", "-wal", "-shm"] {
                     let mut path = self.state.records().into_os_string();
                     path.push(suffix);
@@ -292,16 +292,16 @@ impl<K: Kind> Served<K> {
     fn down(&mut self, within: Duration) {
         let first = !self.cancel.is_requested();
         self.cancel.request(Instant::now() + within);
-        let Some(kind) = self.kind.clone() else {
+        let Some(instance) = self.instance.clone() else {
             let _ = self.events.send(Event::Stopped);
             return;
         };
-        kind.kind().stop_all(within);
+        instance.kind().stop_all(within);
         if first {
             let events = self.events.clone();
             let cancel = self.cancel.clone();
             thread::spawn(move || {
-                kind.kind().join();
+                instance.kind().join();
                 end_adopted(&cancel);
                 let _ = events.send(Event::Stopped);
             });
