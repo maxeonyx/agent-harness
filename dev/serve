@@ -21,8 +21,7 @@
 #   database with the same flags, and it waits until the build is proven
 #   (a response, and a call a limb settled, in its span) or has gone back
 #   to the build before. It keeps the flags the brain runs with: stop
-#   the unit to change them. A running build older than the builds limb is relaunched by
-#   this clone's.
+#   the unit to change them.
 #
 # ~/.local/share/agent-harness/NAME/build links to the build a restart of
 # NAME runs, the last proven, so its `act` is
@@ -53,9 +52,7 @@ home=${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness
 if systemctl --user -q is-active "$unit"; then
     [[ $# -eq 0 ]] || echo "dev/serve: $unit keeps the flags it runs with; stop it to change them" >&2
     pid=$(systemctl --user show -p MainPID --value "$unit")
-    limb=$(dirname "$(readlink -f "/proc/$pid/exe")")/harness-limb-builds
-    [[ -x $limb ]] || exec cargo run -q --release -p harness-limb-builds -- relaunch "$unit" "$repo"
-    exec "$limb" relaunch "$unit" "$repo"
+    exec "$(dirname "$(readlink -f "/proc/$pid/exe")")/harness-limb-builds" relaunch "$unit" "$repo"
 fi
 
 build=$(cargo run -q --release -p harness-limb-builds -- install "$repo")

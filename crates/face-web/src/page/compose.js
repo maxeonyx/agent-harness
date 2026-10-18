@@ -19,7 +19,8 @@ import { startNew } from "./newchat.js";
 // edit too: an edit inside it pins the text up to the end of his edit, and
 // the words still coming go after it.
 export const compose = $(".compose", panel);
-export let box = null, dictation = null;
+export let dictation = null;
+let box = null;
 // The send this tab's box is staged for, "Next" or "TurnEnd"; and until
 // when sending waits, after another device changed the words.
 let staged = null, lockedUntil = 0;

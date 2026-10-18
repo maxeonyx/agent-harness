@@ -74,7 +74,7 @@ where
 /// `at` with `put`. A frame's edits are in ascending order, each in the
 /// offsets of the text before the frame, and never overlap.
 #[derive(Debug, PartialEq)]
-pub struct Edit {
+struct Edit {
     pub at: usize,
     pub cut: usize,
     pub put: String,
@@ -290,7 +290,7 @@ fn upstream(e: tungstenite::Error) -> String {
     format!("dictation endpoint: {e}")
 }
 
-fn would_block(e: &tungstenite::Error) -> bool {
+pub(crate) fn would_block(e: &tungstenite::Error) -> bool {
     matches!(e, tungstenite::Error::Io(e)
         if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut))
 }
@@ -338,7 +338,7 @@ impl Transcript {
 /// one insertion and a rewritten word is one replacement. The common start
 /// and end are trimmed first, so the quadratic part is only the region that
 /// changed; past a bound, that region is one replacement.
-pub fn edits(old: &str, new: &str) -> Vec<Edit> {
+fn edits(old: &str, new: &str) -> Vec<Edit> {
     let a = words(old);
     let b = words(new);
     let start = a.iter().zip(&b).take_while(|(x, y)| x == y).count();

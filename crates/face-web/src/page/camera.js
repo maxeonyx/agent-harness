@@ -5,7 +5,8 @@ import { hideTip } from "./hover.js";
 import { closeNode, go, NEW, openId, saved } from "./card.js";
 
 // ─── The camera ────────────────────────────────────────────────────────────
-export const map = $("#map"), world = $("#world"), nodesLayer = $("#nodes"), edgesLayer = $("#edges");
+const map = $("#map"), world = $("#world");
+export const nodesLayer = $("#nodes"), edgesLayer = $("#edges");
 export let cam = { x: 0, y: 0, k: 1 };
 export let framed = true;  // follows the map's growth until Max moves it himself
 // While the map moves it is a layer of its own, so the browser moves a
@@ -127,7 +128,8 @@ map.addEventListener("wheel", (e) => {
 // On the bare ground, a click closes the open card and a double click opens
 // a new chat there. A click waits a moment to know which it is; a double tap
 // on a touch screen is a double click.
-export let closing = 0, tapped = null;
+export let closing = 0;
+let tapped = null;
 // By the path the event took, not its target: a button its own click redraws
 // is no longer in the card when the click reaches the map.
 const ground = (e) => !drag?.moved && !e.composedPath().some((n) => n.matches?.(".node, #panel, .offscreen"));

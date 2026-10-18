@@ -36,7 +36,7 @@ A pause covers the task and everything under it, and the newest word on the way 
 - **The controls** sit beside the open node's box as small icons, drawn from one list of the task's actions: ‖ **Pause** (`Pause::Now`) while it works; once paused, ■ **Stop** (`Pause::Park`: pause for now, each agent comes to a safe point) and ▶ **Resume** (`Pause::Off`); ✕ **Abandon** (`Drain::Abandon`, within 120 s), then **End now** (within 0); ✓ **Done** in a chat. Abandon, End now and Done ask once more. A refusal shows under the box. Hovering a node shows the same actions; right-clicking it shows them as a menu.
 - **Sending** takes two presses, staged then sent: Enter, Enter for **Send**, Alt+Enter twice for **Queue** (at turn end). Words sent to a task Max paused write `Pause::Off` in the same record.
 - **While the task's request runs**, its visible text streams in at the foot of its log.
-- **The needs-you pill** opens the queue in ranked order. The ↑ ↓ buttons reorder it, and **Next** opens the top item.
+- **What needs Max** off screen is a mark at the screen's edge, the next in the queue haloed; a click opens it. The page does not rank the queue: ranking is the example's own `Ranking` fact.
 
 ## Real output
 

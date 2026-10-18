@@ -13,7 +13,8 @@ import { buildNew } from "./newchat.js";
 // The URL names the open node, so back closes it and a middle click opens a
 // node in a tab of its own. Going from one card to another replaces the
 // entry, so back always goes to the map.
-export let openId = null, saved = null, moving = Promise.resolve(), stay = false;
+export let openId = null, saved = null, moving = Promise.resolve();
+let stay = false;
 // The card's id for a chat not started yet.
 export const NEW = "new";
 
@@ -201,7 +202,7 @@ function mixOf(chain) {
     blocksOf(e).forEach((b, k) => {
       const who = e.role === "user" ? (e.by || [])[k]?.by || "harness" : null;
       const into = b.type === "tool_result" ? "results" : b.type === "tool_use" ? "calls"
-        : b.type === "thinking" || b.type === "redacted_thinking" ? null
+        : b.type === "thinking" ? null
         : e.role === "assistant" ? "said" : who === "max" || who === "prompt" ? "max"
         : who === "mandate" || who === "brief" ? "mandate" : "notes";
       if (into) m[into] += size(b);

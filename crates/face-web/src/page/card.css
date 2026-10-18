@@ -162,8 +162,6 @@
   .tool-def .prose { font: 13.5px/1.5 var(--sans); }
   .tool-def .schema > summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-top: .3em; }
   .io .k { color: var(--muted); }
-  .rendered { border: 1px solid var(--line); border-radius: 8px; padding: .7em 1em; background: var(--white); margin: .3em 0; max-height: 34em; overflow: auto; }
-  .rendered img { max-width: 100%; }
   .chips { display: flex; flex-wrap: wrap; gap: .4em; margin: .25em 0 .5em 1em; }
   a.cite { font-size: .75em; padding: 0 .4em; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: var(--muted, #777); white-space: nowrap; vertical-align: .1em; }
   .io.found a { text-decoration: none; } .io.found .host { opacity: .6; }

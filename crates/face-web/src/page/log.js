@@ -25,7 +25,7 @@ const versionsOf = (task) => fetch(`/versions/${task}`).then((r) => r.ok ? r.jso
 export async function renderLog(t) {
   const s = logState;
   if (!s || s.id !== t.id) return;
-  const seen = `${t.head} ${t.turn}`;
+  const seen = `${t.head} ${t.ended}`;
   if (s.seen !== seen) {
     s.seen = seen;
     const head = t.head, moved = s.head !== head;
@@ -100,10 +100,8 @@ function entry(s, into, e, index, t, parent) {
       if (b.type !== "text" || who.by === "label") return;
       const text = b.text || "";
       if (who.by === "max") {
-        // A mandate sent before its framing had a block of its own carries it.
-        const words = text.replace(/^\[harness\][^\n]*:\n\n/, "");
-        if (run) { $(".bubble", run.el).textContent += `\n${words}`; return; }
-        run = { by: "max", el: said(words, clock(who.at)) };
+        if (run) { $(".bubble", run.el).textContent += `\n${text}`; return; }
+        run = { by: "max", el: said(text, clock(who.at)) };
         // His message: edit it, or run its turn again.
         if (!carry && !$(".moves", into)) {
           const bubble = $(".bubble", run.el);
@@ -139,7 +137,7 @@ function entry(s, into, e, index, t, parent) {
   }
   // The assistant's turn: its words read as prose; its tool uses as steps.
   for (const b of joined(blocks)) {
-    if (b.type === "thinking" || b.type === "redacted_thinking") {
+    if (b.type === "thinking") {
       if (!b.thinking) continue;
       const d = el("details", "thought"); d.append(el("summary", null, "Thinking"), el("div", "plain", b.thinking));
       (s.group ? s.group.el : into).append(d);
