@@ -260,7 +260,7 @@ pub struct Probation {
 impl Probation {
     /// Fold one fact of the span, said by a limb if `by_limb`. Facts of
     /// other spans are not shown it.
-    pub fn see(&mut self, by_limb: bool, trial: Trial) {
+    pub(crate) fn see(&mut self, by_limb: bool, trial: Trial) {
         if self.refused.is_some() || self.proven().is_some() {
             return;
         }
@@ -387,7 +387,7 @@ pub struct Glimpsed {
 }
 
 impl Glimpsed {
-    pub fn trials(&self) -> impl Iterator<Item = Trial> + '_ {
+    pub(crate) fn trials(&self) -> impl Iterator<Item = Trial> + '_ {
         self.facts.iter().filter_map(|glance| match glance {
             Glance::Trial(fact) => fact.trial(),
             Glance::Other(IgnoredAny) => None,
@@ -465,6 +465,6 @@ pub struct Refused {
 /// Whether a provider's refusal with `status` is the fault of the build
 /// that rendered the request: a client error, other than a timeout or a
 /// limit, which the same request from another build may not get.
-fn blames_build(status: u16) -> bool {
+pub fn blames_build(status: u16) -> bool {
     (400..500).contains(&status) && !matches!(status, 408 | 429)
 }

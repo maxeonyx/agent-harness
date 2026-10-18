@@ -411,7 +411,7 @@ impl LimbKind {
 
     /// Whether `other` is the same kind on the same host, which every
     /// version of a limb is.
-    pub fn same(&self, other: &LimbKind) -> bool {
+    pub(crate) fn same(&self, other: &LimbKind) -> bool {
         match (self, other) {
             (
                 LimbKind::Plugin {

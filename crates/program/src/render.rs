@@ -557,7 +557,7 @@ pub fn carried(state: &State, values: Values, whose: &str, call: CallId) -> Vec<
 
 /// How an agent names one of its calls, or one its agents attached, to
 /// `attach` it: shown with the call's result.
-pub fn call_label(call: CallId) -> String {
+pub(crate) fn call_label(call: CallId) -> String {
     let digest = Digest::of(call.to_string().as_bytes()).to_string();
     format!("call-{}", &digest[..6])
 }
@@ -978,7 +978,7 @@ fn mandate(state: &State, values: Values, task: &Task, carried: bool) -> String 
             siblings.join(", ")
         ));
     }
-    // A root made before `compact_and_report` existed does not bind it.
+    // A root need not bind `compact_and_report`.
     let end = if task
         .context()
         .is_some_and(|c| c.binding.limb(crate::meta::COMPACT_AND_REPORT).is_some())

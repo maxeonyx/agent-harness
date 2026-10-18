@@ -1487,7 +1487,7 @@ impl State {
 
     /// Whether a model turn ended at `entry`: a response that ended it, a
     /// compaction's report, or the head an interrupt left.
-    pub fn ended_turn(&self, entry: EntryId) -> bool {
+    pub(crate) fn ended_turn(&self, entry: EntryId) -> bool {
         self.open.interrupted.contains(&entry)
             || self.reported(entry)
             || self.response(entry).is_some_and(|m| {
@@ -2234,10 +2234,6 @@ impl State {
         self.described.get(&limb)
     }
 
-    pub fn reach(&self, id: LimbId) -> Option<&Reached> {
-        self.reach.get(&id)
-    }
-
     /// What `limb` holds of the brain: each call dispatched to it and not
     /// settled, with its stop's deadline; the resources of its that live
     /// contexts embody, with every version the brain holds of each (its
@@ -2320,10 +2316,6 @@ impl State {
 
     pub fn resource(&self, key: &ResourceKey) -> Option<&Current> {
         self.resources.get(key)
-    }
-
-    pub fn ranking(&self) -> &Ranking {
-        &self.ranking
     }
 
     /// The task a face shows Max.
