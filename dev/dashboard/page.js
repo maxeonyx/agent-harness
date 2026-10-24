@@ -630,7 +630,7 @@ function inflight() {
     if (live === null) return el.replaceChildren(h("p.muted", {}, "Reading GitHub, the brains and the clones…"));
     const prFor = (branch) => live.prs.open.find((p) => p.headRefName === branch);
     el.replaceChildren(
-      h("p.lead", {}, `Read ${ago(live.at)} (${when(live.at)}) from GitHub, every running brain's /view and the clones beside the dashboard's; never stored.`),
+      h("p.lead", {}, `Read ${ago(live.at)} (${when(live.at)}) from GitHub, every running brain's /view and the clones beside the dashboard's; never stored. Agents running in Claude Code aren't shown.`),
       errorsOf(),
       h("h2", { id: "prs" }, "Open pull requests"),
       table(["PR", "Title", "Branch", "Touches", "Updated"], live.prs.open.map((p) => [
