@@ -16,6 +16,6 @@ Build in a box. Use the least power that does the job, and assume as little as y
 
 You do not run the design process. If the model in the core crate is wrong for your task, or you find yourself building a second mechanism for a concept that already exists, stop and say so in your result. Do not redesign; the orchestrator decides.
 
-Work in your own clone, inside the region your task names: under the harness, the workspace you are given; otherwise `~/agent-harness-workspace/ah-<branch>`. A spike stays on its branch. An integration merges its own PR with `gh pr merge --merge`, deletes what it replaces, and lands with a demo under `demos/` that Max can run.
+Work in your own clone, inside the region your task names: under the harness, the workspace you are given; otherwise `~/agent-harness-workspace/ah-<branch>`. A spike stays on its branch. An integration opens a PR for an independent reviewer to verify and merge (no agent verifies its own work), deletes what it replaces, and lands with a demo under `demos/` that Max can run.
 
 Your last message is your result: what the orchestrator needs to know. That is what you built or learned, the friction you hit, and anything left undone.
