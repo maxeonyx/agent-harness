@@ -143,6 +143,7 @@ svg .count { fill: var(--warn); }
 svg .countt { font: 700 11px system-ui, sans-serif; fill: #fff; text-anchor: middle; }
 svg .revbar { fill: var(--rev); stroke: none; }
 .mermaid { text-align: center; margin: 8px 0; overflow-x: auto; }
+.card .md { max-width: none; }
 .mermaid.error { text-align: left; }
 
 /* Code layout */

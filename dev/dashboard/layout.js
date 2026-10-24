@@ -20,9 +20,15 @@ function textWidth(text, font = "12px system-ui, sans-serif") {
 const markers = () => s("defs", {},
   s("marker", { id: "arrow", viewBox: "0 0 8 8", refX: "7", refY: "4", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" }, s("path", { d: "M0,0 L8,4 L0,8 z", class: "arrowhead" })));
 
+// ELK's splines come as cubic Bézier control points, three per curve.
 function pathOf(section, dx, dy) {
-  const pts = [section.startPoint, ...(section.bendPoints ?? []), section.endPoint];
-  return pts.map((p, i) => `${i === 0 ? "M" : "L"}${(p.x + dx).toFixed(1)},${(p.y + dy).toFixed(1)}`).join(" ");
+  const pts = [section.startPoint, ...(section.bendPoints ?? []), section.endPoint].map((p) => `${(p.x + dx).toFixed(1)},${(p.y + dy).toFixed(1)}`);
+  if (pts.length > 2 && (pts.length - 1) % 3 === 0) {
+    let d = `M${pts[0]}`;
+    for (let i = 1; i < pts.length; i += 3) d += ` C${pts[i]} ${pts[i + 1]} ${pts[i + 2]}`;
+    return d;
+  }
+  return `M${pts.join(" L")}`;
 }
 
 // --- crates ------------------------------------------------------------------
@@ -116,6 +122,7 @@ export function codeLayout(el, { files, refs, changed, colour, focus, pick }) {
   let expanded = new Set(all.filter((b) => b.path === "crates").map((b) => b.path));
   if (focus !== null) for (const b of all) if (inside(focus, b)) expanded.add(b.path);
   let scale = 1;
+  let zoomed = false;
   let selected = focus !== null && files.includes(focus) ? focus : null;
   let generation = 0;
 
@@ -129,9 +136,11 @@ export function codeLayout(el, { files, refs, changed, colour, focus, pick }) {
       d = next;
     }
   };
-  // The open boxes holding a visible node, outermost first.
-  const chain = (id) => all.filter((b) => expanded.has(b.path) && id !== b.path && id.startsWith(`${b.path}/`)).map((b) => b.path).sort((a, b) => a.length - b.length);
 
+  // Each box is laid out on its own: its children by ELK's layered algorithm
+  // when lines join any of them (a line between two files stands in for its
+  // ends' boxes at the level where they meet), packed into rows when none
+  // do. The lines themselves are drawn over the result, file to file.
   async function draw() {
     const gen = ++generation;
     el.replaceChildren(Object.assign(document.createElement("p"), { className: "muted", textContent: "Laying out…" }));
@@ -141,53 +150,58 @@ export function codeLayout(el, { files, refs, changed, colour, focus, pick }) {
         const label = `${d.name}/  ${d.count}`;
         return { id: d.path, width: textWidth(label, "600 12px system-ui, sans-serif") + 22, height: 26, kind: "closed", d, col };
       }
-      return {
-        id: d.path, kind: "open", d, col,
-        layoutOptions: { "elk.padding": "[top=26,left=8,bottom=8,right=8]", "elk.nodeSize.constraints": "[MINIMUM_SIZE]", "elk.nodeSize.minimum": `(${textWidth(`▾ ${d.name}/`, "600 12px system-ui, sans-serif") + 20}, 40)` },
-        children: [...[...d.dirs.values()].sort((a, b) => a.name.localeCompare(b.name)).map(node), ...d.files.sort().map((f) => {
-          const name = f.split("/").at(-1);
-          return { id: f, width: textWidth(name) + 14, height: 20, kind: "file", name, col: colour(f) };
-        })],
-      };
+      return { id: d.path, kind: "open", d, col, edges: [], children: children(d) };
     };
-    const graph = {
-      id: "root",
-      layoutOptions: {
-        "elk.algorithm": "layered", "elk.direction": "RIGHT", "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-        "elk.layered.spacing.nodeNodeBetweenLayers": "30", "elk.spacing.nodeNode": "6",
-        "elk.layered.spacing.edgeNodeBetweenLayers": "8", "elk.spacing.edgeNode": "6", "elk.spacing.edgeEdge": "3",
-        "elk.padding": "[top=30,left=10,bottom=10,right=10]", "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
-      },
-      children: [...[...root.dirs.values()].sort((a, b) => a.name.localeCompare(b.name)).map(node), ...root.files.sort().map((f) => ({ id: f, width: textWidth(f) + 14, height: 20, kind: "file", name: f, col: null }))],
-      edges: [],
-    };
+    const children = (d) => [...[...d.dirs.values()].sort((x, y) => x.name.localeCompare(y.name)).map(node), ...d.files.sort().map((f) => {
+      const name = f.split("/").at(-1);
+      return { id: f, width: textWidth(name) + 14, height: 20, kind: "file", name, col: colour(f) };
+    })];
+    const graph = { id: "root", kind: "open", d: root, col: null, edges: [], children: children(root) };
+    const byId = new Map();
+    const parent = new Map();
+    const index = (n) => { byId.set(n.id, n); for (const c of n.children ?? []) { parent.set(c.id, n.id); index(c); } };
+    index(graph);
+    const up = (id) => { const out = [id]; for (let p = parent.get(id); p !== undefined; p = parent.get(p)) out.push(p); return out; };
 
-    // One edge per pair of visible nodes, in the innermost open box holding both.
+    // One line per pair of visible nodes; ↔ when each names the other.
     const pairs = new Map();
     for (const [a, b] of refs) {
       const ra = rep(a);
       const rb = rep(b);
       if (ra === rb) continue;
       const [x, y] = ra < rb ? [ra, rb] : [rb, ra];
-      const key = `${x}\t${y}`;
-      const e = pairs.get(key) ?? { x, y, fwd: 0, back: 0 };
+      const e = pairs.get(`${x}\t${y}`) ?? { x, y, fwd: 0, back: 0 };
       if (ra < rb) e.fwd++; else e.back++;
-      pairs.set(key, e);
+      pairs.set(`${x}\t${y}`, e);
     }
-    const byId = new Map();
-    const index = (n) => { byId.set(n.id, n); for (const c of n.children ?? []) index(c); };
-    index(graph);
-    const edges = [...pairs.values()].map((e, i) => {
+    const lines = [...pairs.values()].map((e) => {
       const [from, to] = e.fwd > 0 ? [e.x, e.y] : [e.y, e.x];
-      const ca = chain(from);
-      const cb = new Set(chain(to));
-      const lca = ca.filter((p) => cb.has(p)).at(-1) ?? "root";
-      const edge = { id: `e${i}`, sources: [from], targets: [to], mutual: e.fwd > 0 && e.back > 0, weight: e.fwd + e.back, lca };
-      const host = byId.get(lca);
-      host.edges = host.edges ?? [];
-      host.edges.push(edge);
-      return edge;
+      return { from, to, mutual: e.fwd > 0 && e.back > 0, weight: e.fwd + e.back };
     });
+    const stand = new Set();
+    for (const l of lines) {
+      const ua = up(l.from);
+      const ub = up(l.to);
+      const i = ua.findIndex((x) => ub.includes(x));
+      const lca = ua[i];
+      const key = `${lca}\t${ua[i - 1]}\t${ub[ub.indexOf(lca) - 1]}`;
+      if (stand.has(key)) continue;
+      stand.add(key);
+      byId.get(lca).edges.push({ id: `p${stand.size}`, sources: [ua[i - 1]], targets: [ub[ub.indexOf(lca) - 1]] });
+    }
+    for (const n of byId.values()) {
+      if (n.kind !== "open") continue;
+      const label = n === graph ? "agent-harness/" : `▾ ${n.d.name}/`;
+      n.layoutOptions = {
+        "elk.padding": `[top=${n === graph ? 30 : 26},left=8,bottom=8,right=8]`,
+        "elk.nodeSize.constraints": "[MINIMUM_SIZE]",
+        "elk.nodeSize.minimum": `(${textWidth(label, "600 12px system-ui, sans-serif") + 20}, 40)`,
+        "elk.spacing.nodeNode": "8", "elk.aspectRatio": "1.6",
+        ...(n.edges.length > 0
+          ? { "elk.algorithm": "layered", "elk.direction": "RIGHT", "elk.layered.spacing.nodeNodeBetweenLayers": "36", "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES" }
+          : { "elk.algorithm": "rectpacking" }),
+      };
+    }
 
     const t0 = performance.now();
     const out = await elk.layout(graph);
@@ -196,69 +210,73 @@ export function codeLayout(el, { files, refs, changed, colour, focus, pick }) {
 
     const abs = new Map();
     const place = (n, x, y) => {
-      abs.set(n.id, { x: x + (n.x ?? 0), y: y + (n.y ?? 0), n });
+      abs.set(n.id, { x: x + (n.x ?? 0), y: y + (n.y ?? 0), w: n.width, h: n.height });
       for (const c of n.children ?? []) place(c, x + (n.x ?? 0), y + (n.y ?? 0));
     };
     place(out, 0, 0);
+    if (!zoomed) scale = Math.max(0.45, Math.min(1, (el.clientWidth - 4) / out.width));
     const svg = s("svg", { width: out.width * scale, height: out.height * scale, viewBox: `0 0 ${out.width} ${out.height}`, class: "codemap" }, markers());
     const layerBoxes = s("g");
-    const layerEdges = s("g");
     const layerNodes = s("g");
-    svg.append(layerBoxes, layerEdges, layerNodes);
+    const layerEdges = s("g");
+    svg.append(layerBoxes, layerNodes, layerEdges);
     layerBoxes.append(s("rect", { x: 1, y: 1, width: out.width - 2, height: out.height - 2, rx: 8, class: "repo" }), s("text", { x: 12, y: 19, class: "boxlabel" }, "agent-harness/"));
     const changedIn = (p) => [...changed].some((c) => inside(c, { path: p }));
     const nodes = new Map();
-    for (const [id, { x, y, n }] of abs) {
+    for (const [id, { x, y, w, h }] of abs) {
       if (id === "root") continue;
       const info = byId.get(id);
       const cls = info.col === null ? "" : ` s${info.col}`;
       let g;
       if (info.kind === "open") {
         g = s("g", { class: `dir open${cls}` },
-          s("rect", { x, y, width: n.width, height: n.height, rx: 6, class: "box" }),
-          s("text", { x: x + 8, y: y + 17, class: "boxlabel toggle" }, `▾ ${info.d.name}/`));
+          s("rect", { x, y, width: w, height: h, rx: 6, class: "box" }),
+          s("text", { x: x + 8, y: y + 17, class: "boxlabel toggle" }, s("title", {}, "Close this box"), `▾ ${info.d.name}/`));
         g.querySelector(".toggle").addEventListener("click", () => { expanded.delete(id); draw(); });
         layerBoxes.append(g);
-      } else if (info.kind === "closed") {
+        continue;
+      }
+      if (info.kind === "closed") {
         g = s("g", { class: `dir closed${cls}${changedIn(id) ? " changed" : ""}`, tabindex: "0" },
           s("title", {}, `${id}/: ${info.d.count} files. Click to open.`),
-          s("rect", { x, y, width: n.width, height: n.height, rx: 5, class: "box" }),
+          s("rect", { x, y, width: w, height: h, rx: 5, class: "box" }),
           s("text", { x: x + 9, y: y + 17, class: "boxlabel" }, `${info.d.name}/`, s("tspan", { class: "n" }, `  ${info.d.count}`)),
-          changedIn(id) ? s("rect", { x, y: y + 4, width: 3, height: n.height - 8, class: "revbar" }) : null);
+          changedIn(id) ? s("rect", { x, y: y + 4, width: 3, height: h - 8, class: "revbar" }) : null);
         g.addEventListener("click", () => { expanded.add(id); draw(); });
-        layerNodes.append(g);
       } else {
         g = s("g", { class: `file${cls}${changed.has(id) ? " changed" : ""}${selected === id ? " picked" : ""}`, tabindex: "0" },
           s("title", {}, id),
-          s("rect", { x, y, width: n.width, height: n.height, rx: 4, class: "box" }),
+          s("rect", { x, y, width: w, height: h, rx: 4, class: "box" }),
           s("text", { x: x + 7, y: y + 14, class: "label" }, info.name),
-          changed.has(id) ? s("rect", { x, y: y + 3, width: 3, height: n.height - 6, class: "revbar" }) : null);
+          changed.has(id) ? s("rect", { x, y: y + 3, width: 3, height: h - 6, class: "revbar" }) : null);
         g.addEventListener("click", () => {
           svg.querySelector(".picked")?.classList.remove("picked");
           g.classList.add("picked");
           selected = id;
           pick(id);
         });
-        layerNodes.append(g);
       }
+      layerNodes.append(g);
       nodes.set(id, g);
     }
     const incident = new Map();
-    const laid = [];
-    const collect = (n) => { for (const e of n.edges ?? []) laid.push(e); for (const c of n.children ?? []) collect(c); };
-    collect(out);
-    for (const e of laid) {
-      const meta = edges.find((x) => x.id === e.id);
-      const host = abs.get(e.container ?? meta.lca) ?? abs.get("root");
+    for (const l of lines) {
+      const a = abs.get(l.from);
+      const b = abs.get(l.to);
+      const right = b.x + b.w / 2 >= a.x + a.w / 2;
+      const [sx, ex] = right ? [a.x + a.w, b.x] : [a.x, b.x + b.w];
+      const sy = a.y + a.h / 2;
+      const ey = b.y + b.h / 2;
+      const bend = Math.max(24, Math.abs(ex - sx) / 2) * (right ? 1 : -1);
       const p = s("path", {
-        d: (e.sections ?? []).map((sec) => pathOf(sec, host.x, host.y)).join(" "),
-        class: `edge${meta.mutual ? " mutual" : ""}`, "stroke-width": (0.8 + Math.log2(meta.weight) * 0.6).toFixed(2),
-        "marker-end": "url(#arrow)", "marker-start": meta.mutual ? "url(#arrow)" : undefined,
-      }, s("title", {}, `${meta.sources[0]} ${meta.mutual ? "↔" : "→"} ${meta.targets[0]}${meta.weight > 1 ? ` (${meta.weight} references)` : ""}`));
+        d: `M${sx},${sy} C${sx + bend},${sy} ${ex - bend},${ey} ${ex},${ey}`,
+        class: `edge${l.mutual ? " mutual" : ""}`, "stroke-width": (0.8 + Math.log2(l.weight) * 0.6).toFixed(2),
+        "marker-end": "url(#arrow)", "marker-start": l.mutual ? "url(#arrow)" : undefined,
+      }, s("title", {}, `${l.from} ${l.mutual ? "↔" : "→"} ${l.to}${l.weight > 1 ? ` (${l.weight} references)` : ""}`));
       layerEdges.append(p);
-      for (const end of [meta.sources[0], meta.targets[0]]) {
+      for (const [end, other] of [[l.from, l.to], [l.to, l.from]]) {
         if (!incident.has(end)) incident.set(end, []);
-        incident.get(end).push({ path: p, other: end === meta.sources[0] ? meta.targets[0] : meta.sources[0] });
+        incident.get(end).push({ path: p, other });
       }
     }
     for (const [id, g] of nodes) {
@@ -272,7 +290,7 @@ export function codeLayout(el, { files, refs, changed, colour, focus, pick }) {
         for (const x of svg.querySelectorAll(".hl")) x.classList.remove("hl");
       });
     }
-    const status = Object.assign(document.createElement("p"), { className: "note", textContent: `${files.length} files, ${nodes.size} shown, ${laid.length} lines · laid out in ${Math.round(took)} ms` });
+    const status = Object.assign(document.createElement("p"), { className: "note", textContent: `${files.length} files, ${nodes.size} shown, ${lines.length} lines · laid out in ${Math.round(took)} ms` });
     const scroller = Object.assign(document.createElement("div"), { className: "mapscroll" });
     scroller.append(svg);
     el.replaceChildren(status, scroller);
@@ -293,6 +311,7 @@ export function codeLayout(el, { files, refs, changed, colour, focus, pick }) {
       draw();
     },
     zoom(f) {
+      zoomed = true;
       scale *= f;
       const svg = el.querySelector("svg");
       if (svg === null) return;
