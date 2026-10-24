@@ -2,7 +2,7 @@
 //! stop reaches in band, on Linux, with threads and no async runtime.
 //!
 //! **Concept.** The harness stops work by one protocol at every level
-//! ([`harness_core::cancel`](../harness_core/cancel/index.html)): an owner
+//! (`harness_core::cancel`): an owner
 //! asks with a deadline; the work makes a hard kill safe, passes the request
 //! on with an earlier deadline to what it owns, waits for each to exit,
 //! finishes its own cleanup and exits; at the deadline its owner kills it.
