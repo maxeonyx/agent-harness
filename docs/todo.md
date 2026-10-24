@@ -1,0 +1,98 @@
+# To do
+
+Open work between `main` and [the vision](vision.md), grouped by the [structure](vision.md#architecture) or part of the system it belongs to. Each item says what is missing and where the evidence is; file paths are as of `main` at #123. Max's own asks carry his hedges. What only he can decide is in [plan.md](plan.md#questions-only-max-can-answer), not here.
+
+## Substrate (S1)
+
+- **Snapshots and collection.** Nothing is ever collected, and a store is replayed from its first record. A brain with 10,119 records (10,006 of them `Task`) was 4.9 MB; another, with 119 records, held 195 KB of value bytes against 44 KB of fact JSON. Max: "we should deliver snapshots, not just event streams [...] otherwise it gets really, like, really expensive." (`substrate/src/lib.rs:59-63`, `store/src/lib.rs:22-24`, `core/src/schema.rs:62-77`)
+- **Durability declared per kind of fact.** Every record is kept forever; streamed tokens are the only thing never stored. Max: analytics "is a retention question: what do we keep, for how long, and especially why. 'keep everything' is an option but not an answer."
+- **Incremental views.** Views are recomputed in full on each change (`face-web/src/view.rs:59-64`, `program/src/render.rs:28`), and the brain's `work()` calls `todo()` once per item (`brain/src/brain.rs:394-401`).
+- **Which invariants need a decider.** No analysis yet of which refusals need one replica to decide and which can merge (`substrate/src/decider.rs:22-25`); `core/src/lib.rs` still calls the brain "the one decider".
+- **`Change` carries no previous version** (`core/src/state.rs:2030-2063`).
+- **`cold` duplicates fold state** (`brain/src/brain.rs:146,934,969`).
+- **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). Today the provider reads `~/.claude/.credentials.json`.
+
+## Tasks (S2)
+
+- **Threads with no owner.** Bare `thread::spawn` calls that no task owns: `brain/src/brain.rs:331,1086`, `brain/src/link.rs:47`, `brain/src/process.rs:58,66`, `limb/src/serve.rs:86,303,320`, `limb/src/calls.rs:142`, `limb/src/attach.rs:115`, `limb-browser/src/cdp.rs:53`.
+- **The harness captures PIDs itself,** so an agent never needs `pgrep -f` or `pkill -f` to wait on or stop a process it started. Max: "the important step is *capturing the PID* - how about we make *our* harness do that automatically?" (not now).
+- **Background shells.** `( … &)` dies with its bash call; `env -i setsid` escapes cancellation; a shell runs on a pipe, not a pty (`limb-workspace/src/shell.rs:58`).
+- **Daemons an agent starts** (a dev server) need an owner that outlives the call: today a task handed to Max dies at its tool timeout. Leases are one shape.
+- **Spawn controls.** `spawn` can't set a child's model or effort (`program/src/meta.rs`); a parent can't see the progress of one member, cancel it alone or give it a time limit; there is no spawn under a background scope (`meta.rs:82`).
+- **Isolation as its own action.** Forks share their parent's directory on purpose; making an isolated directory should be a separate action, with a `dir` per spawn member (`meta.rs:144-146`). Max has a workflow for it that "potentially the harness can help" with.
+- **Cancel keeps a finished response.** Max (2026-07): on cancel, wait for the assistant response to complete, "It cost us money, and it's probably good", don't run its tool calls, and run them on resume. `core/src/cancel.rs` cuts an abandoned task's request at once.
+- **Re-wiring dependencies after launch** (A starts A' to fix credentials and makes B and C wait on it): "yes, maybe [...] Maybe A can't do it, but A can ask the orchestrator to do it. I don't know." Spawn order is fixed at launch.
+- **Rough edges.** `Caller::Meta` and `Start.awaits` are never created; `Rejected::CannotStart` carries no names (`core/src/fact.rs:274`); passed calls can clash by name; `end(mark)` is duplicated (`limb-builds/src/relaunch.rs:362`); an unexplained 180 s pause was seen once.
+
+## Contexts (S3)
+
+- **Compaction started by Max or the harness,** not only by the agent: forced at a fixed token threshold ("80-85% (or better, a fixed token threshold like 100k-200k tokens)"), on cache expiry while idle (re-rooting a cold context), and by Max. Also an "uncached compaction" with a traditional summariser prompt, for when the original model isn't available.
+- **Undo a fresh compaction.**
+- **Old cold contexts:** "ideally we just keep an 'old cold' context and make it an 'old warm context', append some [...] notices, and keep going [...] Perhaps an option for the user? I don't think this is settled."
+- **Notices for tools and options.** Removing or changing a tool never gets a notice; old tools keep working until the cache expires, or the context is compacted. Option sets (skill names, role names) "absolutely get notices"; `AGENTS.md` changes "almost certainly yes"; skill description changes, no. Provenance of a change (the harness, git, an outside edit) is "potentially _very_ useful for the model".
+- **Mandate reminder after a tool round.** The fork-framing spike measured it cheap and effective: a depth-1 fork's uncached input fell from about 600-1,800 tokens to 2-4. Ready to build (listed in `core/src/context.rs`). Forking at the parent's request (`rewind`) measured the smallest prefix at depth 2-3, if deep forks get expensive.
+- **A cache breakpoint for message undo:** "everything up to n-2 messages ago (or something like that)". `program/src/policy.rs::breakpoints` marks root, checkpoint, shared brief and tail only.
+- **Tell the model which model it is:** "I think we do want to tell the model which model it is."
+- **Cache keep-alive** for a context waiting on Max inside the 1-hour window.
+- **Compaction warning wording** compared with his OpenCode fork's ([opencode-fork.md](opencode-fork.md)); check it doesn't warn a context that a compaction started already over the threshold.
+- **`Note::Stale.shown` is always empty** (`program/src/render.rs:307`).
+- **Prompt length** from web search result blocks (`program/src/web.rs:51`).
+
+## Environments and limbs (S4)
+
+- **No sandbox.** `bash` can read `~/.claude/.credentials.json`. The JS sandbox limb (an engine with only the limb's functions) is the planned first sandbox.
+- **Chats with no directory,** and roles whose limbs take parameters Max fills in when he starts one: "limb types need varying parameters, potentially". A rich picker for directories and remote environments.
+- **The SSH limb** (`Host::Ssh`, `brain/src/brain.rs:524-530`), which the browser limb needs to reach Max's own browser on his desktop.
+- **The brain depends on limb crates' `Settings`,** and face-web's dictation depends on the provider crate.
+- **Limbs found by file name** (`brain/src/brain.rs:1921-1946`); limbs from an old build are never replaced in place, their state is never retired, and nothing lists or kills them. Without a systemd user manager, a restart ends them.
+- **The roles limb is a fourth copy of limb plumbing** (`brain/src/roles.rs`), and polls every 2 s; there is no file watcher. It needs `Instance` over an in-memory store.
+- **Meta and web limbs don't declare their tools** (`brain/src/brain.rs:1080,1112`).
+- **Files limb.** A refused edit re-shows up to 64 KiB (`limb-workspace/src/files.rs:532-540`); a non-zero exit marks all output as an error (`files.rs:164`); `rescan` re-hashes under a mutex (`limb-workspace/src/lib.rs:476-497`); `clone_of` runs git synchronously on the brain loop (`brain/src/brain.rs:1329,1962-1969`).
+- **Browser limb.** Just after `tab` starts, `browser` and `page` can say "no tab t1"; a tab doesn't survive a limb restart; no downloads or live output; a child can't use a tab passed to its parent.
+- **MCP client and plugins.** No MCP or plugin runtime yet.
+- **Skills per role,** and which `CLAUDE.md` lines the harness loads (Max: "later"). `AGENTS.md` discovery up to the git superproject root, as his OpenCode fork does.
+- **A JS tool for tool plumbing.** Measure how many turns go to plumbing (filtering big output, chaining calls) before deciding on a tool that runs a short JS program over the other tools.
+
+## Replicas and versions (S5)
+
+- **One binary** running any mix of brain, limb and face.
+- **Old sessions on old builds:** the old process finishing its work after a relaunch, deadlines, and collecting old builds.
+- **No go-back button after a relaunch** (`face-web/src/page/builds.js:19`), and rehearsal doesn't catch a broken page.
+- **TLS certificate path and bind address are hard-wired** (`brain/src/main.rs:213-219,245`).
+- **The relaunch watcher folds every 2 s.**
+- **A missing limb at relaunch fails a task permanently,** and an expired login fails a task after about 30 s, where both should wait.
+
+## Max and his attention (S6)
+
+- **The attention scheduler.** `LimbKind::Attention` is produced by nothing; `Ranking` and `Focus` are unchecked (`core/src/state.rs:884,890-901`).
+- **Domains** as data partitions with their own brains.
+- **One mutating face per domain** (the action lock).
+- **Agents see what Max is doing:** whether he is away, what he edited, his branch and its uncommitted changes.
+- **Non-blocking asks** (2026-09): an agent builds up a queue of actions for Max that expire, each with a strict schema and "self contained": it reiterates "the chain from what the user ultimately wants, to why the requests exists", with what he needs to decide.
+- **The continuing user-facing child:** "if the parent is user-facing, it should be opt-out." Today Max opens an aside himself.
+- **Agents read his weekly usage** (`program/src/web.rs:4,18`).
+
+## Face
+
+- **A text CRDT for drafts** edited on two devices; today a conflict opens a second draft.
+- **The attach button** needs a real design.
+- **Directory and remote picker** for starting a chat.
+- **Notifications on a closed app** (Web Push): "Nah, dw about push notifications on android - but a good feature for later!!"
+- **`/view` has no running-tasks field.**
+- **Records nobody read** show only on stderr.
+- **Rough edges.** The TLS listener polls every 20 ms (`face-web/src/lib.rs:134`); the token sum is written out in four places; `Wiring` is full of `Option`s.
+
+## Provider and cache
+
+- **Empty `tool_use` id** becomes an empty string (`brain/src/brain.rs:1033-1037`); the text-block helper is duplicated.
+- **Unmeasured cache questions:** whether the previous assistant turn is charged as a write; TTL behaviour and whether expiry is observable; which tool-array changes keep the prefix ("is it ever possible to change anything about tools _without_ involving the cached prefix"); late system-section changes; whether a smaller model reads a larger model's prefix.
+- **Dictation recognition hints.** The speech endpoint takes `x-config-keyterms` (comma-separated, at most 1024 characters), which could carry project words like "limb" and "brain". Only `linear16` audio returned text.
+- **Agent-run tuning.** Tunables as settings with recorded outcomes, so a background agent could tune them by A/B test (Max, 2026-08).
+
+## Docs and dev
+
+- **Update the core crate's "Provisional" list** (`crates/core/src/lib.rs`) where Max has answered, and rename the leftover "handover" wording in `core/src/task.rs` to compaction.
+- **Bring code names in line with the [glossary](glossary.md)** where it says they differ: `Task` for any asynchronous thing and `Agent` for an agent, roles into limbs.
+- **Small helpers duplicated:** `now()` in five places, the random replica id twice; a `Superseded` row (`brain/src/brain.rs:1657`); `LimbRow::Call.owner` is an `Option` (`core/src/environment.rs:655`); a pure step function for the brain is not done.
+- **Demos.** The spine demo's step numbering (`brain/examples/spine.rs`); demos grep log wording; the relaunch and browser demos haven't been rerun since their last changes; `face-controls` needs a prior build; `dev/serve` has a scripted wait; `dev/drive.mjs` gaps; test brains that are durable need retiring.
+- **Design questions for Max.** Design questions for Max "need to jog my memory": quote the claim and both sides, and ask him to confirm, deny or refine.
