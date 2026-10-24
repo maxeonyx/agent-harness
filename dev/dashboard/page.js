@@ -231,8 +231,8 @@ function header() {
       h("span.spacer"),
       h("a.stat.needs", { href: "#/#needs", title: "What only Max can do: his open questions" }, `Needs you ${needs}`, waiting.length > 0 ? ` · ${plural(waiting.length, "chat")} waiting` : ""),
       live === null ? h("span.stat.muted", {}, "Reading what's in flight…") : [
-        h("a.stat", { href: "#/inflight#brains", title: brains.map((b) => `${b.name} :${b.port} ${b.commit?.slice(0, 7) ?? "?"}${b.behind ? `, ${b.behind} behind main` : ""}`).join("\n") }, `${plural(brains.length, "brain")}${behind > 0 ? ` · ${behind} behind main` : ""}`),
-        h("a.stat", { href: "#/inflight#prs" }, live.errors.some((e) => e.source === "GitHub") ? "PRs unknown" : plural(open.length, "open PR")),
+        h("a.stat", { href: "#/inflight#brains", title: brains.map((b) => `${b.name} :${b.port} ${b.commit?.slice(0, 7) ?? "?"}${b.behind ? `, ${b.behind} behind main` : ""}`).join("\n") }, `${unread("brains") ? "Brains unknown" : plural(brains.length, "brain")}${behind > 0 ? ` · ${behind} behind main` : ""}`),
+        h("a.stat", { href: "#/inflight#prs" }, unread("GitHub") ? "PRs unknown" : plural(open.length, "open PR")),
         live.errors.length > 0 ? h("a.stat.bad", { href: "#/inflight", title: live.errors.map((e) => `${e.source}: ${e.message}`).join("\n") }, `${plural(live.errors.length, "source")} failed`) : null,
       ],
       changed === null ? null : h("span.stat.rev-key", { title: "Marked in the page with a bar like this one. The baseline is kept in this browser." },
@@ -306,13 +306,22 @@ const livePart = (fill) => {
   return el;
 };
 const card = (title, sub, ...kids) => h("div.card", {}, h("h3", {}, title, sub === null ? null : h("small", {}, sub)), kids);
-const builtBy = (s) => m.crates.filter((c) => c.structures.length === 1 && c.structures[0] === s.n);
+const soleStructure = (c) => (c.structures.length === 1 ? c.structures[0] : null);
+const crateClass = (c) => (soleStructure(c) === null ? "" : `s${soleStructure(c)}`);
+const builtBy = (s) => m.crates.filter((c) => soleStructure(c) === s.n);
 const todoOf = (s) => m.todoGroups.find((g) => g.n === s.n);
 const changedCrate = (c) => Object.keys(changes?.files ?? {}).some((p) => p.startsWith(`${c.dir}/`));
-// A crate's gaps as sections to render, each linkable as #<crate>-<title> on the crate's own page.
+// A crate's gaps as sections to render. Those under a heading are linkable as #<crate>-<title> on the crate's own page; a labelled paragraph has no heading.
 const gapSecs = (c, depth) => Object.assign(c.gaps.map((g) => ({ depth: g.labelled ? 0 : depth, title: g.title, slug: `${c.short}-${slug(g.title)}`, start: g.blocks[0].start, blocks: g.blocks })), { links: c.secs.links });
-const prTitle = (p) => inline(p.title, { terms: false });
-const crateLink = (c) => h("a.crate", { href: `#/crate/${c.name}`, class: c.structures.length === 1 ? `s${c.structures[0]}` : "" }, c.short);
+// A title is text from outside the repo: only its `code` spans are marked up, never HTML.
+const prTitle = (p) => {
+  const parts = p.title.split("`");
+  return parts.length % 2 === 0 ? p.title : parts.map((t, i) => (i % 2 === 1 ? h("code", {}, t) : t));
+};
+// A source that failed was read as empty: say so rather than show zero.
+const unread = (source) => live.errors.some((e) => e.source === source || e.source === "dashboard server");
+const buildLink = (b, none) => (b.commit === null ? none : h("a", { href: `https://github.com/${repo.github}/commit/${b.commit}`, target: "_blank" }, b.commit.slice(0, 7)));
+const crateLink = (c) => h("a.crate", { href: `#/crate/${c.name}`, class: crateClass(c) }, c.short);
 const msChip = (ms) => h("a.ms", { href: "#/plan#milestones", class: ms.state, title: `${ms.letter}. ${ms.name}: ${ms.status}` }, ms.letter, " ", ms.state);
 const touched = (paths) => {
   const s = new Set();
@@ -396,7 +405,7 @@ function gapSummary() {
       h("span.b", {}, h("span", { class: g.n === null ? "" : `s${g.n}`, style: `width:${(100 * g.items.length) / max}%` })),
       h("span.n", {}, g.items.length)))),
     h("h4", {}, h("a", { href: "#/gaps#crates" }, "Not built, by the crates' own docs")),
-    h("div.crates", {}, m.crates.filter((c) => c.gapCount > 0).map((c) => h("a.crate", { href: `#/crate/${c.name}#gaps`, class: c.structures.length === 1 ? `s${c.structures[0]}` : "" }, c.short, h("span.count", {}, c.gapCount)))),
+    h("div.crates", {}, m.crates.filter((c) => c.gapCount > 0).map((c) => h("a.crate", { href: `#/crate/${c.name}#gaps`, class: crateClass(c) }, c.short, h("span.count", {}, c.gapCount)))),
     h("h4", {}, h("a", { href: "#/terms" }, `${plural(differ.length, "word")} the code doesn't use the vision's way yet`)),
     h("div.crates", {}, differ.map((t) => h("a.tag", { href: `#/glossary#term-${t.slug}`, title: t.code }, t.names[0], h("small", {}, ` ${t.state}`)))),
   ];
@@ -421,13 +430,14 @@ function needsYou(el) {
 function flightSummary(el) {
   if (live === null) return el.replaceChildren(h("p.muted", {}, "Reading GitHub, the brains and the clones…"));
   const merged = live.prs.merged.filter((p) => isNew(Date.parse(p.mergedAt)));
+  const github = unread("GitHub");
   el.replaceChildren(
-    h("h4", {}, h("a", { href: "#/inflight#prs" }, plural(live.prs.open.length, "open pull request"))),
-    h("ul.compact", {}, live.prs.open.map((p) => h("li", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", prTitle(p), p.isDraft ? h("span.tag", {}, "draft") : null, " ", touched(p.files)))),
-    h("h4", {}, h("a", { href: "#/inflight#brains" }, plural(live.brains.length, "brain"))),
+    h("h4", {}, h("a", { href: "#/inflight#prs" }, github ? "Open pull requests not read" : plural(live.prs.open.length, "open pull request"))),
+    github ? null : h("ul.compact", {}, live.prs.open.map((p) => h("li", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", prTitle(p), p.isDraft ? h("span.tag", {}, "draft") : null, " ", touched(p.files)))),
+    h("h4", {}, h("a", { href: "#/inflight#brains" }, unread("brains") ? "Brains not read" : plural(live.brains.length, "brain"))),
     h("ul.compact", {}, live.brains.map(brainLine)),
-    h("h4", {}, h("a", { href: "#/inflight#merged" }, `${plural(merged.length, "PR")} merged since you last looked`)),
-    h("ul.compact", {}, merged.slice(0, 6).map((p) => h("li.rev", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", prTitle(p)))),
+    h("h4", {}, h("a", { href: "#/inflight#merged" }, github ? "Merged pull requests not read" : `${plural(merged.length, "PR")} merged since you last looked`)),
+    github ? null : h("ul.compact", {}, merged.slice(0, 6).map((p) => h("li.rev", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", prTitle(p)))),
     errorsOf(),
   );
 }
@@ -435,7 +445,7 @@ function flightSummary(el) {
 function brainLine(b) {
   if (b.error !== undefined) return h("li", {}, h("b", {}, b.name), ` :${b.port} — `, h("span.bad", {}, b.error));
   const working = b.working.length;
-  return h("li", {}, h("b", {}, b.name), ` :${b.port} on `, h("a", { href: `https://github.com/${repo.github}/commit/${b.commit}`, target: "_blank" }, b.commit?.slice(0, 7) ?? "an unknown build"), b.dirty ? " +dirty" : "",
+  return h("li", {}, h("b", {}, b.name), ` :${b.port} on `, buildLink(b, "an unknown build"), b.dirty ? " +dirty" : "",
     b.behind === null ? "" : b.behind > 0 ? h("span.warn", {}, ` · ${b.behind} commits behind main`) : " · up to date",
     ` · ${plural(working, "task")} working`, b.waiting.length > 0 ? h("span.warn", {}, ` · ${b.waiting.length} waiting on Max`) : null);
 }
@@ -515,7 +525,7 @@ function built() {
     diagrams.map(({ c, s }) => card(s.title === "" ? c.short : inline(s.title, { terms: false }), h("a", { href: `#/crate/${c.name}` }, `from ${c.short}'s docs`),
       render(Object.assign([{ ...s, depth: 0, blocks: s.blocks.filter((b) => b.token.type === "code" && b.token.lang === "mermaid") }], { links: c.secs.links }), { route: `crate/${c.name}`, crate: c.name, path: c.src }))),
     card("Crates", "arrows: depends on, the shortest way", graphOf(m.crates)),
-    h("div.cards", {}, m.crates.map((c) => h("a.cratecard", { href: `#/crate/${c.name}`, class: c.structures.length === 1 ? `s${c.structures[0]}` : "" },
+    h("div.cards", {}, m.crates.map((c) => h("a.cratecard", { href: `#/crate/${c.name}`, class: crateClass(c) },
       h("div.t", {}, h("b", {}, c.short), " ", chips(c.structures)),
       h("p", {}, c.description),
       h("div.foot", {}, plural(c.files, "file"), c.gapCount > 0 ? h("span.warn", {}, ` · ${c.gapCount} not built or provisional`) : null,
@@ -546,7 +556,7 @@ function codeView(path) {
   const changed = new Set(Object.keys(changes?.files ?? {}));
   const colour = (p) => {
     const c = m.crates.find((x) => p === x.dir || p.startsWith(`${x.dir}/`));
-    return c !== undefined && c.structures.length === 1 ? c.structures[0] : null;
+    return c === undefined ? null : soleStructure(c);
   };
   const layout = codeLayout(box, {
     files, refs: repo.refs, changed, colour, focus: path === "" ? null : path,
@@ -630,19 +640,20 @@ function inflight() {
   return h("div.page", {}, h("h1", {}, "In flight"), livePart((el) => {
     if (live === null) return el.replaceChildren(h("p.muted", {}, "Reading GitHub, the brains and the clones…"));
     const prFor = (branch) => live.prs.open.find((p) => p.headRefName === branch);
+    const notRead = () => h("p.muted", {}, "Not read; the error above says why.");
     el.replaceChildren(
       h("p.lead", {}, `Read ${ago(live.at)} (${when(live.at)}) from GitHub, every running brain's /view and the clones beside the dashboard's; never stored. Agents running in Claude Code aren't shown.`),
       errorsOf(),
       h("h2", { id: "prs" }, "Open pull requests"),
-      table(["PR", "Title", "Branch", "Touches", "Updated"], live.prs.open.map((p) => [
+      unread("GitHub") ? notRead() : table(["PR", "Title", "Branch", "Touches", "Updated"], live.prs.open.map((p) => [
         h("a", { href: p.url, target: "_blank" }, `#${p.number}`), [prTitle(p), p.isDraft ? h("span.tag", {}, "draft") : null], h("code", {}, p.headRefName), touched(p.files), ago(Date.parse(p.updatedAt))])),
       h("h2", { id: "brains" }, "Brains"),
-      h("div.cards", {}, live.brains.map(brainCard)),
+      unread("brains") ? notRead() : h("div.cards", {}, live.brains.map(brainCard)),
       h("h2", { id: "merged" }, "Merged recently"),
-      table(["PR", "Title", "Touches", "Merged"], live.prs.merged.map((p) => Object.assign([
+      unread("GitHub") ? notRead() : table(["PR", "Title", "Touches", "Merged"], live.prs.merged.map((p) => Object.assign([
         h("a", { href: p.url, target: "_blank" }, `#${p.number}`), prTitle(p), touched(p.files), when(Date.parse(p.mergedAt))], { rev: isNew(Date.parse(p.mergedAt)) }))),
       h("h2", { id: "clones" }, "Clones with work on them"),
-      table(["Clone", "Branch", "Ahead, behind", "Uncommitted", "Last commit", "PR"], live.clones.map((c) => {
+      unread("clones") ? notRead() : table(["Clone", "Branch", "Ahead, behind", "Uncommitted", "Last commit", "PR"], live.clones.map((c) => {
         const pr = prFor(c.branch);
         return [h("code", {}, c.dir), h("code", {}, c.branch ?? "detached"), `${c.ahead ?? "?"} ahead, ${c.behind ?? "?"} behind`, c.dirty === 0 ? "" : plural(c.dirty, "file"), ago(c.last), pr === undefined ? "" : h("a", { href: pr.url, target: "_blank" }, `#${pr.number}`)];
       })));
@@ -653,7 +664,7 @@ function brainCard(b) {
   if (b.error !== undefined) return h("div.card", {}, h("h3", {}, b.name, h("small", {}, ` :${b.port}`)), h("p.bad", {}, b.error));
   return h("div.card", {},
     h("h3", {}, h("a", { href: `https://${location.hostname}:${b.port}/`, target: "_blank" }, b.name), h("small", {}, ` :${b.port} · pid ${b.pid}`)),
-    h("p", {}, "Build ", h("a", { href: `https://github.com/${repo.github}/commit/${b.commit}`, target: "_blank" }, b.commit?.slice(0, 7) ?? "unknown"), b.dirty ? " +dirty" : "",
+    h("p", {}, "Build ", buildLink(b, "unknown"), b.dirty ? " +dirty" : "",
       b.behind === null ? "" : b.behind > 0 ? h("span.warn", {}, `, ${b.behind} commits behind main`) : ", up to date with main", ` · ${plural(b.tasks, "task")} in all`),
     h("h4", {}, `Waiting on Max ${b.waiting.length}`),
     h("ul.compact", {}, b.waiting.map((w) => h("li", {}, h("a", { href: faceUrl(b, w.id), target: "_blank" }, w.name ?? w.id), h("small", {}, ` ${w.environment ?? ""}`)))),
@@ -676,7 +687,7 @@ function structureView(arg) {
   const episodes = m.episodes.filter((e) => e.structures.includes(s.n));
   const touching = () => live.prs.open.filter((p) => p.files.some((f) => crates.some((c) => f.startsWith(`${c.dir}/`))));
   return h("div.page", {},
-    h("div.shead", { class: `s${s.n}` }, h("h1", {}, h("span.chip", { class: `s${s.n}` }, `S${s.n}`), " ", s.short, h("small", {}, `: ${s.sub}`)), h("p", {}, inline(s.want ?? ""))),
+    h("div.shead", { class: `s${s.n}` }, h("h1", {}, h("span.chip", { class: `s${s.n}` }, `S${s.n}`), " ", s.short, s.sub === undefined ? null : h("small", {}, `: ${s.sub}`)), h("p", {}, inline(s.want ?? ""))),
     h("div.split", {},
       h("div", {},
         card("In the vision", h("a", { href: `#/vision#${s.slug}` }, "vision.md"), md(docSecs(m.vision, (x) => x === s.sec).map((x) => ({ ...x, depth: 0 })), { path: m.vision.path })),
@@ -692,7 +703,7 @@ function structureView(arg) {
         card("In flight", null, livePart((el) => {
           if (live === null) return el.replaceChildren(h("p.muted", {}, "Reading…"));
           const prs = touching();
-          el.replaceChildren(prs.length === 0 ? h("p.muted", {}, "No open PR touches its crates.") : h("ul.compact", {}, prs.map((p) => h("li", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", prTitle(p)))));
+          el.replaceChildren(unread("GitHub") ? h("p.muted", {}, "Not read: GitHub couldn't be reached.") : prs.length === 0 ? h("p.muted", {}, "No open PR touches its crates.") : h("ul.compact", {}, prs.map((p) => h("li", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", prTitle(p)))));
         })),
       )));
 }

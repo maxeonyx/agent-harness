@@ -186,7 +186,7 @@ svg.codemap.focus .file:not(.hl), svg.codemap.focus .dir.closed:not(.hl) { opaci
 .toc a.rev { box-shadow: inset 3px 0 0 var(--rev); }
 .dochead { display: flex; gap: 12px; align-items: center; font-size: 12.5px; padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
 .md { max-width: 900px; }
-.md section { scroll-margin-top: 110px; }
+main [id], .md section { scroll-margin-top: 110px; }
 .md h1 .anchor, .md h2 .anchor, .md h3 .anchor, .md h4 .anchor, .md h5 .anchor { visibility: hidden; margin-left: 6px; color: var(--muted); font-weight: 400; }
 .md h1:hover .anchor, .md h2:hover .anchor, .md h3:hover .anchor, .md h4:hover .anchor, .md h5:hover .anchor { visibility: visible; }
 .md blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--line); color: var(--muted); }
@@ -240,5 +240,6 @@ table.terms td:last-child { width: 38%; }
   .tiles { grid-template-columns: minmax(0, 1fr); }
   .md section.structure { margin-left: 0; padding-left: 10px; }
   .mapscroll { max-height: 70vh; }
-  .mermaid svg { min-width: 760px; }
+  main [id], .md section, .md tr { scroll-margin-top: 12px; }
+  .mermaid svg { min-width: min(760px, var(--natural, 760px)); }
 }

@@ -16,9 +16,9 @@
 // TLS uses DIR/wildcard-local.{crt,key} (default ~/.config/dev-certs/shared-local).
 // Max's instance is the user unit harness-dashboard:
 //   systemctl --user cat harness-dashboard   # its WorkingDirectory is the clone it runs from
-// The docs shown are always origin's main, but this code runs from the clone's
-// working tree: after a change to dev/dashboard merges, `git pull` there and
-// restart the unit.
+// The docs shown are those of REV, but this code runs from the clone's working
+// tree: after a change to dev/dashboard merges, pull the clone the unit runs
+// from (it should be on main) and restart the unit.
 import { execFile, spawn } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createServer, get } from "node:https";
@@ -361,7 +361,8 @@ async function brains(main) {
       const h = v.rows.harness.Harness;
       // Harness.source is the build's commit, with "+dirty" when it had uncommitted changes.
       const source = h.source ?? "";
-      const commit = source.replace(/\+dirty$/, "") || null;
+      const built = source.replace(/\+dirty$/, "");
+      const commit = /^[0-9a-f]{7,40}$/.test(built) ? built : null; // "unknown" outside a checkout
       const behind = commit === null ? null : await git("rev-list", "--count", `${commit}..${main}`).then((n) => Number(n), () => null);
       const tasks = Object.entries(v.rows).filter(([k]) => k.startsWith("task:")).map(([, r]) => r.Task);
       const waiting = new Set((v.rows.queue?.Queue ?? []).map((q) => q.task));

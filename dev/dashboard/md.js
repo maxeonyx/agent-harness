@@ -51,10 +51,12 @@ export function sections(src) {
 const newlines = (s) => (s.match(/\n/g) ?? []).length;
 const overlaps = (ranges, a, b) => ranges !== undefined && ranges.some(([x, y]) => x <= b && a <= y);
 
-// Render sections into an element. ctx: path (the repo path, for relative
+// Render sections into an element. ctx: route (the view these sections are
+// on, for links to their own anchors), path (the repo path, for relative
 // links), crate (whose Rust paths these are), changed (line ranges changed
 // since Max last looked), shift (added to heading depths), lineOffset
-// (source line of the doc's first line).
+// (source line of the doc's first line), terms (false: no glossary links),
+// prepare (called on the rendered element before it is decorated).
 export function render(secs, ctx) {
   const root = document.createElement("div");
   root.className = "md";
@@ -141,7 +143,7 @@ function links(root, ctx) {
     const [rel, anchor] = href.split("#");
     const path = join(ctx.path ?? "", rel);
     a.href = site.link(path, anchor);
-    if (a.href.startsWith("http")) { a.target = "_blank"; a.rel = "noopener"; }
+    if (/^https?:/.test(a.getAttribute("href"))) { a.target = "_blank"; a.rel = "noopener"; }
   }
 }
 
@@ -168,7 +170,7 @@ function codes(root, ctx) {
     if (target === null) continue;
     const a = document.createElement("a");
     a.href = site.link(target, undefined, m[2] === undefined ? undefined : [Number(m[2]), Number(m[3] ?? m[2])]);
-    if (a.href.startsWith("http")) { a.target = "_blank"; a.rel = "noopener"; }
+    if (/^https?:/.test(a.getAttribute("href"))) { a.target = "_blank"; a.rel = "noopener"; }
     c.replaceWith(a);
     a.append(c);
   }
@@ -259,6 +261,8 @@ function renderDiagrams(nodes) {
       if (!n.isConnected) continue;
       try {
         await mermaid.run({ nodes: [n] });
+        const natural = parseFloat(n.querySelector("svg")?.style.maxWidth);
+        if (!Number.isNaN(natural)) n.querySelector("svg").style.setProperty("--natural", `${natural}px`);
       } catch (e) {
         n.classList.add("error");
         n.textContent = `This diagram didn't render: ${e.message}\n\n${n.textContent}`;
