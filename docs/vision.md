@@ -39,7 +39,7 @@ What Max does with the harness when it is finished, grouped by the part of his d
 ### Agents that work well and cheaply
 
 - **A fork-heavy workflow.** An agent forks for each phase of its work: the fork does the phase and returns a summary, so the main context keeps only the summaries and "naturally elide[s] all tool call info". A fork's result can attach the tool calls its parent needs to see. Fresh agents are for bigger tasks or other roles.
-- **Agents compact themselves.** An agent compacts when it really switches tasks or its context is mostly summaries, warned as it nears the limit, and carries on as the same agent. The word "handover" is dropped as "too othering".
+- **Agents compact themselves.** An agent compacts when it really switches tasks or its context is mostly summaries, warned as it nears the limit, and carries on as the same agent.
 - **Structured concurrency.** A parent waits on its children; nothing runs that nobody owns. A task never ends with background work running unless it explicitly hands that work to its owner, or to Max, which makes it his obligation.
 - **The cache is never wasted.** Forks share their parent's cache, and the cache still hits after the harness restarts.
 - **Agents know what they were told, and when.** A change to something in an agent's context (an `AGENTS.md`, a skill, a tool) reaches it as a dated notice, never a silent rewrite.
@@ -49,7 +49,7 @@ What Max does with the harness when it is finished, grouped by the part of his d
 
 ### What agents can do
 
-- **No permission prompts.** An agent can do what its environment gives it and nothing else; prevention is by construction ("a JavaScript sandbox counts; a classifier that checks if programs are read-only doesn't").
+- **Prevention by construction.** There are no permission prompts ([settled](../AGENTS.md#what-is-settled)): an agent can do what its environment gives it and nothing else. "A full JavaScript sandbox counts. A JavaScript sandbox where you can write programs, but a classifier checks if they're read-only doesn't count."
 - **Environments, not tool lists.** An environment is its tools plus the context for using them. An agent with a directory gets a shell; a chat needs no directory; roles may expose parameters Max fills in when he starts one, with a rich picker for directories and remote environments.
 - **A browser agent for life admin.** A dedicated agent drives a Chromium browser through scripts, with screenshots used sparingly, its own tabs as resources it can hand to Max, and Max's own browser on his desktop as the eventual target. The usual shape is "get Max to do most of the browser usage, then do the tedious part, then let him continue."
 - **Limbs anywhere.** A limb runs on the brain's machine or on another one over SSH, and survives the brain restarting.
@@ -58,24 +58,24 @@ What Max does with the harness when it is finished, grouped by the part of his d
 
 ### Managing his attention and his life
 
-- **Inversion of control.** Max "is not necessarily very good at prioritizing my time across all of the threads that need my input". An attention scheduler, an agent whose whole environment is reading the domain's sessions, reordering his queue and editing its own priority document, puts first the thing that blocks the most and says why. He sets its rules "in a more reflective headspace", argues with its order, and it learns: "a goal of mine to be managed, not just to manage."
+- **Inversion of control.** "I personally am not necessarily very good at prioritizing my time across all of the threads that need my input." An attention scheduler, an agent whose whole environment is reading the domain's sessions, reordering his queue and editing its own priority document, puts first the thing that blocks the most and says why. He sets its rules "in a more reflective headspace", argues with its order, and it learns: "a goal of mine to be managed, not just to manage."
 - **One tree to act on per domain.** He can look anywhere, but acts on one tree at a time in a domain, whichever tabs and devices he uses. It schedules his writing, not his reading.
 - **Agents never create obligations for him.** Only his own action makes a session user-facing; an agent may ask, in the background, and carries on.
 - **After a long absence**, his first task is deciding what continues ("probably").
-- **Home life in the graph view.** The harness's graph view has "a lot of overlap" with how Max wants to manage his home life: admin tasks and responsibilities, alongside agents' work. "In theory, I'm able to use that" for his personal home life management.
+- **Home life in the graph view** (25 Oct). Max could "in theory" manage his home life, its admin tasks and responsibilities, in the harness's graph view, alongside agents' work.
 - **Domains.** Each sphere of his obligations (home, work) has its own brain, queue and data. Data stays on its own machines; a face can show more than one domain, but home devices never see work data.
 
 ### A harness that keeps going and improves itself
 
 - **Restart loses nothing.** Ctrl-C drains and exits; a second Ctrl-C kills. On restart every agent carries on, with no input from Max.
-- **It upgrades itself.** An agent edits the harness, builds it and relaunches it while its own session carries on: "live editing, not live bricking". A broken build bricks nothing.
+- **It upgrades itself.** An agent edits the harness, builds it and relaunches it while its own session carries on: "While we want live editing, we don't want live bricking." A broken build bricks nothing.
 - **Easy to run as a service**, reachable from his phone anywhere, and installable on Android.
 - **Session data is his.** Token usage per session, and his sessions searchable and queryable, across every brain he runs.
 
 ### Building on it
 
 - **A foundation, not just a harness.** The substrate under the harness (facts, replicas, views, sync) is one he can build other applications on, in the line of his earlier designs for a relational, local-first application foundation.
-- **His life-management system on the same foundation.** He wants his personal records hosted "somewhere where it can be given some actual compute, some functions that automatically run when the agent needs it to, or, the agent can write scripts against it": "My ultimate vision is to have it hosted on similar self-built architecture as the harness itself, but that doesn't need to happen now."
+- **His life-management system on the same foundation** (25 Oct). He wants his personal records hosted "somewhere where it can be given some actual compute, some functions that automatically run when the agent needs it to, or, the agent can write scripts against it": "My ultimate vision is to have it hosted on similar self-built architecture as the harness itself, but that doesn't need to happen now."
 - **Lowest cost, best performance.** A far stretch goal: the leanest agent harness there is, down to a pass over its machine code.
 
 ## Architecture
@@ -121,7 +121,7 @@ Each arrow is a pair of one-way syncs of filtered replicas, and each filter is a
 - **Coordination is per object.** The few invariants that need one decider (a task's life, a scope closing, a name) are decided by the replica that owns the object. Everything else merges.
 - **Durability is declared per kind of fact:** never stored (streamed tokens), kept until processed, current state only (a draft, a focus), kept for a context or a session, or kept forever. Collection is the default, and replicas register, so the harness knows what is still needed.
 - **Storage is an effect at one replica:** SQLite under a brain, the browser's own storage under a tab.
-- **Settled.** The substrate is its own crate, general in concept but carrying only what the harness uses, with a core that builds for `wasm32` so the page runs the same code. The query engine is hand-written. "Place" is called "replica".
+- **Settled.** The substrate is its own crate, general in concept but carrying only what the harness uses, with a core that builds for `wasm32` so the page runs the same code. Views are hand-written for now ("handwritten now seems like a reasonable choice"), so an engine can replace them later. "Place" is called "replica".
 - **The want.** Two screens never disagree, nothing he types is lost, and the data discipline is one he can build other software on: "I want to see a beautiful software system built."
 - **You can tell by:** no type between processes is a message or a request, only facts, filters and views; a message's "sent" is derived; a refused click shows in the tab that made it; the database stops growing with clicks.
 
@@ -159,8 +159,8 @@ flowchart TD
 - **Max is a limb.** An agent is user-facing exactly when he is in its environment, and only his own action puts him there.
 - **Roles dissolve.** Roles are "subsumed by limbs": an engineer is a set of limbs plus its model and effort.
 - **Definitions are versioned facts** in the domain's database. A file in a repo is one source of a definition: a limb reads the file, never the brain.
-- **Settled.** Extension is a JS sandbox limb when something needs scripting, and WASM modules later; programs as data is a long-term direction, not now. Asks are not a separate mechanism: an agent facing Max ends its turn with what it needs. The browser limb drives Max's own browser on his Windows desktop, which needs the SSH limb.
-- **The want.** No permission prompts ("a bad abstraction"), prevention by construction rather than by checking, and context that comes with the environment.
+- **Settled.** Extension is a JS sandbox limb when something needs scripting, and WASM modules later; programs as data is a long-term direction, not now. Asks are not a separate mechanism: an agent facing Max ends its turn with what it needs. The browser limb drives Max's own browser on his Windows desktop ("ideally"), which needs the SSH limb.
+- **The want.** Prevention by construction rather than by checking, and context that comes with the environment.
 - **You can tell by:** the brain opens no file but its database; a new kind of limb needs no change to the brain; an agent can't reach `~/.claude/.credentials.json` unless its environment holds it.
 
 ### S5. Replicas and versions
@@ -168,7 +168,7 @@ flowchart TD
 - **Roles, not processes.** Brain, limb and face are roles; one binary runs any mix of them, and each seam is in-process, a pipe or the network, chosen at start: a "decoupled monolith".
 - **A version is a replica.** Each process runs one build. Upgrading starts a replica at the new build and routes new sessions to it; rolling back routes back. Facts are the one compatibility contract: each replica parses facts from other versions at its boundary, as it parses anything foreign.
 - **Settled.** Sessions move to the new build at once. Rebooting is the operator's job (a systemd user service).
-- **The want.** Memory that scales with active work, running anywhere, and upgrades that lose no session: "live editing, [...] not live bricking".
+- **The want.** Memory that scales with active work, running anywhere, and upgrades that lose no session.
 - **You can tell by:** an agent changes the harness and relaunches it, its own session carries on, and its children start on the new build; a broken build bricks nothing.
 
 ### S6. Max: a participant, his attention and his domains

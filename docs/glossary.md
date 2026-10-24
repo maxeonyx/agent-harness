@@ -19,12 +19,12 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Term | Meaning | In code |
 |---|---|---|
 | Substrate | The data layer under the harness: every replica logs its own records, and views are derived from them. Structure S1. | `crates/substrate` |
-| Replica | Anything that keeps its own log of records and syncs it with the others: a brain, a limb, a browser tab. One process can host several. | `id::ReplicaId`. Earlier designs said "place". |
+| Replica | Anything that keeps its own log of records and syncs it with the others: a brain, a limb, a browser tab. One process can host several. | `id::ReplicaId` |
 | Record, fact | One thing that happened, stored in a replica's log: a message sent, a tool call ended, a draft edited. A record carries a fact. | `schema::Record`, `fact::Fact` |
 | Value | Immutable bytes named by their hash: a system prompt, a tool result, a pasted image. Facts name values. | `id::ValueId`, `value::Bytes` |
 | View | Rows derived from records, such as the task tree a tab shows. Everything a person or an agent sees is a view. | `state::State` and its methods; the face's `/view` |
 | Fold | Reading records in order to build the current state. | `schema::Harness` |
-| Durability | How long a kind of fact is kept: never, until processed, current state only, for a context or session, or forever. | Not built: every record is kept. |
+| Durability | How long a kind of fact is kept: never, until processed, current state only, for a context or session, or forever. | `substrate::Durability`: only `Latest` (current state only) and `Kept` (forever); never-stored data is `Live`. |
 
 ## Agents and work
 
@@ -38,7 +38,7 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Scope | The set of tasks a spawn starts. The parent makes no further decision until every result is in, and a task may add siblings to its own scope. | `task::Scope`, owned by its spawn call |
 | Fork | A child agent that starts from its parent's context, sharing its cache, and returns a summary. | `task::Origin::Fork` |
 | Aside | A user-facing child Max opens while its parent waits on other children. | `task::Origin::Aside` |
-| Compaction | An agent moving its head to a new root that carries its own summary, and carrying on as the same agent. Replaces the word "handover", dropped as "too othering". | `task::Compaction`; leftover "handover" wording in `core/src/task.rs` |
+| Compaction | An agent moving its head to a new root that carries its own summary, and carrying on as the same agent. Not "handover": Max, "It is too othering". | `task::Compaction` |
 | Context | The immutable, content-addressed tree of exactly what was sent to the model. | `context::Entry`, `context::EntryId` |
 | Notice | A dated message telling an agent that something in its context changed after a turn. | `resource::Change`, `state::State::stale` |
 | Pause, stop, abandon | The three acts over a subtree: freeze at once and spend nothing; ask each agent to wind down; say the work is no longer needed, then tidy up and end. | Stop: `core/src/cancel.rs` |
@@ -77,4 +77,4 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Spine | The work that moved `main` onto the substrate: milestone B. Not a part of the running system. |
 | Spike | A branch that tests one thesis against a few aspects and is never merged; its result carries what it learned. |
 | Advocate | The `max-advocate` agent: answers as Max would when he is away, from its model of him. |
-| Orchestrator, designer, engineer | This project's agent roles: the orchestrator holds the direction and launches the rest; a designer decides a model; an engineer builds. |
+| Orchestrator, designer, engineer | This project's agent roles; [`AGENTS.md`](../AGENTS.md#how-the-work-runs) says what each does. |

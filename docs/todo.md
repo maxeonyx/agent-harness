@@ -1,6 +1,6 @@
 # To do
 
-Open work between `main` and [the vision](vision.md), grouped by the [structure](vision.md#architecture) or part of the system it belongs to. Each item says what is missing and where the evidence is; file paths are as of `main` at #123. Max's own asks carry his hedges. What only he can decide is in [plan.md](plan.md#questions-only-max-can-answer), not here.
+Open work between `main` and [the vision](vision.md), grouped by the [structure](vision.md#architecture) or part of the system it belongs to. Each item says what is missing and where the evidence is; file paths are as of `main` at #123 (`8d8271f`). Max's own asks carry his hedges. What only he can decide is in [plan.md](plan.md#questions-only-max-can-answer), not here.
 
 ## Wrong steps to undo
 
@@ -9,13 +9,12 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **`Task` means an agent.** In the vision a task is anything asynchronous and an agent is an agent; requests and calls have lifecycles of their own instead of being tasks in one tree ([glossary](glossary.md#agents-and-work)).
 - **Roles are not yet limbs.** `Environment` is a role with a prompt, rather than a set of limbs plus model and effort.
 - **The brain is "the one decider".** The vision decides per object, at the replica that owns it (S1).
-- **"Handover" wording** is left in `core/src/task.rs`, where the concept is compaction.
 - **`Environment::places`** means workspace slots, though "place" was renamed "replica" everywhere else.
 
 ## Substrate (S1)
 
-- **Snapshots and collection.** Nothing is ever collected, and a store is replayed from its first record. A brain with 10,119 records (10,006 of them `Task`) was 4.9 MB; another, with 119 records, held 195 KB of value bytes against 44 KB of fact JSON. Max: "we should deliver snapshots, not just event streams [...] otherwise it gets really, like, really expensive." (`substrate/src/lib.rs:59-63`, `store/src/lib.rs:22-24`, `core/src/schema.rs:62-77`)
-- **Durability declared per kind of fact.** Every record is kept forever; streamed tokens are the only thing never stored. Max: analytics "is a retention question: what do we keep, for how long, and especially why. 'keep everything' is an option but not an answer."
+- **Snapshots and collection.** A decider keeps every record it has folded, since it has no snapshot of its state; values are never collected; a store is replayed from its first record. Max: "we should deliver snapshots, not just event streams [...] otherwise it gets really, like, really expensive." (`substrate/src/lib.rs:59-63`, `store/src/lib.rs:22-24`, `core/src/schema.rs:62-77`)
+- **Durability declared per kind of fact.** Two kinds are built: kept for good, and only the latest per key (a draft's text, a tab's focus); streamed tokens and command output are never stored. "Kept until processed" and "kept for a context or a session" are not built (`substrate/src/record.rs`). Analytics is a retention question. Max: "what do we keep, for how long, and especially why. 'keep everything' is an option but not an answer."
 - **Incremental views.** Views are recomputed in full on each change (`face-web/src/view.rs:59-64`, `program/src/render.rs:28`), and the brain's `work()` calls `todo()` once per item (`brain/src/brain.rs:394-401`).
 - **Which invariants need a decider.** No analysis yet of which refusals need one replica to decide and which can merge (`substrate/src/decider.rs:22-25`); `core/src/lib.rs` still calls the brain "the one decider".
 - **`Change` carries no previous version** (`core/src/state.rs:2030-2063`).
