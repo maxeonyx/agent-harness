@@ -37,32 +37,34 @@ Far beyond these: a query engine on the scale of his relational CRDT design, pro
 
 In Max's order:
 
-1. Code cleanup. Done.
-2. Notes into the repo's docs: this file, [vision.md](vision.md), [todo.md](todo.md) and [glossary.md](glossary.md).
-3. A dashboard rebuild that renders these docs directly (and perhaps lets Max edit them), alongside what it generates from the code.
-4. Discuss a new process with Max (below).
-5. Continue milestone A's gaps, then E.
+1. A dashboard rebuild that renders these docs directly (and perhaps lets Max edit them), alongside what it generates from the code.
+2. Discuss a new process with Max (below).
+3. Continue milestone A's gaps, then E.
 
 What is in flight at any moment (open PRs, running agents and brains) is not written here: the dashboard derives it.
 
 ## How the work runs
 
-The process as it stands is in [`AGENTS.md`](../AGENTS.md#how-the-work-runs) and the role files in [`.claude/agents/`](../.claude/agents): an orchestrator holds the direction and launches scopes of tasks; designers decide models; engineers build in their own clones; a `max-advocate` answers for Max when he is away; no agent verifies its own work, so an independent reviewer verifies and merges.
-
-Max wants to redesign it, and to discuss the new process with him before it changes. His critique:
+The process as it stands is in [`AGENTS.md`](../AGENTS.md#how-the-work-runs). Max wants to redesign it, and to discuss the new process with him before it changes. His critique:
 
 > The max advocates were never quite working, the designers were too expensive, and the engineers were doing an ok job but needed more checking or refinement passes, but also to be cheaper. And the worst role was you the orchestrator, who was both recieving my random thoughts and feedback and supposed to be moving everything forward according to a rigid process. I would like to actually discuss the new process.
 
-He also settled one principle for any process: "don't allow conflict of interest". An agent never verifies or abuse-tests its own work; that is another agent's task, "an important foundation of the ongoing process".
+What the new process has to say, in his words: "the process we are following (principles, constraints, agents, feedback loops, etc), the current plan, the current inflight work. How my feedback, my advocate's feedback, and designer output get taken into account, how engineers build toward the eventual state, how we keep our process sustainable, and more."
+
+Principles he has set that any process keeps:
+
+- **His technical asks are guesses; his feature asks are evidence.** "You should take my technical asks as guesses not decisions. You should take my feature asks as evidence of my wants, not requirements [...] If you're just agreeing with me, no point at all."
+- **No conflict of interest.** No agent verifies or merges its own work: "This is an important foundation of the ongoing process - don't allow conflict of interest".
+- **Delete what is superseded.** Integration "leave[s] NOTHING half done", and deletes what it replaces.
 
 ## Questions only Max can answer
 
-Most of the design questions raised so far are answered, and the answers are in the vision's "Settled" lines. These are open:
+Most of the design questions raised so far are answered, and the answers are in the vision's "Settled" lines. These are open, each with a recommendation he can accept or reject:
 
-- **System messages.** Whether to revisit the rule that only Max's own words appear as user messages, for what the harness tells an agent.
-- **Spawn: blocking or not.** Whether a spawn always blocks its parent until every result is in, or a parent can carry on while background scopes run.
-- **Pause.** Pause is out of the MVP and gets its own button; what exactly it freezes is undecided.
-- **Daemons.** How long-running background processes an agent starts (a dev server) should be owned. The first framing of the question didn't land with Max, so it needs reframing.
-- **What the harness loads from `CLAUDE.md` and skills,** and how skills are split by role ("later").
+- **Unpausing.** Pause stops new model requests, holds a response's tool calls until play, and holds a finished tool's result (Max, 18 Oct). Open: how he resumes ("How do I unpause? Okay, I didn't think about that. Lol."), and whether pause and play share one control. Recommendation: one pause/play toggle on the node, with Stop as a separate control.
+- **What the harness says to an agent.** Today only Max's own words are user messages in his name; everything the harness tells an agent (the time, a notice, a compaction) is user-role text marked `[harness]`. The alternative is a separate system channel in the conversation. Recommendation: keep `[harness]` text until a framing problem is measured, as the fork-framing spike did for mandates.
+- **Spawn: blocking or not.** Today a parent that spawns makes no further decision until every result is in, and Max reaches a waiting parent through an aside. The alternative is background scopes: the parent carries on and is told when results arrive. Recommendation: keep blocking spawns, and add background scopes when an agent facing Max (the orchestrator) needs to keep talking while its children work.
+- **Processes an agent leaves running** (a dev server). Today a task can't end with background work running unless it hands that work to its owner or to Max, and a task handed to Max dies at its tool timeout. The options: the work becomes Max's obligation, with a node on the map he can stop; or it gets a lease the agent renews. Recommendation: a node on the map, owned by Max, since he is the one who will use the server.
+- **Which of his instructions and skills each agent gets.** Today every role holds the user limb: his whole `CLAUDE.md` and an index of the skills named in `roles/skills.txt`, one list for every role, each loaded on demand. He has said "later" to choosing which lines the harness loads and to splitting skills by role. Recommendation: decide it with the process redesign, since roles change there.
 
-The core crate's "Provisional" list ([`crates/core/src/lib.rs`](../crates/core/src/lib.rs)) marks where these live in the code. Some of its entries Max has since answered; [todo.md](todo.md#docs-and-dev) has the item to update it.
+The core crate's "Provisional" list ([`crates/core/src/lib.rs`](../crates/core/src/lib.rs)) marks where decisions live in the code; [todo.md](todo.md#docs-and-dev) has the item to cut it down to code-local caveats that link here.

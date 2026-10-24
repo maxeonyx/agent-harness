@@ -1,6 +1,6 @@
 # agent-harness
 
-A personal agent harness. Max's vision is the gist https://gist.github.com/maxeonyx/014463e0964bebd0add4b914971c492f — his own notes, and the driver. Derive what he wants from it; don't treat a sentence in it as a rule. Build the right thing in the spirit of what he said, not what he literally said. `vision-critique.md` is an outside review of the gist that does exactly this: evidence, not a ruling.
+A personal agent harness. Max's vision is [`docs/vision.md`](docs/vision.md), which started from his gist https://gist.github.com/maxeonyx/014463e0964bebd0add4b914971c492f: his own notes, and the driver. Derive what he wants from it; don't treat a sentence in it as a rule. Build the right thing in the spirit of what he said, not what he literally said. `vision-critique.md` is an outside review of the gist that does exactly this: evidence, not a ruling.
 
 The repo was reset on 2026-10-16 (NZT). The earlier attempt is the unconnected tag `archive/handoffs` (which contains `v1` and `forked-subagents`) and the tag `archive/provider-cache-probe`: evidence of what earlier agents tried and measured, none of it accepted by Max, and none of its process or framing carries over.
 
@@ -8,13 +8,14 @@ The repo was reset on 2026-10-16 (NZT). The earlier attempt is the unconnected t
 
 - [`docs/vision.md`](docs/vision.md): read before deciding what to build or how a concept should work. It holds the user stories, the six structures and the episodes that show a design is right.
 - [`docs/plan.md`](docs/plan.md): read before choosing the next piece of work. Milestones, what is next, the process and Max's open questions.
-- [`docs/todo.md`](docs/todo.md): read before starting work in an area, and update it when you finish or find an item. The open work, by structure.
+- [`docs/todo.md`](docs/todo.md): read before starting work in an area. Add what you find; delete an item when it is done. The open work, by structure.
 - [`docs/glossary.md`](docs/glossary.md): read when a word in the vision, the plan or Max's messages is unfamiliar, or when naming something in code.
 - [`docs/opencode-fork.md`](docs/opencode-fork.md): read before building a feature his OpenCode fork had, so the behaviour matches.
 
 ## What is settled
 
 - The full vision has many aspects that interact pairwise, so it is built up incrementally: prototype a part against only a few of the other aspects, accept imperfect products, integrate, and repeat until the whole behaves well along every dimension. (High confidence.)
+- No agent verifies or merges its own work: Max, "don't allow conflict of interest". (High confidence; he called it "an important foundation of the ongoing process".)
 - No permission prompts in the harness. An environment is defined with its permissions; extending them means changing that definition, possibly by another agent. (High confidence; he calls prompts a bad abstraction.)
 - No tests in the repo except truly black-box end-to-end scenarios Max can run and watch as a demonstration. Otherwise agents test manually by using the harness. (High confidence.)
 - The goal is foundational software as well as Max's own harness: it covers all the essential complexity and relentlessly minimises everything beyond it, across the whole vertical stack. (High confidence; rewriting down to the machine code is a far stretch goal.)
@@ -30,7 +31,7 @@ Max wants to redesign this process, and to discuss it with him before it changes
 - **Direction comes from design; execution is cheap.** What to build next is back-chained from the vision to what Max actually wants. Building is fail-fast: try to get it right first time, expect to have built the wrong thing, try again. Checks are `cargo fmt` and `cargo clippy`, nothing more; engineers spend their time building, not testing.
 - **Models first.** The core concepts are Rust types in one crate; everything else is written in terms of them. When a mechanism is built, ask how the same concept applies to every other aspect: ideally each concept exists once. An engineer who finds the model wrong, or finds itself building a second mechanism for an existing concept, stops and returns that as its result instead of redesigning. The core model is `crates/core` (package `harness-core`); read its crate docs first.
 - **Spikes, then integration.** A spike exercises one thesis against a few aspects, on a branch, and is never merged: its result carries what it learned. Integration into `main` is clean and complete, and deletes what it replaces.
-- **Parallel streams.** Each engineer works in its own clone, `~/agent-harness-workspace/ah-<branch>`, owns the region of the repo its task names, and opens a PR. No agent verifies its own work (Max: "don't allow conflict of interest"), so an independent reviewer verifies it and merges it with a merge commit. A conflict outside that region is returned to the orchestrator, not resolved.
+- **Parallel streams.** Each engineer works in its own clone, `~/agent-harness-workspace/ah-<branch>`, owns the region of the repo its task names, and opens a PR. The orchestrator launches a reviewer, any agent that didn't build the change, which verifies it and merges it with a merge commit. A conflict outside that region is returned to the orchestrator, not resolved.
 - **Trying it costs nothing.** `node dev/drive.mjs` runs throwaway test brains by name, on the scripted model unless told, and drives their chats and pages; the top comment of `dev/drive.mjs` says how. For one real API call on Max's login: `cargo run -q -p harness-provider --bin harness-api -- GET /v1/models`. Which commit a brain was built from (`+dirty` for uncommitted changes): `harness-brain --version`, the first line of its log, and in its `/view`: `curl -sk https://localhost:PORT/view | jq -r .rows.harness.Harness.source`.
 - **Tool output.** A harness agent's `bash` or `grep` result that was cut ends by naming a file holding the whole output: `read` or `grep` that file instead of running the command again.
 - **Long-lived brains** run from an installed build of a commit: `dev/serve NAME PORT` (its top comment says how). A round runs on the `dogfood` brain (`dev/serve dogfood 4327`): `~/.local/share/agent-harness/dogfood/build/bin/act 4327 chat orchestrator DIR "$(cat mandate.md)"`.

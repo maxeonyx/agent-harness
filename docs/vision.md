@@ -63,7 +63,6 @@ What Max does with the harness when it is finished, grouped by the part of his d
 - **Agents never create obligations for him.** Only his own action makes a session user-facing; an agent may ask, in the background, and carries on.
 - **After a long absence**, his first task is deciding what continues ("probably").
 - **Home life in the graph view.** The harness's graph view has "a lot of overlap" with how Max wants to manage his home life: admin tasks and responsibilities, alongside agents' work. "In theory, I'm able to use that" for his personal home life management.
-- **His life-management data on the harness's architecture.** He keeps his personal records (dictations, a normalised view derived from them, and outputs like calendars and agent instructions) in a third-party notes app today. He wants them hosted "somewhere where it can be given some actual compute, some functions that automatically run when the agent needs it to, or, the agent can write scripts against it". "My ultimate vision is to have it hosted on similar self-built architecture as the harness itself, but that doesn't need to happen now."
 - **Domains.** Each sphere of his obligations (home, work) has its own brain, queue and data. Data stays on its own machines; a face can show more than one domain, but home devices never see work data.
 
 ### A harness that keeps going and improves itself
@@ -76,6 +75,7 @@ What Max does with the harness when it is finished, grouped by the part of his d
 ### Building on it
 
 - **A foundation, not just a harness.** The substrate under the harness (facts, replicas, views, sync) is one he can build other applications on, in the line of his earlier designs for a relational, local-first application foundation.
+- **His life-management system on the same foundation.** He wants his personal records hosted "somewhere where it can be given some actual compute, some functions that automatically run when the agent needs it to, or, the agent can write scripts against it": "My ultimate vision is to have it hosted on similar self-built architecture as the harness itself, but that doesn't need to happen now."
 - **Lowest cost, best performance.** A far stretch goal: the leanest agent harness there is, down to a pass over its machine code.
 
 ## Architecture

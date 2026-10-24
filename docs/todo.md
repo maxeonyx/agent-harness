@@ -2,6 +2,16 @@
 
 Open work between `main` and [the vision](vision.md), grouped by the [structure](vision.md#architecture) or part of the system it belongs to. Each item says what is missing and where the evidence is; file paths are as of `main` at #123. Max's own asks carry his hedges. What only he can decide is in [plan.md](plan.md#questions-only-max-can-answer), not here.
 
+## Wrong steps to undo
+
+Where `main` went a way the vision doesn't, as opposed to something not built yet:
+
+- **`Task` means an agent.** In the vision a task is anything asynchronous and an agent is an agent; requests and calls have lifecycles of their own instead of being tasks in one tree ([glossary](glossary.md#agents-and-work)).
+- **Roles are not yet limbs.** `Environment` is a role with a prompt, rather than a set of limbs plus model and effort.
+- **The brain is "the one decider".** The vision decides per object, at the replica that owns it (S1).
+- **"Handover" wording** is left in `core/src/task.rs`, where the concept is compaction.
+- **`Environment::places`** means workspace slots, though "place" was renamed "replica" everywhere else.
+
 ## Substrate (S1)
 
 - **Snapshots and collection.** Nothing is ever collected, and a store is replayed from its first record. A brain with 10,119 records (10,006 of them `Task`) was 4.9 MB; another, with 119 records, held 195 KB of value bytes against 44 KB of fact JSON. Max: "we should deliver snapshots, not just event streams [...] otherwise it gets really, like, really expensive." (`substrate/src/lib.rs:59-63`, `store/src/lib.rs:22-24`, `core/src/schema.rs:62-77`)
@@ -51,6 +61,7 @@ Open work between `main` and [the vision](vision.md), grouped by the [structure]
 - **Browser limb.** Just after `tab` starts, `browser` and `page` can say "no tab t1"; a tab doesn't survive a limb restart; no downloads or live output; a child can't use a tab passed to its parent.
 - **MCP client and plugins.** No MCP or plugin runtime yet.
 - **Skills per role,** and which `CLAUDE.md` lines the harness loads (Max: "later"). `AGENTS.md` discovery up to the git superproject root, as his OpenCode fork does.
+- **A generic parallel tool.** Max: "listen to the model [...] tool calls in order, spawn together in parallel, or maybe better just a generic parallel tool that can be used for any tool." Today parallelism is `spawn` only.
 - **A JS tool for tool plumbing.** Measure how many turns go to plumbing (filtering big output, chaining calls) before deciding on a tool that runs a short JS program over the other tools.
 
 ## Replicas and versions (S5)
@@ -91,8 +102,7 @@ Open work between `main` and [the vision](vision.md), grouped by the [structure]
 
 ## Docs and dev
 
-- **Update the core crate's "Provisional" list** (`crates/core/src/lib.rs`) where Max has answered, and rename the leftover "handover" wording in `core/src/task.rs` to compaction.
-- **Bring code names in line with the [glossary](glossary.md)** where it says they differ: `Task` for any asynchronous thing and `Agent` for an agent, roles into limbs.
+- **Cut the core crate's "Provisional" list** (`crates/core/src/lib.rs`) down to code-local caveats that link to [plan.md](plan.md#questions-only-max-can-answer), dropping what Max has answered, so open questions live in one list.
 - **Small helpers duplicated:** `now()` in five places, the random replica id twice; a `Superseded` row (`brain/src/brain.rs:1657`); `LimbRow::Call.owner` is an `Option` (`core/src/environment.rs:655`); a pure step function for the brain is not done.
 - **Demos.** The spine demo's step numbering (`brain/examples/spine.rs`); demos grep log wording; the relaunch and browser demos haven't been rerun since their last changes; `face-controls` needs a prior build; `dev/serve` has a scripted wait; `dev/drive.mjs` gaps; test brains that are durable need retiring.
 - **Design questions for Max.** Design questions for Max "need to jog my memory": quote the claim and both sides, and ask him to confirm, deny or refine.

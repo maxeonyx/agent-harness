@@ -55,6 +55,19 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Attention scheduler | A standing agent per domain that orders Max's queue, says why, and learns from his disagreement. | Not built: `attention::Ranking` and `attention::Focus` exist, set by nothing. |
 | Action lock | Max acts on one tree at a time in each domain; the scheduler moves it. | `attention::Focus` |
 
+## Running it
+
+| Term | Meaning | In code |
+|---|---|---|
+| Home brain | The long-lived brain Max uses every day, on an installed build. | A `dev/serve` unit |
+| Dogfood brain | A long-lived brain this project's own agents work on, so the harness is used to build itself. | `dev/serve dogfood 4327` |
+| Test brain | A throwaway brain, on the scripted model unless told, for trying a change. | `dev/drive.mjs` |
+| Round | One batch of feature work run on the dogfood brain by an orchestrator there, ending in merged PRs and a report. | |
+| Mandate | The first message a task starts with: what it is for. | |
+| `act` | A command that does what Max does at a tab (start a chat, Done, stop, abandon), for scripts and demos. | `crates/brain/examples/act.rs` |
+| Relaunch | Replacing a running brain with a new build: drain, start the new build on the same database, roll back if it fails. | `crates/limb-builds/src/relaunch.rs` |
+| Rehearsal | Starting the new build on a copy of the database before a relaunch, so a build that won't start changes nothing. | `rehearse` in `relaunch.rs` |
+
 ## The plan
 
 | Term | Meaning |
