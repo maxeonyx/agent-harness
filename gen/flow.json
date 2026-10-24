@@ -1,0 +1,318 @@
+{
+ "nodes": [
+  {
+   "id": "src_max",
+   "kind": "source",
+   "label": "Max via a face",
+   "author": "Author::Max{face, seen}",
+   "facts": [
+    "Delivery(Words | Prompt::Done)",
+    "Call Made by Caller::Max",
+    "Call Settled (answer to ask)",
+    "Task Created in Scope::Max, or an aside",
+    "Task Drain ToMax / Stop(Max)",
+    "Task Moved Rewind",
+    "Task ModeSet / Renamed / Held",
+    "Focus",
+    "Ranking",
+    "Environment",
+    "Limb",
+    "Change to his own resources"
+   ]
+  },
+  {
+   "id": "src_cli",
+   "kind": "source",
+   "label": "Command line start",
+   "author": "Author::Max{face: 0, seen}",
+   "facts": [
+    "Limb",
+    "Task Created (its mandate is the task's)"
+   ]
+  },
+  {
+   "id": "src_brain_loop",
+   "kind": "source",
+   "label": "Brain loop acting on todo",
+   "author": "Author::Brain",
+   "facts": [
+    "Launched",
+    "Task Created (by a meta call) / Moved Root, Handover / Drain",
+    "ModelCall Sent / Ended Lost",
+    "Call Made / Dispatched / Stopping / Settled (meta, unroutable, interrupted, unknown while its limb is unreached)",
+    "Delivery(Prompt::Lingering | Prompt::Unblocked)",
+    "Reach",
+    "Limb",
+    "Change (its own limbs' resources)"
+   ]
+  },
+  {
+   "id": "src_provider",
+   "kind": "source",
+   "label": "Provider stream",
+   "author": "Author::Brain (observed)",
+   "facts": [
+    "ModelCall FirstByte",
+    "ModelCall Ended + Call Made for each tool use, one batch"
+   ]
+  },
+  {
+   "id": "src_limb",
+   "kind": "source",
+   "label": "Plugin limb",
+   "author": "Author::Limb(id)",
+   "facts": [
+    "Described (itself, on every connection)",
+    "Call Settled (own dispatched calls)",
+    "Change (own resources)"
+   ]
+  },
+  {
+   "id": "src_roles",
+   "kind": "source",
+   "label": "Role files (polled)",
+   "author": "Author::Brain",
+   "facts": [
+    "Environment",
+    "Change (role file)"
+   ]
+  },
+  {
+   "id": "src_live",
+   "kind": "source",
+   "label": "Streamed tokens / command output",
+   "author": "none",
+   "facts": [
+    "Live::Model (visible text)",
+    "Live::Call (not facts)"
+   ]
+  },
+  {
+   "id": "commit",
+   "kind": "gate",
+   "label": "Journal::commit",
+   "code": "core/src/journal.rs:423",
+   "does": "stamp seq/at, check values, fold all into a copy (State::with), append or refuse whole"
+  },
+  {
+   "id": "apply",
+   "kind": "fold",
+   "label": "State::apply (+ Task::apply)",
+   "code": "core/src/state.rs:405",
+   "does": "order check, author rules, model invariants"
+  },
+  {
+   "id": "journal",
+   "kind": "log",
+   "label": "SQLite record + value",
+   "code": "store/src/lib.rs"
+  },
+  {
+   "id": "state_brain",
+   "kind": "state",
+   "label": "State (brain)"
+  },
+  {
+   "id": "state_face",
+   "kind": "state",
+   "label": "State (face follower): the brain's, as of a commit",
+   "code": "face-web/src/lib.rs:165"
+  },
+  {
+   "id": "feed",
+   "kind": "state",
+   "label": "Feed (memory)"
+  },
+  {
+   "id": "v_todo",
+   "kind": "view",
+   "label": "State::todo",
+   "code": "core/src/state.rs:1650",
+   "consumer": "brain loop"
+  },
+  {
+   "id": "v_waiting",
+   "kind": "view",
+   "label": "State::waiting_on (throbber)",
+   "code": "core/src/state.rs:1548",
+   "consumer": "face"
+  },
+  {
+   "id": "v_queue",
+   "kind": "view",
+   "label": "State::queue (Max's queue)",
+   "code": "core/src/state.rs:1605",
+   "consumer": "face; attention scheduler (not built)"
+  },
+  {
+   "id": "v_stale",
+   "kind": "view",
+   "label": "State::stale (context notices)",
+   "code": "core/src/state.rs:1624",
+   "consumer": "brain render"
+  },
+  {
+   "id": "v_context",
+   "kind": "view",
+   "label": "State::context(head)",
+   "code": "core/src/state.rs:1282",
+   "consumer": "brain request build; face /context"
+  },
+  {
+   "id": "v_face_view",
+   "kind": "view",
+   "label": "view::view JSON (tasks, queue, usage, environments, workspaces)",
+   "code": "face-web/src/view.rs:25",
+   "consumer": "page via SSE"
+  },
+  {
+   "id": "v_lines",
+   "kind": "view",
+   "label": "describe(record) lines",
+   "code": "face-web/src/view.rs:232",
+   "consumer": "page journal list, brain stdout log"
+  },
+  {
+   "id": "v_sql",
+   "kind": "view",
+   "label": "Ad-hoc SQL analytics",
+   "code": "store/src/lib.rs:25-36",
+   "consumer": "sqlite3 shell"
+  },
+  {
+   "id": "v_live",
+   "kind": "view",
+   "label": "/live stream",
+   "code": "face-web/src/live.rs:66",
+   "consumer": "page"
+  },
+  {
+   "id": "refusal",
+   "kind": "sink",
+   "label": "Refusal (out of band)",
+   "does": "Max: 409 text; limb: stderr + drop; brain: panic"
+  }
+ ],
+ "edges": [
+  {
+   "from": "src_max",
+   "to": "commit",
+   "via": "POST /act -> brain inbox"
+  },
+  {
+   "from": "src_cli",
+   "to": "commit",
+   "via": "Brain::start"
+  },
+  {
+   "from": "src_brain_loop",
+   "to": "commit",
+   "via": "Brain::append (panics on refusal)"
+  },
+  {
+   "from": "src_provider",
+   "to": "commit",
+   "via": "inbox What::FirstByte / What::Finished"
+  },
+  {
+   "from": "src_limb",
+   "to": "commit",
+   "via": "inbox What::Limb(Facts)"
+  },
+  {
+   "from": "src_roles",
+   "to": "commit",
+   "via": "Brain::define every 2 s"
+  },
+  {
+   "from": "src_live",
+   "to": "feed",
+   "via": "Feed::push, bypasses the journal"
+  },
+  {
+   "from": "commit",
+   "to": "apply",
+   "via": "each fact in order"
+  },
+  {
+   "from": "apply",
+   "to": "state_brain",
+   "via": "into a copy; the copy replaces the state once the store has the batch"
+  },
+  {
+   "from": "apply",
+   "to": "refusal",
+   "via": "Rejected"
+  },
+  {
+   "from": "commit",
+   "to": "journal",
+   "via": "Store::append after a clean fold"
+  },
+  {
+   "from": "state_brain",
+   "to": "state_face",
+   "via": "Commit over mpsc after each commit: the persistent State (shared structure, no second fold) and the new records"
+  },
+  {
+   "from": "journal",
+   "to": "state_brain",
+   "via": "refold at open"
+  },
+  {
+   "from": "journal",
+   "to": "v_sql",
+   "via": "SQL over fact JSON"
+  },
+  {
+   "from": "state_brain",
+   "to": "v_todo",
+   "via": "method"
+  },
+  {
+   "from": "state_brain",
+   "to": "v_stale",
+   "via": "method"
+  },
+  {
+   "from": "state_brain",
+   "to": "v_context",
+   "via": "method"
+  },
+  {
+   "from": "state_face",
+   "to": "v_waiting",
+   "via": "method"
+  },
+  {
+   "from": "state_face",
+   "to": "v_queue",
+   "via": "method"
+  },
+  {
+   "from": "state_face",
+   "to": "v_context",
+   "via": "method"
+  },
+  {
+   "from": "state_face",
+   "to": "v_face_view",
+   "via": "view::view"
+  },
+  {
+   "from": "state_face",
+   "to": "v_lines",
+   "via": "describe"
+  },
+  {
+   "from": "feed",
+   "to": "v_live",
+   "via": "SSE"
+  },
+  {
+   "from": "v_todo",
+   "to": "src_brain_loop",
+   "via": "the loop acts on each item: the cycle facts -> fold -> todo -> facts"
+  }
+ ]
+}

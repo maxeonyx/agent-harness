@@ -1,0 +1,279 @@
+{
+ "nodes": [
+  {
+   "id": "brain_state",
+   "label": "Brain Journal + State",
+   "process": "harness-brain",
+   "thread": "brain loop",
+   "holds": "full fold of the journal; sole writer",
+   "durable": false,
+   "code": "core/src/journal.rs:362, core/src/state.rs:87"
+  },
+  {
+   "id": "brain_caches",
+   "label": "Brain-local caches",
+   "process": "harness-brain",
+   "thread": "brain loop",
+   "holds": "cold (each request's context until its first byte), roles_read, process handles",
+   "durable": false,
+   "code": "brain/src/brain.rs:119-159"
+  },
+  {
+   "id": "sqlite",
+   "label": "SQLite journal.sqlite",
+   "process": "file",
+   "holds": "record(seq, at, kind, subject, by, fact) + value(id, bytes)",
+   "durable": true,
+   "code": "store/src/lib.rs:63-79"
+  },
+  {
+   "id": "face_folded",
+   "label": "Face follower (Folded)",
+   "process": "harness-brain",
+   "thread": "face follow",
+   "holds": "the brain's State as of the last commit it rendered (persistent: shares the brain's structure) + up to 2000 recent records as lines",
+   "durable": false,
+   "code": "face-web/src/lib.rs:122-127"
+  },
+  {
+   "id": "face_shown",
+   "label": "Face Shown",
+   "process": "harness-brain",
+   "thread": "shared by HTTP threads",
+   "holds": "latest whole view JSON + seq",
+   "durable": false,
+   "code": "face-web/src/lib.rs:130-133"
+  },
+  {
+   "id": "feed",
+   "label": "Live Feed",
+   "process": "harness-brain",
+   "thread": "shared",
+   "holds": "streamed visible text per running model call, output per running call, until its ending fact",
+   "durable": false,
+   "code": "face-web/src/live.rs:35-41"
+  },
+  {
+   "id": "request_thread",
+   "label": "Provider request thread",
+   "process": "harness-brain",
+   "thread": "one per request",
+   "holds": "copy of base context entries and bytes, abort flag, HTTP stream",
+   "durable": false,
+   "code": "brain/src/brain.rs:775-804"
+  },
+  {
+   "id": "anthropic",
+   "label": "Anthropic API + prompt cache",
+   "process": "remote",
+   "holds": "in-flight request; cached prefixes the harness cannot list",
+   "durable": "provider-defined TTL"
+  },
+  {
+   "id": "dictation",
+   "label": "Dictation relay",
+   "process": "harness-brain",
+   "thread": "per WebSocket",
+   "holds": "audio in flight, transcript edits",
+   "durable": false,
+   "code": "face-web/src/dictation.rs"
+  },
+  {
+   "id": "limb_proc",
+   "label": "Workspace/user limb process",
+   "process": "harness-limb-*",
+   "holds": "running calls, watched resource versions, files mutex",
+   "durable": false,
+   "code": "limb-workspace/src/lib.rs:190-207"
+  },
+  {
+   "id": "limb_record",
+   "label": "Limb call record (disk)",
+   "process": "file",
+   "holds": "Recorded::Started | Settled(Batch) per CallId; process groups",
+   "durable": true,
+   "code": "limb-workspace/src/record.rs:18-39"
+  },
+  {
+   "id": "filesystem",
+   "label": "Workspace files / git clone",
+   "process": "file",
+   "holds": "the resources themselves, versioned by digest",
+   "durable": true
+  },
+  {
+   "id": "role_files",
+   "label": "Role files (roles/*.md)",
+   "process": "file",
+   "holds": "environment definitions",
+   "durable": true
+  },
+  {
+   "id": "page",
+   "label": "Browser page",
+   "process": "browser",
+   "holds": "latest view, recent facts (<=300), byId, selected, replies, open /live streams",
+   "durable": false,
+   "code": "face-web/src/page.html:166-169, 298"
+  },
+  {
+   "id": "page_storage",
+   "label": "Browser localStorage + HTTP cache",
+   "process": "browser",
+   "holds": "face id, unsent draft; immutable /context/<head> responses",
+   "durable": "per browser"
+  }
+ ],
+ "edges": [
+  {
+   "from": "brain_state",
+   "to": "sqlite",
+   "what": "Batch of values + records, after folding",
+   "mechanism": "Journal::commit -> Store::append, one SQLite transaction, synchronous=FULL"
+  },
+  {
+   "from": "brain_state",
+   "to": "face_folded",
+   "what": "the State as of each commit, and the records it added",
+   "mechanism": "Commit over an mpsc channel (brain/src/brain.rs:1329); the face folds nothing itself"
+  },
+  {
+   "from": "sqlite",
+   "to": "face_shown",
+   "what": "stored values by id, for the view and /context",
+   "mechanism": "a SQLite connection of the face's own (Values, brain/src/main.rs:73); values never change, so nothing wakes it"
+  },
+  {
+   "from": "sqlite",
+   "to": "brain_state",
+   "what": "every record",
+   "mechanism": "Journal::open full refold at startup"
+  },
+  {
+   "from": "face_folded",
+   "to": "face_shown",
+   "what": "whole view rendered once per fold",
+   "mechanism": "view::view(state) once per batch of commits; Mutex + Condvar"
+  },
+  {
+   "from": "face_shown",
+   "to": "page",
+   "what": "{view, facts} per fold, id = seq",
+   "mechanism": "SSE /events with Last-Event-ID resume"
+  },
+  {
+   "from": "face_folded",
+   "to": "page",
+   "what": "a context chain by head entry, with value text",
+   "mechanism": "GET /context/<head>, cached immutable"
+  },
+  {
+   "from": "page",
+   "to": "brain_state",
+   "what": "Max's Batch with face + seen",
+   "mechanism": "POST /act -> Act::act -> mpsc inbox What::Max -> commit(Author::Max); reply 200 or 409 + reason"
+  },
+  {
+   "from": "page",
+   "to": "dictation",
+   "what": "PCM audio; back: transcript edits",
+   "mechanism": "WebSocket /dictation"
+  },
+  {
+   "from": "page_storage",
+   "to": "page",
+   "what": "face id, draft",
+   "mechanism": "localStorage on load and on input"
+  },
+  {
+   "from": "brain_state",
+   "to": "request_thread",
+   "what": "ModelCall + base entries + bytes",
+   "mechanism": "thread::spawn after committing ModelCallEvent::Sent"
+  },
+  {
+   "from": "request_thread",
+   "to": "anthropic",
+   "what": "Messages API request",
+   "mechanism": "HTTPS streaming"
+  },
+  {
+   "from": "anthropic",
+   "to": "request_thread",
+   "what": "SSE stream",
+   "mechanism": "HTTPS streaming"
+  },
+  {
+   "from": "request_thread",
+   "to": "feed",
+   "what": "Live::Model events",
+   "mechanism": "Feed::push (shared Arc<Mutex>)"
+  },
+  {
+   "from": "request_thread",
+   "to": "brain_state",
+   "what": "FirstByte, Finished(ending, content, usage, quota)",
+   "mechanism": "mpsc inbox -> brain commits ModelCallEvent facts"
+  },
+  {
+   "from": "brain_state",
+   "to": "request_thread",
+   "what": "abandon",
+   "mechanism": "AtomicBool checked per stream event (Todo::Abandon)"
+  },
+  {
+   "from": "feed",
+   "to": "page",
+   "what": "live pieces, id = count",
+   "mechanism": "SSE /live?model= or ?call=, resumable, 'end' event"
+  },
+  {
+   "from": "brain_state",
+   "to": "limb_proc",
+   "what": "ToLimb::Run{id, call, input} | Stop | Watch{known}",
+   "mechanism": "JSON lines over stdin; Run resent after every reconnect while unsettled"
+  },
+  {
+   "from": "limb_proc",
+   "to": "brain_state",
+   "what": "FromLimb::Hello | Facts(Batch) | Live; its description is a Described fact",
+   "mechanism": "JSON lines over stdout -> reader thread -> mpsc inbox; Facts committed as Author::Limb, refusals logged and dropped"
+  },
+  {
+   "from": "limb_proc",
+   "to": "feed",
+   "what": "Live::Call output chunks",
+   "mechanism": "FromLimb::Live via brain inbox -> Feed::push"
+  },
+  {
+   "from": "limb_proc",
+   "to": "limb_record",
+   "what": "Started before effects; Settled(batch) before sending",
+   "mechanism": "atomic file replace + fsync"
+  },
+  {
+   "from": "limb_record",
+   "to": "limb_proc",
+   "what": "prior outcome of a resent CallId",
+   "mechanism": "read on ToLimb::Run; orphans killed at startup"
+  },
+  {
+   "from": "limb_proc",
+   "to": "filesystem",
+   "what": "tool effects",
+   "mechanism": "shell / file tools; write/edit checked against call.expects under a mutex"
+  },
+  {
+   "from": "filesystem",
+   "to": "limb_proc",
+   "what": "current versions of watched resources",
+   "mechanism": "rescan after each call and on Watch (no watcher)"
+  },
+  {
+   "from": "role_files",
+   "to": "brain_state",
+   "what": "Environment + Change facts for changed roles",
+   "mechanism": "polled every 2 s"
+  }
+ ]
+}

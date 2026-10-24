@@ -1,0 +1,1251 @@
+{
+ "nodes": [
+  {
+   "id": "crates/brain/src/brain.rs",
+   "lines": 1506,
+   "doc": "The loop: act on each item of the to-do list, commit what happened,"
+  },
+  {
+   "id": "crates/brain/src/main.rs",
+   "lines": 172,
+   "doc": "The brain: what makes the harness's crates a harness."
+  },
+  {
+   "id": "crates/brain/src/max.rs",
+   "lines": 60,
+   "doc": "The Max limb: `ask`, a question Max answers from his queue."
+  },
+  {
+   "id": "crates/brain/src/meta.rs",
+   "lines": 281,
+   "doc": "The meta limb: the lifecycle tools the brain itself implements, as calls."
+  },
+  {
+   "id": "crates/brain/src/policy.rs",
+   "lines": 67,
+   "doc": "The brain's policy: every decision the core leaves open, apart from what"
+  },
+  {
+   "id": "crates/brain/src/process.rs",
+   "lines": 79,
+   "doc": "A plugin limb the brain started: `harness-limb-<kind>`, found beside the"
+  },
+  {
+   "id": "crates/brain/src/render.rs",
+   "lines": 473,
+   "doc": "What a request renders, and the wording of everything the harness says to"
+  },
+  {
+   "id": "crates/brain/src/roles.rs",
+   "lines": 210,
+   "doc": "Role files: the definitions of the kinds of agent, read into"
+  },
+  {
+   "id": "crates/core/src/attention.rs",
+   "lines": 88,
+   "doc": "Attention: Max's queue, the order it is in, and what he is looking at."
+  },
+  {
+   "id": "crates/core/src/call.rs",
+   "lines": 222,
+   "doc": "Calls: one action in a limb, by an agent, by Max, or by the harness for"
+  },
+  {
+   "id": "crates/core/src/context.rs",
+   "lines": 308,
+   "doc": "Contexts: exactly what a model was sent, as an immutable tree of entries."
+  },
+  {
+   "id": "crates/core/src/delivery.rs",
+   "lines": 82,
+   "doc": "Deliveries: what is addressed to a task that is not the result of a call."
+  },
+  {
+   "id": "crates/core/src/environment.rs",
+   "lines": 401,
+   "doc": "Environments and limbs: what a kind of agent is, what it can do, and what"
+  },
+  {
+   "id": "crates/core/src/id.rs",
+   "lines": 288,
+   "doc": "Identifiers, positions and time."
+  },
+  {
+   "id": "crates/core/src/journal.rs",
+   "lines": 479,
+   "doc": "The journal: one brain's append-only record of everything that happened,"
+  },
+  {
+   "id": "crates/core/src/lib.rs",
+   "lines": 193,
+   "doc": "The agent harness's core model: the identities the harness is made of,"
+  },
+  {
+   "id": "crates/core/src/live.rs",
+   "lines": 35,
+   "doc": "Live progress: what a face shows while something runs, never a fact."
+  },
+  {
+   "id": "crates/core/src/model_call.rs",
+   "lines": 264,
+   "doc": "Model calls: one request to the provider, and what it cost."
+  },
+  {
+   "id": "crates/core/src/resource.rs",
+   "lines": 107,
+   "doc": "Resources: the changing things a context can embody a version of."
+  },
+  {
+   "id": "crates/core/src/state.rs",
+   "lines": 1776,
+   "doc": "The fold of the journal: every state anyone reads."
+  },
+  {
+   "id": "crates/core/src/task.rs",
+   "lines": 1322,
+   "doc": "Tasks: one agent's mandate over its whole life, and the agent loop as a"
+  },
+  {
+   "id": "crates/core/src/value.rs",
+   "lines": 221,
+   "doc": "The bytes of a value, and how they travel."
+  },
+  {
+   "id": "crates/face-web/src/dictation.rs",
+   "lines": 450,
+   "doc": "Dictation: the page's microphone, relayed to Anthropic's speech-to-text"
+  },
+  {
+   "id": "crates/face-web/src/http.rs",
+   "lines": 141,
+   "doc": "Just enough HTTP/1.1 for one page, its event stream, its JSON, the words"
+  },
+  {
+   "id": "crates/face-web/src/lib.rs",
+   "lines": 466,
+   "doc": "The harness's web face: the task tree Max watches, live from the journal."
+  },
+  {
+   "id": "crates/face-web/src/live.rs",
+   "lines": 106,
+   "doc": "Live progress beside the journal: what a running request has streamed"
+  },
+  {
+   "id": "crates/face-web/src/view.rs",
+   "lines": 369,
+   "doc": "What the page is sent: the folded state's views as JSON, and one line"
+  },
+  {
+   "id": "crates/limb-workspace/examples/demo.rs",
+   "lines": 483,
+   "doc": "Drives the workspace limb through a realistic sequence of calls in a"
+  },
+  {
+   "id": "crates/limb-workspace/src/bin/user.rs",
+   "lines": 4,
+   "doc": "The user limb's process."
+  },
+  {
+   "id": "crates/limb-workspace/src/bin/workspace.rs",
+   "lines": 4,
+   "doc": "The workspace limb's process."
+  },
+  {
+   "id": "crates/limb-workspace/src/files.rs",
+   "lines": 388,
+   "doc": "Running each tool."
+  },
+  {
+   "id": "crates/limb-workspace/src/git.rs",
+   "lines": 76,
+   "doc": "Making a workspace's clone."
+  },
+  {
+   "id": "crates/limb-workspace/src/lib.rs",
+   "lines": 590,
+   "doc": "The workspace limb: a shell and file tools in one directory, speaking the"
+  },
+  {
+   "id": "crates/limb-workspace/src/process.rs",
+   "lines": 77,
+   "doc": "The limb as a process of its own, as the brain starts every plugin limb:"
+  },
+  {
+   "id": "crates/limb-workspace/src/record.rs",
+   "lines": 103,
+   "doc": "What the limb keeps on disk: its record of calls."
+  },
+  {
+   "id": "crates/limb-workspace/src/shell.rs",
+   "lines": 275,
+   "doc": "Running one command as a process tree the call owns."
+  },
+  {
+   "id": "crates/limb-workspace/src/tools.rs",
+   "lines": 120,
+   "doc": "The tools the workspace offers, as a context's root declares them, and"
+  },
+  {
+   "id": "crates/limb-workspace/src/trunc.rs",
+   "lines": 249,
+   "doc": "Head + tail + grep truncation, after Max's `trunc`"
+  },
+  {
+   "id": "crates/limb-workspace/src/user.rs",
+   "lines": 101,
+   "doc": "The user limb: Max's own agent configuration, as a limb every role holds."
+  },
+  {
+   "id": "crates/provider/examples/fork.rs",
+   "lines": 242,
+   "doc": "A root, a two-turn conversation, then two forks of its last response,"
+  },
+  {
+   "id": "crates/provider/src/client.rs",
+   "lines": 275,
+   "doc": "Sending a request and reading its stream."
+  },
+  {
+   "id": "crates/provider/src/lib.rs",
+   "lines": 74,
+   "doc": "The Anthropic Messages API on Max's Claude subscription, in terms of"
+  },
+  {
+   "id": "crates/provider/src/login.rs",
+   "lines": 81,
+   "doc": "The claude.ai login: one owner of the subscription credential, for every"
+  },
+  {
+   "id": "crates/provider/src/request.rs",
+   "lines": 175,
+   "doc": "A request's wire bytes, spliced from stored values."
+  },
+  {
+   "id": "crates/provider/src/response.rs",
+   "lines": 172,
+   "doc": "A streamed response, assembled into the assistant message it becomes."
+  },
+  {
+   "id": "crates/store/examples/crash.rs",
+   "lines": 414,
+   "doc": "Kill a brain mid-commit and show the store survived it."
+  },
+  {
+   "id": "crates/store/src/lib.rs",
+   "lines": 278,
+   "doc": "The durable home of one brain's journal and of the immutable values its"
+  }
+ ],
+ "edges": [
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/brain/src/max.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/brain/src/meta.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/brain/src/process.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/delivery.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/state.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/task.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/face-web/src/lib.rs",
+   "n": 5
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/limb-workspace/src/lib.rs",
+   "n": 2
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/limb-workspace/src/user.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/provider/src/lib.rs",
+   "n": 5
+  },
+  {
+   "from": "crates/brain/src/brain.rs",
+   "to": "crates/store/src/lib.rs",
+   "n": 2
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/brain/src/brain.rs",
+   "n": 2
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/brain/src/max.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/brain/src/meta.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/brain/src/policy.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/brain/src/process.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/brain/src/render.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/brain/src/roles.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/face-web/src/lib.rs",
+   "n": 8
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/provider/src/lib.rs",
+   "n": 2
+  },
+  {
+   "from": "crates/brain/src/main.rs",
+   "to": "crates/store/src/lib.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/max.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/max.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/max.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/meta.rs",
+   "to": "crates/brain/src/render.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/meta.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/meta.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/meta.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/meta.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/policy.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/process.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/brain/src/max.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/brain/src/meta.rs",
+   "n": 3
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/core/src/delivery.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/core/src/state.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/core/src/task.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/render.rs",
+   "to": "crates/provider/src/lib.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/roles.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/roles.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/roles.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/brain/src/roles.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/attention.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/call.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/call.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/context.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/context.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/delivery.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/environment.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/environment.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/environment.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/environment.rs",
+   "to": "crates/core/src/live.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/environment.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/environment.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/attention.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/delivery.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/state.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/task.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/journal.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/attention.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/delivery.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/live.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/state.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/task.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/lib.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/live.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/model_call.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/model_call.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/resource.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/attention.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/delivery.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/state.rs",
+   "to": "crates/core/src/task.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/task.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/task.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/task.rs",
+   "to": "crates/core/src/delivery.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/task.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/task.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/task.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/task.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/task.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/task.rs",
+   "to": "crates/core/src/state.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/core/src/value.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/dictation.rs",
+   "to": "crates/provider/src/lib.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/http.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/lib.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/lib.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/lib.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/lib.rs",
+   "to": "crates/core/src/state.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/lib.rs",
+   "to": "crates/face-web/src/dictation.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/lib.rs",
+   "to": "crates/face-web/src/http.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/lib.rs",
+   "to": "crates/face-web/src/live.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/lib.rs",
+   "to": "crates/face-web/src/view.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/live.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/live.rs",
+   "to": "crates/core/src/live.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/view.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 2
+  },
+  {
+   "from": "crates/face-web/src/view.rs",
+   "to": "crates/core/src/delivery.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/view.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 3
+  },
+  {
+   "from": "crates/face-web/src/view.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/view.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/view.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 2
+  },
+  {
+   "from": "crates/face-web/src/view.rs",
+   "to": "crates/core/src/state.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/face-web/src/view.rs",
+   "to": "crates/core/src/task.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/examples/demo.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/examples/demo.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/examples/demo.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/examples/demo.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/examples/demo.rs",
+   "to": "crates/core/src/live.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/examples/demo.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/examples/demo.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/files.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/files.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/files.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/files.rs",
+   "to": "crates/core/src/live.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/files.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/files.rs",
+   "to": "crates/limb-workspace/src/record.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/files.rs",
+   "to": "crates/limb-workspace/src/shell.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/files.rs",
+   "to": "crates/limb-workspace/src/trunc.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/limb-workspace/src/files.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/limb-workspace/src/git.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/limb-workspace/src/process.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/limb-workspace/src/record.rs",
+   "n": 2
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/limb-workspace/src/shell.rs",
+   "n": 2
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/limb-workspace/src/tools.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/limb-workspace/src/trunc.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/lib.rs",
+   "to": "crates/limb-workspace/src/user.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/process.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/record.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/record.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/shell.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/shell.rs",
+   "to": "crates/limb-workspace/src/trunc.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/tools.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/user.rs",
+   "to": "crates/core/src/call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/user.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/user.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/limb-workspace/src/user.rs",
+   "to": "crates/core/src/resource.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/examples/fork.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/examples/fork.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/examples/fork.rs",
+   "to": "crates/core/src/live.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/examples/fork.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/client.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/client.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/client.rs",
+   "to": "crates/core/src/live.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/client.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/client.rs",
+   "to": "crates/provider/src/login.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/client.rs",
+   "to": "crates/provider/src/response.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/lib.rs",
+   "to": "crates/provider/src/client.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/lib.rs",
+   "to": "crates/provider/src/login.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/lib.rs",
+   "to": "crates/provider/src/request.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/lib.rs",
+   "to": "crates/provider/src/response.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/request.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/request.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/request.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/provider/src/response.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/examples/crash.rs",
+   "to": "crates/core/src/context.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/examples/crash.rs",
+   "to": "crates/core/src/environment.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/examples/crash.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/examples/crash.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/examples/crash.rs",
+   "to": "crates/core/src/model_call.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/examples/crash.rs",
+   "to": "crates/core/src/task.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/examples/crash.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/src/lib.rs",
+   "to": "crates/core/src/id.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/src/lib.rs",
+   "to": "crates/core/src/journal.rs",
+   "n": 1
+  },
+  {
+   "from": "crates/store/src/lib.rs",
+   "to": "crates/core/src/value.rs",
+   "n": 1
+  }
+ ]
+}

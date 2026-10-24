@@ -1,0 +1,244 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>main, as built: ten aspects (17 Oct 2026)</title>
+<!-- The old dashboard's review of main at 256eb78, one section per cross-cutting
+     aspect. Its diagrams are drawn by diagrams.js (graph.js, seq.js) from gen/*.json;
+     here they are left as the empty elements the page filled. -->
+<section class="deep wide" id="aspect-events" data-aspect="1" data-short="Events" data-fit="fit" data-title="1. Events and derived views" data-line="One fact type, one fold, and every reader sees that same fold. One piece of brain state still sits beside it." hidden="until-found">
+<p class="verdict fit">Fits. The one place it leaks is brain state kept beside the fold.</p>
+<pre><code class="language-rust">// core/src/journal.rs:57: what the journal holds, one per seq
+pub struct Record { pub seq: Seq, pub at: Timestamp, pub by: Author, pub fact: Fact }
+
+// core/src/journal.rs:88: everything that can happen
+pub enum Fact {
+    Launched(Launched), Task(TaskId, TaskEvent), ModelCall(ModelCallId, ModelCallEvent),
+    Call(CallId, CallEvent), Delivery(Delivery), Change(Change), Environment(Environment),
+    Limb(Limb), Described { limb: LimbId, description: Description }, Reach { limb: LimbId, reach: Reach },
+    Ranking(Ranking), Focus(Focus),
+}
+
+// brain/src/brain.rs:395: the brain's whole loop
+fn work(&mut self) {
+    let now = now();
+    for todo in self.state().todo(now) {
+        // An earlier item may have moved this one on.
+        if self.state().todo(now).contains(&todo) {
+            self.act(todo, now);
+        }
+    }
+}</code></pre>
+<p><b>What fits.</b> There is one vocabulary and one fold, and every reader uses them. After each commit the brain hands its face its own <code>State</code> (<code>face-web/src/lib.rs:165</code>), a persistent value the face holds while the brain moves on, so the face's view can't drift from the brain's. Restart is just a refold: the brain re-reads the journal and works <code>State::todo</code>, with no recovery code. A task's state is never written as a fact; it is folded from the task's history. <code>Open</code>, the index of live work, is maintained incrementally inside the fold, which is the shape your relational/FRP inspiration points at.</p>
+<p><b>What doesn't yet.</b></p>
+<ul>
+<li>One piece of brain state sits beside the fold: <code>cold</code> (<code>brain/src/brain.rs:145</code>), the context of each request with no first byte yet, which the fold already knows.</li>
+<li>The views are recomputed, not maintained by deltas. The face re-renders its whole JSON view on every fold and sends all of it on every SSE event.</li>
+<li>Time is an input the fold can't see. <code>todo(now)</code> and <code>limited(now)</code> change with no event, so the page re-renders once a second to cover it.</li>
+<li>The filesystem has no event source. The workspace limb only rescans after a call, so an edit you make in your own editor is seen late.</li>
+</ul>
+</section>
+
+<section class="deep wide" id="aspect-durability" data-aspect="2" data-short="Durability" data-fit="gap" data-title="2. Durability classes" data-line="Two classes only: a fact is kept forever, and live output is kept in memory until its fact lands. Nothing lasts for a session or a context." hidden="until-found">
+<p class="verdict gap">Not yet. Your <code>tech.md</code> lists four lifetimes (forever, the session, the context, not durable at all) plus "for some we store only a projection". The code has two.</p>
+<div class="tablewrap"><table>
+<tr><th>Lifetime</th><th>What lives there on <code>main</code></th><th>Where</th></tr>
+<tr><td>forever</td><td>every <code>Fact</code>, including each click on a task (<code>Focus</code>), each queue reorder (<code>Ranking</code>), each <code>FirstByte</code>, each <code>Reach</code> and each limb's <code>Described</code> on every connection</td><td>SQLite <code>record</code>, WAL, <code>synchronous=FULL</code> (<code>store/src/lib.rs:62-94</code>)</td></tr>
+<tr><td>forever, apart</td><td>the bytes facts name, by content id, deduplicated, at most 32 MiB each</td><td>SQLite <code>value</code></td></tr>
+<tr><td>session / context</td><td class="gap">nothing: no fact can say so</td><td></td></tr>
+<tr><td>until its fact lands</td><td><code>Live</code>: streamed tokens and command output</td><td>the <code>Feed</code>, in memory (<code>face-web/src/live.rs:35</code>)</td></tr>
+<tr><td>per browser</td><td>the face id and one unsent draft</td><td><code>localStorage</code></td></tr>
+<tr><td>per call, forever</td><td>the limb's record of each call: <code>Started</code> or <code>Settled(Batch)</code></td><td>one JSON file per call, never collected</td></tr>
+</table></div>
+<p><b>What fits.</b> The split between <code>Live</code> and facts follows a reasoned rule: something becomes a fact when a participant acts on it. When you interrupt, the partial text you saw is promoted into <code>Ending::Abandoned { partial }</code>. Large bytes sit apart from events, as <code>tech.md</code> asks.</p>
+<p><b>What doesn't yet.</b> Nothing gives a fact a lifetime, and there is no compaction, snapshot or projection-only table. <code>Focus</code>, <code>FirstByte</code> and <code>Reach</code> are the obvious first candidates for a shorter class. Memory grows with all of history:</p>
+<ul>
+<li><code>State</code> keeps every task, call and context entry ever made.</li>
+<li>Startup refolds the whole journal.</li>
+</ul>
+</section>
+
+<section class="deep wide" id="aspect-replicas" data-aspect="3" data-short="Replicas" data-fit="gap" data-title="3. Replicas and consistency" data-line="One journal per brain is also the only sequencer. Refusals travel out of band, as a 409, a stderr line or a panic. `seen` is recorded but no rule or view uses it.">
+<p class="verdict gap">Not yet. <code>main</code> is "event-sourced, single leader, read replicas": each brain's journal is both its own log and the one sequencer everyone else must submit to. Your discipline is the other way round. Every replica keeps its own journal; facts cross between journals through a partial mapping; and an invalid action stays a fact where it happened.</p>
+<p>All 15 places a copy of the data lives at runtime, grouped by where it lives. Solid boxes are durable; dotted ones are not. The brain's journal and <code>State</code> is the one box everything else feeds or reads.</p>
+<div class="dg" data-diagram="replicas"></div>
+<p><b>What fits.</b></p>
+<ul>
+<li>Each replica is a deterministic fold of a prefix of one log, and the cursor is the log position end to end: SQLite <code>seq</code>, then the SSE event id, then <code>Last-Event-ID</code>, then <code>seen</code>. That is causal consistency, done cleanly, for a single log.</li>
+<li>The limb protocol is the strongest replica design in the repo:
+<ul>
+<li>A call is delivered at least once and runs at most once per id, because the limb answers a resent call from its own on-disk record.</li>
+<li><code>Unknown</code> is kept distinct from <code>Failed</code>.</li>
+<li><code>Watch { known }</code> is anti-entropy on reconnect.</li>
+<li>A write carries <code>expects</code> (the versions the agent last saw). A stale write comes back as <code>Outcome::Refused { current }</code>, which is a fact. That is the one refusal on <code>main</code> that is already in band.</li>
+</ul></li>
+<li>Content-addressed values and random 128-bit ids are already fit for federation: two brains can't collide on an id or disagree on a value.</li>
+</ul>
+<p><b>What doesn't yet.</b> Here is how each author's invalid action travels today:</p>
+<div class="tablewrap"><table>
+<tr><th>Author</th><th>Refused where</th><th>How it travels</th><th>In band?</th></tr>
+<tr><td>Max</td><td><code>State::apply</code></td><td>HTTP <code>409</code> with the reason as text. The page even reads one refusal text, "creates something that already exists", as an ack on retry.</td><td class="gap">no</td></tr>
+<tr><td>a limb</td><td><code>State::apply</code></td><td><code>eprintln!</code>, then dropped; the limb is never told (<code>brain.rs:1249</code>)</td><td class="gap">no</td></tr>
+<tr><td>the brain</td><td><code>State::apply</code></td><td><code>panic!</code>, by design: it is a bug in the brain (<code>brain.rs:1302</code>)</td><td class="gap">no</td></tr>
+<tr><td>a limb, of a stale write</td><td>the limb, against <code>expects</code></td><td><code>Outcome::Refused { current }</code>, a settlement fact</td><td class="fit">yes</td></tr>
+</table></div>
+<ul>
+<li><b>One journal, one sequencer.</b> The face, the page and the limbs have no journal of their own. The face holds the brain's own <code>State</code> as of a commit, not a log of what you did.</li>
+<li><b><code>seen</code> is written and barely read.</b> <code>Author::Max { face, seen }</code> records how far your face had got. The fold checks only that it isn't past the journal's end; no other rule, view or render uses it. "You said yes before the agent changed its plan" is representable and not yet handled.</li>
+<li><b>Causality is a single number.</b> <code>seen: Seq</code> is a position in one brain's log, and nothing says which journal a fact came from. A face reading a work brain and a home brain would need one cursor per journal.</li>
+<li><b><code>Ranking</code> is last-writer-wins over the whole order.</b> A reorder from a stale page overwrites whatever came in between, and nothing could merge a scheduler's ranking with yours.</li>
+</ul>
+<h4>Invariant confluence, applied to <code>main</code>'s refusals</h4>
+<p>Every fact on <code>main</code> goes through the one writer, whether or not its invariant needs coordination. Here is a first reading of all 26 <code>Rejected</code> reasons (<code>journal.rs:213</code>) under Bailis's test: could two replicas each accept facts that keep this invariant, merge them, and still keep it? This is my hypothesis from the definitions, not a worked proof.</p>
+<div class="tablewrap"><table>
+<tr><th>Merges safely (I-confluent)</th><th>Needs one decider</th><th>Only exists because there is one log</th></tr>
+<tr><td><code>Exists</code> for ids (random 128-bit), <code>Missing</code>, <code>TooLarge</code>, <code>Author</code>; <code>Unknown</code> and <code>Unheard</code> once delivery is causal (what a task has heard only grows); and <code>WrongEnvironment</code>, <code>Ambiguous</code>, <code>NotForTask</code>, <code>CannotStart</code>, <code>Unoffered</code>, <code>Unroutable</code>, <code>ForMax</code>, <code>Redefined</code> where the definitions they check are immutable versions</td><td>A task's life and phase: <code>Finished</code> (settle once; stop vs finish), <code>NotFinished</code>, <code>Starting</code>, <code>Busy</code>, <code>Draining</code>, <code>Unanswered</code>, <code>Detached</code> (a request extends the current head), <code>Idle</code>. A scope: <code>WrongScope</code>, <code>Scoped</code> (a scope closes once). A limb's connection: <code>Unreached</code>. A name: <code>Exists</code> for a second environment or limb of one name</td><td><code>OutOfOrder</code></td></tr>
+</table></div>
+<p>The interesting result is the middle column. Every invariant there is about <em>one</em> object: a task, a scope, a limb's connection, or a name. So the coordination these invariants need is per object, not global. The decider for a task could be whichever replica owns that task, with its own journal, and everything else could merge freely. If that holds, "every replica has its own journal" and "some facts need a decider" fit together without a capital-J Journal.</p>
+</section>
+
+<section class="deep wide" id="aspect-topology" data-aspect="4" data-short="Topology" data-fit="part" data-title="4. Topology: the decoupled monolith" data-line="The seams are in the right places and the limb seam is a real protocol. But there are three binaries, each seam has one transport, and face↔brain isn't a protocol at all." hidden="until-found">
+<p class="verdict part">Partly. The seams are in the right places, and the one between brain and limb is a real message protocol. But no seam can change its transport, and the face↔brain seam is four mechanisms rather than a protocol.</p>
+<p>This is what runs for the dev-process brain on port 4325 right now: the brain and four limb processes, and nine threads in the brain as I write (the loop, the face follower, the listener, a reader for each of the four limbs, and one for each of two open page connections). The label on each arrow is its transport.</p>
+<div class="dg" data-diagram="topology"></div>
+<p><b>What fits.</b> The limb seam carries serde enums framed as JSON lines (<code>ToLimb</code>/<code>FromLimb</code>, <code>core/src/environment.rs:359,387</code>). The brain knows a limb only by its definition and that protocol, so the same lines could go over a socket or ssh unchanged. The face is written against two traits, <code>Source</code> and <code>Act</code> (<code>face-web/src/lib.rs:78,92</code>), and doesn't know it shares a process with the brain. The brain being a role rather than a process also holds in one small way: the meta and attention limbs live inside the brain process, while plugin limbs are processes of their own.</p>
+<p><b>What doesn't yet.</b></p>
+<ul>
+<li><b>Three binaries, not one</b> that can run in any mode. The brain finds a limb by filename: <code>current_exe()?.with_file_name(format!("harness-limb-{kind}"))</code> (<code>brain/src/process.rs:32</code>).</li>
+<li><b>One transport per seam.</b> Face↔brain is in-process only and brain↔limb is stdio only. No type names another host yet: a limb hosted elsewhere "is a new variant when the first one is built" (<code>core/src/environment.rs:262</code>).</li>
+<li><b>Face↔brain is four mechanisms:</b>
+<ul>
+<li>the <code>Act</code> trait over an mpsc channel;</li>
+<li>a channel of <code>Commit</code>s, each the brain's in-memory <code>State</code> as of a commit plus the records it added;</li>
+<li>a SQLite connection of the face's own, for stored values (<code>brain/src/main.rs:73</code>);</li>
+<li>the <code>Feed</code> in shared memory.</li>
+</ul>
+A face in another process would need all of them redone, and the <code>State</code> it is handed is memory shared with the brain, not a wire format. The brain also sends to its face after every commit (<code>brain.rs:1329</code>), so it knows its face exists.</li>
+<li><b>Crate coupling contradicts the process split.</b> <code>harness-brain</code> links <code>harness-limb-workspace</code> as a library, and <code>harness-face-web</code> links <code>harness-provider</code> to run dictation (the arrows from <code>brain</code> and <code>face-web</code> in the <a href="#d-crates">crate graph</a>).</li>
+</ul>
+<p>The shape this points at: face↔brain becomes the same kind of seam as brain↔limb, a stream of journal records out plus batches of facts in. Then "in-process or over a socket" is a choice of transport, not a rewrite. Under <a href="#aspect-replicas">aspect 3</a>, the face's batches would come from the face's own journal.</p>
+</section>
+
+<section class="deep wide" id="aspect-cancel" data-aspect="5" data-short="Cancel" data-fit="part" data-since="40" data-title="5. Structured concurrency and two-phase cancellation" data-line="Two-phase and cascading at the fact level. Missing: the &quot;please tidy up&quot; turn, cancelling blocking I/O, graceful shutdown, and handing ownership to the parent." hidden="until-found">
+<p class="verdict part">Partly. Two-phase cancellation is real at the level of facts: it cascades down the tree and is confirmed by the fold. It is missing at the two ends you named, the agent's own tidy-up and the blocking I/O underneath.</p>
+<p>A real interrupt and stop, from the face-controls demo journal at 11:51:</p>
+<pre><code>39  Max   {"Task":["e5dc…",{"Drain":"ToMax"}]}
+40  Brain {"ModelCall":["5bae…","FirstByte"]}
+41  Brain {"ModelCall":["5bae…",{"Ended":{"ending":{"Abandoned":{"partial":null}}, …}}]}
+46  Max   {"Task":["4532…",{"Drain":{"Stop":"Max"}}]}</code></pre>
+<p>Phase 1 is the <code>Drain</code> fact: it sets the live task's <code>drain</code> and nothing else. The fold then puts the work of stopping on the brain's to-do list. Phase 2 is <code>drained()</code> (<code>task.rs:1224</code>), which ends the task's life as <code>Done</code> with <code>Outcome::Cancelled</code> only once nothing it started is outstanding. Dashed red boxes are what you asked for that isn't there.</p>
+<div class="dg" data-diagram="cancel"></div>
+<p><b>What fits.</b> "The parent exits only after its children confirm" holds by construction. A spawn call settles only when every member of its scope is done, and a stopping owner stops each live member with <code>Drain(Stop(Owner))</code>, which runs the same cascade one level down. Tool calls get a signal ladder: <code>Stop</code>, then <code>SIGTERM</code> to the command's whole process group, one second's grace, then <code>SIGKILL</code>; the settlement fact is the confirmation. A task with background work can't finish: it waits as <code>Listening</code>. That is the safe half of your ownership rule.</p>
+<p><b>What doesn't yet.</b></p>
+<ul>
+<li><b>The agent never gets a "please tidy up" turn.</b> A stop abandons the agent's in-flight response and kills its tools. No request tells the model to wind down and ask the same of its children.</li>
+<li><b>Not every request can be cancelled.</b> The abort flag is read only when a stream event arrives, so connecting, waiting for headers and silent gaps can't be stopped, and <code>ureq</code> has no timeouts. In the journal above, the abandon landed only at <code>FirstByte</code>, 1.2 seconds after the interrupt.</li>
+<li><b>No graceful shutdown.</b> The brain runs until it is killed. In-flight requests become <code>Lost</code> and running commands become <code>Unknown</code>.</li>
+<li><b>No way to pass ownership to the parent.</b> A task that wants to finish while something it started keeps running has no fact to hand that work over.</li>
+<li><b>The naming is the old one.</b> <code>Task</code> is the agent. A model request (<code>ModelCall</code>) and a tool call (<code>Call</code>) are separate identities, each with its own lifecycle, so there is no one "task" with one cancel protocol across levels. These are the three lifecycles that would merge:</li>
+</ul>
+<div class="dg" data-diagram="life"></div>
+<p>A task's life is one enum, <code>Life { Starting, Live(Live), Done { outcome, context } }</code> (<code>task.rs:112</code>), and whose move it is in a live task is a <code>Phase</code> inside it (<code>task.rs:162</code>). Making "task" mean any asynchronous thing, with one cancel protocol across all three boxes, is <a href="#s2">S2 of the full system</a>.</p>
+</section>
+
+<section class="deep wide" id="aspect-continuity" data-aspect="6" data-short="Continuity" data-fit="part" data-since="40" data-title="6. Continuity and self-modification" data-line="Crash and restart recovery is principled and works. Relaunching onto new code isn't built." hidden="until-found">
+<p class="verdict part">Partly. Crash and restart recovery is principled, and it works on real journals. Self-modification (relaunching onto new code) isn't built.</p>
+<p>A real restart, brain-demo at 11:30. A <code>bash</code> call was running when the brain was killed with <code>-9</code>:</p>
+<pre><code>76  Brain {"Call":["c3af…","Dispatched"]}
+77  Brain {"Launched":{"build":"harness-brain 0.0.0","by":null}}
+78-83     Reach … Connected, Described            ← three limbs, new instances, each describing itself
+84  Brain {"Call":["c3af…","Dispatched"]}           ← sent again to the new instance
+86  Limb  {"Call":["c3af…",{"Settled":"Unknown"}]}  ← bash was cut off: nobody knows what it did
+89  Brain {"ModelCall":["00e3…",{"Sent":…}]}        ← the agent carries on</code></pre>
+<p><b>What fits.</b> Restart isn't a mode: it is read off journal positions. A request sent before the latest <code>Launched</code> with no ending is <code>Lost</code> and is sent again. A limb answers a resent call from its own record, reruns it if the tool is safe to repeat, or settles it <code>Unknown</code>. Cache keys survive a relaunch, because a request prefix is spliced from stored, content-addressed bytes and comes out byte-identical. Role files are re-read every 2 s and become a new <code>Environment</code> version, which a task picks up at its next root.</p>
+<p><b>What doesn't yet.</b></p>
+<ul>
+<li><code>Launched { build, by: Option&lt;CallId&gt; }</code> was designed for "the relaunch an agent asked for", but nothing creates one. <code>by</code> is always <code>None</code>, and <code>build</code> is a constant, so every launch in every journal reads <code>harness-brain 0.0.0</code>.</li>
+<li>No drain before a relaunch: relaunching is kill-and-restart, so it always pays <a href="#aspect-cancel">aspect 5</a>'s costs.</li>
+<li>No "ask first after a long outage". <code>task.held</code> exists for it, but the brain never sets it.</li>
+<li>A limb's instructions (<code>AGENTS.md</code>, skills) are resources, but with no file watcher an edit made outside any call is noticed late.</li>
+</ul>
+</section>
+
+<section class="deep wide" id="aspect-extension" data-aspect="7" data-short="Extension" data-fit="part" data-since="41" data-title="7. Extension and sandboxing" data-line="A limb is a process that speaks journal facts. It isn't sandboxed: its `bash` can read your credentials file.">
+<p class="verdict part">Partly. The extension seam is the right shape, a process that speaks journal facts. The sandbox around it isn't started.</p>
+<pre><code class="language-rust">// core/src/environment.rs:359, 387: the whole limb protocol
+pub enum ToLimb { Run { id: CallId, call: Call, input: Bytes }, Stop { call: CallId }, Watch { known: Vec&lt;Observation&gt; } }
+pub enum FromLimb { Hello { instance: InstanceId }, Facts(Batch), Live(Live) }</code></pre>
+<p><b>What fits.</b> A limb states facts in the journal's own vocabulary (<code>FromLimb::Facts(Batch)</code>), so nothing translates. Even its description is a fact, <code>Fact::Described</code>, which it sends after <code>Hello</code> on every connection. The fold lets a limb state only its own description, its own calls' settlements and its own resources' changes. Access control is the binding: a tool use routes only to a limb in the task's environment, and an unroutable one is answered as a failed call. There are no permission prompts. <code>LimbKind::Plugin { kind, config }</code> means a new kind of limb needs no change to core. One <code>Login</code> reads your token, it never touches the refresh token, and limbs are never sent the token.</p>
+<p><b>What doesn't yet.</b> "Never sent" isn't "can't reach". Limbs run as your user, with your <code>$HOME</code>, so an agent's <code>bash</code> can <code>cat ~/.claude/.credentials.json</code>, and the user limb's directory <em>is</em> <code>~/.claude</code>. No limb runs in a container, a namespace or as a separate user. Also not started:</p>
+<ul>
+<li>Deno or any JS sandbox;</li>
+<li>plugin reload;</li>
+<li>provider plugins handed a pre-authenticated fetch;</li>
+<li>MCP.</li>
+</ul>
+</section>
+
+<section class="deep wide" id="aspect-prevention" data-aspect="8" data-short="Prevention" data-fit="part" data-title="8. Prevention by construction" data-line="Authority is decided by the fold and by bindings, with no permission prompts. Some facts are barely checked, and the OS boundary isn't drawn." hidden="until-found">
+<p class="verdict part">Partly. Inside the harness, what an actor can't do is mostly unrepresentable or refused by the fold. Outside it, at the OS, nothing is drawn yet.</p>
+<pre><code class="language-rust">// core/src/state.rs:509: what each author may state, decided by the fold
+Author::Brain => match fact {
+    Fact::Delivery(Delivery { content: Content::Words(_) | Content::Prompt(Prompt::Done), .. })  // only Max has words, and only he marks a task done
+    | Fact::Task(_, TaskEvent::Drain(Drain::Stop(Stopper::Max)))   // only Max stops as Max
+    | Fact::Focus(_)
+    | Fact::Described { .. } => false,                              // a limb describes itself
+    Fact::Task(_, TaskEvent::Created(created)) => created.by.is_some(),
+    Fact::Call(_, CallEvent::Made(call)) => !matches!(call.caller, Caller::Max { .. }),
+    Fact::Call(id, CallEvent::Settled(outcome)) => /* Max's answer is his; a plugin's outcome is its own, unless never sent or its limb is unreached */,
+    Fact::Change(change) => brains(change.resource.limb),
+    _ => true,
+},
+Author::Limb(limb) => match fact {
+    Fact::Call(id, CallEvent::Settled(_)) => /* only its own dispatched call */,
+    Fact::Change(change) => change.resource.limb == *limb && /* by its own call */,
+    Fact::Described { limb: of, .. } => of == limb,
+    _ => false,
+},</code></pre>
+<p><b>What fits.</b></p>
+<ul>
+<li>Authority is a property of who states a fact, checked in the one fold, so the rule that keeps the journal sound also answers every race.</li>
+<li>What an agent can't do is what its environment lacks: a tool name it has no binding for doesn't route.</li>
+<li>The brain's possible actions are a closed enum, <code>Todo</code>, so the brain can't do something the fold never asked for.</li>
+<li>A task is in exactly one <code>Life</code>, and a live one in exactly one <code>Phase</code>.</li>
+<li>Each <code>Rejected</code> variant is one rule, so a face can act on a refusal by matching it rather than its wording.</li>
+<li>Your words are values the fold keeps, and an agent's quote of them is refused unless the quoting task heard them (<code>Rejected::Unheard</code>).</li>
+<li>Batches are atomic, so a meta call's effects land with the call or not at all.</li>
+</ul>
+<p><b>What doesn't yet.</b></p>
+<ul>
+<li>Some facts are barely checked:
+<ul>
+<li><code>Fact::Limb</code> checks only that its name is unique and its kind unchanged (<code>Rejected::Redefined</code>), so the brain or you can repoint a limb's config;</li>
+<li><code>Ranking</code> and <code>Focus</code> don't check that their tasks exist;</li>
+<li><code>Change</code> doesn't check that versions move forward.</li>
+</ul></li>
+<li>At command-line start the brain writes facts as you, through a made-up face (<code>FaceId(0)</code>). That face shows up in a real journal: <code>{"Max":{"face":"0000…","seen":10}}</code>.</li>
+<li>The OS boundary (<a href="#aspect-extension">aspect 7</a>) is policy, not construction.</li>
+</ul>
+</section>
+
+<section class="deep wide" id="aspect-clients" data-aspect="9" data-short="Clients" data-fit="part" data-since="39" data-title="9. Multiple clients" data-line="Each fact you author records its face and how far that face had seen. Faces are per browser rather than per tab, drafts aren't durable, and the browser holds a rendered view rather than a replica." hidden="until-found">
+<p class="verdict part">Partly. The primitives are right: per-face authorship, journal-position cursors and idempotent ids. Per-tab faces, durable drafts and a browser-side replica are missing.</p>
+<pre><code>43 {"Max":{"face":"e4e3…","seen":42}} {"Focus":{…}}       ← every fact you author says which face, and how far it had seen</code></pre>
+<p><b>What fits.</b> Any number of pages can connect to a brain. Each page resumes from its journal position, because <code>/events</code> sends <code>id: seq</code> and honours <code>Last-Event-ID</code>. Focus is per face, and it is a fact. Each face mints the ids of what it creates, so a retried send can't deliver twice.</p>
+<p><b>What doesn't yet.</b></p>
+<ul>
+<li>The face id is per browser (<code>localStorage</code>), so two tabs side by side are one face and overwrite each other's focus.</li>
+<li>The draft is one <code>localStorage</code> key shared by every task and every tab, and answers to asks live only in a page variable. Your rule, "all text boxes persist drafts", isn't met.</li>
+<li>The browser receives the whole server-rendered view on every fold. It can't fold, so it can't hold provisional facts of its own or filter invalid ones before sending them on.</li>
+<li>Nothing stops two faces racing on one object. You said a face may lock your <em>actions</em>, not your viewing, to a subtree.</li>
+</ul>
+</section>
+
+<section class="deep wide" id="aspect-tech" data-aspect="10" data-short="Tech" data-fit="fit" data-title="10. Technology choices" data-line="A small, synchronous stack on std threads. Its one cost: a blocking call can't be cancelled from outside." hidden="until-found">
+<p class="verdict fit">Fits. Versions are my call, as you said; this is what is there and why.</p>
+<div class="tablewrap"><table>
+<tr><th>Crate</th><th>Used in</th><th>For</th></tr>
+<tr><td><code>serde</code>, <code>serde_json</code></td><td>everywhere</td><td>Every fact and protocol message; the journal stores core's own JSON. <code>RawValue</code> keeps a tool use's input bytes exactly as the model wrote them.</td></tr>
+<tr><td><code>blake3</code></td><td>core</td><td>content ids: <code>ValueId</code> and the Merkle <code>EntryId</code> of contexts</td></tr>
+<tr><td><code>rusqlite</code> (bundled)</td><td>store</td><td>the journal: WAL, full sync per commit, schema version 4, refused on mismatch</td></tr>
+<tr><td><code>ureq</code> + <code>rustls</code></td><td>provider</td><td>blocking HTTPS to the Messages API, one thread per request</td></tr>
+<tr><td><code>rustls</code>, <code>webpki-roots</code>, <code>tungstenite</code></td><td>face-web</td><td>the face's own HTTPS server; the dictation WebSocket in both directions</td></tr>
+<tr><td><code>libc</code>, <code>regex</code></td><td>limb-workspace</td><td>signalling process groups and recognising orphans; the <code>grep</code> tool</td></tr>
+</table></div>
+<p>Deliberately absent: an async runtime, a web framework and a front-end build. HTTP/1.1 and SSE are hand-written over <code>std::net</code>, and the page is one static file. The cost is the one in <a href="#aspect-cancel">aspect 5</a>. A thread blocked in <code>read</code> can't be cancelled from outside, so making every request cancellable means either timeouts plus closing the socket from another thread, or moving the I/O seams to async. I'd try the first before the second.</p>
+</section>
