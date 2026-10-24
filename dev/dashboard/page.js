@@ -117,10 +117,7 @@ function model() {
     const names = term.split(/, /);
     terms.push({ term, names, slug: slug(names[0]), meaning, code: code.trim() });
   }
-  for (const t of terms) {
-    const words = t.code.replace(/`[^`]*`/g, "").replace(/\([^)]*\)/g, "").match(/[A-Za-z]{2,}/g) ?? [];
-    t.state = t.code === "" ? null : /^Not built/.test(t.code) ? "not built" : /^Partly/.test(t.code) ? "partly" : words.length >= 4 ? "differs" : null;
-  }
+  for (const t of terms) t.state = /^Not built/.test(t.code) ? "not built" : /^Partly/.test(t.code) ? "partly" : /^Differs/.test(t.code) ? "differs" : null;
 
   const byDir = Object.fromEntries(repo.crates.map((c) => [c.dir, c.name]));
   const crates = repo.crates.map((c) => {
@@ -131,7 +128,7 @@ function model() {
       if (/not built|provisional|not covered/i.test(s.title)) { gaps.push({ title: s.title, blocks: s.blocks }); continue; }
       for (const b of s.blocks) {
         const label = b.token.type === "paragraph" ? b.token.text.match(/^\*\*(Not built yet|Not covered|Provisional)\.\*\*/)?.[1] : undefined;
-        if (label !== undefined) gaps.push({ title: label, blocks: [b] });
+        if (label !== undefined) gaps.push({ title: label, blocks: [b], labelled: true });
       }
     }
     const count = (g) => g.blocks.reduce((n, b) => n + (b.token.type === "list" ? b.token.items.length : 0), 0) || g.blocks.length;
@@ -309,6 +306,12 @@ const livePart = (fill) => {
   return el;
 };
 const card = (title, sub, ...kids) => h("div.card", {}, h("h3", {}, title, sub === null ? null : h("small", {}, sub)), kids);
+const builtBy = (s) => m.crates.filter((c) => c.structures.length === 1 && c.structures[0] === s.n);
+const todoOf = (s) => m.todoGroups.find((g) => g.n === s.n);
+const changedCrate = (c) => Object.keys(changes?.files ?? {}).some((p) => p.startsWith(`${c.dir}/`));
+// A crate's gaps as sections to render, each linkable as #<crate>-<title> on the crate's own page.
+const gapSecs = (c, depth) => Object.assign(c.gaps.map((g) => ({ depth: g.labelled ? 0 : depth, title: g.title, slug: `${c.short}-${slug(g.title)}`, start: g.blocks[0].start, blocks: g.blocks })), { links: c.secs.links });
+const prTitle = (p) => inline(p.title, { terms: false });
 const crateLink = (c) => h("a.crate", { href: `#/crate/${c.name}`, class: c.structures.length === 1 ? `s${c.structures[0]}` : "" }, c.short);
 const msChip = (ms) => h("a.ms", { href: "#/plan#milestones", class: ms.state, title: `${ms.letter}. ${ms.name}: ${ms.status}` }, ms.letter, " ", ms.state);
 const touched = (paths) => {
@@ -359,8 +362,8 @@ function revisedSec(d, s) {
 }
 
 function tile(s) {
-  const todo = m.todoGroups.find((g) => g.n === s.n);
-  const crates = m.crates.filter((c) => c.structures.length === 1 && c.structures[0] === s.n);
+  const todo = todoOf(s);
+  const crates = builtBy(s);
   return h("a.tile", { href: `#/s/${s.n}`, class: `s${s.n} ${revisedSec(m.vision, s.slug) ? "rev" : ""}` },
     h("div.t", {}, h("span.chip", { class: `s${s.n}` }, `S${s.n}`), h("b", {}, s.short)),
     h("div.sub", {}, s.sub),
@@ -374,7 +377,7 @@ function tile(s) {
 function graphOf(crates) {
   const el = h("div.graph");
   crateGraph(el, {
-    crates: crates.map((c) => ({ id: c.name, label: c.short, deps: c.deps, structures: c.structures, count: c.gapCount, changed: Object.keys(changes?.files ?? {}).some((p) => p.startsWith(`${c.dir}/`)) })),
+    crates: crates.map((c) => ({ id: c.name, label: c.short, deps: c.deps, structures: c.structures, count: c.gapCount, changed: changedCrate(c) })),
     open: (id) => { location.hash = `#/crate/${id}`; },
   }).catch((e) => { el.replaceChildren(h("div.error", {}, `The crate graph didn't lay out: ${e.message}`)); });
   return el;
@@ -403,7 +406,7 @@ function milestoneTrack() {
   return h("div.track", {}, m.milestones.map((ms) => h("a.mrow", { href: "#/plan#milestones", class: ms.state },
     h("span.letter", {}, ms.letter),
     h("div", {}, h("b", {}, ms.name), " ", h("span.state", {}, ms.state), " ", chips(ms.structures), ms.letter === "A" ? h("span.tag", {}, "feature track") : null,
-      h("div.can", {}, inline(ms.can))))));
+      h("div.can", {}, inline(ms.can, { path: m.plan.path }))))));
 }
 
 function needsYou(el) {
@@ -421,11 +424,11 @@ function flightSummary(el) {
   const merged = live.prs.merged.filter((p) => isNew(Date.parse(p.mergedAt)));
   el.replaceChildren(
     h("h4", {}, h("a", { href: "#/inflight#prs" }, plural(live.prs.open.length, "open pull request"))),
-    h("ul.compact", {}, live.prs.open.map((p) => h("li", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", p.title, p.isDraft ? h("span.tag", {}, "draft") : null, " ", touched(p.files)))),
+    h("ul.compact", {}, live.prs.open.map((p) => h("li", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", prTitle(p), p.isDraft ? h("span.tag", {}, "draft") : null, " ", touched(p.files)))),
     h("h4", {}, h("a", { href: "#/inflight#brains" }, plural(live.brains.length, "brain"))),
     h("ul.compact", {}, live.brains.map(brainLine)),
     h("h4", {}, h("a", { href: "#/inflight#merged" }, `${plural(merged.length, "PR")} merged since you last looked`)),
-    h("ul.compact", {}, merged.slice(0, 6).map((p) => h("li.rev", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", p.title))),
+    h("ul.compact", {}, merged.slice(0, 6).map((p) => h("li.rev", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", prTitle(p)))),
     errorsOf(),
   );
 }
@@ -478,8 +481,8 @@ function structureStrips(doc) {
 }
 
 function strip(s) {
-  const todo = m.todoGroups.find((g) => g.n === s.n);
-  const crates = m.crates.filter((c) => c.structures.length === 1 && c.structures[0] === s.n);
+  const todo = todoOf(s);
+  const crates = builtBy(s);
   return h("div.strip", {},
     h("span", {}, "Built in ", crates.length === 0 ? "no crate yet" : crates.map(crateLink)),
     h("span", {}, "Milestones ", m.milestones.filter((ms) => ms.structures.includes(s.n)).map(msChip)),
@@ -517,7 +520,7 @@ function built() {
       h("div.t", {}, h("b", {}, c.short), " ", chips(c.structures)),
       h("p", {}, c.description),
       h("div.foot", {}, plural(c.files, "file"), c.gapCount > 0 ? h("span.warn", {}, ` · ${c.gapCount} not built or provisional`) : null,
-        Object.keys(changes?.files ?? {}).some((p) => p.startsWith(`${c.dir}/`)) ? h("span.revtag", {}, "changed") : null)))),
+        changedCrate(c) ? h("span.revtag", {}, "changed") : null)))),
   );
 }
 
@@ -532,7 +535,7 @@ function crateView(name) {
     h("p.meta", {}, "Depends on ", c.deps.length === 0 ? "no other crate" : m.crates.filter((x) => c.deps.includes(x.name)).map(crateLink), " · used by ", users.length === 0 ? "nothing" : users.map(crateLink),
       " · ", h("a", { href: `#/code/${c.dir}` }, `${plural(c.files, "file")} in the code layout`), " · ", h("a", { href: github(c.src), target: "_blank" }, c.src)),
     c.gaps.length === 0 ? null : h("div.card.gaps", { id: "gaps" }, h("h3", {}, "What its docs say isn't built, or is provisional"),
-      render(Object.assign(c.gaps.map((g) => ({ depth: 4, title: g.title, slug: `gap-${slug(g.title)}`, start: g.blocks[0].start, blocks: g.blocks })), { links: c.secs.links }), { ...ctx, shift: 0 })),
+      render(gapSecs(c, 4), { ...ctx, shift: 0 })),
     h("article", {}, render(c.secs, ctx)),
   );
 }
@@ -594,7 +597,7 @@ function gaps() {
     md(wrong, { path: m.todo.path, route: "gaps" }),
     h("section", { id: "crates" }, h("h2", {}, "Not built, by the crates' own docs"),
       m.crates.filter((c) => c.gaps.length > 0).map((c) => h("div.card", {}, h("h3", {}, crateLink(c), " ", chips(c.structures)),
-        render(Object.assign(c.gaps.map((g) => ({ depth: 4, title: g.title, slug: `${c.short}-${slug(g.title)}`, start: g.blocks[0].start, blocks: g.blocks })), { links: c.secs.links }),
+        render(gapSecs(c, 4),
           { route: `crate/${c.name}`, crate: c.name, path: c.src, changed: changedIn(c.src), lineOffset: c.docsStart - 1 })))),
     h("section", {}, h("h2", {}, "Open work, by structure"), gapSummary()[3]));
 }
@@ -619,7 +622,6 @@ function process() {
   const pick = (secs, titles) => Object.assign(secs.filter((s) => titles.includes(s.title)), { links: secs.links });
   return h("div.page", {},
     h("h1", {}, "Process"),
-    h("div.banner", {}, h("b", {}, "Open: "), "Max wants to redesign how the work runs, and to discuss the new process with him before it changes. It is next in his order once the cleanup is done. What the new process has to say, and what any process keeps, are in the plan's section below; how the work runs today is AGENTS.md, after it."),
     md(pick(m.plan.secs, ["How the work runs"]), { path: m.plan.path }),
     h("h2.from", {}, "Today, from ", h("a", { href: "#/doc/AGENTS.md" }, "AGENTS.md")),
     render(pick(asecs, ["What is settled", "How the work runs"]), { route: "doc/AGENTS.md", path: "AGENTS.md", changed: changedIn("AGENTS.md") }));
@@ -634,12 +636,12 @@ function inflight() {
       errorsOf(),
       h("h2", { id: "prs" }, "Open pull requests"),
       table(["PR", "Title", "Branch", "Touches", "Updated"], live.prs.open.map((p) => [
-        h("a", { href: p.url, target: "_blank" }, `#${p.number}`), [p.title, p.isDraft ? h("span.tag", {}, "draft") : null], h("code", {}, p.headRefName), touched(p.files), ago(Date.parse(p.updatedAt))])),
+        h("a", { href: p.url, target: "_blank" }, `#${p.number}`), [prTitle(p), p.isDraft ? h("span.tag", {}, "draft") : null], h("code", {}, p.headRefName), touched(p.files), ago(Date.parse(p.updatedAt))])),
       h("h2", { id: "brains" }, "Brains"),
       h("div.cards", {}, live.brains.map(brainCard)),
       h("h2", { id: "merged" }, "Merged recently"),
       table(["PR", "Title", "Touches", "Merged"], live.prs.merged.map((p) => Object.assign([
-        h("a", { href: p.url, target: "_blank" }, `#${p.number}`), p.title, touched(p.files), when(Date.parse(p.mergedAt))], { rev: isNew(Date.parse(p.mergedAt)) }))),
+        h("a", { href: p.url, target: "_blank" }, `#${p.number}`), prTitle(p), touched(p.files), when(Date.parse(p.mergedAt))], { rev: isNew(Date.parse(p.mergedAt)) }))),
       h("h2", { id: "clones" }, "Clones with work on them"),
       table(["Clone", "Branch", "Ahead, behind", "Uncommitted", "Last commit", "PR"], live.clones.map((c) => {
         const pr = prFor(c.branch);
@@ -670,10 +672,10 @@ function table(head, rows) {
 function structureView(arg) {
   const s = m.structures.find((x) => x.n === Number(arg));
   if (s === undefined) throw new Error(`There's no structure S${arg}.`);
-  const todo = m.todoGroups.find((g) => g.n === s.n);
-  const crates = m.crates.filter((c) => c.structures.length === 1 && c.structures[0] === s.n);
+  const todo = todoOf(s);
+  const crates = builtBy(s);
   const episodes = m.episodes.filter((e) => e.structures.includes(s.n));
-  const prs = (live?.prs.open ?? []).filter((p) => p.files.some((f) => crates.some((c) => f.startsWith(`${c.dir}/`))));
+  const touching = () => live.prs.open.filter((p) => p.files.some((f) => crates.some((c) => f.startsWith(`${c.dir}/`))));
   return h("div.page", {},
     h("div.shead", { class: `s${s.n}` }, h("h1", {}, h("span.chip", { class: `s${s.n}` }, `S${s.n}`), " ", s.short, h("small", {}, `: ${s.sub}`)), h("p", {}, inline(s.want ?? ""))),
     h("div.split", {},
@@ -682,13 +684,17 @@ function structureView(arg) {
         todo === undefined ? null : card("Open work", h("a", { href: `#/todo#${todo.slug}` }, "todo.md"), md(docSecs(m.todo, (x) => x === todo.sec).map((x) => ({ ...x, depth: 0 })), { path: m.todo.path })),
       ),
       h("div", {},
-        card("Milestones", null, h("div.track", {}, m.milestones.filter((ms) => ms.structures.includes(s.n)).map((ms) => h("a.mrow", { href: "#/plan#milestones", class: ms.state }, h("span.letter", {}, ms.letter), h("div", {}, h("b", {}, ms.name), " ", h("span.state", {}, ms.state), h("div.can", {}, inline(ms.status)))))),
+        card("Milestones", null, h("div.track", {}, m.milestones.filter((ms) => ms.structures.includes(s.n)).map((ms) => h("a.mrow", { href: "#/plan#milestones", class: ms.state }, h("span.letter", {}, ms.letter), h("div", {}, h("b", {}, ms.name), " ", h("span.state", {}, ms.state), h("div.can", {}, inline(ms.status, { path: m.plan.path })))))),
           h("p.note", {}, "Core and brain hold and run every structure's types.")),
         card("Built in", null, crates.length === 0 ? h("p.muted", {}, "No crate of its own yet.") : crates.map((c) => h("div.cratebox", {},
           h("h4", {}, crateLink(c), " ", h("small", {}, c.description)),
-          c.gaps.length === 0 ? null : render(Object.assign(c.gaps.map((g) => ({ depth: 5, title: g.title, slug: `${c.short}-${slug(g.title)}`, start: g.blocks[0].start, blocks: g.blocks })), { links: c.secs.links }), { route: `crate/${c.name}`, crate: c.name, path: c.src })))),
-        card("Episodes that show it's right", h("a", { href: "#/vision#how-to-tell-a-design-is-it" }, "vision.md"), episodes.map((e) => [h("h4", {}, e.title, " ", chips(e.structures)), h("ol.compact", {}, e.items.map((x) => h("li", { value: x.n }, inline(x.text))))])),
-        card("In flight", null, live === null ? h("p.muted", {}, "Reading…") : prs.length === 0 ? h("p.muted", {}, "No open PR touches its crates.") : h("ul.compact", {}, prs.map((p) => h("li", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", p.title)))),
+          c.gaps.length === 0 ? null : render(gapSecs(c, 5), { route: `crate/${c.name}`, crate: c.name, path: c.src })))),
+        card("Episodes that show it's right", h("a", { href: "#/vision#how-to-tell-a-design-is-it" }, "vision.md"), episodes.length === 0 ? h("p.muted", {}, `No episode in the vision names S${s.n}.`) : episodes.map((e) => [h("h4", {}, e.title, " ", chips(e.structures)), h("ol.compact", {}, e.items.map((x) => h("li", { value: x.n }, inline(x.text))))])),
+        card("In flight", null, livePart((el) => {
+          if (live === null) return el.replaceChildren(h("p.muted", {}, "Reading…"));
+          const prs = touching();
+          el.replaceChildren(prs.length === 0 ? h("p.muted", {}, "No open PR touches its crates.") : h("ul.compact", {}, prs.map((p) => h("li", {}, h("a", { href: p.url, target: "_blank" }, `#${p.number}`), " ", prTitle(p)))));
+        })),
       )));
 }
 

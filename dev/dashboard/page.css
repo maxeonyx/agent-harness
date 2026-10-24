@@ -205,7 +205,6 @@ a.term:hover { color: var(--link); text-decoration-color: var(--link); }
 a.item, code.item { text-decoration: underline dotted; text-underline-offset: 3px; }
 .peek { position: fixed; z-index: 30; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; box-shadow: 0 6px 24px rgb(0 0 0 / .18); font-size: 13px; pointer-events: none; }
 .peek .in-code { margin-top: 5px; color: var(--muted); font-size: 12.5px; }
-.banner { border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--line)); background: color-mix(in srgb, var(--warn) 9%, var(--card)); border-radius: 8px; padding: 8px 12px; margin: 8px 0 14px; max-width: 900px; }
 h2.from { color: var(--muted); font-size: 15px; border-top: 1px solid var(--line); padding-top: 14px; margin-top: 26px; }
 .drawer { position: fixed; z-index: 20; top: 0; right: 0; bottom: 0; width: min(760px, 100vw); background: var(--card); border-left: 1px solid var(--line); box-shadow: -8px 0 30px rgb(0 0 0 / .18); display: flex; flex-direction: column; }
 .drawer .dh { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 13px; }
@@ -232,7 +231,7 @@ table.terms td:last-child { width: 38%; }
 }
 @media (max-width: 900px) {
   main { padding: 12px 16px 48px; }
-  header { padding: 6px 16px 0; }
+  header { position: static; padding: 6px 16px 0; }
   header .main { display: none; }
   .overview, .docpage, .split, .codegrid { grid-template-columns: minmax(0, 1fr); }
   .overview .band:last-child { grid-column: auto; }
@@ -241,4 +240,5 @@ table.terms td:last-child { width: 38%; }
   .tiles { grid-template-columns: minmax(0, 1fr); }
   .md section.structure { margin-left: 0; padding-left: 10px; }
   .mapscroll { max-height: 70vh; }
+  .mermaid svg { min-width: 760px; }
 }
