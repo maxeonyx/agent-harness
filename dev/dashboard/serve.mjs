@@ -97,7 +97,7 @@ async function build(commit) {
   const crates = cratesOf(text);
   const docs = Object.fromEntries(Object.entries(text).filter(([p]) => p.endsWith(".md") && !p.startsWith("crates/")));
   return {
-    commit, time: Number(time) * 1000, subject, github, weekAgo: weekAgo.trim() || null,
+    rev: rev.replace(/^origin\//, ""), commit, time: Number(time) * 1000, subject, github, weekAgo: weekAgo.trim() || null,
     docs,
     crates: crates.map(({ modules, ...c }) => c),
     items: items(crates, text),

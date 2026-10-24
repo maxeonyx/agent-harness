@@ -230,7 +230,7 @@ function header() {
   el.replaceChildren(
     h("div.top", {},
       h("a.brand", { href: "#/" }, "agent-harness"),
-      h("a.main", { href: `https://github.com/${repo.github}/commit/${repo.commit}`, target: "_blank", title: repo.subject }, `main ${repo.commit.slice(0, 7)} · ${ago(repo.time)}`),
+      h("a.main", { href: `https://github.com/${repo.github}/commit/${repo.commit}`, target: "_blank", title: repo.subject }, `${repo.rev} ${repo.commit.slice(0, 7)} · ${ago(repo.time)}`),
       h("span.spacer"),
       h("a.stat.needs", { href: "#/#needs", title: "What only Max can do: the process discussion and his open questions" }, `Needs you ${needs}`, waiting.length > 0 ? ` · ${plural(waiting.length, "chat")} waiting` : ""),
       live === null ? h("span.stat.muted", {}, "Reading what's in flight…") : [
