@@ -35,11 +35,7 @@ Far beyond these: a query engine on the scale of his relational CRDT design, pro
 
 ## What is next
 
-In Max's order:
-
-1. A dashboard rebuild that renders these docs directly (and perhaps lets Max edit them), alongside what it generates from the code.
-2. Discuss a new process with Max (below).
-3. Continue milestone A's gaps, then E.
+In Max's order (18 Oct): finish the cleanup, which includes a dashboard rebuild that renders these docs directly ("and even allow me to edit?"), alongside what it generates from the code; then discuss a new process with him (below). After that, the recommendation is milestone A's gaps, then E.
 
 What is in flight at any moment (open PRs, running agents and brains) is not written here: the dashboard derives it.
 
@@ -51,11 +47,7 @@ The process as it stands is in [`AGENTS.md`](../AGENTS.md#how-the-work-runs). Ma
 
 What the new process has to say, in his words: "the process we are following (principles, constraints, agents, feedback loops, etc), the current plan, the current inflight work. How my feedback, my advocate's feedback, and designer output get taken into account, how engineers build toward the eventual state, how we keep our process sustainable, and more."
 
-Principles he has set that any process keeps:
-
-- **His technical asks are guesses; his feature asks are evidence.** "You should take my technical asks as guesses not decisions. You should take my feature asks as evidence of my wants, not requirements [...] If you're just agreeing with me, no point at all."
-- **No conflict of interest.** No agent verifies or merges its own work: "This is an important foundation of the ongoing process - don't allow conflict of interest".
-- **Delete what is superseded.** Integration "leave[s] NOTHING half done", and deletes what it replaces.
+Any process keeps what [`AGENTS.md`](../AGENTS.md#what-is-settled) lists as settled, and how he wants his asks taken: "You should take my technical asks as guesses not decisions. You should take my feature asks as evidence of my wants, not requirements [...] If you're just agreeing with me, no point at all."
 
 ## Questions only Max can answer
 

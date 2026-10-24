@@ -15,16 +15,16 @@ The repo was reset on 2026-10-16 (NZT). The earlier attempt is the unconnected t
 ## What is settled
 
 - The full vision has many aspects that interact pairwise, so it is built up incrementally: prototype a part against only a few of the other aspects, accept imperfect products, integrate, and repeat until the whole behaves well along every dimension. (High confidence.)
-- No agent verifies or merges its own work: Max, "don't allow conflict of interest". (High confidence; he called it "an important foundation of the ongoing process".)
+- No agent verifies its own work: another agent does, with that as its task. Max: "it would need an engineer with *that as its task* otherwise it's a conflict of interest. This is an important foundation of the ongoing process - don't allow conflict of interest." (High confidence.)
 - No permission prompts in the harness. An environment is defined with its permissions; extending them means changing that definition, possibly by another agent. (High confidence; he calls prompts a bad abstraction.)
 - No tests in the repo except truly black-box end-to-end scenarios Max can run and watch as a demonstration. Otherwise agents test manually by using the harness. (High confidence.)
-- The goal is foundational software as well as Max's own harness: it covers all the essential complexity and relentlessly minimises everything beyond it, across the whole vertical stack. (High confidence; rewriting down to the machine code is a far stretch goal.)
+- The goal is foundational software as well as Max's own harness: it covers all the essential complexity and relentlessly minimises everything beyond it, across the whole vertical stack. (High confidence.)
 
 ## How the work runs
 
 The process is the harness's own agent model, run by hand on Claude Code until the harness can run it; then the work moves onto the harness.
 
-Max wants to redesign this process, and to discuss it with him before it changes; his critique is in [`docs/plan.md`](docs/plan.md#how-the-work-runs). Until then it runs as below.
+Until the redesign in [`docs/plan.md`](docs/plan.md#how-the-work-runs), it runs as below.
 
 - **Tasks and scopes.** Each piece of work is a task given to one agent, ending in a result: its last message, saying what the parent needs to know. A parent launches a scope of tasks and makes no further decision until every result is in. A task may add siblings to its own scope.
 - **Roles** (`.claude/agents/`). The orchestrator is the session Max starts, at medium effort or lower; it holds the direction and launches every scope. It also defends the process: forward progress on every dimension and backward progress on none, mistakes undone, and old things cleaned up as new ones replace them. A `designer` (xhigh) decides a model; an `engineer` (medium) builds. Only the orchestrator launches designers, because design at high effort everywhere burns Max's usage before he gets what he wants; the exception is a designer starting one that hasn't seen its design, for the independent review the design process asks for.
