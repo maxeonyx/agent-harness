@@ -56,32 +56,32 @@
 //! itself, and the web limb runs inside the provider's responses.
 //!
 //! ```mermaid
-//! flowchart LR
+//! flowchart TB
 //!   subgraph tab["Each of Max's tabs, on the PC or the phone"]
 //!     page["The page, running harness-face-tab as wasm<br/>its own records in IndexedDB"]
 //!   end
-//!   subgraph brain["harness-brain: one process"]
+//!   subgraph brain["harness-brain, one process"]
 //!     face["Face<br/>HTTPS and WebSockets"]
 //!     fold["Decider<br/>folds every replica's records"]
 //!     todo["To-do list<br/>requests, calls, scopes"]
-//!     roles["Roles limb<br/>on a thread"]
+//!     roles["Roles limb, on a thread"]
 //!   end
 //!   db[("The brain's SQLite file<br/>records and values")]
 //!   subgraph limbs["Plugin limbs: harness-limb-KIND serve, a process each"]
 //!     ws["workspace, one per directory<br/>shells and files"]
 //!     other["user, browser, builds"]
-//!     ldb[("Each limb's state directory<br/>lock, socket, its own SQLite records")]
+//!     ldb[("Each limb's state directory<br/>lock, socket, SQLite records")]
 //!   end
 //!   api["Anthropic<br/>Messages API, speech-to-text"]
-//!   page <-->|"/link?replica=ID: records up; rows and live progress down"| face
-//!   face <-->|"records in; the folded state out"| fold
-//!   face -.->|"value bytes, on a connection of its own"| db
+//!   page <-->|"/link WebSocket: records up; rows, live progress down"| face
+//!   face <-->|"records in; folded state out"| fold
+//!   face -.->|value bytes| db
 //!   fold <--> db
-//!   fold --> todo
 //!   roles <-->|channel| fold
-//!   todo <-->|"harness-limb-KIND attach: its stdin and stdout"| limbs
-//!   todo -->|"requests, each on a socket of its own"| api
-//!   face -->|"dictation, relayed"| api
+//!   fold --> todo
+//!   todo <-->|"attach: stdin and stdout"| limbs
+//!   todo -->|"requests, a socket each"| api
+//!   face -->|dictation| api
 //! ```
 
 /// Print a line to stdout, dropping it once nothing reads it: `println!`
