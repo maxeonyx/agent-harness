@@ -20,6 +20,8 @@ flowchart LR
   D --> E["E. It runs his week<br/>S6, S3<br/>later"]
   E --> F["F. Work<br/>federation<br/>later"]
   A["A. Home daily driver<br/>feature track<br/>building"] -.-> E
+  classDef done fill:#dcefe0,stroke:#8fbf98,color:#55705c
+  class B,C,D done
 ```
 
 | Milestone | What Max can do | Status |
@@ -35,9 +37,9 @@ Far beyond these: a query engine on the scale of his relational CRDT design, pro
 
 ## What is next
 
-In Max's order (18 Oct): finish the cleanup, which includes a dashboard rebuild that renders these docs directly ("and even allow me to edit?"), alongside what it generates from the code; then discuss a new process with him (below). After that, the recommendation is milestone A's gaps, then E.
+In Max's order (18 Oct): finish the cleanup, then discuss a new process with him (below). After that, the recommendation is milestone A's gaps, then E.
 
-What is in flight at any moment (open PRs, running agents and brains) is not written here: the dashboard derives it.
+What is in flight at any moment (open PRs, running brains and the clones with work on them) is not written here: the dashboard (`dev/dashboard`) derives it.
 
 ## How the work runs
 
@@ -51,9 +53,10 @@ Any process keeps what [`AGENTS.md`](../AGENTS.md#what-is-settled) lists as sett
 
 ## Questions only Max can answer
 
-Most of the design questions raised so far are answered, and the answers are in the vision's "Settled" lines. These are open, each with a recommendation he can accept or reject:
+Most of the design questions raised so far are answered, and the answers are in the vision's "Settled" lines. These are open; each but the first has a recommendation he can accept or reject:
 
-- **Unpausing.** Pause stops new model requests, holds a response's tool calls until play, and holds a finished tool's result (Max, 18 Oct). Open: how he resumes ("How do I unpause? Okay, I didn't think about that. Lol."), and whether pause and play share one control. Recommendation: one pause/play toggle on the node, with Stop as a separate control.
+- **The new process.** Next in his order, once the cleanup is done: [how the work runs](#how-the-work-runs) is his to redesign, in a discussion with him first.
+- **Unpausing.** Pause stops new model requests, holds a response's tool calls until play, and holds a finished tool's result (Max, 18 Oct). It gets a button of its own, and the MVP doesn't need it. Open: how he resumes ("How do I unpause? Okay, I didn't think about that. Lol."), whether pause and play share one control, and whether his words sent to a paused task resume it, as they do today, or wait until he resumes it. Recommendation: one pause/play toggle on the node, with Stop as a separate control.
 - **What the harness says to an agent.** Today only Max's own words are user messages in his name; everything the harness tells an agent (the time, a notice, a compaction) is user-role text marked `[harness]`. The alternative is a separate system channel in the conversation. Recommendation: keep `[harness]` text until a framing problem is measured, as the fork-framing spike did for mandates.
 - **Spawn: blocking or not.** Today a parent that spawns makes no further decision until every result is in, and Max reaches a waiting parent through an aside. The alternative is background scopes: the parent carries on and is told when results arrive. Recommendation: keep blocking spawns, and add background scopes when an agent facing Max (the orchestrator) needs to keep talking while its children work.
 - **Processes an agent leaves running** (a dev server). Today a task can't end with background work running unless it hands that work to its owner or to Max, and a task handed to Max dies at its tool timeout. The options: the work becomes Max's obligation, with a node on the map he can stop; or it gets a lease the agent renews. Recommendation: a node on the map, owned by Max, since he is the one who will use the server.

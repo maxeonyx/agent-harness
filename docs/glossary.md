@@ -1,6 +1,6 @@
 # Glossary
 
-The words the vision, the plan and Max use. Where the code names a thing differently, the last column says so; the difference is the vision's naming waiting to reach the code, unless the row says otherwise.
+The words the vision, the plan and Max use. Where the code names a thing differently, the last column says so; the difference is the vision's naming waiting to reach the code, unless the row says otherwise. A cell starting `Differs:`, `Partly:` or `Not built` is a gap, and the dashboard lists it.
 
 ## The running system
 
@@ -10,7 +10,7 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Limb | A process that gives agents their tools and the context for using them: a shell and files in a directory, the web, a browser, Max. It outlives a brain restart. | `environment::Limb`; `crates/limb*` |
 | Face | What Max sees and acts through: the page, on the PC or the phone. Each tab is a replica. | `crates/face-web`, `crates/face-tab` |
 | Domain | A sphere of Max's obligations (home, work) with one attention: its own brain, queue, priority document and data. | Not built. |
-| Environment | What an agent can do and know: its limbs, plus its model and effort. A role is one way of naming an environment, and roles are to be "subsumed by limbs". | `environment::Environment` is a role (`orchestrator`, `designer`), with a role prompt. Its `places` are the kinds of workspace slot it needs, not replicas. |
+| Environment | What an agent can do and know: its limbs, plus its model and effort. A role is one way of naming an environment, and roles are to be "subsumed by limbs". | Differs: `environment::Environment` is a role (`orchestrator`, `designer`), with a role prompt. Its `places` are the kinds of workspace slot it needs, not replicas. |
 | Build | One compiled version of the harness, named by the hash of its executable. A supervisor starts a new build beside the old and rolls back if it fails. | `build::BuildId`, `crates/limb-builds` |
 | Program | Everything a session's behaviour depends on that can change under it: how its records fold, its policy, how its requests are written. No I/O, so it can later load as WASM. | `crates/program` |
 
@@ -24,13 +24,13 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Value | Immutable bytes named by their hash: a system prompt, a tool result, a pasted image. Facts name values. | `id::ValueId`, `value::Bytes` |
 | View | Rows derived from records, such as the task tree a tab shows. Everything a person or an agent sees is a view. | `state::State` and its methods; the face's `/view` |
 | Fold | Reading records in order to build the current state. | `schema::Harness` |
-| Durability | How long a kind of fact is kept: never, until processed, current state only, for a context or session, or forever. | `substrate::Durability`: only `Latest` (current state only) and `Kept` (forever); never-stored data is `Live`. |
+| Durability | How long a kind of fact is kept: never, until processed, current state only, for a context or session, or forever. | Partly: `substrate::Durability` has only `Latest` (current state only) and `Kept` (forever); never-stored data is `Live`. |
 
 ## Agents and work
 
 | Term | Meaning | In code |
 |---|---|---|
-| Task | Anything asynchronous with one owner: a process, a request, a tool call, an agent, a chat. Everything that runs is a task in one tree. | `task::Task` is one agent working toward a result. Requests and calls have their own types (below). |
+| Task | Anything asynchronous with one owner: a process, a request, a tool call, an agent, a chat. Everything that runs is a task in one tree. | Differs: `task::Task` is one agent working toward a result. Requests and calls have their own types (below). |
 | Agent | A model working in a loop with its environment toward a result. | `task::Task` |
 | Chat | An agent Max is in the environment of: user-facing. It waits on him whenever its turn ends, and only he says it is done. | A `task::Task` with Max as a limb; `state::Waiting::Max` |
 | Request | One call to the model. | `model_call::ModelCall` |
