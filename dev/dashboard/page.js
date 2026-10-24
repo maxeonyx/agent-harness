@@ -232,7 +232,7 @@ function header() {
       h("a.stat.needs", { href: "#/#needs", title: "What only Max can do: the process discussion and his open questions" }, `Needs you ${needs}`, waiting.length > 0 ? ` · ${plural(waiting.length, "chat")} waiting` : ""),
       live === null ? h("span.stat.muted", {}, "Reading what's in flight…") : [
         h("a.stat", { href: "#/inflight#brains", title: brains.map((b) => `${b.name} :${b.port} ${b.commit?.slice(0, 7) ?? "?"}${b.behind ? `, ${b.behind} behind main` : ""}`).join("\n") }, `${plural(brains.length, "brain")}${behind > 0 ? ` · ${behind} behind main` : ""}`),
-        h("a.stat", { href: "#/inflight#prs" }, `${plural(open.length, "open PR")}`),
+        h("a.stat", { href: "#/inflight#prs" }, live.errors.some((e) => e.source === "GitHub") ? "PRs unknown" : plural(open.length, "open PR")),
         live.errors.length > 0 ? h("a.stat.bad", { href: "#/inflight", title: live.errors.map((e) => `${e.source}: ${e.message}`).join("\n") }, `${plural(live.errors.length, "source")} failed`) : null,
       ],
       changed === null ? null : h("span.stat.rev-key", { title: "Marked in the page with a bar like this one. The baseline is kept in this browser." },

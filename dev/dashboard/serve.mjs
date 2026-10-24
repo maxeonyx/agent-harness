@@ -337,7 +337,8 @@ function view(port) {
       });
     });
     req.on("timeout", () => req.destroy(new Error(`/view on ${port} timed out`)));
-    req.on("error", reject);
+    // Connecting to localhost can fail on both ::1 and 127.0.0.1: an AggregateError with no message of its own.
+    req.on("error", (e) => reject(e.message === "" ? new Error(`/view on ${port}: ${e.errors?.[0]?.message ?? e.code ?? "failed"}`) : e));
   });
 }
 
