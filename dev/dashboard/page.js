@@ -222,14 +222,14 @@ function header() {
   const waiting = brains.flatMap((b) => b.waiting ?? []);
   const behind = brains.filter((b) => (b.behind ?? 0) > 0).length;
   const open = live?.prs.open ?? [];
-  const needs = 1 + m.questions.length;
+  const needs = m.questions.length;
   const changed = changes === null ? null : changes.unknown ? "baseline not in this clone" : `${plural(changes.commits.length, "commit")} since ${when(seen.baseAt)}`;
   el.replaceChildren(
     h("div.top", {},
       h("a.brand", { href: "#/" }, "agent-harness"),
       h("a.main", { href: `https://github.com/${repo.github}/commit/${repo.commit}`, target: "_blank", title: repo.subject }, `${repo.rev} ${repo.commit.slice(0, 7)} · ${ago(repo.time)}`),
       h("span.spacer"),
-      h("a.stat.needs", { href: "#/#needs", title: "What only Max can do: the process discussion and his open questions" }, `Needs you ${needs}`, waiting.length > 0 ? ` · ${plural(waiting.length, "chat")} waiting` : ""),
+      h("a.stat.needs", { href: "#/#needs", title: "What only Max can do: his open questions" }, `Needs you ${needs}`, waiting.length > 0 ? ` · ${plural(waiting.length, "chat")} waiting` : ""),
       live === null ? h("span.stat.muted", {}, "Reading what's in flight…") : [
         h("a.stat", { href: "#/inflight#brains", title: brains.map((b) => `${b.name} :${b.port} ${b.commit?.slice(0, 7) ?? "?"}${b.behind ? `, ${b.behind} behind main` : ""}`).join("\n") }, `${plural(brains.length, "brain")}${behind > 0 ? ` · ${behind} behind main` : ""}`),
         h("a.stat", { href: "#/inflight#prs" }, live.errors.some((e) => e.source === "GitHub") ? "PRs unknown" : plural(open.length, "open PR")),
@@ -411,8 +411,7 @@ function milestoneTrack() {
 
 function needsYou(el) {
   el.replaceChildren(h("ol.needs", {},
-    h("li", {}, h("a", { href: "#/process" }, h("b", {}, "Discuss the new process")), " — next in his order, once the cleanup is done (", h("a", { href: "#/plan#what-is-next" }, "plan"), ")"),
-    m.questions.map((q) => h("li", {}, h("a", { href: "#/plan#questions-only-max-can-answer" }, h("b", {}, q)), " — an open question, with a recommendation"))),
+    m.questions.map((q) => h("li", {}, h("a", { href: "#/plan#questions-only-max-can-answer" }, h("b", {}, q)), " — an open question"))),
   live === null ? h("p.muted", {}, "Reading the brains for chats waiting on him…")
     : h("ul.compact.chats", {}, live.brains.filter((b) => (b.waiting ?? []).length > 0).map((b) => h("li", {},
       h("a", { href: `https://${location.hostname}:${b.port}/`, target: "_blank", title: b.waiting.map((w) => w.name ?? w.id).join("\n") }, `${plural(b.waiting.length, "chat")} waiting on him`), ` in the ${b.name} brain: `,

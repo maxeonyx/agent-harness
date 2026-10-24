@@ -16,6 +16,9 @@
 // TLS uses DIR/wildcard-local.{crt,key} (default ~/.config/dev-certs/shared-local).
 // Max's instance is the user unit harness-dashboard:
 //   systemctl --user cat harness-dashboard   # its WorkingDirectory is the clone it runs from
+// The docs shown are always origin's main, but this code runs from the clone's
+// working tree: after a change to dev/dashboard merges, `git pull` there and
+// restart the unit.
 import { execFile, spawn } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createServer, get } from "node:https";
