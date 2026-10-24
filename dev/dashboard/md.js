@@ -295,6 +295,7 @@ document.addEventListener("mouseover", (e) => {
   const below = r.bottom + 6;
   card.style.top = `${below + card.offsetHeight > innerHeight ? Math.max(8, r.top - card.offsetHeight - 6) : below}px`;
 });
+addEventListener("hashchange", () => { card.hidden = true; });
 document.addEventListener("mouseout", (e) => {
   if (e.target.closest?.(".term") !== null) card.hidden = true;
 });

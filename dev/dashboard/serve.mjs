@@ -182,7 +182,16 @@ function resolve(crate, segs, byIdent, text) {
   let line = at(file, def(segs[0]));
   if (line === null) {
     path = Object.values(crate.modules).find((p) => at(p, def(segs[0])) !== null);
-    if (path === undefined) return null;
+    if (path === undefined) {
+      // A name another crate defines and this module re-exports resolves there.
+      const via = text[file].match(new RegExp(`^[ \\t]*pub use (\\w+)::(?:\\{[^}]*\\b${segs[0]}\\b[^}]*\\}|(?:\\w+::)*${segs[0]}\\b)`, "m"));
+      if (via !== null && via[1] in byIdent && byIdent[via[1]] !== crate) return resolve(byIdent[via[1]], segs, byIdent, text);
+      // A name a macro defines, given alone on a line of its invocation (`id!(… DeliveryId)`).
+      const alone = new RegExp(`^[ \\t]*${segs[0]}[ \\t]*,?[ \\t]*$`, "m");
+      path = Object.values(crate.modules).find((p) => at(p, alone) !== null);
+      if (path === undefined) return null;
+      return { path, line: at(path, alone), code: extract(text[path], at(path, alone)) };
+    }
     line = at(path, def(segs[0]));
   }
   if (segs.length > 1) {

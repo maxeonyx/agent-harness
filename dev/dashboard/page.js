@@ -124,7 +124,8 @@ function model() {
 
   const byDir = Object.fromEntries(repo.crates.map((c) => [c.dir, c.name]));
   const crates = repo.crates.map((c) => {
-    const secs = sections(c.docs);
+    // Rustdoc's [`path`] links, with no target written, read as the path alone.
+    const secs = sections(c.docs.replace(/\[(`[^`\n]+`)\](?![(\[])/g, (all, code, at, src) => (src[at + all.length] === ":" && (at === 0 || src[at - 1] === "\n") ? all : code)));
     const gaps = [];
     for (const s of secs) {
       if (/not built|provisional|not covered/i.test(s.title)) { gaps.push({ title: s.title, blocks: s.blocks }); continue; }
@@ -254,7 +255,7 @@ function route() {
   const path = i < 0 ? raw : raw.slice(0, i);
   const anchor = i < 0 ? null : raw.slice(i + 1);
   const moved = path !== current;
-  if (moved) show(path);
+  if (moved) { document.querySelector("aside.drawer")?.remove(); show(path); }
   if (anchor !== null) requestAnimationFrame(() => target(anchor));
   else if (moved) scrollTo(0, 0);
 }
@@ -437,7 +438,7 @@ function brainLine(b) {
     ` · ${plural(working, "task")} working`, b.waiting.length > 0 ? h("span.warn", {}, ` · ${b.waiting.length} waiting on Max`) : null);
 }
 
-const errorsOf = () => (live.errors.length === 0 ? null : h("div.error", {}, live.errors.map((e) => h("div", {}, h("b", {}, e.source), ": ", e.message))));
+const errorsOf = () => (live.errors.length === 0 ? "" : h("div.error", {}, live.errors.map((e) => h("div", {}, h("b", {}, e.source), ": ", e.message))));
 
 // --- docs -------------------------------------------------------------------------
 
@@ -595,7 +596,7 @@ function gaps() {
       m.crates.filter((c) => c.gaps.length > 0).map((c) => h("div.card", {}, h("h3", {}, crateLink(c), " ", chips(c.structures)),
         render(Object.assign(c.gaps.map((g) => ({ depth: 4, title: g.title, slug: `${c.short}-${slug(g.title)}`, start: g.blocks[0].start, blocks: g.blocks })), { links: c.secs.links }),
           { route: `crate/${c.name}`, crate: c.name, path: c.src, changed: changedIn(c.src), lineOffset: c.docsStart - 1 })))),
-    h("section", {}, h("h2", {}, "Open work, by structure"), gapSummary().slice(2, 4)));
+    h("section", {}, h("h2", {}, "Open work, by structure"), gapSummary()[3]));
 }
 
 function termsView() {
