@@ -20,6 +20,8 @@ flowchart LR
   D --> E["E. It runs his week<br/>S6, S3<br/>later"]
   E --> F["F. Work<br/>federation<br/>later"]
   A["A. Home daily driver<br/>feature track<br/>building"] -.-> E
+  classDef done fill:#dcefe0,stroke:#8fbf98,color:#55705c
+  class B,C,D done
 ```
 
 | Milestone | What Max can do | Status |

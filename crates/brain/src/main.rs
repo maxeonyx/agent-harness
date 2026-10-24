@@ -57,7 +57,7 @@
 //!
 //! ```mermaid
 //! flowchart TB
-//!   subgraph tab["Each of Max's tabs, on the PC or the phone"]
+//!   subgraph tab["Max's tabs, PC or phone"]
 //!     page["The page, running harness-face-tab as wasm<br/>its own records in IndexedDB"]
 //!   end
 //!   subgraph brain["harness-brain, one process"]
