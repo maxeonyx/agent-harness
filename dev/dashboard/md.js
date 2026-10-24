@@ -54,7 +54,7 @@ const overlaps = (ranges, a, b) => ranges !== undefined && ranges.some(([x, y]) 
 // Render sections into an element. ctx: path (the repo path, for relative
 // links), crate (whose Rust paths these are), changed (line ranges changed
 // since Max last looked), shift (added to heading depths), lineOffset
-// (source line of the doc's first line), edit (an Edit link per doc).
+// (source line of the doc's first line).
 export function render(secs, ctx) {
   const root = document.createElement("div");
   root.className = "md";
@@ -118,7 +118,7 @@ export function inline(src, ctx = {}) {
   return span;
 }
 
-export function decorate(root, ctx) {
+function decorate(root, ctx) {
   links(root, ctx);
   codes(root, ctx);
   if (ctx.terms !== false) terms(root);

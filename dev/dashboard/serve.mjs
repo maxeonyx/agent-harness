@@ -15,7 +15,7 @@
 //
 // TLS uses DIR/wildcard-local.{crt,key} (default ~/.config/dev-certs/shared-local).
 // Max's instance is the user unit harness-dashboard:
-//   systemctl --user cat harness-dashboard   # its ExecStart names the clone it runs from
+//   systemctl --user cat harness-dashboard   # its WorkingDirectory is the clone it runs from
 import { execFile, spawn } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createServer, get } from "node:https";
@@ -81,6 +81,7 @@ async function blobs(commit) {
 const snapshots = new Map();
 function snapshot(commit) {
   if (!snapshots.has(commit)) {
+    for (const old of snapshots.keys()) snapshots.delete(old);
     snapshots.set(commit, build(commit).catch((e) => { snapshots.delete(commit); throw e; }));
   }
   return snapshots.get(commit);
@@ -354,13 +355,14 @@ async function brains(main) {
     try {
       const v = await view(b.port);
       const h = v.rows.harness.Harness;
-      const source = h.launch?.source ?? h.source;
-      const commit = source?.commit ?? null;
+      // Harness.source is the build's commit, with "+dirty" when it had uncommitted changes.
+      const source = h.source ?? "";
+      const commit = source.replace(/\+dirty$/, "") || null;
       const behind = commit === null ? null : await git("rev-list", "--count", `${commit}..${main}`).then((n) => Number(n), () => null);
       const tasks = Object.entries(v.rows).filter(([k]) => k.startsWith("task:")).map(([, r]) => r.Task);
       const waiting = new Set((v.rows.queue?.Queue ?? []).map((q) => q.task));
       return {
-        ...b, commit, dirty: source?.dirty ?? false, behind,
+        ...b, commit, dirty: source.endsWith("+dirty"), behind,
         waiting: tasks.filter((t) => waiting.has(t.id)).map((t) => ({ id: t.id, name: t.name, environment: t.environment })),
         working: tasks.filter((t) => !["done", "max"].includes(t.waiting?.kind)).map((t) => ({ id: t.id, name: t.name, environment: t.environment, kind: t.waiting?.kind ?? null })),
         tasks: tasks.length,
@@ -391,9 +393,18 @@ async function clones() {
   return out.filter((c) => c !== null);
 }
 
+// One gather serves every request for 20 s, including those that arrive while it runs.
 let live = null;
-async function liveState() {
-  if (live !== null && Date.now() - live.at < 20_000) return live.value;
+function liveState() {
+  if (live === null || Date.now() - live.at >= 20_000) {
+    const mine = { at: Date.now(), value: gather() };
+    mine.value.catch(() => { if (live === mine) live = null; });
+    live = mine;
+  }
+  return live.value;
+}
+
+async function gather() {
   const main = await head();
   const errors = [];
   const settle = (source, p, empty) => p.catch((e) => { errors.push({ source, message: e.message }); return empty; });
@@ -402,9 +413,7 @@ async function liveState() {
     settle("brains", brains(main), []),
     settle("clones", clones(), []),
   ]);
-  const value = { at: Date.now(), main, prs: pr, brains: br, clones: cl, errors };
-  live = { at: Date.now(), value };
-  return value;
+  return { at: Date.now(), main, prs: pr, brains: br, clones: cl, errors };
 }
 
 // --- serving -----------------------------------------------------------------
