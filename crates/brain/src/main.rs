@@ -49,6 +49,40 @@
 //! At launch the brain reads the models on offer from the provider once;
 //! a role's alias (`opus`) means the newest of its family, and a new model
 //! reaches the roles at the next launch.
+//!
+//! # Processes and seams
+//!
+//! What runs where, and what crosses each seam. The meta limb is the brain
+//! itself, and the web limb runs inside the provider's responses.
+//!
+//! ```mermaid
+//! flowchart LR
+//!   subgraph tab["Each of Max's tabs, on the PC or the phone"]
+//!     page["The page, running harness-face-tab as wasm<br/>its own records in IndexedDB"]
+//!   end
+//!   subgraph brain["harness-brain: one process"]
+//!     face["Face<br/>HTTPS and WebSockets"]
+//!     fold["Decider<br/>folds every replica's records"]
+//!     todo["To-do list<br/>requests, calls, scopes"]
+//!     roles["Roles limb<br/>on a thread"]
+//!   end
+//!   db[("The brain's SQLite file<br/>records and values")]
+//!   subgraph limbs["Plugin limbs: harness-limb-KIND serve, a process each"]
+//!     ws["workspace, one per directory<br/>shells and files"]
+//!     other["user, browser, builds"]
+//!     ldb[("Each limb's state directory<br/>lock, socket, its own SQLite records")]
+//!   end
+//!   api["Anthropic<br/>Messages API, speech-to-text"]
+//!   page <-->|"/link?replica=ID: records up; rows and live progress down"| face
+//!   face <-->|"records in; the folded state out"| fold
+//!   face -.->|"value bytes, on a connection of its own"| db
+//!   fold <--> db
+//!   fold --> todo
+//!   roles <-->|channel| fold
+//!   todo <-->|"harness-limb-KIND attach: its stdin and stdout"| limbs
+//!   todo -->|"requests, each on a socket of its own"| api
+//!   face -->|"dictation, relayed"| api
+//! ```
 
 /// Print a line to stdout, dropping it once nothing reads it: `println!`
 /// panics on a closed pipe, and losing the reader of the brain's output

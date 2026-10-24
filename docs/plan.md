@@ -35,9 +35,9 @@ Far beyond these: a query engine on the scale of his relational CRDT design, pro
 
 ## What is next
 
-In Max's order (18 Oct): finish the cleanup, which includes a dashboard rebuild that renders these docs directly ("and even allow me to edit?"), alongside what it generates from the code; then discuss a new process with him (below). After that, the recommendation is milestone A's gaps, then E.
+In Max's order (18 Oct): finish the cleanup, then discuss a new process with him (below). After that, the recommendation is milestone A's gaps, then E.
 
-What is in flight at any moment (open PRs, running agents and brains) is not written here: the dashboard derives it.
+What is in flight at any moment (open PRs, running brains and the clones with work on them) is not written here: the dashboard (`dev/dashboard`) derives it.
 
 ## How the work runs
 

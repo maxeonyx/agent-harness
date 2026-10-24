@@ -86,6 +86,8 @@ These are hypotheses, not rulings. Max: "I'm not ruling I'm suggesting, hypothes
 
 Three sentences tie the structures together. Everything that happens is a fact at a time and a replica. Everything that runs is a task in one tree. Every boundary is a parse.
 
+In code, `crates/core` holds every structure's types as one schema and `crates/brain` runs them; each structure below names its own crates.
+
 ```mermaid
 flowchart LR
   subgraph home["Home domain"]
@@ -124,6 +126,7 @@ Each arrow is a pair of one-way syncs of filtered replicas, and each filter is a
 - **Settled.** The substrate is its own crate, general in concept but carrying only what the harness uses, with a core that builds for `wasm32` so the page runs the same code. Views are hand-written for now ("handwritten now seems like a reasonable choice"), so an engine can replace them later. "Place" is called "replica".
 - **The want.** Two screens never disagree, nothing he types is lost, and the data discipline is one he can build other software on: "I want to see a beautiful software system built."
 - **You can tell by:** no type between processes is a message or a request, only facts, filters and views; a message's "sent" is derived; a refused click shows in the tab that made it; the database stops growing with clicks.
+- **In code.** `crates/substrate` and `crates/store`; the harness's facts are `fact::Fact`, in `crates/core`.
 
 ### S2. Tasks: one tree, every level
 
@@ -144,6 +147,7 @@ flowchart TD
 - **Settled.** Every stop gets a tidy-up turn; a drain waits up to 5 minutes. Containment is by marks on processes, with cgroups later. Limbs outlive a brain restart.
 - **The want.** Nothing runs that nobody owns, and he can walk away trusting nothing is left burning.
 - **You can tell by:** a request can be cancelled before its first byte; no process outlives its owner in the process table; a stop reaches the leaves and comes back within the deadline.
+- **In code.** `crates/runtime`, the process half of cancellation; the tree is `task::Task`, in `crates/core`.
 
 ### S3. Contexts: what an agent was told, as values
 
@@ -152,6 +156,7 @@ flowchart TD
 - **Settled.** Agents use the 1-hour cache. An agent forks for steps and compacts on real task switches, with a warning as it nears the limit.
 - **The want.** Cost (forks and compaction that hit the cache) and trust: an agent knows what it was told and when. The gist's testimony: "I could not distinguish 'this was always here' from 'this appeared three turns ago'".
 - **You can tell by:** every block on the page names its source; a fork's first request reads its parent's cache; an edited `AGENTS.md` reaches a running agent as a notice with a turn index.
+- **In code.** `crates/program`, what each request renders; a context is `context::Entry`, in `crates/core`.
 
 ### S4. Environments: limbs, and nothing else
 
@@ -162,6 +167,7 @@ flowchart TD
 - **Settled.** Extension is a JS sandbox limb when something needs scripting, and WASM modules later; programs as data is a long-term direction, not now. Asks are not a separate mechanism: an agent facing Max ends its turn with what it needs. The browser limb drives Max's own browser on his Windows desktop ("ideally"), which needs the SSH limb.
 - **The want.** Prevention by construction rather than by checking, and context that comes with the environment.
 - **You can tell by:** the brain opens no file but its database; a new kind of limb needs no change to the brain; an agent can't reach `~/.claude/.credentials.json` unless its environment holds it.
+- **In code.** `crates/limb`, `crates/limb-workspace`, `crates/limb-browser` and `crates/script`; an environment is `environment::Environment`, in `crates/core`.
 
 ### S5. Replicas and versions
 
@@ -170,6 +176,7 @@ flowchart TD
 - **Settled.** Sessions move to the new build at once. Rebooting is the operator's job (a systemd user service).
 - **The want.** Memory that scales with active work, running anywhere, and upgrades that lose no session.
 - **You can tell by:** an agent changes the harness and relaunches it, its own session carries on, and its children start on the new build; a broken build bricks nothing.
+- **In code.** `crates/limb-builds`, which relaunches the brain and rolls back; a build is `build::BuildId`, in `crates/core`.
 
 ### S6. Max: a participant, his attention and his domains
 
@@ -179,6 +186,7 @@ flowchart TD
 - **Settled.** One brain per domain. Work can see home; home and the phone never see work.
 - **The want.** Inversion of control over his attention, with the rules set "in a more reflective headspace", and "an agent can't give me an obligation without my say-so."
 - **You can tell by:** the scheduler puts first the thing that blocks the most and says why; he disagrees, and the order changes while he types, losing nothing.
+- **In code.** `crates/face-web` and `crates/face-tab`; his words are `draft::Draft` and his attention `attention::Ranking`, in `crates/core`.
 
 ## How to tell a design is it
 
