@@ -1,4 +1,4 @@
-import { $ } from "./base.js";
+import { $, fail } from "./base.js";
 import { boot, tab } from "./tab.js";
 import { byId, takeView, view } from "./map.js";
 import "./camera.js";
@@ -22,6 +22,6 @@ export async function viewArrived(fresh) {
   await refresh();
   if (!openPending() && !openId && location.hash.length > 1 && (byId[location.hash.slice(1)] || location.hash === `#${NEW}`) && !moving.started) { moving.started = true; route(); }
 }
-boot().catch((e) => { $("#link").className = "down"; $("#link").title = `this tab could not start: ${e}`; console.error(e); });
+boot().catch((e) => { $("#link").className = "down"; $("#link").title = `this tab could not start: ${e}`; fail("starting this tab", e); });
 // Waits grow between events: the hover's words, and the open card's.
 setInterval(() => { if (view) { if (tipFor) fillTip(); if (openId) renderPanel(); } }, 1000);

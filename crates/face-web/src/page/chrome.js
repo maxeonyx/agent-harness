@@ -1,4 +1,4 @@
-import { $, clock, el, icon } from "./base.js";
+import { $, clock, el, fail, icon } from "./base.js";
 import { act, digest } from "./tab.js";
 import { byId, view } from "./map.js";
 import { fit, setNewPoint, setUsageRight } from "./camera.js";
@@ -12,7 +12,7 @@ import { startFind } from "./newchat.js";
 // forward with that chat open. The browser asks his permission at his first
 // touch of the page.
 let notified = null;
-const worker = navigator.serviceWorker?.register("/page/sw.js").catch((e) => console.warn(`no notifications: ${e}`));
+const worker = navigator.serviceWorker?.register("/page/sw.js").catch((e) => fail("registering the service worker that shows notifications", e));
 navigator.serviceWorker?.addEventListener("message", (e) => { if (byId[e.data?.open]) go(e.data.open); });
 navigator.serviceWorker?.startMessages();
 addEventListener("pointerdown", () => { if (window.Notification?.permission === "default") Notification.requestPermission(); }, { once: true });
@@ -24,7 +24,7 @@ export async function notify(queue) {
   for (const q of queue) {
     const t = byId[q.task];
     if (before.has(q.task) || !t || !reg) continue;
-    reg.showNotification(t.name, { body: q.why || "Your turn", tag: t.id, data: t.id }).catch((e) => console.warn(`not notified: ${e}`));
+    reg.showNotification(t.name, { body: q.why || "Your turn", tag: t.id, data: t.id }).catch((e) => fail(`notifying that ${t.name} waits on Max`, e));
   }
 }
 

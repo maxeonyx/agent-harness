@@ -1,4 +1,4 @@
-import { $, el, icon, kTokens, panel, parse } from "./base.js";
+import { $, el, fail, icon, kTokens, panel, parse } from "./base.js";
 import { act, can, digest, tab } from "./tab.js";
 import { byId, isDone, view } from "./map.js";
 import { aside, NEW, resume } from "./card.js";
@@ -121,7 +121,7 @@ const unborn = (key) => key === NEW || key.startsWith("new:");
 const keptHere = (key) => ({ text: "", attached: [], ...parse(sessionStorage.getItem(`draft:${key}`) || "{}") });
 const keepHere = (key, change) => {
   try { sessionStorage.setItem(`draft:${key}`, JSON.stringify({ ...keptHere(key), ...change })); return null; }
-  catch { return "too big to keep in this tab"; }
+  catch (e) { fail(`keeping the draft ${key} in this tab`, e); return "too big to keep in this tab"; }
 };
 export const drafts = {
   get: (session) => unborn(session) ? keptHere(session).text : contentOf(draftOf(session) || `new:${session}`).text,
@@ -589,7 +589,7 @@ async function dictate(sample) {
       rate = ctx.sampleRate;
       mic = { stream, ctx, node };
     }
-  } catch (e) { return say(`no microphone: ${e.message}`, true); }
+  } catch (e) { fail("opening the microphone", e); return say(`no microphone: ${e.message}`, true); }
   // Dictation goes in at the caret, a space from the word before it.
   let at = box.selectionEnd;
   if (at > 0 && !/\s/.test(box.value[at - 1])) { box.setRangeText(" ", at, at, "end"); at += 1; prev = box.value; }
@@ -604,7 +604,7 @@ async function dictate(sample) {
     const d = JSON.parse(m.data);
     if (d.listening) say(sample ? "dictating the sample" : "listening");
     if (d.edits && dictation === l) applyEdits(d.edits);
-    if (d.error) say(d.error, true);
+    if (d.error) { fail("dictating", d.error); say(d.error, true); }
     if (d.final) finishDictation(l);
   };
   ws.onclose = () => finishDictation(l);
