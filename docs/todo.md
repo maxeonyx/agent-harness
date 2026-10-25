@@ -95,6 +95,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **`/view` has no running-tasks field.**
 - **Records nobody read** show only on stderr.
 - **Chats that start alike look alike.** `act chat` takes no name, so a chat is named after the first words of its mandate (`name_from` in `brain/examples/device/mod.rs`, as the page's `nameFrom` does). In a home-life pilot on the home brain on 25 Oct, five of the six chats started began "Max is away until this evening" and looked identical in the chat list. A chat can be renamed (`TaskEvent::Renamed`), but not through `act`.
+- **No generated titles.** A chat is named after its mandate's first words, so old chats are all "Hi". Max expected a title generator: "I guess we just didn't make that yet."
 - **A chat started from outside has nothing above it.** `act chat` starts only roots, and nothing moves a chat under another, so the pilot's chats stood alone where Max wanted one chat above them "to orchestrate and manage" (the vision's home-life line). A chat can start children; whether Max can talk to them directly is the continuing user-facing child, above.
 - **Rough edges.** The TLS listener polls every 20 ms (`face-web/src/lib.rs:134`); the token sum is written out in four places; `Wiring` is full of `Option`s.
 
