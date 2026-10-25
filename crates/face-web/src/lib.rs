@@ -67,10 +67,10 @@
 //!   end
 //!   Note over face,api: a session the endpoint drops is replaced, up to 3 times<br/>Transcript::keep holds the text so far
 //!   page->>face: Max stops<br/>stopDictation
+//!   Note over page: the microphone is released at once<br/>stopDictation: releaseMic
 //!   face->>api: no more audio<br/>CloseStream
 //!   api-->>face: the final text<br/>TranscriptEndpoint
-//!   face-->>page: final, then the socket closes
-//!   Note over page: the microphone is released<br/>finishDictation
+//!   face-->>page: final, and the page closes the socket<br/>finishDictation
 //!   page->>brain: the text is saved as a draft, 600 ms after the last change<br/>Draft Text record: compose.js edit, save. A chat not yet started keeps it in the tab instead
 //! ```
 
