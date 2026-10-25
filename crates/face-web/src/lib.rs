@@ -43,7 +43,7 @@
 //!
 //! # Dictation
 //!
-//! One press of the microphone. The page streams PCM to the face, which relays it with the login's token, since the page must never hold it. Nothing reaches the brain from the relay: the transcript lands in the box as typed text does, and is saved as the draft like it. Sending while dictating stops the dictation first, waits for its final text (`dictation.then`), then sends: drawn in the brain's "A real turn".
+//! One press of the microphone. The page streams PCM to the face, which relays it with the login's token, since the page must never hold it. Nothing reaches the brain from the relay: the transcript lands in the box as typed text does, and is saved as the draft like it. Pressing send while dictating stops the dictation and stages the text; a second press sends it once the final text is in (`dictation.then`, `finishDictation`). The send itself is drawn in the brain's "A real turn".
 //!
 //! ```mermaid
 //! ---
@@ -63,7 +63,7 @@
 //!     face->>api: the same chunk
 //!     api-->>face: the whole session's text so far<br/>TranscriptText
 //!     face-->>page: what changed, as edits: at, cut, put<br/>Transcript::session, a word-level diff
-//!     Note over page: the edits go in at the caret, keeping Max's own edits<br/>applyEdits
+//!     Note over page: the edits go in where dictation began, at the caret, keeping Max's own edits<br/>applyEdits
 //!   end
 //!   Note over face,api: a session the endpoint drops is replaced, up to 3 times<br/>Transcript::keep holds the text so far
 //!   page->>face: Max stops<br/>stopDictation
