@@ -69,7 +69,7 @@ What Max does with the harness when it is finished, grouped by the part of his d
 ### A harness that keeps going and improves itself
 
 - **Restart loses nothing.** Ctrl-C drains and exits; a second Ctrl-C kills. On restart every agent carries on, with no input from Max.
-- **A long outage holds the work.** After one, the root tasks are held instead, and his first task is probably deciding what continues. He thinks that "makes sense", and that it is "not core": it "can be left for later".
+- **A long outage holds the work.** After one, the root tasks are held instead, and his first task is probably deciding what continues. He thinks holding "makes sense", but that it is "not core" and "can be left for later".
 - **Backups by default.** It "might be nice" for every brain he runs to hold all the data, synced in the background, so each backs up the others without confusing their records with its own. How that squares with a domain's data staying on its own machines is open.
 - **It upgrades itself.** An agent edits the harness, builds it and relaunches it while its own session carries on: "While we want live editing, we don't want live bricking." A broken build bricks nothing.
 - **Easy to run as a service**, reachable from his phone anywhere, and installable on Android.
