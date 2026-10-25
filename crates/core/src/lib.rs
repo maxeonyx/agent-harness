@@ -223,7 +223,7 @@
 //!   Thinking -->|"the request did not finish a turn:<br/>Ended: Failed, Limited, Cut, Lost or another Stop<br/>Task::drained"| Ready
 //!   Thinking -->|"the turn ended, with words or news already waiting:<br/>Task::turn_ended"| Ready
 //!   Thinking -->|"the turn ended in a user-facing task:<br/>Task::turn_ended"| AwaitingMax
-//!   Thinking -->|"the turn ended in a standing task,<br/>or with a background call running:<br/>Task::turn_ended"| Listening
+//!   Thinking -->|"the turn ended in a standing task,<br/>or in an autonomous one with a background call running:<br/>Task::turn_ended"| Listening
 //!   Thinking -->|"the turn ended after Max parked it:<br/>Task::turn_ended, after Prompt::Park"| Parked
 //!   AwaitingMax -->|"Max's words or other news arrive:<br/>Task::woken, woken_by"| Ready
 //!   Listening -->|"words, news, or a background call settling:<br/>Task::woken, woken_by"| Ready
