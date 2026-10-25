@@ -40,6 +40,39 @@
 //! Transport is std's TCP, rustls, one static page and the tab's wasm,
 //! built from `harness-face-tab` by this crate's build script; the
 //! sockets are WebSockets (tungstenite, without its TLS).
+//!
+//! # Dictation
+//!
+//! One press of the microphone. The page streams PCM to the face, which relays it with the login's token, since the page must never hold it. Nothing reaches the brain from the relay: the transcript lands in the box as typed text does, and is saved as the draft like it. Pressing send while dictating stops the dictation and stages the text; a second press sends it once the final text is in (`dictation.then`, `finishDictation`). The send itself is drawn in the brain's "A real turn".
+//!
+//! ```mermaid
+//! ---
+//! title: "Dictation: one press of the microphone"
+//! ---
+//! sequenceDiagram
+//!   participant page as Max's page
+//!   participant face as Face
+//!   participant api as Anthropic voice_stream
+//!   participant brain as The brain
+//!   page->>page: Max presses the microphone: the page makes 16-bit PCM<br/>compose.js dictate: getUserMedia, an AudioWorklet
+//!   page->>face: open the dictation socket<br/>wss /dictation?rate=Hz: Face::dictate
+//!   face->>api: open the speech stream with the login's token, and keep it alive<br/>Dictation::relay, session, connect: wss, KeepAlive
+//!   face-->>page: listening
+//!   loop until Max stops
+//!     page->>face: a tenth of a second of PCM
+//!     face->>api: the same chunk
+//!     api-->>face: the whole session's text so far<br/>TranscriptText
+//!     face-->>page: what changed, as edits: at, cut, put<br/>Transcript::session, a word-level diff
+//!     Note over page: the edits go in where dictation began, at the caret, keeping Max's own edits<br/>applyEdits
+//!   end
+//!   Note over face,api: a session the endpoint drops is replaced, up to 3 times<br/>Transcript::keep holds the text so far
+//!   page->>face: Max stops<br/>stopDictation
+//!   Note over page: the microphone is released at once<br/>stopDictation: releaseMic
+//!   face->>api: no more audio<br/>CloseStream
+//!   api-->>face: the final text<br/>TranscriptEndpoint
+//!   face-->>page: final, and the page closes the socket<br/>finishDictation
+//!   page->>brain: the text is saved as a draft, 600 ms after the last change<br/>Draft Text record: compose.js edit, save. A chat not yet started keeps it in the tab instead
+//! ```
 
 mod dictation;
 mod find;

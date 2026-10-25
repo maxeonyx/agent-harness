@@ -12,14 +12,15 @@ use crate::resource::Observation;
 /// moment its outcome is known: [made](CallEvent::Made) before it is sent,
 /// [dispatched](CallEvent::Dispatched) to a limb, and
 /// [settled](CallEvent::Settled) by that limb. The limb runs each
-/// [`CallId`] at most once, so sending a call again is always safe, and
-/// that is all crash recovery needs: a call is sent again whenever its limb
-/// has reconnected since it was last sent (after its limb restarted, or the
-/// brain did), and the limb answers from its own durable record, keeps
-/// running it, or, having no record, runs it again if its tool may be
-/// rerun or settles it as [`Outcome::Unknown`]. There is no separate
-/// recovery message, and the brain does not need to know which tools may be
-/// rerun: the limb that owns a tool does.
+/// [`CallId`] at most once, so shipping a call again is always safe, and
+/// that is all crash recovery needs: a limb that has reconnected (after it
+/// restarted, or the brain did) is shipped its whole view, which holds a
+/// row for each of its unsettled calls ([`crate::state::State::limb_rows`]),
+/// and answers each from its own durable record, keeps running it, or,
+/// having no record, runs it again if its tool may be rerun or settles it
+/// as [`Outcome::Unknown`]. There is no separate recovery message, and the
+/// brain does not need to know which tools may be rerun: the limb that owns
+/// a tool does.
 ///
 /// Every harness action an agent takes is a call too, to a limb the brain
 /// itself implements ([`crate::environment::LimbKind`]): a spawn opens a
@@ -160,14 +161,17 @@ pub enum Owner {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallEvent {
     Made(Call),
-    /// Sent to its limb's current connection. Sent again, as another
-    /// dispatch, after every reconnection while it is unsettled.
+    /// Sent to its limb. A plugin's call becomes a row of the limb's view
+    /// ([`crate::state::State::limb_rows`]), which a reconnection ships
+    /// again, so it is dispatched once; the provider's reading is
+    /// dispatched again when an earlier brain was running it.
     Dispatched,
     /// Its limb was asked to stop it within `within` milliseconds of this
     /// fact ([`crate::cancel`]), because every task reading it is stopping
-    /// (why is in their [`crate::task::Drain`] facts). Asked again after a
-    /// reconnection, like a dispatch, and again with less time when a reader's
-    /// deadline comes sooner; a deadline is only ever brought forward.
+    /// (why is in their [`crate::task::Drain`] facts). Its row in the limb's
+    /// view carries the deadline across a reconnection, and a later fact asks
+    /// again with less time when a reader's deadline comes sooner; a deadline
+    /// is only ever brought forward.
     Stopping {
         within: u64,
     },

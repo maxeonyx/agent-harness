@@ -19,6 +19,39 @@
 //! An [`Instance`] holds the brain's rows for the limb and its records,
 //! which a kind says through its [`Voice`]; a kind that runs calls runs
 //! them with [`Calls`].
+//!
+//! # A limb's setup
+//!
+//! How the brain comes to use a limb, from needing it to the limb's description, which makes it reached (`State::reached`) so that a task's first root can be made. A limb outlives the brain that started it, so after a brain's restart only the second branch of the `alt` runs. Every kind goes through the same steps: a kind differs only in what its `Kind::open` and `Kind::apply` do.
+//!
+//! ```mermaid
+//! ---
+//! title: "A limb's setup: from Todo::Connect to a limb the brain can use"
+//! ---
+//! sequenceDiagram
+//!   participant brain as The brain
+//!   participant attach as attach LIMB
+//!   participant serve as serve LIMB, the limb
+//!   participant kind as The kind, a Workspace
+//!   Note over brain: a task needs a limb that is not connected<br/>State::todo: Todo::Connect, as Brain::connect
+//!   brain->>attach: start the link, whose stdin and stdout are the brain's end<br/>Process::attach runs harness-limb-KIND attach LIMB
+//!   attach->>attach: look for the limb's socket<br/>attach::run: State::enter, connect
+//!   alt nothing is listening
+//!     attach->>serve: start the limb, in a systemd scope if there is a user manager<br/>attach::start: serve LIMB
+//!     serve->>serve: take the lock, detach, listen on the socket<br/>serve::run: setsid, subreaper
+//!     attach->>serve: connect, tried every 50 ms for up to 30 s
+//!   else a limb already runs, as it does after a brain restart
+//!     attach->>serve: connect
+//!   end
+//!   serve->>brain: the limb says Hello<br/>Hello, through attach::relay, read by link::follow
+//!   Note over brain: the link is kept, and the brain ships the limb a whole view<br/>Brain::joined, then Brain::publish with LimbRow::Definition
+//!   brain->>serve: the view<br/>LimbDown::View
+//!   Note over serve: that connection is now the link, and the limb opens its instance<br/>Served::apply: Instance::open
+//!   serve->>kind: open the kind: clone the repository if the definition has one to make, end an earlier instance's orphans<br/>Kind::open: Workspace::open, git::clone
+//!   serve->>kind: tell the kind the link is up<br/>Instance::apply: Kind::apply, with connected
+//!   kind->>brain: the kind describes itself, a record on the link<br/>Voice::describe: Fact::Described
+//!   Note over brain: the brain notes the connection first, then includes the record<br/>Brain::heard: Reach::Connected<br/>State::reached is now true, so Todo::Root can come
+//! ```
 
 mod attach;
 mod calls;

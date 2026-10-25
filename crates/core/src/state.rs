@@ -2582,10 +2582,10 @@ impl State {
     ///
     /// Restart is not a mode: it is read off the brain's positions. A request
     /// sent before the current [`Launched`] with no end was lost. A plugin
-    /// call is due whenever its limb's current connection (which is always
-    /// this brain's) began after the call was last sent, so a restart of
-    /// the brain, of the limb, or of the network between them all resend
-    /// what is unsettled, and the limb answers each from its own record.
+    /// call is due once its limb is connected and it has not been
+    /// dispatched, so a restart of the brain, of the limb, or of the network
+    /// between them resends none: the limb is shipped its whole view again,
+    /// and answers each row from its own record.
     pub fn todo(&self, now: Timestamp) -> Vec<Todo> {
         let launch = self.launch.as_ref().map(|(mark, _)| mark.seq);
         let lost = |sent: &ModelCallRecord| {
