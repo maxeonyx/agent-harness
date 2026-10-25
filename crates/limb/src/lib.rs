@@ -19,6 +19,39 @@
 //! An [`Instance`] holds the brain's rows for the limb and its records,
 //! which a kind says through its [`Voice`]; a kind that runs calls runs
 //! them with [`Calls`].
+//!
+//! # A limb's setup
+//!
+//! How the brain comes to use a limb, from needing it to the limb's description, which makes it reached (`State::reached`) so that a task's first root can be made. A limb outlives the brain that started it, so after a brain's restart only the second branch of the `alt` runs. Every kind goes through the same steps: a kind differs only in what its `Kind::open` and `Kind::apply` do.
+//!
+//! ```mermaid
+//! ---
+//! title: "A limb's setup: from Todo::Connect to a limb the brain can use"
+//! ---
+//! sequenceDiagram
+//!   participant brain as The brain
+//!   participant attach as attach LIMB
+//!   participant serve as serve LIMB, the limb
+//!   participant kind as The kind, a Workspace
+//!   Note over brain: State::todo: a task needs a limb that is not connected<br/>Todo::Connect, as Brain::connect
+//!   brain->>attach: Process::attach runs harness-limb-KIND attach LIMB<br/>its stdin and stdout are the link
+//!   attach->>attach: attach::run: State::enter, connect to the socket
+//!   alt nothing is listening
+//!     attach->>serve: attach::start: serve LIMB, in a systemd scope if there is a user manager
+//!     serve->>serve: serve::run: the lock, setsid, subreaper, listen on the socket
+//!     attach->>serve: connect, tried every 50 ms for up to 30 s
+//!   else a limb already runs, as it does after a brain restart
+//!     attach->>serve: connect
+//!   end
+//!   serve->>brain: Hello, through attach::relay: link::follow reads it
+//!   Note over brain: Brain::joined: the link is kept<br/>Brain::publish ships a whole view with LimbRow::Definition
+//!   brain->>serve: the view, LimbDown::View
+//!   Note over serve: that connection is now the link<br/>Served::apply: Instance::open
+//!   serve->>kind: Kind::open: Workspace::open<br/>git::clone if the definition has one to make, end an earlier instance's orphans
+//!   serve->>kind: Instance::apply: Kind::apply with connected
+//!   kind->>brain: Voice::describe: Fact::Described, a record on the link
+//!   Note over brain: Brain::heard: Reach::Connected first, then the record is included<br/>State::reached is now true: Todo::Root can come
+//! ```
 
 mod attach;
 mod calls;

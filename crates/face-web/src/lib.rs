@@ -40,6 +40,39 @@
 //! Transport is std's TCP, rustls, one static page and the tab's wasm,
 //! built from `harness-face-tab` by this crate's build script; the
 //! sockets are WebSockets (tungstenite, without its TLS).
+//!
+//! # Dictation
+//!
+//! One press of the microphone. The page streams PCM to the face, which relays it with the login's token, since the page must never hold it. Nothing reaches the brain from the relay: the transcript lands in the box as typed text does, and is saved as the draft like it. Sending while dictating stops the dictation first, waits for its final text (`dictation.then`), then sends: drawn in the brain's "A real turn".
+//!
+//! ```mermaid
+//! ---
+//! title: "Dictation: one press of the microphone"
+//! ---
+//! sequenceDiagram
+//!   participant page as Max's page
+//!   participant face as Face
+//!   participant api as Anthropic voice_stream
+//!   participant brain as The brain
+//!   page->>page: compose.js dictate: getUserMedia, an AudioWorklet makes 16-bit PCM
+//!   page->>face: wss /dictation?rate=Hz: Face::dictate
+//!   face->>api: Dictation::relay, session, connect: wss, the login's token, KeepAlive
+//!   face-->>page: listening
+//!   loop until Max stops
+//!     page->>face: a tenth of a second of PCM
+//!     face->>api: the same chunk
+//!     api-->>face: TranscriptText: the whole session's text so far
+//!     face-->>page: edits at, cut, put: Transcript::session, a word-level diff
+//!     Note over page: applyEdits: at the caret, keeping Max's own edits
+//!   end
+//!   Note over face,api: a session the endpoint drops is replaced, up to 3 times<br/>Transcript::keep holds the text so far
+//!   page->>face: stop, from stopDictation
+//!   face->>api: CloseStream
+//!   api-->>face: the final text, TranscriptEndpoint
+//!   face-->>page: final, then the socket closes
+//!   Note over page: finishDictation releases the microphone
+//!   page->>brain: Draft Text, a record 600 ms after the last change: compose.js edit, save<br/>a chat not yet started keeps it in the tab instead
+//! ```
 
 mod dictation;
 mod find;
