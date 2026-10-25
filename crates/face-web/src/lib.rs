@@ -54,24 +54,24 @@
 //!   participant face as Face
 //!   participant api as Anthropic voice_stream
 //!   participant brain as The brain
-//!   page->>page: compose.js dictate: getUserMedia, an AudioWorklet makes 16-bit PCM
-//!   page->>face: wss /dictation?rate=Hz: Face::dictate
-//!   face->>api: Dictation::relay, session, connect: wss, the login's token, KeepAlive
+//!   page->>page: Max presses the microphone: the page makes 16-bit PCM<br/>compose.js dictate: getUserMedia, an AudioWorklet
+//!   page->>face: open the dictation socket<br/>wss /dictation?rate=Hz: Face::dictate
+//!   face->>api: open the speech stream with the login's token, and keep it alive<br/>Dictation::relay, session, connect: wss, KeepAlive
 //!   face-->>page: listening
 //!   loop until Max stops
 //!     page->>face: a tenth of a second of PCM
 //!     face->>api: the same chunk
-//!     api-->>face: TranscriptText: the whole session's text so far
-//!     face-->>page: edits at, cut, put: Transcript::session, a word-level diff
-//!     Note over page: applyEdits: at the caret, keeping Max's own edits
+//!     api-->>face: the whole session's text so far<br/>TranscriptText
+//!     face-->>page: what changed, as edits: at, cut, put<br/>Transcript::session, a word-level diff
+//!     Note over page: the edits go in at the caret, keeping Max's own edits<br/>applyEdits
 //!   end
 //!   Note over face,api: a session the endpoint drops is replaced, up to 3 times<br/>Transcript::keep holds the text so far
-//!   page->>face: stop, from stopDictation
-//!   face->>api: CloseStream
-//!   api-->>face: the final text, TranscriptEndpoint
+//!   page->>face: Max stops<br/>stopDictation
+//!   face->>api: no more audio<br/>CloseStream
+//!   api-->>face: the final text<br/>TranscriptEndpoint
 //!   face-->>page: final, then the socket closes
-//!   Note over page: finishDictation releases the microphone
-//!   page->>brain: Draft Text, a record 600 ms after the last change: compose.js edit, save<br/>a chat not yet started keeps it in the tab instead
+//!   Note over page: the microphone is released<br/>finishDictation
+//!   page->>brain: the text is saved as a draft, 600 ms after the last change<br/>Draft Text record: compose.js edit, save. A chat not yet started keeps it in the tab instead
 //! ```
 
 mod dictation;

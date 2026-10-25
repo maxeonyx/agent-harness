@@ -160,14 +160,17 @@ pub enum Owner {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallEvent {
     Made(Call),
-    /// Sent to its limb's current connection. Sent again, as another
-    /// dispatch, after every reconnection while it is unsettled.
+    /// Sent to its limb. A plugin's call becomes a row of the limb's view
+    /// ([`crate::state::State::limb_rows`]), which a reconnection ships
+    /// again, so it is dispatched once; the provider's reading is
+    /// dispatched again when an earlier brain was running it.
     Dispatched,
     /// Its limb was asked to stop it within `within` milliseconds of this
     /// fact ([`crate::cancel`]), because every task reading it is stopping
-    /// (why is in their [`crate::task::Drain`] facts). Asked again after a
-    /// reconnection, like a dispatch, and again with less time when a reader's
-    /// deadline comes sooner; a deadline is only ever brought forward.
+    /// (why is in their [`crate::task::Drain`] facts). Its row in the limb's
+    /// view carries the deadline across a reconnection, and a later fact asks
+    /// again with less time when a reader's deadline comes sooner; a deadline
+    /// is only ever brought forward.
     Stopping {
         within: u64,
     },

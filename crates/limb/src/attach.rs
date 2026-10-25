@@ -1,5 +1,6 @@
-//! `attach <limb>`: how a brain reaches a limb, starting it if it is not
-//! running, on this machine as it is and on another through `ssh`.
+//! `attach <limb>`: how a brain reaches a limb on this machine, starting it
+//! if it is not running. A limb on another machine, through `ssh`, is not
+//! built yet: the brain refuses one.
 //!
 //! It connects to the limb's socket. If nothing is listening, it starts
 //! `serve` and waits for it to listen. Then it carries the link: its stdin
