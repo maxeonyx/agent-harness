@@ -24,7 +24,7 @@ export function actionsOf(t) {
   else if (!stopping && runsOnItsOwn(t)) out.push({ icon: "pause", label: "Pause", title: "Nothing new starts in it or under it: what is running finishes, then waits", facts: () => ({ Task: [t.id, { Pause: "Now" }] }) });
   if (!stopping) out.push({ icon: "cancel", label: "Abandon", confirm: true, title: "The work is no longer needed: it and everything it started stop, tidy up and report", facts: () => ({ Task: [t.id, { Drain: { Abandon: { by: "Max", within: 120000 } } }] }) });
   else if (!t.stop.hard) out.push({ icon: "cancel", label: "End now", confirm: true, title: "End it and everything it started now, with no tidy-up", facts: () => ({ Task: [t.id, { Drain: { Abandon: { by: "Max", within: 0 } } }] }) });
-  if (t.mode === "user-facing" && !stopping) out.push({ icon: "tick", label: "Done", confirm: true, title: "It writes its result and finishes", facts: (at) => ({ Delivery: { id: `${at}.0`, to: t.id, content: { Prompt: "Done" } } }) });
+  if (t.mode === "user-facing" && !stopping) out.push({ icon: "tick", label: "Done", confirm: true, title: "It writes its result and finishes", facts: (at) => ({ Delivery: { id: `${at}.0`, to: t.id, content: { Prompt: "Done" }, read: "Next" } }) });
   return out;
 }
 // What Max can do to background work: stop it. What an agent passed to him
