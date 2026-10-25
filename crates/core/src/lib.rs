@@ -186,6 +186,97 @@
 //!   record of the brain's own is a bug and is never written. A face offers
 //!   Max only acts its view says are possible; the brain decides the races.
 //!
+//! # Lifecycle of a task
+//!
+//! Where a task is in its life ([`task::Life`]) and, while it is live, whose move it is ([`task::Phase`]). Each arrow is a fact that `Task::apply` folds, or the choice a function makes when one arrives; the brain acts on what [`state::State::todo`] reads off the phase.
+//!
+//! ```mermaid
+//! ---
+//! title: "Life: how a task begins and ends"
+//! ---
+//! flowchart LR
+//!   created(["TaskEvent::Created"])
+//!   created -->|"Origin::Fresh"| Starting
+//!   created -->|"Origin::Fork, Resume or Aside"| Live
+//!   Starting -->|"Move::Root: Task::root<br/>after Todo::Root"| Live
+//!   subgraph done["Life::Done, by Outcome"]
+//!     Result
+//!     Abandoned
+//!     Failed
+//!   end
+//!   Starting -->|"Drain::Abandon"| Abandoned
+//!   Starting -->|"Drain::Fail"| Failed
+//!   Live -->|"Task::turn_ended:<br/>autonomous, nothing running"| Result
+//!   Live -->|"Task::turn_ended:<br/>the tidy-up turn ended, with a report"| Abandoned
+//!   Live -->|"Task::drained:<br/>a hard stop, no report"| Abandoned
+//!   Live -->|"Task::drained:<br/>Drain::Fail"| Failed
+//! ```
+//!
+//! ```mermaid
+//! ---
+//! title: "Phase: whose move it is while a task is live"
+//! ---
+//! flowchart TB
+//!   Ready -->|"ModelCallEvent::Sent<br/>after Todo::Send"| Thinking
+//!   Thinking -->|"Ended: Responded<br/>with tool uses"| Acting
+//!   Acting -->|"last call settled<br/>Task::settled"| Ready
+//!   Thinking -->|"Ended: Failed, Limited, Cut, Lost,<br/>or another Stop<br/>Task::drained"| Ready
+//!   Thinking -->|"Task::turn_ended: words or<br/>news already waiting"| Ready
+//!   Thinking -->|"Task::turn_ended:<br/>user-facing"| AwaitingMax
+//!   Thinking -->|"Task::turn_ended: standing,<br/>or background running"| Listening
+//!   Thinking -->|"Task::turn_ended:<br/>after Prompt::Park"| Parked
+//!   AwaitingMax -->|"a delivery or news<br/>Task::woken, woken_by"| Ready
+//!   Listening -->|"a delivery, news, or a<br/>background call settling<br/>Task::woken, woken_by"| Ready
+//!   Parked -->|"Prompt::Resume<br/>Task::deliver"| Ready
+//! ```
+//!
+//! `Task::turn_ended` and `Task::drained` decide what follows a round, so every path out of one goes through them; a compaction with a report ends a turn the same way. A drain ([`task::Drain`]) replaces what `Task::drained` would do: `Drain::ToMax` goes to AwaitingMax, and the two stopping drains are drawn in the brain's "Stopping a task". A compaction without a report keeps the phase, a change of mode makes a waiting task choose its wait again (`Task::wait`), and a move back (`Task::back`) puts a waiting task in Ready, or in AwaitingMax when it lands on a turn's end; none of these is drawn.
+//!
+//! # Lifecycle of a request
+//!
+//! A request to the provider ([`model_call::ModelCall`]), from the fact that sends it to the fact that ends it. The right-hand side is what each [`model_call::Ending`] does to its task: the same turn's calls are made in the batch that ends it, and only [`model_call::Stop::EndTurn`] ends a turn.
+//!
+//! ```mermaid
+//! ---
+//! title: "Request: from Todo::Send to what its ending does to the task"
+//! ---
+//! flowchart LR
+//!   send["Todo::Send<br/>Brain::send"] -->|"ModelCallEvent::Sent"| Sent
+//!   Sent -->|"message_start<br/>Brain::first_byte"| Streaming["FirstByte"]
+//!   Sent -->|"the stream ends<br/>Brain::finished"| ended
+//!   Streaming -->|"the stream ends<br/>Brain::finished"| ended
+//!   Sent -.->|"an earlier brain's request, no end seen<br/>Todo::Lost"| ended
+//!   ended{{"ModelCallEvent::Ended"}}
+//!   ended -->|"Responded, with tool uses"| acting["Task: Acting<br/>CallEvent::Made, in the same batch"]
+//!   ended -->|"Responded, Stop::EndTurn"| turn["Task::turn_ended"]
+//!   ended -->|"Responded, another Stop"| short["Task: Ready<br/>Brain::send: MaxTokens, PauseTurn carry on;<br/>ContextWindow roots anew; Refused fails"]
+//!   ended -->|"Failed"| failed["Task: Ready, failures + 1<br/>resend after the retry time or backoff_ms;<br/>after GIVE_UP, Drain::Fail"]
+//!   ended -->|"Limited until"| limited["Task: Ready<br/>no Todo::Send until then"]
+//!   ended -->|"Cut: Todo::Cut"| cut["Task::drained<br/>abandon, interrupt, or shutdown"]
+//!   ended -->|"Lost"| lost["Task: Ready<br/>sent again"]
+//! ```
+//!
+//! # Lifecycle of a call
+//!
+//! A call ([`call::Call`]): a tool use of a response, a background call, Max's act, or a member's spawn. Each arrow is a [`call::CallEvent`] or the [`state::Todo`] that states it. A limb settles its own calls; the brain settles the ones it runs.
+//!
+//! ```mermaid
+//! ---
+//! title: "Call: from CallEvent::Made to CallEvent::Settled"
+//! ---
+//! flowchart LR
+//!   made(["CallEvent::Made"]) --> Made
+//!   Made -->|"Todo::Dispatch<br/>Brain::dispatch"| Dispatched
+//!   Made -->|"Todo::Unroutable<br/>no such tool: Failed"| Settled
+//!   Made -->|"Todo::Interrupt, never dispatched:<br/>Interrupted"| Settled
+//!   Dispatched -->|"Todo::Interrupt<br/>Brain::interrupt"| Stopping
+//!   Dispatched -->|"limb unreached: Unknown"| Settled
+//!   Dispatched -->|"a limb: Voice::settle<br/>the brain: Brain::read, settle_scope"| Settled
+//!   Stopping -->|"Interrupted, or the outcome it reached"| Settled
+//!   Settled -.->|"a second Settled, only after Unknown"| Late["the real outcome"]
+//!   Settled["CallEvent::Settled<br/>Completed, Failed, Refused,<br/>Interrupted or Unknown"]
+//! ```
+//!
 //! # Left to the brain
 //!
 //! Policies, not model: turning role files (read by a co-hosted limb, since
