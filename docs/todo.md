@@ -74,7 +74,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **No go-back button after a relaunch** (`face-web/src/page/builds.js:19`), and rehearsal doesn't catch a broken page.
 - **TLS certificate path and bind address are hard-wired** (`brain/src/main.rs:213-219,245`).
 - **The relaunch watcher folds every 2 s.**
-- **A missing limb at relaunch fails a task permanently,** and an expired login fails a task after about 30 s, where both should wait.
+- **A missing limb at relaunch fails a task permanently,** and an expired login fails a task after about 30 s, where both should wait. Only Claude Code refreshes the login: on 25 Oct it expired at 17:12 NZDT, the next message Max sent failed the chat, and he resumed it after Claude Code was run once by hand.
 
 ## Max and his attention (S6)
 
@@ -95,7 +95,8 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **`/view` has no running-tasks field.**
 - **Records nobody read** show only on stderr.
 - **An engineer that receives harness errors.** Max: "ideally, let's just go for it and direct it straight at an agent that should be fixing the errors. It should be an engineer that receives harness errors. It triages them. It determines the root cause. If it needs design, it flags it and raises it somehow. And it fixes the obvious ones at the root cause. Making the product smaller and better." The page's errors reach the brain as `PageError` (`face-web/src/lib.rs`, `Wiring::report`), which only logs them; handing them to an agent is left.
-- **Chats that start alike look alike.** `act chat` takes no name, so a chat is named after the first words of its mandate (`name_from` in `brain/examples/device/mod.rs`, as the page's `nameFrom` does). In a home-life pilot on the home brain on 25 Oct, five of the six chats started began "Max is away until this evening" and looked identical in the chat list. A chat can be renamed (`TaskEvent::Renamed`), but not through `act`.
+- **Chats that start alike look alike.** `act chat` takes no name, so a chat is named after the first words of its mandate (`name_from` in `brain/examples/device/mod.rs`, as the page's `nameFrom` does). In a home-life pilot on the home brain on 25 Oct, five of the six chats started began "Max is away until this evening" and looked identical in the chat list. A chat can be renamed (`TaskEvent::Renamed`), but not through `act`. Old chats on the home brain include five named "Hi". Max expected a title generator: "I guess we just didn't make that yet."
+- **A chat Max starts has nothing above it.** `act chat` and the page's new chat start only roots (`brain/examples/device/mod.rs:303`, `face-web/src/page/newchat.js:85`), and nothing moves a chat under another, so the pilot's chats stood alone, though Max thought it "would make sense" to have one chat above them "to orchestrate and manage" (the vision's home-life line). A chat can start children; whether Max can talk to them directly is the continuing user-facing child, above.
 - **Rough edges.** The TLS listener polls every 20 ms (`face-web/src/lib.rs:134`); the token sum is written out in four places; `Wiring` is full of `Option`s.
 
 ## Provider and cache
