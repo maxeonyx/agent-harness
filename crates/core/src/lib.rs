@@ -230,7 +230,7 @@
 //!   Parked -->|"Max resumes it:<br/>Prompt::Resume, Task::deliver"| Ready
 //! ```
 //!
-//! `Task::turn_ended` and `Task::drained` decide what follows a round, so every path out of one goes through them; a compaction with a report ends a turn the same way. A drain ([`task::Drain`]) replaces what `Task::drained` would do: `Drain::ToMax` goes to AwaitingMax, and the two stopping drains are drawn in the brain's "Stopping a task". A compaction without a report keeps the phase, a change of mode makes a waiting task choose its wait again (`Task::wait`), and a move back (`Task::back`) puts a waiting task in Ready, or in AwaitingMax when it lands on a turn's end; none of these is drawn.
+//! `Task::turn_ended` and `Task::drained` decide what follows a round, so every path out of one goes through them; a compaction with a report ends a turn the same way. A drain ([`task::Drain`]) replaces what `Task::drained` would do: `Drain::ToMax` goes to AwaitingMax, `Drain::Abandon` is drawn in the brain's "Stopping a task", and `Drain::Fail` interrupts its calls and ends the task Failed once they have settled. A compaction without a report keeps the phase, a change of mode makes a waiting task choose its wait again (`Task::wait`), and a move back (`Task::back`) puts a waiting task in Ready, or in AwaitingMax when it lands on a turn's end; none of these is drawn.
 //!
 //! # Lifecycle of a request
 //!
