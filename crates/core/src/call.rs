@@ -12,14 +12,15 @@ use crate::resource::Observation;
 /// moment its outcome is known: [made](CallEvent::Made) before it is sent,
 /// [dispatched](CallEvent::Dispatched) to a limb, and
 /// [settled](CallEvent::Settled) by that limb. The limb runs each
-/// [`CallId`] at most once, so sending a call again is always safe, and
-/// that is all crash recovery needs: a call is sent again whenever its limb
-/// has reconnected since it was last sent (after its limb restarted, or the
-/// brain did), and the limb answers from its own durable record, keeps
-/// running it, or, having no record, runs it again if its tool may be
-/// rerun or settles it as [`Outcome::Unknown`]. There is no separate
-/// recovery message, and the brain does not need to know which tools may be
-/// rerun: the limb that owns a tool does.
+/// [`CallId`] at most once, so shipping a call again is always safe, and
+/// that is all crash recovery needs: a limb that has reconnected (after it
+/// restarted, or the brain did) is shipped its whole view, which holds a
+/// row for each of its unsettled calls ([`crate::state::State::limb_rows`]),
+/// and answers each from its own durable record, keeps running it, or,
+/// having no record, runs it again if its tool may be rerun or settles it
+/// as [`Outcome::Unknown`]. There is no separate recovery message, and the
+/// brain does not need to know which tools may be rerun: the limb that owns
+/// a tool does.
 ///
 /// Every harness action an agent takes is a call too, to a limb the brain
 /// itself implements ([`crate::environment::LimbKind`]): a spawn opens a
