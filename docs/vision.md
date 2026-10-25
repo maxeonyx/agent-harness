@@ -11,7 +11,7 @@ Max named two halves, "equally important": "First is the harness needs to work l
 
 Neither has to be finished first, though "obviously I want [...] as much of it done as soon as possible".
 
-What makes it his, by his own weighting, most distinctive first: the user turn; the "hardcore 'forking' subagent model", with cache efficiency and structured concurrency; the limb model ([S4](#s4-environments-limbs-and-nothing-else)); and agents owning their own compaction. Good taste it shares with other harnesses, and weighs less: a decoupled monolith, composable configuration, self-modification, and the context model ([S3](#s3-contexts-what-an-agent-was-told-as-values)).
+What is unique to it, in his weighting (2026-07-31): the user turn; the "hardcore 'forking' subagent model", with cache efficiency and structured concurrency; the limb model ([S4](#s4-environments-limbs-and-nothing-else)); and agents owning their own compaction. What he calls non-unique, "good taste" choices from other harnesses: a decoupled monolith, composable configuration, self-modification, and the context model ([S3](#s3-contexts-what-an-agent-was-told-as-values)).
 
 ## User stories
 
