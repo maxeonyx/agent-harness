@@ -39,6 +39,7 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Fork | A child agent that starts from its parent's context, sharing its cache, and returns a summary. | `task::Origin::Fork` |
 | Aside | A user-facing child Max opens while its parent waits on other children. | `task::Origin::Aside` |
 | Compaction | An agent moving its head to a new root that carries its own summary, and carrying on as the same agent. Not "handover": Max, "It is too othering". | `task::Compaction` |
+| Initialise, refurbish | With compaction, the three things done to a context. Initialising writes its system prompt: for a new task, a compaction or a refurbishment. Refurbishing transforms the existing context to use fewer tokens without compacting it, with code and perhaps a utility model. Not "rebuild". | Partly: initialising is `program::render::root`; refurbishing is not built. |
 | Context | The immutable, content-addressed tree of exactly what was sent to the model. | `context::Entry`, `context::EntryId` |
 | Notice | A dated message telling an agent that something in its context changed after a turn. | `resource::Change`, `state::State::stale` |
 | Pause, stop, abandon | The three acts over a subtree: freeze at once and spend nothing; ask each agent to wind down; say the work is no longer needed, then tidy up and end. | Stop: `core/src/cancel.rs` |
