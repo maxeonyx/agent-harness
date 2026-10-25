@@ -455,7 +455,8 @@ pub enum Origin {
     /// parent's other work; the fork's mandate follows as user text in that
     /// message. The fork-framing spike measured this: a mandate put in a
     /// tool result does not override the identity Sonnet has from its
-    /// parent's context, and user text does.
+    /// parent's context, and user text does; and every fork it ran read its
+    /// parent's cache.
     Fork { from: TaskId },
     /// A finished task's last entry, continued with a new mandate. It
     /// inherits what its source had not yet rendered, such as Max's edits

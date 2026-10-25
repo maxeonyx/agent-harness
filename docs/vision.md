@@ -11,6 +11,8 @@ Max named two halves, "equally important": "First is the harness needs to work l
 
 Neither has to be finished first, though "obviously I want [...] as much of it done as soon as possible".
 
+What is unique to it, in his weighting (2026-07-31): the user turn; the "hardcore 'forking' subagent model", with cache efficiency and structured concurrency; the limb model ([S4](#s4-environments-limbs-and-nothing-else)); and agents owning their own compaction. What he calls non-unique, non-exhaustively, "good taste" choices from other harnesses: a decoupled monolith, composable configuration, self-modification, and the context model ([S3](#s3-contexts-what-an-agent-was-told-as-values)).
+
 ## User stories
 
 What Max does with the harness when it is finished, grouped by the part of his day it serves. His feature asks are evidence of what he wants, not specifications: each story states the want, and quotes him where his words carry a hedge.
@@ -61,13 +63,14 @@ What Max does with the harness when it is finished, grouped by the part of his d
 - **Inversion of control.** "I personally am not necessarily very good at prioritizing my time across all of the threads that need my input." An attention scheduler, an agent whose whole environment is reading the domain's sessions, reordering his queue and editing its own priority document, puts first the thing that blocks the most and says why. He sets its rules "in a more reflective headspace", argues with its order, and it learns: "a goal of mine to be managed, not just to manage."
 - **One tree to act on per domain.** He can look anywhere, but acts on one tree at a time in a domain, whichever tabs and devices he uses. It schedules his writing, not his reading.
 - **Agents never create obligations for him.** Only his own action makes a session user-facing; an agent may ask, in the background, and carries on.
-- **After a long absence**, his first task is deciding what continues ("probably").
 - **Home life in the graph view** (25 Oct). Max could "in theory" manage his home life, its admin tasks and responsibilities, in the harness's graph view, alongside agents' work.
 - **Domains.** Each sphere of his obligations (home, work) has its own brain, queue and data. Data stays on its own machines; a face can show more than one domain, but home devices never see work data.
 
 ### A harness that keeps going and improves itself
 
 - **Restart loses nothing.** Ctrl-C drains and exits; a second Ctrl-C kills. On restart every agent carries on, with no input from Max.
+- **A long outage holds the work.** After one, the root tasks are held instead, and his first task is probably deciding what continues. He thinks holding "makes sense", but that it is "not core" and "can be left for later".
+- **Backups by default.** It "might be nice" for every brain he runs to hold all the data, synced in the background, so each backs up the others without confusing their records with its own. How that squares with a domain's data staying on its own machines is open.
 - **It upgrades itself.** An agent edits the harness, builds it and relaunches it while its own session carries on: "While we want live editing, we don't want live bricking." A broken build bricks nothing.
 - **Easy to run as a service**, reachable from his phone anywhere, and installable on Android.
 - **Session data is his.** Token usage per session, and his sessions searchable and queryable, across every brain he runs.
@@ -151,7 +154,7 @@ flowchart TD
 
 ### S3. Contexts: what an agent was told, as values
 
-- **A context is an immutable, content-addressed tree** of exactly what was sent, and an agent's head moves through it. Forks share their parent's prefix and its cache. Compaction moves the head to a new root. Every block records where it came from.
+- **A context is an immutable, content-addressed tree** of exactly what was sent, and an agent's head moves through it. Forks share their parent's prefix and its cache, and fresh agents started together share their common brief's. Compaction moves the head to a new root. Every block records where it came from.
 - **A change to something a context holds becomes a dated notice** ("changed after your turn N"), never a silent rewrite.
 - **Settled.** Agents use the 1-hour cache. An agent forks for steps and compacts on real task switches, with a warning as it nears the limit.
 - **The want.** Cost (forks and compaction that hit the cache) and trust: an agent knows what it was told and when. The gist's testimony: "I could not distinguish 'this was always here' from 'this appeared three turns ago'".
@@ -163,9 +166,9 @@ flowchart TD
 - **Only limbs.** An agent can do and know only what its limbs give it: tools, plus the context for using them. There are no implicit tools. A sandbox counts only if it looks like the whole world to the agent: a JS engine with no file system counts, a shell behind a classifier doesn't.
 - **Max is a limb.** An agent is user-facing exactly when he is in its environment, and only his own action puts him there.
 - **Roles dissolve.** Roles are "subsumed by limbs": an engineer is a set of limbs plus its model and effort.
-- **Definitions are versioned facts** in the domain's database. A file in a repo is one source of a definition: a limb reads the file, never the brain.
-- **Settled.** Extension is a JS sandbox limb when something needs scripting, and WASM modules later; programs as data is a long-term direction, not now. Asks are not a separate mechanism: an agent facing Max ends its turn with what it needs. The browser limb drives Max's own browser on his Windows desktop ("ideally"), which needs the SSH limb.
-- **The want.** Prevention by construction rather than by checking, and context that comes with the environment.
+- **Definitions are versioned facts** in the domain's database. A file in a repo is one source of a definition: a limb reads the file, never the brain. Which source each definition has is chosen for it: "think about where the state should go rather than just blindly putting it in the repo".
+- **Settled.** Extension is a JS sandbox limb when something needs scripting, and WASM modules later; programs as data is a long-term direction, not now, and Max says "Maybe, I'm not so convinced about that. In a language project, maybe. I don't know." Asks are not a separate mechanism: an agent facing Max ends its turn with what it needs. The browser limb drives Max's own browser on his Windows desktop ("ideally"), which needs the SSH limb.
+- **The want.** Prevention by construction at every level, rather than by checking: "checking is the red flag that you're doing this wrong". And context that comes with the environment.
 - **You can tell by:** the brain opens no file but its database; a new kind of limb needs no change to the brain; an agent can't reach `~/.claude/.credentials.json` unless its environment holds it.
 - **In code.** `crates/limb`, `crates/limb-workspace`, `crates/limb-browser` and `crates/script`; an environment is `environment::Environment`, in `crates/core`.
 
@@ -182,7 +185,7 @@ flowchart TD
 
 - **His acts are facts** at his replica (a tab, the phone), parsed into a session like anyone else's. Every text box is durable state. He can look anywhere, but acts on one tree at a time in each domain.
 - **A domain** is a sphere of his obligations with one attention: its own queue, priority document and scheduler, and its own data, which stays on its own machines. Usually one brain per domain, and a face can show several.
-- **The attention scheduler** is a standing agent in each domain whose whole environment is reading the domain's sessions, reordering his queue and editing its own priority document. Each wake is a short fresh request, so its context never grows long. It says why each item is where it is.
+- **The attention scheduler** is an agent in each domain whose whole environment is reading the domain's sessions, reordering his queue and editing its own priority document. Max thinks it probably stands, though he isn't sure it shouldn't be a one-off each time: a standing agent whose every wake is a short fresh request is both, so its context never grows long. It says why each item is where it is.
 - **Settled.** One brain per domain. Work can see home; home and the phone never see work.
 - **The want.** Inversion of control over his attention, with the rules set "in a more reflective headspace", and "an agent can't give me an obligation without my say-so."
 - **You can tell by:** the scheduler puts first the thing that blocks the most and says why; he disagrees, and the order changes while he types, losing nothing.
