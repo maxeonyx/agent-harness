@@ -30,16 +30,19 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **Spawn controls.** `spawn` can't set a child's model or effort (`program/src/meta.rs`); a parent can't see the progress of one member, cancel it alone or give it a time limit; there is no spawn under a background scope (`meta.rs:82`).
 - **Isolation as its own action.** Forks share their parent's directory on purpose; making an isolated directory should be a separate action, with a `dir` per spawn member (`meta.rs:144-146`). Max has a workflow for it that "potentially the harness can help" with.
 - **Cancel keeps a finished response.** Max (2026-07): on cancel, wait for the assistant response to complete, "It cost us money, and it's probably good", don't run its tool calls, and run them on resume. `core/src/cancel.rs` cuts an abandoned task's request at once.
-- **Re-wiring dependencies after launch** (A starts A' to fix credentials and makes B and C wait on it): "yes, maybe [...] Maybe A can't do it, but A can ask the orchestrator to do it. I don't know." Spawn order is fixed at launch.
+- **Re-wiring dependencies after launch** (A starts A' to fix credentials and makes B and C wait on it): "yes, maybe [...] Maybe A can't do it, but A can ask the orchestrator to do it. I don't know." Spawn order is fixed at launch. One shape to weigh: an order such as "B before A" is priority for the scheduler rather than an edge in the tree, and ownership shaped as a graph waits for a real case.
+- **Root tasks held after a long outage** ([vision](vision.md#a-harness-that-keeps-going-and-improves-itself)). A restart carries every task on however long the brain was down; how long counts as long is open.
 - **Rough edges.** `Caller::Meta` and `Start.awaits` are never created; `Rejected::CannotStart` carries no names (`core/src/fact.rs:274`); passed calls can clash by name; `end(mark)` is duplicated (`limb-builds/src/relaunch.rs:362`); an unexplained 180 s pause was seen once.
 
 ## Contexts (S3)
 
-- **Compaction started by Max or the harness,** not only by the agent: forced at a fixed token threshold ("80-85% (or better, a fixed token threshold like 100k-200k tokens)"), on cache expiry while idle (re-rooting a cold context), and by Max. Also an "uncached compaction" with a traditional summariser prompt, for when the original model isn't available.
+- **Compaction started by Max or the harness,** not only by the agent: forced at a fixed token threshold ("80-85% (or better, a fixed token threshold like 100k-200k tokens)"), on cache expiry while idle (re-rooting a cold context; a call still running shows in the new context as in progress, and carries on), and by Max. Also an "uncached compaction" with a traditional summariser prompt, for when the original model isn't available.
 - **Undo a fresh compaction.**
+- **Refurbishing a context** ([glossary](glossary.md#agents-and-work)) "needs to be designed still": code, and maybe a utility model where the economics justify it, that makes a context smaller without compacting it.
+- **Two-stage compaction,** as in his OpenCode fork: the first call gives the agent what a good compaction needs, and lets it tidy up with other tools before a second call completes it. `compact_and_continue` and `compact_and_report` are one call each (`program/src/meta.rs`). A related idea of his, not decided: a fork of the parent writes each child's mandate before a spawn, at the cost of latency and spend on every spawn.
 - **Attaching calls to a result.** `attach` (`program/src/meta.rs`) is the working version Max asked for first; the whole design space is still to look at.
 - **Old cold contexts:** "ideally we just keep an 'old cold' context and make it an 'old warm context', append some [...] notices, and keep going [...] Perhaps an option for the user? I don't think this is settled."
-- **Notices for tools and options.** Removing or changing a tool never gets a notice; old tools keep working until the cache expires, or the context is compacted. Option sets (skill names, role names) "absolutely get notices"; `AGENTS.md` changes "almost certainly yes"; skill description changes, no. Provenance of a change (the harness, git, an outside edit) is "potentially _very_ useful for the model".
+- **Notices for tools and options.** Removing or changing a tool never gets a notice; old tools keep working until the cache expires, or the context is compacted. Whether adding a tool can work without breaking the cached prefix, Max is "unsure". Option sets (skill names, role names) "absolutely get notices"; `AGENTS.md` changes "almost certainly yes"; skill description changes, no. Provenance of a change (the harness, git, an outside edit) is "potentially _very_ useful for the model".
 - **Mandate reminder after a tool round.** The fork-framing spike measured it cheap and effective: a depth-1 fork's uncached input fell from about 600-1,800 tokens to 2-4. Ready to build (listed in `core/src/context.rs`). Forking at the parent's request (`rewind`) measured the smallest prefix at depth 2-3, if deep forks get expensive.
 - **A cache breakpoint for message undo:** "everything up to n-2 messages ago (or something like that)". `program/src/policy.rs::breakpoints` marks root, checkpoint, shared brief and tail only.
 - **Tell the model which model it is:** "I think we do want to tell the model which model it is."
@@ -75,7 +78,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 
 ## Max and his attention (S6)
 
-- **The attention scheduler.** `LimbKind::Attention` is produced by nothing; `Ranking` and `Focus` are unchecked (`core/src/state.rs:884,890-901`).
+- **The attention scheduler.** `LimbKind::Attention` is produced by nothing; `Ranking` and `Focus` are unchecked (`core/src/state.rs:884,890-901`). An `attention::Ranking` is one whole order and the newest wins, so Max reordering by hand while the scheduler ranks loses one of the two.
 - **Domains** as data partitions with their own brains.
 - **One mutating face per domain** (the action lock).
 - **Agents see what Max is doing:** whether he is away, what he edited, his branch and its uncommitted changes.
@@ -91,14 +94,15 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **Notifications on a closed app** (Web Push): "Nah, dw about push notifications on android - but a good feature for later!!"
 - **`/view` has no running-tasks field.**
 - **Records nobody read** show only on stderr.
+- **Chats that start alike look alike.** `act chat` takes no name, so a chat is named after the first words of its mandate (`name_from` in `brain/examples/device/mod.rs`, as the page's `nameFrom` does). In a home-life pilot on the home brain on 25 Oct, five of the six chats started began "Max is away until this evening" and looked identical in the chat list. A chat can be renamed (`TaskEvent::Renamed`), but not through `act`.
 - **Rough edges.** The TLS listener polls every 20 ms (`face-web/src/lib.rs:134`); the token sum is written out in four places; `Wiring` is full of `Option`s.
 
 ## Provider and cache
 
 - **Empty `tool_use` id** becomes an empty string (`brain/src/brain.rs:1033-1037`); the text-block helper is duplicated.
-- **Unmeasured cache questions:** whether the previous assistant turn is charged as a write; TTL behaviour and whether expiry is observable; which tool-array changes keep the prefix ("is it ever possible to change anything about tools _without_ involving the cached prefix"); late system-section changes; whether a smaller model reads a larger model's prefix.
+- **Unmeasured provider questions:** whether a cancelled request is still charged (Max thinks so; each response's 5-hour utilisation can show it); whether the previous assistant turn is charged as a write; TTL behaviour and whether expiry is observable; which tool-array changes keep the prefix ("is it ever possible to change anything about tools _without_ involving the cached prefix"); late system-section changes; whether a smaller model reads a larger model's prefix.
 - **Dictation recognition hints.** The speech endpoint takes `x-config-keyterms` (comma-separated, at most 1024 characters), which could carry project words like "limb" and "brain". Only `linear16` audio returned text.
-- **Agent-run tuning.** Tunables as settings with recorded outcomes, so a background agent could tune them by A/B test (Max, 2026-08).
+- **Agent-run tuning.** Tunables as settings with recorded outcomes, so a background agent could tune them by A/B test, compaction instructions included (Max, 2026-08).
 
 ## Docs and dev
 
