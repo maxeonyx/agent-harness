@@ -12,6 +12,12 @@ The features he added to his fork of OpenCode, as of its last release, `v1.14.22
 - **fork-version-handling**: builds take their version from the exact release tag, e.g. `1.14.22-max.10`.
 - **fork-auto-update**: fork builds check the fork's own releases, and install an update in place from the lobby screen.
 
+### GitHub Copilot
+
+- **copilot-provider**: a Copilot provider with shared discovery and auth, live model loading, billing classification and Claude-native routing.
+- **copilot-quota**: the TUI header and sidebar show usage inline: premium requests for Copilot, dollar cost for other providers.
+- **request-metadata-headers**: Copilot requests carry `x-opencode-*` headers naming the session, request, agent and small-model traffic.
+
 ### Sessions
 
 - **ephemeral-sessions**: headless runs are in-memory by default; `--no-ephemeral` persists them.
