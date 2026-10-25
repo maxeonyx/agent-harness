@@ -22,7 +22,11 @@
 //! little-endian 16-bit mono PCM; `{"type":"KeepAlive"}` every few seconds;
 //! `{"type":"CloseStream"}` to finish; `TranscriptText` (or
 //! `TranscriptInterim`) frames carrying the full text, and one
-//! `TranscriptEndpoint` once the text is final, after `CloseStream`.
+//! `TranscriptEndpoint` once the text is final, after `CloseStream`. It
+//! measured the first words about 0.4 s after connecting and the final text
+//! about 0.6 s after `CloseStream`, with no server limit in 12 minutes of
+//! audio sent in real time; audio sent faster falls behind the upload.
+//! Longer sessions and idle sockets are untested.
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::TcpStream;
