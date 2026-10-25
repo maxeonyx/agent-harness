@@ -1,6 +1,7 @@
 //! Just enough HTTP/1.1 for one page, its wasm, its contexts and its two
 //! sockets (the tab's link and dictation): each request answered on its
-//! own connection. Nothing is posted: what a tab says goes up its link.
+//! own connection. Nothing is posted: what a tab says goes up its link,
+//! except an error report, which is a GET, as the link may be what failed.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 

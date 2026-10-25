@@ -13,6 +13,14 @@ export const ago = (ms) => {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m` : `${Math.floor(s / 86400)}d`;
 };
 export const kTokens = (n) => n == null ? "?" : n < 1000 ? `${n}` : n < 1e6 ? `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k` : `${+(n / 1e6).toFixed(1)}M`;
+// A failure the page handles by showing something else, reported as well, to
+// the brain's log (the first script in head.html): `doing` is what the page
+// was trying to do.
+export const fail = (doing, e) => reportError(Object.assign(new Error(String(e), { cause: e }), { doing }));
+// The JSON at `url`; `fallback` after reporting why not.
+export const getJson = (url, doing, fallback) => fetch(url)
+  .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .catch((e) => { fail(doing, e); return fallback; });
 export const parse = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
 export const phone = () => matchMedia("(max-width: 760px)").matches;
 export const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -75,6 +83,6 @@ async function diagram(pre, source) {
     const fig = el("div", "diagram");
     fig.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true } });
     pre.replaceWith(fig);
-  } catch { /* stays as its source */ }
+  } catch (e) { fail("drawing a mermaid diagram, which stays as its source", e); }
 }
 

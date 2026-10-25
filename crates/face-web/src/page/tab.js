@@ -1,3 +1,4 @@
+import { fail } from "./base.js";
 import { render } from "./draw.js";
 import { liveArrived } from "./log.js";
 import { restoreLocal } from "./compose.js";
@@ -87,7 +88,7 @@ class Replica {
     ws.onopen = () => this.shipUnsent();
     ws.onmessage = (m) => {
       const { out } = tabCall("down", m.data, this.h);
-      if (out.error) return console.error(out.error);
+      if (out.error) return fail("reading a message from the brain", out.error);
       if (out.live) return liveArrived(out.live.live);
       const fresh = m.data.startsWith('{"View"');
       this.persist();
@@ -126,7 +127,7 @@ class Replica {
   // includes it, or with why it refused it; until then it is pending.
   async say(batch) {
     const { out } = tabCall("say", JSON.stringify(batch), this.h, Date.now());
-    if (out.error) return out.error;
+    if (out.error) { fail(`saying facts ${JSON.stringify(batch.facts)}`, out.error); return out.error; }
     await this.persist();
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(out.up));
     return new Promise((ok) => this.waiting.push({ n: out.n, ok }));

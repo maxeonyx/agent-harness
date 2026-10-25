@@ -371,6 +371,7 @@ fn run() -> Result<(), String> {
             models: offered.clone(),
             source: SOURCE.into(),
             page,
+            report: Box::new(|error| errln!("harness-brain: {error}")),
         },
     );
     // The Windows host, read again for each connection: DHCP can move it.

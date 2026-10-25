@@ -33,6 +33,13 @@
 //! A chat is found by what was said in it (`/find?q=<words>`), read off
 //! the fold the same way.
 //!
+//! **Page errors.** An error the page hits (uncaught, or handled by showing
+//! something else) is a [`PageError`]: which tab, what it was trying to do,
+//! and the error. The page's first script ships it as `GET /report`, not up
+//! the link, since the errors that matter most are those that stop the link
+//! or the page's own scripts from starting. The face hands it to
+//! [`Wiring::report`]; the brain decides what becomes of it.
+//!
 //! The box takes dictation too ([`Dictation`]): the page's microphone,
 //! relayed to Anthropic's speech-to-text endpoint, the transcript arriving in
 //! the box as editable text.
@@ -82,6 +89,7 @@ mod view;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 use std::io::{self, ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
@@ -131,6 +139,32 @@ pub struct Wiring {
     /// each request, so an edit shows on reload; `None` serves the ones
     /// built in.
     pub page: Option<PathBuf>,
+    /// Where each error the page reports goes.
+    pub report: Box<dyn Fn(PageError) + Send + Sync>,
+}
+
+/// An error the page hit, as it reported it: all text, as the page wrote it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageError {
+    /// The tab's replica id, or `unknown` before it had one.
+    pub tab: String,
+    /// What the page was trying to do.
+    pub doing: String,
+    pub error: String,
+}
+
+/// One line, however many lines the page's words run to.
+impl fmt::Display for PageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let line = |s: &str| s.replace(|c: char| c.is_control(), " ");
+        write!(
+            f,
+            "page error in tab {} while {}: {}",
+            line(&self.tab),
+            line(&self.doing),
+            line(&self.error)
+        )
+    }
 }
 
 /// What the brain hands the face after each fold.
@@ -257,6 +291,20 @@ impl<S: Source> Face<S> {
                     can.to_string().as_bytes(),
                     false,
                 )
+            }
+            "/report" => {
+                let field = |name| request.query(name).map(find::decode);
+                let (Some(tab), Some(doing), Some(error)) =
+                    (field("tab"), field("doing"), field("error"))
+                else {
+                    return http::refuse(
+                        &mut stream,
+                        "400 Bad Request",
+                        "expected ?tab=<replica>&doing=<what>&error=<why>",
+                    );
+                };
+                (self.wiring.report)(PageError { tab, doing, error });
+                http::respond(&mut stream, "text/plain", b"", false)
             }
             "/view" => self.view(&mut stream),
             "/link" => self.link(stream, &request),

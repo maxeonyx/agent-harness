@@ -1,4 +1,4 @@
-import { $, clock, el, gist, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
+import { $, clock, el, getJson, gist, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
 import { act } from "./tab.js";
 import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
 import { trouble } from "./draw.js";
@@ -10,7 +10,7 @@ import { revealIn } from "./newchat.js";
 const contexts = new Map();
 export async function contextOf(head) {
   if (!contexts.has(head)) {
-    contexts.set(head, fetch(`/context/${head}`).then((r) => r.ok ? r.json() : null).catch(() => null)
+    contexts.set(head, getJson(`/context/${head}`, `loading the context ending at ${head}`, null)
       .then((c) => { if (!c) contexts.delete(head); return c; }));
     while (contexts.size > 20) contexts.delete(contexts.keys().next().value);
   }
@@ -20,7 +20,7 @@ export async function contextOf(head) {
 // Where the task's context has other versions, read again with each head
 // and each request that ends, since any request can add one, and a retry
 // can end where it began.
-const versionsOf = (task) => fetch(`/versions/${task}`).then((r) => r.ok ? r.json() : {}).catch(() => ({}));
+const versionsOf = (task) => getJson(`/versions/${task}`, `loading the versions of task ${task}`, {});
 
 export async function renderLog(t) {
   const s = logState;

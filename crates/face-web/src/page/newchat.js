@@ -1,4 +1,4 @@
-import { $, el, logEl, panel } from "./base.js";
+import { $, el, getJson, logEl, panel } from "./base.js";
 import { byId, graph, live, view } from "./map.js";
 import { fit } from "./camera.js";
 import { drawMap } from "./draw.js";
@@ -113,7 +113,7 @@ findEl.addEventListener("input", () => {
   if (!q) return;
   setTimeout(() => {
     if (ask !== asking) return;
-    fetch(`/find?q=${encodeURIComponent(q)}`).then((r) => r.ok ? r.json() : []).catch(() => []).then((said) => {
+    getJson(`/find?q=${encodeURIComponent(q)}`, `finding chats that said ${JSON.stringify(q)}`, []).then((said) => {
       if (ask !== asking) return;
       const named = new Map(hits.map((h) => [h.task, h]));
       for (const h of said) named.set(h.task, { ...named.get(h.task), ...h });
