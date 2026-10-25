@@ -248,8 +248,8 @@
 //!   Sent -.->|"an earlier brain's request, no end seen<br/>Todo::Lost"| ended
 //!   ended{{"ModelCallEvent::Ended"}}
 //!   ended -->|"Responded, with tool uses"| acting["Task: Acting<br/>CallEvent::Made, in the same batch"]
-//!   ended -->|"Responded, Stop::EndTurn"| turn["Task::turn_ended"]
-//!   ended -->|"Responded, another Stop"| short["Task: Ready<br/>Brain::send: MaxTokens, PauseTurn carry on;<br/>ContextWindow roots anew; Refused fails"]
+//!   ended -->|"Responded, Stop::EndTurn, no tool uses"| turn["Task::turn_ended"]
+//!   ended -->|"Responded, another Stop"| short["Task: Ready<br/>Brain::send: ContextWindow roots anew, Refused fails<br/>MaxTokens, PauseTurn: Note::Continue"]
 //!   ended -->|"Failed"| failed["Task: Ready, failures + 1<br/>resend after the retry time or backoff_ms;<br/>after GIVE_UP, Drain::Fail"]
 //!   ended -->|"Limited until"| limited["Task: Ready<br/>no Todo::Send until then"]
 //!   ended -->|"Cut: Todo::Cut"| cut["Task::drained<br/>abandon, interrupt, or shutdown"]
@@ -258,7 +258,7 @@
 //!
 //! # Lifecycle of a call
 //!
-//! A call ([`call::Call`]): a tool use of a response, a background call, Max's act, or a member's spawn. Each arrow is a [`call::CallEvent`] or the [`state::Todo`] that states it. A limb settles its own calls; the brain settles the ones it runs.
+//! A call ([`call::Call`]): a tool use of a response, a background call, Max's act, or a member's spawn. Each arrow is a [`call::CallEvent`] or the [`state::Todo`] that states it. A limb settles its own calls; the brain settles the ones it runs. `Todo::Interrupt` is read off a [`call::CallEvent::Abandon`] (Max's Stop, an agent's `stop`) or off the drain of every task reading the call, and a later one with less time tightens `Stopping`. A call that is Stopping settles Unknown the same way when its limb goes.
 //!
 //! ```mermaid
 //! ---
@@ -270,9 +270,9 @@
 //!   Made -->|"Todo::Unroutable<br/>no such tool: Failed"| Settled
 //!   Made -->|"Todo::Interrupt, never dispatched:<br/>Interrupted"| Settled
 //!   Dispatched -->|"Todo::Interrupt<br/>Brain::interrupt"| Stopping
-//!   Dispatched -->|"limb unreached: Unknown"| Settled
-//!   Dispatched -->|"a limb: Voice::settle<br/>the brain: Brain::read, settle_scope"| Settled
-//!   Stopping -->|"Interrupted, or the outcome it reached"| Settled
+//!   Dispatched -->|"Todo::Interrupt, its limb not connected:<br/>Unknown"| Settled
+//!   Dispatched -->|"a limb: Voice::settle<br/>the brain: spawn, read, settle_scope"| Settled
+//!   Stopping -->|"Voice::settle: Interrupted,<br/>or the outcome it reached"| Settled
 //!   Settled -.->|"a second Settled, only after Unknown"| Late["the real outcome"]
 //!   Settled["CallEvent::Settled<br/>Completed, Failed, Refused,<br/>Interrupted or Unknown"]
 //! ```

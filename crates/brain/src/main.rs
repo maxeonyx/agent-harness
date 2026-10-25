@@ -83,6 +83,104 @@
 //!   todo -->|"requests, a socket each"| api
 //!   face -->|dictation| api
 //! ```
+//!
+//! # Stopping a task
+//!
+//! What happens when Max abandons a task: the stop that reaches furthest, from the task's request through its calls to the processes of a shell, and down to the members of the scopes it owns. Work that is durable is stopped by facts (the drain, `CallEvent::Stopping`), so a restart carries a stop on; work that is only a process is stopped by [`harness_runtime::Cancel`], whose deadline only moves forward. The three branches are the three things a task can have running, and it may have all of them. A pause and a park wait for a safe point and cut nothing, so they are not drawn.
+//!
+//! ```mermaid
+//! ---
+//! title: "Max abandons a task"
+//! ---
+//! sequenceDiagram
+//!   participant page as Max's page
+//!   participant brain as The brain
+//!   participant req as Request thread
+//!   participant limb as A limb
+//!   participant tree as The call's processes
+//!   page->>brain: TaskEvent::Drain, Drain::Abandon by Max within 2 minutes
+//!   Note over brain: Task::event: Draining::Abandoning, a deadline set<br/>State::todo now reads off the drain
+//!   par its request in flight, Phase::Thinking
+//!     brain->>req: Todo::Cut: Cancel::now
+//!     req->>brain: Brain::finished: Ending::Cut, then Task::drained
+//!   and each call it waits on, in its round or in the background
+//!     brain->>limb: Todo::Interrupt: Brain::interrupt, CallEvent::Stopping within
+//!     limb->>tree: Calls::call: Cancel::request, shell::run: Group::end<br/>SIGTERM now, SIGKILL at the deadline
+//!     limb->>brain: Voice::settle: Outcome::Interrupted
+//!   and each member of a scope it owns
+//!     brain->>brain: Todo::Abandon: Brain::stop_member<br/>Drain::Abandon by Owner within three quarters of what is left
+//!     Note over brain: each member does all of this
+//!     brain->>brain: Todo::Settle: Brain::settle_scope
+//!   end
+//!   Note over brain: Task::drained: nothing of its round is left
+//!   brain->>brain: Todo::Tidy: Prompt::Tidy
+//!   brain->>req: Todo::Send: the tidy-up turn, its one last request
+//!   req->>brain: Brain::finished: Stop::EndTurn
+//!   Note over brain: Task::turn_ended: Outcome::Abandoned, with its report<br/>At the deadline Todo::Expire: TaskEvent::Expired ends it with no report<br/>End now is Drain::Abandon within 0
+//! ```
+//!
+//! # A real turn
+//!
+//! A task's turn from Max's words to its end, with one tool call. No step is a script: each is what [`State::todo`](harness_core::state::State::todo) reads off the state after the one before. `Brain::send` may first compact the task (`Brain::compact`) or hold the request (`policy::hold`); neither is drawn.
+//!
+//! ```mermaid
+//! ---
+//! title: "A real turn: Max's words, a tool call, the end of the turn"
+//! ---
+//! sequenceDiagram
+//!   participant page as Max's page
+//!   participant face as Face
+//!   participant brain as The brain
+//!   participant req as Request thread
+//!   participant api as Anthropic
+//!   participant limb as A limb
+//!   page->>face: /link: Draft Send, from compose.js submit
+//!   face->>brain: Event::Tab: Brain::include
+//!   Note over brain: the draft's words are folded as a Delivery: State::send_words, Task::deliver<br/>a waiting task is Ready, and Brain::work: State::todo says Todo::Send
+//!   brain->>brain: Brain::send: ModelCallEvent::Sent
+//!   brain->>req: thread::spawn: Client::send
+//!   req->>api: POST /v1/messages, streaming
+//!   api-->>req: message_start
+//!   req->>brain: Event::FirstByte: Brain::first_byte
+//!   api-->>req: the response, as it is written
+//!   req-->>face: Live::Model chunks, never a fact
+//!   req->>brain: Event::Finished: Brain::finished
+//!   Note over brain: one batch: CallEvent::Made for each tool use (Brain::tool_uses)<br/>then ModelCallEvent::Ended: the task is Acting
+//!   brain->>limb: Todo::Dispatch: Brain::dispatch, CallEvent::Dispatched<br/>the call's row goes down the link in Brain::publish
+//!   limb->>limb: Calls::call runs it
+//!   limb->>brain: Voice::settle: CallEvent::Settled, in at Brain::heard
+//!   Note over brain: Task::settled: the round is over, the task is Ready
+//!   brain->>req: Todo::Send: Brain::send, with the result
+//!   req->>brain: Brain::finished: Stop::EndTurn
+//!   Note over brain: Task::turn_ended: the task waits for Max
+//!   brain-->>face: Brain::publish: the folded state
+//!   face-->>page: /link: the rows that changed
+//! ```
+//!
+//! # A usage fetch
+//!
+//! Max's click on the usage gauges. The same numbers arrive for free in the headers of every response (the quota of `ModelCallEvent::Ended`), and the view shows whichever is newer.
+//!
+//! ```mermaid
+//! ---
+//! title: "A usage fetch: Max asks for the plan's usage"
+//! ---
+//! sequenceDiagram
+//!   participant page as Max's page
+//!   participant brain as The brain
+//!   participant th as Reading thread
+//!   participant api as Anthropic
+//!   page->>brain: CallEvent::Made: Caller::Max, tool usage, on the web limb<br/>chrome.js refreshUsage
+//!   Note over brain: State::todo: Todo::Dispatch, as LimbKind::Provider
+//!   brain->>brain: Brain::dispatch: Brain::read_usage: CallEvent::Dispatched
+//!   brain->>th: thread::spawn: Client::usage
+//!   th->>api: GET /api/oauth/usage, with the login's bearer token
+//!   api-->>th: each window's utilization and resets_at
+//!   th->>brain: Event::Usage: Brain::read
+//!   Note over brain: web::usage, then one batch: the values and CallEvent::Settled<br/>or Brain::fail_call, saying why
+//!   brain-->>page: Brain::publish: view.usage, from face-web's view::usage
+//!   Note over page: chrome.js renderUsage
+//! ```
 
 /// Print a line to stdout, dropping it once nothing reads it: `println!`
 /// panics on a closed pipe, and losing the reader of the brain's output
