@@ -14,7 +14,7 @@ use crate::http::Response;
 use crate::login::Login;
 use crate::response::Assembly;
 use crate::scripted::{self, SCRIPTED, scripted};
-use crate::{Error, Model, http, request};
+use crate::{Error, Model, TrustError, http, request};
 
 const HOST: &str = "api.anthropic.com";
 const PATH: &str = "/v1/messages";
@@ -76,21 +76,12 @@ pub struct Finished {
 }
 
 impl Client {
-    pub fn new(login: Login) -> Client {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .expect("ring supports the default protocol versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-        Client {
-            tls: Arc::new(tls),
+    pub fn new(login: Login) -> Result<Client, TrustError> {
+        Ok(Client {
+            tls: http::tls()?,
             login,
             seen: Mutex::default(),
-        }
+        })
     }
 
     /// One exchange with the provider on the login: `method` on `path`

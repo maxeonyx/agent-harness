@@ -302,7 +302,8 @@ fn run() -> Result<(), String> {
             "--check" => {
                 let db = PathBuf::from(value()?);
                 let login = Login::claude_code().map_err(|e| format!("the login: {}", e.0))?;
-                let (report, ok) = check::check(&db, &Client::new(login), SOURCE)?;
+                let client = Client::new(login).map_err(|e| e.0)?;
+                let (report, ok) = check::check(&db, &client, SOURCE)?;
                 outln!("{report:#}");
                 return if ok {
                     Ok(())
@@ -353,12 +354,12 @@ fn run() -> Result<(), String> {
     inbox.signals()?;
     let login = || Login::claude_code().map_err(|e| format!("the login: {}", e.0));
     let feed = Feed::default();
-    let client = Client::new(login()?);
+    let client = Client::new(login()?).map_err(|e| e.0)?;
     let offered = client.models(&Cancel::new()).unwrap_or_else(|e| {
         errln!("harness-brain: the provider's models: {e}; aliases keep what they resolved to");
         vec![harness_provider::scripted()]
     });
-    let mut dictation = Dictation::new(login()?);
+    let mut dictation = Dictation::new(login()?).map_err(|e| e.0)?;
     if let Some(sample) = sample {
         dictation = dictation.with_sample(&sample)?;
     }
