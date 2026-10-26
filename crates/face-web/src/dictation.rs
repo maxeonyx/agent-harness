@@ -36,7 +36,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use harness_provider::Login;
+use harness_provider::{Login, TrustError};
 use serde_json::{Value, json};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::{Message, WebSocket};
@@ -102,21 +102,12 @@ const SAMPLE_RATE: u32 = 16_000;
 const RECONNECTS: u32 = 3;
 
 impl Dictation {
-    pub fn new(login: Login) -> Dictation {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .expect("ring supports the default protocol versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-        Dictation {
+    pub fn new(login: Login) -> Result<Dictation, TrustError> {
+        Ok(Dictation {
             login,
-            tls: Arc::new(tls),
+            tls: harness_provider::tls()?,
             sample: None,
-        }
+        })
     }
 
     /// Offer the page a recording to dictate instead of its microphone: a

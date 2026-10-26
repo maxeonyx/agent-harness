@@ -56,6 +56,11 @@
 //! blocked: connecting, in the TLS handshake, before the first byte, or
 //! mid-stream ([`Client::send`]).
 //!
+//! **Trust.** Every connection to Anthropic, dictation's WebSocket too,
+//! trusts the operating system's certificate store, read when its client is
+//! made ([`tls`]). A CA the system stops trusting is distrusted here on the
+//! next restart, with no rebuild.
+//!
 //! **Left to the brain:** breakpoint placement, holding a fan-out until a
 //! first byte, retries, and recording the facts in the journal.
 
@@ -67,7 +72,7 @@ mod response;
 mod scripted;
 
 pub use client::{Client, Counted, Finished, Progress};
-pub use http::{Body, Response};
+pub use http::{Body, Response, TrustError, tls};
 pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};
 pub use scripted::{SCRIPTED, scripted};

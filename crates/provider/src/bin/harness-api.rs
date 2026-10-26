@@ -44,6 +44,7 @@ fn run() -> Result<bool, String> {
     };
     let login = Login::claude_code().map_err(|e| format!("the login: {}", e.0))?;
     let mut response = Client::new(login)
+        .map_err(|e| e.0)?
         .exchange(method, path, &body, &Cancel::new())
         .map_err(|e| e.to_string())?;
     eprintln!("{}", response.status);

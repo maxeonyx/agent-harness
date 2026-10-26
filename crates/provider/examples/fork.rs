@@ -62,7 +62,8 @@ impl Store {
 
 fn main() {
     let name = std::env::args().nth(1).unwrap_or_else(|| "haiku".into());
-    let client = Client::new(Login::claude_code().unwrap_or_else(|e| fail(&e.to_string())));
+    let client = Client::new(Login::claude_code().unwrap_or_else(|e| fail(&e.to_string())))
+        .unwrap_or_else(|e| fail(&e.0));
     let models = client
         .models(&Cancel::new())
         .unwrap_or_else(|e| fail(&format!("listing the models: {e}")));

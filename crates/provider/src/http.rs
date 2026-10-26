@@ -41,6 +41,57 @@ fn find<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// Why no server can be verified: the operating system's certificate store
+/// is missing, empty or unreadable.
+#[derive(Debug)]
+pub struct TrustError(pub String);
+
+impl std::fmt::Display for TrustError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TrustError {}
+
+/// TLS for every connection to Anthropic: it trusts what the operating
+/// system's certificate store trusts when this is called.
+pub fn tls() -> Result<Arc<ClientConfig>, TrustError> {
+    let found = rustls_native_certs::load_native_certs();
+    // rustls_native_certs finds the store with openssl-probe: if either
+    // changes where it looks, update this.
+    let fix = "The harness reads the store where OpenSSL does: SSL_CERT_FILE and \
+        SSL_CERT_DIR if either is set, else the system's, which on Manjaro is \
+        /etc/ssl/certs/ca-certificates.crt and /etc/ssl/certs/, from the \
+        ca-certificates package. `sudo pacman -S ca-certificates` reinstalls it, \
+        and `sudo update-ca-trust` rebuilds it.";
+    if !found.errors.is_empty() {
+        let errors: Vec<String> = found.errors.iter().map(|e| format!("  {e}")).collect();
+        return Err(TrustError(format!(
+            "Cannot reach Anthropic: the operating system's certificate store could not \
+             be read, so the harness cannot tell which servers to trust. {} certificates \
+             were read, and these failed:\n{}\n{fix}",
+            found.certs.len(),
+            errors.join("\n"),
+        )));
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add_parsable_certificates(found.certs);
+    if roots.is_empty() {
+        return Err(TrustError(format!(
+            "Cannot reach Anthropic: the operating system's certificate store is missing \
+             or holds no certificate, so the harness trusts no server. {fix}"
+        )));
+    }
+    let tls =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("ring supports the default protocol versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    Ok(Arc::new(tls))
+}
+
 /// Send `method` with `body` to `https://{host}{path}` with `headers`, and
 /// read the response's head. Every wait ends in [`harness_runtime::Cancelled`]
 /// once `cancel` is requested, and so does every read of the body.
