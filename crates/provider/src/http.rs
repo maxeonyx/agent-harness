@@ -59,12 +59,16 @@ impl std::error::Error for TrustError {}
 pub fn tls() -> Result<Arc<ClientConfig>, TrustError> {
     let found = rustls_native_certs::load_native_certs();
     // rustls_native_certs finds the store with openssl-probe: if either
-    // changes where it looks, update this.
+    // changes where it looks, update this. On Manjaro `ca-certificates` is a
+    // meta package with no files, so reinstalling it restores nothing: the
+    // store is built by `update-ca-trust` (ca-certificates-utils) from the
+    // roots ca-certificates-mozilla installs.
     let fix = "The harness reads the store where OpenSSL does: SSL_CERT_FILE and \
         SSL_CERT_DIR if either is set, else the system's, which on Manjaro is \
-        /etc/ssl/certs/ca-certificates.crt and /etc/ssl/certs/, from the \
-        ca-certificates package. `sudo pacman -S ca-certificates` reinstalls it, \
-        and `sudo update-ca-trust` rebuilds it.";
+        /etc/ssl/certs/ca-certificates.crt and /etc/ssl/certs/, built by \
+        `update-ca-trust` from the roots the ca-certificates-mozilla package \
+        installs. `sudo update-ca-trust` rebuilds it, and `sudo pacman -S \
+        ca-certificates-mozilla` reinstalls those roots and rebuilds it.";
     if !found.errors.is_empty() {
         let errors: Vec<String> = found.errors.iter().map(|e| format!("  {e}")).collect();
         return Err(TrustError(format!(
