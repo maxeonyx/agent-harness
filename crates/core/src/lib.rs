@@ -355,9 +355,9 @@
 //!   waits on, with background scopes as the other path. An interrupt
 //!   meanwhile is refused ([`fact::Rejected::Scoped`],
 //!   [`state::State::scoped`]) so the face can offer the aside; under
-//!   background scopes it would not arise. Max wants a parent that
-//!   doesn't block on its children (`docs/vision.md`, structured
-//!   concurrency), so this goes when spawns stop blocking.
+//!   background scopes it would not arise. Max wants background spawns
+//!   beside blocking ones (`docs/vision.md`, structured concurrency),
+//!   so this goes once a parent can spawn in the background.
 //! - An agent needing Max faces him: a user-facing task ends its turn
 //!   with what it needs in its message ([`state::Waiting::Max`]); an
 //!   autonomous one tells its owner, which faces him or carries it up.
