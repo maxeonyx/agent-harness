@@ -348,6 +348,7 @@ dependencies = [
  "harness-core",
  "harness-runtime",
  "ring",
+ "rusqlite",
  "rustls",
  "rustls-native-certs",
  "serde_json",

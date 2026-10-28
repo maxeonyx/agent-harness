@@ -139,6 +139,9 @@ pub enum Fact {
     Ranking(Ranking),
     /// Which task the face stating it shows Max.
     Focus(Focus),
+    /// The harness has a claude.ai login again: ends the wait that
+    /// [`crate::model_call::Ending::SignedOut`] began. Stated by the brain.
+    SignedIn,
 }
 
 impl Fact {
@@ -154,7 +157,8 @@ impl Fact {
                 limbs: _,
                 how: _,
             })
-            | Fact::Shutdown { within: _ } => {}
+            | Fact::Shutdown { within: _ }
+            | Fact::SignedIn => {}
             Fact::Task(_, event) => event.values(&mut values),
             Fact::ModelCall(_, event) => event.values(&mut values),
             Fact::Call(_, event) => event.values(&mut values),

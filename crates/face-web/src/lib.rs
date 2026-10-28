@@ -127,6 +127,8 @@ pub struct Wiring {
     /// a later [`Folded`]. Without it, a face only watches.
     pub include: Option<Box<dyn Fn(Record) + Send + Sync>>,
     pub dictation: Option<Dictation>,
+    /// The claude.ai login Max signs in to from the page (`/login`).
+    pub login: Option<harness_provider::Login>,
     /// Live progress, from whoever runs things.
     pub feed: Feed,
     /// The models on offer, newest first ([`harness_provider::Client::models`]),
@@ -309,6 +311,21 @@ impl<S: Source> Face<S> {
             "/view" => self.view(&mut stream),
             "/link" => self.link(stream, &request),
             "/dictation" => self.dictate(stream, &request),
+            // A sign-in: the URL to open, then `?code=CODE%23STATE` with
+            // what claude.ai showed. Only Max reaches the face.
+            "/login" => {
+                let Some(login) = &self.wiring.login else {
+                    return http::not_found(&mut stream);
+                };
+                let done = match request.query("code").map(find::decode) {
+                    None => login.begin(),
+                    Some(code) => login.finish(&code).map(|()| "Signed in.".into()),
+                };
+                match done {
+                    Ok(said) => http::respond(&mut stream, "text/plain", said.as_bytes(), false),
+                    Err(e) => http::refuse(&mut stream, "400 Bad Request", &e.to_string()),
+                }
+            }
             "/find" => {
                 let query = find::decode(request.query("q").unwrap_or(""));
                 let tasks = find::own_entries(&self.read());

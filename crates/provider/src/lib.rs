@@ -44,12 +44,15 @@
 //! before its body is read. A 429 whose
 //! unified status is `rejected` is the plan's limit, ending
 //! [`harness_core::model_call::Ending::Limited`] until its reset; any other
-//! refusal is a failure of that request.
+//! refusal is a failure of that request. A request with no login to send it
+//! on is [`LoginError::SignedOut`], which the brain ends as
+//! [`harness_core::model_call::Ending::SignedOut`].
 //!
 //! **The login.** [`Login`] is the one owner of the claude.ai credential,
 //! for every Anthropic endpoint (dictation's WebSocket uses
 //! [`Token::bearer`] too). It is the harness's own sign-in, made the way
-//! Claude Code makes its own, and refreshed before it expires and on a 401.
+//! Claude Code makes its own, kept in the home brain's database, and
+//! refreshed before it expires and on a 401.
 //!
 //! **Cancellation.** A request runs on a socket of its own ([`harness_runtime::Socket`])
 //! through a minimal HTTP/1.1 exchange, so a stop cuts it at once wherever it is

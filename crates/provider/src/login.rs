@@ -10,28 +10,39 @@
 //! would sign the other out. Claude Code's `~/.claude/.credentials.json` is
 //! never touched.
 //!
-//! **Kept fresh.** The tokens live in `~/.local/share/agent-harness/login.json`
-//! (mode 0600, replaced atomically). An access token lasts about 8 hours; it
-//! is refreshed from a random point 1 to 2 hours before it expires, so the
-//! brains that share the file do not all refresh at once, and again when a
-//! request is refused with 401. A refresh holds `login.lock`, and reads the
-//! file again under it: the brain that loses the race uses the winner's
-//! token instead of spending the rotated refresh token a second time.
+//! **Internal state.** The tokens are a row of the `login` table in a
+//! brain's database, beside its records. Every brain on the machine uses
+//! the home brain's ([`Login::home`]) unless told another (`--login DB`),
+//! so Max signs in once. The table is not one of the store's: a build that
+//! does not know it leaves it alone.
+//!
+//! **Kept fresh.** An access token lasts about 8 hours; it is refreshed
+//! from a random point 1 to 2 hours before it expires, so the brains that
+//! share a login do not all refresh at once, and again when a request is
+//! refused with 401. Refresh tokens rotate, so one must never be spent
+//! twice: a refresh first claims the row in a transaction, which also
+//! reads it again, and only the claimant sends the old refresh token. The
+//! claim is a column, not a transaction held across the request, so the
+//! brain's own commits to the file never wait on the network. A process
+//! that finds the row claimed uses the token it has while that is still
+//! valid, else waits for the claimant's; a claim left by a crash lapses
+//! after a minute. A refresh token the endpoint rejects signs the harness
+//! out: the tokens are deleted and [`LoginError::SignedOut`] says so.
 //!
 //! **Signing in once.** [`Login::begin`] gives the URL Max opens; claude.ai
 //! then shows him a code, which [`Login::finish`] exchanges for the tokens.
-//! What `begin` made (the PKCE verifier and state) waits in
-//! `login.pending.json`, so the two halves can run in different processes.
+//! What `begin` made (the PKCE verifier and state) waits in the row, so the
+//! two halves can run in different processes.
 
 use std::fmt;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use harness_runtime::Cancel;
 use ring::rand::{SecureRandom, SystemRandom};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 
 use crate::http;
@@ -48,11 +59,28 @@ const SCOPES: &str = "org:create_api_key user:profile user:inference \
 /// the second at random.
 const EARLY: Duration = Duration::from_secs(3600);
 const JITTER: Duration = Duration::from_secs(3600);
+/// How long a claim to refresh lasts: far longer than the token endpoint
+/// takes to answer.
+const CLAIM: Duration = Duration::from_secs(60);
 
-/// The harness's own claude.ai login, in its file.
+const TABLE: &str = "
+CREATE TABLE IF NOT EXISTS login (
+    one INTEGER PRIMARY KEY CHECK (one = 1),
+    access TEXT,
+    refresh TEXT,
+    expires_at INTEGER,
+    refresh_at INTEGER,
+    claimed_until INTEGER NOT NULL DEFAULT 0,
+    verifier TEXT,
+    state TEXT
+) STRICT;
+INSERT OR IGNORE INTO login (one) VALUES (1);
+";
+
+/// The harness's own claude.ai login, in a brain's database.
 #[derive(Clone, Debug)]
 pub struct Login {
-    path: PathBuf,
+    db: PathBuf,
 }
 
 /// An access token, valid when it was read. It has no `Debug` or `Display`,
@@ -61,47 +89,58 @@ pub struct Token(String);
 
 /// Why there is no usable token. It never contains a token.
 #[derive(Debug)]
-pub struct LoginError(pub String);
+pub enum LoginError {
+    /// There are no tokens: never signed in, or the endpoint rejected the
+    /// refresh token. Only Max signing in again ends it.
+    SignedOut,
+    /// The database or the token endpoint failed; it may pass.
+    Failed(String),
+}
 
-/// The tokens as the file holds them.
+/// The tokens as the row holds them.
 struct Tokens {
     access: String,
     refresh: String,
     /// Unix milliseconds.
-    expires_at: u64,
-    refresh_at: u64,
+    expires_at: i64,
+    refresh_at: i64,
 }
 
 impl Login {
-    /// The harness's login, `~/.local/share/agent-harness/login.json`.
-    pub fn own() -> Result<Login, LoginError> {
-        let home = std::env::var_os("HOME").ok_or(LoginError("HOME is not set".into()))?;
+    /// The home brain's login, in `~/.local/share/agent-harness/home/brain.sqlite`.
+    pub fn home() -> Result<Login, LoginError> {
+        let home = std::env::var_os("HOME").ok_or(LoginError::Failed("HOME is not set".into()))?;
         Ok(Login::at(
-            PathBuf::from(home).join(".local/share/agent-harness/login.json"),
+            PathBuf::from(home).join(".local/share/agent-harness/home/brain.sqlite"),
         ))
     }
 
-    /// A login kept in `path`.
-    pub fn at(path: PathBuf) -> Login {
-        Login { path }
+    /// The login kept in the database at `db`.
+    pub fn at(db: PathBuf) -> Login {
+        Login { db }
+    }
+
+    /// Whether there are tokens: the harness is signed in, though the
+    /// access token may be due for a refresh.
+    pub fn signed_in(&self) -> Result<bool, LoginError> {
+        Ok(self.read(&self.open()?)?.is_some())
     }
 
     /// The current access token, refreshed first if it is due, or why there
     /// is none.
     pub fn token(&self) -> Result<Token, LoginError> {
-        let tokens = self.read()?;
+        let tokens = self.read(&self.open()?)?.ok_or(LoginError::SignedOut)?;
         if now_ms() < tokens.refresh_at {
             return Ok(Token(tokens.access));
         }
         match self.refresh(None) {
-            Ok(token) => Ok(token),
             // A failed early refresh leaves the token it was replacing.
-            Err(_) if now_ms() < tokens.expires_at => Ok(Token(tokens.access)),
-            Err(e) => Err(e),
+            Err(LoginError::Failed(_)) if now_ms() < tokens.expires_at => Ok(Token(tokens.access)),
+            result => result,
         }
     }
 
-    /// A fresh token after `stale` was refused with 401: the file's, if
+    /// A fresh token after `stale` was refused with 401: the row's, if
     /// another request has refreshed it since, else a new one.
     pub fn refused(&self, stale: &Token) -> Result<Token, LoginError> {
         self.refresh(Some(stale))
@@ -114,25 +153,27 @@ impl Login {
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_secs(600));
-                if let Ok(tokens) = login.read()
-                    && now_ms() >= tokens.refresh_at
-                    && let Err(e) = login.refresh(None)
-                {
-                    eprintln!("harness: {e}");
+                if let Err(LoginError::Failed(e)) = login.token() {
+                    eprintln!("harness: login: {e}");
                 }
             }
         });
     }
 
     /// Start a sign-in: the URL Max opens. Its verifier and state wait in
-    /// `login.pending.json` for [`Login::finish`].
+    /// the row for [`Login::finish`].
     pub fn begin(&self) -> Result<String, LoginError> {
         let verifier = base64url(&random::<32>()?);
         let state = base64url(&random::<32>()?);
         let challenge =
             base64url(ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes()).as_ref());
-        let pending = json!({ "verifier": verifier, "state": state });
-        write_private(&self.pending(), pending.to_string().as_bytes())?;
+        let db = self.open()?;
+        db.execute_batch(TABLE).map_err(failed)?;
+        db.execute(
+            "UPDATE login SET verifier = ?, state = ?",
+            params![verifier, state],
+        )
+        .map_err(failed)?;
         let query = [
             ("code", "true"),
             ("client_id", CLIENT_ID),
@@ -148,19 +189,27 @@ impl Login {
 
     /// Finish a sign-in with the code claude.ai showed Max (`CODE#STATE`).
     pub fn finish(&self, pasted: &str) -> Result<(), LoginError> {
-        let pending_path = self.pending();
-        let text = std::fs::read_to_string(&pending_path).map_err(|_| {
-            LoginError("no sign-in was started: start one, then paste its code".into())
-        })?;
-        let pending: Value = serde_json::from_str(&text)
-            .map_err(|_| LoginError(format!("{} is not JSON", pending_path.display())))?;
+        let db = self.open()?;
+        let pending: Option<(String, String)> = db
+            .query_row(
+                "SELECT verifier, state FROM login WHERE verifier IS NOT NULL",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(failed)?;
+        let Some((verifier, expected)) = pending else {
+            return Err(LoginError::Failed(
+                "no sign-in was started: start one, then paste its code".into(),
+            ));
+        };
         let Some((code, state)) = pasted.trim().split_once('#') else {
-            return Err(LoginError(
+            return Err(LoginError::Failed(
                 "the code is CODE#STATE, as claude.ai shows it: paste all of it".into(),
             ));
         };
-        if Some(state) != pending["state"].as_str() {
-            return Err(LoginError(
+        if state != expected {
+            return Err(LoginError::Failed(
                 "the code is from another sign-in: open the latest URL".into(),
             ));
         }
@@ -169,91 +218,160 @@ impl Login {
             "code": code,
             "redirect_uri": REDIRECT,
             "client_id": CLIENT_ID,
-            "code_verifier": pending["verifier"],
+            "code_verifier": verifier,
             "state": state,
-        }))?;
-        let _lock = self.lock()?;
-        self.write(&tokens_from(&response, None)?)?;
-        let _ = std::fs::remove_file(pending_path);
-        Ok(())
+        }))
+        .map_err(|e| LoginError::Failed(e.why))?;
+        let tokens = tokens_from(&response, None)?;
+        self.private()?;
+        db.execute(
+            "UPDATE login SET verifier = NULL, state = NULL, claimed_until = 0",
+            [],
+        )
+        .map_err(failed)?;
+        write(&db, Some(&tokens))
     }
 
-    /// Refresh under the lock, unless the file under it already holds a
-    /// token newer than the one that was due (or `stale`).
+    /// Refresh, unless the row, read again, already holds a token newer
+    /// than the one that was due (or `stale`).
     fn refresh(&self, stale: Option<&Token>) -> Result<Token, LoginError> {
-        let _lock = self.lock()?;
-        let tokens = self.read()?;
-        let moved_on = match stale {
-            Some(stale) => stale.0 != tokens.access,
-            None => now_ms() < tokens.refresh_at,
+        let mut db = self.open()?;
+        let tokens = loop {
+            let tx = immediate(&mut db)?;
+            let tokens = self.read(&tx)?.ok_or(LoginError::SignedOut)?;
+            let moved_on = match stale {
+                Some(stale) => stale.0 != tokens.access,
+                None => now_ms() < tokens.refresh_at,
+            };
+            if moved_on {
+                return Ok(Token(tokens.access));
+            }
+            let claimed: i64 = tx
+                .query_row("SELECT claimed_until FROM login", [], |row| row.get(0))
+                .map_err(failed)?;
+            if claimed <= now_ms() {
+                tx.execute(
+                    "UPDATE login SET claimed_until = ?",
+                    [now_ms() + CLAIM.as_millis() as i64],
+                )
+                .map_err(failed)?;
+                tx.commit().map_err(failed)?;
+                break tokens;
+            }
+            drop(tx);
+            // Another process is refreshing: its token, once it has one.
+            if stale.is_none() && now_ms() < tokens.expires_at {
+                return Ok(Token(tokens.access));
+            }
+            std::thread::sleep(Duration::from_millis(500));
         };
-        if moved_on {
-            return Ok(Token(tokens.access));
-        }
         let response = post(&json!({
             "grant_type": "refresh_token",
             "refresh_token": tokens.refresh,
             "client_id": CLIENT_ID,
             "scope": SCOPES,
-        }))?;
-        let fresh = tokens_from(&response, Some(&tokens.refresh))?;
-        self.write(&fresh)?;
-        Ok(Token(fresh.access))
-    }
-
-    fn read(&self) -> Result<Tokens, LoginError> {
-        let path = self.path.display();
-        let text = match std::fs::read_to_string(&self.path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(LoginError(
-                    "the harness is not signed in to claude.ai: sign in once".into(),
-                ));
+        }));
+        let unclaim = |db: &Connection| {
+            db.execute("UPDATE login SET claimed_until = 0", [])
+                .map_err(failed)
+        };
+        match response {
+            Ok(response) => {
+                let fresh = tokens_from(&response, Some(&tokens.refresh))?;
+                write(&db, Some(&fresh))?;
+                unclaim(&db)?;
+                Ok(Token(fresh.access))
             }
-            Err(e) => return Err(LoginError(format!("cannot read {path}: {e}"))),
-        };
-        let file: Value =
-            serde_json::from_str(&text).map_err(|_| LoginError(format!("{path} is not JSON")))?;
-        let field = |name: &str| {
-            file[name]
-                .as_str()
-                .map(str::to_owned)
-                .ok_or(LoginError(format!("{path} has no {name}")))
-        };
-        let number = |name: &str| {
-            file[name]
-                .as_u64()
-                .ok_or(LoginError(format!("{path} has no {name}")))
-        };
-        Ok(Tokens {
-            access: field("access_token")?,
-            refresh: field("refresh_token")?,
-            expires_at: number("expires_at")?,
-            refresh_at: number("refresh_at")?,
-        })
+            Err(e) if e.rejected => {
+                eprintln!("harness: login: {}: signed out", e.why);
+                write(&db, None)?;
+                unclaim(&db)?;
+                Err(LoginError::SignedOut)
+            }
+            Err(e) => {
+                unclaim(&db)?;
+                Err(LoginError::Failed(e.why))
+            }
+        }
     }
 
-    fn write(&self, tokens: &Tokens) -> Result<(), LoginError> {
-        let file = json!({
-            "access_token": tokens.access,
-            "refresh_token": tokens.refresh,
-            "expires_at": tokens.expires_at,
-            "refresh_at": tokens.refresh_at,
-        });
-        write_private(&self.path, file.to_string().as_bytes())
+    /// Make the database, and the journal beside it, readable by its owner
+    /// alone, before it holds tokens.
+    fn private(&self) -> Result<(), LoginError> {
+        for suffix in ["", "-wal", "-shm"] {
+            let mut path = self.db.clone().into_os_string();
+            path.push(suffix);
+            match std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(LoginError::Failed(format!(
+                        "cannot make {} private: {e}",
+                        self.db.display()
+                    )));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
-    fn lock(&self) -> Result<File, LoginError> {
-        let path = self.path.with_extension("lock");
-        let file = open_private(&path, false)?;
-        file.lock()
-            .map_err(|e| LoginError(format!("cannot lock {}: {e}", path.display())))?;
-        Ok(file)
+    fn open(&self) -> Result<Connection, LoginError> {
+        let db = Connection::open(&self.db).map_err(failed)?;
+        db.busy_timeout(Duration::from_secs(5)).map_err(failed)?;
+        Ok(db)
     }
 
-    fn pending(&self) -> PathBuf {
-        self.path.with_extension("pending.json")
+    /// The tokens, if there are any. Only reads, so it is cheap to ask
+    /// often: a database never signed in has no table.
+    fn read(&self, db: &Connection) -> Result<Option<Tokens>, LoginError> {
+        let table: bool = db
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'login')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(failed)?;
+        if !table {
+            return Ok(None);
+        }
+        db.query_row(
+            "SELECT access, refresh, expires_at, refresh_at FROM login WHERE access IS NOT NULL",
+            [],
+            |row| {
+                Ok(Tokens {
+                    access: row.get(0)?,
+                    refresh: row.get(1)?,
+                    expires_at: row.get(2)?,
+                    refresh_at: row.get(3)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(failed)
     }
+}
+
+/// Put `tokens` in the row, or clear it: signed out.
+fn write(db: &Connection, tokens: Option<&Tokens>) -> Result<(), LoginError> {
+    db.execute(
+        "UPDATE login SET access = ?, refresh = ?, expires_at = ?, refresh_at = ?",
+        params![
+            tokens.map(|t| &t.access),
+            tokens.map(|t| &t.refresh),
+            tokens.map(|t| t.expires_at),
+            tokens.map(|t| t.refresh_at),
+        ],
+    )
+    .map_err(failed)?;
+    Ok(())
+}
+
+fn immediate(db: &mut Connection) -> Result<Transaction<'_>, LoginError> {
+    db.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(failed)
+}
+
+fn failed(e: rusqlite::Error) -> LoginError {
+    LoginError::Failed(format!("the login's database: {e}"))
 }
 
 impl Token {
@@ -263,9 +381,19 @@ impl Token {
     }
 }
 
+/// Why the token endpoint gave no tokens. `rejected` when it refused the
+/// grant itself, rather than failing to answer.
+struct Refused {
+    why: String,
+    rejected: bool,
+}
+
 /// The token endpoint's answer to `body`, as JSON.
-fn post(body: &Value) -> Result<Value, LoginError> {
-    let fail = |why: String| LoginError(format!("the claude.ai token endpoint: {why}"));
+fn post(body: &Value) -> Result<Value, Refused> {
+    let fail = |why: String| Refused {
+        why: format!("the claude.ai token endpoint: {why}"),
+        rejected: false,
+    };
     let tls = http::tls().map_err(|e| fail(e.0))?;
     let body = body.to_string();
     let headers = [
@@ -295,7 +423,10 @@ fn post(body: &Value) -> Result<Value, LoginError> {
             .or(parsed["error"]["message"].as_str())
             .or(parsed["error"].as_str())
             .unwrap_or("");
-        return Err(fail(format!("{} {why:.200}", response.status)));
+        return Err(Refused {
+            rejected: matches!(response.status, 400 | 401),
+            ..fail(format!("{} {why:.200}", response.status))
+        });
     }
     Ok(parsed)
 }
@@ -303,7 +434,7 @@ fn post(body: &Value) -> Result<Value, LoginError> {
 /// The tokens in the endpoint's `response`. A refresh that returns no new
 /// refresh token keeps `refresh`.
 fn tokens_from(response: &Value, refresh: Option<&str>) -> Result<Tokens, LoginError> {
-    let missing = |name| LoginError(format!("the claude.ai token endpoint sent no {name}"));
+    let missing = |name| LoginError::Failed(format!("the claude.ai token endpoint sent no {name}"));
     let access = response["access_token"]
         .as_str()
         .ok_or(missing("access_token"))?;
@@ -312,11 +443,11 @@ fn tokens_from(response: &Value, refresh: Option<&str>) -> Result<Tokens, LoginE
         .or(refresh)
         .ok_or(missing("refresh_token"))?;
     let lifetime = response["expires_in"]
-        .as_u64()
+        .as_i64()
         .ok_or(missing("expires_in"))?
         * 1000;
-    let jitter = u64::from_le_bytes(random::<8>()?) % JITTER.as_millis() as u64;
-    let early = (EARLY.as_millis() as u64 + jitter).min(lifetime / 2);
+    let jitter = (u64::from_le_bytes(random::<8>()?) % JITTER.as_millis() as u64) as i64;
+    let early = (EARLY.as_millis() as i64 + jitter).min(lifetime / 2);
     let now = now_ms();
     Ok(Tokens {
         access: access.to_owned(),
@@ -326,42 +457,18 @@ fn tokens_from(response: &Value, refresh: Option<&str>) -> Result<Tokens, LoginE
     })
 }
 
-fn open_private(path: &Path, truncate: bool) -> Result<File, LoginError> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| LoginError(format!("cannot make {}: {e}", dir.display())))?;
-    }
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(truncate)
-        .mode(0o600)
-        .open(path)
-        .map_err(|e| LoginError(format!("cannot open {}: {e}", path.display())))
-}
-
-/// Replace `path` with `bytes` atomically, readable by its owner alone.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), LoginError> {
-    let temp = path.with_extension("new");
-    let fail = |e: std::io::Error| LoginError(format!("cannot write {}: {e}", path.display()));
-    let mut file = open_private(&temp, true)?;
-    file.write_all(bytes).map_err(fail)?;
-    file.sync_all().map_err(fail)?;
-    std::fs::rename(&temp, path).map_err(fail)
-}
-
 fn random<const N: usize>() -> Result<[u8; N], LoginError> {
     let mut bytes = [0; N];
     SystemRandom::new()
         .fill(&mut bytes)
-        .map_err(|_| LoginError("the system has no randomness to give".into()))?;
+        .map_err(|_| LoginError::Failed("the system has no randomness to give".into()))?;
     Ok(bytes)
 }
 
-fn now_ms() -> u64 {
+fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// Base64url with no padding, as PKCE wants.
@@ -402,7 +509,13 @@ fn form(pairs: &[(&str, &str)]) -> String {
 
 impl fmt::Display for LoginError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "login: {}", self.0)
+        match self {
+            LoginError::SignedOut => write!(
+                f,
+                "login: the harness is not signed in to claude.ai: sign in once"
+            ),
+            LoginError::Failed(why) => write!(f, "login: {why}"),
+        }
     }
 }
 

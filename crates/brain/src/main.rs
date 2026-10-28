@@ -239,12 +239,15 @@ const SOURCE: &str = env!("HARNESS_SOURCE");
 /// What `harness-brain --help` prints. `--model scripted` is
 /// [`harness_provider::SCRIPTED`].
 const USAGE: &str = "\
-usage: harness-brain --db DB --port PORT [--roles DIR] [--sample WAV] [--model MODEL[/EFFORT]] [--page DIR]
+usage: harness-brain --db DB --port PORT [--login DB] [--roles DIR] [--sample WAV] [--model MODEL[/EFFORT]] [--page DIR]
        harness-brain --check DB
        harness-brain --version
 
   --db DB          the database; a new one is made if none is there
   --port PORT      where the face is served, over HTTPS
+  --login DB       the database whose claude.ai login to use: the home
+                   brain's (~/.local/share/agent-harness/home/brain.sqlite)
+                   unless named, so one sign-in serves every brain
   --roles DIR      the role files the roles limb reads; a new database needs
                    it, and on an existing one it moves the limb to DIR
   --model MODEL[/EFFORT]
@@ -285,7 +288,7 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let (mut db, mut port, mut roles, mut sample, mut model) = (None, None, None, None, None);
-    let mut page = None;
+    let (mut page, mut login) = (None, None);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
@@ -299,9 +302,13 @@ fn run() -> Result<(), String> {
                 return Ok(());
             }
             "--page" => page = Some(PathBuf::from(value()?)),
+            "--login" => login = Some(Login::at(PathBuf::from(value()?))),
             "--check" => {
                 let db = PathBuf::from(value()?);
-                let login = Login::own().map_err(|e| format!("the login: {}", e.0))?;
+                let login = match login.take() {
+                    Some(login) => login,
+                    None => Login::home().map_err(|e| e.to_string())?,
+                };
                 let client = Client::new(login).map_err(|e| e.0)?;
                 let (report, ok) = check::check(&db, &client, SOURCE)?;
                 outln!("{report:#}");
@@ -352,15 +359,18 @@ fn run() -> Result<(), String> {
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("port {port}: {e}"))?;
     let inbox = Inbox::new();
     inbox.signals()?;
-    let login = || Login::own().map_err(|e| format!("the login: {}", e.0));
+    let login = match login {
+        Some(login) => login,
+        None => Login::home().map_err(|e| e.to_string())?,
+    };
     let feed = Feed::default();
-    let client = Client::new(login()?).map_err(|e| e.0)?;
-    login()?.keep_fresh();
+    let client = Client::new(login.clone()).map_err(|e| e.0)?;
+    login.keep_fresh();
     let offered = client.models(&Cancel::new()).unwrap_or_else(|e| {
         errln!("harness-brain: the provider's models: {e}; aliases keep what they resolved to");
         vec![harness_provider::scripted()]
     });
-    let mut dictation = Dictation::new(login()?).map_err(|e| e.0)?;
+    let mut dictation = Dictation::new(login.clone()).map_err(|e| e.0)?;
     if let Some(sample) = sample {
         dictation = dictation.with_sample(&sample)?;
     }
@@ -369,6 +379,7 @@ fn run() -> Result<(), String> {
         Wiring {
             include: Some(inbox.include()),
             dictation: Some(dictation),
+            login: Some(login),
             feed: feed.clone(),
             models: offered.clone(),
             source: SOURCE.into(),

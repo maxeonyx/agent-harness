@@ -84,6 +84,11 @@ impl Client {
         })
     }
 
+    /// The login every request is sent on.
+    pub fn login(&self) -> &Login {
+        &self.login
+    }
+
     /// One exchange with the provider on the login: `method` on `path`
     /// (`/v1/models`) with `body`, and the headers every call carries. The
     /// response's head has arrived; its body streams. For anything the
