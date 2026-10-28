@@ -26,8 +26,11 @@
 //! brain's own commits to the file never wait on the network. A process
 //! that finds the row claimed uses the token it has while that is still
 //! valid, else waits for the claimant's; a claim left by a crash lapses
-//! after a minute. A refresh token the endpoint rejects signs the harness
-//! out: the tokens are deleted and [`LoginError::SignedOut`] says so.
+//! after a minute, and a claimant whose claim lapsed during a slow request
+//! neither clears another's claim nor signs out a login another has since
+//! refreshed. A refresh token the endpoint rejects, while the row still
+//! holds it, signs the harness out: the tokens are deleted and
+//! [`LoginError::SignedOut`] says so.
 //!
 //! **Signing in once.** [`Login::begin`] gives the URL Max opens; claude.ai
 //! then shows him a code, which [`Login::finish`] exchanges for the tokens.
@@ -229,14 +232,14 @@ impl Login {
             [],
         )
         .map_err(failed)?;
-        write(&db, Some(&tokens))
+        write(&db, &tokens)
     }
 
     /// Refresh, unless the row, read again, already holds a token newer
     /// than the one that was due (or `stale`).
     fn refresh(&self, stale: Option<&Token>) -> Result<Token, LoginError> {
         let mut db = self.open()?;
-        let tokens = loop {
+        let (tokens, mine) = loop {
             let tx = immediate(&mut db)?;
             let tokens = self.read(&tx)?.ok_or(LoginError::SignedOut)?;
             let moved_on = match stale {
@@ -250,13 +253,11 @@ impl Login {
                 .query_row("SELECT claimed_until FROM login", [], |row| row.get(0))
                 .map_err(failed)?;
             if claimed <= now_ms() {
-                tx.execute(
-                    "UPDATE login SET claimed_until = ?",
-                    [now_ms() + CLAIM.as_millis() as i64],
-                )
-                .map_err(failed)?;
+                let mine = now_ms() + CLAIM.as_millis() as i64;
+                tx.execute("UPDATE login SET claimed_until = ?", [mine])
+                    .map_err(failed)?;
                 tx.commit().map_err(failed)?;
-                break tokens;
+                break (tokens, mine);
             }
             drop(tx);
             // Another process is refreshing: its token, once it has one.
@@ -271,21 +272,37 @@ impl Login {
             "client_id": CLIENT_ID,
             "scope": SCOPES,
         }));
+        // Only while the claim is still this one's: one that lapsed during a
+        // slow request may be another's now.
         let unclaim = |db: &Connection| {
-            db.execute("UPDATE login SET claimed_until = 0", [])
-                .map_err(failed)
+            db.execute(
+                "UPDATE login SET claimed_until = 0 WHERE claimed_until = ?",
+                [mine],
+            )
+            .map_err(failed)
         };
         match response {
             Ok(response) => {
                 let fresh = tokens_from(&response, Some(&tokens.refresh))?;
-                write(&db, Some(&fresh))?;
+                write(&db, &fresh)?;
                 unclaim(&db)?;
                 Ok(Token(fresh.access))
             }
             Err(e) if e.rejected => {
-                eprintln!("harness: login: {}: signed out", e.why);
-                write(&db, None)?;
                 unclaim(&db)?;
+                // Signed out only if the row still holds the rejected token:
+                // a sign-in or another refresh may have replaced it since.
+                let cleared = db
+                    .execute(
+                        "UPDATE login SET access = NULL, refresh = NULL, expires_at = NULL, \
+                         refresh_at = NULL WHERE refresh = ?",
+                        [&tokens.refresh],
+                    )
+                    .map_err(failed)?;
+                if cleared == 0 {
+                    return self.token();
+                }
+                eprintln!("harness: login: {}: signed out", e.why);
                 Err(LoginError::SignedOut)
             }
             Err(e) => {
@@ -350,15 +367,15 @@ impl Login {
     }
 }
 
-/// Put `tokens` in the row, or clear it: signed out.
-fn write(db: &Connection, tokens: Option<&Tokens>) -> Result<(), LoginError> {
+/// Put `tokens` in the row.
+fn write(db: &Connection, tokens: &Tokens) -> Result<(), LoginError> {
     db.execute(
         "UPDATE login SET access = ?, refresh = ?, expires_at = ?, refresh_at = ?",
         params![
-            tokens.map(|t| &t.access),
-            tokens.map(|t| &t.refresh),
-            tokens.map(|t| t.expires_at),
-            tokens.map(|t| t.refresh_at),
+            tokens.access,
+            tokens.refresh,
+            tokens.expires_at,
+            tokens.refresh_at
         ],
     )
     .map_err(failed)?;
