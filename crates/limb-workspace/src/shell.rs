@@ -41,10 +41,10 @@ pub fn mark(call: CallId) -> String {
 /// Run `command` with `bash -c` in `dir` as the tree of processes `call`
 /// owns ([`Group`]), its stdout and stderr merged as a terminal shows them,
 /// until it exits, reaches `timeout` (unless `limit` is lifted by then), or
-/// `cancel` is requested; then end
-/// what is left of the tree: `SIGTERM` to each process, and `SIGKILL` at
-/// the deadline (the cancel's, or a short grace). Returns only once nothing
-/// of the tree is left, or what is left has outlived `SIGKILL`.
+/// `cancel` is requested; then end what is left of the tree: `SIGTERM` to
+/// each process, and `SIGKILL` at the deadline (the cancel's, or a short
+/// grace). Returns only once nothing of the tree is left, or what is left
+/// has outlived `SIGKILL`.
 ///
 /// One thread does it all, waiting in `poll` on the output, the leader's
 /// exit and the cancel at once.
