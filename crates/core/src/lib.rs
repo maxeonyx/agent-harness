@@ -356,8 +356,8 @@
 //!   meanwhile is refused ([`fact::Rejected::Scoped`],
 //!   [`state::State::scoped`]) so the face can offer the aside; under
 //!   background scopes it would not arise. Max wants background spawns
-//!   beside blocking ones (`docs/vision.md`, structured concurrency),
-//!   so this goes once a parent can spawn in the background.
+//!   beside blocking ones (`docs/vision.md`, structured concurrency);
+//!   whether this stays for blocking ones is open.
 //! - An agent needing Max faces him: a user-facing task ends its turn
 //!   with what it needs in its message ([`state::Waiting::Max`]); an
 //!   autonomous one tells its owner, which faces him or carries it up.
