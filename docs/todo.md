@@ -74,7 +74,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **No go-back button after a relaunch** (`face-web/src/page/builds.js:19`), and rehearsal doesn't catch a broken page.
 - **TLS certificate path and bind address are hard-wired** (`brain/src/main.rs:213-219,245`).
 - **The relaunch watcher folds every 2 s.**
-- **A missing limb at relaunch fails a task permanently,** and an expired login fails a task after about 30 s, where both should wait. Only Claude Code refreshes the login: on 25 Oct it expired at 17:12 NZDT, the next message Max sent failed the chat, and he resumed it after Claude Code was run once by hand. Max wants the harness's own auth token, refreshed automatically (28 Oct).
+- **A missing limb at relaunch fails a task permanently,** and an expired login fails a task after about 30 s, where both should wait. Only Claude Code refreshes the login: on 25 Oct it expired at 17:12 NZDT, the next message Max sent failed the chat, and he resumed it after Claude Code was run once by hand. Max decided (28 Oct) that the harness gets its own login, through its own OAuth flow as Claude Code does, and refreshes it itself.
 
 ## Max and his attention (S6)
 
