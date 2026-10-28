@@ -347,6 +347,7 @@ version = "0.0.0"
 dependencies = [
  "harness-core",
  "harness-runtime",
+ "ring",
  "rustls",
  "rustls-native-certs",
  "serde_json",

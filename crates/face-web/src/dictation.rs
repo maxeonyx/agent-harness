@@ -4,8 +4,7 @@
 //! **Why a relay.** A browser WebSocket cannot set `Authorization`, and the
 //! token must not reach the page anyway. So the page streams raw 16-bit PCM
 //! to the face, and the face streams it on with the [`Login`]'s token: the
-//! same credential owner as the Messages API, read again for every session
-//! and never refreshed.
+//! same credential owner as the Messages API, read again for every session.
 //!
 //! **Snapshots into edits.** The endpoint sends the whole session's text in
 //! every frame, and a later frame may rewrite earlier words. The page is sent

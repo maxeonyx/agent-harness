@@ -301,7 +301,7 @@ fn run() -> Result<(), String> {
             "--page" => page = Some(PathBuf::from(value()?)),
             "--check" => {
                 let db = PathBuf::from(value()?);
-                let login = Login::claude_code().map_err(|e| format!("the login: {}", e.0))?;
+                let login = Login::own().map_err(|e| format!("the login: {}", e.0))?;
                 let client = Client::new(login).map_err(|e| e.0)?;
                 let (report, ok) = check::check(&db, &client, SOURCE)?;
                 outln!("{report:#}");
@@ -352,9 +352,10 @@ fn run() -> Result<(), String> {
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("port {port}: {e}"))?;
     let inbox = Inbox::new();
     inbox.signals()?;
-    let login = || Login::claude_code().map_err(|e| format!("the login: {}", e.0));
+    let login = || Login::own().map_err(|e| format!("the login: {}", e.0));
     let feed = Feed::default();
     let client = Client::new(login()?).map_err(|e| e.0)?;
+    login()?.keep_fresh();
     let offered = client.models(&Cancel::new()).unwrap_or_else(|e| {
         errln!("harness-brain: the provider's models: {e}; aliases keep what they resolved to");
         vec![harness_provider::scripted()]

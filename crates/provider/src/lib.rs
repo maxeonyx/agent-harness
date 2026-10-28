@@ -48,8 +48,8 @@
 //!
 //! **The login.** [`Login`] is the one owner of the claude.ai credential,
 //! for every Anthropic endpoint (dictation's WebSocket uses
-//! [`Token::bearer`] too). It reads Claude Code's token for each request
-//! and never refreshes it.
+//! [`Token::bearer`] too). It is the harness's own sign-in, made the way
+//! Claude Code makes its own, and refreshed before it expires and on a 401.
 //!
 //! **Cancellation.** A request runs on a socket of its own ([`harness_runtime::Socket`])
 //! through a minimal HTTP/1.1 exchange, so a stop cuts it at once wherever it is

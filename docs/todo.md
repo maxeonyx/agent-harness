@@ -19,7 +19,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **Which invariants need a decider.** No analysis yet of which refusals need one replica to decide and which can merge (`substrate/src/decider.rs:22-25`); `core/src/lib.rs` still calls the brain "the one decider".
 - **`Change` carries no previous version** (`core/src/state.rs:2030-2063`).
 - **`cold` duplicates fold state** (`brain/src/brain.rs:146,934,969`).
-- **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). Today the provider reads `~/.claude/.credentials.json`.
+- **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). Today the harness's own login is `~/.local/share/agent-harness/login.json`.
 
 ## Tasks (S2)
 
@@ -74,7 +74,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **No go-back button after a relaunch** (`face-web/src/page/builds.js:19`), and rehearsal doesn't catch a broken page.
 - **TLS certificate path and bind address are hard-wired** (`brain/src/main.rs:213-219,245`).
 - **The relaunch watcher folds every 2 s.**
-- **A missing limb at relaunch fails a task permanently,** and an expired login fails a task after about 30 s, where both should wait. Only Claude Code refreshes the login: on 25 Oct it expired at 17:12 NZDT, the next message Max sent failed the chat, and he resumed it after Claude Code was run once by hand.
+- **A missing limb at relaunch fails a task permanently,** and a missing or dead login (never signed in, or its refresh token revoked) fails a task after about 30 s, where both should wait. A signed-out login is the same concept as `Ending::Limited` (the account waits; not the task's failure) but with no known end and a different reason, so it wants a decision on the core model before the brain can wait on it and say so on the page.
 
 ## Max and his attention (S6)
 
