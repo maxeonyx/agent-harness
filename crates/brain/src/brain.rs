@@ -108,6 +108,10 @@ struct Link {
     /// that says hello and fails before it can serve (its directory cannot
     /// be made) leaves only why.
     unsaid: Option<Reach>,
+    /// Whether it has been told nothing holds it ([`LimbRow::Unheld`]):
+    /// its link ending is then its letting go, even if a later view held
+    /// it again too late.
+    let_go: bool,
 }
 
 /// One brain: the decider of everything its replicas say.
@@ -132,8 +136,9 @@ pub struct Brain {
     limbs: HashMap<LimbId, Process>,
     /// When the brain last failed to reach a limb.
     failed: HashMap<LimbId, Instant>,
-    /// The limbs whose link ended while they were superseded: their
-    /// ending is a move to the build the brain starts, not a failure.
+    /// The limbs whose link ended once they were told to go, superseded or
+    /// held by nothing: their ending is no failure, and the brain starts
+    /// them again if something holds them ([`Todo::Connect`]).
     moving: HashSet<LimbId>,
     /// The limbs connected now.
     links: HashMap<LimbId, Link>,
@@ -574,9 +579,8 @@ impl Brain {
             let Some(process) = self.limbs.remove(&limb) else {
                 continue;
             };
-            if self.moving.remove(&limb) {
-                self.connect(limb);
-            } else if !success
+            if !self.moving.remove(&limb)
+                && !success
                 && self.state().shutdown().is_none()
                 && self.state().held().contains(&limb)
             {
@@ -609,6 +613,7 @@ impl Brain {
                 wire,
                 publisher: Publisher::default(),
                 unsaid,
+                let_go: false,
             },
         );
         self.publish();
@@ -638,7 +643,7 @@ impl Brain {
         };
         let link = self.links.remove(&limb).expect("found");
         errln!("limb {limb}: its link ended");
-        if self.state().superseded(limb).is_some() {
+        if self.state().superseded(limb).is_some() || link.let_go {
             self.moving.insert(limb);
         }
         if link.unsaid.is_some() {
@@ -1670,6 +1675,7 @@ and you cannot finish until it has.",
                 set(&mut step.rows, key.clone(), view.rows.get(&key).cloned());
                 steps.push(step.clone());
             }
+            link.let_go |= view.rows.contains_key(&LimbKey::Unheld);
             for view in steps {
                 if let Some(down) = link.publisher.publish(view) {
                     let _ = link.wire.send(down);
