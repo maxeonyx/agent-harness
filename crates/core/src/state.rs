@@ -2383,7 +2383,7 @@ impl State {
 
     /// What every ready task waits on at `now`, if anything: a sign-in
     /// first, since it has no end of its own.
-    pub fn held(&self, now: Timestamp) -> Option<Hold> {
+    pub fn hold(&self, now: Timestamp) -> Option<Hold> {
         match self.signed_out {
             Some(since) => Some(Hold::SignedOut { since }),
             None => self.limited(now).map(|until| Hold::Limited { until }),
@@ -2548,7 +2548,7 @@ impl State {
         };
         Some(match &live.phase {
             Phase::Ready if self.gated(t) => Waiting::Paused { since },
-            Phase::Ready => match self.held(now) {
+            Phase::Ready => match self.hold(now) {
                 Some(hold) => Waiting::Held { hold, since },
                 None => Waiting::Brain { since },
             },
@@ -2653,14 +2653,14 @@ impl State {
                 (Some(Phase::Listening), None) if lingering => {
                     todo.push(Todo::Linger(task.id));
                 }
-                (Some(Phase::Ready), None) if !self.gated(task) && self.held(now).is_none() => {
+                (Some(Phase::Ready), None) if !self.gated(task) && self.hold(now).is_none() => {
                     todo.push(Todo::Send(task.id));
                 }
                 // The tidy-up turn: asked for once, then sent, paused or not.
                 (Some(Phase::Ready), Some(Draining::Abandoning(s))) if !s.hard => {
                     if !s.told {
                         todo.push(Todo::Tidy(task.id));
-                    } else if self.held(now).is_none() {
+                    } else if self.hold(now).is_none() {
                         todo.push(Todo::Send(task.id));
                     }
                 }

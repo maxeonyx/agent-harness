@@ -118,7 +118,7 @@ pub fn rows(
             .map(|l| l.name.as_str())
             .collect::<Vec<_>>(),
         "limited": state.limited(now).map(|t| t.0),
-        "signedOut": match state.held(now) {
+        "signedOut": match state.hold(now) {
             Some(Hold::SignedOut { since }) => Some(since.0),
             _ => None,
         },
