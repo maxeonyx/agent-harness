@@ -436,10 +436,10 @@ pub enum Waiting {
 /// again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Todo {
-    /// Connect to this plugin limb, starting its process if need be: a live
-    /// task can reach it, or a call to it is unsettled, and it is not
-    /// connected. A limb nobody needs is never on the list, so its process
-    /// can be let go.
+    /// Connect to this plugin limb, starting its process if need be:
+    /// something holds it ([`State::held`]) and it is not connected. A limb
+    /// nothing holds is never on the list, and is told to let its process
+    /// go ([`LimbRow::Unheld`]).
     Connect(LimbId),
     /// The task is starting and every limb it can reach has connected and
     /// described itself: render its first root from their descriptions and
@@ -2234,12 +2234,27 @@ impl State {
         self.described.get(&limb)
     }
 
+    /// The limbs something holds: each a live task can reach, and each with
+    /// a call to it unsettled. A plugin limb something holds is connected
+    /// ([`Todo::Connect`]); one nothing holds is let go ([`LimbRow::Unheld`]).
+    /// Held by facts alone, so a relaunched brain holds what its last did.
+    pub fn held(&self) -> BTreeSet<LimbId> {
+        let mut held: BTreeSet<LimbId> = self.live().flat_map(|t| self.limbs_of(t)).collect();
+        held.extend(
+            self.open
+                .calls
+                .iter()
+                .filter_map(|id| self.calls.get(id)?.limb),
+        );
+        held
+    }
+
     /// What `limb` holds of the brain: each call dispatched to it and not
     /// settled, with its stop's deadline; the resources of its that live
     /// contexts embody, with every version the brain holds of each (its
     /// current one where one is recorded, otherwise each a live context
-    /// embodies); the environments read from its resources; and the
-    /// brain's shutdown. The bytes of the values the
+    /// embodies); the environments read from its resources; whether it is
+    /// superseded, or held by nothing; and the brain's shutdown. The bytes of the values the
     /// call rows name ([`LimbRow::Value`]) are the store's, so the brain
     /// adds them.
     pub fn limb_rows(&self, limb: LimbId) -> BTreeMap<LimbKey, LimbRow> {
@@ -2280,6 +2295,9 @@ impl State {
         }
         if let Some(by) = self.superseded(limb) {
             rows.insert(LimbKey::Superseded, LimbRow::Superseded { by });
+        }
+        if !self.held().contains(&limb) {
+            rows.insert(LimbKey::Unheld, LimbRow::Unheld);
         }
         for env in self.environments.values() {
             if env.source.as_ref().is_some_and(|s| s.resource.limb == limb) {
@@ -2599,7 +2617,6 @@ impl State {
             .map(|id| Todo::Lost(*id))
             .collect();
         let mut readers: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
-        let mut needed: BTreeSet<LimbId> = BTreeSet::new();
         let mut starting = Vec::new();
         for task in self.live() {
             for call in task.awaited() {
@@ -2609,7 +2626,6 @@ impl State {
             if task.life == Life::Starting && limbs.iter().all(|l| self.reached(*l)) {
                 starting.push(Todo::Root(task.id));
             }
-            needed.extend(limbs);
             let lingering = task.mode == Mode::Autonomous
                 && !task.background.is_empty()
                 && !self.open.lingered.contains(&task.id);
@@ -2694,7 +2710,6 @@ impl State {
                 todo.push(Todo::Unroutable(*id));
                 continue;
             };
-            needed.insert(limb.id);
             let connection = self.connected(limb.id).map(|(_, mark)| mark.seq);
             let readers = readers.get(id).map_or(&[][..], Vec::as_slice);
             if record.abandoned || interrupts(*id, &record.call, readers) {
@@ -2726,7 +2741,7 @@ impl State {
                 todo.push(Todo::Dispatch(*id));
             }
         }
-        let connect = needed.into_iter().filter(|l| {
+        let connect = self.held().into_iter().filter(|l| {
             self.limbs.get(l).is_some_and(|limb| !limb.kind.is_brains())
                 && self.connected(*l).is_none()
         });

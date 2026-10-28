@@ -562,7 +562,8 @@ impl Brain {
     }
 
     /// Let go of the links whose `attach` has exited, recording why of
-    /// each that failed: the limb could not start, or ended.
+    /// each that failed: the limb could not start, or ended while something
+    /// held it.
     fn reap(&mut self) {
         let exited: Vec<(LimbId, bool)> = self
             .limbs
@@ -575,7 +576,10 @@ impl Brain {
             };
             if self.moving.remove(&limb) {
                 self.connect(limb);
-            } else if !success && self.state().shutdown().is_none() {
+            } else if !success
+                && self.state().shutdown().is_none()
+                && self.state().held().contains(&limb)
+            {
                 self.unreached(limb, process.last_words());
             }
         }
@@ -1654,19 +1658,19 @@ and you cannot finish until it has.",
                 standing: self.decider.standing(link.replica),
                 rows,
             };
-            // `Superseded` changes on a line of its own: a limb of a build
-            // before it cannot read it, and drops that line whole.
-            let mut before = view.clone();
-            let held = link
-                .publisher
-                .shipped()
-                .and_then(|v| v.rows.get(&LimbKey::Superseded))
-                .cloned();
-            match held {
-                Some(row) => before.rows.insert(LimbKey::Superseded, row),
-                None => before.rows.remove(&LimbKey::Superseded),
-            };
-            for view in [before, view] {
+            // Each row a limb of an earlier build may not read changes on a
+            // line of its own: such a limb drops that line whole.
+            let mut step = view.clone();
+            for key in LATE {
+                let shipped = link.publisher.shipped().and_then(|v| v.rows.get(&key));
+                set(&mut step.rows, key, shipped.cloned());
+            }
+            let mut steps = vec![step.clone()];
+            for key in LATE {
+                set(&mut step.rows, key.clone(), view.rows.get(&key).cloned());
+                steps.push(step.clone());
+            }
+            for view in steps {
                 if let Some(down) = link.publisher.publish(view) {
                     let _ = link.wire.send(down);
                 }
@@ -2054,4 +2058,15 @@ fn launch_how(state: &State) -> Launch {
         },
         _ => Launch::Started,
     }
+}
+
+/// The rows a limb of an earlier build may not read, in the order they came.
+const LATE: [LimbKey; 2] = [LimbKey::Superseded, LimbKey::Unheld];
+
+/// Set `key` to `row`, or remove it for none.
+fn set(rows: &mut BTreeMap<LimbKey, LimbRow>, key: LimbKey, row: Option<LimbRow>) {
+    match row {
+        Some(row) => rows.insert(key, row),
+        None => rows.remove(&key),
+    };
 }

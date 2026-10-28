@@ -77,6 +77,10 @@ use harness_core::id::LimbId;
 /// running calls.
 pub const ABSENT: Duration = Duration::from_secs(15 * 60);
 
+/// How long a limb the brain holds by nothing runs on: long enough that a
+/// task resumed soon after finds it warm.
+pub const GRACE: Duration = Duration::from_secs(60);
+
 /// How long its calls get to stop when the limb shuts down without being
 /// told how long: no brain for [`ABSENT`], or a signal.
 pub const SHUTDOWN: Duration = Duration::from_secs(5);

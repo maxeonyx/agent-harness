@@ -13,6 +13,10 @@
 //! ([`LimbRow::Superseded`]) has it exit once nothing it holds would die
 //! with it, so the brain's next attach starts that build.
 //!
+//! A brain that holds the limb by nothing ([`LimbRow::Unheld`]) has it exit
+//! after [`GRACE`] once nothing it holds would die with it, unless a later
+//! view holds it again.
+//!
 //! A brain going away is a link closing: it stops nothing. The limb exits
 //! on a signal, or once no brain has been linked for [`ABSENT`], and only
 //! once nothing it started is left: it stops every running call (`SIGTERM`,
@@ -45,7 +49,7 @@ use harness_store::Store;
 use harness_substrate::{Log, Up};
 use serde_json::Value;
 
-use crate::{ABSENT, Instance, Kind, SHUTDOWN, State};
+use crate::{ABSENT, GRACE, Instance, Kind, SHUTDOWN, State};
 
 /// One connection, numbered by the limb.
 type Conn = u64;
@@ -119,14 +123,22 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
     let mut alone_since = Instant::now();
     // The build the brain would start instead of this one, once it says so.
     let mut superseded: Option<BuildId> = None;
+    // Since when the brain has held it by nothing, as it last said.
+    let mut unheld: Option<Instant> = None;
     loop {
+        let idle = !limb_.stopping() && limb_.instance.as_ref().is_some_and(|i| !i.kind().holds());
         if let Some(by) = superseded
-            && !limb_.stopping()
-            && limb_.instance.as_ref().is_some_and(|i| !i.kind().holds())
+            && idle
         {
             eprintln!(
                 "harness-limb-{kind}: superseded by build {:.12}: shutting down",
                 by.to_string()
+            );
+            limb_.down(SHUTDOWN);
+        } else if unheld.is_some_and(|since| since.elapsed() >= GRACE) && idle {
+            eprintln!(
+                "harness-limb-{kind}: held by nothing for {}s: shutting down",
+                GRACE.as_secs()
             );
             limb_.down(SHUTDOWN);
         }
@@ -169,7 +181,15 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
                     }
                     link = Some(conn);
                 }
-                superseded = superseded_by(&down, superseded);
+                if let Some(row) = row_at(&down, &LimbKey::Superseded) {
+                    superseded = match row {
+                        Some(LimbRow::Superseded { by }) => Some(*by),
+                        _ => None,
+                    };
+                }
+                if let Some(row) = row_at(&down, &LimbKey::Unheld) {
+                    unheld = row.map(|_| unheld.unwrap_or_else(Instant::now));
+                }
                 match limb_.apply(*down) {
                     Ok(unsent) => {
                         for record in unsent {
@@ -331,21 +351,16 @@ fn read(conn: Conn, stream: UnixStream, events: Sender<Event>) {
     });
 }
 
-/// Whether the brain would start another build in this limb's place, as of
-/// `down`, if it was `before`.
-fn superseded_by(down: &LimbDown, before: Option<BuildId>) -> Option<BuildId> {
-    let by = |row: &LimbRow| match row {
-        LimbRow::Superseded { by } => Some(*by),
-        _ => None,
-    };
+/// The row at `key` as `down` leaves it: `None` where it does not say.
+fn row_at<'a>(down: &'a LimbDown, key: &LimbKey) -> Option<Option<&'a LimbRow>> {
     match down {
-        LimbDown::View(view) => view.rows.get(&LimbKey::Superseded).and_then(by),
-        LimbDown::Step(step) => match step.set.iter().find(|(k, _)| *k == LimbKey::Superseded) {
-            Some((_, row)) => by(row),
-            None if step.gone.contains(&LimbKey::Superseded) => None,
-            None => before,
+        LimbDown::View(view) => Some(view.rows.get(key)),
+        LimbDown::Step(step) => match step.set.iter().find(|(k, _)| k == key) {
+            Some((_, row)) => Some(Some(row)),
+            None if step.gone.contains(key) => Some(None),
+            None => None,
         },
-        LimbDown::Live(_) => before,
+        LimbDown::Live(_) => None,
     }
 }
 

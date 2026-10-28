@@ -616,6 +616,7 @@ pub enum LimbKey {
     Definition,
     Environment(EnvironmentId),
     Superseded,
+    Unheld,
 }
 
 /// One row of what a limb holds of the brain: what the brain wants of it,
@@ -680,6 +681,13 @@ pub enum LimbRow {
     /// it at their next call after a relaunch, without killing their
     /// running commands, and no limb runs an old build for good.
     Superseded { by: BuildId },
+    /// No live task can reach this limb and no call to it is unsettled
+    /// ([`crate::state::State::held`]): exit after a grace, once nothing it
+    /// holds would die with it, unless a later view holds it again. So a
+    /// task resumed soon after finds it warm, and one resumed later has the
+    /// brain start it again. A brain going away is no letting go: the limb
+    /// keeps the last word it had.
+    Unheld,
 }
 
 impl std::fmt::Display for LimbKey {
@@ -691,6 +699,7 @@ impl std::fmt::Display for LimbKey {
             LimbKey::Definition => f.write_str("definition"),
             LimbKey::Environment(id) => write!(f, "environment:{id}"),
             LimbKey::Superseded => f.write_str("superseded"),
+            LimbKey::Unheld => f.write_str("unheld"),
         }
     }
 }
@@ -700,12 +709,13 @@ impl std::str::FromStr for LimbKey {
 
     fn from_str(text: &str) -> Result<LimbKey, ParseError> {
         let invalid = ParseError {
-            expected: "a row: call:{id}, value:{id}, watch, definition, superseded or environment:{id}",
+            expected: "a row: call:{id}, value:{id}, watch, definition, superseded, unheld or environment:{id}",
         };
         Ok(match text.split_once(':') {
             None if text == "watch" => LimbKey::Watch,
             None if text == "definition" => LimbKey::Definition,
             None if text == "superseded" => LimbKey::Superseded,
+            None if text == "unheld" => LimbKey::Unheld,
             Some(("call", id)) => LimbKey::Call(id.parse()?),
             Some(("value", id)) => LimbKey::Value(id.parse()?),
             Some(("environment", id)) => LimbKey::Environment(id.parse()?),
