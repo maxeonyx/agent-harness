@@ -180,7 +180,9 @@ pub enum CallEvent {
     /// test run someone will still use. Only a running background call is
     /// passed, by the task that owns it, to the task that owns that one, or
     /// to Max from a task he started. `why` is the owner's reason, shown to
-    /// whoever receives it.
+    /// whoever receives it. Passed to Max, it has no time limit from then
+    /// on: a limit is for someone waiting on its result, and he keeps it for
+    /// its lifetime, until he stops it. Passed to a task, it keeps its limit.
     Passed {
         to: Owner,
         why: String,

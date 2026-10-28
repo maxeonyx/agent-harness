@@ -217,7 +217,7 @@ impl harness_limb::Kind for Browser {
             let rerun = tools::rerun(&call.tool);
             self.inner
                 .calls
-                .call(row, rerun, move |input, cancel, report| {
+                .call(row, rerun, move |input, cancel, _, report| {
                     let outcome = inner.execute(id, &call, &input.0, owner, cancel, report);
                     lock(&inner.held).remove(&id);
                     outcome

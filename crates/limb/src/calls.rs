@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use harness_core::call::{Caller, Outcome};
+use harness_core::call::{Caller, Outcome, Owner};
 use harness_core::environment::LimbKey;
 use harness_core::id::{CallId, TaskId};
 use harness_core::value::Bytes;
@@ -48,6 +48,7 @@ pub struct Calls {
 
 struct Running {
     cancel: Cancel,
+    limit: Limit,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -67,29 +68,34 @@ impl Calls {
     }
 
     /// One call row: run it at most once, however often it arrives, and
-    /// stop it when the row says so. `rerun`: running its tool again after
-    /// an instance was cut off running it is the same as running it once.
+    /// stop it when the row says so, and lift its time limit once it is
+    /// passed to Max ([`Limit`]). `rerun`: running its tool again after an
+    /// instance was cut off running it is the same as running it once.
     /// `run` runs it on its input, once the task's earlier calls have
     /// ended, to the report and outcome it settles with.
     pub fn call(
         &self,
         row: CallRow,
         rerun: bool,
-        run: impl FnOnce(&Bytes, &Cancel, &mut Report) -> Outcome + Send + 'static,
+        run: impl FnOnce(&Bytes, &Cancel, &Limit, &mut Report) -> Outcome + Send + 'static,
     ) {
         let CallRow {
             id,
             call,
             input,
             stopping,
+            owner,
             earlier,
-            ..
         } = row;
+        let kept = owner == Some(Owner::Max) && matches!(call.caller, Caller::Background { .. });
         let voice = &self.voice;
         let mut running = lock(&self.running);
         if let Some(running) = running.get(&id) {
             if let Some(by) = stopping {
                 running.cancel.request(instant(by));
+            }
+            if kept {
+                running.limit.lift();
             }
             return;
         }
@@ -126,6 +132,10 @@ impl Calls {
             return voice.settle(report, outcome);
         }
         let cancel = Cancel::new();
+        let limit = Limit::default();
+        if kept {
+            limit.lift();
+        }
         // This call's end: the writer, held until it has settled. The
         // task's next call waits on the reader.
         let (before, ended) = match (&call.caller, io::pipe()) {
@@ -136,12 +146,13 @@ impl Calls {
         };
         let thread = {
             let cancel = cancel.clone();
+            let limit = limit.clone();
             let voice = voice.clone();
             let idle = self.idle;
             let running = self.running.clone();
             thread::spawn(move || {
                 let outcome = match after(before, &cancel) {
-                    Ok(()) => run(&input, &cancel, &mut report),
+                    Ok(()) => run(&input, &cancel, &limit, &mut report),
                     Err(_) => Outcome::Interrupted { partial: None },
                 };
                 voice.settle(report, outcome);
@@ -157,6 +168,7 @@ impl Calls {
             id,
             Running {
                 cancel,
+                limit,
                 thread: Some(thread),
             },
         );
@@ -227,5 +239,26 @@ fn after(before: Option<PipeReader>, cancel: &Cancel) -> io::Result<()> {
         {
             return Ok(());
         }
+    }
+}
+
+/// Whether a call is still held to its own time limit (a command's
+/// `timeout_ms`). Clones share it.
+///
+/// A time limit is for someone waiting on the call's result. A background
+/// call passed to Max ([`harness_core::call::CallEvent::Passed`]) is kept
+/// for its lifetime instead, a dev server he goes on using, so its limit is
+/// lifted and it runs until he stops it. A call passed to an agent keeps
+/// its limit: that agent still waits on its result.
+#[derive(Clone, Default)]
+pub struct Limit(Arc<AtomicBool>);
+
+impl Limit {
+    pub fn lift(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_lifted(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
     }
 }
