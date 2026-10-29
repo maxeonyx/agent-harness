@@ -157,10 +157,13 @@ function newHere(sx, sy) {
 
 // ─── The open card, in the map ─────────────────────────────────────────────
 // An open node is a card in the world, where the node is: its top at the
-// node's top, centred on it. The map makes room at the card's seams without
-// being laid out again: what is wholly beside the node's column moves out
-// sideways, and what is below the node moves down, each by the card's size,
-// so everything keeps its place relative to everything else.
+// node's top, centred on it. The map makes room for it without being laid
+// out again. Lines from the node's four corners out to the same corners of
+// infinity cut the map into four: what is above stays, what is left moves
+// left, what is right moves right, and what is below moves down, each by
+// as much as the card needs. The lines bend round every project but the
+// one the node is in: another project goes whole, the way most of it lies,
+// so it keeps its shape.
 const SEAM = 28;
 export let seam = null;       // the open card's place: {id, o, W, H, sx, sy}
 export let cardShown = null;  // the card's visible rect in the world, now
@@ -198,11 +201,35 @@ export const cardRect = (s) => ({ x: Math.round(s.o.x + s.o.w / 2 - s.W / 2), y:
 export function target(id) {
   const p = positions.get(id);
   if (!seam || !p || id === seam.id) return p;
+  const d = moves().get(id);
+  return d ? { ...p, x: p.x + d.x, y: p.y + d.y } : p;
+}
+// How far each node moves for the open card: by the quarter its box lies
+// in, or its whole project's if the project is clear of the node: the one
+// it is farthest into past the node's edges.
+let moved = { seam: null, positions: null, by: new Map() };
+function moves() {
+  if (moved.seam === seam && moved.positions === positions) return moved.by;
   const { o, sx, sy } = seam;
-  let dx = 0, dy = 0;
-  if (p.x + p.w <= o.x + 1) dx = -sx; else if (p.x >= o.x + o.w - 1) dx = sx;
-  if (p.y >= o.y + o.h - 1) dy = sy;
-  return dx || dy ? { ...p, x: p.x + dx, y: p.y + dy } : p;
+  const away = (b) => {
+    const left = o.x - b.x1, right = b.x0 - (o.x + o.w), up = o.y - b.y1, down = b.y0 - (o.y + o.h);
+    const most = Math.max(left, right, up, down);
+    return most === up ? null : most === down ? { x: 0, y: sy } : { x: most === left ? -sx : sx, y: 0 };
+  };
+  const by = new Map();
+  for (const c of graph.comps) {
+    const ids = c.nodes.map((n) => n.id).filter((id) => positions.has(id));
+    if (!ids.length) continue;
+    const b = bounds(new Set(ids));
+    const cut = b.x0 < o.x + o.w && b.x1 > o.x && b.y0 < o.y + o.h && b.y1 > o.y;
+    for (const id of ids) {
+      const p = positions.get(id);
+      const d = id !== seam.id && away(cut ? { x0: p.x, y0: p.y, x1: p.x + p.w, y1: p.y + p.h } : b);
+      if (d) by.set(id, d);
+    }
+  }
+  moved = { seam, positions, by };
+  return by;
 }
 // A node's dot, or a new chat's point: what a card opens from and closes to.
 export function dotRect(id) {
