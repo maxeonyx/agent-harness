@@ -41,6 +41,7 @@ export const ICONS = {
   find: '<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   toward: '<path d="M9 5l7 7-7 7"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/>',
 };
 export function icon(name, cls, title) {
   const b = el("button", `icon ${cls || ""}`);
@@ -58,6 +59,15 @@ export function gist(input) {
   const line = s.split("\n")[0];
   return line.length > 90 ? line.slice(0, 90) + "…" : line;
 }
+
+// Struck through only between `~~`: a single `~` is a home directory.
+const STRUCK = /^~~(?=[^\s~])([\s\S]*?[^\s~])~~(?!~)/;
+window.marked?.use({ tokenizer: { del(src) {
+  const m = STRUCK.exec(src);
+  return m ? { type: "del", raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) } : undefined;
+} } });
+// A path under the home directory, as Max writes it.
+export const homePath = (p) => p.replace(/^\/(home|Users)\/[^/]+(?=\/|$)|^\/root(?=\/|$)/, "~");
 
 export function markdown(text) {
   if (!window.marked || !window.DOMPurify) return el("div", "plain", text);
