@@ -84,26 +84,45 @@ export function renderUsage() {
   setUsageRight(span.getBoundingClientRect().right);
 }
 // Signing the harness in to claude.ai, when it is not: every task waits
-// until it is. One element across renders, so a sign-in under way survives.
-const signIn = el("span", "alarm sign-in", "not signed in to claude.ai · work waits · ");
-const signInStep = el("button", "", "sign in");
-signIn.append(signInStep);
-signInStep.onclick = async () => {
-  const said = await fetch("/login").then((r) => r.text()).catch((e) => fail("starting a sign-in", e));
-  if (said === undefined) return;
-  if (!said.startsWith("https://")) return alert(said);
-  const open = el("a", "", "open claude.ai");
-  open.href = said;
-  open.target = "_blank";
-  const paste = el("button", "", "paste its code");
-  paste.onclick = async () => {
-    const code = prompt("The code claude.ai showed (CODE#STATE)");
-    if (!code) return;
-    const done = await fetch(`/login?code=${encodeURIComponent(code.trim())}`).then((r) => r.text()).catch((e) => e);
-    alert(String(done));
-  };
-  signIn.replaceChildren("not signed in to claude.ai · ", open, " then ", paste);
+// until it is. One click on Sign in opens `/login` in a new tab, which
+// begins a sign-in and goes on to claude.ai, and at the same time shows a
+// box here for the code claude.ai shows; pasting it finishes the sign-in.
+const signIn = el("span", "alarm sign-in", "Not signed in to claude.ai, so work waits ");
+const signInLink = el("a", "button", "Sign in");
+signInLink.href = "/login";
+signInLink.target = "_blank";
+signInLink.rel = "noopener";
+signIn.append(signInLink);
+const codeBox = el("dialog", "sign-in-box");
+const codeForm = el("form");
+const codeInput = el("input");
+codeInput.placeholder = "Paste the code";
+codeInput.autocomplete = "off";
+const codeSaid = el("div", "said");
+const codeCancel = el("button", "", "Cancel");
+codeCancel.type = "button";
+codeCancel.onclick = () => codeBox.close();
+const codeActions = el("div", "actions");
+codeActions.append(codeCancel, el("button", "", "Sign in"));
+codeForm.append(el("b", "", "Sign in to claude.ai"), el("p", "", "Approve the sign-in in the tab that opened, then paste the code it shows here."), codeInput, codeSaid, codeActions);
+codeBox.append(codeForm);
+document.body.append(codeBox);
+signInLink.onclick = () => {
+  codeInput.value = "";
+  codeSaid.textContent = "";
+  codeBox.showModal();
 };
+async function finishSignIn() {
+  const code = codeInput.value.trim();
+  if (!code) return;
+  codeSaid.textContent = "Signing in…";
+  const r = await fetch(`/login?code=${encodeURIComponent(code)}`).catch((e) => e);
+  const said = r instanceof Response ? await r.text() : String(r);
+  if (r.ok) return codeBox.close();
+  codeSaid.textContent = said;
+}
+codeForm.onsubmit = (e) => { e.preventDefault(); finishSignIn(); };
+codeInput.addEventListener("input", (e) => { if (e.inputType === "insertFromPaste") finishSignIn(); });
 const findButton = icon("find", "", "Find a chat (Ctrl+K or /)");
 const fitButton = icon("fit", "", "Fit the map (F)"), newButton = icon("plus", "", "New chat (or double-click the map)");
 newButton.id = "new";
