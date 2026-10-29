@@ -52,10 +52,10 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **`Note::Stale.shown` is always empty** (`program/src/render.rs:307`).
 - **Prompt length** from web search result blocks (`program/src/web.rs:51`).
 
-## Environments and limbs (S4)
+## Roles, agents and limbs (S4)
 
 - **No sandbox.** `bash` can read `~/.claude/.credentials.json`. The JS sandbox limb (an engine with only the limb's functions) is the planned first sandbox.
-- **Chats with no directory,** and roles whose limbs take parameters Max fills in when he starts one: "limb types need varying parameters, potentially". A rich picker for directories and remote environments.
+- **Chats with no directory,** and roles that take parameters Max fills in when he starts one: "limb types need varying parameters, potentially". A rich picker for directories and remote environments.
 - **The SSH limb** (`Host::Ssh`, `brain/src/brain.rs:524-530`), which the browser limb needs to reach Max's own browser on his desktop. Which sites the browser agent may log into is his to say.
 - **The brain depends on limb crates' `Settings`,** and face-web's dictation depends on the provider crate.
 - **Limbs found by file name** (`brain/src/brain.rs:1921-1946`); limbs from an old build are never replaced in place, their state is never retired, and nothing lists, kills, restarts or updates them (Max, 28 Oct: "We do need to shut them down, however. We also need to be able to start them back up. We also need to be able to update them, probably."). Without a systemd user manager, a restart ends them.

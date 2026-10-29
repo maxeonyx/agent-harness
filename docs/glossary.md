@@ -79,7 +79,7 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 
 | Term | Meaning |
 |---|---|
-| Structure | One of the six building blocks (S1 to S6): the substrate, the task tree, contexts as values, environments of limbs, replicas and versions, Max's attention. Every requirement should be an instance of one. |
+| Structure | One of the six building blocks (S1 to S6): the substrate, the task tree, contexts as values, roles, agents and limbs, replicas and versions, Max's attention. Every requirement should be an instance of one. |
 | Milestone, rung | A step in the plan, A to F, named by what Max can do when it lands. B to F are rungs: one structure each, built with full discipline. A is the feature track, built fast on what exists. |
 | Spine | The work that moved `main` onto the substrate: milestone B. Not a part of the running system. |
 | Spike | A branch that tests one thesis against a few aspects and is never merged; its result carries what it learned. |
