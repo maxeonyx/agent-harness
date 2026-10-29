@@ -3,6 +3,7 @@ import { render } from "./draw.js";
 import { liveArrived } from "./log.js";
 import { restoreLocal } from "./compose.js";
 import { viewArrived } from "./main.js";
+import { received, sent, dropped } from "./liveness.js";
 
 // ─── This tab: a replica on the substrate ────────────────────────────────────
 // The tab is the wasm build of harness-face-tab: its own records, kept in
@@ -85,8 +86,10 @@ class Replica {
   }
   connect() {
     const ws = this.ws = new WebSocket(`wss://${location.host}/link?replica=${this.id}`);
-    ws.onopen = () => this.shipUnsent();
+    ws.onopen = () => { if (this === tab) received(); this.shipUnsent(); };
     ws.onmessage = (m) => {
+      if (this === tab) received();
+      if (!m.data) return; // the brain's keepalive
       const { out } = tabCall("down", m.data, this.h);
       if (out.error) return fail("reading a message from the brain", out.error);
       if (out.live) return liveArrived(out.live.live);
@@ -100,7 +103,7 @@ class Replica {
       });
       this.onView?.(fresh);
     };
-    ws.onclose = () => { if (this.ws === ws) { this.onView?.(null); setTimeout(() => this.reconnect(), 1000); } };
+    ws.onclose = () => { if (this === tab) dropped(); if (this.ws === ws) { this.onView?.(null); setTimeout(() => this.reconnect(), 1000); } };
   }
   // Behind a login such as Cloudflare Access, a link that drops may be a
   // session that expired: the login redirects the brain's requests away.
@@ -116,8 +119,9 @@ class Replica {
   shipUnsent() {
     const { out } = tabCall("unsent", undefined, this.h);
     if (out.restored) return restored(this);
-    for (const up of out.ups) this.ws?.send(JSON.stringify(up));
+    for (const up of out.ups) this.send(up);
   }
+  send(up) { this.ws?.send(JSON.stringify(up)); if (this === tab) sent(); }
   status(n) { return tabCall("status", undefined, this.h, n).out; }
   view() { return tabCall("view", undefined, this.h).out; }
   next() { return tabCall("next", undefined, this.h).out; }
@@ -129,7 +133,7 @@ class Replica {
     const { out } = tabCall("say", JSON.stringify(batch), this.h, Date.now());
     if (out.error) { fail(`saying facts ${JSON.stringify(batch.facts)}`, out.error); return out.error; }
     await this.persist();
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(out.up));
+    if (this.ws?.readyState === WebSocket.OPEN) this.send(out.up);
     return new Promise((ok) => this.waiting.push({ n: out.n, ok }));
   }
 }

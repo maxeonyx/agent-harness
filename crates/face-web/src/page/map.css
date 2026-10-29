@@ -1,4 +1,4 @@
-  /* Shown only while the brain is out of reach, and only once it has been a moment. */
+  /* Shown only while the link is dead (liveness.js), and only once it has been a moment. */
   #link { position: fixed; top: max(.6em, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 40; display: none; padding: .2em .8em; border-radius: 999px; background: var(--maroon); color: var(--paper); font-size: 12.5px; pointer-events: none; }
   #link.down { display: block; animation: late 1.5s steps(1, end) both; }
   #link.down::after { content: "reconnecting"; }
@@ -64,6 +64,8 @@
   .node.paused .name { color: var(--muted); }
   .node.trouble .ring { border: 2px dashed var(--red); animation: spin 3s linear infinite; }
   .node.cancelling .ring { border: 2px dashed var(--faint); animation: spin 5s linear infinite; }
+  /* A dead link (liveness.js): what the rings say may be stale, so they stop. */
+  #link.down ~ #map .node .ring { animation-play-state: paused; opacity: .35; }
   .node.done { opacity: .5; }
   .node.done:hover { opacity: .9; }
   .node.done .dot { background: var(--green); border-color: var(--green); color: var(--paper); }
