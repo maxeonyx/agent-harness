@@ -142,10 +142,10 @@ left
 # C's limbs are done with: end them, so what D leaves is D's.
 demos/end.sh "$mark"
 
-say "== D. The agent passes its background worker to Max and finishes; the worker runs on until Max stops it"
+say "== D. The agent passes its background worker to Max and finishes; the worker runs on past its time limit until Max stops it"
 : > "$dir/repo/worker.log"
-launch d "Start \`./worker.sh\` in the background: call the \`background\` tool with the \`name\` \`worker\`, to run \`bash\` with the command \`./worker.sh\` and \`timeout_ms\` 600000. It is a server Max will go on using after you finish, so then pass it to Max with the \`pass\` tool, saying why. Then say in one line what you did, and end your turn.$(script \
-  'tool background {"name": "worker", "tool": "bash", "input": {"command": "./worker.sh", "timeout_ms": 600000}}' \
+launch d "Start \`./worker.sh\` in the background: call the \`background\` tool with the \`name\` \`worker\`, to run \`bash\` with the command \`./worker.sh\` and \`timeout_ms\` 10000. It is a server Max will go on using after you finish, so then pass it to Max with the \`pass\` tool, saying why. Then say in one line what you did, and end your turn.$(script \
+  'tool background {"name": "worker", "tool": "bash", "input": {"command": "./worker.sh", "timeout_ms": 10000}}' \
   'tool pass {"call": "worker", "why": "A server Max goes on using after I finish."}' \
   'say Started worker.sh and passed it to Max.' 'say Done: worker.sh runs on with Max.')"
 say "its own background work, and what it passed to Max:"
@@ -156,6 +156,10 @@ until_root '.outcome != null' 180
 say "finished: $(q "$root | .outcome.kind"); left running:"
 left
 call=$(q "$root | .handed[0].id")
+sleep 15
+say "15 s on, past its 10 s time limit, it runs on, as Max keeps it for its lifetime. worker.log:"
+sed 's/^/          /' "$dir/repo/worker.log"
+say "the call is still Max's, running: $(q "$root | .handed[] | select(.id == \"$call\") | .name")"
 say "Max stops the worker passed to him, $call"
 target/release/examples/act "$port" stop "$call" | sed 's/^/          the brain: /'
 until_root '(.handed | length) == 0' 120

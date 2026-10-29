@@ -76,7 +76,7 @@ use harness_core::value::Bytes;
 use harness_substrate::Time;
 use serde::{Deserialize, Serialize};
 
-use harness_limb::{Calls, Report, Rows, SHUTDOWN, Voice, lock};
+use harness_limb::{Calls, Limit, Report, Rows, SHUTDOWN, Voice, lock};
 use harness_runtime::Cancel;
 
 use crate::record::{Marks, Outputs};
@@ -225,8 +225,8 @@ impl harness_limb::Kind for Workspace {
             let rerun = tools::rerun(&call.tool);
             self.inner
                 .calls
-                .call(row, rerun, move |input, cancel, report| {
-                    inner.run(id, call, input, cancel, report)
+                .call(row, rerun, move |input, cancel, limit, report| {
+                    inner.run(id, call, input, cancel, limit, report)
                 });
         }
         if let Some(LimbRow::Watch { known }) = rows.rows.get(&LimbKey::Watch) {
@@ -317,11 +317,12 @@ impl Inner {
         call: Call,
         input: &Bytes,
         cancel: &Cancel,
+        limit: &Limit,
         report: &mut Report,
     ) -> Outcome {
         let started = SystemTime::now();
         let written = self.as_written(id, call.clone());
-        let mut outcome = self.execute(id, &written, &input.0, cancel, report);
+        let mut outcome = self.execute(id, &written, &input.0, cancel, limit, report);
         let ran = (started, SystemTime::now());
         let made = self.rescan(report, call.tool == "bash");
         if let Outcome::Completed(output)

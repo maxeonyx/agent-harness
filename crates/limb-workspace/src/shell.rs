@@ -8,6 +8,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use harness_core::id::CallId;
+use harness_limb::Limit;
 use harness_runtime::{Cancel, Ended as TreeEnded, Group, Wake};
 
 use crate::trunc::{Truncated, Truncator};
@@ -39,18 +40,21 @@ pub fn mark(call: CallId) -> String {
 
 /// Run `command` with `bash -c` in `dir` as the tree of processes `call`
 /// owns ([`Group`]), its stdout and stderr merged as a terminal shows them,
-/// until it exits, reaches `timeout`, or `cancel` is requested; then end
-/// what is left of the tree: `SIGTERM` to each process, and `SIGKILL` at
-/// the deadline (the cancel's, or a short grace). Returns only once nothing
-/// of the tree is left, or what is left has outlived `SIGKILL`.
+/// until it exits, reaches `timeout` (unless `limit` is lifted by then), or
+/// `cancel` is requested; then end what is left of the tree: `SIGTERM` to
+/// each process, and `SIGKILL` at the deadline (the cancel's, or a short
+/// grace). Returns only once nothing of the tree is left, or what is left
+/// has outlived `SIGKILL`.
 ///
 /// One thread does it all, waiting in `poll` on the output, the leader's
 /// exit and the cancel at once.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     call: CallId,
     command: &str,
     dir: &Path,
     timeout: Duration,
+    limit: &Limit,
     cancel: &Cancel,
     truncator: Truncator,
     progress: impl FnMut(&[u8]),
@@ -78,7 +82,7 @@ pub fn run(
         progress,
     };
     let mut waiter = cancel.waiter()?;
-    let limit = Instant::now() + timeout;
+    let mut until = Some(Instant::now() + timeout);
     let ended = loop {
         output.drain();
         if let Some(status) = group.exited() {
@@ -89,7 +93,11 @@ pub fn run(
         }
         let mut fds = vec![(group.exits(), libc::POLLIN)];
         fds.extend(output.watch().map(|fd| (fd, libc::POLLIN)));
-        if waiter.wait(&fds, Some(limit))? == Wake::TimedOut {
+        if waiter.wait(&fds, until)? == Wake::TimedOut {
+            if limit.is_lifted() {
+                until = None;
+                continue;
+            }
             break Ended::TimedOut;
         }
     };
