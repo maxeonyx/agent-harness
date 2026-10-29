@@ -241,8 +241,13 @@ pub fn normal(dir: &Path) -> PathBuf {
 /// (`Fact::Described`): a [`ToolSet`] for each of its offers. The brain's
 /// own limb is described by the brain's code at each root instead, since
 /// what `meta` offers depends on the role holding it.
+///
+/// A description from before limbs were per machine reads as offering no
+/// set: only a limb linked to settle its old calls states one, and nothing
+/// is rooted on it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Description {
+    #[serde(default)]
     pub sets: Vec<ToolSet>,
 }
 
