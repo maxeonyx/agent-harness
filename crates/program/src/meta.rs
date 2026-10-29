@@ -165,15 +165,15 @@ and returns at once: the agent that started you gets its result with yours.",
             "required": ["tasks"]
         }
     });
-    let summary = json!({ "type": "string", "description": "What you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, and everything your report will need (friction, evidence, decisions), including what earlier summaries carried." });
+    let carry = json!({ "type": "string", "description": "Your summary: what you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, and everything your report will need (friction, evidence, decisions), including what earlier summaries carried." });
     let fresh = json!({ "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and your summary alone." });
     let compact_and_continue = json!({
         "name": COMPACT_AND_CONTINUE,
         "description": "Replace your work since your latest checkpoint with your summary of it, and carry on from the summary in the same turn, with your next step. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
         "input_schema": {
             "type": "object",
-            "properties": { "summary": summary, "fresh": fresh },
-            "required": ["summary"]
+            "properties": { "carry": carry, "fresh": fresh },
+            "required": ["carry"]
         }
     });
     let compact_and_report = json!({
@@ -182,11 +182,11 @@ and returns at once: the agent that started you gets its result with yours.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "summary": summary,
+                "carry": carry,
                 "report": { "type": "string", "description": "Your report: what the reader (Max, or the agent that started you) needs to know. It is your last message; they never see the summary." },
                 "fresh": fresh
             },
-            "required": ["summary", "report"]
+            "required": ["carry", "report"]
         }
     });
     let attach = json!({
@@ -328,7 +328,7 @@ pub fn compaction(tool: &str, input: &[u8]) -> Result<Compact, String> {
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
-    let summary = field("summary").ok_or("`summary` must say what you need to carry on")?;
+    let summary = field("carry").ok_or("`carry` must say what you need to carry on")?;
     let report = if tool == COMPACT_AND_REPORT {
         Some(field("report").ok_or("`report` must be your report")?)
     } else {

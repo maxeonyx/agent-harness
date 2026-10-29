@@ -17,7 +17,7 @@ What it does:
 7. On the scripted model, a second chat compacts in a loop: its summary scripts another `compact_and_continue`, with no call between. The harness refuses it, saying there is nothing to replace, so the agent carries on instead of compacting again:
 
 ```
-  → compact_and_continue {"summary":"again"}
+  → compact_and_continue {"carry":"again"}
   ← error Not compacted: you compacted last and have made no other call since, so there is nothing to replace. Carry on with your next step, or, if your work is done, call `compact_and_report`.
 ```
 
