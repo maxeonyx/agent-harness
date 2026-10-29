@@ -14,6 +14,9 @@
 //! value(id, bytes)                  -- every byte a record names
 //! ```
 //!
+//! The file may hold one table more, `login`: the claude.ai login, which
+//! `harness_provider::Login` keeps there and the store never reads.
+//!
 //! `replica` is the 16-hex [`ReplicaId`] and `n` the record's number there, so
 //! `(replica, n)` is its [`Time`]. `record` is the substrate's JSON of the
 //! [`Record`], without the bytes of a [`Batch`]'s `values`: those go to

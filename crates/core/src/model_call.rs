@@ -178,7 +178,10 @@ impl ModelCallEvent {
             } => match ending {
                 Ending::Responded { content, stop: _ } => out.push(*content),
                 Ending::Cut { partial } => out.extend(*partial),
-                Ending::Failed { .. } | Ending::Limited { .. } | Ending::Lost => {}
+                Ending::Failed { .. }
+                | Ending::Limited { .. }
+                | Ending::SignedOut
+                | Ending::Lost => {}
             },
         }
     }
@@ -205,6 +208,11 @@ pub enum Ending {
     /// until `until`. Not the task's failure, so it never counts towards
     /// giving up on it.
     Limited { until: Timestamp },
+    /// Nothing was sent: the harness has no claude.ai login, never signed in
+    /// or its refresh token rejected. Every task on the account waits until
+    /// the brain sees one again ([`crate::fact::Fact::SignedIn`]). Not the
+    /// task's failure either.
+    SignedOut,
     /// The harness cut it: Max interrupted, the task is abandoned, or the
     /// brain is shutting down. Nothing was kept as the model's; the visible
     /// text Max may have been reacting to is kept here and quoted to the

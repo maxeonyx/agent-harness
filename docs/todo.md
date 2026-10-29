@@ -19,7 +19,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **Which invariants need a decider.** No analysis yet of which refusals need one replica to decide and which can merge (`substrate/src/decider.rs:22-25`); `core/src/lib.rs` still calls the brain "the one decider".
 - **`Change` carries no previous version** (`core/src/state.rs:2030-2063`).
 - **`cold` duplicates fold state** (`brain/src/brain.rs:146,934,969`).
-- **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). On 28 Oct he chose the database over a token file for the harness's own login, "so that it can sync across machines, ideally", with encryption from "some kind of keychain or SSH agent" in the future. Today the provider reads `~/.claude/.credentials.json`.
+- **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). On 28 Oct he chose the database over a token file for the harness's own login, "so that it can sync across machines, ideally", with encryption from "some kind of keychain or SSH agent" in the future. Today the login is a `login` table beside the home brain's records, unencrypted and not replicated: every brain on the machine reads it there (`provider/src/login.rs`).
 
 ## Tasks (S2)
 
@@ -77,7 +77,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **No go-back button after a relaunch** (`face-web/src/page/builds.js:19`), and rehearsal doesn't catch a broken page.
 - **TLS certificate path and bind address are hard-wired** (`brain/src/main.rs:213-219,245`).
 - **The relaunch watcher folds every 2 s.**
-- **A missing limb at relaunch fails a task permanently,** and an expired login fails a task after about 30 s, where both should wait. Only Claude Code refreshes the login: on 25 Oct it expired at 17:12 NZDT, the next message Max sent failed the chat, and he resumed it after Claude Code was run once by hand. Max decided (28 Oct) that the harness gets its own login, through its own OAuth flow as Claude Code does, refreshes it itself, and keeps it in the database.
+- **A missing limb at relaunch fails a task permanently,** where it should wait, as a signed-out login does (`Hold::SignedOut`).
 
 ## Max and his attention (S6)
 

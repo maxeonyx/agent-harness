@@ -80,8 +80,30 @@ export function renderUsage() {
   span.classList.toggle("busy", !!busy);
   usageAlarms.replaceChildren();
   if (view.limited) usageAlarms.append(el("span", "alarm", `limited until ${clock(view.limited)} · carries on by itself`));
+  if (view.signedOut) usageAlarms.append(signIn);
   setUsageRight(span.getBoundingClientRect().right);
 }
+// Signing the harness in to claude.ai, when it is not: every task waits
+// until it is. One element across renders, so a sign-in under way survives.
+const signIn = el("span", "alarm sign-in", "not signed in to claude.ai · work waits · ");
+const signInStep = el("button", "", "sign in");
+signIn.append(signInStep);
+signInStep.onclick = async () => {
+  const said = await fetch("/login").then((r) => r.text()).catch((e) => fail("starting a sign-in", e));
+  if (said === undefined) return;
+  if (!said.startsWith("https://")) return alert(said);
+  const open = el("a", "", "open claude.ai");
+  open.href = said;
+  open.target = "_blank";
+  const paste = el("button", "", "paste its code");
+  paste.onclick = async () => {
+    const code = prompt("The code claude.ai showed (CODE#STATE)");
+    if (!code) return;
+    const done = await fetch(`/login?code=${encodeURIComponent(code.trim())}`).then((r) => r.text()).catch((e) => e);
+    alert(String(done));
+  };
+  signIn.replaceChildren("not signed in to claude.ai · ", open, " then ", paste);
+};
 const findButton = icon("find", "", "Find a chat (Ctrl+K or /)");
 const fitButton = icon("fit", "", "Fit the map (F)"), newButton = icon("plus", "", "New chat (or double-click the map)");
 newButton.id = "new";

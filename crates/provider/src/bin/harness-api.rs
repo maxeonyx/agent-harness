@@ -5,6 +5,9 @@
 //! harness-api METHOD PATH [BODY_FILE]
 //! harness-api GET /v1/models
 //! harness-api POST /v1/messages body.json
+//! harness-api login            # prints the URL to sign in at
+//! harness-api login CODE#STATE # the code claude.ai shows after it
+//! harness-api --login DB ...    # a brain's login other than the home brain's
 //! ```
 //!
 //! The status and the response's headers go to stderr, the body to
@@ -32,17 +35,35 @@ fn main() -> ExitCode {
 
 /// Whether the provider answered 2xx.
 fn run() -> Result<bool, String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let login = match args.first().map(String::as_str) {
+        Some("--login") if args.len() > 1 => Login::at(args.drain(..2).nth(1).unwrap().into()),
+        _ => Login::home().map_err(|e| e.to_string())?,
+    };
     let (method, path, file) = match args.as_slice() {
+        [l] if l == "login" => {
+            println!("{}", login.begin().map_err(|e| e.to_string())?);
+            eprintln!("Open the URL, sign in, then: harness-api login CODE#STATE");
+            return Ok(true);
+        }
+        [l, code] if l == "login" => {
+            login.finish(code).map_err(|e| e.to_string())?;
+            eprintln!("Signed in.");
+            return Ok(true);
+        }
         [method, path] => (method, path, None),
         [method, path, file] => (method, path, Some(file)),
-        _ => return Err("usage: harness-api METHOD PATH [BODY_FILE]".into()),
+        _ => {
+            return Err(
+                "usage: harness-api [--login DB] METHOD PATH [BODY_FILE] | login [CODE#STATE]"
+                    .into(),
+            );
+        }
     };
     let body = match file {
         Some(file) => std::fs::read(file).map_err(|e| format!("{file}: {e}"))?,
         None => Vec::new(),
     };
-    let login = Login::claude_code().map_err(|e| format!("the login: {}", e.0))?;
     let mut response = Client::new(login)
         .map_err(|e| e.0)?
         .exchange(method, path, &body, &Cancel::new())

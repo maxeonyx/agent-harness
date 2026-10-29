@@ -387,7 +387,7 @@ function goButton(name, cls, word, tip) {
 }
 // Mid-turn, words can go now or wait for the turn's end; between turns, in
 // response to its question, or to a finished chat, there is only now.
-const midTurn = (t) => ["model", "calls", "harness", "held", "limited"].includes(t.waiting?.kind);
+const midTurn = (t) => ["model", "calls", "harness", "held", "limited", "signedOut"].includes(t.waiting?.kind);
 export function renderComposeState(t) {
   if (!box) return;
   const key = box.dataset.key, has = !!box.value.trim() || attached.get(key).length > 0;

@@ -127,6 +127,8 @@ pub struct State {
     /// ([`Durability::Latest`]) is not here: a fact naming it carries it.
     kept_values: OrdSet<ValueId>,
     limited_until: Option<Timestamp>,
+    /// Since when the harness has had no claude.ai login, if it has none.
+    signed_out: Option<Timestamp>,
     open: Open,
 }
 
@@ -366,6 +368,17 @@ pub struct Stale {
     pub wakes: bool,
 }
 
+/// Why every ready task on the account waits: not any task's failure, so
+/// it never counts towards giving up on one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hold {
+    /// The subscription's limit, until it resets ([`Ending::Limited`]).
+    Limited { until: Timestamp },
+    /// No claude.ai login ([`Ending::SignedOut`]) since `since`: until Max
+    /// signs in, which has no time of its own.
+    SignedOut { since: Timestamp },
+}
+
 /// What a task is waiting on, and since when: the throbber, and the answer
 /// to "why is nothing happening?".
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -393,9 +406,9 @@ pub enum Waiting {
     Parked {
         since: Timestamp,
     },
-    /// On the subscription's limit.
-    Limited {
-        until: Timestamp,
+    /// On the account: ready, and every task waits with it.
+    Held {
+        hold: Hold,
         since: Timestamp,
     },
     /// On the model: sent at `since`, streaming once its first byte came.
@@ -482,6 +495,9 @@ pub enum Todo {
     Tidy(TaskId),
     /// An abandoned task's deadline has come: commit [`TaskEvent::Expired`].
     Expire(TaskId),
+    /// The account waits for a sign-in ([`Hold::SignedOut`]): if the
+    /// harness has a login now, commit [`Fact::SignedIn`]. Due until then.
+    SignIn,
     /// Max parked the task, it is in the middle of its own loop, and it has
     /// not been asked yet: deliver [`Prompt::Park`].
     Park(TaskId),
@@ -886,6 +902,7 @@ impl State {
                 self.faces.insert(*replica);
             }
             Fact::Seen(_) => {}
+            Fact::SignedIn => self.signed_out = None,
             Fact::Draft(id, event) => self.fold_draft(*id, event, record)?,
             Fact::Focus(focus) => {
                 let Author::Max = record.by else {
@@ -1027,6 +1044,7 @@ impl State {
                 Fact::Environment(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
                 Fact::Launched(_)
                 | Fact::Shutdown { .. }
+                | Fact::SignedIn
                 | Fact::ModelCall(..)
                 | Fact::Call(..)
                 | Fact::Described { .. }
@@ -1663,8 +1681,14 @@ impl State {
                 let mut task = self.tasks.get(&owner).ok_or(Rejected::Unknown)?.clone();
                 task.apply(record, self)?;
                 self.put(task);
-                if let Ending::Limited { until } = ending {
-                    self.limited_until = self.limited_until.max(Some(*until));
+                match ending {
+                    Ending::Limited { until } => {
+                        self.limited_until = self.limited_until.max(Some(*until));
+                    }
+                    Ending::SignedOut => {
+                        self.signed_out.get_or_insert(record.at);
+                    }
+                    _ => {}
                 }
                 let response = response.map(|entry| {
                     let entry_id = entry.id();
@@ -2357,6 +2381,15 @@ impl State {
         self.limited_until.filter(|until| *until > now)
     }
 
+    /// What every ready task waits on at `now`, if anything: a sign-in
+    /// first, since it has no end of its own.
+    pub fn hold(&self, now: Timestamp) -> Option<Hold> {
+        match self.signed_out {
+            Some(since) => Some(Hold::SignedOut { since }),
+            None => self.limited(now).map(|until| Hold::Limited { until }),
+        }
+    }
+
     /// The task that owns this one: the caller of its scope's spawn. `None`
     /// in Max's scope.
     pub fn owner(&self, task: TaskId) -> Option<TaskId> {
@@ -2515,8 +2548,8 @@ impl State {
         };
         Some(match &live.phase {
             Phase::Ready if self.gated(t) => Waiting::Paused { since },
-            Phase::Ready => match self.limited(now) {
-                Some(until) => Waiting::Limited { until, since },
+            Phase::Ready => match self.hold(now) {
+                Some(hold) => Waiting::Held { hold, since },
                 None => Waiting::Brain { since },
             },
             Phase::Thinking(call) => {
@@ -2598,6 +2631,9 @@ impl State {
             .filter(|id| self.model_calls.get(id).is_some_and(lost))
             .map(|id| Todo::Lost(*id))
             .collect();
+        if self.signed_out.is_some() {
+            todo.push(Todo::SignIn);
+        }
         let mut readers: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
         let mut needed: BTreeSet<LimbId> = BTreeSet::new();
         let mut starting = Vec::new();
@@ -2617,14 +2653,14 @@ impl State {
                 (Some(Phase::Listening), None) if lingering => {
                     todo.push(Todo::Linger(task.id));
                 }
-                (Some(Phase::Ready), None) if !self.gated(task) && self.limited(now).is_none() => {
+                (Some(Phase::Ready), None) if !self.gated(task) && self.hold(now).is_none() => {
                     todo.push(Todo::Send(task.id));
                 }
                 // The tidy-up turn: asked for once, then sent, paused or not.
                 (Some(Phase::Ready), Some(Draining::Abandoning(s))) if !s.hard => {
                     if !s.told {
                         todo.push(Todo::Tidy(task.id));
-                    } else if self.limited(now).is_none() {
+                    } else if self.hold(now).is_none() {
                         todo.push(Todo::Send(task.id));
                     }
                 }

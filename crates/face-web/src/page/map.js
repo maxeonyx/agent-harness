@@ -55,6 +55,7 @@ export function look(t) {
     case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `paused with ${h.name}` : "paused" }; }
     case "parked": return { cls: "paused", text: "parked" + since };
     case "limited": return { cls: "paused", text: `limited until ${clock(w.until)}` };
+    case "signedOut": return { cls: "paused", text: "waits for a sign-in" };
     case "listening": return { cls: "listening" + stopping, text: w.calls.length ? `${w.calls.length} in the background` : "listening" };
     case "done": {
       const o = t.outcome || {};

@@ -1521,7 +1521,10 @@ impl Task {
                         live.failures += 1;
                         self.drained(at);
                     }
-                    Ending::Limited { .. } | Ending::Cut { .. } | Ending::Lost => {
+                    Ending::Limited { .. }
+                    | Ending::SignedOut
+                    | Ending::Cut { .. }
+                    | Ending::Lost => {
                         self.drained(at);
                     }
                 }

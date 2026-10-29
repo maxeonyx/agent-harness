@@ -220,7 +220,7 @@
 //!   Ready -->|"a request is sent:<br/>ModelCallEvent::Sent, after Todo::Send"| Thinking
 //!   Thinking -->|"the response has tool uses:<br/>Ended: Responded"| Acting
 //!   Acting -->|"the last call settled:<br/>Task::settled"| Ready
-//!   Thinking -->|"the request did not finish a turn:<br/>Ended: Failed, Limited, Cut, Lost or another Stop<br/>Task::drained"| Ready
+//!   Thinking -->|"the request did not finish a turn:<br/>Ended: Failed, Limited, SignedOut, Cut, Lost or another Stop<br/>Task::drained"| Ready
 //!   Thinking -->|"the turn ended, with words or news already waiting:<br/>Task::turn_ended"| Ready
 //!   Thinking -->|"the turn ended in a user-facing task:<br/>Task::turn_ended"| AwaitingMax
 //!   Thinking -->|"the turn ended in a standing task,<br/>or in an autonomous one with a background call running:<br/>Task::turn_ended"| Listening
@@ -251,7 +251,8 @@
 //!   ended -->|"Responded, Stop::EndTurn, no tool uses"| turn["Task::turn_ended"]
 //!   ended -->|"Responded, another Stop"| short["Task: Ready<br/>Brain::send: ContextWindow roots anew, Refused fails<br/>MaxTokens, PauseTurn: Note::Continue"]
 //!   ended -->|"Failed"| failed["Task: Ready, failures + 1<br/>resend after the retry time or backoff_ms,<br/>after GIVE_UP, Drain::Fail"]
-//!   ended -->|"Limited until"| limited["Task: Ready<br/>no Todo::Send until then"]
+//!   ended -->|"Limited until"| limited["Task: Ready<br/>Hold::Limited: no Todo::Send until then"]
+//!   ended -->|"SignedOut"| signedout["Task: Ready<br/>Hold::SignedOut: no Todo::Send, Todo::SignIn<br/>until Fact::SignedIn"]
 //!   ended -->|"Cut: Todo::Cut"| cut["Task::drained<br/>abandon, interrupt, or shutdown"]
 //!   ended -->|"Lost"| lost["Task: Ready<br/>sent again"]
 //! ```

@@ -11,7 +11,7 @@ use harness_core::model_call::{Ending, ModelCall, Quota, Usage, Window};
 use harness_runtime::{Cancel, Cancelled};
 
 use crate::http::Response;
-use crate::login::Login;
+use crate::login::{Login, Token};
 use crate::response::Assembly;
 use crate::scripted::{self, SCRIPTED, scripted};
 use crate::{Error, Model, TrustError, http, request};
@@ -84,6 +84,11 @@ impl Client {
         })
     }
 
+    /// The login every request is sent on.
+    pub fn login(&self) -> &Login {
+        &self.login
+    }
+
     /// One exchange with the provider on the login: `method` on `path`
     /// (`/v1/models`) with `body`, and the headers every call carries. The
     /// response's head has arrived; its body streams. For anything the
@@ -95,16 +100,24 @@ impl Client {
         body: &[u8],
         cancel: &Cancel,
     ) -> Result<Response, Error> {
+        let send = |token: &Token| {
+            let bearer = token.bearer();
+            let headers = [
+                ("authorization", bearer.as_str()),
+                ("anthropic-version", "2023-06-01"),
+                ("anthropic-beta", "oauth-2025-04-20"),
+                ("content-type", "application/json"),
+                ("user-agent", concat!("harness/", env!("CARGO_PKG_VERSION"))),
+            ];
+            http::exchange(&self.tls, method, HOST, path, &headers, body, cancel).map_err(Error::Io)
+        };
         let token = self.login.token()?;
-        let bearer = token.bearer();
-        let headers = [
-            ("authorization", bearer.as_str()),
-            ("anthropic-version", "2023-06-01"),
-            ("anthropic-beta", "oauth-2025-04-20"),
-            ("content-type", "application/json"),
-            ("user-agent", concat!("harness/", env!("CARGO_PKG_VERSION"))),
-        ];
-        http::exchange(&self.tls, method, HOST, path, &headers, body, cancel).map_err(Error::Io)
+        let response = send(&token)?;
+        if response.status != 401 {
+            return Ok(response);
+        }
+        // A token refused before its time: refreshed once, and sent again.
+        send(&self.login.refused(&token)?)
     }
 
     /// A GET of `path`, its body as JSON. `Err` says why there is none; it

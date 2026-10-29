@@ -11,7 +11,7 @@ use harness_core::environment::{Effort, Environment, LimbKind, Reach};
 use harness_core::fact::Fact;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
-use harness_core::state::{Ended, State, Waiting};
+use harness_core::state::{Ended, Hold, State, Waiting};
 use harness_core::task::{
     Drain, Draining, Input, Mode, Move, Onto, Origin, Outcome, Pause, Phase, Scope, Task, TaskEvent,
 };
@@ -118,6 +118,10 @@ pub fn rows(
             .map(|l| l.name.as_str())
             .collect::<Vec<_>>(),
         "limited": state.limited(now).map(|t| t.0),
+        "signedOut": match state.hold(now) {
+            Some(Hold::SignedOut { since }) => Some(since.0),
+            _ => None,
+        },
         "provider": provider.map(|l| l.to_string()),
         "usage": usage(state, value, provider),
     });
@@ -265,6 +269,10 @@ fn trouble(ended: &Ended) -> Value {
             },
         }),
         Ending::Limited { until } => json!({"at": ended.at.at.0, "until": until.0}),
+        Ending::SignedOut => json!({
+            "at": ended.at.at.0,
+            "text": "the harness is not signed in to claude.ai",
+        }),
         Ending::Responded { .. } | Ending::Cut { .. } | Ending::Lost => Value::Null,
     }
 }
@@ -402,9 +410,14 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
         Waiting::Brain { since } => json!({"kind": "harness", "since": since.0}),
         Waiting::Paused { since } => json!({"kind": "held", "since": since.0}),
         Waiting::Parked { since } => json!({"kind": "parked", "since": since.0}),
-        Waiting::Limited { until, since } => {
-            json!({"kind": "limited", "until": until.0, "since": since.0})
-        }
+        Waiting::Held {
+            hold: Hold::Limited { until },
+            since,
+        } => json!({"kind": "limited", "until": until.0, "since": since.0}),
+        Waiting::Held {
+            hold: Hold::SignedOut { .. },
+            since,
+        } => json!({"kind": "signedOut", "since": since.0}),
         Waiting::Model {
             call,
             since,
@@ -501,6 +514,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             None => format!("brain launched, build {:.12}", l.build.to_string()),
         },
         Fact::Shutdown { within } => format!("brain shutting down, within {}s", within / 1000),
+        Fact::SignedIn => "signed in to claude.ai: work carries on".into(),
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {
                 let how = match &c.origin {
@@ -577,6 +591,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                             None => format!("{task}: request failed: {message}"),
                         },
                         Ending::Limited { .. } => format!("{task}: limited by the account"),
+                        Ending::SignedOut => format!("{task}: waits for a sign-in to claude.ai"),
                         Ending::Cut { .. } => format!("{task}: response cut"),
                         Ending::Lost => format!("{task}: request lost"),
                     }

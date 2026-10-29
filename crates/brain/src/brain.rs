@@ -36,7 +36,7 @@ use harness_substrate::{Error, Publisher, Up, View, What as Said};
 
 use crate::link::{self, Conn, Wire};
 use crate::process::Process;
-use harness_provider::{Client, Finished, Progress};
+use harness_provider::{Client, Finished, LoginError, Progress};
 use harness_runtime::{Cancel, signals};
 use harness_store::Store;
 
@@ -436,6 +436,11 @@ impl Brain {
             Todo::Park(task) => self.prompt(task, Prompt::Park),
             Todo::Resume(task) => self.prompt(task, Prompt::Resume),
             Todo::Unblock(aside) => self.prompt(aside, Prompt::Unblocked),
+            Todo::SignIn => {
+                if let Ok(true) = self.client.login().signed_in() {
+                    self.fact(Fact::SignedIn);
+                }
+            }
         }
     }
 
@@ -994,10 +999,13 @@ impl Brain {
             usage,
             quota,
         } = finished.unwrap_or_else(|e| Finished {
-            ending: Ending::Failed {
-                status: None,
-                message: e.to_string(),
-                retry: None,
+            ending: match e {
+                harness_provider::Error::Login(LoginError::SignedOut) => Ending::SignedOut,
+                e => Ending::Failed {
+                    status: None,
+                    message: e.to_string(),
+                    retry: None,
+                },
             },
             value: None,
             usage: None,
