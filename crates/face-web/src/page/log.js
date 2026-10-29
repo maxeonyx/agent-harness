@@ -507,7 +507,7 @@ function renderTail(s, t) {
   else stopModel();
   // Not read yet: dashed, until the request that reads it.
   for (const p of t.pending || []) {
-    const when = `${clock(p.at)} · ${p.read === "TurnEnd" ? "read when its turn ends" : "not read yet"}`;
+    const when = `${clock(p.at)} · not read yet`;
     parts.push(p.prompt ? said(PROMPTS[p.prompt] || p.prompt, when, "queued-words prompt") : said(p.content, when, "queued-words"));
   }
   if (!t.head && !isDone(t)) parts.push(t.owner ? mandateCard(t) : said(t.mandate || "", "not read yet", "queued-words"));
