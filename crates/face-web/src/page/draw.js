@@ -1,6 +1,6 @@
 import { $, clock, el, ICONS, panel, svgEl } from "./base.js";
 import { byId, derive, DOT, glyph, graph, isDone, layout, live, look, positions, ROOT_DOT, SAT_DOT, satLabel, shortName, shown, unfolded, view } from "./map.js";
-import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setSeam, target } from "./camera.js";
+import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam, target } from "./camera.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
 import { renderBuilds } from "./builds.js";
@@ -127,11 +127,11 @@ export function drawEdges() {
 // not be made, or its last turn not responding.
 export function trouble(t) {
   const failed = t.waiting?.kind === "starting" ? t.waiting.failed || [] : [];
-  if (failed.length) return failed.map((f) => `couldn't make ${f.limb}: ${f.why} · the harness keeps trying; abandon it, or start again elsewhere`).join("; ");
+  if (failed.length) return `${failed.map((f) => `Couldn't make ${f.limb}: ${f.why}.`).join(" ")} The harness keeps trying: abandon it, or start again elsewhere.`;
   const x = t.trouble;
   if (!x || isDone(t)) return null;
-  if (x.until != null) return x.until > Date.now() ? `limited until ${clock(x.until)}` : null;
-  return t.failures ? `failed ${t.failures}× · ${x.text}` : null;
+  if (x.until != null) return x.until > Date.now() ? `Limited until ${clock(x.until)}` : null;
+  return t.failures ? `Failed ${t.failures === 1 ? "once" : `${t.failures} times`}: ${x.text}` : null;
 }
 
 // ─── The whole page, from the view ─────────────────────────────────────────
@@ -173,7 +173,7 @@ export function render() {
   renderUsage();
   renderBuilds();
   const q = view.queue || [];
-  document.title = q.length ? `(${q.length}) harness` : "harness";
+  document.title = q.length ? `(${q.length}) Harness` : "Harness";
   notify(q);
   if (openId && openId !== NEW && live(openId) !== openId) goStaying(live(openId));
   else if (openId) renderPanel();
@@ -184,7 +184,8 @@ export function render() {
 
 // ─── What needs Max, off screen ────────────────────────────────────────────
 // What waits on Max where the camera does not show it is a mark at the
-// screen's edge, toward it, the next one haloed; a click opens it.
+// screen's edge, toward it, the next one haloed; a click brings it to the
+// middle of the screen, where a click on it opens it.
 const marksEl = $("#marks"), markEls = new Map();
 export function placeMarks() {
   if (!view) return;
@@ -202,7 +203,7 @@ export function placeMarks() {
       a = el("button", "offscreen");
       a.type = "button";
       a.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.toward}</svg>`;
-      a.onclick = () => go(id);
+      a.onclick = () => centre(id);
       marksEl.append(a);
       markEls.set(id, a);
     }
@@ -220,4 +221,10 @@ export function placeMarks() {
   });
   for (const [id, a] of markEls) if (!seen.has(id)) { a.remove(); markEls.delete(id); }
 }
-
+// The camera, at the zoom it has, moved to put a node in the middle.
+function centre(id) {
+  const p = shown.get(id);
+  if (!p) return;
+  setFramed(false);
+  glide({ k: cam.k, x: innerWidth / 2 - (p.x + p.w / 2) * cam.k, y: innerHeight / 2 - (p.y + p.h / 2) * cam.k }, { T: 420 });
+}

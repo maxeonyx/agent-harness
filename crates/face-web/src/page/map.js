@@ -36,32 +36,32 @@ export const live = (id) => alias[id] || id;
 // words its hover says.
 export function look(t) {
   const w = t.waiting || {};
-  const since = w.since != null ? ` · ${ago(w.since)}` : "";
+  const since = w.since != null ? ` for ${ago(w.since)}` : "";
   const stopping = t.stop && w.kind !== "done" ? " cancelling" : "";
   switch (w.kind) {
-    case "model": return { cls: (w.streaming ? "working streaming" : "working") + stopping, text: (stopping ? "abandoning: " : "") + (w.streaming ? "writing" : "thinking") + since };
+    case "model": return { cls: (w.streaming ? "working streaming" : "working") + stopping, text: (stopping ? "Abandoning: " : "") + (w.streaming ? "Writing" : "Thinking") + since };
     case "calls": {
       const kids = w.calls.flatMap((c) => c.children);
       if (kids.length) {
         const running = kids.filter((k) => byId[k] && byId[k].waiting?.kind !== "done").length;
-        return { cls: "children" + stopping, text: `waiting on ${running} of ${kids.length}${since}` };
+        return { cls: "children" + stopping, text: `Waiting on ${running} of ${kids.length}${since}` };
       }
       const c = w.calls[0] || {};
-      return { cls: "working tool" + stopping, text: `${c.tool || "tools"}${c.input ? " " + gist(c.input) : ""}` };
+      return { cls: "working tool" + stopping, text: `${c.tool || "Tools"}${c.input ? " " + gist(c.input) : ""}` };
     }
-    case "max": return { cls: "needs" + stopping, text: "your turn" + since };
-    case "starting": return { cls: "starting", text: w.limbs.length ? `making ${w.limbs.join(", ")}` : "starting" };
-    case "harness": return { cls: "working" + stopping, text: "harness" + since };
-    case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `paused with ${h.name}` : "paused" }; }
-    case "parked": return { cls: "paused", text: "parked" + since };
-    case "limited": return { cls: "paused", text: `limited until ${clock(w.until)}` };
-    case "signedOut": return { cls: "paused", text: "waits for a sign-in" };
-    case "listening": return { cls: "listening" + stopping, text: w.calls.length ? `${w.calls.length} in the background` : "listening" };
+    case "max": return { cls: "needs" + stopping, text: "Your turn" + since };
+    case "starting": return { cls: "starting", text: w.limbs.length ? `Making ${w.limbs.join(", ")}` : "Starting" };
+    case "harness": return { cls: "working" + stopping, text: "In the harness" + since };
+    case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `Paused with ${h.name}` : "Paused" }; }
+    case "parked": return { cls: "paused", text: "Parked" + since };
+    case "limited": return { cls: "paused", text: `Limited until ${clock(w.until)}` };
+    case "signedOut": return { cls: "paused", text: "Waits for a sign-in" };
+    case "listening": return { cls: "listening" + stopping, text: w.calls.length ? `${w.calls.length} in the background` : "Listening" };
     case "done": {
       const o = t.outcome || {};
-      if (o.kind === "failed") return { cls: "done failed", text: `failed ${ago(w.since)} ago` };
-      if (o.kind === "abandoned") return { cls: "done cancelled", text: `abandoned ${ago(w.since)} ago` };
-      return { cls: "done", text: `done ${ago(w.since)} ago` };
+      if (o.kind === "failed") return { cls: "done failed", text: `Failed ${ago(w.since)} ago` };
+      if (o.kind === "abandoned") return { cls: "done cancelled", text: `Abandoned ${ago(w.since)} ago` };
+      return { cls: "done", text: `Done ${ago(w.since)} ago` };
     }
   }
   return { cls: "", text: w.kind || "" };
@@ -149,7 +149,7 @@ export let shown = new Map();       // id -> {x, y}: drawn now (tweened)
 let shape = "";
 
 const CARD_H = 34;
-export const cardStatus = (c) => `finished ${ago(c.last)} ago · ${c.tasks.length} task${c.tasks.length > 1 ? "s" : ""}`;
+export const cardStatus = (c) => `Finished ${ago(c.last)} ago`;
 function sizeOf(n, comp) {
   if (comp.folded) return { w: Math.min(240, Math.max(120, measure(shortName(n.t), "500 13px Georgia") + 34 + (comp.tasks.length > 1 ? 14 : 0))), h: CARD_H };
   if (n.kind === "sat") return { w: Math.min(160, Math.max(90, measure(satLabel(n), "12px sans-serif") + 10)), h: SAT_DOT + 22 };
@@ -157,7 +157,7 @@ function sizeOf(n, comp) {
   const w = Math.min(210, Math.max(110, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
   return { w, h: (root ? ROOT_DOT : DOT) + (root ? 26 : 24) };
 }
-export const satLabel = (n) => `${n.call.owner === "max" ? "yours: " : ""}${n.call.name || `${n.call.tool} ${gist(n.call.input)}`}`.trim();
+export const satLabel = (n) => `${n.call.owner === "max" ? "Yours: " : ""}${n.call.name || `${n.call.tool} ${gist(n.call.input)}`}`.trim();
 
 // Each project is laid out on its own, then the projects are shelved in
 // reading order, live ones first, in rows as wide as the screen: on a phone

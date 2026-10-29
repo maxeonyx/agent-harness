@@ -67,11 +67,11 @@ const nameFrom = (text) => {
 };
 export async function startNew(text, files) {
   const env = view.environments.find((e) => e.name === $("#n-role").value);
-  if (!env) return say("choose a role", true);
+  if (!env) return say("Choose a role", true);
   const given = Object.fromEntries([...compose.querySelectorAll(".place")].map((f) => [f.dataset.place, f.value.trim()]));
   const missing = env.places.find((p) => !given[p]);
-  if (missing) return say(`it needs its ${missing}`, true);
-  if (!text.trim()) return say("write what it is for", true);
+  if (missing) return say(`It needs its ${missing}`, true);
+  if (!text.trim()) return say("Write what it is for", true);
   takeWords(NEW);
   const why = await start((next, out) => {
     const places = {};
@@ -84,7 +84,7 @@ export async function startNew(text, files) {
     }
     return { name: nameFrom(text), scope: "Max", origin: { Fresh: { environment: env.id, places } }, tuning: newTuning() };
   }, text, files);
-  if (why) { giveBack(NEW, text, files); return say(`not started: ${why}`, true); }
+  if (why) { giveBack(NEW, text, files); return say(`Not started: ${why}`, true); }
 }
 
 // ─── Finding a chat ────────────────────────────────────────────────────────
