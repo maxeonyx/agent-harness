@@ -19,6 +19,8 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **`Change` carries no previous version** (`core/src/state.rs:2030-2063`).
 - **`cold` duplicates fold state** (`brain/src/brain.rs:146,934,969`).
 - **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). On 28 Oct he chose the database over a token file for the harness's own login, "so that it can sync across machines, ideally", with encryption from "some kind of keychain or SSH agent" in the future. Today the login is a `login` table beside the home brain's records, unencrypted and not replicated: every brain on the machine reads it there (`provider/src/login.rs`).
+- **Any 400 from a refresh signs the harness out** (`provider/src/login.rs`, `post`: `rejected` is 400 or 401), including `invalid_scope`, which is the harness's own mistake and leaves the refresh token good. Only `invalid_grant` (and 401) says the refresh token is dead; anything else could keep the tokens and fail, as a network error does. Kept for now because signed out is the state the page offers a way out of.
+- **A relaunch while signed out stays on probation until Max signs in.** The check passes signed out (`brain/src/check.rs`), but the new build sends no request until then, so `Verdict::Proving` holds and the builds limb watches it with no deadline (`limb-builds/src/relaunch.rs`, `watch`); after the sign-in it proves itself as usual.
 
 ## Tasks (S2)
 

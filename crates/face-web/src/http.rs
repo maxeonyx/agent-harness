@@ -92,6 +92,16 @@ pub fn refuse(stream: &mut impl Write, status: &str, why: &str) -> io::Result<()
     stream.flush()
 }
 
+/// Send the browser on to `to`.
+pub fn redirect(stream: &mut impl Write, to: &str) -> io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 303 See Other\r\nLocation: {to}\r\nContent-Length: 0\r\n\
+         Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+    )?;
+    stream.flush()
+}
+
 pub fn not_found(stream: &mut impl Write) -> io::Result<()> {
     refuse(stream, "404 Not Found", "")
 }

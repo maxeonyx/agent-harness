@@ -6,7 +6,7 @@
 //! harness-api GET /v1/models
 //! harness-api POST /v1/messages body.json
 //! harness-api login            # prints the URL to sign in at
-//! harness-api login CODE#STATE # the code claude.ai shows after it
+//! harness-api login CODE         # the code claude.ai shows after it
 //! harness-api --login DB ...    # a brain's login other than the home brain's
 //! ```
 //!
@@ -43,7 +43,7 @@ fn run() -> Result<bool, String> {
     let (method, path, file) = match args.as_slice() {
         [l] if l == "login" => {
             println!("{}", login.begin().map_err(|e| e.to_string())?);
-            eprintln!("Open the URL, sign in, then: harness-api login CODE#STATE");
+            eprintln!("Open the URL, sign in, then: harness-api login CODE");
             return Ok(true);
         }
         [l, code] if l == "login" => {
@@ -55,8 +55,7 @@ fn run() -> Result<bool, String> {
         [method, path, file] => (method, path, Some(file)),
         _ => {
             return Err(
-                "usage: harness-api [--login DB] METHOD PATH [BODY_FILE] | login [CODE#STATE]"
-                    .into(),
+                "usage: harness-api [--login DB] METHOD PATH [BODY_FILE] | login [CODE]".into(),
             );
         }
     };
