@@ -7,10 +7,11 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Term | Meaning | In code |
 |---|---|---|
 | Brain | The one process that owns model calls, storage and decisions for a domain. Faces and limbs connect to it. | `crates/brain` |
-| Limb | A process that gives agents their tools and the context for using them: a shell and files in a directory, the web, a browser, Max. It outlives a brain restart. | `environment::Limb`; `crates/limb*` |
+| Limb | What gives agents their tools and the context for using them: a shell and files in a directory, the web, a browser, Max. It outlives a brain restart. Max thinks a limb shouldn't need a process (an in-process meta limb that only touches the harness), and has proposed that "role" replace it as the concept ([plan](plan.md#questions-only-max-can-answer)). | Partly: every `environment::Limb` is a process; `crates/limb*` |
 | Face | What Max sees and acts through: the page, on the PC or the phone. Each tab is a replica. | `crates/face-web`, `crates/face-tab` |
 | Domain | A sphere of Max's obligations (home, work) with one attention: its own brain, queue, priority document and data. | Not built. |
-| Environment | What an agent can do and know: its limbs, plus its model and effort. A role is one way of naming an environment, and roles are to be "subsumed by limbs". | Differs: `environment::Environment` is a role (`orchestrator`, `designer`), with a role prompt. Its `places` are the kinds of workspace slot it needs, not replicas. |
+| Area | A mode of Max's life within a domain (hobby programming, life admin, Kibra's study), with a main agent that owns its work. | Not built. |
+| Environment | What an agent can do and know: its limbs, plus its model and effort. A role is one way of naming an environment, and roles are to be "subsumed by limbs", unless Max's proposal that a role is the concept (an agent definition, a set of tools, a location) wins ([plan](plan.md#questions-only-max-can-answer)). | Differs: `environment::Environment` is a role (`orchestrator`, `designer`), with a role prompt. Its `places` are the kinds of workspace slot it needs, not replicas. |
 | Build | One compiled version of the harness, named by the hash of its executable. A supervisor starts a new build beside the old and rolls back if it fails. | `build::BuildId`, `crates/limb-builds` |
 | Program | Everything a session's behaviour depends on that can change under it: how its records fold, its policy, how its requests are written. No I/O, so it can later load as WASM. | `crates/program` |
 
@@ -35,7 +36,9 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Chat | An agent Max is in the environment of: user-facing. It waits on him whenever its turn ends, and only he says it is done. | A `task::Task` with Max as a limb; `state::Waiting::Max` |
 | Request | One call to the model. | `model_call::ModelCall` |
 | Call | One tool call. | `call::Call` |
-| Scope | The set of tasks a spawn starts. The parent makes no further decision until every result is in, and a task may add siblings to its own scope. | `task::Scope`, owned by its spawn call |
+| Scope | The set of tasks a spawn starts. In a foreground spawn the parent makes no further decision until every result is in; in a background spawn it carries on and joins later. A task may add siblings to its own scope. | Partly: `task::Scope`, owned by its spawn call; every spawn is foreground. |
+| Message, watch | The two relationships between tasks that own nothing. A message is words delivered to a live task. A watch wakes a task when work it doesn't own settles or is abandoned; one that would close a circle of waits is refused. | Not built. |
+| Hold | Using a resource (a limb, a clone, a tab, a dev server) without owning it; the resource is cleaned up after its last holder ends. | Not built. |
 | Fork | A child agent that starts from its parent's context, sharing its cache, and returns a summary. | `task::Origin::Fork` |
 | Aside | A user-facing child Max opens while its parent waits on other children. | `task::Origin::Aside` |
 | Compaction | An agent moving its head to a new root that carries its own summary, and carrying on as the same agent. Not "handover": Max, "It is too othering". | `task::Compaction` |

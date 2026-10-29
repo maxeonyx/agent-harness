@@ -13,7 +13,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use harness_limb::{Report, lock};
+use harness_limb::{Limit, Report, lock};
 use harness_runtime::{Cancel, Ended as TreeEnded};
 
 use crate::Inner;
@@ -91,6 +91,7 @@ impl Inner {
         call: &Call,
         input: &[u8],
         cancel: &Cancel,
+        limit: &Limit,
         report: &mut Report,
     ) -> Outcome {
         if self.kind == crate::Kind::User {
@@ -100,7 +101,7 @@ impl Inner {
             };
         }
         let result = match call.tool.as_str() {
-            "bash" => parse(input).and_then(|i| self.bash(id, i, cancel, report)),
+            "bash" => parse(input).and_then(|i| self.bash(id, i, cancel, limit, report)),
             "read" => parse(input).and_then(|i| self.read(i, report)),
             "write" => parse(input).and_then(|i| self.write(id, i, call, report)),
             "edit" => parse(input).and_then(|i| self.edit(id, i, call, report)),
@@ -115,6 +116,7 @@ impl Inner {
         call: CallId,
         input: Bash,
         cancel: &Cancel,
+        limit: &Limit,
         report: &mut Report,
     ) -> Result<Outcome, String> {
         let timeout =
@@ -142,6 +144,7 @@ impl Inner {
             &input.command,
             &self.root,
             timeout,
+            limit,
             cancel,
             truncator,
             progress,
