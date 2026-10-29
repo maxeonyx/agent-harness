@@ -6,12 +6,12 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 
 | Term | Meaning | In code |
 |---|---|---|
-| Brain | The one process that owns model calls, storage and decisions for a domain. Faces and limbs connect to it. | `crates/brain` |
-| Limb | What gives agents their tools and the context for using them: a shell and files in a directory, the web, a browser, Max. It outlives a brain restart. Max thinks a limb shouldn't need a process (an in-process meta limb that only touches the harness), and has proposed that "role" replace it as the concept ([plan](plan.md#questions-only-max-can-answer)). | Partly: every `environment::Limb` is a process; `crates/limb*` |
+| Brain | The one process that owns model calls, storage and decisions for a domain. Faces and limbs connect to it. It is a limb too: it hosts the harness's own tool sets. | `crates/brain` |
+| Limb | A process the harness gets onto a machine, as one user, so that agents can do things there: one per brain, machine and user, whatever directories its agents work in. What it does varies with the tool sets it offers. Infrastructure, not part of the agent model. It outlives a brain restart. | Differs: each workspace directory, the browser, the builds and Max's config are each an `environment::Limb` with a process of its own; `crates/limb*` |
 | Face | What Max sees and acts through: the page, on the PC or the phone. Each tab is a replica. | `crates/face-web`, `crates/face-tab` |
 | Domain | A sphere of Max's obligations (home, work) with one attention: its own brain, queue, priority document and data. | Not built. |
 | Area | A mode of Max's life within a domain (hobby programming, life admin, Kibra's study), with a main agent that owns its work. | Not built. |
-| Environment | What an agent can do and know: its limbs, plus its model and effort. A role is one way of naming an environment, and roles are to be "subsumed by limbs", unless Max's proposal that a role is the concept (an agent definition, a set of tools, a location) wins ([plan](plan.md#questions-only-max-can-answer)). | Differs: `environment::Environment` is a role (`orchestrator`, `designer`), with a role prompt. Its `places` are the kinds of workspace slot it needs, not replicas. |
+| Tool set | A named set of tools and the instructions for using them, offered by a limb and held by roles: currently `workspace` (a shell and files in the working directory), `user` (Max's own instructions and skills), `web`, `meta`, `browser`, `builds`. | Differs: each is a limb of its own. |
 | Build | One compiled version of the harness, named by the hash of its executable. A supervisor starts a new build beside the old and rolls back if it fails. | `build::BuildId`, `crates/limb-builds` |
 | Program | Everything a session's behaviour depends on that can change under it: how its records fold, its policy, how its requests are written. No I/O, so it can later load as WASM. | `crates/program` |
 
@@ -32,13 +32,16 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Term | Meaning | In code |
 |---|---|---|
 | Task | Anything asynchronous with one owner: a process, a request, a tool call, an agent, a chat. Everything that runs is a task in one tree. | Differs: `task::Task` is one agent working toward a result. Requests and calls have their own types (below). |
-| Agent | A model working in a loop with its environment toward a result. | `task::Task` |
-| Chat | An agent Max is in the environment of: user-facing. It waits on him whenever its turn ends, and only he says it is done. | A `task::Task` with Max as a limb; `state::Waiting::Max` |
+| Role | The abstract kind of agent: its system prompt, the tool sets it holds (with their instructions and skills), its model and effort, and the roles it can start. It names no limb and no directory. | Differs: `environment::Environment`, which names limbs (`limbs`) and the kinds of limb each agent gets (`places`). |
+| Meta role | A role that holds only the brain's tool sets: its agents have no working directory and need no process anywhere. | Not built. |
+| Agent | The concrete one: a context, a working directory and a role. A model working in a loop toward a result. | `task::Task` |
+| Working directory | Where an agent's shell and file tools run, on one limb: given when the agent is created, fixed for its life, and shared by its forks. | Differs: a workspace limb per directory, in `task::Task::places`. |
+| Chat | An agent Max started or opened: user-facing. It waits on him whenever its turn ends, and only he says it is done. | `task::Mode::UserFacing`; `state::Waiting::Max` |
 | Request | One call to the model. | `model_call::ModelCall` |
 | Call | One tool call. | `call::Call` |
 | Scope | The set of tasks a spawn starts. In a foreground spawn the parent makes no further decision until every result is in; in a background spawn it carries on and joins later. A task may add siblings to its own scope. | Partly: `task::Scope`, owned by its spawn call; every spawn is foreground. |
 | Message, watch | The two relationships between tasks that own nothing. A message is words delivered to a live task. A watch wakes a task when work it doesn't own settles or is abandoned; one that would close a circle of waits is refused. | Not built. |
-| Hold | Using a resource (a limb, a clone, a tab, a dev server) without owning it; the resource is cleaned up after its last holder ends. | Not built. |
+| Hold | Using a resource (a clone, a tab, a dev server) without owning it; the resource is cleaned up after its last holder ends. | Not built. |
 | Fork | A child agent that starts from its parent's context, sharing its cache, and returns a summary. | `task::Origin::Fork` |
 | Aside | A user-facing child Max opens while its parent waits on other children. | `task::Origin::Aside` |
 | Compaction | An agent moving its head to a new root that carries its own summary, and carrying on as the same agent. Not "handover": Max, "It is too othering". | `task::Compaction` |

@@ -11,7 +11,7 @@ Max named two halves, "equally important": "First is the harness needs to work l
 
 Neither has to be finished first, though "obviously I want [...] as much of it done as soon as possible".
 
-What is unique to it, in his weighting (2026-07-31): the user turn; the "hardcore 'forking' subagent model", with cache efficiency and structured concurrency; the limb model ([S4](#s4-environments-limbs-and-nothing-else)); and agents owning their own compaction. What he calls non-unique, non-exhaustively, "good taste" choices from other harnesses: a decoupled monolith, composable configuration, self-modification, and the context model ([S3](#s3-contexts-what-an-agent-was-told-as-values)).
+What is unique to it, in his weighting (2026-07-31): the user turn; the "hardcore 'forking' subagent model", with cache efficiency and structured concurrency; the limb model ([S4](#s4-roles-agents-and-limbs)); and agents owning their own compaction. What he calls non-unique, non-exhaustively, "good taste" choices from other harnesses: a decoupled monolith, composable configuration, self-modification, and the context model ([S3](#s3-contexts-what-an-agent-was-told-as-values)).
 
 ## User stories
 
@@ -62,9 +62,9 @@ What Max does with the harness when it is finished, grouped by the part of his d
 ### What agents can do
 
 - **Prevention by construction.** There are no permission prompts ([settled](../AGENTS.md#what-is-settled)): an agent can do what its environment gives it and nothing else. "A full JavaScript sandbox counts. A JavaScript sandbox where you can write programs, but a classifier checks if they're read-only doesn't count."
-- **Environments, not tool lists.** An environment is its tools plus the context for using them. An agent with a directory gets a shell; a chat needs no directory; roles may expose parameters Max fills in when he starts one, with a rich picker for directories and remote environments.
+- **Roles, not tool lists.** A role is its tool sets plus the context for using them. An agent with a directory gets a shell; a chat needs no directory; roles may expose parameters Max fills in when he starts one, with a rich picker for directories and remote environments.
 - **A browser agent for life admin.** A dedicated agent drives a Chromium browser through scripts, with screenshots used sparingly, its own tabs as resources it can hand to Max, and Max's own browser on his desktop as the eventual target. The usual shape is "get Max to do most of the browser usage, then do the tedious part, then let him continue."
-- **Limbs anywhere.** A limb runs on the brain's machine or on another one over SSH, and survives the brain restarting.
+- **Limbs anywhere.** A limb runs on the brain's machine or on another one over SSH, one per machine and user account, and survives the brain restarting.
 - **Web search and fetch**, and an MCP client.
 - **Workspaces and clones** follow Max's existing pattern (shared directories, lazy clones); isolation is a separate action when it is wanted.
 - **Agents that serve many and own nothing** (28 Oct). Ownership is not the only relationship between agents: "is there just one kind of relationship between agents? Not really." Some agents serve many in the background without owning their work. His example is an agent-instructions agent, which receives improvements from many agents, user-facing or autonomous, and has the process, the tools and a limb fit for improving the instructions. It "doesn't have to be one agent": it could be one limb with several agents in it, depending on whether the data model lets several work on it at once. Code does, through git, which agents understand as "a distributed partial order model [...] with manual merges"; other data not necessarily.
@@ -112,12 +112,10 @@ In code, `crates/core` holds every structure's types as one schema and `crates/b
 ```mermaid
 flowchart LR
   subgraph home["Home domain"]
-    hb["Brain<br/>(SQLite replica)"]
-    hl1["Limb: workspace"]
-    hl2["Limb: browser"]
-    hl3["Limb over SSH"]
+    hb["Brain, a limb itself<br/>(SQLite replica)"]
+    hl1["Limb: the brain's machine<br/>(every directory, the browser, the builds)"]
+    hl3["Limb: another machine, over SSH"]
     hb <--> hl1
-    hb <--> hl2
     hb <--> hl3
   end
   subgraph work["Work domain"]
@@ -179,20 +177,23 @@ flowchart TD
 - **You can tell by:** every block on the page names its source; a fork's first request reads its parent's cache; an edited `AGENTS.md` reaches a running agent as a notice with a turn index.
 - **In code.** `crates/program`, what each request renders; a context is `context::Entry`, in `crates/core`.
 
-### S4. Environments: limbs, and nothing else
+### S4. Roles, agents and limbs
 
-- **Only limbs.** An agent can do and know only what its limbs give it: tools, plus the context for using them. There are no implicit tools. A sandbox counts only if it looks like the whole world to the agent: a JS engine with no file system counts, a shell behind a classifier doesn't.
-- **Max is a limb.** An agent is user-facing exactly when he is in its environment, and only his own action puts him there.
-- **Roles dissolve.** Roles are "subsumed by limbs": an engineer is a set of limbs plus its model and effort. On 28 Oct Max proposed the reverse, as a guess: "I think the name limb has outlived its usefulness. We've discovered that role is the right abstraction. An agent, definition, a set of tools, a location." A limb is the place ("an SSH remote process, a local process, an in-process, you know, virtual thing"), "A role is a limb plus an agent. And I think that's the actual concept we use most of the time." A limb with a working directory having its own process is "a good design": a systemd scope can carry resource limits, though limbs also need shutting down, starting back up and "update them, probably". But a limb shouldn't need a process: an orchestrator's limb is an in-process "meta limb" that only touches the harness itself (reading chat history and his messages, examining the harness's state, spawning sub-agents in other limbs). "I'm not sure if I really want orchestrators to be that way, but I think I do. [...] Maybe we need more roles." Nothing is renamed until it is agreed ([plan](plan.md#questions-only-max-can-answer)).
+- **A role is abstract, an agent concrete, a limb infrastructure.** Max (29 Oct): "A role is the abstract thing, and then an agent is the concrete thing. An agent has a context and a working directory and a role. The role includes the agent instructions, the skill set, the tool set." And: "I think a lim is an extension of the harness infrastructure. It's not part of the agent model. We get a process onto a remote machine so that we can do stuff on the remote machine. What stuff? It varies. Maybe we don't have any bash. Maybe we only connect to a CDP on that machine. Maybe we only do web fetches from a locked down sandbox, but the web fetches are special because of that machine's network location or something." So a role names tool sets, never a limb or a directory, and each agent finds its role's tool sets on limbs when it is created.
+- **Only what the role holds.** An agent can do and know only what its role's tool sets give it: tools, plus the context for using them. There are no implicit tools. A sandbox counts only if it looks like the whole world to the agent: a JS engine with no file system counts, a shell behind a classifier doesn't.
+- **One limb per machine and user account.** His decision (29 Oct): "I think lim per machine and user account. [...] One process per machine per user account." Not one per directory: every agent working on a machine works through its one limb, each in its own working directory. "The lim shouldn't have huge memory usage itself, right?" The limb "could create a scope for an agent who has bash callability. And then that agent gets a scope per agent", so what an agent runs counts as that agent's and stops with it. Each brain has its own limb on a machine, since his words were against one per directory rather than across brains (the advocate's reading, 29 Oct): a test brain trying a change to limb code runs its own build, and two domains never share a process.
+- **The brain is a limb.** "A role can be hosted in the brain. Given a tool set, instruction set, skill set, system prompt. The brain is a lim." The brain offers the harness's own tool sets (spawning, handing over, his queue, web search), so a role that holds only those, a **meta role**, needs no process anywhere: "Now that I say meta lim, I think meta role makes more sense." Whether orchestrators become meta roles is open (28 Oct: "I'm not sure if I really want orchestrators to be that way, but I think I do"). A limb on a machine "could also potentially have a meta lim. I don't know why it would, but it could."
+- **Max is a participant, not a limb.** An agent is user-facing because Max started it or opened it, and only his own action makes one so.
+- **Failing gracefully.** "I'm not interested in the crash. I think that that's bad code if we crash. [...] Rust gives us the tools to gracefully handle almost all error cases, so we should." A directory that can't be made, a tool set that can't open or a tool that panics fails only itself, in band; a limb's process ends only when it cannot exist at all.
 - **Definitions are versioned facts** in the domain's database. A file in a repo is one source of a definition: a limb reads the file, never the brain. Which source each definition has is chosen for it: "think about where the state should go rather than just blindly putting it in the repo".
-- **Settled.** Extension is a JS sandbox limb when something needs scripting, and WASM modules later; programs as data is a long-term direction, not now, and Max says "Maybe, I'm not so convinced about that. In a language project, maybe. I don't know." Asks are not a separate mechanism: an agent facing Max ends its turn with what it needs. The browser limb drives Max's own browser on his Windows desktop ("ideally"), which needs the SSH limb.
-- **The want.** Prevention by construction at every level, rather than by checking: "checking is the red flag that you're doing this wrong". And context that comes with the environment.
-- **You can tell by:** the brain opens no file but its database; a new kind of limb needs no change to the brain; an agent can't reach `~/.claude/.credentials.json` unless its environment holds it.
-- **In code.** `crates/limb`, `crates/limb-workspace`, `crates/limb-browser` and `crates/script`; an environment is `environment::Environment`, in `crates/core`.
+- **Settled.** Extension is a JS sandbox limb when something needs scripting, and WASM modules later; programs as data is a long-term direction, not now, and Max says "Maybe, I'm not so convinced about that. In a language project, maybe. I don't know." Asks are not a separate mechanism: an agent facing Max ends its turn with what it needs. The browser drives Max's own browser on his Windows desktop ("ideally"), which needs a limb there over SSH. Sandboxing, later, is the limb starting each command bubblewrapped.
+- **The want.** Prevention by construction at every level, rather than by checking: "checking is the red flag that you're doing this wrong". Context that comes with the tool set. And infrastructure that stays small and leaves nothing running: one process per machine, with each agent's work counted and stopped as its own.
+- **You can tell by:** one limb process per brain on each machine, however many directories its agents work in; an agent's build shows under that agent in `systemd-cgtop`, not under the limb; stopping an agent ends everything its commands started, `setsid` or not; a clone that fails stops one agent, not the limb; the brain opens no file but its database; a new kind of tool set needs no change to the brain; an agent can't reach `~/.claude/.credentials.json` unless its role holds a tool set that can.
+- **In code.** `crates/limb`, `crates/limb-workspace`, `crates/limb-browser`, `crates/limb-builds` and `crates/script`. Today each workspace directory, the browser, the builds and Max's config are each a limb with a process of its own; a role is `environment::Environment`, which names limbs, and an agent's directory is a workspace limb in its `places`.
 
 ### S5. Replicas and versions
 
-- **Roles, not processes.** Brain, limb and face are roles; one binary runs any mix of them, and each seam is in-process, a pipe or the network, chosen at start: a "decoupled monolith".
+- **Parts, not processes.** Brain, limb and face are parts; one binary runs any mix of them, and each seam is in-process, a pipe or the network, chosen at start: a "decoupled monolith".
 - **A version is a replica.** Each process runs one build. Upgrading starts a replica at the new build and routes new sessions to it; rolling back routes back. Facts are the one compatibility contract: each replica parses facts from other versions at its boundary, as it parses anything foreign.
 - **Settled.** Sessions move to the new build at once. Rebooting is the operator's job (a systemd user service).
 - **The want.** Memory that scales with active work, running anywhere, and upgrades that lose no session.
