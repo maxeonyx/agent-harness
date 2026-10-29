@@ -1,6 +1,6 @@
 import { $, clock, el, ICONS, panel, svgEl } from "./base.js";
-import { byId, derive, DOT, glyph, graph, isDone, layout, live, look, positions, ROOT_DOT, SAT_DOT, satLabel, shortName, shown, unfolded, view } from "./map.js";
-import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setSeam, target } from "./camera.js";
+import { byId, derive, DOT, glyph, graph, isDone, layout, live, look, positions, ROOT_DOT, routes, SAT_DOT, satLabel, shortName, shown, unfolded, view } from "./map.js";
+import { cam, cardShown, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setSeam, target } from "./camera.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
 import { renderBuilds } from "./builds.js";
@@ -91,25 +91,32 @@ function anchor(id, end) {
   const d = n.kind === "sat" ? SAT_DOT : graph.comps.some((c) => c.root.id === id) ? ROOT_DOT : DOT;
   return end === "out" ? { x: cx, y: p.y + d + 2 } : { x: cx, y: p.y - 2 };
 }
+// An edge along the curve the layout gave it, bent to follow its two ends
+// wherever they have moved since: each point moves as the end nearer it does.
+// An open chat's card is its node: what it leads to leaves from the card's foot.
+function laidCurve(e) {
+  const pts = routes.get(`${e.from}>${e.to}`);
+  if (!pts) return null;
+  const move = (id) => {
+    const p = positions.get(id), s = shown.get(id), c = id === openId && e.from === id && cardShown;
+    return c ? { x: c.x + c.w / 2 - p.x - p.w / 2, y: c.y + c.h - p.y - p.h } : { x: s.x - p.x, y: s.y - p.y };
+  };
+  const m0 = move(e.from), m1 = move(e.to), y0 = pts[0].y, y1 = pts[pts.length - 1].y;
+  const q = pts.map((p) => { const u = y1 === y0 ? 0 : Math.max(0, Math.min(1, (p.y - y0) / (y1 - y0))); return `${p.x + m0.x + (m1.x - m0.x) * u},${p.y + m0.y + (m1.y - m0.y) * u}`; });
+  return (q.length - 1) % 3 ? `M${q.join(" L")}` : `M${q[0]} C${q.slice(1).join(" ")}`;
+}
+// Out of the bottom of the source's dot, below its name, into the top of the target's.
+function straight(e, a, b) {
+  const sx = a.x, sy = shown.get(e.from).y + shown.get(e.from).h - 4;
+  const dy = Math.max(18, (b.y - sy) / 2);
+  return b.y > sy ? `M${sx},${sy} C${sx},${sy + dy} ${b.x},${b.y - dy} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x + 60},${a.y} ${b.x + 60},${b.y} ${b.x},${b.y}`;
+}
 export function drawEdges() {
   const paths = [];
   for (const e of graph.edges) {
     const a = anchor(e.from, "out"), b = anchor(e.to, "in");
     if (!a || !b) continue;
-    if (e.kind === "continues") {
-      const p = shown.get(e.from), q = shown.get(e.to), d = DOT / 2;
-      const x0 = p.x + p.w / 2, y0 = p.y + d, x1 = q.x + q.w / 2, y1 = q.y + d;
-      const lift = Math.min(60, 12 + Math.abs(x1 - x0) / 6);
-      const path = svgEl("path");
-      path.setAttribute("d", `M${x0 + Math.sign(x1 - x0) * (d + 3)},${y0} C${x0},${Math.min(y0, y1) - lift} ${x1},${Math.min(y0, y1) - lift} ${x1 - Math.sign(x1 - x0) * (d + 3)},${y1}`);
-      path.setAttribute("class", "edge continues");
-      paths.push(path);
-      continue;
-    }
-    // Out of the bottom of the source's dot, below its name, into the top of the target's.
-    const sx = a.x, sy = shown.get(e.from).y + shown.get(e.from).h - 4;
-    const dy = Math.max(18, (b.y - sy) / 2);
-    const d = b.y > sy ? `M${sx},${sy} C${sx},${sy + dy} ${b.x},${b.y - dy} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x + 60},${a.y} ${b.x + 60},${b.y} ${b.x},${b.y}`;
+    const d = laidCurve(e) || straight(e, a, b);
     const cls = `edge ${e.kind}${e.flow ? " flow" : ""}`;
     // A fork's edge is hollow: its owner's context, carried down into it.
     // A fresh agent's is a line: it starts from its mandate alone.
