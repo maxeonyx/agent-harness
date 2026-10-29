@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 
 use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::delivery::Content;
-use harness_core::environment::{Effort, Environment, LimbKind, Reach};
+use harness_core::limb::{Defined, Host, Prepared, Reach};
+use harness_core::role::{Effort, Role};
 use harness_core::fact::Fact;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
@@ -28,7 +29,7 @@ fn text(value: Text, id: ValueId) -> Option<String> {
 
 /// The model and effort a task's next request runs at, and while its cache
 /// is warm, until when and how many tokens a change would reread without it.
-fn tuning(value: Text, t: &Task, env: &Environment, last: Option<&Ended>) -> Value {
+fn tuning(value: Text, t: &Task, role: &Role, last: Option<&Ended>) -> Value {
     let warm = last.and_then(|ended| {
         let u = ended.usage?;
         Some(json!({
@@ -37,8 +38,8 @@ fn tuning(value: Text, t: &Task, env: &Environment, last: Option<&Ended>) -> Val
         }))
     });
     json!({
-        "model": t.tuning.model(env),
-        "effort": t.tuning.effort.or_else(|| harness_provider::effort(&value(env.params)?)),
+        "model": t.tuning.model(role),
+        "effort": t.tuning.effort.or_else(|| harness_provider::effort(&value(role.params)?)),
         "warm": warm,
     })
 }
@@ -77,37 +78,40 @@ pub fn rows(
         })
         .collect();
     rows.insert(FaceKey::Queue, FaceRow::Queue(Value::Array(queue)));
-    // The workspaces, by directory, which is a workspace limb's name: what a
-    // new task can be given, or a new limb made for.
-    let workspaces: Vec<Value> = state
-        .limbs()
-        .filter(|l| matches!(&l.kind, LimbKind::Plugin { kind, .. } if kind == "workspace"))
-        .map(|l| json!({"id": l.id.to_string(), "dir": l.name}))
-        .collect();
-    let environments: Vec<Value> = state
-        .environments()
-        .map(|e| {
+    // The directories tasks work in, each once: what a new task is offered.
+    let mut workspaces: Vec<Value> = Vec::new();
+    for workdir in state.tasks().filter_map(|t| state.workdir(t)) {
+        let row = json!({
+            "limb": workdir.limb.to_string(),
+            "dir": workdir.dir,
+        });
+        if !workspaces.contains(&row) {
+            workspaces.push(row);
+        }
+    }
+    let roles: Vec<Value> = state
+        .roles()
+        .map(|r| {
             json!({
-                "id": e.id.to_string(),
-                "name": e.name,
-                "model": e.model,
-                "effort": value(e.params).and_then(|p| harness_provider::effort(&p)),
-                "places": e.places,
+                "id": r.id.to_string(),
+                "name": r.name,
+                "model": r.model,
+                "effort": value(r.params).and_then(|p| harness_provider::effort(&p)),
+                "workdir": r.works_in_a_directory(),
             })
         })
         .collect();
-    let provider = state
-        .limbs()
-        .find(|l| l.kind == LimbKind::Provider)
-        .map(|l| l.id);
+    let brain = state.brain().map(|l| l.id);
     let harness = json!({
-        "environments": environments,
+        "roles": roles,
         "models": harness_provider::current(models)
             .iter()
             .map(|m| json!({"id": m.id, "name": m.name}))
             .collect::<Vec<_>>(),
         "efforts": Effort::ALL,
         "workspaces": workspaces,
+        // Where a new task's directory is: the limb on the brain's machine.
+        "local": state.limbs().find(|l| l.host == Host::Local).map(|l| l.id.to_string()),
         "launch": state.launch().map(|(_, l)| l),
         "probation": state.probation().verdict(),
         "source": source,
@@ -122,8 +126,8 @@ pub fn rows(
             Some(Hold::SignedOut { since }) => Some(since.0),
             _ => None,
         },
-        "provider": provider.map(|l| l.to_string()),
-        "usage": usage(state, value, provider),
+        "brain": brain.map(|l| l.to_string()),
+        "usage": usage(state, value, brain),
     });
     rows.insert(FaceKey::Harness, FaceRow::Harness(harness));
     // A sent draft is a delivery in its session; a discarded one is gone.
@@ -146,16 +150,17 @@ pub fn rows(
 }
 
 /// Where the latest relaunch of the brain stands, as far as it concerns the
-/// build running now: `under way` while the builds limb is building and
+/// build running now: `under way` while the `builds` set is building and
 /// rehearsing it; `took over` once it settled in this launch's span, when
 /// `probation` says how far the build has proven itself; `went back` with
-/// the builds limb's reason, the content of its change of the service it
+/// the `builds` set's reason, the content of its change of the service it
 /// relaunched, when that change came after this launch. `null` when the
 /// running build did not come from a relaunch.
 fn relaunch(state: &State, value: Text) -> Value {
     let builds = |limb: Option<LimbId>| {
-        limb.and_then(|l| state.limb(l))
-            .is_some_and(|l| matches!(&l.kind, LimbKind::Plugin { kind, .. } if kind == "builds"))
+        (limb.and_then(|l| state.resolve(l)))
+            .and_then(|l| state.limb(l))
+            .is_some_and(|l| l.offer("builds").is_some())
     };
     let Some((_, call)) = state
         .calls()
@@ -188,7 +193,7 @@ fn relaunch(state: &State, value: Text) -> Value {
 /// headers reported and what Max's latest usage reading returned, each
 /// window by name, as of when; whether a reading is running; and why the
 /// last one failed, if none has succeeded since.
-fn usage(state: &State, value: Text, provider: Option<LimbId>) -> Value {
+fn usage(state: &State, value: Text, brain: Option<LimbId>) -> Value {
     let window = |w: &Window| json!({"used": w.used, "resets": w.resets.map(|t| t.0)});
     let mut at = None;
     let mut windows = serde_json::Map::new();
@@ -207,7 +212,8 @@ fn usage(state: &State, value: Text, provider: Option<LimbId>) -> Value {
     }
     let (mut refreshing, mut failed) = (false, None);
     let readings = state.calls().map(|(_, c)| c).filter(|c| {
-        provider.is_some_and(|p| c.limb == Some(p)) && matches!(c.call.caller, Caller::Max { .. })
+        c.limb.is_some_and(|l| brain.is_some() && state.resolve(l) == brain)
+            && matches!(c.call.caller, Caller::Max { .. })
     });
     for call in readings {
         let Some(settled) = &call.settled else {
@@ -324,10 +330,10 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "compactions": t.head().map_or(0, |h| state.compactions_on(t.id, h)),
         // When its last request ended: a retry can end where it began.
         "ended": last.map(|e| e.at.seq.n),
-        "environment": state.environment(t.environment).map(|e| e.name.clone()),
-        "window": state.environment(t.environment).map(|e| harness_provider::context_window(t.tuning.model(e))),
-        "tuning": state.environment(t.environment).map(|e| tuning(value, t, e, last)),
-        "places": t.places.iter().map(|(place, limb)| (place.clone(), limb_name(state, *limb))).collect::<BTreeMap<String, String>>(),
+        "role": state.role(t.role).map(|r| r.name.clone()),
+        "window": state.role(t.role).map(|r| harness_provider::context_window(t.tuning.model(r))),
+        "tuning": state.role(t.role).map(|r| tuning(value, t, r, last)),
+        "workdir": state.workdir(t).map(|w| w.dir),
         // Whether Max has paused it, how, and on which task: itself or an
         // ancestor.
         "pause": state.pause(t.id).map(|(how, by)| json!({
@@ -518,9 +524,9 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {
                 let how = match &c.origin {
-                    Origin::Fresh { environment, .. } => state
-                        .environment(*environment)
-                        .map_or_else(|| environment.to_string(), |e| e.name.clone()),
+                    Origin::Fresh { role, .. } => state
+                        .role(*role)
+                        .map_or_else(|| role.to_string(), |r| r.name.clone()),
                     Origin::Fork { from } => format!("forked from {}", name(*from)),
                     Origin::Resume { from } => format!("resuming {}", name(*from)),
                     Origin::Aside { from } => format!("an aside of {}", name(*from)),
@@ -633,11 +639,29 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             ),
             None => format!("{} {} changed", c.resource.kind, c.resource.name),
         },
-        Fact::Environment(e) => format!("environment {} defined", e.name),
-        Fact::Limb(l) => format!("limb {} defined", l.name),
+        Fact::Role(r) => format!("role {} defined", r.name),
+        Fact::Limb(Defined::Limb(l)) => format!("limb {} defined", l.name),
+        Fact::Limb(Defined::Legacy(l)) => format!("limb {} defined, as before", l.name),
         Fact::Described { limb, description } => {
             let limb = limb_name(state, *limb);
-            format!("{limb} described: {} tools", description.tools.len())
+            let tools: usize = description.sets.iter().map(|s| s.tools.len()).sum();
+            format!(
+                "{limb} described: {} sets, {tools} tools",
+                description.sets.len()
+            )
+        }
+        Fact::Workdir {
+            limb,
+            dir,
+            prepared,
+        } => {
+            let limb = limb_name(state, *limb);
+            match prepared {
+                Prepared::Ready { .. } => format!("{limb} has {} ready", dir.display()),
+                Prepared::Failed { why } => {
+                    format!("{limb} cannot make {}: {why}", dir.display())
+                }
+            }
         }
         Fact::Reach { limb, reach } => {
             let limb = limb_name(state, *limb);
@@ -687,9 +711,9 @@ fn outcome(o: &CallOutcome) -> &'static str {
     }
 }
 
-/// A limb's name, or its id if it has none here.
+/// A limb's name, of now or from before, or its id if it has none here.
 fn limb_name(state: &State, limb: LimbId) -> String {
-    state
-        .limb(limb)
-        .map_or_else(|| limb.to_string(), |l| l.name.clone())
+    (state.limb(limb).map(|l| &l.name))
+        .or(state.legacy(limb).map(|l| &l.name))
+        .map_or_else(|| limb.to_string(), String::clone)
 }

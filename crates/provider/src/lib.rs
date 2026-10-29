@@ -80,7 +80,7 @@ pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};
 pub use scripted::{SCRIPTED, scripted};
 
-use harness_core::environment::Effort;
+use harness_core::role::Effort;
 
 /// A model on offer, as a face lists it and a role file may name it.
 #[derive(Clone, Debug, PartialEq, Eq)]

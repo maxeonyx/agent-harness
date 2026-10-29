@@ -213,7 +213,7 @@ use std::process::ExitCode;
 use std::sync::{Mutex, mpsc};
 use std::thread;
 
-use harness_core::environment::UnknownEffort;
+use harness_core::role::UnknownEffort;
 use harness_core::id::ValueId;
 use harness_face_web::{Dictation, Face, Feed, Source, Wiring};
 use harness_provider::{Client, Login};

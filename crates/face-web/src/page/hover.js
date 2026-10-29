@@ -96,9 +96,9 @@ export function fillTip() {
     if (!t) return hideTip();
     const fc = graph.comps.find((c) => c.folded && c.root.id === id);
     lines.push(el("b", null, t.name), el("div", "now", fc ? cardStatus(fc) : trouble(t) || look(t).text));
-    const place = Object.values(t.places || {})[0];
+    const place = t.workdir;
     const mode = t.mode === "user-facing" ? "chat" : t.mode === "standing" ? "standing" : null;
-    const what = [t.environment, mode !== t.environment && mode].filter(Boolean).join(" ");
+    const what = [t.role, mode !== t.role && mode].filter(Boolean).join(" ");
     const phased = t.compactions && `compacted ${t.compactions === 1 ? "once" : `${t.compactions}×`}`;
     lines.push(el("div", null, [what, t.origin === "fork" && "a fork", phased, place && `in ${place.split("/").filter(Boolean).slice(-2).join("/")}`].filter(Boolean).join(" · ")));
     if (t.tokens && !isDone(t)) lines.push(el("div", null, `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`));

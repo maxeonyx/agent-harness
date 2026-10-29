@@ -13,7 +13,7 @@ import { openId } from "./card.js";
 export let view = null;
 // The tab's rows, one per object, as the page draws them.
 function assemble(v) {
-  const out = { as_of: v.as_of, seq: Number(v.as_of.split(".")[1]), tasks: [], queue: [], drafts: [], environments: [], workspaces: [] };
+  const out = { as_of: v.as_of, seq: Number(v.as_of.split(".")[1]), tasks: [], queue: [], drafts: [], roles: [], workspaces: [] };
   for (const [key, row] of Object.entries(v.rows)) {
     const id = key.slice(key.indexOf(":") + 1);
     if (row.Task) out.tasks.push(row.Task);
@@ -68,7 +68,7 @@ export function look(t) {
 }
 // Under its owner, a task's name without the owner's name it starts with.
 export const shortName = (t) => { const o = byId[parentOf(t)]; return o && t.name.startsWith(o.name + "-") ? t.name.slice(o.name.length + 1) : t.name; };
-export const glyph = (t) => (t.environment || t.name || "?").trim()[0].toUpperCase();
+export const glyph = (t) => (t.role || t.name || "?").trim()[0].toUpperCase();
 // Tasks in the order they were created.
 export const order = (a, b) => a.created.seq - b.created.seq;
 export const isDone = (t) => t.waiting?.kind === "done";

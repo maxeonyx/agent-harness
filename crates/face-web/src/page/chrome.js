@@ -43,10 +43,10 @@ const windowName = (n) => ({ five_hour: "5-hour", seven_day: "Weekly", seven_day
 let refreshAsked = false, refreshRefused = null;
 async function refreshUsage() {
   const u = view.usage;
-  if (refreshAsked || u?.refreshing || !view.provider) return;
+  if (refreshAsked || u?.refreshing || !view.brain) return;
   refreshAsked = true; refreshRefused = null; renderUsage();
   const why = await act((at) => ({ Call: [`${at}.0`, { Made: {
-    caller: { Max: { limb: view.provider, chat: null } }, tool: "usage", input: digest("{}"), expects: [],
+    caller: { Max: { limb: view.brain, chat: null } }, tool: "usage", input: digest("{}"), expects: [],
   } }] }), ["{}"]);
   refreshRefused = why && `Could not ask for a reading: ${why}`;
   refreshAsked = false; renderUsage();
