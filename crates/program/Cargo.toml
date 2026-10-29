@@ -7,4 +7,5 @@ description = "A session's program: what its requests render, the harness's tool
 
 [dependencies]
 harness-core = { path = "../core" }
-serde_json = "1"
+# preserve_order: a tool definition reaches the model in the order it is written.
+serde_json = { version = "1", features = ["preserve_order"] }
