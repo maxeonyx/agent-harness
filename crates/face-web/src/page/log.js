@@ -313,17 +313,21 @@ function closeGroup(s) { s.group = null; }
 
 const FILES = /\.(md|markdown|svg|html?|txt|json|rs|py|js|ts|toml|ya?ml|sh|css)$/i;
 // A call's row: its tool, the agent's summary of it (its input's last
-// field, `summary`; a compaction's `summary` is what it carries on with),
-// and a glimpse of its real arguments; opened, its input and result.
+// field, `summary`), and a glimpse of its real arguments; opened, its input
+// and result. A compaction carries on with its `carry`; one recorded before
+// `carry` existed has its text in `summary` instead.
 function toolRow(s, b, t) {
-  const input = b.input || {};
+  let input = b.input || {};
+  if (b.name.startsWith("compact") && input.carry === undefined) {
+    const { summary: carry, ...rest } = input;
+    input = { ...rest, carry };
+  }
   const inner = b.name === "background" ? input.input || {} : input;
   const name = b.name === "background" ? `${input.tool} ↷` : b.name;
-  const compact = (b.name === "background" ? input.tool : b.name)?.startsWith("compact");
-  const said = compact ? "" : input.summary ?? inner.summary;
+  const said = input.summary ?? inner.summary;
   const summary = typeof said === "string" ? said : "";
   const detail = el("div", "detail");
-  detail.append(readable(compact ? input : unsummarised(input, b.name === "background")));
+  detail.append(readable(unsummarised(input, b.name === "background")));
   const row = foldRow(name, summary, gist(inner), detail);
   row.dataset.tool = b.name;
   row.dataset.summary = summary;
@@ -343,7 +347,7 @@ function toolRow(s, b, t) {
   }
   if (b.name.startsWith("compact")) {
     const q = el("div", "card");
-    q.append(el("div", "label", input.fresh ? "Compacting into a new context" : "Compacting"), markdown(input.summary || ""));
+    q.append(el("div", "label", input.fresh ? "Compacting into a new context" : "Compacting"), markdown(input.carry || ""));
     row.insertBefore(q, detail);
   }
   s.rows.set(b.id, { row, b, inner });
