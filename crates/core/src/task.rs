@@ -9,13 +9,12 @@ use serde::{Deserialize, Serialize};
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome, Owner};
 use crate::context::{Entry, EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
-use crate::environment::Binding;
 use crate::fact::{Author, Fact, Rejected, Stated};
-use crate::id::{
-    CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, TaskId, Timestamp, ValueId,
-};
+use crate::id::{CallId, DeliveryId, LimbId, ModelCallId, RoleId, TaskId, Timestamp, ValueId};
+use crate::limb::Workdir;
 use crate::model_call::{Ending, ModelCallEvent, Stop};
 use crate::resource::{Change, Observation, ResourceKey, Version};
+use crate::role::{Binding, Tuning};
 use crate::state::{Mark, State};
 
 /// The fold of the facts about one task: everything the brain, a face or
@@ -24,9 +23,9 @@ use crate::state::{Mark, State};
 /// **Concept.** A task is the unit of structured concurrency and the thing
 /// Max watches, talks to, and is asked to attend to. It has a [`Mandate`],
 /// a [`Scope`] that owns it, a [`Mode`] that says what the end of a turn
-/// means, an [environment](crate::environment::Environment) that is its role
-/// for life, the limbs that fill that environment's places (its own clone),
-/// and a [`Life`]: starting, live in a [`Context`], or done. A task is an
+/// means, a [role](crate::role::Role) for life, a
+/// [working directory](Workdir) for life if its role works in one, and a
+/// [`Life`]: starting, live in a [`Context`], or done. A task is an
 /// identity; its context is a value. The head moves through the context tree
 /// (a fork starts a task on its parent's response, a compaction replaces
 /// what the task did since a checkpoint with what it carries, a resume
@@ -37,9 +36,10 @@ use crate::state::{Mark, State};
 /// Creation and the first root are separate facts. A spawn creates its
 /// members in the batch that dispatches it, so a scope's membership is
 /// atomic with the call that owns it; a fresh member is then
-/// [`Life::Starting`] until every limb it can reach has connected and
-/// described itself (a clone made, a process started), when the brain gives
-/// it its first root ([`Move::Root`]).
+/// [`Life::Starting`] until every limb hosting its tool sets has connected
+/// and described itself and its working directory is ready (a clone made, a
+/// process started), when the brain gives it its first root
+/// ([`Move::Root`]).
 ///
 /// Its life is folded from the facts that concern it (`Task::apply`, run
 /// only by the brain's fold): its own events, its model calls, the
@@ -75,15 +75,15 @@ pub struct Task {
     pub id: TaskId,
     /// Short and descriptive, growing with depth (`tk-prodsync-findfiles`).
     pub name: String,
-    /// Its role, and everything it can reach. Fixed for life, and inherited
-    /// by forks, resumes and asides: models do not reliably honour a role
-    /// that changes mid-context. A new version of the environment reaches
-    /// it at its next root.
-    pub environment: EnvironmentId,
-    /// The limb filling each of its environment's
-    /// [places](crate::environment::Environment::places), by plugin kind.
-    /// Fixed for life, and shared by its forks.
-    pub places: BTreeMap<String, LimbId>,
+    /// Its role. Fixed for life, and inherited by forks, resumes and asides:
+    /// models do not reliably honour a role that changes mid-context. A new
+    /// version of the role reaches it at its next root.
+    pub role: RoleId,
+    /// Where its shell and file tools run, if its role works in a
+    /// directory. Fixed for life, and shared by its forks. A task from
+    /// before limbs were per machine has its workspace limb's directory,
+    /// naming that old limb, which [`State::workdir`] resolves.
+    pub workdir: Option<Workdir>,
     pub scope: Scope,
     pub origin: Origin,
     /// The meta call that created it; `None` when Max did. Whoever made
@@ -94,8 +94,8 @@ pub struct Task {
     /// creation's, unless Max has since edited the first message of its
     /// context ([`crate::draft::DraftEvent::Opened`] at its start).
     pub mandate: Mandate,
-    /// The model and effort Max chose for it, over its environment's.
-    pub tuning: crate::environment::Tuning,
+    /// The model and effort Max chose for it, over its role's.
+    pub tuning: Tuning,
     /// What Max last said here about pausing it and everything under it;
     /// `None` if he never has. Whether it is paused now is
     /// [`State::pause`], which also reads its ancestors.
@@ -121,8 +121,9 @@ pub struct Task {
 /// Where a task is in its life. Exactly one holds.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Life {
-    /// Created, with no context yet: some limb it can reach has not
-    /// connected or described itself (its clone is being made). The brain
+    /// Created, with no context yet: some limb hosting its tool sets has
+    /// not connected or described itself, or its working directory is not
+    /// ready (its clone is being made). The brain
     /// gives it its first root once every one has
     /// ([`crate::state::Todo::Root`]). Max can stop it; it cannot be
     /// interrupted, forked, resumed or moved back, and makes no calls.
@@ -213,7 +214,7 @@ pub struct Context {
     pub start: EntryId,
     pub head: EntryId,
     /// Which limb runs each of its tools. Made with its root and kept until
-    /// the next one, so a redefined environment takes effect when the task
+    /// the next one, so a redefined role takes effect when the task
     /// next compacts onto a fresh root, never under it.
     pub binding: Binding,
     /// The version of each resource it embodies, and what it has been told
@@ -435,18 +436,24 @@ pub enum Scope {
     Spawn(CallId),
 }
 
-/// How a task came to be. It decides its environment, where its first
+/// How a task came to be. It decides its role, where its first
 /// context starts, how the first request is framed, and how the tree shows
 /// the task.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Origin {
-    /// A new task in an environment, with a limb for each of its places. It
-    /// starts on a new root ([`Move::Root`]), then its attachments, its
-    /// shared brief and its own mandate. Created by an agent, only in an
-    /// environment its own [starts](crate::environment::Environment::starts).
+    /// A new task in a role, with a working directory exactly when the role
+    /// works in one. It starts on a new root ([`Move::Root`]), then its
+    /// attachments, its shared brief and its own mandate. Created by an
+    /// agent, only in a role its own [starts](crate::role::Role::starts).
     Fresh {
-        environment: EnvironmentId,
-        /// By plugin kind, one for each of the environment's places.
+        #[serde(alias = "environment")]
+        role: RoleId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workdir: Option<Workdir>,
+        /// From before limbs were per machine: the limb filling each of its
+        /// environment's places, by plugin kind. Read, never stated: its
+        /// `workspace` is the task's working directory.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         places: BTreeMap<String, LimbId>,
     },
     /// The parent's spawning response, the source's head when the fork is
@@ -480,8 +487,8 @@ pub struct Start {
     pub root: Root,
     /// Made with the root's tools ([`Binding::new`]).
     pub binding: Binding,
-    /// The versions the root embodies: the environment's source, each
-    /// limb's instructions (an `AGENTS.md`, the skills index), each tool's
+    /// The versions the root embodies: the role's source, each tool set's
+    /// and the working directory's instructions (an `AGENTS.md`, the skills index), each tool's
     /// schema.
     pub observes: Vec<Observation>,
     /// Attachments to run before the first request, shown to the task as
@@ -732,8 +739,8 @@ pub enum TaskEvent {
     ModeSet(Mode),
     Renamed(String),
     /// Max sets the model and effort its next requests run at
-    /// ([`crate::environment::Tuning`]), the whole setting at once.
-    Tuned(crate::environment::Tuning),
+    /// ([`Tuning`]), the whole setting at once.
+    Tuned(Tuning),
     Moved(Move),
     Drain(Drain),
     /// The deadline of the task's abandonment has come: from now nothing
@@ -838,14 +845,14 @@ impl TaskEvent {
     }
 }
 
-/// A task begins. Its environment and places, and for a fork, resume or
+/// A task begins. Its role and working directory, and for a fork, resume or
 /// aside its context, follow from its origin.
 ///
 /// Who may create one is checked by the brain's fold. Max creates in his own
 /// scope, with `by` empty, and his mandate is his words. The brain creates
 /// only as the effect of an agent's meta call, `by`: in the scope that call
 /// opens, or as a sibling in its caller's own spawn scope, and only what the
-/// caller's environment can start. So the tree records who started each
+/// caller's role can start. So the tree records who started each
 /// task, and the brain cannot put a task in Max's scope that he did not
 /// start.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -857,11 +864,11 @@ pub struct Created {
     pub origin: Origin,
     pub mode: Mode,
     pub mandate: Mandate,
-    /// The model and effort it runs at, over its environment's: chosen by
+    /// The model and effort it runs at, over its role's: chosen by
     /// Max in the card that starts a chat. A fork, an aside or a resume
     /// takes its source's where this says nothing.
     #[serde(default)]
-    pub tuning: crate::environment::Tuning,
+    pub tuning: Tuning,
 }
 
 /// The head moved to an entry that does not extend it.
@@ -1001,7 +1008,7 @@ pub struct Compaction {
 pub enum Onto {
     /// The task's latest checkpoint: everything up to it is kept verbatim.
     Checkpoint(EntryId),
-    /// A new root, rendered from the environment's current version, where a
+    /// A new root, rendered from the role's current version, where a
     /// changed role, model, instructions or tool set takes effect. It has
     /// no attachments of its own: they are in the carry.
     Fresh(Box<Start>),
@@ -1047,11 +1054,15 @@ impl Task {
         let mut pending = Vec::new();
         let mut max_actions = Vec::new();
         let mut tuning = created.tuning.clone();
-        let (environment, places, life) = match &created.origin {
+        let (role, workdir, life) = match &created.origin {
             Origin::Fresh {
-                environment,
+                role,
+                workdir,
                 places,
-            } => (*environment, places.clone(), Life::Starting),
+            } => {
+                let workdir = workdir.clone().or_else(|| world.legacy_workdir(places));
+                (*role, workdir, Life::Starting)
+            }
             Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from } => {
                 let source = world.task(*from).ok_or(Rejected::Unknown)?;
                 tuning = source.tuning.or(&created.tuning);
@@ -1067,14 +1078,14 @@ impl Task {
                     max_actions = source.max_actions.clone();
                 }
                 let life = Life::Live(Live::new(context.continued()));
-                (source.environment, source.places.clone(), life)
+                (source.role, source.workdir.clone(), life)
             }
         };
         Ok(Task {
             id,
             name: created.name.clone(),
-            environment,
-            places,
+            role,
+            workdir,
             scope: created.scope,
             origin: created.origin.clone(),
             by: created.by,

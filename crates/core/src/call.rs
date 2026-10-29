@@ -22,8 +22,8 @@ use crate::resource::Observation;
 /// brain does not need to know which tools may be rerun: the limb that owns
 /// a tool does.
 ///
-/// Every harness action an agent takes is a call too, to a limb the brain
-/// itself implements ([`crate::environment::LimbKind`]): a spawn opens a
+/// Every harness action an agent takes is a call too, to the brain, which
+/// is a limb ([`crate::limb::Host::Brain`]): a spawn opens a
 /// scope and settles when its last task is done, so a parent waiting on its
 /// children is a task with an outstanding call and nothing more; a
 /// compaction call compacts its caller's context once its round is over. Their

@@ -15,12 +15,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::BuildId;
 use crate::call::{Call, Owner};
-use crate::id::{LimbId, ParseError, ReplicaId, TaskId, Timestamp};
+use crate::id::{CallId, LimbId, ParseError, ReplicaId, TaskId, Timestamp, ValueId};
 use crate::legacy;
+use crate::resource::Observation;
 use crate::role::{Role, RoleId};
 use crate::value::Bytes;
-
-pub use crate::environment::{Audience, Hello, Instruction, Reach, Tool};
 
 /// The tool set of a shell and file tools in the agent's working
 /// directory. A role that holds it gives each of its agents a [`Workdir`].
@@ -283,9 +282,9 @@ pub struct ToolSet {
 /// object's keys are.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LimbKey {
-    Call(crate::id::CallId),
+    Call(CallId),
     /// The bytes of a value a call row names.
-    Value(crate::id::ValueId),
+    Value(ValueId),
     Watch,
     Definition,
     Role(RoleId),
@@ -333,9 +332,7 @@ pub enum LimbRow {
     /// Watch these resources: what live contexts embody. Report, as a
     /// [`crate::resource::Change`], each whose version is none of these,
     /// and from then on each change as it happens.
-    Watch {
-        known: Vec<crate::resource::Observation>,
-    },
+    Watch { known: Vec<Observation> },
     /// A value's bytes.
     Value(Bytes),
     /// The limb's current definition, so a new version reaches the running
@@ -428,3 +425,72 @@ pub type LimbDown = harness_substrate::Down<LimbKey, LimbRow, crate::fact::Refus
 /// What a limb ships the brain over its link: its own records, and a
 /// running command's output so far.
 pub type LimbUp = harness_substrate::Up<crate::schema::Harness, crate::live::Live>;
+
+/// One piece of a tool set's or a working directory's instructions, and
+/// the version it was read at, which the root then embodies.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Instruction {
+    pub text: String,
+    pub observes: Observation,
+}
+
+/// One tool of a tool set.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tool {
+    /// The name in `definition`. Stated beside it so the core reads no JSON;
+    /// a limb builds both from one source.
+    pub name: String,
+    /// The provider's exact tool definition: name, description, input
+    /// schema, and whether it is deferred.
+    pub definition: String,
+    pub audience: Audience,
+}
+
+/// Who may call a tool. Max's face renders his tools as controls; an
+/// agent's root declares the agent's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Audience {
+    Agent,
+    Max,
+    Both,
+}
+
+/// What the brain knows of its connection to a limb on a machine, and which
+/// replica speaks for it. Three lifetimes are distinct: the resources (a
+/// directory's files outlive everything), the instance (a process: a
+/// replica, whose records are the limb's while it is connected) and the
+/// connection to it. A connection belongs to the brain that made it, so every limb is
+/// unreached from a [`crate::build::Launched`] until the new brain connects
+/// to it, and a record from a replica no longer connected is refused.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Reach {
+    /// Connected as the replica `instance`, running `build`: its records
+    /// are the limb's. An instance other than the last one means the limb's
+    /// state was lost and it started again with no memory of its calls; a
+    /// build older than the brain's is a limb that outlived a relaunch.
+    Connected {
+        instance: ReplicaId,
+        build: Option<BuildId>,
+    },
+    /// The connection dropped. Calls sent to it stay sent; the throbber says
+    /// "waiting on reconnect" rather than "running".
+    Lost,
+    /// The brain could not reach it, saying why in the words of whatever
+    /// failed: its process could not start, or ended before it connected
+    /// (the program is missing, its state is held by another instance), or
+    /// its host cannot be reached. The brain tries again while
+    /// a task needs it; a task starting on it shows why it is stuck.
+    Failed { why: String },
+}
+
+/// The first thing a limb says when a brain connects to it: which limb it
+/// is, the replica its records are of, and the build it runs. Then
+/// [`LimbUp`]s one way and [`LimbDown`]s the other. The brain checks the
+/// limb is the one it dialled, and ships it a whole view; a brain that
+/// connects again, restarted or rebuilt, is shipped one again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hello {
+    pub limb: LimbId,
+    pub replica: ReplicaId,
+    pub build: Option<BuildId>,
+}

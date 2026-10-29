@@ -22,7 +22,7 @@ use crate::id::{TaskId, Timestamp, ValueId};
 /// computed, never stated: it cannot claim a context that does not grow
 /// from the one its task has, and the fold learns the new entries from it.
 ///
-/// It is Bx's build record. The task's environment and binding are the
+/// It is Bx's build record. The task's role and binding are the
 /// definition, the head's [`EntryId`] is the resolved input's content
 /// identity, the response is the output, and timing, usage and quota are
 /// the execution evidence. Several model calls on one head (Max's retry, a
@@ -71,7 +71,7 @@ pub struct ModelCall {
     pub base: EntryId,
     /// The model it named, when not the one its context's root names: Max
     /// tuned the task to another since that root
-    /// ([`crate::environment::Tuning`]). A request on another model reads
+    /// ([`crate::role::Tuning`]). A request on another model reads
     /// none of its prefix's cache, so warmth is keyed by the model with the
     /// entry; and the response's model is on its record, for a face to
     /// show beside it.

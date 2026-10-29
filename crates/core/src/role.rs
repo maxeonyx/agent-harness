@@ -6,10 +6,7 @@ use crate::id::{LimbId, ValueId};
 use crate::limb::ToolSet;
 use crate::resource::Observation;
 
-pub use crate::environment::{Duplicate, Effort, Tuning, UnknownEffort};
-
-/// A role's identity, the same for every version of it.
-pub type RoleId = crate::id::EnvironmentId;
+pub use crate::id::RoleId;
 
 /// A role: the abstract kind of agent. Its system prompt, its model and
 /// request parameters, the tool sets its agents hold, and the roles they
@@ -172,3 +169,132 @@ pub struct Route {
     pub tool: String,
     pub limb: LimbId,
 }
+
+/// The model and effort Max chose for one task, over its role's.
+///
+/// **Concept.** How a task's requests run, as distinct from what it is:
+/// its role and tool sets are its role's for life, but the model and
+/// effort are a dial Max turns while it works, as he does in any chat app.
+/// A field left `None` is the role's. Max sets it on a task
+/// ([`crate::task::TaskEvent::Tuned`]) or as he creates one
+/// ([`crate::task::Created::tuning`]), and it takes effect at the task's
+/// next request, mid-turn included; a fork, an aside and a resume start
+/// with their source's. The brain renders a new root with its model, and
+/// each request with its model ([`crate::model_call::ModelCall::model`]) and
+/// its effort in the request's `params`, so what each response ran at is
+/// on its record.
+///
+/// **Vision.** Effort and model per role, and Max in charge of his usage:
+/// a quick question on a cheaper model, a hard problem raised to `xhigh`
+/// halfway through, without a new chat or a new role.
+///
+/// **Cost.** Either change makes the next request reread the whole context
+/// without its cache: the provider caches per model, and keys the messages'
+/// cache on the top-level effort too. The provider has a per-message effort
+/// that keeps the cache (a system message mid-conversation, in beta); using
+/// it would make an effort change an entry in the context, and waits on a
+/// spike on the subscription. The face shows the cost before Max changes
+/// either on a warm context.
+///
+/// **Existing harnesses.** Claude Code's `/model` and `/effort` change the
+/// session and warn when the cache is warm; claude.ai applies a change from
+/// the next response. Both keep it as session state; here it is a fact of
+/// the task, so the phone and the PC show and change the same setting.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tuning {
+    /// The provider's name for the model, as a root names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
+}
+
+impl Tuning {
+    /// The model a request of a task in `role` names now.
+    pub fn model<'a>(&'a self, role: &'a Role) -> &'a str {
+        self.model.as_deref().unwrap_or(&role.model)
+    }
+
+    /// This tuning, with `over`'s choices where it makes them: a new task's
+    /// own choices over its source's.
+    pub fn or(&self, over: &Tuning) -> Tuning {
+        Tuning {
+            model: over.model.clone().or_else(|| self.model.clone()),
+            effort: over.effort.or(self.effort),
+        }
+    }
+}
+
+/// How hard the model thinks: the provider's `output_config.effort`.
+///
+/// The provider has a level above `xhigh`; it is never used, so it is not
+/// here, and a role file that names it is refused (its `FromStr`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+impl Effort {
+    /// Every level, lowest first: what a face offers.
+    pub const ALL: [Effort; 4] = [Effort::Low, Effort::Medium, Effort::High, Effort::XHigh];
+
+    /// The provider's name for it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::XHigh => "xhigh",
+        }
+    }
+}
+
+impl std::fmt::Display for Effort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// An effort level the harness does not use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownEffort(pub String);
+
+impl std::fmt::Display for UnknownEffort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.as_str() {
+            "max" => f.write_str("effort `max` is never used: `xhigh` is the ceiling"),
+            other => write!(f, "no effort named {other:?}: low, medium, high or xhigh"),
+        }
+    }
+}
+
+impl std::error::Error for UnknownEffort {}
+
+impl std::str::FromStr for Effort {
+    type Err = UnknownEffort;
+
+    fn from_str(text: &str) -> Result<Effort, UnknownEffort> {
+        Effort::ALL
+            .into_iter()
+            .find(|e| e.as_str() == text)
+            .ok_or_else(|| UnknownEffort(text.to_owned()))
+    }
+}
+
+/// Two tool sets of one root offer a tool of the same name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Duplicate {
+    pub tool: String,
+}
+
+impl std::fmt::Display for Duplicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "two tool sets offer the tool `{}`", self.tool)
+    }
+}
+
+impl std::error::Error for Duplicate {}

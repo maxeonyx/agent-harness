@@ -1,6 +1,8 @@
 //! Facts: what the harness's replicas say, who said it, and why the brain
 //! refuses what it refuses.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::attention::{Focus, Ranking};
@@ -8,13 +10,14 @@ use crate::build::Launched;
 use crate::call::CallEvent;
 use crate::delivery::{Content, Delivery};
 use crate::draft::DraftEvent;
-use crate::environment::{Description, Environment, Limb, Reach};
 use crate::id::{
     CallId, DeliveryId, EventId, LimbId, ModelCallId, ReplicaId, Seq, TaskId, Time, Timestamp,
     ValueId,
 };
+use crate::limb::{Defined, Description, Prepared, Reach};
 use crate::model_call::ModelCallEvent;
 use crate::resource::Change;
+use crate::role::Role;
 use crate::task::TaskEvent;
 use crate::value::Bytes;
 
@@ -74,7 +77,7 @@ pub struct Stated<'a> {
 ///
 /// The brain states what it decides and observes: its own replica. A limb
 /// states facts about its own calls and resources, and no others: the
-/// replica the brain last connected it as ([`crate::environment::Reach`]).
+/// replica the brain last connected it as ([`crate::limb::Reach`]).
 /// Max states his words, his calls and his controls over the tree, from a replica the brain accepted as one of his faces
 /// ([`Fact::Face`]). A record from any other replica is refused
 /// ([`Rejected::Author`]). Which face is the record's own replica, and what
@@ -97,7 +100,7 @@ pub enum Fact {
     /// by a signal (Ctrl-C, `SIGTERM`). Its tasks are not stopped; it starts
     /// nothing new, lets requests in flight finish until the deadline and
     /// cuts them at it, and closes its links to its limbs, whose calls run
-    /// on for the next brain ([`crate::environment::Host`]). Stated again
+    /// on for the next brain ([`crate::limb::Host`]). Stated again
     /// with less time to make it harder. A launch with no shutdown before
     /// the next one ended in a crash.
     Shutdown {
@@ -110,15 +113,25 @@ pub enum Fact {
     Delivery(Delivery),
     /// A resource moved to a new version.
     Change(Change),
-    /// A new version of an environment's definition.
-    Environment(Environment),
-    /// A new version of a limb's definition.
-    Limb(Limb),
-    /// What a plugin limb offers and says about itself, on its current
-    /// connection.
+    /// A new version of a role's definition. Read from `Environment`, its
+    /// name before roles were the concept.
+    #[serde(alias = "Environment")]
+    Role(Role),
+    /// A new version of a limb's definition, or one from before limbs were
+    /// per machine.
+    Limb(Defined),
+    /// What a limb on a machine offers, on its current connection.
     Described {
         limb: LimbId,
         description: Description,
+    },
+    /// What a limb found making a working directory ready, as the brain
+    /// named it ([`crate::limb::Workdir::dir`]): on its first making it
+    /// ready, on each new link, and whenever its instructions change.
+    Workdir {
+        limb: LimbId,
+        dir: PathBuf,
+        prepared: Prepared,
     },
     /// What the brain knows of its connection to a limb, and which replica
     /// speaks for it.
@@ -178,26 +191,26 @@ impl Fact {
                 content,
                 wakes: _,
             }) => values.extend(*content),
-            Fact::Environment(Environment {
+            Fact::Role(Role {
                 id: _,
                 name: _,
                 description: _,
-                role,
+                prompt,
                 model: _,
                 params,
-                limbs: _,
-                places: _,
+                tools: _,
                 starts: _,
                 source: _,
-            }) => values.extend([*role, *params]),
-            Fact::Limb(Limb {
-                id: _,
-                name: _,
-                kind: _,
-            }) => {}
+            }) => values.extend([*prompt, *params]),
+            Fact::Limb(_) => {}
             Fact::Described {
                 limb: _,
                 description: _,
+            } => {}
+            Fact::Workdir {
+                limb: _,
+                dir: _,
+                prepared: _,
             } => {}
             Fact::Reach { limb: _, reach: _ } => {}
             Fact::Face(_) | Fact::Seen(_) => {}
@@ -241,8 +254,8 @@ pub struct Batch {
 pub enum Rejected {
     /// Names an identity the brain has never seen.
     Unknown,
-    /// Creates an identity that already exists, a second environment or
-    /// limb of one name, or runs a call the brain runs a second time.
+    /// Creates an identity that already exists, a second role or limb of
+    /// one name, or runs a call the brain runs a second time.
     Exists,
     /// Addresses a task that is done, a call that has settled, or a scope
     /// that has closed.
@@ -272,32 +285,33 @@ pub enum Rejected {
     /// source is waiting on.
     WrongScope,
     /// A task created by something other than a running agent's meta call,
-    /// or something its creator cannot start: a fresh task in an environment
-    /// its own does not start, a fork of another task, a resume of a task it
+    /// or something its creator cannot start: a fresh task in a role its
+    /// own does not start, a fork of another task, a resume of a task it
     /// did not own, an aside or a standing task.
     CannotStart,
-    /// A route to a limb outside its task's environment and places, or an
-    /// attachment its context does not route.
+    /// A route to a limb that hosts none of its task's tool sets for it, or
+    /// an attachment its context does not route.
     WrongEnvironment,
-    /// A task started without each of its environment's places filled by
-    /// one limb of that kind: it carries the kinds the environment needs
-    /// (`workspace`), so whoever started it learns what to give.
+    /// A fresh task without a working directory in a role that works in
+    /// one, carrying `workspace`, so whoever started it learns what to
+    /// give; or with one in a role that does not, carrying nothing.
     Unplaced(Vec<String>),
     /// A route, or a call of Max's, naming a tool its limb's current
-    /// description does not offer that caller, or a limb that has not
-    /// described itself.
+    /// description does not offer that caller in a set the task holds, or a
+    /// limb that has not described itself.
     Unoffered,
     /// A dispatch of a call no limb runs: its tool is not in its context.
     Unroutable,
-    /// A dispatch of a call to Max: he answers, nothing is sent.
+    /// A dispatch of a call to a limb from before that is now nothing (Max,
+    /// when he was a limb): nothing is sent.
     ForMax,
-    /// A dispatch to, or a description from, a limb not connected to this
-    /// brain.
+    /// A dispatch to, or a description or working directory from, a limb
+    /// not connected to this brain.
     Unreached,
-    /// A binding that routes one tool name to two limbs, or an environment
-    /// with two places of one kind.
+    /// A binding that routes one tool name to two limbs.
     Ambiguous,
-    /// A new version of a limb that changes what kind of limb it is.
+    /// A new version of a limb that changes its host, or of a limb from
+    /// before that changes its kind.
     Redefined,
     /// A head or breakpoint that is not on the task's chain, or a move back
     /// to an entry the task has not been at.
@@ -334,14 +348,14 @@ impl std::fmt::Display for Rejected {
             Rejected::TooLarge(value) => {
                 return write!(f, "value {value} is larger than the limit");
             }
-            Rejected::Unplaced(places) if places.is_empty() => {
-                "its environment has no places, so nothing may fill one"
+            Rejected::Unplaced(sets) if sets.is_empty() => {
+                "its role has no working directory, so none may be given"
             }
-            Rejected::Unplaced(places) => {
+            Rejected::Unplaced(sets) => {
                 return write!(
                     f,
-                    "its environment needs each of its places filled, by a limb of that kind: {}",
-                    places.join(", ")
+                    "its role needs a working directory, for: {}",
+                    sets.join(", ")
                 );
             }
             Rejected::Unknown => "names something the brain has never seen",
@@ -363,13 +377,13 @@ impl std::fmt::Display for Rejected {
             Rejected::CannotStart => {
                 "an agent may start only a fork of itself, a resume of an agent it started, or a fresh agent in a role its own role starts"
             }
-            Rejected::WrongEnvironment => "outside the task's environment",
+            Rejected::WrongEnvironment => "outside the task's tool sets",
             Rejected::Unoffered => "the limb does not offer that tool to that caller",
             Rejected::Unroutable => "no limb runs that tool in its context",
-            Rejected::ForMax => "a question for Max is answered by him, never sent",
+            Rejected::ForMax => "nothing runs calls on that limb any more",
             Rejected::Unreached => "the limb is not connected",
             Rejected::Ambiguous => "one name used twice",
-            Rejected::Redefined => "a limb's new version changes its kind",
+            Rejected::Redefined => "a limb's new version changes its host or kind",
             Rejected::Detached => "not on the task's chain",
             Rejected::NotForTask => "does not concern what it is routed to",
             Rejected::Unheard => "quotes words Max did not say to the quoting task",

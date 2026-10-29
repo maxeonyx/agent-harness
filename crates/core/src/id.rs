@@ -1,7 +1,7 @@
 //! Identifiers, positions and time.
 //!
 //! Three kinds of name. Things that change over time (a task, a call, a
-//! request, a delivery, an environment, a limb) are named by the event that
+//! request, a delivery, a role, a limb) are named by the event that
 //! made them ([`EventId`]): the replica and time of the record that created
 //! them, so federated brains hold each other's records without renaming
 //! anything and nothing generates an id apart from a fact. Immutable bytes
@@ -72,14 +72,12 @@ id!(
     DeliveryId
 );
 id!(
-    /// An [`crate::environment::Environment`]: the event of its first
-    /// version.
-    EnvironmentId
+    /// A [`crate::role::Role`]: the event of its first version.
+    RoleId
 );
 id!(
-    /// A [`crate::environment::Limb`]: the event of its first version.
-    /// Several environments may share one, for example an engineer's and a
-    /// reviewer's on the same clone.
+    /// A [`crate::limb::Limb`]: the event of its first version. One per
+    /// brain, machine and user.
     LimbId
 );
 

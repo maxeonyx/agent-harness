@@ -1,6 +1,7 @@
 //! The brain's fold: every state anyone reads.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use imbl::{OrdMap, OrdSet};
 
@@ -12,16 +13,18 @@ use harness_substrate::{Durability, Folding, Schema};
 
 use crate::build::{BuildId, Glimpsed, Launch, Launched, Probation, Trial, Verdict};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
-use crate::environment::{
-    Audience, Description, Environment, Limb, LimbKey, LimbKind, LimbRow, Reach,
-};
 use crate::fact::{Author, Fact, Refusal, Rejected, Stated};
 use crate::id::{
-    CallId, DeliveryId, EnvironmentId, EventId, LimbId, ModelCallId, ReplicaId, Seq, TaskId, Time,
+    CallId, DeliveryId, EventId, LimbId, ModelCallId, ReplicaId, RoleId, Seq, TaskId, Time,
     Timestamp, ValueId,
+};
+use crate::legacy::{self, LimbKind, Now};
+use crate::limb::{
+    Audience, Defined, Description, Host, Limb, LimbKey, LimbRow, Prepared, Reach, Workdir,
 };
 use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
 use crate::resource::{Change, Observation, ResourceKey, Version};
+use crate::role::Role;
 use crate::schema::Harness;
 use crate::task::{
     Abandoner, Compaction, Created, Drain, Draining, Life, Mode, Move, Onto, Origin, Pause, Paused,
@@ -57,15 +60,15 @@ use crate::value::Bytes;
 /// leaves a tool use unanswered, is sent while its task drains, or grows a
 /// context other than its task's; a scope's call settles only when every
 /// member is done, and nothing joins a closed scope; only Max starts tasks
-/// in his scope, and an agent starts only what its environment lists,
-/// through its own meta call; a place is filled only by a limb of its kind,
-/// and a root routes only to its task's environment and places, and only
-/// tools those limbs offer; a call by an agent goes only along its binding;
+/// in his scope, and an agent starts only what its role lists, through its
+/// own meta call; a task has a working directory exactly when its role
+/// works in one, and a root routes only to the limbs hosting its task's
+/// tool sets, and only tools those sets offer; a call by an agent goes only along its binding;
 /// a standing task lives only in Max's scope; an aside joins only the scope
 /// its source waits on; a fork starts where its source is; a settled call moves again only from unknown to its real outcome; a
-/// meta call is never run twice; a limb never changes kind; a limb states
-/// only its own description, its own calls' outcomes and its own resources'
-/// changes, and the brain only what is its to say; a quote is Max's words,
+/// meta call is never run twice; a limb never changes host; a limb states
+/// only its own description, what it found in its directories, its own
+/// calls' outcomes and its own resources' changes, and the brain only what is its to say; a quote is Max's words,
 /// heard by the task that quotes them; and Max's facts say what he had
 /// seen, through the face he used.
 ///
@@ -107,10 +110,14 @@ pub struct State {
     calls: OrdMap<CallId, CallRecord>,
     model_calls: OrdMap<ModelCallId, ModelCallRecord>,
     deliveries: OrdMap<DeliveryId, Delivered>,
-    environments: OrdMap<EnvironmentId, Environment>,
+    roles: OrdMap<RoleId, Role>,
     limbs: OrdMap<LimbId, Limb>,
+    /// Limbs as records from before limbs were per machine define them.
+    legacy: OrdMap<LimbId, legacy::Limb>,
     described: OrdMap<LimbId, Described>,
     reach: OrdMap<LimbId, Reached>,
+    /// What each limb last found in each working directory.
+    prepared: OrdMap<(LimbId, PathBuf), Readied>,
     resources: OrdMap<ResourceKey, Current>,
     /// Max's words, each with when he first said them.
     said: OrdMap<ValueId, Mark>,
@@ -201,6 +208,17 @@ impl Left {
     pub fn is_empty(&self) -> bool {
         self.wrote.is_empty() && self.running.is_empty() && self.started.is_empty()
     }
+}
+
+/// How a limb runs calls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Runs {
+    /// The brain, in its own process.
+    Brain,
+    /// A process of its own, which the brain links to.
+    Process,
+    /// Nothing: Max, from when he was a limb.
+    Nothing,
 }
 
 /// Where and when something was recorded. The position orders it against
@@ -327,10 +345,17 @@ pub struct Delivered {
     pub seen: Option<Time>,
 }
 
-/// A plugin limb's description, and when it said it.
+/// A limb's description, and when it said it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Described {
     pub description: Description,
+    pub at: Mark,
+}
+
+/// What a limb last found in a working directory, and when it said it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Readied {
+    pub prepared: Prepared,
     pub at: Mark,
 }
 
@@ -383,11 +408,13 @@ pub enum Hold {
 /// to "why is nothing happening?".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Waiting {
-    /// On its limbs, before its first root: the plugin limbs it can reach
-    /// that have not connected and described themselves (a clone being
-    /// made, a process starting). Empty when they all have, and the brain
-    /// is rooting it. Each says why its last process failed, if it did
-    /// ([`Reach::Failed`]): Max sees why it is stuck, and can stop it.
+    /// On its limbs, before its first root: the limbs hosting its tool sets
+    /// that have not connected and described themselves (a process
+    /// starting), and the limb of its working directory while that is not
+    /// ready (a clone being made). Empty when they all are, and the brain
+    /// is rooting it. Each says why its last process failed, or why its
+    /// directory could not be made ([`Reach::Failed`],
+    /// [`Prepared::Failed`]): Max sees why it is stuck, and can stop it.
     Starting {
         limbs: Vec<(LimbId, Option<String>)>,
         since: Timestamp,
@@ -449,14 +476,15 @@ pub enum Waiting {
 /// again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Todo {
-    /// Connect to this plugin limb, starting its process if need be: a live
-    /// task can reach it, or a call to it is unsettled, and it is not
-    /// connected. A limb nobody needs is never on the list, so its process
-    /// can be let go.
+    /// Connect to this limb, starting its process if need be: it hosts a
+    /// live task's tool sets or working directory, or a call to it is
+    /// unsettled, and it is not connected. A limb from before limbs were
+    /// per machine is needed only while a call to it is unsettled. A limb
+    /// nobody needs is never on the list, so its process can be let go.
     Connect(LimbId),
-    /// The task is starting and every limb it can reach has connected and
-    /// described itself: render its first root from their descriptions and
-    /// commit [`Move::Root`].
+    /// The task is starting, every limb hosting its tool sets has connected
+    /// and described itself, and its working directory is ready: render its
+    /// first root from their descriptions and commit [`Move::Root`].
     Root(TaskId),
     /// Build and send the task's next request, rendering every pending
     /// input that the policy includes (every result, always). If its last
@@ -465,11 +493,12 @@ pub enum Todo {
     /// A request an earlier brain sent and never saw end: end it as
     /// [`Ending::Lost`], after which its task sends again.
     Lost(ModelCallId),
-    /// Dispatch the call: a plugin's becomes a row of its limb's view
-    /// ([`State::limb_rows`]), which the limb holds across reconnections,
-    /// so it is dispatched once; for a limb the brain runs, run it and
-    /// commit its effects with the dispatch, or for the provider, commit the
-    /// dispatch and run it off the brain's thread.
+    /// Dispatch the call: one to a limb on a machine becomes a row of its
+    /// limb's view ([`State::limb_rows`]), which the limb holds across
+    /// reconnections, so it is dispatched once; for one to the brain, run
+    /// it and commit its effects with the dispatch, or for one that only
+    /// reads (Max's), commit the dispatch and run it off the brain's
+    /// thread.
     Dispatch(CallId),
     /// The call's tool is not in its task's binding: settle it as failed,
     /// saying so.
@@ -844,33 +873,48 @@ impl State {
                 self.deliver(delivery, record)?
             }
             Fact::Change(change) => self.change(change, record)?,
-            Fact::Environment(environment) => {
-                if !self.environments.contains_key(&environment.id) {
-                    minted(environment.id.0, record)?;
+            Fact::Role(role) => {
+                if !self.roles.contains_key(&role.id) {
+                    minted(role.id.0, record)?;
                 }
-                self.define(environment)?
+                if (self.roles.values()).any(|r| r.id != role.id && r.name == role.name) {
+                    return Err(Rejected::Exists);
+                }
+                self.roles.insert(role.id, role.clone());
             }
-            Fact::Limb(limb) => {
+            Fact::Limb(Defined::Limb(limb)) => {
                 if !self.limbs.contains_key(&limb.id) {
                     minted(limb.id.0, record)?;
                 }
-                if self
-                    .limbs
-                    .values()
-                    .any(|l| l.id != limb.id && l.name == limb.name)
-                {
+                if (self.limbs.values()).any(|l| l.id != limb.id && l.name == limb.name) {
                     return Err(Rejected::Exists);
                 }
-                if let Some(old) = self.limbs.get(&limb.id)
-                    && !old.kind.same(&limb.kind)
+                if self.legacy.contains_key(&limb.id)
+                    || self
+                        .limbs
+                        .get(&limb.id)
+                        .is_some_and(|l| l.host != limb.host)
                 {
                     return Err(Rejected::Redefined);
                 }
                 self.limbs.insert(limb.id, limb.clone());
             }
+            Fact::Limb(Defined::Legacy(limb)) => {
+                if !self.legacy.contains_key(&limb.id) {
+                    minted(limb.id.0, record)?;
+                }
+                if (self.legacy.values()).any(|l| l.id != limb.id && l.name == limb.name) {
+                    return Err(Rejected::Exists);
+                }
+                if self.limbs.contains_key(&limb.id)
+                    || (self.legacy.get(&limb.id)).is_some_and(|l| !l.kind.same(&limb.kind))
+                {
+                    return Err(Rejected::Redefined);
+                }
+                self.legacy.insert(limb.id, limb.clone());
+            }
             Fact::Described { limb, description } => {
-                let defined = self.limbs.get(limb).ok_or(Rejected::Unknown)?;
-                if defined.kind.is_brains() {
+                if self.runs(*limb).ok_or(Rejected::Unknown)? != Runs::Process {
                     return Err(Rejected::NotForTask);
                 }
                 if self.connected(*limb).is_none() {
@@ -884,9 +928,27 @@ impl State {
                     },
                 );
             }
+            Fact::Workdir {
+                limb,
+                dir,
+                prepared,
+            } => {
+                if !self.limbs.get(limb).is_some_and(|l| l.host != Host::Brain) {
+                    return Err(Rejected::NotForTask);
+                }
+                if self.connected(*limb).is_none() {
+                    return Err(Rejected::Unreached);
+                }
+                self.prepared.insert(
+                    (*limb, dir.clone()),
+                    Readied {
+                        prepared: prepared.clone(),
+                        at: mark,
+                    },
+                );
+            }
             Fact::Reach { limb, reach } => {
-                let defined = self.limbs.get(limb).ok_or(Rejected::Unknown)?;
-                if defined.kind.is_brains() {
+                if self.runs(*limb).ok_or(Rejected::Unknown)? != Runs::Process {
                     return Err(Rejected::NotForTask);
                 }
                 self.reach.insert(
@@ -926,21 +988,18 @@ impl State {
     /// Whether `by` may state `fact`.
     ///
     /// The brain states what it decides and observes, but never Max's words,
-    /// his marking a task done, his stop, what his face shows, a task no agent's call created, a
-    /// limb's description, how a call a limb was sent ended, or a change to
-    /// a resource it does not own (its own limbs' resources, such as the
-    /// role files the meta limb reads, are its to state). A limb states only
-    /// its own description, how its own dispatched calls ended and how its
-    /// own resources changed. Max states his words, his calls and his
-    /// answers, his controls over the tree, the tasks of his own scope, what
-    /// his own face shows, his presence, and the definitions of
-    /// environments and limbs; never what a model or a limb did.
+    /// his marking a task done, his stop, what his face shows, a task no
+    /// agent's call created, a limb's description or what it found in a
+    /// directory, how a call a limb was sent ended, or a change to a
+    /// resource it does not own (its own resources, such as the role files
+    /// its `roles` set reads, are its to state). A limb states only its own
+    /// description, what it found in its own directories, how its own
+    /// dispatched calls ended and how its own resources changed. Max states
+    /// his words, his calls, his controls over the tree, the tasks of his
+    /// own scope, what his own face shows, his presence, and the
+    /// definitions of roles and limbs; never what a model or a limb did.
     fn authorised(&self, by: &Author, fact: &Fact) -> bool {
-        let brains = |limb: LimbId| {
-            self.limbs
-                .get(&limb)
-                .is_some_and(|l| l.kind.is_brains() && l.kind != LimbKind::Max)
-        };
+        let brains = |limb: LimbId| self.runs(limb) == Some(Runs::Brain);
         match by {
             Author::Brain => match fact {
                 Fact::Delivery(Delivery {
@@ -956,27 +1015,28 @@ impl State {
                 | Fact::Focus(_)
                 | Fact::Seen(_)
                 | Fact::Draft(..)
-                | Fact::Described { .. } => false,
+                | Fact::Described { .. }
+                | Fact::Workdir { .. } => false,
                 Fact::Task(_, TaskEvent::Created(created)) => created.by.is_some(),
                 Fact::Call(_, CallEvent::Made(call)) => !matches!(call.caller, Caller::Max { .. }),
                 Fact::Call(id, CallEvent::Settled(outcome)) => {
                     self.calls.get(id).is_some_and(|c| {
-                        let Some(limb) = c.limb.and_then(|l| self.limbs.get(&l)) else {
+                        let Some(limb) = c.limb else {
                             return c.dispatched.is_none();
                         };
-                        match &limb.kind {
-                            // Max's answer is his; the brain only withdraws the question.
-                            LimbKind::Max => matches!(outcome, CallOutcome::Interrupted { .. }),
-                            LimbKind::Meta | LimbKind::Attention | LimbKind::Provider => true,
-                            // A plugin's outcome is its own, unless it was never
+                        match self.runs(limb) {
+                            None => c.dispatched.is_none(),
+                            // Nothing else can settle it: the brain withdraws it.
+                            Some(Runs::Brain | Runs::Nothing) => true,
+                            // A process's outcome is its own, unless it was never
                             // sent, or the brain gives up on it while the limb is
                             // unreached; the limb's real outcome is still taken
                             // when it reconnects.
-                            LimbKind::Plugin { .. } => {
+                            Some(Runs::Process) => {
                                 c.dispatched.is_none()
                                     || (c.settled.is_none()
                                         && *outcome == CallOutcome::Unknown
-                                        && self.connected(limb.id).is_none())
+                                        && self.connected(limb).is_none())
                             }
                         }
                     })
@@ -995,10 +1055,10 @@ impl State {
                             self.calls.get(&call).is_some_and(|c| c.limb == Some(*limb))
                         })
                 }
-                Fact::Described { limb: of, .. } => of == limb,
-                // A limb that holds role definitions states the
-                // environments read from them.
-                Fact::Environment(env) => env
+                Fact::Described { limb: of, .. } | Fact::Workdir { limb: of, .. } => of == limb,
+                // A limb from before that held role definitions stated the
+                // roles read from them.
+                Fact::Role(role) => role
                     .source
                     .as_ref()
                     .is_some_and(|s| s.resource.limb == *limb),
@@ -1034,44 +1094,20 @@ impl State {
                     matches!(call.caller, Caller::Max { .. })
                 }
                 Fact::Call(_, CallEvent::Abandon) => true,
-                Fact::Call(id, CallEvent::Settled(_)) => self
-                    .calls
-                    .get(id)
-                    .and_then(|c| c.limb)
-                    .is_some_and(|l| self.is_max(l)),
-                Fact::Change(change) => self.is_max(change.resource.limb),
                 Fact::Focus(_) | Fact::Seen(_) | Fact::Draft(..) => true,
-                Fact::Environment(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
+                Fact::Role(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
                 Fact::Launched(_)
                 | Fact::Shutdown { .. }
                 | Fact::SignedIn
                 | Fact::ModelCall(..)
                 | Fact::Call(..)
+                | Fact::Change(_)
                 | Fact::Described { .. }
+                | Fact::Workdir { .. }
                 | Fact::Reach { .. }
                 | Fact::Face(_) => false,
             },
         }
-    }
-
-    fn define(&mut self, environment: &Environment) -> Result<(), Rejected> {
-        if !environment.limbs.iter().all(|l| self.limbs.contains_key(l)) {
-            return Err(Rejected::Unknown);
-        }
-        if self
-            .environments
-            .values()
-            .any(|e| e.id != environment.id && e.name == environment.name)
-        {
-            return Err(Rejected::Exists);
-        }
-        let mut places = BTreeSet::new();
-        if !environment.places.iter().all(|p| places.insert(p)) {
-            return Err(Rejected::Ambiguous);
-        }
-        self.environments
-            .insert(environment.id, environment.clone());
-        Ok(())
     }
 
     /// Max said `words` to `to`.
@@ -1096,9 +1132,10 @@ impl State {
         }
         match &created.origin {
             Origin::Fresh {
-                environment,
+                role,
+                workdir,
                 places,
-            } => self.check_places(*environment, places)?,
+            } => self.check_workdir(*role, workdir.as_ref(), places)?,
             Origin::Aside { from } => self.check_aside(*from, created)?,
             Origin::Fork { .. } | Origin::Resume { .. } => {}
         }
@@ -1133,20 +1170,22 @@ impl State {
     }
 
     /// The task whose meta call `by` creates a task, if that call may: it
-    /// is still running, it is an agent's call to the meta limb, the new
-    /// task joins the scope the call opens or, as a sibling, its caller's
-    /// own spawn scope, and it is a fork of the caller, a resume of a task
-    /// the caller owned, or fresh in an environment the caller's own
-    /// environment starts.
+    /// is still running, it is an agent's call to the brain, the new task
+    /// joins the scope the call opens or, as a sibling, its caller's own
+    /// spawn scope, and it is a fork of the caller, a resume of a task the
+    /// caller owned, or fresh in a role the caller's own role starts.
     fn creator(&self, by: CallId, created: &Created) -> Result<TaskId, Rejected> {
         let call = self.calls.get(&by).ok_or(Rejected::Unknown)?;
         if call.settled.is_some() {
             return Err(Rejected::Finished);
         }
-        let meta = call
-            .limb
-            .and_then(|l| self.limbs.get(&l))
-            .is_some_and(|l| l.kind == LimbKind::Meta);
+        let meta = match call.limb {
+            Some(limb) => match self.legacy.get(&limb) {
+                Some(old) => old.kind == LimbKind::Meta,
+                None => self.runs(limb) == Some(Runs::Brain),
+            },
+            None => false,
+        };
         let (Caller::Agent { task: caller, .. } | Caller::Background { task: caller, .. }) =
             call.call.caller
         else {
@@ -1162,10 +1201,9 @@ impl State {
             return Err(Rejected::WrongScope);
         }
         let origin = match &created.origin {
-            Origin::Fresh { environment, .. } => self
-                .environments
-                .get(&task.environment)
-                .is_some_and(|e| e.starts.contains(environment)),
+            Origin::Fresh { role, .. } => {
+                (self.roles.get(&task.role)).is_some_and(|r| r.starts.contains(role))
+            }
             Origin::Fork { from } => *from == caller,
             Origin::Resume { from } => self.owner(*from) == Some(caller),
             Origin::Aside { .. } => false,
@@ -1196,67 +1234,76 @@ impl State {
         Ok(())
     }
 
-    /// Every place of the environment is filled, by a limb of its kind.
-    fn check_places(
+    /// A fresh task has a working directory, on a limb on a machine,
+    /// exactly when its role works in one. One from before limbs were per
+    /// machine, with places, was checked when it was stated.
+    fn check_workdir(
         &self,
-        environment: EnvironmentId,
+        role: RoleId,
+        workdir: Option<&Workdir>,
         places: &BTreeMap<String, LimbId>,
     ) -> Result<(), Rejected> {
-        let environment = self
-            .environments
-            .get(&environment)
-            .ok_or(Rejected::Unknown)?;
-        let unfilled = || Rejected::Unplaced(environment.places.clone());
-        if places.len() != environment.places.len() {
-            return Err(unfilled());
+        let role = self.roles.get(&role).ok_or(Rejected::Unknown)?;
+        if !places.is_empty() {
+            return match workdir {
+                None => Ok(()),
+                Some(_) => Err(Rejected::Unplaced(Vec::new())),
+            };
         }
-        for kind in &environment.places {
-            let fits = places
-                .get(kind)
-                .and_then(|l| self.limbs.get(l))
-                .is_some_and(|l| matches!(&l.kind, LimbKind::Plugin { kind: k, .. } if k == kind));
-            if !fits {
-                return Err(unfilled());
-            }
+        match (role.works_in_a_directory(), workdir) {
+            (true, None) => Err(Rejected::Unplaced(vec![crate::limb::WORKSPACE.to_owned()])),
+            (false, Some(_)) => Err(Rejected::Unplaced(Vec::new())),
+            (true, Some(workdir)) => match self.limbs.get(&workdir.limb) {
+                Some(limb) if limb.host != Host::Brain => Ok(()),
+                Some(_) => Err(Rejected::NotForTask),
+                None => Err(Rejected::Unknown),
+            },
+            (false, None) => Ok(()),
         }
-        Ok(())
     }
 
-    /// Whether a plugin limb's current description offers `tool` to Max
-    /// (`to_max`) or to agents.
-    fn offered(&self, limb: LimbId, tool: &str, to_max: bool) -> bool {
+    /// Whether `limb`'s current description offers `tool` to Max (`to_max`)
+    /// or to agents, in one of `sets`, or in any set when `sets` is `None`.
+    fn offered(&self, limb: LimbId, tool: &str, to_max: bool, sets: Option<&[&str]>) -> bool {
         self.described.get(&limb).is_some_and(|d| {
-            d.description.tools.iter().any(|t| {
-                t.name == tool
-                    && match t.audience {
-                        Audience::Agent => !to_max,
-                        Audience::Max => to_max,
-                        Audience::Both => true,
-                    }
-            })
+            (d.description.sets.iter())
+                .filter(|s| sets.is_none_or(|sets| sets.contains(&s.name.as_str())))
+                .flat_map(|s| &s.tools)
+                .any(|t| {
+                    t.name == tool
+                        && match t.audience {
+                            Audience::Agent => !to_max,
+                            Audience::Max => to_max,
+                            Audience::Both => true,
+                        }
+                })
         })
     }
 
-    /// A task's new root must route only to its environment's limbs and its
-    /// places, only tools those limbs offer agents, each tool once, and
-    /// attach only the harness's calls along the binding.
+    /// A task's new root must route only to the limbs hosting its tool
+    /// sets, only tools those sets offer agents, each tool once, and attach
+    /// only the harness's calls along the binding. A route to a limb from
+    /// before limbs were per machine is in a record of then, checked when
+    /// it was stated.
     fn check_start(&self, task: &Task, start: &Start) -> Result<(), Rejected> {
-        let environment = self
-            .environments
-            .get(&task.environment)
-            .ok_or(Rejected::Unknown)?;
+        let hosts = self.sets_of(task);
         let mut tools = BTreeSet::new();
         for route in &start.binding.routes {
-            let reachable = environment.limbs.contains(&route.limb)
-                || task.places.values().any(|l| *l == route.limb);
-            if !reachable {
-                return Err(Rejected::WrongEnvironment);
-            }
             if !tools.insert(route.tool.as_str()) {
                 return Err(Rejected::Ambiguous);
             }
-            let limb = self.limbs.get(&route.limb).ok_or(Rejected::Unknown)?;
-            if !limb.kind.is_brains() && !self.offered(route.limb, &route.tool, false) {
+            if self.legacy.contains_key(&route.limb) {
+                continue;
+            }
+            let sets: Vec<&str> = (hosts.iter())
+                .filter(|(_, limb)| *limb == route.limb)
+                .map(|(set, _)| set.as_str())
+                .collect();
+            if sets.is_empty() {
+                return Err(Rejected::WrongEnvironment);
+            }
+            let brain = self.runs(route.limb) == Some(Runs::Brain);
+            if !brain && !self.offered(route.limb, &route.tool, false, Some(&sets)) {
                 return Err(Rejected::Unoffered);
             }
         }
@@ -1733,19 +1780,14 @@ impl State {
                     return Err(Rejected::Finished);
                 }
                 let limb = made.limb.ok_or(Rejected::Unroutable)?;
-                let limb = self.limbs.get(&limb).ok_or(Rejected::Unknown)?;
-                let instance = match &limb.kind {
-                    LimbKind::Max => return Err(Rejected::ForMax),
+                let instance = match self.runs(limb).ok_or(Rejected::Unknown)? {
+                    Runs::Nothing => return Err(Rejected::ForMax),
                     // Run off the brain's thread; again by a later brain.
-                    LimbKind::Provider => None,
+                    Runs::Brain if self.reruns(made) => None,
                     // Run once, with its effects, so never twice.
-                    LimbKind::Meta | LimbKind::Attention if made.dispatched.is_some() => {
-                        return Err(Rejected::Exists);
-                    }
-                    LimbKind::Meta | LimbKind::Attention => None,
-                    LimbKind::Plugin { .. } => {
-                        Some(self.connected(limb.id).ok_or(Rejected::Unreached)?.0)
-                    }
+                    Runs::Brain if made.dispatched.is_some() => return Err(Rejected::Exists),
+                    Runs::Brain => None,
+                    Runs::Process => Some(self.connected(limb).ok_or(Rejected::Unreached)?.0),
                 };
                 if !self.acting_on(id, &made.call) {
                     return Err(Rejected::Busy);
@@ -1858,7 +1900,7 @@ impl State {
                     Some(Phase::Thinking(request)) => thinking = Some(*request),
                     _ => return Err(Rejected::Busy),
                 }
-                context.binding.limb(&call.tool)
+                context.binding.limb(&call.tool).map(|l| self.resolved(l))
             }
             Caller::Background { task, from, name } => {
                 let started = self.calls.get(from).ok_or(Rejected::Unknown)?;
@@ -1878,7 +1920,7 @@ impl State {
                     return Err(Rejected::Exists);
                 }
                 let context = task.context().ok_or(Rejected::Starting)?;
-                let limb = context.binding.limb(&call.tool);
+                let limb = context.binding.limb(&call.tool).map(|l| self.resolved(l));
                 if limb.is_none() {
                     return Err(Rejected::Unroutable);
                 }
@@ -1888,15 +1930,16 @@ impl State {
                 limb
             }
             Caller::Max { limb, chat } => {
-                let defined = self.limbs.get(limb).ok_or(Rejected::Unknown)?;
-                if !defined.kind.is_brains() && !self.offered(*limb, &call.tool, true) {
+                let process = self.runs(*limb).ok_or(Rejected::Unknown)? == Runs::Process;
+                let old = self.legacy.contains_key(limb);
+                if process && !old && !self.offered(*limb, &call.tool, true, None) {
                     return Err(Rejected::Unoffered);
                 }
                 if let Some(chat) = chat {
                     let task = self.tasks.get(chat).ok_or(Rejected::Unknown)?;
-                    let routed = task
-                        .context()
-                        .is_some_and(|c| c.binding.routes.iter().any(|r| r.limb == *limb));
+                    let routed = task.context().is_some_and(|c| {
+                        (c.binding.routes.iter()).any(|r| self.resolved(r.limb) == *limb)
+                    });
                     if !routed {
                         return Err(Rejected::WrongEnvironment);
                     }
@@ -1911,7 +1954,7 @@ impl State {
                 if by.settled.is_some() {
                     return Err(Rejected::Finished);
                 }
-                if !self.limbs.contains_key(limb) {
+                if self.runs(*limb).is_none() {
                     return Err(Rejected::Unknown);
                 }
                 Some(*limb)
@@ -2052,7 +2095,7 @@ impl State {
     }
 
     fn change(&mut self, change: &Change, record: &Stated) -> Result<(), Rejected> {
-        if !self.limbs.contains_key(&change.resource.limb) {
+        if self.runs(change.resource.limb).is_none() {
             return Err(Rejected::Unknown);
         }
         if let Some(by) = change.by
@@ -2112,8 +2155,9 @@ impl State {
     /// it should exit once nothing it holds would die with it, so the next
     /// attach starts this one. `None` while the build is on probation (a
     /// build that goes back never moves a limb back), for a limb on the
-    /// launch's own build, one that did not say what it runs, or a kind the
-    /// launch has no executable for.
+    /// launch's own build, one that did not say what it runs, or one the
+    /// launch has no executable for. A limb on a machine runs the executable
+    /// the launch names `limb`; one from before, that of its plugin kind.
     pub fn superseded(&self, limb: LimbId) -> Option<BuildId> {
         if !matches!(self.probation.verdict(), Verdict::Proven { .. }) {
             return None;
@@ -2129,11 +2173,15 @@ impl State {
         else {
             return None;
         };
-        let LimbKind::Plugin { kind, .. } = &self.limbs.get(&limb)?.kind else {
-            return None;
+        let executable = match self.legacy.get(&limb) {
+            Some(old) => match &old.kind {
+                LimbKind::Plugin { kind, .. } => kind.as_str(),
+                _ => return None,
+            },
+            None => "limb",
         };
         let (_, launched) = self.launch.as_ref()?;
-        let wanted = *launched.limbs.get(kind)?;
+        let wanted = *launched.limbs.get(executable)?;
         (wanted != *running).then_some(wanted)
     }
 
@@ -2231,61 +2279,220 @@ impl State {
         self.heard.get(&task).is_some_and(|w| w.contains(&words))
     }
 
-    pub fn environment(&self, id: EnvironmentId) -> Option<&Environment> {
-        self.environments.get(&id)
+    pub fn role(&self, id: RoleId) -> Option<&Role> {
+        self.roles.get(&id)
     }
 
-    pub fn environments(&self) -> impl Iterator<Item = &Environment> {
-        self.environments.values()
+    pub fn roles(&self) -> impl Iterator<Item = &Role> {
+        self.roles.values()
     }
 
     pub fn limb(&self, id: LimbId) -> Option<&Limb> {
         self.limbs.get(&id)
     }
 
-    /// Every limb, in id order.
+    /// Every limb, in id order: those of now, not those from before.
     pub fn limbs(&self) -> impl Iterator<Item = &Limb> {
         self.limbs.values()
     }
 
-    /// The limb of this name: a workspace by its directory.
+    /// The limb of this name: `brain`, or a machine's.
     pub fn limb_named(&self, name: &str) -> Option<&Limb> {
         self.limbs.values().find(|l| l.name == name)
     }
 
-    /// What a plugin limb last said about itself, and when.
+    /// The limb the brain is ([`Host::Brain`]), once it has defined it.
+    pub fn brain(&self) -> Option<&Limb> {
+        self.limbs.values().find(|l| l.host == Host::Brain)
+    }
+
+    /// A limb from before limbs were per machine, as its records define it.
+    pub fn legacy(&self, id: LimbId) -> Option<&legacy::Limb> {
+        self.legacy.get(&id)
+    }
+
+    /// The limb that hosts `limb` now: itself, for a limb of now; for one
+    /// from before, the brain or the limb on its host, once defined. `None`
+    /// for an unknown limb, one whose host has no limb yet, and Max, who is
+    /// not a limb.
+    pub fn resolve(&self, limb: LimbId) -> Option<LimbId> {
+        if self.limbs.contains_key(&limb) {
+            return Some(limb);
+        }
+        let host = match legacy::now(self.legacy.get(&limb)?) {
+            Now::Brain { .. } => Host::Brain,
+            Now::Set { host, .. } | Now::Workdir { host, .. } => host,
+            Now::Nothing => return None,
+        };
+        self.limbs.values().find(|l| l.host == host).map(|l| l.id)
+    }
+
+    /// `limb` resolved, or as it is where nothing hosts it now: what a call
+    /// made from a context of before is sent to.
+    fn resolved(&self, limb: LimbId) -> LimbId {
+        self.resolve(limb).unwrap_or(limb)
+    }
+
+    /// The working directory of a task from before limbs were per machine:
+    /// its `workspace` place's directory, on that old limb, which
+    /// [`State::workdir`] resolves.
+    pub(crate) fn legacy_workdir(&self, places: &BTreeMap<String, LimbId>) -> Option<Workdir> {
+        let limb = *places.get(crate::limb::WORKSPACE)?;
+        match legacy::now(self.legacy.get(&limb)?) {
+            Now::Workdir { dir, .. } => Some(Workdir {
+                limb,
+                dir,
+                branch: None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// A task's working directory, on the limb that hosts it now. `None`
+    /// for a task whose role works in none, or whose old limb's host has no
+    /// limb yet.
+    pub fn workdir(&self, task: &Task) -> Option<Workdir> {
+        let workdir = task.workdir.as_ref()?;
+        Some(Workdir {
+            limb: self.resolve(workdir.limb)?,
+            ..workdir.clone()
+        })
+    }
+
+    /// Each tool set a task's role holds, in the role's order, with the
+    /// limb that hosts it for the task: the brain, for a set the brain
+    /// offers; otherwise the limb of its working directory, or for a task
+    /// with none, the limb on the brain's own machine. A set that limb does
+    /// not offer is left out, so a root has only what is there to use.
+    pub fn sets_of(&self, task: &Task) -> Vec<(String, LimbId)> {
+        let Some(role) = self.roles.get(&task.role) else {
+            return Vec::new();
+        };
+        let brain = self.brain();
+        let machine = match self.workdir(task) {
+            Some(workdir) => self.limbs.get(&workdir.limb),
+            None => self.limbs.values().find(|l| l.host == Host::Local),
+        };
+        (role.tools.iter())
+            .filter_map(|set| {
+                let host = [brain, machine]
+                    .into_iter()
+                    .flatten()
+                    .find(|l| l.offer(set).is_some())?;
+                Some((set.clone(), host.id))
+            })
+            .collect()
+    }
+
+    /// What a limb last said about itself, and when.
     pub fn described(&self, limb: LimbId) -> Option<&Described> {
         self.described.get(&limb)
     }
 
-    /// What `limb` holds of the brain: each call dispatched to it and not
-    /// settled, with its stop's deadline; the resources of its that live
-    /// contexts embody, with every version the brain holds of each (its
-    /// current one where one is recorded, otherwise each a live context
-    /// embodies); the environments read from its resources; and the
-    /// brain's shutdown. The bytes of the values the
-    /// call rows name ([`LimbRow::Value`]) are the store's, so the brain
-    /// adds them.
-    pub fn limb_rows(&self, limb: LimbId) -> BTreeMap<LimbKey, LimbRow> {
-        let mut rows: BTreeMap<LimbKey, LimbRow> = self
-            .open
-            .calls
-            .iter()
-            .filter_map(|id| Some((*id, self.calls.get(id)?)))
-            .filter(|(_, c)| c.limb == Some(limb))
-            .filter_map(|(id, c)| {
-                let row = LimbRow::Call {
-                    call: c.call.clone(),
-                    stopping: c.stopping.map(|s| s.deadline),
-                    first_sent_to: c.dispatched?.first_to?,
-                    owner: Some(c.owner),
-                };
-                Some((LimbKey::Call(id), row))
-            })
-            .collect();
-        if let Some(definition) = self.limbs.get(&limb) {
-            rows.insert(LimbKey::Definition, LimbRow::Definition(definition.clone()));
+    /// What `limb` last found in the directory `dir`, and when.
+    pub fn prepared(&self, limb: LimbId, dir: &Path) -> Option<&Readied> {
+        self.prepared.get(&(limb, dir.to_path_buf()))
+    }
+
+    /// How `limb` runs calls, if the brain knows it.
+    fn runs(&self, limb: LimbId) -> Option<Runs> {
+        if let Some(limb) = self.limbs.get(&limb) {
+            return Some(match limb.host {
+                Host::Brain => Runs::Brain,
+                Host::Local | Host::Ssh { .. } => Runs::Process,
+            });
         }
+        Some(match &self.legacy.get(&limb)?.kind {
+            LimbKind::Meta | LimbKind::Attention | LimbKind::Provider => Runs::Brain,
+            LimbKind::Plugin { .. } => Runs::Process,
+            LimbKind::Max => Runs::Nothing,
+        })
+    }
+
+    /// Whether a call the brain runs is run again by a later brain: one
+    /// that only reads. Max's calls to the brain only read (the plan's
+    /// usage); an agent's act on the harness, so each is run once, with
+    /// its effects.
+    fn reruns(&self, record: &CallRecord) -> bool {
+        match record.limb.and_then(|l| self.legacy.get(&l)) {
+            Some(old) => old.kind == LimbKind::Provider,
+            None => matches!(record.call.caller, Caller::Max { .. }),
+        }
+    }
+
+    /// What `limb` holds of the brain: its definition; each call
+    /// dispatched to it and not settled, with its stop's deadline and its
+    /// caller's working directory; each working directory a live agent
+    /// works in there or an unsettled call runs in, with the agents working
+    /// there; the resources of its that live contexts embody, with every
+    /// version the brain holds of each (its current one where one is
+    /// recorded, otherwise each a live context embodies); the roles read
+    /// from its resources; and whether it is superseded. A limb from before
+    /// limbs were per machine holds only its old definition and its calls.
+    /// The bytes of the values the call rows name ([`LimbRow::Value`]) are
+    /// the store's, so the brain adds them.
+    pub fn limb_rows(&self, limb: LimbId) -> BTreeMap<LimbKey, LimbRow> {
+        let mut workdirs: BTreeMap<PathBuf, LimbRow> = BTreeMap::new();
+        let mut working = |workdir: Option<Workdir>, task: Option<&Task>| {
+            let workdir = workdir.filter(|w| w.limb == limb)?;
+            let row = workdirs
+                .entry(workdir.dir.clone())
+                .or_insert(LimbRow::Workdir {
+                    branch: None,
+                    agents: BTreeMap::new(),
+                });
+            if let (LimbRow::Workdir { branch, agents }, Some(task)) = (row, task) {
+                if branch.is_none() {
+                    branch.clone_from(&workdir.branch);
+                }
+                agents.insert(task.id, task.name.clone());
+            }
+            Some(workdir.dir)
+        };
+        let mut rows: BTreeMap<LimbKey, LimbRow> = BTreeMap::new();
+        for id in self.open.calls.iter() {
+            let Some(c) = self.calls.get(id).filter(|c| c.limb == Some(limb)) else {
+                continue;
+            };
+            let Some(first_sent_to) = c.dispatched.and_then(|d| d.first_to) else {
+                continue;
+            };
+            let caller = match c.call.caller {
+                Caller::Agent { task, .. } | Caller::Background { task, .. } => Some(task),
+                Caller::Max { chat, .. } => chat,
+                Caller::Meta { .. } => self.call_owner(*id),
+            };
+            let dir = working(caller.and_then(|t| self.workdir(self.tasks.get(&t)?)), None);
+            let row = LimbRow::Call {
+                call: c.call.clone(),
+                stopping: c.stopping.map(|s| s.deadline),
+                first_sent_to,
+                owner: Some(c.owner),
+                dir,
+            };
+            rows.insert(LimbKey::Call(*id), row);
+        }
+        if let Some(old) = self.legacy.get(&limb) {
+            rows.insert(
+                LimbKey::Definition,
+                LimbRow::Definition(Defined::Legacy(old.clone())),
+            );
+            return rows;
+        }
+        if let Some(definition) = self.limbs.get(&limb) {
+            rows.insert(
+                LimbKey::Definition,
+                LimbRow::Definition(Defined::Limb(definition.clone())),
+            );
+        }
+        for task in self.live() {
+            working(self.workdir(task), Some(task));
+        }
+        rows.extend(
+            workdirs
+                .into_iter()
+                .map(|(dir, row)| (LimbKey::Workdir(dir), row)),
+        );
         let mut known: Vec<Observation> = Vec::new();
         for context in self.live().filter_map(Task::context) {
             for (resource, embodied) in context.knows.iter().filter(|(r, _)| r.limb == limb) {
@@ -2305,12 +2512,13 @@ impl State {
         if let Some(by) = self.superseded(limb) {
             rows.insert(LimbKey::Superseded, LimbRow::Superseded { by });
         }
-        for env in self.environments.values() {
-            if env.source.as_ref().is_some_and(|s| s.resource.limb == limb) {
-                rows.insert(
-                    LimbKey::Environment(env.id),
-                    LimbRow::Environment(env.clone()),
-                );
+        for role in self.roles.values() {
+            if role
+                .source
+                .as_ref()
+                .is_some_and(|s| s.resource.limb == limb)
+            {
+                rows.insert(LimbKey::Role(role.id), LimbRow::Role(role.clone()));
             }
         }
         rows
@@ -2462,28 +2670,57 @@ impl State {
         }
     }
 
-    /// The limbs a task can reach now: its environment's, as currently
-    /// defined, and its places. A new root is made from these.
-    pub fn limbs_of(&self, task: &Task) -> Vec<LimbId> {
-        let mut limbs: Vec<LimbId> = self
-            .environments
-            .get(&task.environment)
-            .map(|e| e.limbs.clone())
-            .unwrap_or_default();
-        limbs.extend(task.places.values().copied());
+    /// The limbs a task needs now: those hosting its tool sets, and its
+    /// working directory's. A new root is made from these.
+    fn hosts(&self, task: &Task) -> BTreeSet<LimbId> {
+        let mut limbs: BTreeSet<LimbId> = self.sets_of(task).into_iter().map(|(_, l)| l).collect();
+        limbs.extend(self.workdir(task).map(|w| w.limb));
         limbs
     }
 
-    /// Whether the brain can use a limb now: one it runs itself, or a plugin
-    /// connected to it that has described itself on that connection.
+    /// The limbs a task waits on before a new root, each with why its last
+    /// process failed or its directory could not be made: each hosting its
+    /// tool sets that is not [reached](State::reached), and its working
+    /// directory's while the directory has not been ready since the limb's
+    /// current connection.
+    fn unready(&self, task: &Task) -> Vec<(LimbId, Option<String>)> {
+        let workdir = self.workdir(task);
+        let mut waits = Vec::new();
+        for limb in self.hosts(task) {
+            if !self.reached(limb) {
+                waits.push((limb, self.failed(limb).map(str::to_owned)));
+                continue;
+            }
+            let Some(workdir) = workdir.as_ref().filter(|w| w.limb == limb) else {
+                continue;
+            };
+            let since = self.connected(limb).map(|(_, mark)| mark.seq);
+            match self.prepared(limb, &workdir.dir) {
+                Some(Readied {
+                    prepared: Prepared::Ready { .. },
+                    at,
+                }) if since.is_some_and(|since| at.seq >= since) => {}
+                Some(Readied {
+                    prepared: Prepared::Failed { why },
+                    ..
+                }) => waits.push((limb, Some(why.clone()))),
+                _ => waits.push((limb, None)),
+            }
+        }
+        waits
+    }
+
+    /// Whether the brain can use a limb now: the brain itself, or a limb on
+    /// a machine connected to it that has described itself on that
+    /// connection.
     fn reached(&self, limb: LimbId) -> bool {
-        match self.limbs.get(&limb) {
-            Some(l) if l.kind.is_brains() => true,
-            Some(_) => match (self.connected(limb), self.described.get(&limb)) {
+        match self.runs(limb) {
+            Some(Runs::Brain) => true,
+            Some(Runs::Process) => match (self.connected(limb), self.described.get(&limb)) {
                 (Some((_, since)), Some(described)) => described.at.seq >= since.seq,
                 _ => false,
             },
-            None => false,
+            Some(Runs::Nothing) | None => false,
         }
     }
 
@@ -2498,14 +2735,6 @@ impl State {
                 .any(|c| self.members(Scope::Spawn(*c)).any(|m| !m.is_done())),
             _ => false,
         }
-    }
-
-    /// Whether a limb is Max: his to settle calls on and change resources
-    /// of ([`LimbKind::Max`]).
-    fn is_max(&self, limb: LimbId) -> bool {
-        self.limbs
-            .get(&limb)
-            .is_some_and(|l| l.kind == LimbKind::Max)
     }
 
     /// Whether a call waits undispatched because Max paused the task whose
@@ -2534,12 +2763,7 @@ impl State {
         let live = match &t.life {
             Life::Starting => {
                 return Some(Waiting::Starting {
-                    limbs: self
-                        .limbs_of(t)
-                        .into_iter()
-                        .filter(|l| !self.reached(*l))
-                        .map(|l| (l, self.failed(l).map(str::to_owned)))
-                        .collect(),
+                    limbs: self.unready(t),
                     since,
                 });
             }
@@ -2614,8 +2838,8 @@ impl State {
     /// Everything the brain should do now.
     ///
     /// Restart is not a mode: it is read off the brain's positions. A request
-    /// sent before the current [`Launched`] with no end was lost. A plugin
-    /// call is due once its limb is connected and it has not been
+    /// sent before the current [`Launched`] with no end was lost. A call to
+    /// a limb on a machine is due once its limb is connected and it has not been
     /// dispatched, so a restart of the brain, of the limb, or of the network
     /// between them resends none: the limb is shipped its whole view again,
     /// and answers each row from its own record.
@@ -2641,11 +2865,10 @@ impl State {
             for call in task.awaited() {
                 readers.entry(call).or_default().push(task);
             }
-            let limbs = self.limbs_of(task);
-            if task.life == Life::Starting && limbs.iter().all(|l| self.reached(*l)) {
+            if task.life == Life::Starting && self.unready(task).is_empty() {
                 starting.push(Todo::Root(task.id));
             }
-            needed.extend(limbs);
+            needed.extend(self.hosts(task));
             let lingering = task.mode == Mode::Autonomous
                 && !task.background.is_empty()
                 && !self.open.lingered.contains(&task.id);
@@ -2726,17 +2949,17 @@ impl State {
                 }
                 continue;
             }
-            let Some(limb) = record.limb.and_then(|l| self.limbs.get(&l)) else {
+            let Some((limb, runs)) = record.limb.and_then(|l| Some((l, self.runs(l)?))) else {
                 todo.push(Todo::Unroutable(*id));
                 continue;
             };
-            needed.insert(limb.id);
-            let connection = self.connected(limb.id).map(|(_, mark)| mark.seq);
+            needed.insert(limb);
+            let connection = self.connected(limb).map(|(_, mark)| mark.seq);
             let readers = readers.get(id).map_or(&[][..], Vec::as_slice);
             if record.abandoned || interrupts(*id, &record.call, readers) {
-                let due = match (&record.dispatched, &limb.kind) {
+                let due = match (&record.dispatched, runs) {
                     (None, _) => true,
-                    (Some(_), LimbKind::Plugin { .. }) => match connection {
+                    (Some(_), Runs::Process) => match connection {
                         Some(_) => record.stopping.is_none_or(|s| {
                             needed_by(readers).is_some_and(|by| s.deadline > by.max(s.asked.at))
                         }),
@@ -2749,23 +2972,22 @@ impl State {
                 }
                 continue;
             }
-            let due = match &limb.kind {
-                LimbKind::Max => false,
+            let due = match runs {
+                Runs::Nothing => false,
                 // It only reads, so one an earlier brain was running is run again.
-                LimbKind::Provider => record
+                Runs::Brain if self.reruns(record) => record
                     .dispatched
                     .is_none_or(|d| launch.is_some_and(|l| d.last.seq < l)),
-                LimbKind::Meta | LimbKind::Attention => record.dispatched.is_none(),
-                LimbKind::Plugin { .. } => connection.is_some() && record.dispatched.is_none(),
+                Runs::Brain => record.dispatched.is_none(),
+                Runs::Process => connection.is_some() && record.dispatched.is_none(),
             };
             if due && self.acting_on(*id, &record.call) && !self.withheld(*id) {
                 todo.push(Todo::Dispatch(*id));
             }
         }
-        let connect = needed.into_iter().filter(|l| {
-            self.limbs.get(l).is_some_and(|limb| !limb.kind.is_brains())
-                && self.connected(*l).is_none()
-        });
+        let connect = needed
+            .into_iter()
+            .filter(|l| self.runs(*l) == Some(Runs::Process) && self.connected(*l).is_none());
         todo.extend(connect.map(Todo::Connect));
         todo.extend(starting);
         // A brain shutting down starts nothing, and cuts what it has not
