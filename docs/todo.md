@@ -7,7 +7,7 @@ Open work between `main` and [the vision](vision.md), grouped by the [structure]
 Where `main` went a way the vision doesn't, as opposed to something not built yet:
 
 - **`Task` means an agent.** In the vision a task is anything asynchronous and an agent is an agent; requests and calls have lifecycles of their own instead of being tasks in one tree ([glossary](glossary.md#agents-and-work)).
-- **Roles are not yet limbs.** `Environment` is a role with a prompt, rather than a set of limbs plus model and effort.
+- **Roles are not yet limbs.** `Environment` is a role with a prompt, rather than a set of limbs plus model and effort. Max's 28 Oct proposal that "role" is the concept and limbs its places may reverse this ([plan](plan.md#questions-only-max-can-answer)).
 - **The brain is "the one decider".** The vision decides per object, at the replica that owns it (S1).
 - **`Environment::places`** means workspace slots, though "place" was renamed "replica" everywhere else.
 
@@ -19,7 +19,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **Which invariants need a decider.** No analysis yet of which refusals need one replica to decide and which can merge (`substrate/src/decider.rs:22-25`); `core/src/lib.rs` still calls the brain "the one decider".
 - **`Change` carries no previous version** (`core/src/state.rs:2030-2063`).
 - **`cold` duplicates fold state** (`brain/src/brain.rs:146,934,969`).
-- **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). Today the provider reads `~/.claude/.credentials.json`.
+- **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). On 28 Oct he chose the database over a token file for the harness's own login, "so that it can sync across machines, ideally", with encryption from "some kind of keychain or SSH agent" in the future. Today the provider reads `~/.claude/.credentials.json`.
 
 ## Tasks (S2)
 
@@ -27,10 +27,13 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **The harness captures PIDs itself,** so an agent never needs `pgrep -f` or `pkill -f` to wait on or stop a process it started. Max: "the important step is *capturing the PID* - how about we make *our* harness do that automatically?" (not now).
 - **Background shells.** `( … &)` dies with its bash call; `env -i setsid` escapes cancellation; a shell runs on a pipe, not a pty (`limb-workspace/src/shell.rs:58`).
 - **Daemons an agent starts** (a dev server) need an owner that outlives the call: today a task handed to Max dies at its tool timeout. Leases are one shape.
-- **Spawn controls.** `spawn` can't set a child's model or effort (`program/src/meta.rs`); a parent can't see the progress of one member, cancel it alone or give it a time limit; there is no spawn under a background scope (`meta.rs:82`).
+- **Spawn controls.** `spawn` can't set a child's model or effort (`program/src/meta.rs`); a parent can't see the progress of one member, cancel it alone or give it a time limit; there is no spawn under a background scope (`meta.rs:82`). Every spawn blocks its parent: Max wants a background spawn too, joined later by a tool call that waits on work the agent owns, with the foreground kept for fork-per-phase ([vision](vision.md#agents-that-work-well-and-cheaply)). Asides and the refusal to interrupt a parent waiting on its scope (`Rejected::Scoped`) exist because spawns block; whether they stay for foreground spawns is open.
 - **Isolation as its own action.** Forks share their parent's directory on purpose; making an isolated directory should be a separate action, with a `dir` per spawn member (`meta.rs:144-146`). Max has a workflow for it that "potentially the harness can help" with.
 - **Cancel keeps a finished response.** Max (2026-07): on cancel, wait for the assistant response to complete, "It cost us money, and it's probably good", don't run its tool calls, and run them on resume. `core/src/cancel.rs` cuts an abandoned task's request at once.
-- **Re-wiring dependencies after launch** (A starts A' to fix credentials and makes B and C wait on it): "yes, maybe [...] Maybe A can't do it, but A can ask the orchestrator to do it. I don't know." Spawn order is fixed at launch. One shape to weigh: an order such as "B before A" is priority for the scheduler rather than an edge in the tree, and ownership shaped as a graph waits for a real case.
+- **Re-wiring dependencies after launch** (A starts A' to fix credentials and makes B and C wait on it): "yes, maybe [...] Maybe A can't do it, but A can ask the orchestrator to do it. I don't know." Spawn order is fixed at launch. The 28 Oct shape: an order such as "B before A" between different owners' work is priority for the planner, and a dependency is a watch, refused if it would close a circle of waits.
+- **A failing owner ends its workers.** While an owner is failing, the fold accepts its abandon of its workers (`core/src/state.rs:1318`, `Some(Draining::Failing(_)) => {}`), so a failure ends work as an abandon would. Max (28 Oct): the subtree is held, and a failing parent is "basically a pause"; whether held work needs pausing too is open.
+- **Messages and watches.** No relationship between tasks except owning: an agent can't message another live agent, or watch work it doesn't own and be told when it settles or is abandoned ([vision](vision.md#what-agents-can-do)). A watch that would close a circle of waits is refused.
+- **Standing tasks under an owner.** Only Max's scope may hold a standing task (`core/src/task.rs:1249`, `Rejected::WrongScope`), so an area's main agent, or a service under it, can't stand.
 - **Root tasks held after a long outage** ([vision](vision.md#a-harness-that-keeps-going-and-improves-itself)). A restart carries every task on however long the brain was down; how long counts as long is open. He wrote "Perhaps if it's been more than an hour", then "Actually - I don't think that's so clear. Probably this should be optional too."
 - **Rough edges.** `Caller::Meta` and `Start.awaits` are never created; `Rejected::CannotStart` carries no names (`core/src/fact.rs:274`); passed calls can clash by name; `end(mark)` is duplicated (`limb-builds/src/relaunch.rs:362`); an unexplained 180 s pause was seen once.
 
@@ -57,7 +60,8 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **Chats with no directory,** and roles whose limbs take parameters Max fills in when he starts one: "limb types need varying parameters, potentially". A rich picker for directories and remote environments.
 - **The SSH limb** (`Host::Ssh`, `brain/src/brain.rs:524-530`), which the browser limb needs to reach Max's own browser on his desktop. Which sites the browser agent may log into is his to say.
 - **The brain depends on limb crates' `Settings`,** and face-web's dictation depends on the provider crate.
-- **Limbs found by file name** (`brain/src/brain.rs:1921-1946`); limbs from an old build are never replaced in place, their state is never retired, and nothing lists or kills them. Without a systemd user manager, a restart ends them.
+- **Limbs found by file name** (`brain/src/brain.rs:1921-1946`); limbs from an old build are never replaced in place, their state is never retired, and nothing lists, kills, restarts or updates them (Max, 28 Oct: "We do need to shut them down, however. We also need to be able to start them back up. We also need to be able to update them, probably."). Without a systemd user manager, a restart ends them.
+- **In-process limbs.** Every limb is a process. Max (28 Oct): "the concept of a limb doesn't need a process. It shouldn't need a process. We should have in-process limbs", such as an orchestrator's meta limb ([vision](vision.md#s4-environments-limbs-and-nothing-else)).
 - **The roles limb is a fourth copy of limb plumbing** (`brain/src/roles.rs`), and polls every 2 s; there is no file watcher. It needs `Instance` over an in-memory store.
 - **Meta and web limbs don't declare their tools** (`brain/src/brain.rs:1080,1112`).
 - **Files limb.** A refused edit re-shows up to 64 KiB (`limb-workspace/src/files.rs:532-540`); a non-zero exit marks all output as an error (`files.rs:164`); `rescan` re-hashes under a mutex (`limb-workspace/src/lib.rs:476-497`); `clone_of` runs git synchronously on the brain loop (`brain/src/brain.rs:1329,1962-1969`).
@@ -74,12 +78,14 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **No go-back button after a relaunch** (`face-web/src/page/builds.js:19`), and rehearsal doesn't catch a broken page.
 - **TLS certificate path and bind address are hard-wired** (`brain/src/main.rs:213-219,245`).
 - **The relaunch watcher folds every 2 s.**
-- **A missing limb at relaunch fails a task permanently,** and an expired login fails a task after about 30 s, where both should wait. Only Claude Code refreshes the login: on 25 Oct it expired at 17:12 NZDT, the next message Max sent failed the chat, and he resumed it after Claude Code was run once by hand.
+- **A missing limb at relaunch fails a task permanently,** and an expired login fails a task after about 30 s, where both should wait. Only Claude Code refreshes the login: on 25 Oct it expired at 17:12 NZDT, the next message Max sent failed the chat, and he resumed it after Claude Code was run once by hand. Max decided (28 Oct) that the harness gets its own login, through its own OAuth flow as Claude Code does, refreshes it itself, and keeps it in the database.
 
 ## Max and his attention (S6)
 
 - **The attention scheduler.** `LimbKind::Attention` is produced by nothing; `Ranking` and `Focus` are unchecked (`core/src/state.rs:884,890-901`). An `attention::Ranking` is one whole order and the newest wins, so Max reordering by hand while the scheduler ranks loses one of the two.
 - **Domains** as data partitions with their own brains.
+- **Areas and their main agents** (28 Oct): an owning coordinator per area, and an agent above the areas that may pause work when usage runs low and abandon its own subtrees ([vision](vision.md#managing-his-attention-and-his-life)). Nothing models an area.
+- **His to-dos and waiting items in the graph:** a node for work with no agent behind it, executed by Max or waiting on someone outside, shown faintly until it is his action ([vision](vision.md#seeing-and-steering-the-work)).
 - **One mutating face per domain** (the action lock).
 - **Agents see what Max is doing:** whether he is away, what he edited, his branch and its uncommitted changes.
 - **Non-blocking asks** (2026-09): an agent builds up a queue of actions for Max that expire, each with a strict schema and "self contained": it reiterates "the chain from what the user ultimately wants, to why the requests exists", with what he needs to decide.
@@ -96,7 +102,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **Records nobody read** show only on stderr.
 - **An engineer that receives harness errors.** Max: "ideally, let's just go for it and direct it straight at an agent that should be fixing the errors. It should be an engineer that receives harness errors. It triages them. It determines the root cause. If it needs design, it flags it and raises it somehow. And it fixes the obvious ones at the root cause. Making the product smaller and better." The page's errors reach the brain as `PageError` (`face-web/src/lib.rs`, `Wiring::report`), which only logs them; handing them to an agent is left.
 - **Chats that start alike look alike.** `act chat` takes no name, so a chat is named after the first words of its mandate (`name_from` in `brain/examples/device/mod.rs`, as the page's `nameFrom` does). In a home-life pilot on the home brain on 25 Oct, five of the six chats started began "Max is away until this evening" and looked identical in the chat list. A chat can be renamed (`TaskEvent::Renamed`), but not through `act`. Old chats on the home brain include five named "Hi". Max expected a title generator: "I guess we just didn't make that yet."
-- **A chat Max starts has nothing above it.** `act chat` and the page's new chat start only roots (`brain/examples/device/mod.rs:303`, `face-web/src/page/newchat.js:85`), and nothing moves a chat under another, so the pilot's chats stood alone, though Max thought it "would make sense" to have one chat above them "to orchestrate and manage" (the vision's home-life line). A chat can start children; whether Max can talk to them directly is the continuing user-facing child, above.
+- **A chat Max starts has nothing above it.** `act chat` and the page's new chat start only roots (`brain/examples/device/mod.rs:303`, `face-web/src/page/newchat.js:85`), and nothing moves a chat under another, so the pilot's chats stood alone, though Max thought it "would make sense" to have one chat above them "to orchestrate and manage" (the vision's main agent for each area). A chat can start children; whether Max can talk to them directly is the continuing user-facing child, above.
 - **Rough edges.** The TLS listener polls every 20 ms (`face-web/src/lib.rs:134`); the token sum is written out in four places; `Wiring` is full of `Option`s.
 
 ## Provider and cache
