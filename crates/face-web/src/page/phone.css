@@ -5,9 +5,9 @@
     #panel { border-radius: 14px; }
     .log { padding: 1em 1em 2em; }
     .prose { font-size: 15.5px; }
-    .compose { padding: .2em .4em max(.45em, env(safe-area-inset-bottom)); }
+    .compose { padding: 0 0 env(safe-area-inset-bottom); }
     body.covered .compose { padding-bottom: calc(2.6em + env(safe-area-inset-bottom)); }
-    body.covered .compose:focus-within { padding-bottom: max(.45em, env(safe-area-inset-bottom)); }
+    body.covered .compose:focus-within { padding-bottom: env(safe-area-inset-bottom); }
     body.covered:has(.compose:focus-within) #usage { display: none; }
     .viewer { position: absolute; inset: 0; z-index: 2; border: 0; }
     #panel > .body { position: relative; }
