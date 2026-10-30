@@ -1,6 +1,8 @@
   /* On a phone: the card fills the screen, and the type is a touch larger. */
   @media (max-width: 760px) {
     #panel { --r: 14px; }
+    /* Too narrow for the build beside the usage, model and effort. */
+    .compose .dock .build { display: none; }
     .log { padding: 1em 1em 2em; }
     .prose { font-size: 15.5px; }
     .compose { padding: 0 0 env(safe-area-inset-bottom); }

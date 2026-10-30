@@ -60,7 +60,9 @@
   .compose .row2 { display: flex; align-items: stretch; min-height: 28px; border-top: 1px solid var(--line); border-radius: inherit; background: var(--paper); font-size: 12.5px; }
   .compose .row2 > :last-child, .compose .tune > :last-child { border-bottom-right-radius: inherit; }
   .compose .tune { border-radius: inherit; }
-  .compose .dock { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; overflow: hidden; padding: 0 .9em; color: var(--muted); }
+  .compose .dock { display: flex; align-items: center; flex: none; padding: 0 .8em; color: var(--muted); }
+  .compose .dock #corner, .compose .dock #usage, .compose .dock .gauges { gap: .7em; }
+  .compose .dock .gauge i { width: 2em; }
   .compose .dock:empty { display: none; }
   .compose .row2:not(:has(:not(:empty):not([hidden]))) { display: none; }
   .compose .status { flex: 1 1 0; min-width: 0; align-self: center; padding: 0 .9em; font-size: 12px; color: var(--red); }
@@ -73,9 +75,10 @@
   .compose .pick:hover, .compose .pick:focus { border-color: var(--line); color: var(--ink); }
   .compose input.pick { field-sizing: content; min-width: 7em; max-width: 30em; text-overflow: ellipsis; }
   /* Model and effort: a section each, its own menu. */
-  .compose .tune { display: flex; align-items: stretch; }
+  .compose .tune { display: flex; align-items: stretch; min-width: 0; }
   .compose .tune:empty { display: none; }
-  .compose .tune .pick { border: 0; border-left: 1px solid var(--line); border-radius: 0; padding: 0 .9em; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compose .tune .pick { border: 0; border-left: 1px solid var(--line); border-radius: 0; padding: 0 .9em; min-width: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compose .tune .pick:last-child { flex: none; }
   .compose .tune .pick:hover, .compose .tune .pick[aria-expanded], .compose .tune .pick:focus-visible { background: var(--hover); color: var(--ink); }
   /* A menu over the control that opens it. */
   .menu { position: fixed; z-index: 60; min-width: 9em; max-height: 50vh; overflow: auto; background: var(--white); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px rgba(40, 30, 20, .14); padding: .3em; font-size: 13px; }
