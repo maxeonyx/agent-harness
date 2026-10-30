@@ -33,7 +33,8 @@
 //! [`LoginError::SignedOut`] says so.
 //!
 //! **Signing in once.** [`Login::begin`] gives the URL Max opens; claude.ai
-//! then shows him a code, which [`Login::finish`] exchanges for the tokens.
+//! then shows him a code (`CODE#STATE`; the code alone will do), which
+//! [`Login::finish`] exchanges for the tokens.
 //! What `begin` made (the PKCE verifier and state) waits in the row, so the
 //! two halves can run in different processes.
 
@@ -55,7 +56,13 @@ const AUTHORIZE: &str = "https://claude.com/cai/oauth/authorize";
 const TOKEN_HOST: &str = "platform.claude.com";
 const TOKEN_PATH: &str = "/v1/oauth/token";
 const REDIRECT: &str = "https://platform.claude.com/oauth/code/callback";
+/// What a sign-in asks for. A refresh asks for the same less
+/// `org:create_api_key`, which the token endpoint refuses on a refresh
+/// (`invalid_scope`), as Claude Code 2.1.312's refresh (`Vse`) does: it
+/// sends `zxt()`, its sign-in scopes less that one.
 const SCOPES: &str = "org:create_api_key user:profile user:inference \
+    user:sessions:claude_code user:mcp_servers user:file_upload";
+const REFRESH_SCOPES: &str = "user:profile user:inference \
     user:sessions:claude_code user:mcp_servers user:file_upload";
 
 /// How long before expiry a refresh starts: at least the first, plus up to
@@ -190,7 +197,8 @@ impl Login {
         Ok(format!("{AUTHORIZE}?{}", form(&query)))
     }
 
-    /// Finish a sign-in with the code claude.ai showed Max (`CODE#STATE`).
+    /// Finish a sign-in with the code claude.ai showed Max (`CODE#STATE`,
+    /// or the code alone).
     pub fn finish(&self, pasted: &str) -> Result<(), LoginError> {
         let db = self.open()?;
         let pending: Option<(String, String)> = db
@@ -206,10 +214,11 @@ impl Login {
                 "no sign-in was started: start one, then paste its code".into(),
             ));
         };
-        let Some((code, state)) = pasted.trim().split_once('#') else {
-            return Err(LoginError::Failed(
-                "the code is CODE#STATE, as claude.ai shows it: paste all of it".into(),
-            ));
+        // claude.ai shows CODE#STATE; a code alone is taken as this
+        // sign-in's.
+        let (code, state) = match pasted.trim().split_once('#') {
+            Some((code, state)) => (code, state),
+            None => (pasted.trim(), expected.as_str()),
         };
         if state != expected {
             return Err(LoginError::Failed(
@@ -270,7 +279,7 @@ impl Login {
             "grant_type": "refresh_token",
             "refresh_token": tokens.refresh,
             "client_id": CLIENT_ID,
-            "scope": SCOPES,
+            "scope": REFRESH_SCOPES,
         }));
         // Only while the claim is still this one's: one that lapsed during a
         // slow request may be another's now.

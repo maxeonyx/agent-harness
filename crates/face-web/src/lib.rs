@@ -23,6 +23,10 @@
 //! each link forwards what its tab has not had as [`Down::Live`], all of it
 //! again after a reconnect.
 //!
+//! **Keepalive.** A link that has shipped nothing for [`KEEPALIVE`] ships an
+//! empty text message, so a quiet link still shows its tab it is alive, and
+//! a tab that hears nothing for longer knows its link is not.
+//!
 //! **A context is a value.** It is fetched by its head entry
 //! (`/context/<entry>`), read off the fold ([`State::context`]) with the
 //! bytes each entry names from the [`Source`], and when each response was
@@ -201,8 +205,9 @@ struct Shown {
 /// ship it. A synchronous TLS socket cannot be read on one thread and
 /// written on another, so a link takes turns.
 const TURN: Duration = Duration::from_millis(20);
-/// How often an idle link is pinged, so a dead one is noticed.
-const HEARTBEAT: Duration = Duration::from_secs(15);
+/// How long a link stays quiet before it ships a keepalive: an empty text
+/// message, which the page reads as proof the link is alive.
+pub const KEEPALIVE: Duration = Duration::from_secs(4);
 
 impl<S: Source> Face<S> {
     /// A face that includes, dictates and shows live progress as `wiring`
@@ -311,18 +316,21 @@ impl<S: Source> Face<S> {
             "/view" => self.view(&mut stream),
             "/link" => self.link(stream, &request),
             "/dictation" => self.dictate(stream, &request),
-            // A sign-in: the URL to open, then `?code=CODE%23STATE` with
-            // what claude.ai showed. Only Max reaches the face.
+            // A sign-in: opened in a tab of its own, `/login` begins one and
+            // sends the tab on to claude.ai; then `?code=CODE` finishes it
+            // with what claude.ai showed. Only Max reaches the face.
             "/login" => {
                 let Some(login) = &self.wiring.login else {
                     return http::not_found(&mut stream);
                 };
                 let done = match request.query("code").map(find::decode) {
-                    None => login.begin(),
-                    Some(code) => login.finish(&code).map(|()| "Signed in.".into()),
+                    None => login.begin().map(|url| http::redirect(&mut stream, &url)),
+                    Some(code) => login
+                        .finish(&code)
+                        .map(|()| http::respond(&mut stream, "text/plain", b"Signed in.", false)),
                 };
                 match done {
-                    Ok(said) => http::respond(&mut stream, "text/plain", said.as_bytes(), false),
+                    Ok(sent) => sent,
                     Err(e) => http::refuse(&mut stream, "400 Bad Request", &e.to_string()),
                 }
             }
@@ -379,7 +387,7 @@ impl<S: Source> Face<S> {
         let mut publisher = Publisher::default();
         let mut published: Option<Arc<Shown>> = None;
         let mut live = HashMap::new();
-        let mut pinged = Instant::now();
+        let mut shipped = Instant::now();
         loop {
             match tab.read() {
                 Ok(Message::Text(text)) => match serde_json::from_str::<Up>(&text) {
@@ -407,6 +415,7 @@ impl<S: Source> Face<S> {
                 };
                 if let Some(down) = publisher.publish(view) {
                     send(&mut tab, &down)?;
+                    shipped = Instant::now();
                 }
                 published = Some(shown);
             }
@@ -417,12 +426,12 @@ impl<S: Source> Face<S> {
                         live: piece,
                     });
                     send(&mut tab, &down)?;
+                    shipped = Instant::now();
                 }
             }
-            if pinged.elapsed() > HEARTBEAT {
-                pinged = Instant::now();
-                tab.send(Message::Ping(Default::default()))
-                    .map_err(io::Error::other)?;
+            if shipped.elapsed() > KEEPALIVE {
+                shipped = Instant::now();
+                tab.send(Message::text("")).map_err(io::Error::other)?;
             }
         }
     }
