@@ -252,15 +252,21 @@ fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<(), String
     done.map_err(|why| format!("{commit}'s scratch brain {why}"))
 }
 
-/// What a `--check` report says failed, one line each.
+/// What a `--check` report says failed, one line each. Of the records it
+/// could not fold, only the first, in fold order: the rest may follow from
+/// it.
 fn failures(report: &str) -> String {
     let Ok(report) = serde_json::from_str::<serde_json::Value>(report) else {
         return format!("\n{}", report.trim());
     };
-    let skipped = report["skipped"].as_array().into_iter().flatten();
+    let skipped = report["skipped"].as_array().map_or(&[][..], Vec::as_slice);
     let sessions = report["sessions"].as_array().into_iter().flatten();
-    let said: Vec<String> = skipped
-        .map(|s| format!("\nit could not fold a record: {s}"))
+    let said: Vec<String> = (skipped.first())
+        .map(|s| match skipped.len() - 1 {
+            0 => format!("\nit could not fold a record: {s}"),
+            more => format!("\nit could not fold a record: {s}, nor {more} after it"),
+        })
+        .into_iter()
         .chain(
             sessions
                 .filter(|s| s.get("tokens").is_none())
