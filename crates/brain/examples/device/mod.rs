@@ -361,7 +361,8 @@ impl Device {
         while !done(self) {
             assert!(Instant::now() < until, "{}: waited too long", self.name);
             match self.socket.read() {
-                Ok(Message::Text(text)) => {
+                // An empty message is the link's keepalive.
+                Ok(Message::Text(text)) if !text.is_empty() => {
                     let down: Down = serde_json::from_str(&text).expect("the brain's rows");
                     self.tab.down(down);
                 }
@@ -380,7 +381,7 @@ impl Device {
         let mut live = Vec::new();
         while Instant::now() < until && !done(self) {
             match self.socket.read() {
-                Ok(Message::Text(text)) => {
+                Ok(Message::Text(text)) if !text.is_empty() => {
                     let down: Down = serde_json::from_str(&text).expect("the brain's rows");
                     live.extend(self.tab.down(down).map(|l| l.live));
                 }
