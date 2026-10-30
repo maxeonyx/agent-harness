@@ -4,10 +4,10 @@
     padding: .55em .9em max(.55em, env(safe-area-inset-bottom)); pointer-events: none; color: var(--muted); font-size: 12.5px;
   }
   #bottom > * { pointer-events: auto; }
-  /* Over the open card, only the usage stays, compact and on a ground of its own. */
-  body.covered #bottom > :not(#usage) { display: none; }
-  body.covered #usage { padding: .2em .7em; border-radius: 999px; background: rgba(250, 249, 245, .92); backdrop-filter: blur(6px); border: 1px solid var(--line); }
-  body.covered #usage .gauge i { width: 2em; }
+  /* Over the open card none of it floats: the usage and the build sit in
+     the card's bottom bar instead. */
+  body.covered #bottom { display: none; }
+  #corner { display: inline-flex; gap: .9em; align-items: center; }
   .spacer { flex: 1; pointer-events: none !important; }
   #bottom .icon { background: rgba(250, 249, 245, .88); backdrop-filter: blur(6px); border: 1px solid var(--line); }
   #bottom #new { width: 2.7em; height: 2.7em; background: var(--ink); border-color: var(--ink); color: var(--paper); }
@@ -36,12 +36,12 @@
   .gauge.high i b { background: var(--maroon); }
   .alarm { color: var(--maroon); font-weight: 600; }
   /* Which build runs: a quiet line, red only when a relaunch went back. */
-  #bottom .build { position: relative; color: var(--faint); white-space: nowrap; cursor: default; }
-  #bottom .build > .now { margin-left: .7em; }
-  #bottom .build.back > .now { color: var(--maroon); }
-  #bottom .build .pop { white-space: normal; }
-  #bottom .build .pop td:first-child { white-space: nowrap; }
-  #bottom .build .pop td:last-child { color: var(--ink); overflow-wrap: break-word; }
+  #corner .build { position: relative; color: var(--faint); white-space: nowrap; cursor: default; }
+  #corner .build > .now { margin-left: .7em; }
+  #corner .build.back > .now { color: var(--maroon); }
+  #corner .build .pop { white-space: normal; }
+  #corner .build .pop td:first-child { white-space: nowrap; }
+  #corner .build .pop td:last-child { color: var(--ink); overflow-wrap: break-word; }
   /* Signing in: the bar's button, and the box the code is pasted into. */
   .sign-in a.button { margin-left: .4em; padding: .15em .7em; border-radius: 999px; background: var(--maroon); color: var(--white); text-decoration: none; }
   .sign-in-box { width: min(26em, 90vw); padding: 1.1em 1.2em; border: 1px solid var(--line); border-radius: 12px; background: var(--white); color: var(--ink); box-shadow: 0 10px 30px rgba(40, 30, 20, .18); }
