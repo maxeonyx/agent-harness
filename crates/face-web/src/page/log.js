@@ -135,6 +135,7 @@ function entry(s, into, e, index, t, parent) {
     return;
   }
   // The assistant's turn: its words read as prose; its tool uses as steps.
+  closeGroup(s);
   for (const b of joined(blocks)) {
     if (b.type === "thinking") {
       if (!b.thinking) continue;
@@ -297,7 +298,7 @@ async function copied(button, text, html) {
   setTimeout(() => { $("svg", button).innerHTML = ICONS.copy; }, 1200);
 }
 
-// Consecutive tool calls with no words between them are one block, folded
+// One response's tool calls, with no words between them, are one block, folded
 // to what they did: each call's summary in turn, or the tools' names when
 // the calls have none. A block of one call is just its row.
 function step(s, into, b, t) {

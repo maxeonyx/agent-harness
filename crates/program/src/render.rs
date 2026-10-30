@@ -66,7 +66,7 @@ pub fn root(
     sets: &[(LimbId, &ToolSet)],
     workdir: &[Instruction],
 ) -> Result<NewRoot, String> {
-    let mut system = vec![text(identity), text(role)];
+    let mut system = vec![text(identity), text(role), text(SUMMARY)];
     let mut observes = Vec::new();
     let instructions = sets.iter().flat_map(|(_, set)| &set.instructions);
     for instruction in instructions.chain(workdir) {
@@ -101,6 +101,11 @@ pub fn root(
         values: vec![system, tools],
     })
 }
+
+/// What `system` says of the [`summary`](summarised) every tool takes: the
+/// schema alone leaves a model's first calls without one.
+const SUMMARY: &str = "Every tool call takes a `summary`, written last, after the arguments: what the call does, \
+in a few words, such as `run the tests`. Max reads it in place of the call's input.";
 
 /// `tool` taking a required `summary` as its input's last property: the
 /// agent's few words on what each call does, which the page shows in place
@@ -759,6 +764,11 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
     {
         blocks.push(named);
     }
+    if let Value::Array(blocks) = &mut content
+        && !summarised_input(&values(record.call.input))
+    {
+        blocks.push(json!({ "type": "text", "text": "(This call had no `summary`: give every call one, last, in a few words.)" }));
+    }
     json!({
         "type": "tool_result",
         "tool_use_id": tool_use.0,
@@ -766,6 +776,19 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
         "is_error": error,
     })
     .to_string()
+}
+
+/// Whether a call's input carries the [`summary`](summarised) its schema
+/// requires. The API does not enforce `required`, and strict tool use
+/// would: but its grammar writes required fields before optional ones,
+/// so `summary` would no longer come last, and it cannot express an
+/// open object such as `background`'s `input`. So the call runs, and
+/// its result asks for one next time.
+fn summarised_input(input: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(input)
+        .ok()
+        .and_then(|input| input.get("summary")?.as_str().map(|s| !s.trim().is_empty()))
+        .unwrap_or(false)
 }
 
 /// A tool result's content, and whether it is an error.
