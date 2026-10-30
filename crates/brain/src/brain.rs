@@ -2,7 +2,6 @@
 //! repeat.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -14,14 +13,14 @@ use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
-use harness_core::legacy::LimbKind;
-use harness_core::limb::{
-    Branch, Defined, Hello, Host, Limb, LimbKey, LimbRow, Offer, Prepared, Reach, ToolSet, WORKSPACE,
-    Workdir, normal,
-};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{
     CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
+};
+use harness_core::legacy::LimbKind;
+use harness_core::limb::{
+    Branch, Defined, Hello, Host, Limb, LimbKey, LimbRow, Offer, Prepared, Reach, ToolSet,
+    WORKSPACE, Workdir, normal,
 };
 use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
@@ -1276,7 +1275,9 @@ and you cannot finish until it has.",
             (Some(own), Some(from)) => (own.limb, own.dir.join(from)),
             (Some(own), None) => (own.limb, own.dir),
             (None, Some(from)) => (self.local, PathBuf::from(from)),
-            (None, None) => return Err("you have no working directory to share or clone from".into()),
+            (None, None) => {
+                return Err("you have no working directory to share or clone from".into());
+            }
         };
         let dir = normal(&dir);
         // Without a branch it works where it is pointed, as a fork does.
@@ -1867,27 +1868,31 @@ fn limb_builds() -> BTreeMap<String, BuildId> {
     }
 }
 
-/// A new replica: 64 random bits.
-fn mint_replica() -> ReplicaId {
-    let mut bytes = [0; 8];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .expect("/dev/urandom reads");
-    ReplicaId(u64::from_le_bytes(bytes))
-}
-
 /// A new clone for an agent started from a workspace at `dir`: cloned from
 /// what `dir` itself was cloned from (or `dir`, if it has no `origin`), into
 /// a sibling directory named for the repository and the branch, the way
 /// Max names his (`agent-harness` on `dev-x` is `agent-harness-dev-x`).
-pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
-    let from = Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "remote", "get-url", "origin"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| dir.to_string_lossy().into_owned());
+/// A `dir` in no repository has nothing to clone: refused, saying so.
+pub fn clone_of(dir: &Path, branch: &str) -> Result<(String, PathBuf), String> {
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    if git(&["rev-parse", "--git-dir"]).is_none() {
+        return Err(format!(
+            "`{}` is not in a git repository, so there is nothing to clone branch `{branch}` from: \
+name a repository in `from`, or omit `branch` to work in that directory",
+            dir.display()
+        ));
+    }
+    let from =
+        git(&["remote", "get-url", "origin"]).unwrap_or_else(|| dir.to_string_lossy().into_owned());
     let repo = from
         .trim_end_matches('/')
         .rsplit(['/', ':'])
@@ -1896,7 +1901,7 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
         .trim_end_matches(".git");
     let name = format!("{repo}-{}", branch.replace('/', "-"));
     let parent = dir.parent().unwrap_or(dir);
-    (from, parent.join(name))
+    Ok((from, parent.join(name)))
 }
 
 /// One text block saying `said`: what a call the brain runs answers.

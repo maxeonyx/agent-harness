@@ -311,18 +311,21 @@ impl<S: Source> Face<S> {
             "/view" => self.view(&mut stream),
             "/link" => self.link(stream, &request),
             "/dictation" => self.dictate(stream, &request),
-            // A sign-in: the URL to open, then `?code=CODE%23STATE` with
-            // what claude.ai showed. Only Max reaches the face.
+            // A sign-in: opened in a tab of its own, `/login` begins one and
+            // sends the tab on to claude.ai; then `?code=CODE` finishes it
+            // with what claude.ai showed. Only Max reaches the face.
             "/login" => {
                 let Some(login) = &self.wiring.login else {
                     return http::not_found(&mut stream);
                 };
                 let done = match request.query("code").map(find::decode) {
-                    None => login.begin(),
-                    Some(code) => login.finish(&code).map(|()| "Signed in.".into()),
+                    None => login.begin().map(|url| http::redirect(&mut stream, &url)),
+                    Some(code) => login
+                        .finish(&code)
+                        .map(|()| http::respond(&mut stream, "text/plain", b"Signed in.", false)),
                 };
                 match done {
-                    Ok(said) => http::respond(&mut stream, "text/plain", said.as_bytes(), false),
+                    Ok(sent) => sent,
                     Err(e) => http::refuse(&mut stream, "400 Bad Request", &e.to_string()),
                 }
             }

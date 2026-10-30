@@ -7,9 +7,8 @@ Open work between `main` and [the vision](vision.md), grouped by the [structure]
 Where `main` went a way the vision doesn't, as opposed to something not built yet:
 
 - **`Task` means an agent.** In the vision a task is anything asynchronous and an agent is an agent; requests and calls have lifecycles of their own instead of being tasks in one tree ([glossary](glossary.md#agents-and-work)).
-- **Roles are not yet limbs.** `Environment` is a role with a prompt, rather than a set of limbs plus model and effort. Max's 28 Oct proposal that "role" is the concept and limbs its places may reverse this ([plan](plan.md#questions-only-max-can-answer)).
+- **Limbs are per directory, and roles name limbs.** Each workspace directory, the browser, the builds and Max's config are each a limb with a process of its own, and `Environment` names limbs and places. Max decided (29 Oct) on one limb per machine and user, roles that name tool sets, and agents with a working directory ([vision](vision.md#s4-roles-agents-and-limbs)).
 - **The brain is "the one decider".** The vision decides per object, at the replica that owns it (S1).
-- **`Environment::places`** means workspace slots, though "place" was renamed "replica" everywhere else.
 
 ## Substrate (S1)
 
@@ -20,6 +19,8 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **`Change` carries no previous version** (`core/src/state.rs:2030-2063`).
 - **`cold` duplicates fold state** (`brain/src/brain.rs:146,934,969`).
 - **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). On 28 Oct he chose the database over a token file for the harness's own login, "so that it can sync across machines, ideally", with encryption from "some kind of keychain or SSH agent" in the future. Today the login is a `login` table beside the home brain's records, unencrypted and not replicated: every brain on the machine reads it there (`provider/src/login.rs`).
+- **Any 400 from a refresh signs the harness out** (`provider/src/login.rs`, `post`: `rejected` is 400 or 401), including `invalid_scope`, which is the harness's own mistake and leaves the refresh token good. Only `invalid_grant` (and 401) says the refresh token is dead; anything else could keep the tokens and fail, as a network error does. Kept for now because signed out is the state the page offers a way out of.
+- **A relaunch while signed out stays on probation until Max signs in.** The check passes signed out (`brain/src/check.rs`), but the new build sends no request until then, so `Verdict::Proving` holds and the builds limb watches it with no deadline (`limb-builds/src/relaunch.rs`, `watch`); after the sign-in it proves itself as usual.
 
 ## Tasks (S2)
 
@@ -27,6 +28,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **The harness captures PIDs itself,** so an agent never needs `pgrep -f` or `pkill -f` to wait on or stop a process it started. Max: "the important step is *capturing the PID* - how about we make *our* harness do that automatically?" (not now).
 - **Background shells.** `( … &)` dies with its bash call; `env -i setsid` escapes cancellation; a shell runs on a pipe, not a pty (`limb-workspace/src/shell.rs:58`).
 - **Spawn controls.** `spawn` can't set a child's model or effort (`program/src/meta.rs`); a parent can't see the progress of one member, cancel it alone or give it a time limit; there is no spawn under a background scope (`meta.rs:82`). Every spawn blocks its parent: Max wants a background spawn too, joined later by a tool call that waits on work the agent owns, with the foreground kept for fork-per-phase ([vision](vision.md#agents-that-work-well-and-cheaply)). Asides and the refusal to interrupt a parent waiting on its scope (`Rejected::Scoped`) exist because spawns block; whether they stay for foreground spawns is open.
+- **A message queued before a spawn waits for the scope.** A message sent to a task mid-turn, before it blocks on `spawn`, stays unread until the scope ends, while messages sent once it waits open asides. Max: "A queued message and a new message should go through the same mechanism." The fix needs the brain to open the aside, which changes who may create one (`core/src/state.rs`, `check_aside`): a model decision.
 - **Isolation as its own action.** Forks share their parent's directory on purpose; making an isolated directory should be a separate action, with a `dir` per spawn member (`meta.rs:144-146`). Max has a workflow for it that "potentially the harness can help" with.
 - **Cancel keeps a finished response.** Max (2026-07): on cancel, wait for the assistant response to complete, "It cost us money, and it's probably good", don't run its tool calls, and run them on resume. `core/src/cancel.rs` cuts an abandoned task's request at once.
 - **Re-wiring dependencies after launch** (A starts A' to fix credentials and makes B and C wait on it): "yes, maybe [...] Maybe A can't do it, but A can ask the orchestrator to do it. I don't know." Spawn order is fixed at launch. The 28 Oct shape: an order such as "B before A" between different owners' work is priority for the planner, and a dependency is a watch, refused if it would close a circle of waits.
@@ -53,14 +55,15 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **`Note::Stale.shown` is always empty** (`program/src/render.rs:307`).
 - **Prompt length** from web search result blocks (`program/src/web.rs:51`).
 
-## Environments and limbs (S4)
+## Roles, agents and limbs (S4)
 
 - **No sandbox.** `bash` can read `~/.claude/.credentials.json`. The JS sandbox limb (an engine with only the limb's functions) is the planned first sandbox.
-- **Chats with no directory,** and roles whose limbs take parameters Max fills in when he starts one: "limb types need varying parameters, potentially". A rich picker for directories and remote environments.
+- **Chats with no directory,** and roles that take parameters Max fills in when he starts one: "limb types need varying parameters, potentially". A rich picker for directories and remote environments.
 - **The SSH limb** (`Host::Ssh`, `brain/src/brain.rs:524-530`), which the browser limb needs to reach Max's own browser on his desktop. Which sites the browser agent may log into is his to say.
 - **The brain depends on limb crates' `Settings`,** and face-web's dictation depends on the provider crate.
 - **Limbs found by file name** (`brain/src/brain.rs:1921-1946`); limbs from an old build are never replaced in place, their state is never retired, and nothing lists, kills, restarts or updates them (Max, 28 Oct: "We do need to shut them down, however. We also need to be able to start them back up. We also need to be able to update them, probably."). Without a systemd user manager, a restart ends them.
-- **In-process limbs.** Every limb is a process. Max (28 Oct): "the concept of a limb doesn't need a process. It shouldn't need a process. We should have in-process limbs", such as an orchestrator's meta limb ([vision](vision.md#s4-environments-limbs-and-nothing-else)).
+- **The brain's tool sets are limbs of their own.** Meta, web (the provider) and the roles reader are each a limb hosted in the brain, rather than tool sets of the one limb the brain is ([vision](vision.md#s4-roles-agents-and-limbs)).
+- **A long call pins a limb to its build.** A superseded limb exits only once nothing it runs would die (`limb/src/serve.rs:123`), so one long-running call, such as a server passed to Max, keeps it on its old build; once one limb serves a whole machine, that is every agent there. The fix: the limb `execve`s the new build in place, keeping its pid, its children, its lock and its socket, and hands its running calls over in a file.
 - **The roles limb is a fourth copy of limb plumbing** (`brain/src/roles.rs`), and polls every 2 s; there is no file watcher. It needs `Instance` over an in-memory store.
 - **Meta and web limbs don't declare their tools** (`brain/src/brain.rs:1080,1112`).
 - **Files limb.** A refused edit re-shows up to 64 KiB (`limb-workspace/src/files.rs:532-540`); a non-zero exit marks all output as an error (`files.rs:164`); `rescan` re-hashes under a mutex (`limb-workspace/src/lib.rs:476-497`); `clone_of` runs git synchronously on the brain loop (`brain/src/brain.rs:1329,1962-1969`).
