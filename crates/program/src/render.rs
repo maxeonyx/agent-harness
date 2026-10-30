@@ -104,7 +104,7 @@ pub fn root(
 
 /// What `system` says of the [`summary`](summarised) every tool takes: the
 /// schema alone leaves a model's first calls without one.
-const SUMMARY: &str = "Every tool call takes a `summary`, written last, after the arguments: what the call does, \
+const SUMMARY: &str = "Every tool call takes a `summary`, written last, after the arguments: what the call is for, \
 in a few words, such as `run the tests`. Max reads it in place of the call's input.";
 
 /// `tool` taking a required `summary` as its input's last property: the
@@ -115,6 +115,12 @@ in a few words, such as `run the tests`. Max reads it in place of the call's inp
 /// knows about it. A server tool, with no input schema, is left as it is.
 /// The definition keeps its order (serde_json's `preserve_order`), which
 /// is the order the model sees.
+///
+/// The API does not enforce `required`, and strict tool use would: but its
+/// grammar writes required fields before optional ones, so `summary` would
+/// no longer come last, and it cannot express an open object such as
+/// `background`'s `input`. So a call without one runs as any other, and the
+/// page shows its tool and arguments instead.
 fn summarised(tool: &Tool) -> Tool {
     let Ok(mut definition) = serde_json::from_str::<Value>(&tool.definition) else {
         return tool.clone();
@@ -124,7 +130,7 @@ fn summarised(tool: &Tool) -> Tool {
     };
     schema["properties"]["summary"] = json!({
         "type": "string",
-        "description": "What this call does, in a few words, such as `run the tests`."
+        "description": "What this call is for, in a few words."
     });
     match schema["required"].as_array_mut() {
         Some(required) => required.push(json!("summary")),
@@ -771,11 +777,6 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
     {
         blocks.push(named);
     }
-    if let Value::Array(blocks) = &mut content
-        && !summarised_input(&values(record.call.input))
-    {
-        blocks.push(json!({ "type": "text", "text": "(This call had no `summary`: give every call one, last, in a few words.)" }));
-    }
     json!({
         "type": "tool_result",
         "tool_use_id": tool_use.0,
@@ -783,19 +784,6 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
         "is_error": error,
     })
     .to_string()
-}
-
-/// Whether a call's input carries the [`summary`](summarised) its schema
-/// requires. The API does not enforce `required`, and strict tool use
-/// would: but its grammar writes required fields before optional ones,
-/// so `summary` would no longer come last, and it cannot express an
-/// open object such as `background`'s `input`. So the call runs, and
-/// its result asks for one next time.
-fn summarised_input(input: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(input)
-        .ok()
-        .and_then(|input| input.get("summary")?.as_str().map(|s| !s.trim().is_empty()))
-        .unwrap_or(false)
 }
 
 /// A tool result's content, and whether it is an error.
