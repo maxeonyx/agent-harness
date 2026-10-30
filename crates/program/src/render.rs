@@ -506,7 +506,7 @@ carrying on."
     }
     let mut said = vec![text(&framing)];
     if let Some(summary) = carry.summary {
-        said.push(text(&format!("Your summary:\n\n{summary}")));
+        said.push(text(&format!("What you carried:\n\n{summary}")));
     }
     let running: Vec<String> = task
         .background
