@@ -98,11 +98,10 @@
 //!   edit reaches running tasks as a notice and takes effect at their next
 //!   root, and `params` (effort) at their next request, since they are not
 //!   part of the cached prefix.
-//! - **Max acting on a chat's turns.** Retry, edit, going back and
-//!   choosing between versions of a reply are one move: the task back at an
-//!   entry it has been at ([`task::Move::Back`]), what follows read off the
-//!   entry (a turn's end is his move; a request's head, a retry, is the
-//!   model's). Every version stays in the tree, so nothing he moves away
+//! - **Max acting on a chat's turns.** Edit, going back and choosing
+//!   between versions of a reply are one move: the task back at an entry it
+//!   has been at ([`task::Move::Back`]), what follows read off the entry (a
+//!   turn's end is his move; a request's head is the model's). Every version stays in the tree, so nothing he moves away
 //!   from is lost and a face shows the versions as the tree's branches. An
 //!   edit is a draft at an entry ([`draft::DraftEvent::Opened`]), staged
 //!   like any message and landing as move and words together. Only the
@@ -302,7 +301,7 @@
 //! encoding over those names (an [`context::EntryId`]); a request is a
 //! build record whose input is a content identity and whose output is a
 //! value; several records for one input expose nondeterminism instead of
-//! hiding it, which is what Max's retry asks for, and a model or effort he
+//! hiding it, and a model or effort he
 //! changed between them is one input under two definitions; a task's head
 //! is a mutable name for an immutable node, as a branch names a commit, and
 //! its moves are that name's history; provenance lives in the record, not
