@@ -18,7 +18,7 @@ use crate::id::{DeliveryId, TaskId, ValueId};
 /// the results. To be heard sooner he interrupts; to talk to a task waiting
 /// on its children he opens an aside.
 ///
-/// What an environment does between turns is not a delivery. A watcher's
+/// What the world does between turns is not a delivery. A watcher's
 /// result, a page event, a change to Max's queue: each is a new version of a
 /// resource its limb owns ([`crate::resource::Change`]), which reaches every
 /// context that embodies it as one notice at its next request, and wakes a

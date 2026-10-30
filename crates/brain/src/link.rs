@@ -11,7 +11,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
-use harness_core::environment::{Hello, LimbDown, LimbUp};
+use harness_core::limb::{Hello, LimbDown, LimbUp};
 
 /// One connection, numbered by the brain so a stale one's end is told
 /// from the current one's.

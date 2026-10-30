@@ -360,17 +360,17 @@ export function buildCompose(id) {
 // kept with its draft and goes into the fact that starts it.
 export const modelName = (id) => view.models?.find((m) => m.id === id)?.name || id;
 function tuneOf(t) {
-  if (t) return { env: view.environments.find((e) => e.name === t.environment), ...t.tuning };
-  const env = view.environments.find((e) => e.name === $("#n-role")?.value);
-  return { env, model: drafts.get("new:model") || env?.model, effort: drafts.get("new:effort") || env?.effort, warm: null };
+  if (t) return { role: view.roles.find((r) => r.name === t.role), ...t.tuning };
+  const role = view.roles.find((r) => r.name === $("#n-role")?.value);
+  return { role, model: drafts.get("new:model") || role?.model, effort: drafts.get("new:effort") || role?.effort, warm: null };
 }
 export function renderTune(t) {
   const pill = $(".tune", compose);
   if (!pill || (t && isDone(t))) return pill?.replaceChildren();
   const now = tuneOf(t);
-  if (!now.env || !now.model) return pill.replaceChildren();
+  if (!now.role || !now.model) return pill.replaceChildren();
   const warm = now.warm && now.warm.until > Date.now() ? now.warm.tokens : 0;
-  const key = `${now.model}|${now.effort}|${warm}|${now.env.name}`;
+  const key = `${now.model}|${now.effort}|${warm}|${now.role.name}`;
   if (pill.dataset.key === key) return;
   pill.dataset.key = key;
   const cost = warm ? `rereads ${kTokens(warm)}` : "";
@@ -428,18 +428,18 @@ export function menu(opener, items, picked) {
 // The whole setting at once, with what is its role's left to the role.
 async function retune(t, now, field, value) {
   const next = { model: now.model, effort: now.effort, [field]: value };
-  if (!t) { drafts.set(`new:${field}`, value === now.env[field] ? "" : value); return renderTune(null); }
+  if (!t) { drafts.set(`new:${field}`, value === now.role[field] ? "" : value); return renderTune(null); }
   const tuning = {};
-  if (next.model !== now.env.model) tuning.model = next.model;
-  if (next.effort !== now.env.effort) tuning.effort = next.effort;
+  if (next.model !== now.role.model) tuning.model = next.model;
+  if (next.effort !== now.role.effort) tuning.effort = next.effort;
   const why = await act({ Task: [t.id, { Tuned: tuning }] });
   if (why) say(`not changed: ${why}`, true);
 }
 // What a new chat's Created says it runs at.
 export function newTuning() {
   const now = tuneOf(null), tuning = {};
-  if (now.model && now.model !== now.env?.model) tuning.model = now.model;
-  if (now.effort && now.effort !== now.env?.effort) tuning.effort = now.effort;
+  if (now.model && now.model !== now.role?.model) tuning.model = now.model;
+  if (now.effort && now.effort !== now.role?.effort) tuning.effort = now.effort;
   return tuning;
 }
 

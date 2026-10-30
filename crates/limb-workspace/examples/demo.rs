@@ -8,6 +8,8 @@
 //! The limb runs in this process, but for the instance that is killed: that
 //! one is this executable run as `demo crash`.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::unreachable)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,20 +18,24 @@ use std::time::Duration;
 use std::{env, fs, thread};
 
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
-use harness_core::environment::Limb;
-use harness_core::environment::{Description, LimbDown, LimbKey, LimbRow, LimbUp};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{CallId, EventId, LimbId, TaskId, Time, Timestamp, ToolUseId, ValueId};
+use harness_core::limb::{
+    Defined, Description, Host, Limb, LimbDown, LimbKey, LimbRow, LimbUp, Offer, Prepared,
+    WORKSPACE,
+};
 use harness_core::live::Live;
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::value::Bytes;
-use harness_limb::{Instance, now};
-use harness_limb_workspace::{Settings, Workspace};
+use harness_limb::{Instance, Open, SHUTDOWN, now};
 use harness_substrate::{Publisher, ReplicaId, Standing, Up, View, What};
 use serde_json::{Value, json};
 
 /// The replica the brain's ids are minted at.
 const BRAIN: ReplicaId = ReplicaId(0xb7a1);
+
+/// The one tool set this limb offers.
+const SETS: &[(&str, Open)] = &[(WORKSPACE, harness_limb_workspace::open)];
 
 /// The limb, as the brain's first event.
 const LIMB: LimbId = LimbId(EventId {
@@ -54,16 +60,17 @@ fn main() {
 
     title("The tools, as a context's root declares them");
     let description = brain.description.clone().expect("described");
-    for tool in &description.tools {
+    let set = &description.sets[0];
+    for tool in &set.tools {
         let definition: Value = serde_json::from_str(&tool.definition).unwrap();
         let required = &definition["input_schema"]["required"];
         println!("  {:<6} required={required}", tool.name);
     }
     println!(
         "\n  bash, exactly as rendered into the root:\n  {}",
-        description.tools[0].definition
+        set.tools[0].definition
     );
-    let text = &description.instructions[0].text;
+    let text = &set.instructions[0].text;
     println!(
         "\n  the instructions beside them begin: {:?} ...",
         &text[..text.find(". ").unwrap() + 1]
@@ -100,7 +107,7 @@ fn main() {
     let key = ResourceKey {
         limb: LIMB,
         kind: "file".into(),
-        name: "src/lib.rs".into(),
+        name: work(&scratch).join("src/lib.rs").to_string_lossy().into(),
     };
     println!(
         "\n  → Watch row: src/lib.rs, at the versions A and B have seen (the limb reports only a version that is neither)"
@@ -209,7 +216,14 @@ fn main() {
     brain.settle(&mut a, call);
     println!("  afterwards: {}", after(&pids));
 
-    title("A server started with setsid outlives its command, until stopped by its pid");
+    title("Each command runs in a systemd scope of its own, in its agent's slice");
+    brain.call(
+        &mut a,
+        "bash",
+        json!({ "command": "cat /proc/self/cgroup; systemctl --user list-units --no-legend 'harness-call-*' | cat" }),
+    );
+
+    title("A server started with setsid ends with its command all the same");
     brain.call(
         &mut a,
         "bash",
@@ -218,12 +232,7 @@ fn main() {
     brain.call(
         &mut a,
         "bash",
-        json!({ "command": "kill -0 $(cat server.pid) && echo still running in the next call" }),
-    );
-    brain.call(
-        &mut a,
-        "bash",
-        json!({ "command": "kill $(cat server.pid); sleep 0.2; ps -o stat= -p $(cat server.pid) | grep -qv Z && echo running || echo stopped" }),
+        json!({ "command": "ps -o stat= -p $(cat server.pid) | grep -qv Z && echo still running || echo stopped with its command" }),
     );
 
     title("The limb is killed mid-command; the next instance ends what it left and settles");
@@ -279,6 +288,7 @@ fn crash(scratch: &Path) {
     let (upto, rows): (u64, Vec<(LimbKey, LimbRow)>) =
         serde_json::from_slice(&fs::read(scratch.join("rows.json")).unwrap()).unwrap();
     let workspace = open(scratch, Box::new(|_| {}));
+    let rows: BTreeMap<LimbKey, LimbRow> = rows.into_iter().collect();
     let view = View {
         as_of: Time {
             replica: BRAIN,
@@ -288,7 +298,7 @@ fn crash(scratch: &Path) {
             upto,
             refused: BTreeMap::new(),
         },
-        rows: rows.into_iter().collect(),
+        rows,
     };
     workspace.apply(LimbDown::View(view)).unwrap();
     loop {
@@ -306,23 +316,40 @@ fn records(
 }
 
 /// A limb instance on the state directory, as its server opens it.
-fn open(scratch: &Path, out: harness_limb::Out) -> Instance<Workspace> {
-    Instance::open(
-        &definition(scratch),
-        records(scratch),
-        &scratch.join("state"),
-        out,
-    )
-    .unwrap()
+fn open(scratch: &Path, out: harness_limb::Out) -> Instance {
+    Instance::open(LIMB, records(scratch), &scratch.join("state"), out, SETS).unwrap()
 }
 
-fn definition(scratch: &Path) -> Limb {
-    let settings = Settings {
-        dir: scratch.join("work"),
-        clone: None,
-        skills: None,
+/// The directory the agents work in.
+fn work(scratch: &Path) -> PathBuf {
+    scratch.join("work").canonicalize().unwrap()
+}
+
+/// The rows a brain starts the limb with: its definition, offering the
+/// workspace, and the agents' working directory.
+fn rows(scratch: &Path) -> BTreeMap<LimbKey, LimbRow> {
+    let limb = Limb {
+        id: LIMB,
+        name: "demo".into(),
+        host: Host::Local,
+        offers: vec![Offer {
+            set: WORKSPACE.into(),
+            config: String::new(),
+        }],
     };
-    settings.definition(LIMB, "workspace")
+    BTreeMap::from([
+        (
+            LimbKey::Definition,
+            LimbRow::Definition(Defined::Limb(limb)),
+        ),
+        (
+            LimbKey::Workdir(work(scratch)),
+            LimbRow::Workdir {
+                branch: None,
+                agents: BTreeMap::new(),
+            },
+        ),
+    ])
 }
 
 /// The brain's side of one limb: the rows it wants of it, its standing, and
@@ -342,11 +369,13 @@ struct Brain {
     /// Settlements taken and not yet shown.
     settled: HashMap<CallId, Outcome>,
     description: Option<Description>,
+    /// Whether the working directory is ready.
+    ready: bool,
 }
 
 /// One running instance and what the brain has shipped it.
 struct Link {
-    workspace: Instance<Workspace>,
+    workspace: Instance,
     up: Receiver<LimbUp>,
     publisher: Publisher<LimbKey, LimbRow, Refusal>,
 }
@@ -356,7 +385,7 @@ impl Brain {
         Brain {
             scratch: scratch.into(),
             n: 1,
-            rows: BTreeMap::new(),
+            rows: rows(scratch),
             standing: Standing {
                 upto: 0,
                 refused: BTreeMap::new(),
@@ -366,6 +395,7 @@ impl Brain {
             values: HashMap::new(),
             settled: HashMap::new(),
             description: None,
+            ready: false,
         }
     }
 
@@ -403,8 +433,9 @@ impl Brain {
             publisher: Publisher::default(),
         });
         self.description = None;
+        self.ready = false;
         self.publish();
-        while self.description.is_none() {
+        while self.description.is_none() || !self.ready {
             self.take();
         }
     }
@@ -412,7 +443,10 @@ impl Brain {
     /// Close the link: the instance stops its calls and is gone.
     fn disconnect(&mut self) {
         self.drain();
-        self.link = None;
+        if let Some(link) = self.link.take() {
+            link.workspace.stop_all(SHUTDOWN);
+            link.workspace.join();
+        }
     }
 
     /// Ship the rows, as of now: a whole view to a new link, then steps.
@@ -494,6 +528,16 @@ impl Brain {
                     }
                 }
                 Fact::Described { description, .. } => self.description = Some(description),
+                Fact::Workdir { dir, prepared, .. } => {
+                    let found = match prepared {
+                        Prepared::Ready { instructions } => {
+                            self.ready = true;
+                            format!("ready, with {} instruction(s)", instructions.len())
+                        }
+                        Prepared::Failed { why } => format!("failed: {why}"),
+                    };
+                    println!("    {} is {found}", dir.display());
+                }
                 other => println!("    {other:?}"),
             }
         }
@@ -561,6 +605,7 @@ impl Brain {
                 stopping: None,
                 first_sent_to: self.instance.expect("an instance has connected"),
                 owner: None,
+                dir: Some(work(&self.scratch)),
             },
         );
         self.publish();
@@ -591,6 +636,7 @@ fn summary(facts: &[Fact], values: usize) -> String {
             }
             Fact::Change(_) => "a Change".into(),
             Fact::Described { .. } => "its description".into(),
+            Fact::Workdir { .. } => "what it found in a directory".into(),
             _ => "a fact".into(),
         })
         .collect();

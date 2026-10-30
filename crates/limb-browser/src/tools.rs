@@ -1,7 +1,7 @@
 //! What the browser limb offers: its tools, the instructions for them, and
 //! the JavaScript a `browser` script runs on.
 
-use harness_core::environment::{Audience, Tool};
+use harness_core::limb::{Audience, Tool};
 use serde_json::json;
 
 pub const TAB: &str = "tab";

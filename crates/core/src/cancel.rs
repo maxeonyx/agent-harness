@@ -59,8 +59,8 @@
 //! [`Outcome::Abandoned`]: crate::task::Outcome::Abandoned
 //! [`TaskEvent::Expired`]: crate::task::TaskEvent::Expired
 //! [`CallEvent::Stopping`]: crate::call::CallEvent::Stopping
-//! [`LimbRow::Call`]: crate::environment::LimbRow::Call
-//! [`Host`]: crate::environment::Host
+//! [`LimbRow::Call`]: crate::limb::LimbRow::Call
+//! [`Host`]: crate::limb::Host
 //! [`Todo::Cut`]: crate::state::Todo::Cut
 //! [`Pause`]: crate::task::Pause
 //! [`ModelCallEvent::Ended`]: crate::model_call::ModelCallEvent::Ended

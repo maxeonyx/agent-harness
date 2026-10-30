@@ -1,9 +1,10 @@
-//! A plugin limb the brain is linked to: `harness-limb-<kind> attach
-//! <limb>`, found beside the brain's own executable, run as a child whose
-//! stdin and stdout are the link ([`crate::link`]) and whose stderr is why,
-//! if it fails. It starts the limb if it is not running ([`harness_limb`]);
-//! the limb lives on its own after that, and the brain knows nothing of it
-//! but its definition and its link.
+//! A limb the brain is linked to: `harness-limb attach <limb>`, found
+//! beside the brain's own executable, run as a child whose stdin and stdout
+//! are the link ([`crate::link`]) and whose stderr is why, if it fails. It
+//! starts the limb if it is not running, or with `--existing`, for a limb
+//! from before limbs were per machine, only attaches to one that is; the
+//! limb lives on its own after that, and the brain knows nothing of it but
+//! its definition and its link.
 //!
 //! The child leads a process group of its own, so Ctrl-C in the brain's
 //! terminal reaches only the brain. The brain exiting closes the child's
@@ -15,7 +16,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use harness_core::environment::{Limb, LimbKind};
+use harness_core::id::LimbId;
 
 use crate::link::{self, Conn, Said};
 
@@ -27,20 +28,19 @@ pub struct Process {
 }
 
 impl Process {
-    /// Attach to the limb `definition` defines, saying what the link says
-    /// to `said` as connection `conn`.
+    /// Attach to `limb`, starting it unless `existing`, saying what the
+    /// link says to `said` as connection `conn`.
     pub fn attach(
-        definition: &Limb,
+        limb: LimbId,
+        existing: bool,
         conn: Conn,
         said: impl Fn(Conn, Said) + Send + 'static,
     ) -> io::Result<Process> {
-        let LimbKind::Plugin { kind, .. } = &definition.kind else {
-            return Err(io::Error::other("only a plugin limb is a process"));
-        };
-        let program = std::env::current_exe()?.with_file_name(format!("harness-limb-{kind}"));
+        let program = std::env::current_exe()?.with_file_name("harness-limb");
         let mut child = Command::new(&program)
             .arg("attach")
-            .arg(definition.id.to_string())
+            .args(existing.then_some("--existing"))
+            .arg(limb.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -54,7 +54,6 @@ impl Process {
         };
         let last = Arc::new(Mutex::new(String::new()));
         let heard = last.clone();
-        let limb = definition.id;
         thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 if !line.trim().is_empty() {

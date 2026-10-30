@@ -2,7 +2,6 @@
 //! repeat.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -14,12 +13,14 @@ use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
-use harness_core::environment::{
-    Description, Hello, Host, Limb, LimbKey, LimbKind, LimbRow, Reach,
-};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{
     CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, TaskId, Time, Timestamp, ToolUseId, ValueId,
+};
+use harness_core::legacy::LimbKind;
+use harness_core::limb::{
+    Branch, Defined, Hello, Host, Limb, LimbKey, LimbRow, Offer, Prepared, Reach, ToolSet,
+    WORKSPACE, Workdir, normal,
 };
 use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
@@ -31,7 +32,6 @@ use harness_core::task::{
 };
 use harness_core::value::Bytes;
 use harness_face_web::{Feed, Folded, Running};
-use harness_limb_workspace::{Clone, Settings, user};
 use harness_substrate::{Error, Publisher, Up, View, What as Said};
 
 use crate::link::{self, Conn, Wire};
@@ -62,6 +62,8 @@ pub enum Event {
     Usage(CallId, Result<BTreeMap<String, Window>, String>),
     /// A signal asking the brain's process to stop.
     Signal(libc::c_int),
+    /// The role files as they read now, or why they cannot be read.
+    Roles(Result<Vec<roles::File>, String>),
     /// A record from one of Max's tabs.
     Tab(Box<Record>),
 }
@@ -120,15 +122,15 @@ pub struct Brain {
     inbox: Receiver<Event>,
     /// Each request's streamed events, for the face.
     feed: Feed,
-    meta: LimbId,
-    /// The provider: web search and fetch, and Max's usage reading.
-    web: LimbId,
-    /// The roles limb, co-hosted.
-    roles: Option<LimbId>,
+    /// The limb the brain is, which runs the calls of its own tool sets.
+    brain: LimbId,
+    /// The limb on the brain's machine: where a fresh task's directory is
+    /// when its parent has none.
+    local: LimbId,
     /// What its roles' models resolve against.
     models: roles::Models,
-    /// The links to plugin limbs this brain is making or has, by id,
-    /// until their `attach` exits.
+    /// The links to limbs this brain is making or has, by id, until their
+    /// `attach` exits.
     limbs: HashMap<LimbId, Process>,
     /// When the brain last failed to reach a limb.
     failed: HashMap<LimbId, Instant>,
@@ -137,10 +139,8 @@ pub struct Brain {
     moving: HashSet<LimbId>,
     /// The limbs connected now.
     links: HashMap<LimbId, Link>,
-    /// The next number for a process link, counting up from 1.
+    /// The next number for a link, counting up from 1.
     attached: Conn,
-    /// The next number for a co-hosted link, counting down from the top.
-    hosted: Conn,
     /// The model and context of each request without a first byte yet:
     /// fan-out gating.
     cold: HashMap<ModelCallId, (String, HashSet<EntryId>)>,
@@ -155,9 +155,10 @@ pub struct Brain {
 }
 
 impl Brain {
-    /// Fold what the database holds, define the brain's own limbs if it is
-    /// new (the roles limb over `roles`), and listen for limbs. What the
-    /// last brain left in flight is on the to-do list.
+    /// Fold what the database holds, define the brain's own limb and the
+    /// limb on its machine (or restate either whose offers changed), start
+    /// reading the role files, and listen for limbs. What the last brain
+    /// left in flight is on the to-do list.
     pub fn launch(
         store: Store,
         face: Sender<Folded>,
@@ -173,19 +174,6 @@ impl Brain {
             errln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
         }
         let state = decider.state();
-        let find =
-            |is: &dyn Fn(&LimbKind) -> bool| state.limbs().find(|l| is(&l.kind)).map(|l| l.id);
-        let meta = find(&|k| *k == LimbKind::Meta);
-        let web = find(&|k| *k == LimbKind::Provider);
-        let user_limb = find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == user::KIND));
-        let browser_limb = find(
-            &|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == harness_limb_browser::KIND),
-        );
-        let builds_limb = find(
-            &|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == harness_limb_builds::KIND),
-        );
-        let roles_limb =
-            find(&|k| matches!(k, LimbKind::Plugin { kind, .. } if kind == roles::KIND));
         let at = decider.next();
         let exe = std::env::current_exe()
             .and_then(std::fs::read)
@@ -196,88 +184,24 @@ impl Brain {
             limbs: limb_builds(),
             how: launch_how(state),
         })];
-        let define =
-            |facts: &mut Vec<Fact>, found: Option<LimbId>, limb: &dyn Fn(LimbId) -> Limb| {
-                found.unwrap_or_else(|| {
-                    let id = LimbId(at.event(facts.len() as u32));
-                    facts.push(Fact::Limb(limb(id)));
-                    id
-                })
-            };
-        let meta = define(&mut facts, meta, &meta::definition);
-        let web = define(&mut facts, web, &web::definition);
-        let roles_dir = roles
-            .map(|dir| {
+        let roles = match roles {
+            Some(dir) => Some(
                 dir.canonicalize()
-                    .map_err(|e| format!("the roles {dir:?}: {e}"))
-            })
-            .transpose()?;
-        let home = std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?;
-        let config = PathBuf::from(home).join(".claude");
-        // The skills it offers are named in `skills.txt` beside the role
-        // files, which the limb reads.
-        let skills = roles_dir.as_ref().map(|dir| dir.join("skills.txt"));
-        let user = define(&mut facts, user_limb, &|id| {
-            Settings::user(id, config.clone(), skills.clone())
-        });
-        // The harness's browser: `$HARNESS_BROWSER` names one to attach to
-        // or launch, as the limb's settings say (empty for Playwright's
-        // headless shell), and a new value is a new version of the limb.
-        // Unset, the definition stays as it is.
-        let wanted = std::env::var("HARNESS_BROWSER")
-            .ok()
-            .map(|word| harness_limb_browser::Settings::parse(&word));
-        if let Some(wanted) = &wanted {
-            facts.extend(changed(
-                state,
-                browser_limb,
-                wanted,
-                harness_limb_browser::Settings::of,
-            ));
-        }
-        let browser = define(&mut facts, browser_limb, &|id| {
-            wanted.clone().unwrap_or_default().definition(id)
-        });
-        // The builds limb relaunches the brain's own service: the unit
-        // this process runs in, which a new version follows.
-        let unit = harness_limb_builds::Settings::here();
-        facts.extend(changed(
-            state,
-            builds_limb,
-            &unit,
-            harness_limb_builds::Settings::of,
-        ));
-        let builds = define(&mut facts, builds_limb, &|id| unit.definition(id));
-        let shared: BTreeMap<String, LimbId> = [
-            ("meta", meta),
-            ("user", user),
-            ("web", web),
-            ("browser", browser),
-            ("builds", builds),
-        ]
-        .into_iter()
-        .map(|(n, l)| (n.to_string(), l))
-        .collect();
-        let roles = match (roles_limb, roles_dir) {
-            // The roles limb names the shared limbs as they are now, and
-            // `--roles` moves it to another directory.
-            (Some(id), dir) => {
-                let limb = state.limb(id).expect("found among the limbs");
-                if let Some(settings) = roles::Settings::of(limb) {
-                    let dir = dir.unwrap_or_else(|| settings.dir.clone());
-                    let wanted = roles::Settings { dir, limbs: shared };
-                    if wanted != settings {
-                        facts.push(Fact::Limb(reconfigured(limb, &wanted)));
-                    }
-                }
-                Some(id)
-            }
-            (None, Some(dir)) => {
-                let settings = roles::Settings { dir, limbs: shared };
-                Some(define(&mut facts, None, &|id| settings.definition(id)))
-            }
-            (None, None) => None,
+                    .map_err(|e| format!("the roles {dir:?}: {e}"))?,
+            ),
+            // Where the last launch read them.
+            None => (state.brain().and_then(|b| b.offer(roles::SET)))
+                .and_then(roles::Settings::of)
+                .map(|s| s.dir),
         };
+        let id = |facts: &Vec<Fact>, found: Option<&Limb>| {
+            found.map_or_else(|| LimbId(at.event(facts.len() as u32)), |l| l.id)
+        };
+        let limb = brain_limb(id(&facts, state.brain()), roles.as_deref());
+        let brain = define(state, &mut facts, limb);
+        let found = state.limbs().find(|l| l.host == Host::Local);
+        let limb = local_limb(id(&facts, found), found, roles.as_deref())?;
+        let local = define(state, &mut facts, limb);
         let mut brain = Brain {
             decider,
             face,
@@ -285,16 +209,14 @@ impl Brain {
             events,
             inbox,
             feed,
-            meta,
-            web,
-            roles,
+            brain,
+            local,
             models,
             limbs: HashMap::new(),
             failed: HashMap::new(),
             moving: HashSet::new(),
             links: HashMap::new(),
             attached: 1,
-            hosted: Conn::MAX,
             cold: HashMap::new(),
             requests: HashMap::new(),
             root: None,
@@ -305,65 +227,38 @@ impl Brain {
             values: Vec::new(),
             facts,
         });
-        brain.host_roles();
+        match roles {
+            Some(dir) => brain.watch_roles(dir),
+            None => errln!("harness-brain: no role files: a new database needs --roles"),
+        }
         Ok(brain)
     }
 
-    /// Start the roles limb on a thread of its own, linked by a channel.
-    fn host_roles(&mut self) {
-        let Some(id) = self.roles else {
-            return errln!("harness-brain: no roles limb: a new database needs --roles");
-        };
-        let limb = self.state().limb(id).expect("the roles limb").clone();
-        let models = self.models.clone();
-        let (wire, down) = mpsc::channel();
-        let conn = self.hosted;
-        self.hosted -= 1;
-        let replica = mint_replica();
+    /// Read the role files on a thread of their own, which hands each new
+    /// reading to the loop.
+    fn watch_roles(&self, dir: PathBuf) {
         let events = self.events.clone();
-        let build = self.state().launch().map(|(_, launched)| launched.build);
-        let hello = Hello {
-            limb: id,
-            replica,
-            build,
-        };
-        self.joined(conn, hello, wire);
         thread::spawn(move || {
-            let up = |up| {
-                let said = link::Said::Up(Box::new(up));
-                let _ = events.send(Event::Link(conn, said));
-            };
-            roles::run(&limb, replica, down, up, &models);
-            let _ = events.send(Event::Link(conn, link::Said::Left));
+            roles::watch(&dir, |read| events.send(Event::Roles(read)).is_ok());
         });
     }
 
-    /// The workspace limb for `dir`, which is its name: the one already
-    /// defined, or a new one whose definition goes in `facts`, to be said
-    /// in the brain's record at `at`, made by cloning if `clone`.
-    fn workspace_limb(
-        &self,
-        dir: &Path,
-        clone: Option<Clone>,
-        at: Time,
-        facts: &mut Vec<Fact>,
-    ) -> LimbId {
-        let name = dir.to_string_lossy();
-        let new = facts.iter().find_map(|f| match f {
-            Fact::Limb(l) if l.name == name => Some(l.id),
-            _ => None,
+    /// Bring the roles up to the role files as they read now. A reading
+    /// the state refuses changes nothing, and says why.
+    fn roles(&mut self, read: Result<Vec<roles::File>, String>) {
+        let batch = read.and_then(|files| {
+            let current: Vec<&harness_core::role::Role> = self.state().roles().collect();
+            let at = self.decider.next();
+            roles::batch(&files, &current, &self.models, self.brain, at)
         });
-        if let Some(id) = new.or_else(|| self.state().limb_named(&name).map(|l| l.id)) {
-            return id;
-        }
-        let id = LimbId(at.event(facts.len() as u32));
-        let settings = Settings {
-            dir: dir.to_path_buf(),
-            clone,
-            skills: None,
+        let refused = match batch {
+            Ok(batch) if batch.facts.is_empty() => return,
+            Ok(batch) => self.say(batch).map_err(|why| format!("{why:?}")),
+            Err(why) => Err(why),
         };
-        facts.push(Fact::Limb(settings.definition(id, &name)));
-        id
+        if let Err(why) = refused {
+            errln!("harness-brain: the role files: {why}");
+        }
     }
 
     /// Run until a signal has shut the brain down. The root's result is
@@ -508,9 +403,9 @@ impl Brain {
 
     // Limbs.
 
-    /// Attach to a plugin limb, starting it if it is not running: it says
-    /// hello once it is ready, which may take a while (a clone to make).
-    /// Not while a link to it is made or being made, nor soon after the
+    /// Attach to a limb on a machine, starting it if it is not running (a
+    /// limb from before limbs were per machine only if it is): it says
+    /// hello once it is ready. Not while a link to it is made or being made, nor soon after the
     /// brain failed to reach it, nor while the brain shuts down.
     fn connect(&mut self, limb: LimbId) {
         let recently = |at: &Instant| at.elapsed() < RESTART;
@@ -521,20 +416,13 @@ impl Brain {
         {
             return;
         }
-        let definition = self.state().limb(limb).expect("a limb to connect").clone();
-        match &definition.kind {
-            LimbKind::Plugin {
-                host: Host::Local, ..
-            } => {}
-            LimbKind::Plugin {
-                host: Host::Ssh { destination },
-                ..
-            } => {
-                let why = format!("on {destination}: limbs on other machines are not built yet");
-                return self.unreached(limb, why);
-            }
-            // Hosted in the brain's own process at launch.
-            _ => return,
+        // The brain's own sets run in its own process.
+        let Some((host, existing)) = on_a_machine(self.state(), limb) else {
+            return;
+        };
+        if let Host::Ssh { destination } = host {
+            let why = format!("on {destination}: limbs on other machines are not built yet");
+            return self.unreached(limb, why);
         }
         let conn = self.attached;
         self.attached += 1;
@@ -542,7 +430,7 @@ impl Brain {
         let said = move |conn, said| {
             let _ = events.send(Event::Link(conn, said));
         };
-        match Process::attach(&definition, conn, said) {
+        match Process::attach(limb, existing, conn, said) {
             Ok(process) => {
                 self.limbs.insert(limb, process);
             }
@@ -593,8 +481,8 @@ impl Brain {
             replica,
             build,
         } = hello;
-        if self.state().limb(limb).is_none_or(|l| l.kind.is_brains()) {
-            return errln!("a link said it is limb {limb}, which is no plugin limb here");
+        if on_a_machine(self.state(), limb).is_none() {
+            return errln!("a link said it is limb {limb}, which is no limb on a machine here");
         }
         let known = self.state().connected(limb).map(|(p, _)| p) == Some(replica);
         let unsaid = (!known).then_some(Reach::Connected {
@@ -650,25 +538,33 @@ impl Brain {
         });
     }
 
-    /// What a limb tells a root of `task`: the meta limb is described per
-    /// environment, a plugin as it last said.
-    fn description(&self, task: &Task, limb: LimbId) -> Option<Description> {
-        if limb == self.web {
-            return Some(web::description());
-        }
-        if limb != self.meta {
-            return self.state().described(limb).map(|d| d.description.clone());
-        }
+    /// The tool set `name` as `limb` gives it to a root of `task`: the
+    /// brain's own as its code says, `meta` for the task's role; any other
+    /// as its limb last described it. `None` for a set its limb has not
+    /// described.
+    fn tool_set(&self, task: &Task, name: &str, limb: LimbId) -> Option<ToolSet> {
         let state = self.state();
-        let env = state.environment(task.environment)?;
-        let roles: Vec<(&str, &str)> = env
-            .starts
-            .iter()
-            .filter_map(|e| state.environment(*e))
-            .map(|e| (e.name.as_str(), e.description.as_str()))
-            .collect();
-        let member = matches!(task.scope, Scope::Spawn(_));
-        Some(meta::description(self.meta, &roles, member))
+        if limb != self.brain {
+            return state.described(limb)?.description.set(name).cloned();
+        }
+        Some(match name {
+            meta::SET => {
+                let role = state.role(task.role)?;
+                let roles: Vec<(&str, &str)> = (role.starts.iter())
+                    .filter_map(|r| state.role(*r))
+                    .map(|r| (r.name.as_str(), r.description.as_str()))
+                    .collect();
+                let member = matches!(task.scope, Scope::Spawn(_));
+                meta::set(self.brain, &roles, member)
+            }
+            web::SET => web::set(),
+            // A set with nothing for an agent, such as `roles`.
+            name => ToolSet {
+                name: name.to_owned(),
+                instructions: Vec::new(),
+                tools: Vec::new(),
+            },
+        })
     }
 
     /// A starting task's first root, once every limb it reaches has
@@ -696,33 +592,42 @@ impl Brain {
         self.fact(Fact::Task(id, TaskEvent::Drain(Drain::Fail(why.into()))));
     }
 
-    /// A new root for the task from its environment's current version and
-    /// its limbs' descriptions, with the bytes it names; `None` while a limb
-    /// has not described itself.
+    /// A new root for the task from its role's current version, its tool
+    /// sets as their limbs describe them and its working directory's
+    /// instructions, with the bytes it names; `None` while a limb has not
+    /// described a set or the directory is not ready.
     fn start_of(&self, id: TaskId) -> Option<Result<(TaskStart, Vec<Bytes>), String>> {
-        let task = self.state().task(id).expect("a task to root");
-        let env = self
-            .state()
-            .environment(task.environment)
-            .expect("the task's environment");
-        let mut described = Vec::new();
-        for limb in self.state().limbs_of(task) {
-            described.push((limb, self.description(task, limb)?));
+        let state = self.state();
+        let task = state.task(id)?;
+        let Some(role) = state.role(task.role) else {
+            return Some(Err(format!("its role {} is not defined", task.role)));
+        };
+        let mut sets = Vec::new();
+        for (name, limb) in state.sets_of(task) {
+            sets.push((limb, self.tool_set(task, &name, limb)?));
         }
-        let refs: Vec<(LimbId, &Description)> = described.iter().map(|(l, d)| (*l, d)).collect();
-        let role = String::from_utf8_lossy(&self.value(env.role)).into_owned();
+        let refs: Vec<(LimbId, &ToolSet)> = sets.iter().map(|(l, s)| (*l, s)).collect();
+        let workdir = match state.workdir(task) {
+            None => Vec::new(),
+            Some(w) => match &state.prepared(w.limb, &w.dir)?.prepared {
+                Prepared::Ready { instructions } => instructions.clone(),
+                Prepared::Failed { .. } => return None,
+            },
+        };
+        let prompt = String::from_utf8_lossy(&self.value(role.prompt)).into_owned();
         Some(
             render::root(
                 harness_provider::IDENTITY,
-                task.tuning.model(env),
-                &role,
+                task.tuning.model(role),
+                &prompt,
                 &refs,
+                &workdir,
             )
             .map(|new| {
                 let start = TaskStart {
                     root: new.root,
                     binding: new.binding,
-                    observes: env.source.iter().cloned().chain(new.observes).collect(),
+                    observes: role.source.iter().cloned().chain(new.observes).collect(),
                     awaits: Vec::new(),
                 };
                 (start, new.values)
@@ -1073,12 +978,16 @@ impl Brain {
     fn dispatch(&mut self, id: CallId) {
         let record = self.state().call(id).expect("a call to dispatch");
         let call = record.call.clone();
-        let limb = record.limb.expect("a routed call");
-        if limb == self.meta {
-            return self.spawn(id, &call);
-        }
-        if limb == self.web {
-            return self.read_usage(id, &call);
+        let Some(limb) = record.limb else {
+            return self.fail_call(id, "The harness routed this call nowhere.");
+        };
+        // The brain's own sets are told apart by tool name: Max's reading of
+        // the plan's usage, and every other is `meta`'s.
+        if self.state().resolve(limb) == Some(self.brain) {
+            return match call.tool.as_str() {
+                web::USAGE => self.read_usage(id, &call),
+                _ => self.spawn(id, &call),
+            };
         }
         // The limb runs it from its row.
         self.fact(Fact::Call(id, CallEvent::Dispatched));
@@ -1088,8 +997,8 @@ impl Brain {
     /// request runs, and settle it when it reports. It only reads, so it is
     /// not stopped at shutdown: a later brain runs it again.
     fn read_usage(&mut self, id: CallId, call: &Call) {
-        if call.tool != web::USAGE {
-            let said = format!("The provider offers Max no tool `{}`.", call.tool);
+        if !matches!(call.caller, Caller::Max { .. }) {
+            let said = format!("The harness offers agents no tool `{}`.", call.tool);
             return self.fail_call(id, &said);
         }
         self.fact(Fact::Call(id, CallEvent::Dispatched));
@@ -1118,8 +1027,8 @@ impl Brain {
     /// dispatch, or it fails at once with nothing created. An `add_sibling`
     /// settles in that batch too.
     fn spawn(&mut self, id: CallId, call: &Call) {
-        // The state lets Max call any tool of a limb the brain runs, and
-        // the meta limb offers him none.
+        // The state lets Max call any tool of the brain's, and `meta`
+        // offers him none.
         let Caller::Agent { task: parent, .. } = call.caller else {
             let said = format!("The harness offers Max no tool `{}`.", call.tool);
             return self.fail_call(id, &said);
@@ -1158,7 +1067,7 @@ Carry on with your next step, or, if your work is done, call `compact_and_report
         } else if call.tool == meta::ATTACH {
             meta::attach(self.state(), &|v| self.value(v), &parent, &input)
         } else if call.tool == meta::BACKGROUND {
-            meta::background_call(self.state(), &parent, id, self.meta, &input).map(
+            meta::background_call(self.state(), &parent, id, self.brain, &input).map(
                 |(started, input)| {
                     let said = words(&format!(
                         "Started `{}` in the background: its result comes to you as a message when it settles, \
@@ -1254,8 +1163,8 @@ and you cannot finish until it has.",
         ))
     }
 
-    /// The facts creating a meta call's members, with a limb for each new
-    /// clone, appended to `batch`; their names.
+    /// The facts creating a meta call's members, appended to `batch`; their
+    /// names.
     fn members(
         &self,
         call: CallId,
@@ -1302,15 +1211,13 @@ and you cannot finish until it has.",
                     base,
                     from,
                 } => {
-                    let own = state
-                        .environment(parent.environment)
-                        .expect("a task's environment");
+                    let own = state.role(parent.role).ok_or("your role is not defined")?;
                     let starts: Vec<_> = state
-                        .environments()
-                        .filter(|e| own.starts.contains(&e.id))
+                        .roles()
+                        .filter(|r| own.starts.contains(&r.id))
                         .collect();
-                    let env = *starts.iter().find(|e| e.name == role).ok_or_else(|| {
-                        let names: Vec<&str> = starts.iter().map(|e| e.name.as_str()).collect();
+                    let role = *starts.iter().find(|r| r.name == role).ok_or_else(|| {
+                        let names: Vec<&str> = starts.iter().map(|r| r.name.as_str()).collect();
                         let can = match names.is_empty() {
                             true => "only forks of itself".to_owned(),
                             false => names.join(", "),
@@ -1320,39 +1227,14 @@ and you cannot finish until it has.",
                             own.name
                         )
                     })?;
-                    let mut places = BTreeMap::new();
-                    for kind in &env.places {
-                        // A workspace limb is named by its directory.
-                        let own = parent
-                            .places
-                            .get(kind)
-                            .and_then(|l| state.limb(*l))
-                            .map(|l| PathBuf::from(&l.name));
-                        let dir = match (own, &from) {
-                            (Some(own), Some(from)) => own.join(from),
-                            (own, from) => own
-                                .or(from.as_ref().map(PathBuf::from))
-                                .ok_or(format!("you have no {kind} to share or clone from"))?,
-                        };
-                        // Without a branch it works where it is pointed, as a fork does.
-                        let (dir, clone) = match &branch {
-                            None => (dir, None),
-                            Some(branch) => {
-                                let (from, dir) = clone_of(&dir, branch)?;
-                                let clone = Clone {
-                                    from,
-                                    branch: branch.clone(),
-                                    base: base.clone(),
-                                };
-                                (dir, Some(clone))
-                            }
-                        };
-                        let limb = self.workspace_limb(&dir, clone, at, &mut batch.facts);
-                        places.insert(kind.clone(), limb);
-                    }
+                    let workdir = match role.works_in_a_directory() {
+                        true => Some(self.workdir(parent, from, branch, base)?),
+                        false => None,
+                    };
                     Origin::Fresh {
-                        environment: env.id,
-                        places,
+                        role: role.id,
+                        workdir,
+                        places: BTreeMap::new(),
                     }
                 }
             };
@@ -1380,6 +1262,42 @@ and you cannot finish until it has.",
         }
         batch.values.extend(brief);
         Ok(names)
+    }
+
+    /// A fresh member's working directory: its parent's, the directory
+    /// `from` names under it (or on the brain's machine, for a parent with
+    /// none), or with a `branch`, a clone of its own of that repository,
+    /// beside it, on that branch, made from `base`.
+    fn workdir(
+        &self,
+        parent: &Task,
+        from: Option<String>,
+        branch: Option<String>,
+        base: String,
+    ) -> Result<Workdir, String> {
+        let (limb, dir) = match (self.state().workdir(parent), from) {
+            (Some(own), Some(from)) => (own.limb, own.dir.join(from)),
+            (Some(own), None) => (own.limb, own.dir),
+            (None, Some(from)) => (self.local, PathBuf::from(from)),
+            (None, None) => {
+                return Err("you have no working directory to share or clone from".into());
+            }
+        };
+        let dir = normal(&dir);
+        // Without a branch it works where it is pointed, as a fork does.
+        let Some(name) = branch else {
+            return Ok(Workdir {
+                limb,
+                dir,
+                branch: None,
+            });
+        };
+        let (from, dir) = clone_of(&dir, &name)?;
+        Ok(Workdir {
+            limb,
+            dir: normal(&dir),
+            branch: Some(Branch { from, name, base }),
+        })
     }
 
     /// Every member of a spawn's scope is done: settle it with their results,
@@ -1535,6 +1453,7 @@ and you cannot finish until it has.",
             Event::Finished(request, finished) => self.finished(request, finished),
             Event::Usage(call, reading) => self.read(call, reading),
             Event::Signal(signal) => self.signal(signal),
+            Event::Roles(read) => self.roles(read),
             Event::Tab(record) => {
                 // A tab new to the brain is one of Max's faces.
                 let replica = record.at.replica;
@@ -1697,7 +1616,7 @@ and you cannot finish until it has.",
                 .state()
                 .call(*id)
                 .and_then(|c| c.limb)
-                .is_some_and(|l| l != self.meta)
+                .is_some_and(|l| self.state().resolve(l) != Some(self.brain))
         {
             let input = String::from_utf8_lossy(&self.value(call.input))
                 .chars()
@@ -1758,6 +1677,19 @@ and you cannot finish until it has.",
     }
 }
 
+/// Where `limb` runs, if it is a process on a machine, and whether it is a
+/// limb from before limbs were per machine.
+fn on_a_machine(state: &State, limb: LimbId) -> Option<(Host, bool)> {
+    match (state.limb(limb), state.legacy(limb)) {
+        (Some(now), _) => (now.host != Host::Brain).then(|| (now.host.clone(), false)),
+        (None, Some(old)) => match &old.kind {
+            LimbKind::Plugin { host, .. } if *host != Host::Brain => Some((host.clone(), true)),
+            _ => None,
+        },
+        (None, None) => None,
+    }
+}
+
 /// What a fact starts running, with live progress to show.
 fn starts(fact: &Fact) -> Option<Running> {
     match fact {
@@ -1795,11 +1727,9 @@ pub fn next(
     unanswered: bool,
 ) -> Next {
     let head = task.head().expect("a task that sends has a context");
-    let env = state
-        .environment(task.environment)
-        .expect("the task's environment");
-    let model = task.tuning.model(env).to_owned();
-    let params = env.params;
+    let role = state.role(task.role).expect("the task's role");
+    let model = task.tuning.model(role).to_owned();
+    let params = role.params;
     let calls = || {
         state
             .response(head)
@@ -1846,7 +1776,7 @@ pub fn next(
         appends.push(user(render::blocks(&turn.blocks), &mut values));
     }
     renders.extend(turn.renders);
-    // Max's effort, when it is not the environment's, as parameters of
+    // Max's effort, when it is not the role's, as parameters of
     // its own.
     let params = match task.tuning.effort {
         Some(effort) => {
@@ -1930,41 +1860,16 @@ pub fn now() -> Timestamp {
     )
 }
 
-/// The executable the brain starts for each kind of plugin limb: each
-/// `harness-limb-<kind>` beside its own, by digest. A limb connected with
-/// other bytes is superseded ([`harness_core::state::State::superseded`]).
+/// The executable the brain starts for a limb on a machine: the
+/// `harness-limb` beside its own, by digest, as [`Launched::limbs`]'s
+/// `limb`. A limb connected with other bytes is superseded
+/// ([`harness_core::state::State::superseded`]).
 fn limb_builds() -> BTreeMap<String, BuildId> {
-    let Some(dir) = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(Path::to_path_buf))
-    else {
-        return BTreeMap::new();
-    };
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return BTreeMap::new();
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            // Not cargo's `.d` files beside them in a target directory.
-            let kind = name
-                .strip_prefix("harness-limb-")
-                .filter(|k| !k.contains('.'))?;
-            let kind = kind.to_owned();
-            let bytes = std::fs::read(entry.path()).ok()?;
-            Some((kind, BuildId::of(&bytes)))
-        })
-        .collect()
-}
-
-/// A new replica, for a face or a co-hosted limb this launch: 64 random bits.
-fn mint_replica() -> ReplicaId {
-    let mut bytes = [0; 8];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .expect("/dev/urandom reads");
-    ReplicaId(u64::from_le_bytes(bytes))
+    let limb = std::env::current_exe().map(|e| e.with_file_name("harness-limb"));
+    match limb.and_then(std::fs::read) {
+        Ok(bytes) => BTreeMap::from([("limb".to_owned(), BuildId::of(&bytes))]),
+        Err(_) => BTreeMap::new(),
+    }
 }
 
 /// A new clone for an agent started from a workspace at `dir`: cloned from
@@ -2040,27 +1945,114 @@ fn round(task: &Task, except: Option<CallId>) -> Vec<CallId> {
         .collect()
 }
 
-/// A new version of the limb `found`, if its settings are not `wanted`
-/// ([`reconfigured`]).
-fn changed<S: PartialEq + serde::Serialize>(
-    state: &State,
-    found: Option<LimbId>,
-    wanted: &S,
-    of: impl Fn(&Limb) -> Option<S>,
-) -> Option<Fact> {
-    let limb = state.limb(found?)?;
-    (of(limb).as_ref() != Some(wanted)).then(|| Fact::Limb(reconfigured(limb, wanted)))
+/// The id of `limb`, stating it in `facts` if it is new or differs from
+/// what the state holds of it.
+fn define(state: &State, facts: &mut Vec<Fact>, limb: Limb) -> LimbId {
+    if state.limb(limb.id) != Some(&limb) {
+        facts.push(Fact::Limb(Defined::Limb(limb.clone())));
+    }
+    limb.id
 }
 
-/// A new version of `limb` with `settings` as its config: the same kind on
-/// the same host as the version recorded.
-fn reconfigured(limb: &Limb, settings: &impl serde::Serialize) -> Limb {
-    let mut limb = limb.clone();
-    if let LimbKind::Plugin { config, .. } = &mut limb.kind {
-        *config = serde_json::to_string(settings).expect("settings are JSON");
+/// The brain's own limb, with the tool sets it offers: `meta`, `web`, and
+/// `roles` over the role files in `roles`.
+fn brain_limb(id: LimbId, roles: Option<&Path>) -> Limb {
+    let mut offers = vec![offer(meta::SET, "{}"), offer(web::SET, "{}")];
+    offers.extend(roles.map(|dir| {
+        roles::Settings {
+            dir: dir.to_path_buf(),
+        }
+        .offer()
+    }));
+    Limb {
+        id,
+        name: "brain".into(),
+        host: Host::Brain,
+        offers,
     }
-    limb
 }
+
+/// The limb on the brain's machine, as its user, named for the machine,
+/// with the tool sets it offers and their settings: `workspace`; `user`
+/// over Max's config directory, with the skills `skills.txt` beside the
+/// role files names; `browser`, the one `$HARNESS_BROWSER` names (unset,
+/// as `found` had it); and `builds`, relaunching the brain's own service.
+fn local_limb(id: LimbId, found: Option<&Limb>, roles: Option<&Path>) -> Result<Limb, String> {
+    let home = std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?;
+    let mut user = serde_json::json!({ "dir": PathBuf::from(home).join(".claude") });
+    if let Some(dir) = roles {
+        user["skills"] = serde_json::json!(dir.join("skills.txt"));
+    }
+    let browser = match std::env::var("HARNESS_BROWSER") {
+        Ok(word) => browser(&word).to_string(),
+        Err(_) => (found.and_then(|l| l.offer("browser")))
+            .map_or_else(|| "{}".to_owned(), |o| o.config.clone()),
+    };
+    let builds = match unit() {
+        Some(unit) => serde_json::json!({ "unit": unit }).to_string(),
+        None => "{}".to_owned(),
+    };
+    Ok(Limb {
+        id,
+        name: found.map_or_else(hostname, |l| l.name.clone()),
+        host: Host::Local,
+        offers: vec![
+            offer(WORKSPACE, "{}"),
+            offer("user", &user.to_string()),
+            offer("browser", &browser),
+            offer("builds", &builds),
+        ],
+    })
+}
+
+/// The `browser` set's settings from one word: an endpoint to attach to
+/// (`host:port`, `http://…`, `ws://…`), or else the path of a browser to
+/// launch. Empty for the limb's default.
+fn browser(word: &str) -> serde_json::Value {
+    let word = word.trim();
+    let endpoint = word.starts_with("ws://")
+        || word.starts_with("http://")
+        || (word.rsplit_once(':')).is_some_and(|(_, port)| port.parse::<u16>().is_ok());
+    match word {
+        "" => serde_json::json!({}),
+        _ if endpoint => serde_json::json!({ "endpoint": word }),
+        _ => serde_json::json!({ "chrome": word }),
+    }
+}
+
+fn offer(set: &str, config: &str) -> Offer {
+    Offer {
+        set: set.into(),
+        config: config.into(),
+    }
+}
+
+/// The brain's systemd user unit, `harness-NAME.service`: the unit whose
+/// cgroup this process is in, if that is a brain's. `None` for a brain no
+/// unit runs, such as a test brain, which cannot be relaunched.
+fn unit() -> Option<String> {
+    let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    cgroup
+        .lines()
+        .filter_map(|l| l.rsplit('/').next())
+        .find(|u| u.starts_with("harness-") && u.ends_with(".service"))
+        .map(String::from)
+}
+
+/// This machine's name, as the limb on it is called.
+fn hostname() -> String {
+    let mut name = [0u8; 256];
+    // SAFETY: `name` outlives the call, and its length is passed.
+    let failed = unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) } != 0;
+    let end = name.iter().position(|b| *b == 0).unwrap_or(name.len());
+    match String::from_utf8_lossy(&name[..end]).into_owned() {
+        name if !failed && !name.is_empty() => name,
+        _ => "local".into(),
+    }
+}
+/// The environment variable that tells a brain the `relaunch` call that
+/// started it, which the `builds` set puts in its unit's environment.
+const RELAUNCHED_BY: &str = "HARNESS_RELAUNCHED_BY";
 
 /// How this launch came: [`Launch::Relaunched`] after a brain that shut
 /// down, or by the builds limb's `relaunch` call its unit's environment
@@ -2068,7 +2060,7 @@ fn reconfigured(limb: &Limb, settings: &impl serde::Serialize) -> Limb {
 /// before was killed); [`Launch::Started`] after a crash or on a new
 /// database.
 fn launch_how(state: &State) -> Launch {
-    let by = std::env::var(harness_limb_builds::RELAUNCHED_BY)
+    let by = std::env::var(RELAUNCHED_BY)
         .ok()
         .and_then(|call| call.parse().ok())
         .filter(|call| state.call(*call).is_some());

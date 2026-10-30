@@ -117,7 +117,7 @@ pub enum Entry {
 
 /// What leads every request of a context, fixed for its life.
 ///
-/// Changing the tools, the role or the environment's instructions needs a
+/// Changing the tools, the role or the tool sets' instructions needs a
 /// new root: "append or rebuild?" is the choice between a [`Message`] and a
 /// [`Root`], and a context whose instructions changed in place cannot be
 /// expressed. The model is not like them: the provider takes the same
@@ -130,13 +130,13 @@ pub enum Entry {
 /// `system` is the provider identity string the subscription requires.
 ///
 /// Which limb runs each tool is not here: it is the task's
-/// [`crate::environment::Binding`], made from the same descriptions as
-/// `tools` by [`crate::environment::Binding::new`].
+/// [`crate::role::Binding`], made from the same tool sets as
+/// `tools` by [`crate::role::Binding::new`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Root {
     pub model: String,
-    /// The exact `system` blocks: identity, the environment's role, its
-    /// limbs' instructions, the skill index.
+    /// The exact `system` blocks: identity, the role prompt, its tool sets'
+    /// and working directory's instructions, the skill index.
     pub system: ValueId,
     /// The exact `tools` array, including tools whose definitions defer
     /// them, so a later message can surface them without breaking the

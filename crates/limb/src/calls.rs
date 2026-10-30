@@ -1,7 +1,7 @@
-//! Running a kind's calls, each at most once.
+//! Running a limb's calls, each at most once.
 //!
 //! A call is run on its own thread, after the calls its task made before it
-//! on the same limb have ended: a model writes one response's tool uses in
+//! on the same limb have ended, whichever of its tool sets they went to: a model writes one response's tool uses in
 //! the order it means them to happen (write a file, then commit it), so
 //! they run in that order. Other tasks' calls run alongside.
 //!
@@ -24,14 +24,14 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use harness_core::call::{Caller, Outcome, Owner};
-use harness_core::environment::LimbKey;
 use harness_core::id::{CallId, TaskId};
+use harness_core::limb::LimbKey;
 use harness_core::value::Bytes;
 use harness_runtime::Cancel;
 
-use crate::{CallRow, Report, Rows, Voice, instant, lock};
+use crate::{CallRow, Report, Rows, Voice, guard, instant, lock};
 
-/// A kind's running calls, and its marks of those it started.
+/// A limb's running calls, and its marks of those it started.
 pub struct Calls {
     voice: Arc<Voice>,
     /// A file per call started and not yet known settled by the brain.
@@ -41,9 +41,7 @@ pub struct Calls {
     /// call ends, and the task's next call waits for that.
     latest: Mutex<HashMap<TaskId, PipeReader>>,
     /// Shutting down: no new call runs, and a stopped one says why.
-    shutting_down: AtomicBool,
-    /// Run when the last running call has ended.
-    idle: fn(),
+    shutting_down: Arc<AtomicBool>,
 }
 
 struct Running {
@@ -53,17 +51,16 @@ struct Running {
 }
 
 impl Calls {
-    /// The calls of a kind that says them through `voice`, marked in
-    /// `started`. `idle` runs each time no call is left running.
-    pub fn open(voice: Arc<Voice>, started: &Path, idle: fn()) -> io::Result<Calls> {
+    /// The calls of a limb that says them through `voice`, marked in
+    /// `started`.
+    pub fn open(voice: Arc<Voice>, started: &Path) -> io::Result<Calls> {
         fs::create_dir_all(started)?;
         Ok(Calls {
             voice,
             started: started.to_path_buf(),
             running: Arc::default(),
             latest: Mutex::default(),
-            shutting_down: AtomicBool::new(false),
-            idle,
+            shutting_down: Arc::default(),
         })
     }
 
@@ -72,7 +69,8 @@ impl Calls {
     /// passed to Max ([`Limit`]). `rerun`: running its tool again after an
     /// instance was cut off running it is the same as running it once.
     /// `run` runs it on its input, once the task's earlier calls have
-    /// ended, to the report and outcome it settles with.
+    /// ended, to the report and outcome it settles with; a panic in it
+    /// settles the call as failed, saying so.
     pub fn call(
         &self,
         row: CallRow,
@@ -86,6 +84,7 @@ impl Calls {
             stopping,
             owner,
             earlier,
+            ..
         } = row;
         let kept = owner == Some(Owner::Max) && matches!(call.caller, Caller::Background { .. });
         let voice = &self.voice;
@@ -148,20 +147,21 @@ impl Calls {
             let cancel = cancel.clone();
             let limit = limit.clone();
             let voice = voice.clone();
-            let idle = self.idle;
             let running = self.running.clone();
             thread::spawn(move || {
                 let outcome = match after(before, &cancel) {
-                    Ok(()) => run(&input, &cancel, &limit, &mut report),
+                    Ok(()) => match guard(|| run(&input, &cancel, &limit, &mut report)) {
+                        Ok(outcome) => outcome,
+                        Err(why) => {
+                            report = Report::new(Some(id));
+                            report.failed(&format!("The tool failed: {why}."))
+                        }
+                    },
                     Err(_) => Outcome::Interrupted { partial: None },
                 };
                 voice.settle(report, outcome);
                 drop(ended);
-                let mut running = lock(&running);
-                running.remove(&id);
-                if running.is_empty() {
-                    idle();
-                }
+                lock(&running).remove(&id);
             })
         };
         running.insert(
@@ -198,6 +198,11 @@ impl Calls {
 
     pub fn shutting_down(&self) -> bool {
         self.shutting_down.load(Ordering::SeqCst)
+    }
+
+    /// What says whether the limb is shutting down, for a running call.
+    pub fn shutting_down_flag(&self) -> Arc<AtomicBool> {
+        self.shutting_down.clone()
     }
 
     /// Stop every running call, each to be gone `within` from now, and run

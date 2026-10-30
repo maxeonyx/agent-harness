@@ -8,8 +8,8 @@ import { compose, drafts, giveBack, menu, newTuning, renderTune, say, takeWords 
 // ─── A new chat, in Max's own scope ───────────────────────────────────────
 // A double click on the ground, or +, opens a small card there on a chat
 // that does not exist yet: the same staging box as every chat, beside the
-// send its role and a field for each place that role names (a workspace's
-// is its directory), its draft and attachments kept like theirs. Sending
+// send its role and, for a role that works in a directory, a field for
+// its working directory on this machine, its draft and attachments kept like theirs. Sending
 // starts it: the words are its mandate, what is attached reaches it with
 // them, and the card becomes the chat where it is.
 export function buildNew() {
@@ -20,32 +20,32 @@ export function buildNew() {
   const picks = $(".picks", compose);
   if (!picks) return;
   const role = el("button", "pick"); role.type = "button"; role.id = "n-role"; role.title = "Its role";
-  role.value = role.textContent = drafts.get("new:role") || (view.environments.some((e) => e.name === "chat") ? "chat" : view.environments[0]?.name);
-  role.hidden = view.environments.length < 2;
-  const places = el("span");
-  places.style.display = "contents";
-  const fill = () => places.replaceChildren(...placesOf(role.value).flatMap(placeField));
-  role.onclick = () => menu(role, view.environments.map((e) => ({ v: e.name, name: e.name, on: e.name === role.value })), (name) => {
+  role.value = role.textContent = drafts.get("new:role") || (view.roles.some((r) => r.name === "chat") ? "chat" : view.roles[0]?.name);
+  role.hidden = view.roles.length < 2;
+  const dir = el("span");
+  dir.style.display = "contents";
+  const fill = () => dir.replaceChildren(...(roleNamed(role.value)?.workdir ? dirField() : []));
+  role.onclick = () => menu(role, view.roles.map((r) => ({ v: r.name, name: r.name, on: r.name === role.value })), (name) => {
     role.value = role.textContent = name;
     drafts.set("new:role", name); fill(); renderTune(null);
   });
   fill();
-  picks.replaceChildren(role, places);
+  picks.replaceChildren(role, dir);
   renderTune(null);
 }
-const newest = (place) => view.tasks.filter((t) => (t.scope ?? "Max") === "Max" && t.places?.[place])
-  .reduce((a, t) => !a || t.created.at > a.created.at ? t : a, null)?.places[place] || "";
-const placesOf = (role) => view.environments.find((e) => e.name === role)?.places || [];
-// A place's field: a workspace's is a directory, offered from those known,
-// and starting as the newest chat's, so a chat from a phone needs no typing.
-function placeField(place) {
-  const f = el("input", "pick place"); f.dataset.place = place;
-  f.placeholder = place === "workspace" ? "directory" : place; f.title = `Its ${place}`;
-  f.value = drafts.get(`new:${place}`) || newest(place);
-  f.oninput = () => drafts.set(`new:${place}`, f.value);
-  if (place !== "workspace") return [f];
-  const list = el("datalist"); list.id = `n-${place}`;
-  list.append(...view.workspaces.map((w) => Object.assign(el("option"), { value: w.dir })));
+const roleNamed = (name) => view.roles.find((r) => r.name === name);
+const newest = () => view.tasks.filter((t) => (t.scope ?? "Max") === "Max" && t.workdir)
+  .reduce((a, t) => !a || t.created.at > a.created.at ? t : a, null)?.workdir || "";
+// The working directory's field: offered from the directories tasks work
+// in on this machine, and starting as the newest chat's, so a chat from a
+// phone needs no typing.
+function dirField() {
+  const f = el("input", "pick workdir"); f.id = "n-workdir";
+  f.placeholder = "directory"; f.title = "Its working directory";
+  f.value = drafts.get("new:workdir") || newest();
+  f.oninput = () => drafts.set("new:workdir", f.value);
+  const list = el("datalist"); list.id = "n-workdirs";
+  list.append(...view.workspaces.filter((w) => w.limb === view.local).map((w) => Object.assign(el("option"), { value: w.dir })));
   f.setAttribute("list", list.id);
   return [f, list];
 }
@@ -66,24 +66,16 @@ const nameFrom = (text) => {
   return words.length > 40 ? `${words.slice(0, 39)}…` : words;
 };
 export async function startNew(text, files) {
-  const env = view.environments.find((e) => e.name === $("#n-role").value);
-  if (!env) return say("Choose a role", true);
-  const given = Object.fromEntries([...compose.querySelectorAll(".place")].map((f) => [f.dataset.place, f.value.trim()]));
-  const missing = env.places.find((p) => !given[p]);
-  if (missing) return say(`It needs its ${missing}`, true);
+  const role = roleNamed($("#n-role").value);
+  if (!role) return say("Choose a role", true);
+  const dir = $("#n-workdir")?.value.trim();
+  if (role.workdir && !dir) return say("It needs its working directory", true);
+  if (role.workdir && !view.local) return say("This brain has no limb on its machine", true);
   if (!text.trim()) return say("Write what it is for", true);
   takeWords(NEW);
-  const why = await start((next, out) => {
-    const places = {};
-    for (const place of env.places) {
-      const name = given[place];
-      const known = place === "workspace" && view.workspaces.find((w) => w.dir === name);
-      const limb = known ? known.id : next();
-      if (!known) out.push({ Limb: { id: limb, name, kind: { Plugin: { kind: place, config: JSON.stringify({ dir: name }) } } } });
-      places[place] = limb;
-    }
-    return { name: nameFrom(text), scope: "Max", origin: { Fresh: { environment: env.id, places } }, tuning: newTuning() };
-  }, text, files);
+  const workdir = role.workdir ? { limb: view.local, dir } : undefined;
+  const fresh = { Fresh: { role: role.id, workdir } };
+  const why = await start({ name: nameFrom(text), scope: "Max", origin: fresh, tuning: newTuning() }, text, files);
   if (why) { giveBack(NEW, text, files); return say(`Not started: ${why}`, true); }
 }
 

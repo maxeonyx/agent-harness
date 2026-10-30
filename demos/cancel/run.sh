@@ -18,7 +18,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 drive() { node dev/drive.mjs "$1" --brain "cancel-$2" "${@:3}"; }
-cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example act
+cargo build -q --release -p harness-brain -p harness-limb-machine --bins --example act
 dir=target/cancel-demo
 brain=target/release/harness-brain
 model=${MODEL:-scripted}

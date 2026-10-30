@@ -259,14 +259,12 @@ function renderControls(t) {
 // attached delivered with them. A new chat, a finished chat continued, or
 // an aside: a fork of a task waiting on agents it started, to talk with
 // while they work, as one more of them. What the record creates is named
-// by its time and the fact that creates it; `how` may make facts of its
-// own first (a new chat's limbs), and `after` rides along.
-export async function start(how, text, files, after = []) {
+// by its time and the fact that creates it; `after` rides along.
+export async function start(h, text, files, after = []) {
   const mandate = digest(text), words = files.length ? JSON.stringify(files.map((a) => a.block)) : null;
   let id;
   const why = await act((at) => {
     const out = [], next = () => `${at}.${out.length}`;
-    const h = typeof how === "function" ? how(next, out) : how;
     id = next();
     out.push({ Task: [id, { Created: {
       name: h.name, by: null, scope: h.scope, origin: h.origin,

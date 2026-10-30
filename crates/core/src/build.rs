@@ -13,9 +13,9 @@
 //! the provider's cache still hits, and the tool definitions its root
 //! declared are in those bytes.
 //!
-//! **Relaunching** is an act of the builds limb, a plugin limb of the
-//! brain's machine whose resource is the brain's own service. An agent whose
-//! environment holds it calls its `relaunch` tool on a clone; the limb
+//! **Relaunching** is an act of the `builds` tool set, offered by the limb
+//! of the brain's machine, whose resource is the brain's own service. An
+//! agent whose role holds it calls its `relaunch` tool on a clone; the limb
 //! builds and installs that clone's commit and proves the new build beside
 //! the running brain without touching it: on a copy of the live database
 //! it folds every record, renders every live session's next request and
@@ -81,7 +81,7 @@ use crate::model_call::{Ending, ModelCallEvent};
 ///
 /// **Concept.** A version of the code, as a value, so a record of what ran
 /// names bytes, not a version string two different builds can share. The
-/// brain's [`Launched`] names its own; a limb's [`crate::environment::Hello`]
+/// brain's [`Launched`] names its own; a limb's [`crate::limb::Hello`]
 /// names the one it runs, and the two are compared only to the executable
 /// of the same kind the brain would start.
 ///

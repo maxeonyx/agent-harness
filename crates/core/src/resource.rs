@@ -7,7 +7,7 @@ use crate::id::{CallId, Digest, LimbId, ValueId};
 /// A changing thing owned by a limb, which a context can hold a copy of.
 ///
 /// **Concept.** A file, a skill, the `AGENTS.md` hierarchy, a tool's schema,
-/// an environment's role file ([`crate::environment::Environment::source`]),
+/// a role's file ([`crate::role::Role::source`]),
 /// Max's presence, Max's queue, a limb's running instance, a test watcher's
 /// last run, a page's event log. An [`Observation`] says "this context embodies
 /// `resource` at `version`"; it comes from the root a task was given
@@ -24,15 +24,15 @@ use crate::id::{CallId, Digest, LimbId, ValueId};
 /// content the owning limb attached to the change when looking again is not
 /// how the context should learn it ([`Change::content`]).
 ///
-/// This is also how an environment speaks between turns. A standing task
-/// listening for its environment is woken by a change to anything its
+/// This is also how the world speaks between turns. A standing task
+/// listening is woken by a change to anything its
 /// context embodies, and any task by a change its limb calls news
 /// ([`Change::wakes`]); its next request is that notice: the attention
 /// scheduler embodies Max's queue, so a change to the queue is its next
 /// turn, and changes that arrive while it thinks fold into the one after.
 ///
-/// Keyed by limb, not environment, so a write through one environment is
-/// seen by every context that read the same thing through another. Kinds
+/// Keyed by limb, not role, so a write through one role is seen by every
+/// context that read the same thing through another. Kinds
 /// are the owning limb's words, as limb kinds are: the core reads none of
 /// them.
 ///

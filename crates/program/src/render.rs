@@ -5,11 +5,12 @@
 use harness_core::call::{Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
-use harness_core::environment::{Binding, Description, Tool};
 use harness_core::fact::Author;
 use harness_core::id::{CallId, Digest, LimbId, Timestamp, ValueId};
+use harness_core::limb::{Instruction, Tool, ToolSet};
 use harness_core::model_call::{Ending, Stop};
 use harness_core::resource::Observation;
+use harness_core::role::Binding;
 use harness_core::state::{Delivered, Stale, State};
 use harness_core::task::{Abandoner, Draining, Input, Origin, Scope, Task};
 use harness_core::value::Bytes;
@@ -46,9 +47,9 @@ fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> St
     }
 }
 
-/// A new root in an environment: the identity, the role, then each limb's
-/// instructions in `system`; the tools its binding routes, each taking a
-/// [`summary`](summarised) last.
+/// A new root of a role: the identity, the role prompt, each tool set's
+/// instructions, then the working directory's, in `system`; the tools its
+/// binding routes, each taking a [`summary`](summarised) last.
 pub struct NewRoot {
     pub root: Root,
     pub binding: Binding,
@@ -62,31 +63,31 @@ pub fn root(
     identity: &str,
     model: &str,
     role: &str,
-    limbs: &[(LimbId, &Description)],
+    sets: &[(LimbId, &ToolSet)],
+    workdir: &[Instruction],
 ) -> Result<NewRoot, String> {
     let mut system = vec![text(identity), text(role), text(SUMMARY)];
     let mut observes = Vec::new();
-    for (_, description) in limbs {
-        for instruction in &description.instructions {
-            system.push(text(&instruction.text));
-            observes.push(instruction.observes.clone());
-        }
+    let instructions = sets.iter().flat_map(|(_, set)| &set.instructions);
+    for instruction in instructions.chain(workdir) {
+        system.push(text(&instruction.text));
+        observes.push(instruction.observes.clone());
     }
-    let limbs: Vec<(LimbId, Description)> = limbs
+    let sets: Vec<(LimbId, ToolSet)> = sets
         .iter()
-        .map(|(limb, description)| {
-            let tools = description.tools.iter().map(summarised).collect();
+        .map(|(limb, set)| {
+            let tools = set.tools.iter().map(summarised).collect();
             (
                 *limb,
-                Description {
+                ToolSet {
                     tools,
-                    ..(*description).clone()
+                    ..(*set).clone()
                 },
             )
         })
         .collect();
-    let limbs: Vec<(LimbId, &Description)> = limbs.iter().map(|(l, d)| (*l, d)).collect();
-    let (binding, tools) = Binding::new(&limbs).map_err(|d| d.to_string())?;
+    let sets: Vec<(LimbId, &ToolSet)> = sets.iter().map(|(l, s)| (*l, s)).collect();
+    let (binding, tools) = Binding::new(&sets).map_err(|d| d.to_string())?;
     let system = blocks(&system);
     let tools = Bytes::from(tools);
     Ok(NewRoot {

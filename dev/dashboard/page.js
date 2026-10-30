@@ -667,9 +667,9 @@ function brainCard(b) {
     h("p", {}, "Build ", buildLink(b, "unknown"), b.dirty ? " +dirty" : "",
       b.behind === null ? "" : b.behind > 0 ? h("span.warn", {}, `, ${b.behind} commits behind main`) : ", up to date with main", ` · ${plural(b.tasks, "task")} in all`),
     h("h4", {}, `Waiting on Max ${b.waiting.length}`),
-    h("ul.compact", {}, b.waiting.map((w) => h("li", {}, h("a", { href: faceUrl(b, w.id), target: "_blank" }, w.name ?? w.id), h("small", {}, ` ${w.environment ?? ""}`)))),
+    h("ul.compact", {}, b.waiting.map((w) => h("li", {}, h("a", { href: faceUrl(b, w.id), target: "_blank" }, w.name ?? w.id), h("small", {}, ` ${w.role ?? ""}`)))),
     h("h4", {}, `Working ${b.working.length}`),
-    h("ul.compact", {}, b.working.map((w) => h("li", {}, h("a", { href: faceUrl(b, w.id), target: "_blank" }, w.name ?? w.id), h("small", {}, ` ${w.environment ?? ""} · ${w.kind ?? "running"}`)))));
+    h("ul.compact", {}, b.working.map((w) => h("li", {}, h("a", { href: faceUrl(b, w.id), target: "_blank" }, w.name ?? w.id), h("small", {}, ` ${w.role ?? ""} · ${w.kind ?? "running"}`)))));
 }
 
 function table(head, rows) {

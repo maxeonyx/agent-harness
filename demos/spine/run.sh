@@ -3,7 +3,7 @@
 # wss, and three brain restarts; README.md says what each part shows.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -q --release -p harness-brain -p harness-limb-workspace --bins --example spine
+cargo build -q --release -p harness-brain -p harness-limb-machine --bins --example spine
 # Everything the demo starts carries this mark; its limbs outlive their
 # brains, so what is left is ended when it finishes.
 mark=HARNESS_OWNER_spine-demo-$$

@@ -368,8 +368,8 @@ async function brains(main) {
       const waiting = new Set((v.rows.queue?.Queue ?? []).map((q) => q.task));
       return {
         ...b, commit, dirty: source.endsWith("+dirty"), behind,
-        waiting: tasks.filter((t) => waiting.has(t.id)).map((t) => ({ id: t.id, name: t.name, environment: t.environment })),
-        working: tasks.filter((t) => !["done", "max"].includes(t.waiting?.kind)).map((t) => ({ id: t.id, name: t.name, environment: t.environment, kind: t.waiting?.kind ?? null })),
+        waiting: tasks.filter((t) => waiting.has(t.id)).map((t) => ({ id: t.id, name: t.name, role: t.role })),
+        working: tasks.filter((t) => !["done", "max"].includes(t.waiting?.kind)).map((t) => ({ id: t.id, name: t.name, role: t.role, kind: t.waiting?.kind ?? null })),
         tasks: tasks.length,
       };
     } catch (e) {

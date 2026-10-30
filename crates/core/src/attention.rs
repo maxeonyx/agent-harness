@@ -21,8 +21,8 @@ use crate::id::{TaskId, Timestamp};
 /// Max finishes one, and a slow, failed or usage-limited scheduler degrades
 /// to a plain first-in first-out queue marked unranked.
 ///
-/// The scheduler is an ordinary standing task whose environment holds only
-/// the [attention limb](crate::environment::LimbKind::Attention), which
+/// The scheduler is an ordinary standing task whose role holds only the
+/// brain's `attention` tool set, which
 /// shows it the queue (a [resource](crate::resource::ResourceKey) it
 /// observes, so a change to the queue wakes it, and changes that arrive
 /// while it thinks fold into its next turn) and gives it one effect: a new

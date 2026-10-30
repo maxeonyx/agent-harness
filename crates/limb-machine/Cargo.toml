@@ -1,0 +1,27 @@
+[package]
+name = "harness-limb-machine"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+description = "harness-limb: the one limb process per brain, machine and user, with every tool set; and relaunching a brain by hand."
+
+[dependencies]
+harness-limb = { path = "../limb" }
+harness-limb-browser = { path = "../limb-browser" }
+harness-limb-builds = { path = "../limb-builds" }
+harness-limb-workspace = { path = "../limb-workspace" }
+
+[dev-dependencies]
+harness-core = { path = "../core" }
+harness-substrate = { path = "../substrate" }
+serde_json = "1"
+
+[[bin]]
+name = "harness-limb"
+path = "src/main.rs"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"

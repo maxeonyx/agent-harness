@@ -1,7 +1,8 @@
-//! The meta limb: the lifecycle tools the brain itself implements, as calls.
+//! The `meta` tool set: the lifecycle tools the brain itself implements,
+//! as calls.
 //!
 //! `spawn` opens a scope: one call whose members are forks of the caller,
-//! fresh agents in the roles its environment starts, or resumes of its
+//! fresh agents in the roles its role starts, or resumes of its
 //! finished children, and which settles with every member's result once
 //! the last is done. `add_sibling` adds one task to the caller's own scope
 //! and returns at once. `compact_and_continue` compacts the caller's
@@ -12,16 +13,16 @@
 //! to one of the caller's other tools that no round waits on: its result
 //! arrives as a message, and its owner cannot finish until it has. `stop`
 //! abandons one of those calls, and `pass` hands one up the tree
-//! ([`harness_core::call::Owner`]). Their effects (the members' `Created` facts, with a
-//! limb for each new clone) are appended in the same batch as the
+//! ([`harness_core::call::Owner`]). Their effects (the members' `Created`
+//! facts) are appended in the same batch as the
 //! `Dispatched`, so a crash leaves both or neither, and a restart never
 //! spawns twice.
 
 use harness_core::call::{Call, Caller};
 use harness_core::context::Rendered;
 use harness_core::delivery::Content;
-use harness_core::environment::{Audience, Description, Instruction, Limb, LimbKind, Tool};
 use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
+use harness_core::limb::{Audience, Instruction, Tool, ToolSet};
 use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::state::State;
 use harness_core::task::{Context, Task};
@@ -48,18 +49,13 @@ pub const ATTACH: &str = "attach";
 /// tool output shows.
 const ATTACHED: usize = 16 * 1024;
 
-pub fn definition(id: LimbId) -> Limb {
-    Limb {
-        id,
-        name: "meta".into(),
-        kind: LimbKind::Meta,
-    }
-}
+/// The tool set's name, as roles hold it.
+pub const SET: &str = "meta";
 
-/// What the meta limb tells a root in an environment that starts `roles`,
-/// each a name and its one-line description; `member` when the task is in
-/// a scope it can add siblings to.
-pub fn description(limb: LimbId, roles: &[(&str, &str)], member: bool) -> Description {
+/// The `meta` set the brain `limb` gives a root in a role that starts
+/// `roles`, each a name and its one-line description; `member` when the
+/// task is in a scope it can add siblings to.
+pub fn set(limb: LimbId, roles: &[(&str, &str)], member: bool) -> ToolSet {
     let mut said = String::from(
         "All the calls of one response start together, and you get all of their results together, once the last \
 has finished. So no call sees another's result from the same response: a call that needs one goes in your next \
@@ -261,7 +257,8 @@ and returns at once: the agent that started you gets its result with yours.",
         });
         tools.push(tool(ADD_SIBLING, sibling));
     }
-    Description {
+    ToolSet {
+        name: SET.into(),
         instructions: vec![Instruction {
             observes: Observation {
                 resource: ResourceKey {
@@ -595,12 +592,13 @@ pub fn expects(context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
 }
 
 /// A `background` call's input as the call it starts, with its input's
-/// bytes: routed by the caller's binding, never to the meta limb.
+/// bytes: routed by the caller's binding, never to the brain's own limb,
+/// whose calls act on the harness at once.
 pub fn background_call(
     state: &State,
     parent: &Task,
     from: CallId,
-    meta: LimbId,
+    brain: LimbId,
     input: &[u8],
 ) -> Result<(Call, Bytes), String> {
     let (name, tool, input) = background(input)?;
@@ -614,7 +612,7 @@ pub fn background_call(
         .binding
         .limb(&tool)
         .ok_or(format!("you have no tool `{tool}`"))?;
-    if limb == meta {
+    if state.resolve(limb) == Some(brain) {
         return Err(format!("`{tool}` cannot run in the background"));
     }
     let call = Call {

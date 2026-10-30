@@ -5,10 +5,10 @@
 #
 # Runs this clone's HEAD (a tree with uncommitted changes is refused) as
 # the durable user unit harness-NAME.service on
-# ~/.local/share/agent-harness/NAME/brain.sqlite. The builds limb does the
-# work (crates/limb-builds), so there is one way to install and relaunch:
+# ~/.local/share/agent-harness/NAME/brain.sqlite. The `builds` tool set does
+# the work (crates/limb-builds), so there is one way to install and relaunch:
 #
-# - If the unit does not run, it installs the commit (`harness-limb-builds
+# - If the unit does not run, it installs the commit (`harness-limb
 #   install`: its executables and roles/ into
 #   ~/.local/share/agent-harness/builds/COMMIT/, once, read-only, deleting
 #   the builds nothing runs or links to but the three newest) and starts
@@ -16,7 +16,7 @@
 #   `--sample WAV`). It prints the commit and the URL once the brain serves
 #   its face.
 # - If it runs, it relaunches it, as the `relaunch` tool does, with the
-#   running build's own builds limb: the brain drains (its requests in
+#   running build's own `builds` set: the brain drains (its requests in
 #   flight get up to five minutes), the new build starts on the same
 #   database with the same flags, and it waits until the build is proven
 #   (a response, and a call a limb settled, in its span) or has gone back
@@ -53,16 +53,16 @@ home=${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness
 if systemctl --user -q is-active "$unit"; then
     [[ $# -eq 0 ]] || echo "dev/serve: $unit keeps the flags it runs with; stop it to change them" >&2
     pid=$(systemctl --user show -p MainPID --value "$unit")
-    exec "$(dirname "$(readlink -f "/proc/$pid/exe")")/harness-limb-builds" relaunch "$unit" "$repo"
+    exec "$(dirname "$(readlink -f "/proc/$pid/exe")")/harness-limb" relaunch "$unit" "$repo"
 fi
 
-build=$(cargo run -q --release -p harness-limb-builds -- install "$repo")
+build=$(cargo run -q --release -p harness-limb-machine -- install "$repo")
 commit=${build##*/}
 data=$home/$name
 mkdir -p "$data"
 [[ -z $(ss -Hltn "sport = :$port") ]] || die "something else listens on port $port"
 ln -sfn "$build" "$data/build"
-"$build/bin/harness-limb-builds" start "$unit" "$build/bin/harness-brain" \
+"$build/bin/harness-limb" start "$unit" "$build/bin/harness-brain" \
     --db "$data/brain.sqlite" --port "$port" --roles "$build/roles" "$@"
 
 url=https://mx-hv-mj.local:$port/

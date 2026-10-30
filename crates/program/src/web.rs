@@ -1,4 +1,4 @@
-//! The provider limb, `web`. To agents it offers the provider's own web
+//! The `web` tool set, which the brain offers from the provider. To agents it offers the provider's own web
 //! search and web fetch, which run inside a response: the model's use of
 //! them and their results are blocks of its response, with citations, so
 //! nothing is dispatched and nothing settles. To Max it offers `usage`, a
@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use harness_core::call::{Outcome, Output};
-use harness_core::environment::{Audience, Description, Limb, LimbKind, Tool};
-use harness_core::id::{LimbId, Timestamp};
+use harness_core::id::Timestamp;
+use harness_core::limb::{Audience, Tool, ToolSet};
 use harness_core::model_call::Window;
 use harness_core::value::Bytes;
 use serde_json::json;
@@ -18,18 +18,13 @@ use crate::render::{blocks, text};
 /// Max's tool: read the plan's usage now. Its input is `{}`.
 pub const USAGE: &str = "usage";
 
-pub fn definition(id: LimbId) -> Limb {
-    Limb {
-        id,
-        name: "web".into(),
-        kind: LimbKind::Provider,
-    }
-}
+/// The tool set's name, as roles hold it.
+pub const SET: &str = "web";
 
 /// The basic variants: the dynamic-filtering ones (`_20260209`) run the
 /// search inside code execution, which the subscription refuses ("no more
 /// code_execution tool calls remaining this turn").
-pub fn description() -> Description {
+pub fn set() -> ToolSet {
     let tool = |name: &str, kind: &str| Tool {
         name: name.into(),
         definition: json!({ "type": kind, "name": name }).to_string(),
@@ -45,7 +40,8 @@ pub fn description() -> Description {
         .to_string(),
         audience: Audience::Max,
     };
-    Description {
+    ToolSet {
+        name: SET.into(),
         instructions: Vec::new(),
         tools: vec![
             tool("web_search", "web_search_20250305"),

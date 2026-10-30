@@ -28,8 +28,9 @@
 //! | A request | [`model_call::ModelCall`] | [`model_call::ModelCallEvent`] | [`state::ModelCallRecord`] |
 //! | A call | [`call::Call`] | [`call::CallEvent`] | [`state::CallRecord`] |
 //! | Max's message | [`id::DeliveryId`]: a [`draft::Draft`], then the [`delivery::Delivery`] it becomes | [`draft::DraftEvent`], from any of his faces | [`state::State::draft`], [`state::State::fate`], the task's pending inputs |
-//! | An environment: a role | [`environment::Environment`] | each new version | [`state::State::environment`] |
-//! | A limb | [`environment::Limb`], unique by name, a server on its [`environment::Host`] | each new version, never of another kind or host; [`fact::Fact::Described`]; [`environment::Reach`], which names the replica speaking for it and its build | [`state::State::limb`], [`state::State::limb_named`], [`state::State::described`], [`state::State::connected`], [`state::State::limb_rows`] |
+//! | A role | [`role::Role`], unique by name | each new version | [`state::State::role`], [`state::State::sets_of`] |
+//! | A limb: the brain, or a process on a machine as one user | [`limb::Limb`], unique by name, one per brain and [`limb::Host`]; one from before limbs were per machine, [`legacy::Limb`] | each new version, never on another host; [`fact::Fact::Described`]; [`limb::Reach`], which names the replica speaking for it and its build | [`state::State::limb`], [`state::State::brain`], [`state::State::resolve`], [`state::State::described`], [`state::State::connected`], [`state::State::limb_rows`] |
+//! | A working directory | [`limb::Workdir`]: a limb and a directory, given with a task for life | [`fact::Fact::Workdir`], what its limb found making it ready | [`state::State::workdir`], [`state::State::prepared`] |
 //! | A resource | [`resource::ResourceKey`] | [`resource::Change`] | [`state::State::resource`], [`state::State::stale`] |
 //! | Max's attention | [`attention::Ranking`], [`attention::Focus`] (the newest per face is kept) | each new one | [`state::State::queue`] |
 //! | Max's faces | [`fact::Fact::Face`] | the brain accepting each replica | [`state::State::is_face`]; what each showed him is [`fact::Fact::Seen`] |
@@ -83,17 +84,20 @@
 //!   the batch that dispatches their spawn, so membership is atomic with
 //!   the scope. Only Max starts tasks in his scope; an agent starts, through
 //!   its own meta call, only forks of itself, resumes of its finished
-//!   children, and fresh tasks in the environments its own environment
-//!   lists, so a member adding a sibling is held to its own list.
-//! - **Environments are roles.** An orchestrator, a designer, an engineer
-//!   and the attention scheduler are each an [`environment::Environment`]:
-//!   a role prompt, a model and request parameters, the limbs every task of
-//!   the kind shares, the [places](environment::Environment::places) each
-//!   fills with a plugin limb of its own of the place's kind (an engineer's
-//!   clone), and what it can start. A task is in one for life. A fresh task
-//!   is created before its own limbs exist and is rooted once they have
-//!   connected and described themselves, so the clone's `AGENTS.md`,
-//!   directory and branch are in its first root. A definition is a versioned
+//!   children, and fresh tasks in the roles its own role lists, so a member
+//!   adding a sibling is held to its own list.
+//! - **A role is abstract, an agent concrete, a limb infrastructure.** An
+//!   orchestrator, a designer, an engineer and the attention scheduler are
+//!   each a [`role::Role`]: a role prompt, a model and request parameters,
+//!   the tool sets its agents hold, by name, and what it can start. It
+//!   names no limb and no directory. A task is in one for life, and has a
+//!   [working directory](limb::Workdir) for life when its role holds the
+//!   `workspace` set; its sets are found on limbs when it is rooted
+//!   ([`state::State::sets_of`]). A fresh task is created before its
+//!   directory exists and is rooted once the limbs hosting its sets have
+//!   connected and described themselves and its directory is ready, so the
+//!   clone's `AGENTS.md`, directory and branch are in its first root. A
+//!   definition is a versioned
 //!   fact, read by the brain from a role file that is reviewed like code; an
 //!   edit reaches running tasks as a notice and takes effect at their next
 //!   root, and `params` (effort) at their next request, since they are not
@@ -107,7 +111,7 @@
 //!   like any message and landing as move and words together. Only the
 //!   context moves: files stay as the path it left made them, and the
 //!   context is told ([`context::Note::Moved`]). The model and effort are a
-//!   setting of the task he turns while it works ([`environment::Tuning`]),
+//!   setting of the task he turns while it works ([`role::Tuning`]),
 //!   recorded on each request, so each response says what it ran at.
 //! - **Max as a participant.** His words are deliveries, his edits in a
 //!   chat are calls to the agent's own tools, his controls over the tree are
@@ -125,15 +129,17 @@
 //!   brain folds the records it holds, following the verdicts it recorded,
 //!   and works through [`state::State::todo`]. A request sent before the
 //!   current [`build::Launched`] with no end was lost and is sent again;
-//!   every limb a live task can reach is connected again
+//!   every limb a live task needs is connected again
 //!   ([`state::Todo::Connect`]); every unsettled call is a row of its limb's
 //!   view, which the limb gets whole on connecting, and the limb runs each id
 //!   at most once; every follower ships what the brain's standing of it does
 //!   not include, and the brain skips what it already has. A brain restart,
 //!   a limb restart and a dropped connection are one case.
-//! - **Limbs live on their own.** A plugin limb is a server on its
-//!   [host](environment::Host): on the brain's machine, or on another one
-//!   through SSH. The brain starts it if it is not running and dials it,
+//! - **Limbs live on their own.** A limb is the brain, or a process on a
+//!   machine as one user, one per brain, machine and user, whatever
+//!   directories its agents work in: on the brain's machine, or on another
+//!   one through SSH ([`limb::Host`]). The brain starts it if it is not
+//!   running and dials it,
 //!   because the brain always knows where its limbs are and a remote one
 //!   often cannot reach the brain. After that it lives apart from any
 //!   brain: a brain going away, cleanly or not, closes a link and stops
@@ -143,11 +149,16 @@
 //!   no-op, two builds of one brain reach one instance, and the newest
 //!   connection replaces a stale one. A limb serves the brain whose records
 //!   define it, so two domains' brains never share a limb process, even on
-//!   one machine. Several tasks share a limb as they share a workspace or a
-//!   browser; what one task holds inside it (a tab, a sandbox's state) is a
-//!   [resource](resource::ResourceKey) of that limb. How much of this is
-//!   built yet: [`environment::Host`].
-//! - **Upgrades.** An agent whose environment holds the builds limb
+//!   one machine. Every agent on a machine works through its one limb, each
+//!   in its own working directory; each command runs in a scope of its own
+//!   in its agent's slice, so what an agent runs is counted as its own and
+//!   stops with it. What one task holds inside a limb (a tab, a sandbox's
+//!   state) is a [resource](resource::ResourceKey) of that limb. Limbs from
+//!   before they were per machine stay in the records: each reads as what
+//!   it is now ([`legacy::now`]), the state resolves it to the limb that
+//!   hosts it ([`state::State::resolve`]), and its own process is linked
+//!   only while a call to it is unsettled.
+//! - **Upgrades.** An agent whose role holds the `builds` tool set
 //!   relaunches the harness onto a commit with one call: the limb proves
 //!   the new build beside the running brain (on a copy of the database it
 //!   folds every record, has the provider check every live session's next
@@ -161,20 +172,19 @@
 //!   its own fold and goes back to the old build's installed bytes on any
 //!   failure, so a broken build bricks nothing. Once it is proven, limbs
 //!   follow at their next idle moment ([`state::State::superseded`]).
-//! - **Context updates and the environment between turns.** Each task knows
+//! - **Context updates and the world between turns.** Each task knows
 //!   the version of everything its context embodies; a change becomes one
 //!   notice at its next request, and wakes a standing task that listens.
 //!   A watcher's result, a page event and a change to Max's queue are
-//!   changes, so nothing an environment says needs an addressee. A limb's
+//!   changes, so nothing the world says needs an addressee. A limb's
 //!   view lists every version the brain holds, so every change it states is
 //!   one.
 //! - **No permission prompts.** An agent's call names only its tool and is
 //!   routed by its task's binding, made with its root's tools from the same
-//!   descriptions ([`environment::Binding::new`]), and a root may route only
-//!   tools its limbs offer, so what an agent cannot do is what its
-//!   environment lacks. A tool use the binding does not route is answered as
-//!   a failed call ([`state::Todo::Unroutable`]). A parent filling a child's
-//!   place can hand it only a limb of the place's kind.
+//!   tool sets ([`role::Binding::new`]), and a root may route only tools its
+//!   role's sets offer, on the limbs hosting them for it, so what an agent
+//!   cannot do is what its role lacks. A tool use the binding does not route
+//!   is answered as a failed call ([`state::Todo::Unroutable`]).
 //! - **Integrity.** The brain's [`schema::Brain`] is the one decider: it
 //!   folds each record into a copy of the state (free because the state is
 //!   persistent), checking who stated it and that every value its facts
@@ -269,10 +279,10 @@
 //!   Made -->|"its limb is asked to run it:<br/>Todo::Dispatch, Brain::dispatch"| Dispatched
 //!   Made -->|"no such tool, so it fails:<br/>Todo::Unroutable"| Settled
 //!   Made -->|"stopped before it was sent:<br/>Todo::Interrupt, Interrupted"| Settled
-//!   Dispatched -->|"a plugin limb's call is stopped:<br/>Todo::Interrupt, Brain::interrupt"| Stopping
-//!   Dispatched -->|"a plugin limb's call is stopped, its limb not connected:<br/>Todo::Interrupt, Unknown"| Settled
+//!   Dispatched -->|"a call on a machine's limb is stopped:<br/>Todo::Interrupt, Brain::interrupt"| Stopping
+//!   Dispatched -->|"a call on a machine's limb is stopped, its limb not connected:<br/>Todo::Interrupt, Unknown"| Settled
 //!   Dispatched -->|"it ran: a limb, Voice::settle,<br/>or the brain, spawn, read, settle_scope"| Settled
-//!   Dispatched -.->|"a provider read an earlier brain was running:<br/>run again, Todo::Dispatch"| Dispatched
+//!   Dispatched -.->|"Max's read of the brain an earlier brain was running:<br/>run again, Todo::Dispatch"| Dispatched
 //!   Stopping -->|"the limb settles it:<br/>Voice::settle, Interrupted or the outcome it reached"| Settled
 //!   Settled -.->|"a second Settled, only after Unknown"| Late["the real outcome"]
 //!   Settled["CallEvent::Settled<br/>Completed, Failed, Refused,<br/>Interrupted or Unknown"]
@@ -280,10 +290,10 @@
 //!
 //! # Left to the brain
 //!
-//! Policies, not model: turning role files (read by a co-hosted limb, since
-//! the brain reads nothing but its own records) into environment versions; which directory a place's new clone goes in, and reusing
-//! the limb of a directory that has one ([`state::State::limb_named`]); when
-//! to let go of a limb process no task needs; which pending inputs a
+//! Policies, not model: turning role files (read by the brain's `roles`
+//! tool set) into role versions; which directory a fresh task's new clone
+//! goes in; defining the brain's own limb and its machine's from its
+//! options; when to let go of a limb process no task needs; which pending inputs a
 //! request renders beyond the results it must; the wording of notes; where
 //! breakpoints go; keep-alive and compaction timing, an expected-value
 //! decision over [`model_call::ModelCall`] records; when to hold a fan-out's
@@ -346,10 +356,11 @@
 //! - Moving a task back while a spawn on the path it leaves still runs
 //!   abandons that spawn's members, after the face names them and Max
 //!   confirms, rather than refusing until he abandons them himself.
-//! - What an environment says between turns is a resource change, never a
+//! - What the world says between turns is a resource change, never a
 //!   delivery ([`resource::Change`]).
-//! - A limb may state only its own description, how its own dispatched
-//!   calls ended and how its own resources changed.
+//! - A limb may state only its own description, what it found in its own
+//!   directories, how its own dispatched calls ended and how its own
+//!   resources changed.
 //! - Talking to a parent waiting on its children: an aside
 //!   ([`task::Origin::Aside`]), the user-facing member of the scope it
 //!   waits on, with background scopes as the other path. An interrupt
@@ -369,9 +380,15 @@
 //!   work, stop it, or pass it up ([`call::CallEvent::Passed`]).
 //! - Where role files live (shared with Claude Code's `.claude/agents/`
 //!   during the transition, or the harness's own), and whether the
-//!   orchestrator's environment holds a shell or only meta tools and Max
-//!   ([`environment::Environment`]).
-//! - No tool is given to every agent implicitly; each comes from a limb.
+//!   orchestrator becomes a meta role, holding only the brain's tool sets
+//!   ([`role::Role`]).
+//! - No tool is given to every agent implicitly; each comes from a tool set
+//!   its role holds.
+//! - Max's calls to the brain only read (the plan's usage), so one an
+//!   earlier brain was running is run again; an agent's call acts on the
+//!   harness, so it is run once, with its effects. The fold tells them
+//!   apart by caller, since the brain's own sets are described by its code,
+//!   not in facts.
 //! - Sending one draft from two faces at once: the first Send the brain
 //!   includes delivers it; a later Send of other words opens a new draft
 //!   holding them ([`draft::DraftEvent::Send`]), rather than delivering a
@@ -389,12 +406,14 @@ pub mod cancel;
 pub mod context;
 pub mod delivery;
 pub mod draft;
-pub mod environment;
 pub mod fact;
 pub mod id;
+pub mod legacy;
+pub mod limb;
 pub mod live;
 pub mod model_call;
 pub mod resource;
+pub mod role;
 pub mod schema;
 pub mod state;
 pub mod task;

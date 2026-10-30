@@ -1,38 +1,44 @@
-//! The workspace limb: a shell and file tools in one directory, a follower
-//! of the brain on the substrate's link.
+//! The workspace tool set: a shell and file tools in any directory on the
+//! limb's machine, and the `user` set of Max's own instructions and skills
+//! ([`user`]).
 //!
-//! **Concept.** A workspace is a [`Limb`] that owns a directory on a
-//! machine. It runs the coding tools an engineer needs (`bash`, `read`,
-//! `write`, `edit`, `grep`; see [`tools`]) as [`harness_core::call::Call`]s,
-//! and its files are resources of kind `file`: a read's result
-//! observes the version it returned, a write's the version it produced, and
-//! a write or edit whose caller has not seen the current version is
-//! [refused](Outcome::Refused) before it touches anything. A caller who has
-//! never seen an existing file is treated as having seen it absent, so
-//! nothing is overwritten blind. The refusal shows the file as a read
-//! would, which counts as seeing it, so a retry written after it goes
-//! through. Forks share their source's workspace; the
-//! notices and refusals are how siblings coordinate in it.
+//! **Concept.** One [`Workspace`] per limb serves every working directory
+//! its agents have ([`harness_core::limb::Workdir`]). It runs the coding
+//! tools an engineer needs (`bash`, `read`, `write`, `edit`, `grep`; see
+//! [`tools`]) as [`harness_core::call::Call`]s, each in its caller's
+//! directory (the row's `dir`), and its files are resources of kind `file`,
+//! named by absolute canonical path, so two directories that nest see each
+//! other's writes: a read's result observes the version it returned, a
+//! write's the version it produced, and a write or edit whose caller has
+//! not seen the current version is [refused](Outcome::Refused) before it
+//! touches anything. A caller who has never seen an existing file is
+//! treated as having seen it absent, so nothing is overwritten blind. The
+//! refusal shows the file as a read would, which counts as seeing it, so a
+//! retry written after it goes through. Forks and siblings share a
+//! directory; the notices and refusals are how they coordinate in it.
 //!
-//! Everything it says is records of its own replica, about itself, its own
-//! calls and its files, kept in its own log ([`harness_limb::Voice`])
-//! until the brain has included them: its [`Description`] on each
-//! connection; a settlement, with the bytes of its output, and a
-//! [`harness_core::resource::Change`] naming the call for each file the
-//! call wrote, in one batch. What it hears is the brain's rows for
-//! it ([`LimbRow`]): the calls to run and the resources to watch.
+//! Each directory the brain asks for ([`LimbRow::Workdir`]) is made ready on
+//! a thread of its own (made, or cloned for its agent's branch), and the
+//! limb says what it found as `Fact::Workdir`: its instructions, or why it
+//! cannot be made, which fails only the agents starting there. It states
+//! them again on each new link and whenever they change.
+//!
+//! What it keeps is per limb, not per directory: one table of the
+//! resources live contexts have seen, rescanned after every call (`stat`
+//! first, reading only what moved), so a command's writes, or Max's in his
+//! editor, reach the contexts that read them; per agent, what its own calls
+//! did ([`Own`]); and one lock held across a file tool's check and its
+//! write. A change the rescan finds is a command's only if the file's time
+//! falls inside the command's run; otherwise it is a notice to everyone who
+//! saw the file, the command's caller too.
+//!
+//! Every command runs in a systemd scope of its own in its agent's slice
+//! ([`harness_limb::scope`]), and ends, with everything it started, when
+//! its call does.
 //!
 //! Access control is the definition and nothing else: the limb has no
-//! prompts and no checks on what a command may touch. An environment either
-//! holds this limb or does not.
-//!
-//! It runs as a server of its own ([`harness_limb`]), `harness-limb-workspace` or
-//! `harness-limb-user`.
-//!
-//! Its calls run as a limb's do ([`harness_limb::Calls`]): in the order
-//! each task wrote them, and each at most once however often a crash makes
-//! it arrive, rerun after a crash only if its tool allows
-//! ([`tools::rerun`]).
+//! prompts and no checks on what a command may touch. A role either holds
+//! this set or does not.
 //!
 //! **Vision.** No permission prompts; process trees owned by their call;
 //! interrupted calls whose outcome is unknown kept distinct from failed
@@ -62,130 +68,204 @@ mod tools;
 mod trunc;
 pub mod user;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::fs;
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::thread;
+use std::time::{Duration, SystemTime};
 
 use harness_core::call::{Call, Caller, Outcome};
-use harness_core::environment::{Description, Instruction, Limb, LimbKey, LimbRow};
-use harness_core::id::{CallId, Digest, LimbId, TaskId};
+use harness_core::fact::{Batch, Fact};
+use harness_core::id::{CallId, Digest, TaskId};
+pub use harness_core::limb::WORKSPACE;
+use harness_core::limb::{self, Branch, Instruction, LimbKey, LimbRow, Offer, Prepared};
 use harness_core::resource::{Observation, ResourceKey, Version};
-use harness_core::value::Bytes;
+use harness_limb::{Opening, Report, Rows, Running, ToolSet, Voice, guard, lock};
 use harness_substrate::Time;
-use serde::{Deserialize, Serialize};
-
-use harness_limb::{Calls, Limit, Report, Rows, SHUTDOWN, Voice, lock};
-use harness_runtime::Cancel;
 
 use crate::record::{Marks, Outputs};
 
-/// The resource kinds this limb owns.
+/// The resource kinds this set owns.
 const FILE: &str = "file";
 const INSTRUCTIONS: &str = "instructions";
 
-/// The plugin kind this limb is, which an environment's replica names.
-pub const KIND: &str = "workspace";
-
-/// A workspace's own settings: the `config` of its [`Limb`] definition.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Settings {
-    /// The directory the tools work in. Must exist, unless `clone` makes it.
-    pub dir: PathBuf,
-    /// Made before the limb first connects, if `dir` does not exist yet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clone: Option<Clone>,
-    /// A user limb's file naming the set of Max's skills it offers, a name
-    /// a line (`#` for comments): the index lists only these and `skill`
-    /// loads only these. Every skill when absent, or when the file is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<PathBuf>,
-}
-
-/// A clone of a repository, made for one agent: its own directory and its
-/// own branch, which it commits and pushes to.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Clone {
-    /// What `git clone` is given: a URL or a path.
-    pub from: String,
-    /// Checked out from `origin/<branch>` if it exists, otherwise made from
-    /// `origin/<base>`.
-    pub branch: String,
-    pub base: String,
-}
-
-impl Settings {
-    /// The definition of a workspace limb, as the fact that declares it.
-    pub fn definition(&self, id: LimbId, name: &str) -> Limb {
-        self.limb(id, name, Kind::Workspace)
-    }
-
-    /// The definition of a user limb over Max's config directory `dir`.
-    pub fn user(id: LimbId, dir: PathBuf, skills: Option<PathBuf>) -> Limb {
-        Settings {
-            dir,
-            clone: None,
-            skills,
+/// Open the workspace set: it has no settings of its own. Ends what an
+/// earlier instance's commands left running.
+pub fn open(_offer: &Offer, opening: &Opening) -> Result<Arc<dyn ToolSet>, String> {
+    let state = &opening.state;
+    let inner = Inner {
+        voice: opening.voice.clone(),
+        marks: Marks::open(state.join("running")).map_err(|e| e.to_string())?,
+        outputs: Outputs::open(state.join("outputs")).map_err(|e| e.to_string())?,
+        dirs: Mutex::default(),
+        agents: Mutex::default(),
+        own: Mutex::default(),
+        watched: Mutex::default(),
+        files: Mutex::default(),
+    };
+    // An instance that was killed mid-command left its processes running,
+    // each carrying its call's mark, in its call's scope.
+    match inner.marks.orphans() {
+        Ok(orphans) => {
+            for call in orphans {
+                if let Err(e) = shell::end_orphan(call) {
+                    eprintln!("ending what call {call} left running: {e}");
+                }
+                inner.marks.ran(call);
+            }
         }
-        .limb(id, "user", Kind::User)
+        Err(e) => eprintln!("the commands an earlier instance left running: {e}"),
     }
-
-    fn limb(&self, id: LimbId, name: &str, kind: Kind) -> Limb {
-        harness_limb::definition(id, name, kind.name(), self)
-    }
+    Ok(Arc::new(Workspace {
+        inner: Arc::new(inner),
+    }))
 }
 
-/// The two plugin kinds this crate runs: one implementation over a
-/// directory, with different tools and instructions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
-    /// An agent's working directory, with the coding tools.
-    Workspace,
-    /// Max's own agent configuration ([`user`]).
-    User,
-}
-
-impl Kind {
-    fn name(self) -> &'static str {
-        match self {
-            Kind::Workspace => KIND,
-            Kind::User => user::KIND,
-        }
-    }
-}
-
-/// One running instance of the workspace limb: a [`harness_limb::Kind`].
-/// Dropping it stops every running call, within [`SHUTDOWN`], and waits
-/// until each has settled.
+/// The workspace set of one limb.
 pub struct Workspace {
     inner: Arc<Inner>,
 }
 
 struct Inner {
     voice: Arc<Voice>,
-    root: PathBuf,
-    /// The clone it was made as, which its instructions say is the agent's
-    /// own.
-    clone: Option<Clone>,
-    /// The file naming the skills a user limb offers.
-    skills: Option<PathBuf>,
-    kind: Kind,
-    calls: Calls,
     marks: Marks,
     outputs: Outputs,
+    /// Each directory the brain asks for, by the name it gave.
+    dirs: Mutex<BTreeMap<PathBuf, Dir>>,
+    /// The agents working here, by name: what their commands' scopes say.
+    agents: Mutex<BTreeMap<TaskId, String>>,
     /// What each task's own calls did, so that it is not refused for it.
     own: Mutex<HashMap<TaskId, Own>>,
-    /// The resources the brain asked to hear about, at the version last
-    /// reported.
-    watched: Mutex<HashMap<ResourceKey, Version>>,
+    /// The resources the brain asked to hear about, as last seen.
+    watched: Mutex<HashMap<ResourceKey, Seen>>,
     /// Held across a file tool's check and its write, so two calls cannot
     /// both pass the check on one version.
     files: Mutex<()>,
 }
 
+/// A directory the brain asked for.
+#[derive(Clone)]
+enum Dir {
+    Preparing,
+    Ready {
+        /// Where it is: absolute and canonical.
+        root: PathBuf,
+        branch: Option<Branch>,
+        /// As last stated.
+        instructions: Vec<Instruction>,
+    },
+    Failed,
+}
+
+/// A resource as the rescan last saw it.
+#[derive(Clone)]
+struct Seen {
+    version: Version,
+    /// The file's identity and times, which unchanged mean its bytes are.
+    stat: Option<Stat>,
+    /// When it last changed, as far as the disk says: the file's time, or
+    /// its directory's once it is gone.
+    modified: Option<SystemTime>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stat {
+    dev: u64,
+    ino: u64,
+    len: u64,
+    mtime: (i64, i64),
+    ctime: (i64, i64),
+}
+
+impl Stat {
+    fn of(meta: &fs::Metadata) -> Stat {
+        Stat {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            len: meta.len(),
+            mtime: (meta.mtime(), meta.mtime_nsec()),
+            ctime: (meta.ctime(), meta.ctime_nsec()),
+        }
+    }
+}
+
+impl ToolSet for Workspace {
+    fn describe(&self) -> limb::ToolSet {
+        let text = tools::USE.to_string();
+        limb::ToolSet {
+            name: WORKSPACE.into(),
+            instructions: vec![Instruction {
+                observes: Observation {
+                    resource: self.inner.key(INSTRUCTIONS, WORKSPACE),
+                    version: Version::Is(Digest::of(text.as_bytes())),
+                },
+                text,
+            }],
+            tools: tools::tools(),
+        }
+    }
+
+    /// Make each new directory ready, on a thread of its own, and forget
+    /// those no longer asked for. A new link hears each again, and a
+    /// directory that could not be made is tried again.
+    fn apply(&self, rows: &Rows, connected: bool) {
+        let inner = &self.inner;
+        let mut wanted = BTreeMap::new();
+        let mut agents = BTreeMap::new();
+        for (key, row) in &rows.rows {
+            if let (LimbKey::Workdir(dir), LimbRow::Workdir { branch, agents: a }) = (key, row) {
+                wanted.insert(dir.clone(), branch.clone());
+                agents.extend(a.iter().map(|(t, n)| (*t, n.clone())));
+            }
+        }
+        *lock(&inner.agents) = agents;
+        let mut restate = Vec::new();
+        {
+            let mut dirs = lock(&inner.dirs);
+            dirs.retain(|dir, _| wanted.contains_key(dir));
+            for (dir, branch) in wanted {
+                match dirs.get(&dir) {
+                    None => {}
+                    Some(Dir::Failed) if connected => {}
+                    Some(Dir::Ready { .. }) if connected => {
+                        restate.push(dir);
+                        continue;
+                    }
+                    Some(_) => continue,
+                }
+                dirs.insert(dir.clone(), Dir::Preparing);
+                let inner = self.inner.clone();
+                thread::spawn(move || inner.prepare(dir, branch));
+            }
+        }
+        for dir in restate {
+            inner.restate(&dir, true);
+        }
+        if let Some(LimbRow::Watch { known }) = rows.rows.get(&LimbKey::Watch) {
+            inner.watch(known);
+        }
+    }
+
+    fn rerun(&self, tool: &str) -> bool {
+        tools::rerun(tool)
+    }
+
+    fn run(&self, running: &Running<'_>, report: &mut Report) -> Outcome {
+        let Some(dir) = running.dir else {
+            return report.failed("the call names no working directory to run in");
+        };
+        match absolute(dir).and_then(|d| d.canonicalize()) {
+            Ok(root) => self.inner.run(&root, running, report),
+            Err(e) => report.failed(&format!("its working directory {}: {e}", dir.display())),
+        }
+    }
+}
+
 /// `dir` as an absolute path: `~/…` in `$HOME`.
-fn absolute(dir: &Path) -> io::Result<PathBuf> {
+pub(crate) fn absolute(dir: &Path) -> io::Result<PathBuf> {
     if let Ok(rest) = dir.strip_prefix("~") {
         let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("no $HOME for `~`"))?;
         return Ok(PathBuf::from(home).join(rest));
@@ -199,132 +279,98 @@ fn absolute(dir: &Path) -> io::Result<PathBuf> {
     )))
 }
 
-impl harness_limb::Kind for Workspace {
-    /// Make its directory (its clone, if it has one to make), and end what
-    /// an earlier instance left running. Blocks while it clones. A
-    /// directory given as `~/…` is in `$HOME`; any other must be absolute.
-    /// Its marks of calls are in its `state`, outside the directory, so the
-    /// agents' files stay theirs.
-    fn open(definition: &Limb, voice: Arc<Voice>, state: &Path) -> Result<Workspace, String> {
-        let (kind, settings) = [Kind::Workspace, Kind::User]
-            .into_iter()
-            .find_map(|k| Some((k, harness_limb::settings(definition, k.name())?)))
-            .ok_or("the definition is not a workspace or user limb's")?;
-        Workspace::open(kind, settings, voice, state).map_err(|e| e.to_string())
-    }
-
-    /// A whole view begins a link: the limb describes itself on it.
-    fn apply(&self, rows: &Rows, connected: bool) {
-        let inner = &self.inner;
-        if connected {
-            inner.voice.describe(inner.describe());
+/// `path`, absolute, as one name however it was reached: the longest part
+/// of it that exists resolved on disk (its links and `..`), and the rest
+/// with `.` and `..` resolved by name.
+fn canonical(path: &Path) -> PathBuf {
+    let path = limb::normal(path);
+    let mut existing = path.as_path();
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            let rest = path.strip_prefix(existing).unwrap_or(Path::new(""));
+            return match rest.as_os_str().is_empty() {
+                true => real,
+                false => real.join(rest),
+            };
         }
-        for row in inner.voice.calls(rows) {
-            let (id, call) = (row.id, row.call.clone());
-            let inner = self.inner.clone();
-            let rerun = tools::rerun(&call.tool);
-            self.inner
-                .calls
-                .call(row, rerun, move |input, cancel, limit, report| {
-                    inner.run(id, call, input, cancel, limit, report)
-                });
+        match existing.parent() {
+            Some(parent) => existing = parent,
+            None => return path,
         }
-        if let Some(LimbRow::Watch { known }) = rows.rows.get(&LimbKey::Watch) {
-            inner.watch(known);
-        }
-        inner.calls.forget(rows);
-    }
-
-    /// Whether a call runs, or a process one left (a server it started
-    /// with `setsid`, adopted by the limb) does.
-    fn holds(&self) -> bool {
-        self.inner.calls.any() || !harness_runtime::children().is_empty()
-    }
-
-    fn stop_all(&self, within: Duration) {
-        self.inner.calls.stop_all(within);
-    }
-
-    fn join(&self) {
-        self.inner.calls.join();
-    }
-}
-
-impl Workspace {
-    fn open(
-        kind: Kind,
-        settings: Settings,
-        voice: Arc<Voice>,
-        state: &Path,
-    ) -> io::Result<Workspace> {
-        let Settings { dir, clone, skills } = settings;
-        let dir = absolute(&dir)?;
-        match &clone {
-            Some(clone) => git::clone(clone, &dir)?,
-            None => std::fs::create_dir_all(&dir).map_err(|e| {
-                io::Error::new(e.kind(), format!("cannot make {}: {e}", dir.display()))
-            })?,
-        }
-        std::fs::create_dir_all(state)?;
-        let inner = Inner {
-            voice: voice.clone(),
-            root: dir.canonicalize()?,
-            clone,
-            skills,
-            kind,
-            // Orphans the limb adopted that have exited, reaped only while
-            // no call runs, so no call's own command can be among them.
-            calls: Calls::open(
-                voice.clone(),
-                &state.join("calls/started"),
-                harness_runtime::reap_children,
-            )?,
-            marks: Marks::open(state.join("calls/running"))?,
-            outputs: Outputs::open(state.join("outputs"))?,
-            own: Mutex::default(),
-            watched: Mutex::default(),
-            files: Mutex::default(),
-        };
-        // An instance that was killed mid-command left its processes
-        // running, each carrying its call's mark.
-        for call in inner.marks.orphans()? {
-            let mark = shell::mark(call);
-            let mut waiter = Cancel::new().waiter()?;
-            let deadline = Instant::now() + SHUTDOWN;
-            let members = || harness_runtime::marked(&mark);
-            harness_runtime::end(&mut waiter, deadline, Some(libc::SIGTERM), members, || None)?;
-            inner.marks.ran(call);
-        }
-        Ok(Workspace {
-            inner: Arc::new(inner),
-        })
-    }
-}
-
-impl Drop for Workspace {
-    fn drop(&mut self) {
-        self.inner.calls.stop_all(SHUTDOWN);
-        self.inner.calls.join();
     }
 }
 
 impl Inner {
-    /// Run one call on its input: as its caller wrote it, noting what it
-    /// made and what it did.
-    fn run(
-        &self,
-        id: CallId,
-        call: Call,
-        input: &Bytes,
-        cancel: &Cancel,
-        limit: &Limit,
-        report: &mut Report,
-    ) -> Outcome {
+    /// Make `dir` ready and say what was found, unless the brain stopped
+    /// asking for it meanwhile.
+    fn prepare(&self, dir: PathBuf, branch: Option<Branch>) {
+        let made = guard(|| make(&dir, branch.as_ref())).and_then(|r| r);
+        let state = match made {
+            Ok(root) => Dir::Ready {
+                instructions: dir_instructions(self, &root, branch.as_ref()),
+                root,
+                branch,
+            },
+            Err(why) => {
+                eprintln!("the directory {}: {why}", dir.display());
+                self.say_workdir(&dir, Prepared::Failed { why });
+                let mut dirs = lock(&self.dirs);
+                if let Some(d @ Dir::Preparing) = dirs.get_mut(&dir) {
+                    *d = Dir::Failed;
+                }
+                return;
+            }
+        };
+        let mut dirs = lock(&self.dirs);
+        let Some(d @ Dir::Preparing) = dirs.get_mut(&dir) else {
+            return;
+        };
+        *d = state;
+        drop(dirs);
+        self.restate(&dir, true);
+    }
+
+    /// State a ready directory's instructions: `always`, or only if they
+    /// changed since they were last stated.
+    fn restate(&self, dir: &Path, always: bool) {
+        let mut dirs = lock(&self.dirs);
+        let Some(Dir::Ready {
+            root,
+            branch,
+            instructions,
+        }) = dirs.get_mut(dir)
+        else {
+            return;
+        };
+        let now = dir_instructions(self, root, branch.as_ref());
+        if !always && now == *instructions {
+            return;
+        }
+        *instructions = now.clone();
+        drop(dirs);
+        self.say_workdir(dir, Prepared::Ready { instructions: now });
+    }
+
+    fn say_workdir(&self, dir: &Path, prepared: Prepared) {
+        self.voice.say(Batch {
+            values: Vec::new(),
+            facts: vec![Fact::Workdir {
+                limb: self.voice.limb(),
+                dir: dir.to_path_buf(),
+                prepared,
+            }],
+        });
+    }
+
+    /// Run one call in `root`: as its caller wrote it, noting what it made
+    /// and what it did.
+    fn run(&self, root: &Path, running: &Running<'_>, report: &mut Report) -> Outcome {
         let started = SystemTime::now();
-        let written = self.as_written(id, call.clone());
-        let mut outcome = self.execute(id, &written, &input.0, cancel, limit, report);
+        let written = self.as_written(running.id, running.call.clone());
+        let command = running.call.tool == "bash";
+        let mut outcome = self.execute(root, running, &written, report);
         let ran = (started, SystemTime::now());
-        let made = self.rescan(report, call.tool == "bash");
+        let made = self.rescan(report, command.then_some(ran));
         if let Outcome::Completed(output)
         | Outcome::Failed(output)
         | Outcome::Interrupted {
@@ -333,7 +379,11 @@ impl Inner {
         {
             output.observes.extend(made);
         }
-        self.did(id, &call, &outcome, ran);
+        self.did(running.id, running.call, &outcome, ran);
+        let ready: Vec<PathBuf> = lock(&self.dirs).keys().cloned().collect();
+        for dir in ready {
+            self.restate(&dir, false);
+        }
         outcome
     }
 
@@ -347,82 +397,20 @@ impl Inner {
             if watched.contains_key(&o.resource) {
                 continue;
             }
-            let Some(version) = self.version_of(&o.resource) else {
+            let Some(seen) = self.current(&o.resource, None) else {
                 continue;
             };
-            watched.insert(o.resource.clone(), version);
             let new = known
                 .iter()
-                .all(|k| k.resource != o.resource || k.version != version);
+                .all(|k| k.resource != o.resource || k.version != seen.version);
             if new {
-                report.changed(o.resource.clone(), version, false);
+                report.changed(o.resource.clone(), seen.version, false);
             }
+            watched.insert(o.resource.clone(), seen);
         }
         drop(watched);
         if !report.changes().is_empty() {
             self.voice.say(report.batch(Vec::new()));
-        }
-    }
-
-    fn describe(&self) -> Description {
-        if self.kind == Kind::User {
-            return self.describe_user();
-        }
-        let text = tools::instructions(&self.root, self.clone.as_ref());
-        let version = Version::Is(Digest::of(text.as_bytes()));
-        let mut instructions = vec![Instruction {
-            observes: Observation {
-                resource: self.key(INSTRUCTIONS, ""),
-                version,
-            },
-            text,
-        }];
-        if let Ok(agents) = std::fs::read_to_string(self.root.join("AGENTS.md")) {
-            instructions.push(Instruction {
-                observes: Observation {
-                    resource: self.key(INSTRUCTIONS, "AGENTS.md"),
-                    version: Version::Is(Digest::of(agents.as_bytes())),
-                },
-                text: format!("Contents of AGENTS.md:\n\n{agents}"),
-            });
-        }
-        Description {
-            instructions,
-            tools: tools::tools(),
-        }
-    }
-
-    fn describe_user(&self) -> Description {
-        let mut instructions = Vec::new();
-        if let Ok(own) = std::fs::read_to_string(self.root.join(user::INSTRUCTIONS)) {
-            instructions.push(Instruction {
-                observes: Observation {
-                    resource: self.key(INSTRUCTIONS, user::INSTRUCTIONS),
-                    version: Version::Is(Digest::of(own.as_bytes())),
-                },
-                text: format!("Max's own instructions, for every agent:\n\n{own}"),
-            });
-        }
-        let index = user::index(&self.root, self.offered().as_deref());
-        instructions.push(Instruction {
-            observes: Observation {
-                resource: self.key(INSTRUCTIONS, user::INDEX),
-                version: Version::Is(Digest::of(index.as_bytes())),
-            },
-            text: index,
-        });
-        Description {
-            instructions,
-            tools: user::tools(),
-        }
-    }
-
-    /// The file whose contents are among the limb's instructions.
-    fn instruction_file(&self) -> &'static str {
-        if self.kind == Kind::User {
-            user::INSTRUCTIONS
-        } else {
-            "AGENTS.md"
         }
     }
 
@@ -434,29 +422,56 @@ impl Inner {
         }
     }
 
-    /// Every resource a file is: the file, and the root's instructions when
-    /// it is the root's `AGENTS.md`.
+    /// The ready directories' roots.
+    fn roots(&self) -> Vec<PathBuf> {
+        lock(&self.dirs)
+            .values()
+            .filter_map(|d| match d {
+                Dir::Ready { root, .. } => Some(root.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every resource a file is: the file, and a directory's instructions
+    /// when it is a ready directory's `AGENTS.md`.
     fn keys(&self, name: &str) -> Vec<ResourceKey> {
         let mut keys = vec![self.key(FILE, name)];
-        if name == self.instruction_file() {
+        if self
+            .roots()
+            .iter()
+            .any(|root| root.join("AGENTS.md").as_os_str() == name)
+        {
             keys.push(self.key(INSTRUCTIONS, name));
         }
         keys
     }
 
-    fn version_of(&self, resource: &ResourceKey) -> Option<Version> {
+    /// A resource as it is now, reading a file only if its `stat` moved
+    /// since `before`. `None` for one this set does not keep, or cannot
+    /// read.
+    fn current(&self, resource: &ResourceKey, before: Option<&Seen>) -> Option<Seen> {
+        if resource.limb != self.voice.limb() {
+            return None;
+        }
+        let text = |text: &str| Seen {
+            version: Version::Is(Digest::of(text.as_bytes())),
+            stat: None,
+            modified: None,
+        };
         match resource.kind.as_str() {
-            INSTRUCTIONS if self.kind == Kind::User && resource.name == user::INDEX => {
-                Some(Version::Is(Digest::of(
-                    user::index(&self.root, self.offered().as_deref()).as_bytes(),
-                )))
+            INSTRUCTIONS if resource.name == WORKSPACE => Some(text(tools::USE)),
+            FILE | INSTRUCTIONS if resource.name.starts_with('/') => {
+                let path = canonical(Path::new(&resource.name));
+                if resource.kind == INSTRUCTIONS
+                    && let Some(Dir::Ready { root, branch, .. }) = lock(&self.dirs)
+                        .values()
+                        .find(|d| matches!(d, Dir::Ready { root, .. } if *root == path))
+                {
+                    return Some(text(&tools::instructions(root, branch.as_ref())));
+                }
+                seen(&path, before)
             }
-            FILE | INSTRUCTIONS if !resource.name.is_empty() => {
-                files::version(&self.root.join(&resource.name)).ok()
-            }
-            INSTRUCTIONS => Some(Version::Is(Digest::of(
-                tools::instructions(&self.root, self.clone.as_ref()).as_bytes(),
-            ))),
             _ => None,
         }
     }
@@ -469,36 +484,112 @@ impl Inner {
     }
 
     /// After a call: add every watched resource that moved, which is how a
-    /// command's writes reach the contexts that read them. Attributed to the
-    /// call when it was a command, whose writes the limb cannot see; and
-    /// returned, as what the command's caller has seen, since it made them:
-    /// its context is not told of its own writes. A sibling's command that
-    /// wrote the same file at the same moment is attributed to both.
-    fn rescan(&self, report: &mut Report, command: bool) -> Vec<Observation> {
+    /// command's writes, and anyone's outside the harness, reach the
+    /// contexts that read them. A change is the command's (`ran` is when it
+    /// ran) only if the file's time falls inside its run: then it names the
+    /// call, and is returned as what the command's caller has seen, since it
+    /// made it, so its context is not told of its own writes. Any other
+    /// change is a notice to everyone who saw the file. A sibling's command
+    /// that wrote the same file at the same moment is attributed to both.
+    fn rescan(
+        &self,
+        report: &mut Report,
+        ran: Option<(SystemTime, SystemTime)>,
+    ) -> Vec<Observation> {
         let mut made = Vec::new();
         let mut watched = lock(&self.watched);
         for change in report.changes() {
-            if let Some(known) = watched.get_mut(&change.resource) {
-                *known = change.version;
+            if let Some(seen) = watched.get_mut(&change.resource) {
+                seen.version = change.version;
+                seen.stat = None;
             }
         }
-        for (resource, known) in watched.iter_mut() {
-            let Some(version) = self.version_of(resource) else {
+        for (resource, before) in watched.iter_mut() {
+            let Some(now) = self.current(resource, Some(before)) else {
                 continue;
             };
-            if version != *known {
-                *known = version;
-                report.changed(resource.clone(), version, command);
-                if command {
+            if now.version != before.version {
+                let by = ran.is_some_and(|(start, end)| {
+                    now.modified
+                        .is_some_and(|m| (start - COARSE..=end).contains(&m))
+                });
+                report.changed(resource.clone(), now.version, by);
+                if by {
                     made.push(Observation {
                         resource: resource.clone(),
-                        version,
+                        version: now.version,
                     });
                 }
             }
+            *before = now;
         }
         made
     }
+}
+
+/// A file as it is now, read only if its `stat` moved since `before`.
+fn seen(path: &Path, before: Option<&Seen>) -> Option<Seen> {
+    match fs::metadata(path) {
+        Ok(meta) => {
+            let stat = Stat::of(&meta);
+            if let Some(before) = before.filter(|b| b.stat == Some(stat)) {
+                return Some(before.clone());
+            }
+            let version = files::version(path).ok()?;
+            Some(Seen {
+                version,
+                stat: Some(stat),
+                modified: meta.modified().ok(),
+            })
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Some(Seen {
+            version: Version::Gone,
+            stat: None,
+            modified: path
+                .parent()
+                .and_then(|p| fs::metadata(p).and_then(|m| m.modified()).ok()),
+        }),
+        Err(_) => None,
+    }
+}
+
+/// Make the directory the brain named: its clone if it has a branch and
+/// does not exist yet, otherwise the directory. Where it is.
+fn make(dir: &Path, branch: Option<&Branch>) -> Result<PathBuf, String> {
+    let path = absolute(dir).map_err(|e| e.to_string())?;
+    match branch {
+        Some(branch) => git::clone(branch, &path).map_err(|e| e.to_string())?,
+        None => {
+            fs::create_dir_all(&path).map_err(|e| format!("cannot make {}: {e}", path.display()))?
+        }
+    }
+    path.canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// A directory's own instructions: where it is and whose branch it is,
+/// and what its `AGENTS.md` says.
+fn dir_instructions(inner: &Inner, root: &Path, branch: Option<&Branch>) -> Vec<Instruction> {
+    let text = tools::instructions(root, branch);
+    let name = root.to_string_lossy();
+    let mut instructions = vec![Instruction {
+        observes: Observation {
+            resource: inner.key(INSTRUCTIONS, &name),
+            version: Version::Is(Digest::of(text.as_bytes())),
+        },
+        text,
+    }];
+    let agents = root.join("AGENTS.md");
+    if let Ok(text) = fs::read_to_string(&agents) {
+        instructions.push(Instruction {
+            observes: Observation {
+                resource: inner.key(INSTRUCTIONS, &agents.to_string_lossy()),
+                version: Version::Is(Digest::of(text.as_bytes())),
+            },
+            text: format!("Contents of AGENTS.md:\n\n{text}"),
+        });
+    }
+    instructions
 }
 
 /// What one task's own calls did.
@@ -523,11 +614,10 @@ const COARSE: Duration = Duration::from_millis(20);
 
 impl Inner {
     /// `call` as its caller wrote it: one response's tool uses run in the
-    /// order written (see the crate docs), so each was written knowing what
-    /// the earlier ones would leave. It expects what its context knew when
-    /// the response was made, updated by what those calls observed: an
-    /// agent's second `edit` of a file in one response is not refused for
-    /// its first.
+    /// order written, so each was written knowing what the earlier ones
+    /// would leave. It expects what its context knew when the response was
+    /// made, updated by what those calls observed: an agent's second
+    /// `edit` of a file in one response is not refused for its first.
     fn as_written(&self, id: CallId, mut call: Call) -> Call {
         let Caller::Agent { task, .. } = &call.caller else {
             return call;
@@ -597,14 +687,14 @@ impl Inner {
     }
 
     /// Whether `caller`'s own command last changed `path`: it changed while
-    /// one ran. A command's other writes reach this limb only as changes
-    /// to what some context has seen ([`Inner::rescan`]); a file it made
-    /// that nobody has seen, it has seen as its maker.
+    /// one ran. A command's other writes reach this set only as changes to
+    /// what some context has seen ([`Inner::rescan`]); a file it made that
+    /// nobody has seen, it has seen as its maker.
     pub(crate) fn made_by(&self, caller: &Caller, path: &Path) -> bool {
         let Caller::Agent { task, .. } = caller else {
             return false;
         };
-        let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) else {
+        let Ok(modified) = fs::metadata(path).and_then(|m| m.modified()) else {
             return false;
         };
         lock(&self.own).get(task).is_some_and(|own| {
@@ -612,5 +702,38 @@ impl Inner {
                 .iter()
                 .any(|(start, end)| (*start - COARSE..=*end).contains(&modified))
         })
+    }
+
+    /// What a command `call` makes is in the scope `harness-call-<call>`,
+    /// in its agent's slice, described as its agent's.
+    pub(crate) fn scope(
+        &self,
+        call: CallId,
+        caller: &Caller,
+        command: &str,
+    ) -> harness_limb::scope::Scope {
+        let task = match caller {
+            Caller::Agent { task, .. } | Caller::Background { task, .. } => Some(*task),
+            Caller::Max { chat, .. } => *chat,
+            Caller::Meta { .. } => None,
+        };
+        let who = match (caller, task) {
+            (Caller::Max { .. }, _) => "Max".to_string(),
+            (_, Some(task)) => lock(&self.agents)
+                .get(&task)
+                .cloned()
+                .unwrap_or_else(|| task.to_string()),
+            (_, None) => "the harness".to_string(),
+        };
+        let line = command.lines().next().unwrap_or_default();
+        let line: String = line.chars().take(80).collect();
+        harness_limb::scope::Scope {
+            unit: shell::unit(call),
+            slice: Some(match task {
+                Some(task) => format!("harness-{task}.slice"),
+                None => "harness-max.slice".into(),
+            }),
+            description: format!("{who}: {line}"),
+        }
     }
 }

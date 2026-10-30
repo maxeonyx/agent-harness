@@ -97,9 +97,9 @@ export function fillTip() {
     const fc = graph.comps.find((c) => c.folded && c.root.id === id);
     lines.push(el("b", null, t.name), el("div", "now", fc ? cardStatus(fc) : trouble(t) || look(t).text));
     // What it is, each fact a word or two of its own; where it works, as a path.
-    const place = Object.values(t.places || {})[0];
+    const place = t.workdir;
     const mode = t.mode === "user-facing" ? "chat" : t.mode === "standing" ? "standing" : null;
-    const what = [t.environment, mode !== t.environment && mode].filter(Boolean).join(" ");
+    const what = [t.role, mode !== t.role && mode].filter(Boolean).join(" ");
     const n = t.compactions;
     const facts = [what && what[0].toUpperCase() + what.slice(1), t.origin === "fork" && "Forked", n && `Compacted ${n === 1 ? "once" : `${n} times`}`,
       fc && fc.tasks.length > 1 && `${fc.tasks.length} tasks`, t.tokens && !isDone(t) && `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`].filter(Boolean);

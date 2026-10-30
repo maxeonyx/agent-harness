@@ -9,10 +9,10 @@ use std::collections::BTreeMap;
 
 use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::draft::{DraftEvent, Fate};
-use harness_core::environment::Environment;
 use harness_core::fact::{Batch, Fact, Refusal};
-use harness_core::id::{DeliveryId, EnvironmentId, ReplicaId, TaskId, Time, Timestamp, ValueId};
+use harness_core::id::{DeliveryId, ReplicaId, RoleId, TaskId, Time, Timestamp, ValueId};
 use harness_core::live::Live;
+use harness_core::role::Role;
 use harness_core::schema::{Brain, Harness};
 use harness_core::state::State;
 use harness_core::task::{
@@ -247,7 +247,7 @@ fn main() {
     let mut pc = Face::new("pc", PC);
     let mut phone = Face::new("phone", PHONE);
 
-    println!("1. The brain starts, accepts two faces, and defines an environment.");
+    println!("1. The brain starts, accepts two faces, and defines a role.");
     let (role, role_bytes) = remember(&mut words_of, "You design.");
     let (params, params_bytes) = remember(&mut words_of, "{}");
     hub.say(|_| Batch {
@@ -263,22 +263,21 @@ fn main() {
             Fact::Face(PHONE),
         ],
     });
-    let environment = hub.say(|at| Batch {
+    let designer = hub.say(|at| Batch {
         values: vec![role_bytes, params_bytes],
-        facts: vec![Fact::Environment(Environment {
-            id: EnvironmentId(at.event(0)),
+        facts: vec![Fact::Role(Role {
+            id: RoleId(at.event(0)),
             name: "designer".into(),
-            role,
+            prompt: role,
             model: "claude-opus-5-5".into(),
             params,
-            limbs: vec![],
-            places: vec![],
+            tools: vec![],
             starts: vec![],
             source: None,
             description: String::new(),
         })],
     });
-    let environment = EnvironmentId(environment.event(0));
+    let designer = RoleId(designer.event(0));
     hub.sync(&mut pc);
     hub.sync(&mut phone);
 
@@ -295,7 +294,8 @@ fn main() {
                 by: None,
                 scope: Scope::Max,
                 origin: Origin::Fresh {
-                    environment,
+                    role: designer,
+                    workdir: None,
                     places: BTreeMap::new(),
                 },
                 mode: Mode::UserFacing,
@@ -328,7 +328,8 @@ fn main() {
                 by: None,
                 scope: Scope::Max,
                 origin: Origin::Fresh {
-                    environment,
+                    role: designer,
+                    workdir: None,
                     places: BTreeMap::new(),
                 },
                 mode: Mode::UserFacing,

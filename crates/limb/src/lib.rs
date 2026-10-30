@@ -1,28 +1,40 @@
-//! A plugin limb as a server on its host
-//! ([`Host`](harness_core::environment::Host)): what every kind of limb
-//! shares, so a kind is only what it does with its rows.
+//! A limb as a server on its machine ([`Host`](harness_core::limb::Host)):
+//! one process per brain, machine and user, running the tool sets its
+//! definition offers.
 //!
-//! `harness-limb-<kind>` is one executable with two commands:
-//! - `attach <limb>` is how the brain reaches the limb, and the only one it
-//!   runs. It starts the limb if no instance holds its state, then carries
-//!   the link over its own stdin and stdout until either end closes. What it
-//!   prints on stderr when it fails is why ([`attach`]).
+//! `harness-limb` is one executable (`crates/limb-machine`) with two
+//! commands for the limb, besides the builds' own:
+//! - `attach [--existing] <limb>` is how the brain reaches the limb, and the
+//!   only one it runs. It starts the limb if no instance holds its state
+//!   (unless `--existing`: then it only reaches one that runs, as for a limb
+//!   from before limbs were per machine, linked only to settle its calls),
+//!   then carries the link over its own stdin and stdout until either end
+//!   closes. What it prints on stderr when it fails is why ([`attach`]).
 //! - `serve <limb>` is the limb itself, started by `attach` and never by
-//!   hand: it holds the limb's state, listens on its socket, and runs the
-//!   kind for whichever brain links to it ([`serve`]).
+//!   hand: it holds the limb's state, listens on its socket, and runs its
+//!   tool sets for whichever brain links to it ([`serve`]).
 //!
 //! A limb's state is one directory on its host, named by its id
 //! ([`State`]): the lock one instance holds while it runs, the socket it
-//! listens on, its records, and the log of what it printed. So the state is
-//! the limb's address and its lock at once.
+//! listens on, its records, the log of what it printed, and a directory
+//! per tool set. So the state is the limb's address and its lock at once.
 //!
-//! An [`Instance`] holds the brain's rows for the limb and its records,
-//! which a kind says through its [`Voice`]; a kind that runs calls runs
-//! them with [`Calls`].
+//! An [`Instance`] holds the brain's rows for the limb, its records, which
+//! it says through its [`Voice`], and its tool sets, each a [`ToolSet`]
+//! opened from one of the definition's offers on its own, so one that
+//! cannot open fails only itself. It runs every call with [`Calls`],
+//! dispatched to the set that has its tool by name, in the order each agent
+//! wrote them. What a call runs on the machine runs in a systemd scope of
+//! its own ([`scope`]).
+//!
+//! Max: "I'm not interested in the crash. I think that that's bad code if
+//! we crash." The limb crates deny `unwrap`, `expect`, `panic!` and
+//! `unreachable!`; a panic in a tool set all the same fails only the call
+//! or the set it was in.
 //!
 //! # A limb's setup
 //!
-//! How the brain comes to use a limb, from needing it to the limb's description, which makes it reached (`State::reached`) so that a task's first root can be made. A limb outlives the brain that started it, so after a brain's restart only the second branch of the `alt` runs. Every kind goes through the same steps: a kind differs only in what its `Kind::open` and `Kind::apply` do.
+//! How the brain comes to use a limb, from needing it to the limb's description, which makes it reached (`State::reached`) so that a task's first root can be made. A limb outlives the brain that started it, so after a brain's restart only the second branch of the `alt` runs.
 //!
 //! ```mermaid
 //! ---
@@ -32,45 +44,46 @@
 //!   participant brain as The brain
 //!   participant attach as attach LIMB
 //!   participant serve as serve LIMB, the limb
-//!   participant kind as The kind, a Workspace
-//!   Note over brain: a task needs a limb that is not connected<br/>State::todo: Todo::Connect, as Brain::connect
-//!   brain->>attach: start the link, whose stdin and stdout are the brain's end<br/>Process::attach runs harness-limb-KIND attach LIMB
+//!   participant sets as Its tool sets
+//!   Note over brain: a task needs a limb that is not connected<br/>State::todo: Todo::Connect
+//!   brain->>attach: start the link, whose stdin and stdout are the brain's end<br/>harness-limb attach LIMB
 //!   attach->>attach: look for the limb's socket<br/>attach::run: State::enter, connect
 //!   alt nothing is listening
-//!     attach->>serve: start the limb, in a systemd scope if there is a user manager<br/>attach::start: serve LIMB
-//!     serve->>serve: take the lock, detach, listen on the socket<br/>serve::run: setsid, subreaper
+//!     attach->>serve: start the limb in harness-limb-LIMB.scope, if there is a user manager<br/>attach::start: serve LIMB
+//!     serve->>serve: take the lock, detach, open its records, listen on the socket<br/>serve::run: setsid, subreaper, Instance::open
 //!     attach->>serve: connect, tried every 50 ms for up to 30 s
 //!   else a limb already runs, as it does after a brain restart
 //!     attach->>serve: connect
 //!   end
-//!   serve->>brain: the limb says Hello<br/>Hello, through attach::relay, read by link::follow
-//!   Note over brain: the link is kept, and the brain ships the limb a whole view<br/>Brain::joined, then Brain::publish with LimbRow::Definition
-//!   brain->>serve: the view<br/>LimbDown::View
-//!   Note over serve: that connection is now the link, and the limb opens its instance<br/>Served::apply: Instance::open
-//!   serve->>kind: open the kind: clone the repository if the definition has one to make, end an earlier instance's orphans<br/>Kind::open: Workspace::open, git::clone
-//!   serve->>kind: tell the kind the link is up<br/>Instance::apply: Kind::apply, with connected
-//!   kind->>brain: the kind describes itself, a record on the link<br/>Voice::describe: Fact::Described
-//!   Note over brain: the brain notes the connection first, then includes the record<br/>Brain::heard: Reach::Connected<br/>State::reached is now true, so Todo::Root can come
+//!   serve->>brain: the limb says Hello<br/>Hello, through attach::relay
+//!   brain->>serve: a whole view, with LimbRow::Definition and a LimbRow::Workdir per directory
+//!   Note over serve: that connection is now the link<br/>Instance::apply
+//!   serve->>sets: open each offer's set on its own; hand every set the rows<br/>Instance::define, ToolSet::apply
+//!   sets->>brain: the workspace prepares each directory on a thread of its own, and says what it found<br/>Fact::Workdir
+//!   serve->>brain: the limb describes its sets, a record on the link<br/>Fact::Described
+//!   Note over brain: State::reached is now true, and a task whose directory is Ready can be rooted
 //! ```
 
 mod attach;
 mod calls;
+pub mod scope;
 mod serve;
+mod set;
 mod voice;
 
 pub use calls::{Calls, Limit};
-pub use voice::{CallRow, Instance, Report, Rows, Voice, definition, instant, lock, now, settings};
+pub use set::{Open, Opening, Running, ToolSet, offer, settings};
+pub use voice::{CallRow, Instance, Report, Rows, Voice, instant, lock, now};
 
 use std::fs::File;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::Duration;
 
-use harness_core::environment::{Limb, LimbUp};
 use harness_core::id::LimbId;
+use harness_core::limb::LimbUp;
 
 /// How long a limb runs on with no brain linked: long enough for a crashed
 /// brain to be restarted by hand, so a restart never costs a limb its
@@ -81,62 +94,35 @@ pub const ABSENT: Duration = Duration::from_secs(15 * 60);
 /// told how long: no brain for [`ABSENT`], or a signal.
 pub const SHUTDOWN: Duration = Duration::from_secs(5);
 
-/// What a kind ships, in order: to the link while there is one.
+/// What a limb ships, in order: to the link while there is one.
 pub type Out = Box<dyn Fn(LimbUp) + Send + Sync>;
 
-/// One kind of limb: what it does with the rows a brain ships it.
-pub trait Kind: Sized + Send + Sync + 'static {
-    /// Open an instance on its definition, the first the brain ships: make
-    /// what it works in, and say its records through `voice`. What it
-    /// returns on failure is why the limb cannot start.
-    fn open(definition: &Limb, voice: Arc<Voice>, state: &Path) -> Result<Self, String>;
-
-    /// Act on the brain's rows as they now stand: run the calls it has no
-    /// record of, stop those asked to stop, watch what is asked.
-    /// `connected`: the rows begin a link, on which it describes itself.
-    /// Never blocks on a call.
-    fn apply(&self, rows: &Rows, connected: bool);
-
-    /// Whether anything would die with the process: a running call, or what
-    /// one left running (a server, a browser and its tabs). A superseded
-    /// limb ([`harness_core::environment::LimbRow::Superseded`]) exits once nothing does.
-    fn holds(&self) -> bool;
-
-    /// Stop everything running, to be gone `within` from now, and start
-    /// nothing new. Asked again with less time, stop harder.
-    fn stop_all(&self, within: Duration);
-
-    /// Wait until nothing it started is left.
-    fn join(&self);
-}
-
-/// Run as `harness-limb-<kind>`: `attach <limb>` or `serve <limb>`.
-pub fn main<K: Kind>(kind: &str) -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let (Some(command), Some(limb), None) = (args.next(), args.next(), args.next()) else {
-        eprintln!("usage: harness-limb-{kind} attach|serve <limb>");
-        return ExitCode::FAILURE;
+/// Run the limb's own commands, `attach [--existing] <limb>` or
+/// `serve <limb>`, from `args` (the arguments after the program's name),
+/// with the tool sets `sets` it can open, by name.
+pub fn main(args: &[&str], sets: &'static [(&'static str, Open)]) -> ExitCode {
+    let ran = match args {
+        ["attach", limb] => parse(limb).and_then(|l| attach::run(l, true)),
+        ["attach", "--existing", limb] => parse(limb).and_then(|l| attach::run(l, false)),
+        ["serve", limb] => parse(limb).and_then(|l| serve::run(l, sets)),
+        _ => Err("usage: harness-limb attach [--existing] <limb> | serve <limb>".into()),
     };
-    let ran = limb
-        .parse::<LimbId>()
-        .map_err(|e| format!("the limb {limb}: {e:?}"))
-        .and_then(|limb| match command.as_str() {
-            "attach" => attach::run(kind, limb),
-            "serve" => serve::run::<K>(kind, limb),
-            _ => Err(format!("no command `{command}`: attach or serve")),
-        });
     match ran {
         Ok(code) => code,
         // What `attach` says is the limb's own last words, or its own.
-        Err(e) if command == "attach" => {
+        Err(e) if args.first() == Some(&"attach") => {
             eprintln!("{e}");
             ExitCode::FAILURE
         }
         Err(e) => {
-            eprintln!("harness-limb-{kind}: {e}");
+            eprintln!("harness-limb: {e}");
             ExitCode::FAILURE
         }
     }
+}
+
+fn parse(limb: &str) -> Result<LimbId, String> {
+    limb.parse().map_err(|e| format!("the limb {limb}: {e:?}"))
 }
 
 /// One limb's state on its host: `$XDG_STATE_HOME/harness/limbs/<limb>`.
@@ -206,10 +192,28 @@ impl State {
     /// that ended did.
     pub fn last_words(&self, from: u64) -> String {
         let text = std::fs::read(self.log()).unwrap_or_default();
-        let text = String::from_utf8_lossy(text.get(from as usize..).unwrap_or_default());
+        let from = usize::try_from(from).unwrap_or(usize::MAX);
+        let text = String::from_utf8_lossy(text.get(from..).unwrap_or_default());
         match text.lines().rev().find(|l| !l.trim().is_empty()) {
             Some(line) => line.trim().to_string(),
             None => format!("it ended saying nothing; see {}", self.log().display()),
         }
     }
+}
+
+/// What a panic said, for a call or a set that it failed.
+pub fn panicked(payload: &(dyn std::any::Any + Send)) -> String {
+    match payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+    {
+        Some(message) => format!("it panicked: {message}"),
+        None => "it panicked".into(),
+    }
+}
+
+/// Run `f`, a panic in it becoming an error that says so.
+pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|p| panicked(&*p))
 }
