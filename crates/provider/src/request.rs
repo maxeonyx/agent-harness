@@ -4,6 +4,8 @@ use harness_core::context::{Entry, EntryId, Root};
 use harness_core::id::ValueId;
 use harness_core::model_call::ModelCall;
 
+use crate::image::shrunk;
+
 /// The identity string the subscription requires as `system[0]`. Without it
 /// Opus refuses with a 429 that pretends to be a rate limit.
 pub const IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
@@ -36,7 +38,8 @@ pub fn model<'a>(call: &'a ModelCall, base: &[(EntryId, &'a Entry)]) -> Option<&
 /// and the members of `call.params`. A breakpoint
 /// adds `cache_control` to the last block of the entry it names (the last
 /// `system` block, for a root). Nothing is parsed and written again, so what
-/// was stored is what is sent.
+/// was stored is what is sent, except a message holding an image too large
+/// for the API, which is sent [`shrunk`].
 pub fn body(
     call: &ModelCall,
     base: &[(EntryId, &Entry)],
@@ -124,7 +127,7 @@ pub fn body(
         out.extend_from_slice(b"{\"role\":\"");
         out.extend_from_slice(message.role.as_str().as_bytes());
         out.extend_from_slice(b"\",\"content\":");
-        out.extend_from_slice(&marked(bytes(message.content)?, *id)?);
+        out.extend_from_slice(&marked(shrunk(bytes(message.content)?), *id)?);
         out.push(b'}');
     }
     out.extend_from_slice(b"],\"stream\":true");
