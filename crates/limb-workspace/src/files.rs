@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use harness_limb::{Report, Running, lock};
-use harness_runtime::{Cancel, Ended as TreeEnded};
+use harness_runtime::Cancel;
 
 use crate::record::replace;
 use crate::shell::{self, Ended};
@@ -147,7 +147,7 @@ impl Inner {
         )
         .map_err(|e| format!("cannot run the command: {e}"))?;
         // What outlived SIGKILL stays recorded, for the next instance.
-        if !matches!(&ran.tree, TreeEnded::Killed { survivors } if !survivors.is_empty()) {
+        if ran.tree.survivors.is_empty() {
             self.marks.ran(call);
         }
         let ended = shell::describe(&ran, timeout, running.shutting_down());

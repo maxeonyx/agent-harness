@@ -403,10 +403,14 @@ fn end_adopted(cancel: &Cancel) {
         harness_runtime::children()
     };
     match harness_runtime::end(&mut waiter, deadline, Some(libc::SIGTERM), members, || None) {
-        Ok(harness_runtime::Ended::Killed { survivors }) if !survivors.is_empty() => {
-            eprintln!("processes {survivors:?} survived SIGKILL");
+        Ok(ended) => {
+            for survivor in ended.survivors {
+                eprintln!(
+                    "PID {} `{}` survived SIGKILL",
+                    survivor.pid, survivor.command
+                );
+            }
         }
-        Ok(_) => {}
         Err(e) => eprintln!("ending what was left: {e}"),
     }
     harness_runtime::reap_children();

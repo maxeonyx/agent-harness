@@ -33,7 +33,7 @@
 //! **Not covered.** Name resolution (`getaddrinfo`) blocks a connect and
 //! cannot be cancelled. A process that leaves its group and clears its
 //! environment is found only once the subreaper adopts it, and a process in
-//! uninterruptible sleep can outlive `SIGKILL`; [`Ended::Killed`] names it.
+//! uninterruptible sleep can outlive `SIGKILL`; [`Ended`] names it.
 //! A cgroup per limb would close the first escape.
 
 mod cancel;
@@ -42,7 +42,5 @@ pub mod signals;
 mod socket;
 
 pub use cancel::{Cancel, Cancelled, Waiter, Wake};
-pub use group::{
-    Ended, Group, Process, children, end, marked, reap_children, reap_detached, subreaper,
-};
+pub use group::{Ended, Group, Member, Process, children, end, marked, reap_children, subreaper};
 pub use socket::Socket;

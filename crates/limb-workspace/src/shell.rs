@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use harness_core::id::CallId;
 use harness_limb::scope::{self, Scope};
 use harness_limb::{Limit, SHUTDOWN};
-use harness_runtime::{Cancel, Ended as TreeEnded, Group, Wake};
+use harness_runtime::{Cancel, Ended as TreeEnded, Group, Member, Wake};
 
 use crate::trunc::{Truncated, Truncator};
 
@@ -209,18 +209,43 @@ pub fn describe(ran: &Ran, timeout: Duration, shutdown: bool) -> String {
         Ended::Stopped if shutdown => "[interrupted: the harness shut down]".into(),
         Ended::Stopped => "[interrupted]".into(),
     };
-    let tree = match &ran.tree {
-        TreeEnded::Graceful => String::new(),
-        TreeEnded::Killed { survivors } if survivors.is_empty() => {
-            " [what it left running did not exit when asked, and was killed]".into()
+    let tree = &ran.tree;
+    let left = match (&ran.ended, tree.asked.is_empty(), tree.killed) {
+        (Ended::Exited(_), false, false) => {
+            format!(
+                " [what it left running was stopped: {}]",
+                members(&tree.asked)
+            )
         }
-        TreeEnded::Killed { survivors } => {
-            format!(" [processes {survivors:?} it started survived SIGKILL and are still running]")
-        }
+        (Ended::Exited(_), false, true) => format!(
+            " [what it left running did not exit on SIGTERM and was killed: {}]",
+            members(&tree.asked)
+        ),
+        _ => String::new(),
+    };
+    let survivors = match tree.survivors.is_empty() {
+        true => String::new(),
+        false => format!(
+            " [still running after SIGKILL: {}]",
+            members(&tree.survivors)
+        ),
     };
     let unscoped = match &ran.unscoped {
         Some(why) => format!(" [it ran without a systemd scope of its own: {why}]"),
         None => String::new(),
     };
-    format!("{ended}{tree}{unscoped}")
+    format!("{ended}{left}{survivors}{unscoped}")
+}
+
+/// Processes as PID and command line, each cut to a line.
+fn members(members: &[Member]) -> String {
+    const WIDTH: usize = 120;
+    let member = |m: &Member| {
+        let command = match m.command.char_indices().nth(WIDTH) {
+            Some((cut, _)) => format!("{}…", &m.command[..cut]),
+            None => m.command.clone(),
+        };
+        format!("PID {} `{command}`", m.pid)
+    };
+    members.iter().map(member).collect::<Vec<_>>().join(", ")
 }
