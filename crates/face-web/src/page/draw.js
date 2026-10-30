@@ -1,6 +1,6 @@
 import { $, clock, el, ICONS, panel, svgEl } from "./base.js";
 import { byId, derive, DOT, glyph, graph, isDone, layout, live, look, positions, ROOT_DOT, routes, SAT_DOT, satLabel, shortName, shown, unfolded, view } from "./map.js";
-import { cam, cardShown, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setSeam, target } from "./camera.js";
+import { cam, cardShown, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam, target } from "./camera.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
 import { renderBuilds } from "./builds.js";
@@ -134,11 +134,11 @@ export function drawEdges() {
 // not be made, or its last turn not responding.
 export function trouble(t) {
   const failed = t.waiting?.kind === "starting" ? t.waiting.failed || [] : [];
-  if (failed.length) return failed.map((f) => `couldn't make ${f.limb}: ${f.why} · the harness keeps trying; abandon it, or start again elsewhere`).join("; ");
+  if (failed.length) return `${failed.map((f) => `Couldn't make ${f.limb}: ${f.why}.`).join(" ")} The harness keeps trying: abandon it, or start again elsewhere.`;
   const x = t.trouble;
   if (!x || isDone(t)) return null;
-  if (x.until != null) return x.until > Date.now() ? `limited until ${clock(x.until)}` : null;
-  return t.failures ? `failed ${t.failures}× · ${x.text}` : null;
+  if (x.until != null) return x.until > Date.now() ? `Limited until ${clock(x.until)}` : null;
+  return t.failures ? `Failed ${t.failures === 1 ? "once" : `${t.failures} times`}: ${x.text}` : null;
 }
 
 // ─── The whole page, from the view ─────────────────────────────────────────
@@ -180,7 +180,7 @@ export function render() {
   renderUsage();
   renderBuilds();
   const q = view.queue || [];
-  document.title = q.length ? `(${q.length}) harness` : "harness";
+  document.title = q.length ? `(${q.length}) Harness` : "Harness";
   notify(q);
   if (openId && openId !== NEW && live(openId) !== openId) goStaying(live(openId));
   else if (openId) renderPanel();
@@ -191,40 +191,74 @@ export function render() {
 
 // ─── What needs Max, off screen ────────────────────────────────────────────
 // What waits on Max where the camera does not show it is a mark at the
-// screen's edge, toward it, the next one haloed; a click opens it.
+// screen's edge, toward it, the next one haloed; a click brings it to the
+// middle of the screen, where a click on it opens it.
 const marksEl = $("#marks"), markEls = new Map();
 export function placeMarks() {
   if (!view) return;
-  const m = 20, seen = new Set(), placed = [];
-  // The open card covers what is under it: no mark goes there.
-  const card = openId && !panel.hidden ? panel.getBoundingClientRect() : null;
+  // The marks run round a rectangle inset from the screen, clear of the
+  // bottom bar; each sits where the line from the middle to its node crosses
+  // it, so it slides as the camera moves, round corners too.
+  const m = 20, l = m, t = m, r = innerWidth - m, b = innerHeight - m - 40;
+  const w = r - l, h = b - t, P = 2 * (w + h), ox = innerWidth / 2, oy = (t + b) / 2;
+  const marks = [];
   (view.queue || []).forEach((q, i) => {
     const id = live(q.task), p = shown.get(id);
     if (!p || id === openId) return;
     const x = cam.x + (p.x + p.w / 2) * cam.k, y = cam.y + (p.y + DOT / 2) * cam.k;
     if (x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight) return;
+    const dx = x - ox, dy = y - oy, f = Math.min(Math.abs(w / 2 / dx), Math.abs(h / 2 / dy));
+    const ex = ox + dx * f, ey = oy + dy * f;
+    // Distance along the perimeter, clockwise from the top left corner.
+    const s = Math.abs(ey - t) < 0.5 ? ex - l : Math.abs(ex - r) < 0.5 ? w + ey - t : Math.abs(ey - b) < 0.5 ? w + h + r - ex : 2 * w + h + b - ey;
+    marks.push({ id, x, y, s, d: Math.hypot(dx, dy), next: i === 0 });
+  });
+  // Neighbours closer than a mark's width push each other apart evenly, so a
+  // group spreads and moves as one. Nodes in line with the middle, as a
+  // column is when one of it is centred, go in order of distance.
+  marks.sort((u, v) => (Math.abs(u.s - v.s) < 0.5 ? u.d - v.d : u.s - v.s));
+  const n = marks.length, gap = Math.min(30, P / Math.max(n, 1));
+  const apart = (i) => marks[(i + 1) % n].s - marks[i].s + (i === n - 1 ? P : 0);
+  for (let k = 0; n > 1 && k < 16 * n; k++) {
+    let moved = false;
+    for (let i = 0; i < n; i++) {
+      const u = marks[i], v = marks[(i + 1) % n], d = apart(i);
+      if (d < gap - 0.01) { const e = (gap - d) / 2; u.s -= e; v.s += e; moved = true; }
+    }
+    if (!moved) break;
+  }
+  const at = (s) => {
+    s = ((s % P) + P) % P;
+    return s < w ? [l + s, t] : s < w + h ? [r, t + s - w] : s < 2 * w + h ? [r - (s - w - h), b] : [l, b - (s - 2 * w - h)];
+  };
+  // The open card covers what is under it: a mark there fades out.
+  const card = openId && !panel.hidden ? panel.getBoundingClientRect() : null;
+  const seen = new Set();
+  for (const { id, x, y, s, next } of marks) {
     seen.add(id);
     let a = markEls.get(id);
     if (!a) {
       a = el("button", "offscreen");
       a.type = "button";
       a.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.toward}</svg>`;
-      a.onclick = () => go(id);
+      a.onclick = () => centre(id);
       marksEl.append(a);
       markEls.set(id, a);
     }
     a.title = byId[id]?.name || "";
-    a.classList.toggle("next", i === 0);
-    // Marks toward the same corner line up along the edge rather than stack.
-    let cx = Math.max(m, Math.min(innerWidth - m, x)), cy = Math.max(m, Math.min(innerHeight - m - 40, y));
-    const along = cx === m || cx === innerWidth - m ? [0, 30] : [30, 0];
-    while (placed.some(([px, py]) => Math.hypot(px - cx, py - cy) < 28)) { cx += along[0]; cy += along[1]; }
-    placed.push([cx, cy]);
-    a.hidden = !!card && cx > card.left - 12 && cx < card.right + 12 && cy > card.top - 12 && cy < card.bottom + 12;
+    a.classList.toggle("next", next);
+    const [cx, cy] = at(s);
+    a.classList.toggle("under", !!card && cx > card.left - 12 && cx < card.right + 12 && cy > card.top - 12 && cy < card.bottom + 12);
     a.style.left = `${cx}px`;
     a.style.top = `${cy}px`;
     $("svg", a).style.transform = `rotate(${Math.atan2(y - cy, x - cx)}rad)`;
-  });
+  }
   for (const [id, a] of markEls) if (!seen.has(id)) { a.remove(); markEls.delete(id); }
 }
-
+// The camera, at the zoom it has, moved to put a node in the middle.
+function centre(id) {
+  const p = shown.get(id);
+  if (!p) return;
+  setFramed(false);
+  glide({ k: cam.k, x: innerWidth / 2 - (p.x + p.w / 2) * cam.k, y: innerHeight / 2 - (p.y + p.h / 2) * cam.k }, { T: 420 });
+}

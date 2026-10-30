@@ -36,7 +36,7 @@
   }
   .node .dot {
     position: relative; width: var(--d); height: var(--d); border-radius: 50%; display: grid; place-items: center;
-    background: var(--paper); border: 1.5px solid var(--ink); font: 600 calc(var(--d) * .44) / 1 var(--serif);
+    background: var(--s, var(--paper)); border: 1.5px solid var(--s, var(--ink)); color: var(--on, inherit); font: 600 calc(var(--d) * .44) / 1 var(--serif);
     transition: transform .2s var(--ease), background .3s, border-color .3s, color .3s;
   }
   .node:hover .dot { transform: scale(1.1); }
@@ -54,13 +54,12 @@
   .node.streaming .ring { animation-duration: .7s; }
   .node.tool .ring { border: 2px dashed rgba(20, 20, 19, .55); animation: spin 4s linear infinite; }
   .node.children .ring { border-color: rgba(20, 20, 19, .16); }
-  .node.starting .dot { border-style: dashed; color: var(--faint); }
+  .node.starting .dot { border-style: dashed; }
   .node.starting .ring { border: 2px dotted rgba(20, 20, 19, .3); animation: spin 6s linear infinite; }
   .node.listening .dot { border-style: double; border-width: 3px; }
-  .node.needs .dot { background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
-  .node.needs .name { color: var(--maroon); }
-  .node.next .ring { border-color: var(--maroon); animation: halo 2.2s var(--ease) infinite; }
-  .node.paused .dot { background: var(--ground); border-color: var(--faint); color: var(--muted); }
+  .node.needs .name { color: var(--yours); }
+  .node.next .ring { border-color: var(--yours); animation: halo 2.2s var(--ease) infinite; }
+  .node.paused .dot { background: var(--ground); }
   .node.paused .name { color: var(--muted); }
   .node.trouble .ring { border: 2px dashed var(--red); animation: spin 3s linear infinite; }
   .node.cancelling .ring { border: 2px dashed var(--faint); animation: spin 5s linear infinite; }
@@ -68,17 +67,14 @@
   #link.down ~ #map .node .ring { animation-play-state: paused; opacity: .35; }
   .node.done { opacity: .5; }
   .node.done:hover { opacity: .9; }
-  .node.done .dot { background: var(--green); border-color: var(--green); color: var(--paper); }
   .node.done .name { font-weight: 500; }
-  .node.failed .dot { background: var(--red); border-color: var(--red); }
-  .node.cancelled .dot { background: var(--line); border-color: var(--faint); color: var(--muted); border-radius: 30%; }
+  .node.cancelled .dot { background: var(--line); border-radius: 30%; }
   .node.unmatched { opacity: .12 !important; }
   .node.selected { visibility: hidden; }
   .node .more { margin-top: 3px; font-size: 11px; color: var(--muted); border-radius: 9px; padding: 0 .5em; }
   /* A finished project, folded: a small card on the archive shelf. */
   .node.archived { align-items: flex-start; text-align: left; justify-content: center; height: 34px; padding: 0 1.7em 0 .75em; border: 1px solid var(--line); border-radius: 10px; background: rgba(250, 249, 245, .7); opacity: 1; }
-  .node.archived::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--green); opacity: .6; }
-  .node.archived.failed::before { background: var(--red); }
+  .node.archived::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--s, var(--done)); opacity: .6; }
   .node.archived:hover { background: var(--paper); }
   .node.archived .dot { display: none; }
   .node.archived .name { margin: 0; font: 500 13px/1.2 var(--serif); color: var(--muted); }
@@ -93,7 +89,8 @@
   @keyframes grow { from { transform: scale(.2); opacity: 0; } }
 
   /* What needs Max but is off screen: a mark at the edge, toward it. */
-  .offscreen { position: fixed; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--maroon); color: var(--paper); display: grid; place-items: center; box-shadow: 0 3px 10px rgba(122, 31, 34, .35); }
+  .offscreen { position: fixed; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--yours); color: var(--paper); display: grid; place-items: center; box-shadow: 0 3px 10px rgba(122, 60, 20, .35); transition: opacity .2s; }
+  .offscreen.under { opacity: 0; pointer-events: none; }
   .offscreen svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-  .offscreen.next::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--maroon); animation: halo 2.2s var(--ease) infinite; }
+  .offscreen.next::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--yours); animation: halo 2.2s var(--ease) infinite; }
 

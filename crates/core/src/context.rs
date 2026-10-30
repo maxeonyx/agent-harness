@@ -52,8 +52,8 @@ impl FromStr for EntryId {
 /// tree and refuses a head that does not grow along it. Nothing else
 /// stores entries.
 ///
-/// Fork, fresh start, shared seed, compaction, resume, Max's retry, edit
-/// and going back, and aside are all a task's head moving to an entry
+/// Fork, fresh start, shared seed, compaction, resume, edit and going
+/// back, and aside are all a task's head moving to an entry
 /// ([`crate::task::Move`]): to the parent's response (a fork), to a new root
 /// (a fresh start), to the task's latest checkpoint or a new root with the
 /// carry of a compaction appended, to a finished task's last entry (a

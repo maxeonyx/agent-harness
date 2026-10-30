@@ -735,7 +735,7 @@ impl State {
                 });
                 draft.discarded = false;
             }
-            DraftEvent::Send { text, read } => {
+            DraftEvent::Send { text } => {
                 let mut draft = self.drafts.get(&id).ok_or(Rejected::Unknown)?.clone();
                 match &draft.sent {
                     Some(sent) if sent.text == *text => {}
@@ -759,7 +759,6 @@ impl State {
                             id,
                             to: draft.session,
                             content: Content::Words(*text),
-                            read: *read,
                         };
                         let fact = Fact::Delivery(delivery.clone());
                         let as_delivery = Stated {

@@ -8,7 +8,6 @@
 use std::collections::BTreeMap;
 
 use harness_core::build::{BuildId, Launch, Launched};
-use harness_core::delivery::Read;
 use harness_core::draft::{DraftEvent, Fate};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::{DeliveryId, ReplicaId, RoleId, TaskId, Time, Timestamp, ValueId};
@@ -403,13 +402,7 @@ fn main() {
     let clock = hub.tick();
     let pc_send = pc.act(clock, |_| Batch {
         values: vec![words(&words_of[&pc_text]).1],
-        facts: vec![Fact::Draft(
-            draft,
-            DraftEvent::Send {
-                text: pc_text,
-                read: Read::Next,
-            },
-        )],
+        facts: vec![Fact::Draft(draft, DraftEvent::Send { text: pc_text })],
     });
     let clock = hub.tick();
     phone.act(clock, |_| Batch {
@@ -419,13 +412,7 @@ fn main() {
     let clock = hub.tick();
     let phone_send = phone.act(clock, |_| Batch {
         values: vec![phone_bytes],
-        facts: vec![Fact::Draft(
-            draft,
-            DraftEvent::Send {
-                text: phone_text,
-                read: Read::Next,
-            },
-        )],
+        facts: vec![Fact::Draft(draft, DraftEvent::Send { text: phone_text })],
     });
     println!(
         "  before syncing: pc's Send {}, phone's Send {}",
@@ -511,10 +498,7 @@ fn main() {
         values: vec![words(&words_of[&phone_text]).1],
         facts: vec![Fact::Draft(
             successor,
-            DraftEvent::Send {
-                text: phone_text,
-                read: Read::Next,
-            },
+            DraftEvent::Send { text: phone_text },
         )],
     });
     hub.sync(&mut phone);

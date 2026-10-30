@@ -179,7 +179,7 @@ async function endRename(keep) {
   title.removeAttribute("contenteditable");
   if (!t || !keep || !name || name === t.name) { title.textContent = t?.name || ""; return; }
   const why = await act({ Task: [t.id, { Renamed: name }] });
-  if (why) { title.textContent = t.name; say(`not renamed: ${why}`, true); }
+  if (why) { title.textContent = t.name; say(`Not renamed: ${why}`, true); }
 }
 
 // How full a task's context was at its last request, of its model's window.
@@ -227,7 +227,10 @@ async function renderMix(t) {
     tr.append(name, el("td", "n", `≈${kTokens(Math.round(tokens * m[k] / total))}`), el("td", "n", `${Math.round(m[k] / total * 100)}%`));
     table.append(tr);
   }
-  const head = el("div", null, `${kTokens(tokens)} of ${kTokens(t.window)} (${Math.round(fullness(t) * 100)}%) at its last request · ${t.tokens?.output ?? "?"} out`);
+  const head = el("div", "sum");
+  head.title = "At its last request";
+  const fact = (label, value, rest) => { const s = el("span", null, `${label} `); s.append(el("b", null, value), rest); return s; };
+  head.append(fact("Context", kTokens(tokens), ` of ${kTokens(t.window)}, ${Math.round(fullness(t) * 100)}%`), fact("Output", kTokens(t.tokens?.output), ""));
   const exact = el("button", `btn${logState?.exact ? " armed" : ""}`, "As sent");
   exact.type = "button";
   exact.title = "The log as the exact context the model was sent";
@@ -267,7 +270,7 @@ export async function start(h, text, files, after = []) {
       name: h.name, by: null, scope: h.scope, origin: h.origin,
       mode: "UserFacing", mandate: { text: mandate, brief: null, quotes: [] }, tuning: h.tuning || {},
     } }] });
-    if (words) out.push({ Delivery: { id: next(), to: id, content: { Words: digest(words) }, read: "Next" } });
+    if (words) out.push({ Delivery: { id: next(), to: id, content: { Words: digest(words) } } });
     return [...out, ...after];
   }, words ? [text, words] : [text]);
   if (!why) { pendingOpen = id; stay = true; }

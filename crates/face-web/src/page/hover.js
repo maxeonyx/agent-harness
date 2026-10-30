@@ -1,4 +1,4 @@
-import { $, ago, el, gist, kTokens } from "./base.js";
+import { $, ago, el, gist, homePath, kTokens } from "./base.js";
 import { byId, cardStatus, graph, isDone, look, parentOf } from "./map.js";
 import { drag } from "./camera.js";
 import { trouble } from "./draw.js";
@@ -87,7 +87,7 @@ export function fillTip() {
     const n = graph.nodes.get(id);
     if (!n) return hideTip();
     const c = n.call;
-    lines.push(el("b", null, c.name ? `${c.name}: ${c.tool}` : c.tool), el("div", "now", `started ${ago(c.made)} ago`));
+    lines.push(el("b", null, c.name ? `${c.name}: ${c.tool}` : c.tool), el("div", "now", `Started ${ago(c.made)} ago`));
     if (c.owner === "max" && c.passed) lines.push(el("div", null, `Passed to you by ${byId[c.passed.by]?.name || "an agent"}: ${c.passed.why}`));
     const input = gist(c.input);
     if (input) lines.push(el("div", "m", input));
@@ -96,12 +96,15 @@ export function fillTip() {
     if (!t) return hideTip();
     const fc = graph.comps.find((c) => c.folded && c.root.id === id);
     lines.push(el("b", null, t.name), el("div", "now", fc ? cardStatus(fc) : trouble(t) || look(t).text));
+    // What it is, each fact a word or two of its own; where it works, as a path.
     const place = t.workdir;
     const mode = t.mode === "user-facing" ? "chat" : t.mode === "standing" ? "standing" : null;
     const what = [t.role, mode !== t.role && mode].filter(Boolean).join(" ");
-    const phased = t.compactions && `compacted ${t.compactions === 1 ? "once" : `${t.compactions}×`}`;
-    lines.push(el("div", null, [what, t.origin === "fork" && "a fork", phased, place && `in ${place.split("/").filter(Boolean).slice(-2).join("/")}`].filter(Boolean).join(" · ")));
-    if (t.tokens && !isDone(t)) lines.push(el("div", null, `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`));
+    const n = t.compactions;
+    const facts = [what && what[0].toUpperCase() + what.slice(1), t.origin === "fork" && "Forked", n && `Compacted ${n === 1 ? "once" : `${n} times`}`,
+      fc && fc.tasks.length > 1 && `${fc.tasks.length} tasks`, t.tokens && !isDone(t) && `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`].filter(Boolean);
+    if (facts.length) { const f = el("div", "facts"); f.append(...facts.map((x) => el("span", null, x))); lines.push(f); }
+    if (place) { const d = el("div", "place"); d.append(el("code", null, homePath(place))); lines.push(d); }
     if (t.mandate && !fc) lines.push(el("div", "m", t.mandate.slice(0, 240)));
   }
   const words = tip.querySelector(".words") || tip.appendChild(el("div", "words"));

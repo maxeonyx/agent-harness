@@ -3,11 +3,23 @@
     --ground: #f0eee6; --paper: #faf9f5; --white: #fffefb; --line: #e3dfd3; --ink: #141413;
     --muted: #6b6a64; --faint: #a19f96; --maroon: #7a1f22; --hover: #e9e5d9;
     --green: #4f8a55; --red: #b3352c;
+    /* What a task's state is, by its colour: Max's turn, an agent at work,
+       waiting on other agents, done, paused or abandoned, failed. */
+    --yours: #d4691c; --working: #3a6db0; --others: #8b5aa6; --done: var(--green); --paused: var(--faint); --failed: var(--red);
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
     --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
     --ease: cubic-bezier(.2, .8, .2, 1);
   }
+  /* A task's state sets its colour here once, as --s, and --on for what is
+     drawn on it; whatever shows a state reads them. Paused and abandoned are
+     hollow: each place shows them unfilled. */
+  :is(.working, .starting, .listening) { --s: var(--working); --on: var(--paper); }
+  .children { --s: var(--others); --on: var(--paper); }
+  .needs { --s: var(--yours); --on: var(--paper); }
+  .done { --s: var(--done); --on: var(--paper); }
+  .failed { --s: var(--failed); --on: var(--paper); }
+  :is(.paused, .cancelled) { --s: var(--paused); --on: var(--muted); }
   * { box-sizing: border-box; }
   /* Scrollbars thin and in the page's colours, wherever they appear. */
   ::-webkit-scrollbar { width: 9px; height: 9px; }

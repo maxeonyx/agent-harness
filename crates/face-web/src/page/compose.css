@@ -1,28 +1,31 @@
-  /* What Max writes: a staging area, kept until he sends it, with dictate and
-     send stacked at its right, large. The words run under them, kept clear
-     of them, so the box's scrollbar is at its own right edge. What he can do to the task itself floats on the
-     map, outside the card to the right of the box; on a phone, where the card
-     fills the screen, it floats above the box's right end. */
-  .compose { padding: .2em 1em .6em; }
-  .compose .box { max-width: 48rem; margin: 0 auto; background: var(--white); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 2px 10px rgba(40, 30, 20, .06); padding: .6em 3px .4em .95em; }
-  .compose .box:focus-within { border-color: #c9c4b4; box-shadow: 0 2px 14px rgba(40, 30, 20, .1); }
-  .compose .box.drop { border-color: var(--ink); }
-  .compose .box.staged, .compose .box.staged:focus-within { border-color: var(--maroon); box-shadow: 0 0 0 1.5px var(--maroon); }
+  /* What Max writes: the full width of the card, with only a line above it.
+     Staged parts sit at its top, each above a divider, and the words he
+     types below them; they scroll as one, under attach, dictate and send,
+     stacked at its right. Its bottom edge is a strip of sections: what went
+     wrong, and the model and effort. What he can do to the task itself
+     floats on the map, outside the card to the right of the box; on a
+     phone, where the card fills the screen, it floats above the box's right
+     end. */
+  .compose { padding: 0; }
+  .compose .box { background: var(--white); border-top: 1px solid var(--line); }
+  .compose .box.drop { box-shadow: inset 0 0 0 1.5px var(--ink); }
   .compose .others:empty { display: none; }
+  .compose .others { padding: .4em .6em 0; }
   .compose .other { display: flex; align-items: center; gap: .6em; margin: 0 0 .4em; padding: .35em .6em; border: 1px dashed var(--line); border-radius: 10px; font-size: 13px; }
   .compose .other .said { flex: 1; white-space: pre-wrap; }
   .compose .other .why { color: var(--muted); font-size: 12px; }
   .compose .other.held { border-style: solid; }
-  .compose .tray { display: flex; flex-wrap: wrap; gap: .4em; margin: .1em 0 .35em; }
-  .compose .tray:empty { display: none; }
-  .compose .att { display: inline-flex; align-items: center; gap: .35em; font-size: 12px; border: 1px solid var(--line); border-radius: 8px; padding: .15em .25em .15em .4em; background: var(--paper); max-width: 16em; }
-  .compose .att img { height: 2.2em; border-radius: 4px; }
-  .compose .att span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .compose .att .x { --x: 9px; width: 18px; height: 18px; border-radius: 5px; }
   .compose .line { display: grid; }
   .compose .line > * { grid-area: 1 / 1; }
-  .compose textarea { display: block; width: 100%; min-width: 0; align-self: start; border: 0; outline: 0; resize: none; background: transparent; font: 15px/1.5 var(--sans); color: var(--ink); min-height: 1.5em; max-height: 40vh; padding: .1em 60px .1em 0; }
-  .compose .side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; justify-self: end; align-self: end; margin-right: 10px; }
+  .compose .field { max-height: 45vh; overflow-y: auto; overscroll-behavior: contain; padding: .5em 52px .35em .9em; }
+  .compose .parts:empty { display: none; }
+  .compose .part { display: flex; align-items: flex-start; gap: .4em; padding: .15em 0 .4em; margin-bottom: .4em; border-bottom: 1px solid var(--line); font: 15px/1.5 var(--sans); color: var(--ink); }
+  .compose .part .words { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .compose .part.document .words { color: var(--muted); }
+  .compose .part img { max-height: 6em; max-width: 60%; border-radius: 6px; margin-right: auto; }
+  .compose .part .x { --x: 9px; width: 22px; height: 22px; border-radius: 6px; flex: none; }
+  .compose textarea { display: block; width: 100%; min-width: 0; border: 0; outline: 0; resize: none; overflow: hidden; background: transparent; font: 15px/1.5 var(--sans); color: var(--ink); min-height: 1.5em; padding: .1em 0; }
+  .compose .side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; justify-self: end; align-self: end; margin: 0 6px 6px 0; }
   .compose .acts { position: absolute; left: calc(100% + 10px); bottom: .6em; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
   .compose .acts:empty { display: none; }
   .compose .acts .act { height: 36px; border: 1px solid var(--line); box-shadow: 0 2px 10px rgba(40, 30, 20, .12); }
@@ -33,35 +36,39 @@
     .compose { position: relative; }
     .compose .acts { left: auto; right: .9em; bottom: calc(100% + 4px); flex-direction: row; }
   }
-  .compose .mic, .compose .send { width: 40px; height: 40px; }
-  .compose .mic svg, .compose .send svg { width: 20px; height: 20px; }
-  .compose .queue { width: 32px; height: 32px; border: 1.5px solid var(--ink); color: var(--ink); }
-  .compose .go .word:empty { display: none; }
-  .compose .go.staged { width: auto; display: inline-flex; gap: .3em; padding: 0 .9em 0 .6em; border-radius: 999px; font-weight: 600; background: var(--maroon); border-color: var(--maroon); color: var(--paper); }
-  .compose .go.staged:hover { background: var(--maroon); color: var(--paper); }
-  .compose .go:disabled { opacity: .4; cursor: default; }
-  .compose .row2 { display: flex; flex-wrap: wrap; align-items: center; gap: .3em; margin-top: .2em; margin-left: -.45em; }
-  .compose .row2:not(:has(:not(:empty):not([hidden]))) { display: none; }
-  .compose .status { flex: 1 1 9em; font-size: 12px; color: var(--red); }
+  .compose .clip, .compose .mic { width: 36px; height: 36px; }
+  .compose .send { width: 40px; height: 40px; }
+  .compose .clip svg, .compose .mic svg, .compose .send svg { width: 20px; height: 20px; }
   .compose .mic.on { background: var(--maroon); color: var(--paper); animation: breathe 1.6s infinite; }
-  .compose .later { font-size: 12.5px; color: var(--muted); padding: .25em .6em; border-radius: 999px; white-space: nowrap; }
-  .compose .later:hover { background: var(--hover); color: var(--ink); }
   .compose .send { background: var(--ink); color: var(--paper); }
   .compose .send:hover { background: #33322e; color: var(--paper); }
-  .compose .send:disabled { background: var(--line); opacity: 1; }
+  .compose .send:disabled { background: var(--line); cursor: default; }
+  .compose .send .word:empty { display: none; }
+  /* Pressing now sends what is staged: it says so. */
+  .compose .send.armed { width: auto; display: inline-flex; gap: .3em; padding: 0 .9em 0 .6em; border-radius: 999px; font-weight: 600; background: var(--maroon); color: var(--paper); }
+  .compose .send.armed:hover { background: var(--maroon); }
+  /* The brain does not have every word yet. */
+  .compose .send.saving svg { display: none; }
+  .compose .send.saving::after { content: ""; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: saving .8s linear infinite; }
+  .compose .send.saving:disabled { color: var(--muted); }
+  @keyframes saving { to { transform: rotate(360deg); } }
   .compose .send.locked:disabled { background: var(--faint); animation: breathe 1s infinite; }
-  .compose .picks { display: inline-flex; gap: .3em; min-width: 0; }
+  /* The bottom edge: sections across one line. */
+  .compose .row2 { display: flex; align-items: stretch; min-height: 28px; border-top: 1px solid var(--line); font-size: 12.5px; }
+  .compose .row2:not(:has(:not(:empty):not([hidden]))) { display: none; }
+  .compose .status { flex: 1 1 9em; align-self: center; padding: 0 .9em; font-size: 12px; color: var(--red); }
+  .compose .later { color: var(--muted); padding: 0 .9em; white-space: nowrap; border-left: 1px solid var(--line); }
+  .compose .later:hover { background: var(--hover); color: var(--ink); }
+  .compose .picks { display: inline-flex; align-items: center; gap: .3em; min-width: 0; padding-left: .45em; }
+  .compose .picks:empty { display: none; }
   .compose .pick { font: 12.5px var(--sans); color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 999px; padding: .25em .6em; max-width: 16em; outline: 0; cursor: pointer; }
   .compose .pick:hover, .compose .pick:focus { border-color: var(--line); color: var(--ink); }
   .compose input.pick { field-sizing: content; min-width: 7em; max-width: 30em; text-overflow: ellipsis; }
-  /* Model and effort: one pill, split in two, each half its own menu. */
-  .compose .tune { display: inline-flex; align-items: stretch; margin-left: auto; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  /* Model and effort: a section each, its own menu. */
+  .compose .tune { display: flex; align-items: stretch; }
   .compose .tune:empty { display: none; }
-  .compose .tune .pick { border: 0; border-radius: 0; padding: .2em .5em .2em .75em; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .compose .tune .pick:last-child { padding: .2em .75em .2em .5em; }
-  .compose .tune .pick:hover, .compose .tune .pick[aria-expanded] { background: var(--hover); color: var(--ink); }
-  .compose .tune .pick:focus-visible { background: var(--hover); color: var(--ink); }
-  .compose .tune .sep { width: 1px; background: var(--line); }
+  .compose .tune .pick { border: 0; border-left: 1px solid var(--line); border-radius: 0; padding: 0 .9em; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compose .tune .pick:hover, .compose .tune .pick[aria-expanded], .compose .tune .pick:focus-visible { background: var(--hover); color: var(--ink); }
   /* A menu over the control that opens it. */
   .menu { position: fixed; z-index: 60; min-width: 9em; max-height: 50vh; overflow: auto; background: var(--white); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px rgba(40, 30, 20, .14); padding: .3em; font-size: 13px; }
   .menu button { display: flex; align-items: baseline; gap: 1em; width: 100%; padding: .4em .65em; border-radius: 8px; text-align: left; white-space: nowrap; outline: 0; }
@@ -75,5 +82,4 @@
   .act.armed { width: auto; display: inline-flex; gap: .3em; padding: 0 .7em 0 .45em; border-radius: 999px; background: var(--maroon); color: var(--paper); font-size: 12.5px; font-weight: 600; }
   .act.armed:hover { background: var(--maroon); color: var(--paper); }
   .act.row { width: 100%; height: auto; display: flex; justify-content: flex-start; gap: .55em; padding: .35em .55em; border-radius: 7px; font-size: 13px; color: var(--ink); }
-  .compose .closed { max-width: 48rem; margin: 0 auto; color: var(--muted); font-size: 13px; text-align: center; padding: .4em; }
-
+  .compose .closed { color: var(--muted); font-size: 13px; text-align: center; padding: .4em; border-top: 1px solid var(--line); }

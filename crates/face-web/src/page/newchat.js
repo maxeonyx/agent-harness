@@ -67,16 +67,16 @@ const nameFrom = (text) => {
 };
 export async function startNew(text, files) {
   const role = roleNamed($("#n-role").value);
-  if (!role) return say("choose a role", true);
+  if (!role) return say("Choose a role", true);
   const dir = $("#n-workdir")?.value.trim();
-  if (role.workdir && !dir) return say("it needs its working directory", true);
-  if (role.workdir && !view.local) return say("this brain has no limb on its machine", true);
-  if (!text.trim()) return say("write what it is for", true);
+  if (role.workdir && !dir) return say("It needs its working directory", true);
+  if (role.workdir && !view.local) return say("This brain has no limb on its machine", true);
+  if (!text.trim()) return say("Write what it is for", true);
   takeWords(NEW);
   const workdir = role.workdir ? { limb: view.local, dir } : undefined;
   const fresh = { Fresh: { role: role.id, workdir } };
   const why = await start({ name: nameFrom(text), scope: "Max", origin: fresh, tuning: newTuning() }, text, files);
-  if (why) { giveBack(NEW, text, files); return say(`not started: ${why}`, true); }
+  if (why) { giveBack(NEW, text, files); return say(`Not started: ${why}`, true); }
 }
 
 // ─── Finding a chat ────────────────────────────────────────────────────────

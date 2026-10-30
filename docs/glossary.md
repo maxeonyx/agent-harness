@@ -56,7 +56,7 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 
 | Term | Meaning | In code |
 |---|---|---|
-| Staging box | The box Max types and dictates into. Enter or a click stages; the second sends. Send now delivers at the agent's next request; Queue holds it until the turn ends. | `draft::Draft`, then `delivery::Delivery` |
+| Staging box | The box Max types and dictates into. Send with words in it stages them, as a part above a divider; Send with it empty sends every staged part, at the agent's next request. | `draft::Draft`, then `delivery::Delivery` |
 | The user turn | Max contributing to a chat the way an agent does: what he opens, runs or edits is attached to the conversation. | Partly: `fact::Fact::Seen` |
 | Map, card | The page's top level is a map of every agent and chat; a card is a chat opened in place on it. Finished projects fold to an archive card. | `crates/face-web/src/page` |
 | Attention scheduler | A standing agent per domain that orders Max's queue, says why, and learns from his disagreement. | Not built: `attention::Ranking` and `attention::Focus` exist, set by nothing. |

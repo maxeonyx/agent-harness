@@ -15,24 +15,33 @@
   #usage .gauges { display: inline-flex; gap: 1.1em; align-items: center; padding: .25em .1em; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
   #usage.busy .gauges { cursor: progress; }
   #usage .alarms { display: inline-flex; gap: 1.1em; }
-  .usage-card {
+  /* A pop-up over what floats over the map, while it is hovered or focused:
+     a table, and a line under it. */
+  .pop {
     position: absolute; left: 0; bottom: calc(100% + .5em); display: none; min-width: 17em; max-width: 24em; padding: .55em .75em; border-radius: 10px;
     background: var(--white); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(40, 30, 20, .14); color: var(--muted); white-space: nowrap;
   }
-  #usage:hover .usage-card, #usage:focus-within .usage-card { display: block; }
-  .usage-card .row { display: grid; grid-template-columns: 1fr auto auto; gap: .9em; padding: .1em 0; }
-  .usage-card .row b { color: var(--ink); font-weight: 600; text-align: right; }
-  .usage-card .row + .as-of { margin-top: .35em; padding-top: .35em; border-top: 1px solid var(--line); }
-  .usage-card .stale { color: var(--faint); }
-  .usage-card .failed { margin-top: .2em; color: var(--maroon); white-space: normal; }
+  :hover > .pop, :focus-within > .pop { display: block; }
+  .pop table { border-collapse: collapse; width: 100%; }
+  .pop td { padding: .1em 1.1em .1em 0; }
+  .pop td:last-child { padding-right: 0; }
+  .pop td.n { color: var(--ink); font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+  .pop .foot { display: flex; justify-content: space-between; gap: 1.2em; }
+  .pop table:not(:empty) + .foot { margin-top: .35em; padding-top: .35em; border-top: 1px solid var(--line); }
+  .pop .stale { color: var(--faint); }
+  .pop .failed { margin-top: .2em; color: var(--maroon); white-space: normal; }
   .gauge { display: inline-flex; gap: .4em; align-items: center; }
   .gauge i { display: inline-block; width: 3.4em; height: .32em; border-radius: 1em; background: var(--line); overflow: hidden; }
   .gauge i b { display: block; height: 100%; background: var(--muted); }
   .gauge.high i b { background: var(--maroon); }
   .alarm { color: var(--maroon); font-weight: 600; }
   /* Which build runs: a quiet line, red only when a relaunch went back. */
-  #bottom .build { color: var(--faint); max-width: 40em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #bottom .build.back { color: var(--maroon); }
+  #bottom .build { position: relative; color: var(--faint); white-space: nowrap; cursor: default; }
+  #bottom .build > .now { margin-left: .7em; }
+  #bottom .build.back > .now { color: var(--maroon); }
+  #bottom .build .pop { white-space: normal; }
+  #bottom .build .pop td:first-child { white-space: nowrap; }
+  #bottom .build .pop td:last-child { color: var(--ink); overflow-wrap: break-word; }
   /* Signing in: the bar's button, and the box the code is pasted into. */
   .sign-in a.button { margin-left: .4em; padding: .15em .7em; border-radius: 999px; background: var(--maroon); color: var(--white); text-decoration: none; }
   .sign-in-box { width: min(26em, 90vw); padding: 1.1em 1.2em; border: 1px solid var(--line); border-radius: 12px; background: var(--white); color: var(--ink); box-shadow: 0 10px 30px rgba(40, 30, 20, .18); }

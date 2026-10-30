@@ -382,12 +382,10 @@ fn pending_words(state: &State, value: Text, t: &Task) -> Vec<Value> {
             Content::Words(words) => json!({
                 "at": d.at.at.0,
                 "content": text(value, words),
-                "read": format!("{:?}", d.delivery.read),
             }),
             Content::Prompt(prompt) => json!({
                 "at": d.at.at.0,
                 "prompt": format!("{prompt:?}"),
-                "read": format!("{:?}", d.delivery.read),
             }),
         })
         .collect()

@@ -4,7 +4,7 @@
 
 use harness_core::call::{Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
-use harness_core::delivery::{Content, Delivery, Prompt, Read};
+use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::fact::Author;
 use harness_core::id::{CallId, Digest, LimbId, Timestamp, ValueId};
 use harness_core::limb::{Instruction, Tool, ToolSet};
@@ -36,7 +36,7 @@ fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> St
         })
         .collect();
     unseen.sort();
-    let mut when = match unseen.as_slice() {
+    match unseen.as_slice() {
         [] if mid_turn => " while you were working".to_string(),
         [] => String::new(),
         [(_, one)] => format!(" while you were working, before your tool call `{one}`"),
@@ -44,11 +44,7 @@ fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> St
             " while you were working, before your last {} tool calls (from `{first}` on)",
             unseen.len()
         ),
-    };
-    if delivered.delivery.read == Read::TurnEnd {
-        when.push_str(", asking that it wait for the end of your turn");
     }
-    when
 }
 
 /// A new root of a role: the identity, the role prompt, each tool set's
@@ -270,10 +266,7 @@ pub fn turn(
                 let Some(delivered) = state.delivery(id) else {
                     continue;
                 };
-                let Delivery { content, read, .. } = &delivered.delivery;
-                if *read == Read::TurnEnd && mid_turn {
-                    continue;
-                }
+                let Delivery { content, .. } = &delivered.delivery;
                 let mut said = Vec::new();
                 // Max's words are labelled, so a brief can quote them, and
                 // say where in the agent's work he wrote them.
