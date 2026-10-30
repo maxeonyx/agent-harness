@@ -1,7 +1,7 @@
 import { $, clock, el, fail, icon } from "./base.js";
 import { act, digest } from "./tab.js";
 import { byId, view } from "./map.js";
-import { fit, setNewPoint, setUsageRight } from "./camera.js";
+import { fit, setNewPoint } from "./camera.js";
 import { go, NEW } from "./card.js";
 import { startFind } from "./newchat.js";
 
@@ -81,7 +81,6 @@ export function renderUsage() {
   usageAlarms.replaceChildren();
   if (view.limited) usageAlarms.append(el("span", "alarm", `Limited until ${clock(view.limited)}, then carries on by itself`));
   if (view.signedOut) usageAlarms.append(signIn);
-  setUsageRight(span.getBoundingClientRect().right);
 }
 // Signing the harness in to claude.ai, when it is not: every task waits
 // until it is. One click on Sign in opens `/login` in a new tab, which

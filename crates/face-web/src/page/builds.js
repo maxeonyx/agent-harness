@@ -10,7 +10,7 @@ import { view } from "./map.js";
 const badge = el("span", "build"), commitEl = el("span"), nowEl = el("span", "now"), card = el("div", "pop");
 badge.tabIndex = 0;
 badge.append(commitEl, nowEl, card);
-$("#usage").after(badge);
+$("#corner").append(badge);
 const tick = (done) => done ? "✓" : "Not yet";
 export function renderBuilds() {
   const r = view.relaunch, v = view.probation || {};

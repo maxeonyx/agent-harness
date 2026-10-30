@@ -1,7 +1,7 @@
   /* An open node: a card in the map where the node is. */
   #panel {
     position: absolute; left: 0; top: 0; z-index: 2; display: flex; flex-direction: column; background: var(--paper);
-    border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 22px 60px rgba(40, 30, 20, .2);
+    --r: 18px; border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 22px 60px rgba(40, 30, 20, .2);
     cursor: auto; touch-action: pan-x pan-y;
   }
   #panel > .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em 1em; border-bottom: 1px solid var(--line); min-height: 2.9em; cursor: grab; }
@@ -20,10 +20,13 @@
   #panel.asleep > .wake:hover { background: var(--white); }
   .wake > span { position: absolute; display: flex; align-items: center; gap: .5em; max-width: 90%; transform: translate(-50%, -50%); font-weight: 600; font-family: var(--serif); white-space: nowrap; }
   .wake .mini { font-size: .8em; }
-  .bar .title { flex: 1; min-width: 0; font: 600 16.5px/1.3 var(--serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+  /* The title is only as wide as its words, and a little round them: a
+     double click there renames, and a tap on the bar's empty rest closes. */
+  .bar .title { flex: 0 1 auto; min-width: 0; padding: .2em .4em; margin: -.2em -.4em; font: 600 16.5px/1.3 var(--serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
   .bar .up { flex: none; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); padding: .2em .5em; border-radius: 6px; }
   .bar .up:hover { background: var(--hover); color: var(--ink); }
   .bar .title[contenteditable] { cursor: text; outline: 0; border-bottom: 1px solid var(--ink); text-overflow: clip; }
+  .bar .ctx, .bar .ctx[hidden] + .x { margin-left: auto; }
   .bar .ctx { display: grid; align-items: center; width: 3.6em; height: 1.6em; padding: 0 .35em; border-radius: 6px; }
   .bar .ctx:hover { background: var(--hover); }
   .bar .ctx i { display: block; height: .3em; border-radius: 1em; background: var(--line); overflow: hidden; }
@@ -57,17 +60,32 @@
   .viewer .content { flex: 1; overflow: auto; padding: 1em 1.4em; }
   .viewer iframe { width: 100%; height: 100%; border: 0; background: white; }
   .viewer .content.frame { padding: 0; }
-  .jump { position: sticky; bottom: .8em; margin: 0 auto; display: block; width: max-content; box-shadow: 0 6px 18px rgba(40, 30, 20, .15); }
+  .jump { position: sticky; bottom: .8em; margin: 0 auto; display: grid; padding: 0; color: var(--ink); box-shadow: 0 6px 18px rgba(40, 30, 20, .15); }
 
   /* The log reads like Claude Desktop's chat, and is the exact context. */
   .entry { margin: 0 0 1.1em; }
   .prose { font: 16px/1.62 var(--serif); overflow-wrap: anywhere; }
-  .prose.entry { position: relative; }
+  .prose { position: relative; }
+  /* Raw: the Markdown as written, on hover of the passage it shows; beside
+     Copy on a reply. Without hover it stays shown, quieter. */
+  .raw-toggle { position: absolute; top: 0; right: 0; z-index: 1; font: 11px var(--sans); color: var(--muted); background: var(--paper); padding: .05em .45em; border-radius: 4px; opacity: 0; transition: opacity .15s; }
+  .raw-toggle:hover { background: var(--hover); color: var(--ink); }
+  .raw-toggle.armed { opacity: 1; color: var(--ink); background: var(--hover); }
+  .prose:hover:not(:has(.prose:hover)) > .raw-toggle, .raw-toggle:focus { opacity: 1; }
+  /* Without hover it stays shown, quieter, on its own line after the passage so it covers none of it. */
+  @media (hover: none) { .raw-toggle { opacity: .5; position: static; display: block; width: max-content; margin: .2em 0 0 auto; } }
+  .prose.entry > .raw-toggle { top: auto; bottom: -1.75em; right: 2em; }
+  .prose.raw > :not(.raw-toggle, .source, .copy) { display: none; }
+  .prose > .source { margin: 0; }
+  .prose.quiet:not(.full) > .raw-toggle { display: none; }
   .prose .copy { position: absolute; right: -.3em; bottom: -2em; font-size: 12px; width: 2em; height: 2em; opacity: 0; }
   .prose:hover .copy, .prose .copy:focus { opacity: 1; }
   /* Without hover it stays shown, so it takes its own line rather than cover the next block. */
-  @media (hover: none) { .prose .copy { position: static; display: block; margin: -.4em 0 0 auto; opacity: .6; } }
-  .prose > :first-child { margin-top: 0; } .prose > :last-child { margin-bottom: 0; }
+  @media (hover: none) {
+    .prose .copy { position: static; display: block; margin: -.4em 0 0 auto; opacity: .6; }
+    .prose.entry:has(> .copy) > .raw-toggle { position: absolute; bottom: .45em; right: 2.4em; margin: 0; }
+  }
+  .prose > :first-child { margin-top: 0; } .prose > :nth-last-child(1 of :not(.raw-toggle, .copy)) { margin-bottom: 0; }
   .prose p, .prose ul, .prose ol, .prose pre, .prose blockquote, .prose table { margin: .65em 0; }
   .prose h1, .prose h2, .prose h3, .prose h4 { font-family: var(--serif); line-height: 1.25; margin: 1.1em 0 .45em; }
   .prose h1 { font-size: 1.35em; } .prose h2 { font-size: 1.2em; } .prose h3 { font-size: 1.07em; }
@@ -100,24 +118,25 @@
   .card.clip .prose { max-height: 13em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
   .more-link { font-size: 12.5px; color: var(--maroon); margin-top: .3em; cursor: pointer; }
   details > summary.more-link { margin: .1em 0 .3em 1em; }
-  .card.result { border-color: #c9c4b4; }
   .card.ended { border-color: var(--red); color: var(--red); }
   /* The harness's words: a quiet line of Markdown, all of it when clicked. */
   .note { display: flex; gap: .5em; font-size: 12px; color: var(--faint); margin: .2em 0 1em; }
   .note::before { content: "⚙"; opacity: .7; }
-  .prose.quiet { font: 12px/1.5 var(--sans); color: var(--faint); min-width: 0; max-height: 1.5em; overflow: hidden; cursor: pointer; }
+  .prose.quiet { font: 12px/1.5 var(--sans); color: var(--faint); min-width: 0; max-height: 1.5em; overflow: hidden; }
+  .prose.quiet:is(.cut, .full) { cursor: pointer; }
   .prose.quiet:not(.full) > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .prose.quiet > * { margin: 0 0 .4em; }
   .prose.quiet :is(h1, h2, h3, h4) { font: 600 1em var(--sans); }
   .prose.quiet code, .prose.quiet pre { font-size: 1em; background: none; border: 0; padding: 0; }
   .prose.quiet a { color: inherit; }
   .prose.quiet.full { max-height: none; color: var(--muted); }
-  /* Moving the chat: back, edit, and a reply's versions. Shown on hover, dimmed while it cannot move. */
+  /* Moving the chat: edit, and a reply's versions. Shown on hover, dimmed while it cannot move. */
   .moves { display: flex; gap: .2em; margin: -.3em 0 .6em; opacity: 0; transition: opacity .15s; }
   .said .moves { justify-content: flex-end; margin: .2em 0 0; }
   .chunk:hover .moves, .moves:focus-within { opacity: 1; }
   @media (hover: none) { .moves { opacity: .6; } }
   .mv { font: 12px var(--sans); color: var(--muted); background: none; border: 0; padding: .1em .35em; border-radius: 4px; cursor: pointer; }
+  .mv svg { width: 1.1em; height: 1.1em; margin-right: .3em; vertical-align: -.2em; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
   .mv:hover:not(:disabled) { background: #0000000d; color: inherit; }
   .mv:disabled { opacity: .3; cursor: default; }
   .unmovable .moves .mv, .unmovable .versions .mv { opacity: .35; cursor: not-allowed; }
@@ -142,11 +161,12 @@
   .fold.folded > .head::after { transform: none; }
   .fold.folded:not(.one) > :not(.head):not(.live), .fold.one > .head { display: none; }
   .fold.folded > .head { border-radius: 10px; }
+  .fold.one > .row { border-top: 0; }
   .fold:has(.st.bad) > .head .n { color: var(--red); }
   .fold .line { display: flex; align-items: baseline; gap: .6em; padding: .4em .8em; cursor: pointer; min-width: 0; }
   .fold .line:hover { background: var(--hover); }
   .fold .tool { flex: none; font: 600 12px var(--mono); color: var(--ink); }
-  .fold .sum { flex: 0 1 auto; min-width: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fold .sum { flex: 1 1 0; min-width: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fold .gist { flex: 1 1 0; font: 12px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .fold .st { flex: none; font-size: 12px; color: var(--faint); white-space: nowrap; }
   .fold .st.bad { color: var(--red); }
@@ -176,7 +196,18 @@
   .prose.v { font: 13.5px/1.5 var(--sans); }
   .prose.v > * { margin: 0 0 .3em; }
   .io .k { color: var(--muted); }
-  .chips { display: flex; flex-wrap: wrap; gap: .4em; margin: .25em 0 .5em 1em; }
+  /* A call's agents: pills while they work, a line each once done, opened to its part of the result. */
+  .members:empty { display: none; }
+  .members > .chips { display: flex; flex-wrap: wrap; gap: .4em; padding: .4em .8em; }
+  .members > * + * { border-top: 1px solid var(--line); }
+  .row > .members { border-top: 1px solid var(--line); }
+  .member > .line { align-items: center; cursor: default; }
+  .member.has > .line { cursor: pointer; }
+  .member:not(.has) > .line:hover { background: none; }
+  .member > .line > .gist { font: inherit; color: var(--muted); }
+  .member > .prose { padding: .2em .8em .7em 1.6em; font: 14.5px/1.55 var(--serif); }
+  .member:not(.open) > .prose { display: none; }
+  .member.open > .line { background: var(--hover); }
   a.cite { font-size: .75em; padding: 0 .4em; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: var(--muted, #777); white-space: nowrap; vertical-align: .1em; }
   .io.found a { text-decoration: none; } .io.found .host { opacity: .6; }
   .chip { display: inline-flex; align-items: center; gap: .4em; padding: .25em .7em .25em .35em; border: 1px solid var(--line); border-radius: 999px; background: var(--white); font: 600 13px var(--serif); text-decoration: none; color: inherit; }

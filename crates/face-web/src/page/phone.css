@@ -1,14 +1,11 @@
-  /* On a phone: the card fills the screen, and the type is a touch larger.
-     The usage stays over the open card, in a strip of its own below the box,
-     except while Max types, when the keyboard has the room. */
+  /* On a phone: the card fills the screen, and the type is a touch larger. */
   @media (max-width: 760px) {
-    #panel { border-radius: 14px; }
+    #panel { --r: 14px; }
+    /* Too narrow for the build beside the usage, model and effort. */
+    .compose .dock .build { display: none; }
     .log { padding: 1em 1em 2em; }
     .prose { font-size: 15.5px; }
     .compose { padding: 0 0 env(safe-area-inset-bottom); }
-    body.covered .compose { padding-bottom: calc(2.6em + env(safe-area-inset-bottom)); }
-    body.covered .compose:has(textarea:focus) { padding-bottom: env(safe-area-inset-bottom); }
-    body.covered:has(.compose textarea:focus) #usage { display: none; }
     .viewer { position: absolute; inset: 0; z-index: 2; border: 0; }
     #panel > .body { position: relative; }
     .gauge .pc { display: none; }
