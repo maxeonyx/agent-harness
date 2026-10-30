@@ -759,8 +759,13 @@ impl Brain {
             {
                 return None;
             }
-            let ask = meta::compaction(&record.tool, &self.value(record.input)).ok()?;
-            Some((call, ask))
+            match meta::compaction(&record.tool, &self.value(record.input)) {
+                Ok(ask) => Some((call, ask)),
+                Err(why) => {
+                    errln!("compaction call {call} was accepted but cannot compact: {why}");
+                    None
+                }
+            }
         });
         let Some((call, ask)) = asked else {
             return false;
