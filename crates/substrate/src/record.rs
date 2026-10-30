@@ -272,10 +272,17 @@ pub trait Schema: Clone + fmt::Debug + PartialEq + 'static {
 
     /// Fold what [`Self::Glimpse`] read of a record the build that wrote or
     /// included it accepted, but this build cannot read or would refuse
-    /// (a fact about something it skipped), at the decider's time `here`;
-    /// `at` is the record's own. Never a refusal: the record is not this
-    /// build's to judge. It runs where [`Schema::fold`] would.
-    fn glimpse(state: &mut Self::State, here: Time, at: Time, glimpse: &Self::Glimpse);
+    /// (a fact about something it skipped), at the decider's time `here`,
+    /// whose clock is `clock`; `at` is the record's own, as in a
+    /// [`Folding`]. Never a refusal: the record is not this build's to
+    /// judge. It runs where [`Schema::fold`] would.
+    fn glimpse(
+        state: &mut Self::State,
+        here: Time,
+        clock: Timestamp,
+        at: Time,
+        glimpse: &Self::Glimpse,
+    );
 
     /// Fold a record the rules refused, as refused: an invalid act is still
     /// a fact, and the state may say so (a draft edit that raced another

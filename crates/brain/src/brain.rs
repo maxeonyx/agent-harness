@@ -2057,18 +2057,20 @@ const RELAUNCHED_BY: &str = "HARNESS_RELAUNCHED_BY";
 /// How this launch came: [`Launch::Relaunched`] after a brain that shut
 /// down, or by the builds limb's `relaunch` call its unit's environment
 /// names (forward, or back after the new build failed: then the brain
-/// before was killed); [`Launch::Started`] after a crash or on a new
-/// database.
+/// before was killed); [`Launch::Started`] after a crash, on a new
+/// database, or after a build this one cannot read.
 fn launch_how(state: &State) -> Launch {
     let by = std::env::var(RELAUNCHED_BY)
         .ok()
         .and_then(|call| call.parse().ok())
         .filter(|call| state.call(*call).is_some());
     match state.launch() {
-        Some((_, before)) if by.is_some() || state.shutdown().is_some() => Launch::Relaunched {
-            from: before.build,
-            by,
-        },
+        Some((_, Some(before))) if by.is_some() || state.shutdown().is_some() => {
+            Launch::Relaunched {
+                from: before.build,
+                by,
+            }
+        }
         _ => Launch::Started,
     }
 }
