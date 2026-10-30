@@ -1,4 +1,4 @@
-import { $, clock, el, ICONS, panel, svgEl } from "./base.js";
+import { $, clock, el, ICONS, svgEl } from "./base.js";
 import { byId, derive, DOT, glyph, graph, isDone, layout, live, look, positions, ROOT_DOT, routes, SAT_DOT, satLabel, shortName, shown, unfolded, view } from "./map.js";
 import { cam, cardShown, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam, target } from "./camera.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
@@ -231,8 +231,10 @@ export function placeMarks() {
     s = ((s % P) + P) % P;
     return s < w ? [l + s, t] : s < w + h ? [r, t + s - w] : s < 2 * w + h ? [r - (s - w - h), b] : [l, b - (s - 2 * w - h)];
   };
-  // The open card covers what is under it: a mark there fades out.
-  const card = openId && !panel.hidden ? panel.getBoundingClientRect() : null;
+  // A mark never covers what Max presses: one under the open card, the
+  // actions beside it, or the bottom bar's buttons fades out.
+  const ui = [...document.querySelectorAll("#panel:not([hidden]), #panel .acts, #bottom > :not(.spacer)")]
+    .map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
   const seen = new Set();
   for (const { id, x, y, s, next } of marks) {
     seen.add(id);
@@ -248,7 +250,7 @@ export function placeMarks() {
     a.title = byId[id]?.name || "";
     a.classList.toggle("next", next);
     const [cx, cy] = at(s);
-    a.classList.toggle("under", !!card && cx > card.left - 12 && cx < card.right + 12 && cy > card.top - 12 && cy < card.bottom + 12);
+    a.classList.toggle("under", ui.some((u) => cx > u.left - 12 && cx < u.right + 12 && cy > u.top - 12 && cy < u.bottom + 12));
     a.style.left = `${cx}px`;
     a.style.top = `${cy}px`;
     $("svg", a).style.transform = `rotate(${Math.atan2(y - cy, x - cx)}rad)`;
