@@ -14,7 +14,6 @@ import "./hints.js";
 
 // ─── The page, started ─────────────────────────────────────────────────────
 export async function viewArrived(fresh) {
-  if (fresh === null) return;
   if (fresh) liveReset();
   takeView(tab.view());
   settleLocal();
