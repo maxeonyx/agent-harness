@@ -28,7 +28,7 @@ use crate::role::Role;
 use crate::schema::Harness;
 use crate::task::{
     Abandoner, Compaction, Created, Drain, Draining, Life, Mode, Move, Onto, Origin, Pause, Paused,
-    Phase, Scope, Start, Task, TaskEvent, ends,
+    Phase, Scope, Start, Step, Task, TaskEvent, ends,
 };
 use crate::value::Bytes;
 
@@ -419,7 +419,8 @@ pub enum Waiting {
         limbs: Vec<(LimbId, Option<String>)>,
         since: Timestamp,
     },
-    /// On the brain to send its next request.
+    /// On the brain's own work between asynchronous calls: building and
+    /// sending its next request, or dispatching a response's calls.
     Brain {
         since: Timestamp,
     },
@@ -2756,6 +2757,32 @@ impl State {
         }
     }
 
+    /// Whether the brain owes `id` its dispatch now: its limb can take it
+    /// and its task is acting on it. Between a response's end and its calls
+    /// reaching their limbs, the task waits on the brain.
+    fn owes_dispatch(&self, id: CallId, record: &CallRecord) -> bool {
+        let Some(limb) = record.limb else {
+            return false;
+        };
+        let due = match self.runs(limb) {
+            None | Some(Runs::Nothing) => false,
+            // It only reads, so one an earlier brain was running is run again.
+            Some(Runs::Brain) if self.reruns(record) => record
+                .dispatched
+                .is_none_or(|d| (self.launch.as_ref()).is_some_and(|(l, _)| d.last.seq < l.seq)),
+            Some(Runs::Brain) => record.dispatched.is_none(),
+            Some(Runs::Process) => self.connected(limb).is_some() && record.dispatched.is_none(),
+        };
+        due && self.acting_on(id, &record.call) && !self.withheld(id)
+    }
+
+    /// Whether the brain owes any of a round's calls its dispatch.
+    fn dispatching(&self, step: &Step) -> bool {
+        step.outstanding
+            .iter()
+            .any(|id| (self.call(*id)).is_some_and(|record| self.owes_dispatch(*id, record)))
+    }
+
     /// What a task is waiting on now.
     pub fn waiting_on(&self, task: TaskId, now: Timestamp) -> Option<Waiting> {
         let t = self.tasks.get(&task)?;
@@ -2784,6 +2811,7 @@ impl State {
                     streaming: sent.first_byte.is_some(),
                 }
             }
+            Phase::Acting(step) if self.dispatching(step) => Waiting::Brain { since },
             Phase::Acting(step) => Waiting::Calls {
                 calls: step.outstanding.clone(),
                 since,
@@ -2972,16 +3000,7 @@ impl State {
                 }
                 continue;
             }
-            let due = match runs {
-                Runs::Nothing => false,
-                // It only reads, so one an earlier brain was running is run again.
-                Runs::Brain if self.reruns(record) => record
-                    .dispatched
-                    .is_none_or(|d| launch.is_some_and(|l| d.last.seq < l)),
-                Runs::Brain => record.dispatched.is_none(),
-                Runs::Process => connection.is_some() && record.dispatched.is_none(),
-            };
-            if due && self.acting_on(*id, &record.call) && !self.withheld(*id) {
+            if self.owes_dispatch(*id, record) {
                 todo.push(Todo::Dispatch(*id));
             }
         }

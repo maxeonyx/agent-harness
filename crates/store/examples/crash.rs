@@ -5,7 +5,7 @@
 //! while it keeps committing, then reopens the brain from the file.
 //!
 //! The writer is a brain on a fresh [`Store`]: it launches, accepts Max's
-//! face and defines an environment, then includes one record of Max's face
+//! face and defines a role, then includes one record of Max's face
 //! after another, each creating a task and carrying its mandate's bytes.
 //! Every include is one commit of two records: the face's and the brain's
 //! receipt for it.
@@ -16,9 +16,9 @@ use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
 use harness_core::build::{BuildId, Launch, Launched};
-use harness_core::environment::Environment;
 use harness_core::fact::{Batch, Fact};
-use harness_core::id::{EnvironmentId, ReplicaId, TaskId, Time, Timestamp};
+use harness_core::id::{ReplicaId, RoleId, TaskId, Time, Timestamp};
+use harness_core::role::Role;
 use harness_core::schema::{Brain, Record};
 use harness_core::task::{Created, Mandate, Mode, Origin, Scope, TaskEvent};
 use harness_core::value::Bytes;
@@ -153,21 +153,20 @@ fn write(file: &str) -> Result<(), Box<dyn std::error::Error>> {
     let defined = brain
         .say(now(), |at| Batch {
             values: vec![role.clone(), params.clone()],
-            facts: vec![Fact::Environment(Environment {
-                id: EnvironmentId(at.event(0)),
+            facts: vec![Fact::Role(Role {
+                id: RoleId(at.event(0)),
                 name: "counter".into(),
-                role: role.id(),
+                prompt: role.id(),
                 model: "claude-opus-5-5".into(),
                 params: params.id(),
-                limbs: vec![],
-                places: vec![],
+                tools: vec![],
                 starts: vec![],
                 source: None,
                 description: String::new(),
             })],
         })
         .map_err(fail)?;
-    let environment = EnvironmentId(defined.event(0));
+    let role = RoleId(defined.event(0));
 
     for k in 1.. {
         let at = Time {
@@ -187,7 +186,8 @@ fn write(file: &str) -> Result<(), Box<dyn std::error::Error>> {
                         by: None,
                         scope: Scope::Max,
                         origin: Origin::Fresh {
-                            environment,
+                            role,
+                            workdir: None,
                             places: BTreeMap::new(),
                         },
                         mode: Mode::UserFacing,

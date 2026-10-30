@@ -93,21 +93,21 @@ gets its own clone of that repository instead, beside it, on that branch, made f
     said.push_str(
         "\n\nYour context keeps checkpoints: its first message, each message that began one of your turns (Max's \
 words, or whatever woke you), and each compaction. `compact_and_continue` replaces everything after the latest \
-checkpoint with a summary you write, and you carry on from it in the same turn. Use it whenever you finish a step of \
+checkpoint with what you write in `carry`, and you carry on from it in the same turn. Use it whenever you finish a step of \
 your work and move to the next: your context stays short and cheap, and nothing up to the checkpoint is lost, so \
 summarise only the step: what you did, what you found and decided and why, what is left, and anything you will need \
-to look at again. What you compact away is gone, so the summary must also carry everything your report will need: \
+to look at again. What you compact away is gone, so what you carry must also hold everything your report will need: \
 the friction you hit, the evidence you will show (attach the calls whose real output it is alongside the compaction, or keep their labels to attach later), \
-and your decisions and why, including those carried by earlier summaries. Compact when you really switch from one task to another, or when your context has grown \
+and your decisions and why, including those carried by earlier compactions. Compact when you really switch from one task to another, or when your context has grown \
 long, even if it is mostly results already. Max's words after the checkpoint, the results of the other calls in the \
 same response, and your running background work are carried with it as they are, so do not retell them: to take a \
 file into the compacted context as it is now, read it in the same response.\n\n\
-When your work is done, call `compact_and_report` instead, with your summary and your report: it compacts and ends \
-your turn, and the report is your last message in the new context, right after the summary. Max reads it, or, if you \
+When your work is done, call `compact_and_report` instead, with what you carry and your report: it compacts and ends \
+your turn, and the report is your last message in the new context, right after what you carried. Max reads it, or, if you \
 were started by another agent, it is your result, and what you read alongside it reaches that agent with it. Put \
-everything the reader needs in the report: they never see the summary.\n\n\
-With `fresh: true` either tool starts a new context instead, from your role, your mandate, Max's words and your \
-summary alone. Use it when even your checkpoints have grown long; the summary must then carry everything else you \
+everything the reader needs in the report: they never see what you carried.\n\n\
+With `fresh: true` either tool starts a new context instead, from your role, your mandate, Max's words and what you \
+carry alone. Use it when even your checkpoints have grown long; what you carry must then hold everything else you \
 need. A change to your role's definition takes effect then. A `compact_and_continue` right after another compaction, with no other \
 call since or alongside it, is refused: there is nothing to replace.\n\n\
 Each result of a call you make ends with its label, such as `[call-3fa2c1]`. `attach` gives back the outputs of the \
@@ -161,28 +161,28 @@ and returns at once: the agent that started you gets its result with yours.",
             "required": ["tasks"]
         }
     });
-    let summary = json!({ "type": "string", "description": "What you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, and everything your report will need (friction, evidence, decisions), including what earlier summaries carried." });
-    let fresh = json!({ "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and your summary alone." });
+    let carry = json!({ "type": "string", "description": "What you carry: what you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, and everything your report will need (friction, evidence, decisions), including what earlier compactions carried." });
+    let fresh = json!({ "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and what you carry alone." });
     let compact_and_continue = json!({
         "name": COMPACT_AND_CONTINUE,
-        "description": "Replace your work since your latest checkpoint with your summary of it, and carry on from the summary in the same turn, with your next step. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
+        "description": "Replace your work since your latest checkpoint with what you carry from it, and carry on from that in the same turn, with your next step. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
         "input_schema": {
             "type": "object",
-            "properties": { "summary": summary, "fresh": fresh },
-            "required": ["summary"]
+            "properties": { "carry": carry, "fresh": fresh },
+            "required": ["carry"]
         }
     });
     let compact_and_report = json!({
         "name": COMPACT_AND_REPORT,
-        "description": "When your work is done: replace your work since your latest checkpoint with your summary of it, and end your turn with your report as your last message, after the summary. The results of other calls in the same response are carried with it.",
+        "description": "When your work is done: replace your work since your latest checkpoint with what you carry from it, and end your turn with your report as your last message, after what you carried. The results of other calls in the same response are carried with it.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "summary": summary,
-                "report": { "type": "string", "description": "Your report: what the reader (Max, or the agent that started you) needs to know. It is your last message; they never see the summary." },
+                "carry": carry,
+                "report": { "type": "string", "description": "Your report: what the reader (Max, or the agent that started you) needs to know. It is your last message; they never see what you carried." },
                 "fresh": fresh
             },
-            "required": ["summary", "report"]
+            "required": ["carry", "report"]
         }
     });
     let attach = json!({
@@ -325,7 +325,10 @@ pub fn compaction(tool: &str, input: &[u8]) -> Result<Compact, String> {
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
-    let summary = field("summary").ok_or("`summary` must say what you need to carry on")?;
+    // `summary` is what tool definitions recorded before `carry` named it.
+    let summary = field("carry")
+        .or_else(|| field("summary"))
+        .ok_or("`carry` must say what you need to carry on")?;
     let report = if tool == COMPACT_AND_REPORT {
         Some(field("report").ok_or("`report` must be your report")?)
     } else {

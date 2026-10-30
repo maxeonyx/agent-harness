@@ -17,7 +17,7 @@ What it does:
 7. On the scripted model, a second chat compacts in a loop: its summary scripts another `compact_and_continue`, with no call between. The harness refuses it, saying there is nothing to replace, so the agent carries on instead of compacting again:
 
 ```
-  → compact_and_continue {"summary":"again"}
+  → compact_and_continue {"carry":"again"}
   ← error Not compacted: you compacted last and have made no other call since, so there is nothing to replace. Carry on with your next step, or, if your work is done, call `compact_and_report`.
 ```
 
@@ -39,8 +39,8 @@ Max's turn since 10:15:26
 == its context now: its first message and each carry are kept; the steps' tool calls are gone
 root      scripted
 user      (harness,label,max) [harness] Sun 18 Oct 2026 10:14 NZDT. | [harness] Max wrote this (`max-1d47ffaa` quotes it in a brief): | Build textstat
-user      (compacted) [harness] You compacted your work after this point. | Your summary:  Step 1 done: textstats/wordcount.py and its tests; ./check.
-user      (compacted) [harness] You compacted your work after this point. | Your summary:  Step 2 done: textstats/palindromes.py and its tests; ./chec
+user      (compacted) [harness] You compacted your work after this point. | What you carried:  Step 1 done: textstats/wordcount.py and its tests; ./check.
+user      (compacted) [harness] You compacted your work after this point. | What you carried:  Step 2 done: textstats/palindromes.py and its tests; ./chec
 assistant I built both steps, and ./check.sh passes. Everything is in one commit on main.
 
 == Max answers
@@ -49,11 +49,11 @@ Max's turn since 10:15:42
 == its context now: Max's words and both reports are kept verbatim
 root      scripted
 user      (harness,label,max) [harness] Sun 18 Oct 2026 10:14 NZDT. | [harness] Max wrote this (`max-1d47ffaa` quotes it in a brief): | Build textstat
-user      (compacted) [harness] You compacted your work after this point. | Your summary:  Step 1 done: textstats/wordcount.py and its tests; ./check.
-user      (compacted) [harness] You compacted your work after this point. | Your summary:  Step 2 done: textstats/palindromes.py and its tests; ./chec
+user      (compacted) [harness] You compacted your work after this point. | What you carried:  Step 1 done: textstats/wordcount.py and its tests; ./check.
+user      (compacted) [harness] You compacted your work after this point. | What you carried:  Step 2 done: textstats/palindromes.py and its tests; ./chec
 assistant I built both steps, and ./check.sh passes. Everything is in one commit on main.
 user      (harness,label,max) [harness] Sun 18 Oct 2026 10:15 NZDT. | [harness] Max wrote this (`max-a654eb42` quotes it in a brief): | Thanks. Add `t
-user      (compacted) [harness] You compacted your work after this point. | Your summary:  Added unique and its test; ./check.sh passes; committed. sa
+user      (compacted) [harness] You compacted your work after this point. | What you carried:  Added unique and its test; ./check.sh passes; committed. sa
 assistant I added unique with a test; ./check.sh passes and it is committed.
 
   act: tab 0709d3a53e06e379 linked
@@ -90,8 +90,8 @@ Max's turn since 10:17:12
 == its context now: its first message and each carry are kept; the steps' tool calls are gone
 root      claude-sonnet-5-5
 user      (harness,label,max) [harness] Sun 18 Oct 2026 10:16 NZDT. | [harness] Max wrote this (`max-81d3ff47` quotes it in a brief): | This repositor
-user      (compacted) [harness] You compacted your work after this point. | Your summary:  Step 1 done: textstats/wordcount.py and tests/test_wordcoun
-user      (compacted) [harness] You compacted your work after this point. | Your summary:  Both steps done, check.sh passes, committed d5e39a7.
+user      (compacted) [harness] You compacted your work after this point. | What you carried:  Step 1 done: textstats/wordcount.py and tests/test_wordcoun
+user      (compacted) [harness] You compacted your work after this point. | What you carried:  Both steps done, check.sh passes, committed d5e39a7.
 assistant Both steps are built, and `./check.sh` passed after each one (4 tests, style ok). Everything is committed as d5e39a7 and not pushed.  - **St
 
 == Max answers
@@ -100,8 +100,8 @@ Max's turn since 10:17:33
 == its context now: Max's words and both reports are kept verbatim
 root      claude-sonnet-5-5
 user      (harness,label,max) [harness] Sun 18 Oct 2026 10:16 NZDT. | [harness] Max wrote this (`max-81d3ff47` quotes it in a brief): | This repositor
-user      (compacted) [harness] You compacted your work after this point. | Your summary:  Step 1 done: textstats/wordcount.py and tests/test_wordcoun
-user      (compacted) [harness] You compacted your work after this point. | Your summary:  Both steps done, check.sh passes, committed d5e39a7.
+user      (compacted) [harness] You compacted your work after this point. | What you carried:  Step 1 done: textstats/wordcount.py and tests/test_wordcoun
+user      (compacted) [harness] You compacted your work after this point. | What you carried:  Both steps done, check.sh passes, committed d5e39a7.
 assistant Both steps are built, and `./check.sh` passed after each one (4 tests, style ok). Everything is committed as d5e39a7 and not pushed.  - **St
 user      (harness,label,max) [harness] Sun 18 Oct 2026 10:17 NZDT. | [harness] Max wrote this (`max-0c73f81a` quotes it in a brief): | Thanks. Add `t
 assistant [bash]
