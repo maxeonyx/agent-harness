@@ -27,8 +27,8 @@ use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::role::Role;
 use crate::schema::Harness;
 use crate::task::{
-    Abandoner, Compaction, Created, Drain, Draining, Life, Mode, Move, Onto, Origin, Pause, Paused,
-    Phase, Scope, Start, Step, Task, TaskEvent, ends,
+    Abandoner, Compaction, Created, Drain, Draining, Input, Life, Mandate, Mode, Move, Onto,
+    Origin, Pause, Paused, Phase, Scope, Start, Step, Task, TaskEvent, ends,
 };
 use crate::value::Bytes;
 
@@ -537,6 +537,10 @@ pub enum Todo {
     /// Every member of this spawn's scope is done: settle it with their
     /// outcomes.
     Settle(CallId),
+    /// The task waits on a scope and has unread words from Max: open an
+    /// aside with them ([`State::unread_words`]), as he would have had he
+    /// sent them once it waited.
+    Aside(TaskId),
     /// Every member of an aside's scope but the asides is done, and it has
     /// not been told: deliver [`Prompt::Unblocked`].
     Unblock(TaskId),
@@ -1001,7 +1005,8 @@ impl State {
     ///
     /// The brain states what it decides and observes, but never Max's words,
     /// his marking a task done, his stop, what his face shows, a task no
-    /// agent's call created, a limb's description or what it found in a
+    /// agent's call created (but the aside his unread words open once their
+    /// task waits on a scope, [`Todo::Aside`]), a limb's description or what it found in a
     /// directory, how a call a limb was sent ended, or a change to a
     /// resource it does not own (its own resources, such as the role files
     /// its `roles` set reads, are its to state). A limb states only its own
@@ -1029,7 +1034,9 @@ impl State {
                 | Fact::Draft(..)
                 | Fact::Described { .. }
                 | Fact::Workdir { .. } => false,
-                Fact::Task(_, TaskEvent::Created(created)) => created.by.is_some(),
+                Fact::Task(_, TaskEvent::Created(created)) => {
+                    created.by.is_some() || self.carries_words(created)
+                }
                 Fact::Call(_, CallEvent::Made(call)) => !matches!(call.caller, Caller::Max { .. }),
                 Fact::Call(id, CallEvent::Settled(outcome)) => {
                     self.calls.get(id).is_some_and(|c| {
@@ -1161,7 +1168,23 @@ impl State {
             }
         }
         let mark = Mark::of(record);
-        let task = Task::new(id, created, mark, self)?;
+        let mut task = Task::new(id, created, mark, self)?;
+        // An aside takes its source's unread words from Max with it: the
+        // talk they were for goes on there. Words the same as its mandate
+        // are its mandate.
+        if let Origin::Aside { from } = created.origin
+            && let Some(source) = self.tasks.get(&from)
+        {
+            let unread = self.unread_words(source);
+            let mut source = source.clone();
+            (source.pending).retain(|p| !unread.iter().any(|(d, _)| *p == Input::Delivery(*d)));
+            self.put(source);
+            (task.pending).extend(
+                (unread.into_iter())
+                    .filter(|(_, words)| *words != created.mandate.text)
+                    .map(|(d, _)| Input::Delivery(d)),
+            );
+        }
         // What its context holds, it has heard.
         if let Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from } =
             created.origin
@@ -2744,13 +2767,51 @@ impl State {
     /// so the move cannot become Max's until it closes: a face offers an
     /// aside instead of an interrupt.
     pub fn scoped(&self, task: &Task) -> bool {
+        self.waits_on(task).is_some()
+    }
+
+    /// The spawn whose scope the task's round waits on while members of
+    /// it still run: where an aside of it goes.
+    pub fn waits_on(&self, task: &Task) -> Option<CallId> {
         match task.phase() {
-            Some(Phase::Acting(step)) => step
-                .outstanding
-                .iter()
-                .any(|c| self.members(Scope::Spawn(*c)).any(|m| !m.is_done())),
-            _ => false,
+            Some(Phase::Acting(step)) => (step.outstanding.iter().copied())
+                .find(|c| self.members(Scope::Spawn(*c)).any(|m| !m.is_done())),
+            _ => None,
         }
+    }
+
+    /// Max's words to the task that no request has read yet, oldest first.
+    pub fn unread_words(&self, task: &Task) -> Vec<(DeliveryId, ValueId)> {
+        (task.pending.iter())
+            .filter_map(|p| match p {
+                Input::Delivery(id) => self.deliveries.get(id),
+                _ => None,
+            })
+            .filter_map(|d| match (&d.by, &d.delivery.content) {
+                (Author::Max, Content::Words(words)) => Some((d.delivery.id, *words)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether `created` is the aside Max's unread words to a task open
+    /// once it waits on a scope: his, with the first of them as its
+    /// mandate, which the brain states for him ([`Todo::Aside`]).
+    fn carries_words(&self, created: &Created) -> bool {
+        let Origin::Aside { from } = created.origin else {
+            return false;
+        };
+        let Mandate {
+            text,
+            brief,
+            quotes,
+        } = &created.mandate;
+        self.tasks
+            .get(&from)
+            .is_some_and(|source| self.unread_words(source).first().map(|(_, w)| w) == Some(text))
+            && created.by.is_none()
+            && brief.is_none()
+            && quotes.is_empty()
     }
 
     /// Whether a call waits undispatched because Max paused the task whose
@@ -2938,6 +2999,9 @@ impl State {
                     todo.push(Todo::Cut(*call));
                 }
                 _ => {}
+            }
+            if task.drain().is_none() && self.scoped(task) && !self.unread_words(task).is_empty() {
+                todo.push(Todo::Aside(task.id));
             }
             if let Some(Draining::Abandoning(s)) = task.drain()
                 && !s.hard

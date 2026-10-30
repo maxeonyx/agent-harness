@@ -16,7 +16,8 @@ use crate::id::{DeliveryId, TaskId, ValueId};
 /// designer streams its last response are read before its result goes
 /// anywhere, and words typed during a long tool round arrive straight after
 /// the results. To be heard sooner he interrupts; to talk to a task waiting
-/// on its children he opens an aside.
+/// on its children he opens an aside, and words it had not read when it
+/// began to wait go to one ([`crate::task::Origin::Aside`]).
 ///
 /// What the world does between turns is not a delivery. A watcher's
 /// result, a page event, a change to Max's queue: each is a new version of a

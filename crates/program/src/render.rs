@@ -448,6 +448,13 @@ goes back to the context you were forked from with their results. He wrote (`{}`
         (_, Scope::Spawn(_)) => None,
     };
     match framing {
+        // An aside's mandate may be one of his messages as he sent it, with
+        // what he attached ([`State::unread_words`]).
+        Some(framing) if matches!(task.origin, Origin::Aside { .. }) => {
+            let mut said = vec![text(&framing)];
+            said.extend(words_of(values, task.mandate.text));
+            said
+        }
         Some(framing) => vec![text(&framing), text(&said(values, task.mandate.text))],
         None => vec![text(&mandate(state, values, task, carried))],
     }

@@ -27,6 +27,18 @@ fn text(value: Text, id: ValueId) -> Option<String> {
     value(id).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// The text of a mandate, which may be one of Max's messages as he sent
+/// it: its text blocks, a blank line apart.
+fn plain(mandate: &str) -> String {
+    match serde_json::from_str::<Vec<Value>>(mandate) {
+        Ok(blocks) => (blocks.iter())
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        Err(_) => mandate.to_owned(),
+    }
+}
+
 /// The model and effort a task's next request runs at, and while its cache
 /// is warm, until when and how many tokens a change would reread without it.
 fn tuning(value: Text, t: &Task, role: &Role, last: Option<&Ended>) -> Value {
@@ -326,7 +338,7 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
             Scope::Max => None,
             Scope::Spawn(call) => Some(call.to_string()),
         },
-        "mandate": text(value, t.mandate.text),
+        "mandate": text(value, t.mandate.text).map(|m| plain(&m)),
         "head": t.head().map(|h| h.to_string()),
         "compactions": t.head().map_or(0, |h| state.compactions_on(t.id, h)),
         // When its last request ended: a retry can end where it began.
