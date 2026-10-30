@@ -150,6 +150,15 @@ export const drafts = {
 // the staged words joined, and the rest.
 const words = (blocks) => blocks.filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
 const split = (blocks) => ({ text: words(blocks), files: blocks.filter((b) => b.type !== "text").map((block) => ({ block })) });
+// What a message carries: staged words next to each other are paragraphs
+// of one text, a blank line apart, as a mandate's are: the separation is
+// in the words, not left to how a model joins adjacent text blocks.
+const message = (blocks) => blocks.reduce((m, b) => {
+  const last = m.at(-1);
+  if (b.type === "text" && last?.type === "text") m[m.length - 1] = { type: "text", text: `${last.text}\n\n${b.text}` };
+  else m.push(b);
+  return m;
+}, []);
 // The brain's draft in the box, if this tab has nothing of its own unsaved:
 // what another device changed.
 export function syncCompose() {
@@ -502,7 +511,7 @@ async function submit() {
     local.delete(draft);
     return;
   }
-  const sent = JSON.stringify(blocks), id = digest(sent);
+  const sent = JSON.stringify(message(blocks)), id = digest(sent);
   let as = null;
   const why = await act((at) => {
     as = `${at}.0`;
