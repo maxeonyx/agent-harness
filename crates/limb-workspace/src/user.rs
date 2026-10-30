@@ -272,12 +272,16 @@ impl User {
         let loaded = serde_json::from_slice::<Skill>(input)
             .map_err(|e| format!("invalid input: {e}"))
             .and_then(|Skill { name }| {
-                let offered = self.offered().is_none_or(|s| s.contains(&name));
                 let missing = || format!("no skill `{name}`; the index lists them all");
-                if name.contains('/') || name.starts_with('.') || !offered {
+                if name.contains('/') || name.starts_with('.') {
                     return Err(missing());
                 }
                 let bytes = fs::read(self.skill_file(&name)).map_err(|_| missing())?;
+                if self.offered().is_some_and(|s| !s.contains(&name)) {
+                    return Err(format!(
+                        "skill `{name}` exists but is not offered to harness agents; the skills file lists those offered"
+                    ));
+                }
                 let version = Version::Is(Digest::of(&bytes));
                 Ok((String::from_utf8_lossy(&bytes).into_owned(), name, version))
             });
