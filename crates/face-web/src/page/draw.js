@@ -204,20 +204,19 @@ export function placeMarks() {
     const ex = ox + dx * f, ey = oy + dy * f;
     // Distance along the perimeter, clockwise from the top left corner.
     const s = Math.abs(ey - t) < 0.5 ? ex - l : Math.abs(ex - r) < 0.5 ? w + ey - t : Math.abs(ey - b) < 0.5 ? w + h + r - ex : 2 * w + h + b - ey;
-    marks.push({ id, x, y, s, next: i === 0 });
+    marks.push({ id, x, y, s, d: Math.hypot(dx, dy), next: i === 0 });
   });
   // Neighbours closer than a mark's width push each other apart evenly, so a
-  // group spreads and moves as one. Two whose nodes line up with the middle
-  // pass through each other within a few pixels rather than swap at once.
-  marks.sort((u, v) => u.s - v.s);
+  // group spreads and moves as one. Nodes in line with the middle, as a
+  // column is when one of it is centred, go in order of distance.
+  marks.sort((u, v) => (Math.abs(u.s - v.s) < 0.5 ? u.d - v.d : u.s - v.s));
   const n = marks.length, gap = Math.min(30, P / Math.max(n, 1));
   const apart = (i) => marks[(i + 1) % n].s - marks[i].s + (i === n - 1 ? P : 0);
-  const want = marks.map((_, i) => gap * Math.min(1, apart(i) / 2));
-  for (let k = 0; n > 1 && k < 4 * n; k++) {
+  for (let k = 0; n > 1 && k < 16 * n; k++) {
     let moved = false;
     for (let i = 0; i < n; i++) {
       const u = marks[i], v = marks[(i + 1) % n], d = apart(i);
-      if (d < want[i] - 0.01) { const e = (want[i] - d) / 2; u.s -= e; v.s += e; moved = true; }
+      if (d < gap - 0.01) { const e = (gap - d) / 2; u.s -= e; v.s += e; moved = true; }
     }
     if (!moved) break;
   }
