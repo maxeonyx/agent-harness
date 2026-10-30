@@ -1005,7 +1005,8 @@ impl State {
     ///
     /// The brain states what it decides and observes, but never Max's words,
     /// his marking a task done, his stop, what his face shows, a task no
-    /// agent's call created, a limb's description or what it found in a
+    /// agent's call created (but the aside his unread words open once their
+    /// task waits on a scope, [`Todo::Aside`]), a limb's description or what it found in a
     /// directory, how a call a limb was sent ended, or a change to a
     /// resource it does not own (its own resources, such as the role files
     /// its `roles` set reads, are its to state). A limb states only its own
