@@ -653,7 +653,8 @@ fn remove(dir: &Path) {
 ///
 /// The unit is durable: `$XDG_CONFIG_HOME/systemd/user/UNIT`, enabled for
 /// `default.target`, so it starts at boot (with lingering, before a login)
-/// and again after a crash. Its command line runs the build `NAME/build`
+/// and again after any exit systemd did not ask for: a crash, or a signal
+/// from anything but `systemctl stop`, which a relaunch uses. Its command line runs the build `NAME/build`
 /// links to, the last proven, so it is the same file whatever build
 /// `argv` names. This one start runs `argv` itself, with `by` in its
 /// environment, through a drop-in in `$XDG_RUNTIME_DIR` that is deleted
@@ -691,7 +692,7 @@ pub fn start(unit: &str, argv: &[String], by: Option<CallId>) -> Result<(), Stri
         &format!(
             "[Unit]\nDescription=agent-harness brain {name}\n\n\
              [Service]\nWorkingDirectory={}\nExecStart={}\n\
-             KillMode=mixed\nTimeoutStopSec=330\nRestart=on-failure\nRestartSec=5\n\n\
+             KillMode=mixed\nTimeoutStopSec=330\nRestart=always\nRestartSec=5\n\n\
              [Install]\nWantedBy=default.target\n",
             data.to_string_lossy().replace('%', "%%"),
             exec_line(&linked),
