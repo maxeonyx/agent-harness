@@ -177,7 +177,6 @@ function entry(s, into, e, index, t, parent) {
 function rootEntry(e) {
   const system = parse(e.system), tools = parse(e.tools) || [];
   const d = fold(el("span", "what", `System prompt and ${tools.length} tools`), el("span", "n", modelName(e.model)));
-  d.classList.add("root");
   for (const b of Array.isArray(system) ? system : [{ text: e.system || "" }]) {
     const section = markdown(b.text || "");
     section.classList.add("section");
@@ -287,7 +286,6 @@ function note(text) {
 function step(s, into, b, t) {
   if (!s.group) {
     const g = fold();
-    g.classList.add("steps");
     s.group = { el: g, head: $(".head", g), rows: [] };
     into.append(g);
   }
@@ -471,7 +469,8 @@ function result(s, b) {
   const r = s.rows.get(b.tool_use_id);
   if (!r) return;
   for (const old of r.row.querySelectorAll(".res")) old.remove();
-  r.row.classList.remove("live");
+  // A call watched live folds when it settles, so its output does not stay in the chat.
+  if (r.row.classList.contains("live")) r.row.classList.remove("live", "expanded");
   const st = $(".st", r.row);
   const text = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.type === "text" ? x.text : `[${x.type}]`).join("\n");
   st.className = `st${b.is_error ? " bad" : ""}`;
@@ -637,6 +636,6 @@ export function stopFollowing() { stopModel(); for (const id of callStreams) wat
 // A command's output as a terminal would leave it: only the last screenful.
 function screen(raw) {
   const lines = raw.replace(/\r\n/g, "\n").split("\n").map((l) => l.slice(l.lastIndexOf("\r") + 1));
-  return (lines.length > 40 ? [`[${lines.length - 40} earlier lines]`, ...lines.slice(-40)] : lines).join("\n");
+  return (lines.length > 12 ? [`[${lines.length - 12} earlier lines]`, ...lines.slice(-12)] : lines).join("\n");
 }
 
