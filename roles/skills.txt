@@ -28,6 +28,11 @@ js
 python
 nix
 
+# Agent config: his CLAUDE.md says to load `maintaining-agent-config`
+# before changing it, and roles and AGENTS.md files are agent instructions
+maintaining-agent-config
+writing-agent-instructions
+
 # Git and GitHub
 github
 github-pr-wip
