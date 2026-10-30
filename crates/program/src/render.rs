@@ -5,7 +5,7 @@
 use harness_core::call::{Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
-use harness_core::environment::{Binding, Description};
+use harness_core::environment::{Binding, Description, Tool};
 use harness_core::fact::Author;
 use harness_core::id::{CallId, Digest, LimbId, Timestamp, ValueId};
 use harness_core::model_call::{Ending, Stop};
@@ -51,7 +51,8 @@ fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> St
 }
 
 /// A new root in an environment: the identity, the role, then each limb's
-/// instructions in `system`; the tools its binding routes.
+/// instructions in `system`; the tools its binding routes, each taking a
+/// [`summary`](summarised) last.
 pub struct NewRoot {
     pub root: Root,
     pub binding: Binding,
@@ -75,7 +76,21 @@ pub fn root(
             observes.push(instruction.observes.clone());
         }
     }
-    let (binding, tools) = Binding::new(limbs).map_err(|d| d.to_string())?;
+    let limbs: Vec<(LimbId, Description)> = limbs
+        .iter()
+        .map(|(limb, description)| {
+            let tools = description.tools.iter().map(summarised).collect();
+            (
+                *limb,
+                Description {
+                    tools,
+                    ..(*description).clone()
+                },
+            )
+        })
+        .collect();
+    let limbs: Vec<(LimbId, &Description)> = limbs.iter().map(|(l, d)| (*l, d)).collect();
+    let (binding, tools) = Binding::new(&limbs).map_err(|d| d.to_string())?;
     let system = blocks(&system);
     let tools = Bytes::from(tools);
     Ok(NewRoot {
@@ -88,6 +103,35 @@ pub fn root(
         observes,
         values: vec![system, tools],
     })
+}
+
+/// `tool` taking a required `summary` as its input's last property: the
+/// agent's few words on what each call does, which the page shows in place
+/// of the call's input. Last, so the model writes it from the arguments it
+/// has just written. Added here, for every limb's tools, and recorded in the
+/// call's input with the rest; a limb reads the fields it names, so none
+/// knows about it. A server tool, with no input schema, is left as it is.
+/// The definition keeps its order (serde_json's `preserve_order`), which
+/// is the order the model sees.
+fn summarised(tool: &Tool) -> Tool {
+    let Ok(mut definition) = serde_json::from_str::<Value>(&tool.definition) else {
+        return tool.clone();
+    };
+    let Some(schema) = definition.get_mut("input_schema") else {
+        return tool.clone();
+    };
+    schema["properties"]["summary"] = json!({
+        "type": "string",
+        "description": "What this call does, in a few words, such as `run the tests`."
+    });
+    match schema["required"].as_array_mut() {
+        Some(required) => required.push(json!("summary")),
+        None => schema["required"] = json!(["summary"]),
+    }
+    Tool {
+        definition: definition.to_string(),
+        ..tool.clone()
+    }
 }
 
 /// What every fresh member of a spawn shares, as its first message: the
@@ -462,7 +506,7 @@ carrying on."
     }
     let mut said = vec![text(&framing)];
     if let Some(summary) = carry.summary {
-        said.push(text(&format!("Your summary:\n\n{summary}")));
+        said.push(text(&format!("What you carried:\n\n{summary}")));
     }
     let running: Vec<String> = task
         .background
