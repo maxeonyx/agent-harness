@@ -69,7 +69,8 @@
   .raw-toggle:hover { background: var(--hover); color: var(--ink); }
   .raw-toggle.armed { opacity: 1; color: var(--ink); background: var(--hover); }
   .prose:hover:not(:has(.prose:hover)) > .raw-toggle, .raw-toggle:focus { opacity: 1; }
-  @media (hover: none) { .raw-toggle { opacity: .5; } }
+  /* Without hover it stays shown, quieter, on its own line after the passage so it covers none of it. */
+  @media (hover: none) { .raw-toggle { opacity: .5; position: static; display: block; width: max-content; margin: .2em 0 0 auto; } }
   .prose.entry > .raw-toggle { top: auto; bottom: -1.75em; right: 2em; }
   .prose.raw > :not(.raw-toggle, .source, .copy) { display: none; }
   .prose > .source { margin: 0; }
@@ -77,7 +78,10 @@
   .prose .copy { position: absolute; right: -.3em; bottom: -2em; font-size: 12px; width: 2em; height: 2em; opacity: 0; }
   .prose:hover .copy, .prose .copy:focus { opacity: 1; }
   /* Without hover it stays shown, so it takes its own line rather than cover the next block. */
-  @media (hover: none) { .prose .copy { position: static; display: block; margin: -.4em 0 0 auto; opacity: .6; } }
+  @media (hover: none) {
+    .prose .copy { position: static; display: block; margin: -.4em 0 0 auto; opacity: .6; }
+    .prose.entry:has(> .copy) > .raw-toggle { position: absolute; bottom: .45em; right: 2.4em; margin: 0; }
+  }
   .prose > :first-child { margin-top: 0; } .prose > :nth-last-child(1 of :not(.raw-toggle, .copy)) { margin-bottom: 0; }
   .prose p, .prose ul, .prose ol, .prose pre, .prose blockquote, .prose table { margin: .65em 0; }
   .prose h1, .prose h2, .prose h3, .prose h4 { font-family: var(--serif); line-height: 1.25; margin: 1.1em 0 .45em; }
@@ -152,11 +156,12 @@
   .fold.folded > .head::after { transform: none; }
   .fold.folded:not(.one) > :not(.head):not(.live), .fold.one > .head { display: none; }
   .fold.folded > .head { border-radius: 10px; }
+  .fold.one > .row { border-top: 0; }
   .fold:has(.st.bad) > .head .n { color: var(--red); }
   .fold .line { display: flex; align-items: baseline; gap: .6em; padding: .4em .8em; cursor: pointer; min-width: 0; }
   .fold .line:hover { background: var(--hover); }
   .fold .tool { flex: none; font: 600 12px var(--mono); color: var(--ink); }
-  .fold .sum { flex: 0 1 auto; min-width: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fold .sum { flex: 1 1 0; min-width: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fold .gist { flex: 1 1 0; font: 12px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .fold .st { flex: none; font-size: 12px; color: var(--faint); white-space: nowrap; }
   .fold .st.bad { color: var(--red); }
@@ -194,6 +199,7 @@
   .member > .line { align-items: center; cursor: default; }
   .member.has > .line { cursor: pointer; }
   .member:not(.has) > .line:hover { background: none; }
+  .member > .line > .gist { font: inherit; color: var(--muted); }
   .member > .prose { padding: .2em .8em .7em 1.6em; font: 14.5px/1.55 var(--serif); }
   .member:not(.open) > .prose { display: none; }
   .member.open > .line { background: var(--hover); }

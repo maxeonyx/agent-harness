@@ -222,8 +222,8 @@ function fold(...head) {
 function foldRow(name, summary, glimpse, detail) {
   const row = el("div", "row"), line = el("div", "line");
   line.append(el("span", "tool", name));
-  if (summary) line.append(el("span", "sum", summary));
-  line.append(el("span", "gist", glimpse));
+  // The summary says what the call is for; its arguments are one click further.
+  line.append(summary ? el("span", "sum", summary) : el("span", "gist", glimpse));
   line.onclick = () => row.classList.toggle("expanded");
   row.append(line, detail);
   return row;
@@ -323,14 +323,9 @@ function groupHead(g) {
   const n = g.rows.length;
   g.el.classList.toggle("one", n === 1);
   if (n === 1) return;
-  let what;
-  if (g.rows.some((r) => r.dataset.summary)) what = g.rows.map((r) => r.dataset.summary || r.dataset.tool).join(" → ");
-  else {
-    const counts = {};
-    for (const r of g.rows) counts[r.dataset.tool] = (counts[r.dataset.tool] || 0) + 1;
-    what = Object.entries(counts).map(([k, v]) => v > 1 ? `${k} ×${v}` : k).join(", ");
-  }
-  g.head.replaceChildren(el("span", "what", what), el("span", "n", `${n} calls`));
+  const what = el("span", "what");
+  what.append(...g.rows.flatMap((r, i) => [...(i ? [" → "] : []), el("span", "tool", $(".tool", r).textContent)]));
+  g.head.replaceChildren(what, el("span", "n", `${n} calls`));
 }
 function closeGroup(s) { s.group = null; }
 
@@ -352,8 +347,6 @@ function toolRow(s, b, t) {
   const detail = el("div", "detail");
   detail.append(readable(unsummarised(input, b.name === "background")));
   const row = foldRow(name, summary, gist(inner), detail);
-  row.dataset.tool = b.name;
-  row.dataset.summary = summary;
   const line = $(".line", row);
   line.append(el("span", "st run", ""));
   const path = inner.path;
@@ -447,7 +440,7 @@ function memberLine(r, name, m) {
   if (said !== undefined) d.append(markdown(said));
   return d;
 }
-const firstLine = (text) => text.split("\n").map((l) => l.replace(/^[#>*\-\s]+/, "")).find((l) => l.trim()) || "";
+const firstLine = (text) => text.split("\n").map((l) => l.replace(/^[#>*\-\s]+/, "").replace(/[*_`]/g, "")).find((l) => l.trim()) || "";
 function chip(m) {
   const l = look(m);
   const a = el("a", `chip ${l.cls}`);
@@ -460,12 +453,12 @@ function chip(m) {
 // A scope's result, each agent's part under its name (harness-program's
 // `meta::result`): `## name` alone in a text block, then what it said.
 function parts(content) {
-  const blocks = typeof content === "string" ? content.split(/\n(?=## )/) : (content || []).map((x) => x.type === "text" ? x.text : `[${x.type}]`);
+  if (!Array.isArray(content)) return null;
   const out = new Map();
   let name = null;
-  for (const b of blocks) {
-    const head = /^## (.+)(?:\n|$)/.exec(b);
-    if (head) { name = head[1]; out.set(name, b.slice(head[0].length)); continue; }
+  for (const b of content.map((x) => x.type === "text" ? x.text : `[${x.type}]`)) {
+    const head = /^## ([^\n]+)$/.exec(b);
+    if (head) { name = head[1]; out.set(name, ""); continue; }
     if (name === null) return null;
     out.set(name, [out.get(name), b].filter((x) => x).join("\n\n"));
   }
