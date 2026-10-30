@@ -7,12 +7,19 @@ use std::time::Duration;
 use harness_core::context::EntryId;
 use harness_core::id::Timestamp;
 
-/// How many tokens of context, in a window of `window`, make each request
-/// warn the agent to wrap up and compact itself: 300k, or 80% of a smaller
-/// window, before the provider refuses it and the harness compacts it with
-/// no summary of the agent's.
-pub fn warn_at(window: u64) -> u64 {
+/// The soft limit of context in a window of `window`, past which each
+/// request tells the agent to compact now: 300k, or 80% of a smaller window,
+/// before the provider refuses it and the harness compacts it with no
+/// summary of the agent's.
+pub fn limit(window: u64) -> u64 {
     (window * 80 / 100).min(300_000)
+}
+
+/// How many tokens of context, in a window of `window`, make each request
+/// offer the agent a compaction in its own time: the last 50k before the
+/// [`limit`].
+pub fn offer_at(window: u64) -> u64 {
+    limit(window).saturating_sub(50_000)
 }
 
 /// Requests that may fail in a row before the task fails.

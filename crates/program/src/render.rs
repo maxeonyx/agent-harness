@@ -104,8 +104,8 @@ pub fn root(
 
 /// What `system` says of the [`summary`](summarised) every tool takes: the
 /// schema alone leaves a model's first calls without one.
-const SUMMARY: &str = "Every tool call takes a `summary`, written last, after the arguments: what the call is for, \
-in a few words, such as `run the tests`. Max reads it in place of the call's input.";
+const SUMMARY: &str = "Every tool call takes a `summary`, written last, after the arguments: what the call does, \
+like `run the tests` or `find where compactions render`. Max reads it in place of the call's input.";
 
 /// `tool` taking a required `summary` as its input's last property: the
 /// agent's few words on what each call does, which the page shows in place
@@ -130,7 +130,7 @@ fn summarised(tool: &Tool) -> Tool {
     };
     schema["properties"]["summary"] = json!({
         "type": "string",
-        "description": "What this call is for, in a few words."
+        "description": "What this call does, like `run the tests` or `find where compactions render`."
     });
     match schema["required"].as_array_mut() {
         Some(required) => required.push(json!("summary")),
@@ -378,7 +378,7 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
         );
     }
     // The clock starts what the harness says; mid-turn, it comes alone
-    // only to warn of a context nearly full.
+    // only to say the context is nearly full.
     let (clock, full) = clock(state, task, now);
     if !texts.blocks.is_empty() || full {
         turn.push(Rendered::Note(Note::Now), vec![text(&clock)]);
@@ -389,8 +389,8 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
 
 /// The time, and how full the context was at the task's last response,
 /// unless a compaction has replaced that context since (the head is its
-/// carry, or the report after it); and whether it
-/// is full enough to warn the agent to compact ([`crate::policy::warn_at`]).
+/// carry, or the report after it); and whether it is full enough to say so
+/// ([`crate::policy::offer_at`], [`crate::policy::limit`]).
 fn clock(state: &State, task: &Task, now: &Now) -> (String, bool) {
     let used = state
         .last_turn(task.id)
@@ -410,13 +410,20 @@ fn clock(state: &State, task: &Task, now: &Now) -> (String, bool) {
         tokens(used),
         tokens(now.window)
     );
-    let full = used >= crate::policy::warn_at(now.window);
-    if full {
+    let limit = crate::policy::limit(now.window);
+    let full = used >= crate::policy::offer_at(now.window);
+    if used >= limit {
         said.push_str(&format!(
-            " That is past {}: wrap up the step you are on soon, and then compact with `compact_and_continue`, \
-or `compact_and_report` if you are done. If it fills, the \
-harness compacts it for you, with no summary of yours, and what is only in your context is lost.",
-            tokens(crate::policy::warn_at(now.window))
+            " That is past {}: call a compaction tool now, `compact_and_continue`, or `compact_and_report` if you \
+are done. If it fills, the harness compacts it for you, with no summary of yours, and what is only in your \
+context is lost.",
+            tokens(limit)
+        ));
+    } else if full {
+        said.push_str(&format!(
+            " It nears {}: a good time to tidy up what needs it, then compact with `compact_and_continue` in your \
+own time.",
+            tokens(limit)
         ));
     }
     (said, full)
