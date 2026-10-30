@@ -24,8 +24,13 @@
 //! opened from one of the definition's offers on its own, so one that
 //! cannot open fails only itself. It runs every call with [`Calls`],
 //! dispatched to the set that has its tool by name, in the order each agent
-//! wrote them. A panic in a tool set fails only the call or the set it was
-//! in.
+//! wrote them. What a call runs on the machine runs in a systemd scope of
+//! its own ([`scope`]).
+//!
+//! Max: "I'm not interested in the crash. I think that that's bad code if
+//! we crash." The limb crates deny `unwrap`, `expect`, `panic!` and
+//! `unreachable!`; a panic in a tool set all the same fails only the call
+//! or the set it was in.
 //!
 //! # A limb's setup
 //!
@@ -44,7 +49,7 @@
 //!   brain->>attach: start the link, whose stdin and stdout are the brain's end<br/>harness-limb attach LIMB
 //!   attach->>attach: look for the limb's socket<br/>attach::run: State::enter, connect
 //!   alt nothing is listening
-//!     attach->>serve: start the limb in a systemd scope if there is a user manager<br/>attach::start: serve LIMB
+//!     attach->>serve: start the limb in harness-limb-LIMB.scope, if there is a user manager<br/>attach::start: serve LIMB
 //!     serve->>serve: take the lock, detach, open its records, listen on the socket<br/>serve::run: setsid, subreaper, Instance::open
 //!     attach->>serve: connect, tried every 50 ms for up to 30 s
 //!   else a limb already runs, as it does after a brain restart
@@ -61,6 +66,7 @@
 
 mod attach;
 mod calls;
+pub mod scope;
 mod serve;
 mod set;
 mod voice;

@@ -133,10 +133,12 @@ impl Inner {
         self.marks
             .running(call)
             .map_err(|e| format!("cannot record the command: {e}"))?;
+        let scope = self.scope(call, &running.call.caller, &input.command);
         let ran = shell::run(
             call,
             &input.command,
             root,
+            &scope,
             timeout,
             running.limit,
             running.cancel,

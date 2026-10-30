@@ -13,3 +13,9 @@ harness-substrate = { path = "../substrate" }
 libc = "0.2"
 serde = "1"
 serde_json = "1"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"

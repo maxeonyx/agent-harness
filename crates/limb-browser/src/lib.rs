@@ -4,7 +4,8 @@
 //! **Concept.** A limb that offers the `browser` set shares one browser
 //! among the agents whose roles hold it, as forks share a directory. It
 //! drives it over the Chrome DevTools Protocol ([`cdp`]): one it launches,
-//! with a profile of its own in the limb's state, or one it attaches to at an endpoint, such as a dedicated
+//! in a systemd scope of its own and with a profile of its own in the
+//! limb's state, or one it attaches to at an endpoint, such as a dedicated
 //! Chrome on Max's desktop through a tunnel ([`chrome`], [`Settings`]). It
 //! finds or launches the browser at the first call that needs it, so a
 //! browser that cannot start fails only those calls.
@@ -279,7 +280,7 @@ impl Inner {
             let _ = old.kill();
             let _ = old.wait();
         }
-        let browser = chrome::open(&lock(&self.settings), &self.state)?;
+        let browser = chrome::open(&lock(&self.settings), &self.state, self.voice.limb())?;
         *process = browser.process;
         let events = self.events.clone();
         let connection = Arc::new(cdp::Cdp::connect(&browser.url, move |e| {

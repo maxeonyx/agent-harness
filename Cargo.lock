@@ -322,10 +322,13 @@ dependencies = [
 name = "harness-limb-machine"
 version = "0.0.0"
 dependencies = [
+ "harness-core",
  "harness-limb",
  "harness-limb-browser",
  "harness-limb-builds",
  "harness-limb-workspace",
+ "harness-substrate",
+ "serde_json",
 ]
 
 [[package]]

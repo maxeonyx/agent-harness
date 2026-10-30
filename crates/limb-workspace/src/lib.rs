@@ -32,6 +32,10 @@
 //! falls inside the command's run; otherwise it is a notice to everyone who
 //! saw the file, the command's caller too.
 //!
+//! Every command runs in a systemd scope of its own in its agent's slice
+//! ([`harness_limb::scope`]), and ends, with everything it started, when
+//! its call does.
+//!
 //! Access control is the definition and nothing else: the limb has no
 //! prompts and no checks on what a command may touch. A role either holds
 //! this set or does not.
@@ -698,5 +702,38 @@ impl Inner {
                 .iter()
                 .any(|(start, end)| (*start - COARSE..=*end).contains(&modified))
         })
+    }
+
+    /// What a command `call` makes is in the scope `harness-call-<call>`,
+    /// in its agent's slice, described as its agent's.
+    pub(crate) fn scope(
+        &self,
+        call: CallId,
+        caller: &Caller,
+        command: &str,
+    ) -> harness_limb::scope::Scope {
+        let task = match caller {
+            Caller::Agent { task, .. } | Caller::Background { task, .. } => Some(*task),
+            Caller::Max { chat, .. } => *chat,
+            Caller::Meta { .. } => None,
+        };
+        let who = match (caller, task) {
+            (Caller::Max { .. }, _) => "Max".to_string(),
+            (_, Some(task)) => lock(&self.agents)
+                .get(&task)
+                .cloned()
+                .unwrap_or_else(|| task.to_string()),
+            (_, None) => "the harness".to_string(),
+        };
+        let line = command.lines().next().unwrap_or_default();
+        let line: String = line.chars().take(80).collect();
+        harness_limb::scope::Scope {
+            unit: shell::unit(call),
+            slice: Some(match task {
+                Some(task) => format!("harness-{task}.slice"),
+                None => "harness-max.slice".into(),
+            }),
+            description: format!("{who}: {line}"),
+        }
     }
 }

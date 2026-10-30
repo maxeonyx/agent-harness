@@ -28,9 +28,8 @@ Relative paths are relative to it.{own}",
 pub const USE: &str = "\
 Your calls to this workspace run one after another, in the order you write them, each once the one before has ended. \
 Every `bash` call starts a fresh shell there: no working directory, variables or background jobs carry over. \
-Each command owns every process it starts, and they are all killed when it ends, is interrupted or reaches its time limit. \
-A process that starts a session of its own leaves the command: `setsid server > server.log 2>&1 &` keeps a server across calls. \
-Stop it with `kill <pid>`; it is stopped anyway when the limb ends.
+Each command owns every process it starts, `setsid` or not, and they are all stopped when it ends, is interrupted or reaches its time limit. \
+To keep a server running across calls, run its command in the background, if you can: it runs until that call is stopped.
 
 Long `bash` and `grep` output is cut to a view: its first and last 30 lines, with markers naming the lines each gap hides, and its longest lines cut to fit about 16 KiB; binary output is not shown. \
 When anything is cut, the view ends by naming a file that holds the whole output: `read` or `grep` that file rather than running the command again. \

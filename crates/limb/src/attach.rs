@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use harness_core::id::LimbId;
 
 use crate::State;
+use crate::scope::user_manager;
 
 /// How long a starting limb gets to listen.
 const START: Duration = Duration::from_secs(30);
@@ -105,12 +106,6 @@ fn start(limb: LimbId, state: &State, from: u64) -> Result<UnixStream, String> {
         }
         thread::sleep(POLL);
     }
-}
-
-/// Whether a systemd user manager runs this user's units.
-fn user_manager() -> bool {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .is_some_and(|dir| std::path::Path::new(&dir).join("systemd/private").exists())
 }
 
 /// Which end closed the link.

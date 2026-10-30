@@ -216,7 +216,14 @@ fn main() {
     brain.settle(&mut a, call);
     println!("  afterwards: {}", after(&pids));
 
-    title("A server started with setsid outlives its command, until stopped by its pid");
+    title("Each command runs in a systemd scope of its own, in its agent's slice");
+    brain.call(
+        &mut a,
+        "bash",
+        json!({ "command": "cat /proc/self/cgroup; systemctl --user list-units --no-legend 'harness-call-*' | cat" }),
+    );
+
+    title("A server started with setsid ends with its command all the same");
     brain.call(
         &mut a,
         "bash",
@@ -225,12 +232,7 @@ fn main() {
     brain.call(
         &mut a,
         "bash",
-        json!({ "command": "kill -0 $(cat server.pid) && echo still running in the next call" }),
-    );
-    brain.call(
-        &mut a,
-        "bash",
-        json!({ "command": "kill $(cat server.pid); sleep 0.2; ps -o stat= -p $(cat server.pid) | grep -qv Z && echo running || echo stopped" }),
+        json!({ "command": "ps -o stat= -p $(cat server.pid) | grep -qv Z && echo still running || echo stopped with its command" }),
     );
 
     title("The limb is killed mid-command; the next instance ends what it left and settles");
