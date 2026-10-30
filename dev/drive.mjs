@@ -397,6 +397,8 @@ class Browser {
     const proc = spawn(chromium(), [
       "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
       "--ignore-certificate-errors", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",
+      // Without it Chromium waits on the system keyring, and may never start.
+      "--password-store=basic",
       `--window-size=${size.width},${size.height}`, "about:blank",
     ], { stdio: "ignore", env: { ...process.env, [brain.mark]: "1" } });
     const b = new Browser(proc, profile, size, log);
