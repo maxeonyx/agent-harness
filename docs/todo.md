@@ -80,6 +80,8 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **No go-back button after a relaunch** (`face-web/src/page/builds.js:19`), and rehearsal doesn't catch a broken page.
 - **TLS certificate path and bind address are hard-wired** (`brain/src/main.rs:213-219,245`).
 - **The relaunch watcher folds every 2 s.**
+- **A rollback forks history.** On 31 Oct the first move of the home brain onto 9c5a5fa rolled back because the old build's watcher couldn't read the record holding the new build's `Launched`. The old build then ran again for 32 minutes: it skipped the 27 records the new build had written, ran a read-only `bash` call a second time (its settlement was in a skipped record), and carried sessions on from an earlier point. Moving forward needed a backup and those 27 records deleted by hand; a mutating call would also have run twice. The design is open; one shape suggested: any build folds a rolled-back span only as far as the build that took back over could read it.
+- **The builds limb doesn't reap a `harness-limb` it adopts.** After that move, PID 227530 was `[harness-limb] <defunct>`, its parent the old build's builds limb (`harness-limb-builds serve`, 2dace7a7c6a7). It is in the parent's session and leads its own group, so `reap_orphans` (`limb/src/serve.rs`) takes it for a child a thread waits on and skips it; probably the `harness-limb attach` of a rehearsal brain that was ended, orphaned to the limb as subreaper.
 - **A missing limb at relaunch fails a task permanently,** where it should wait, as a signed-out login does (`Hold::SignedOut`).
 
 ## Max and his attention (S6)
