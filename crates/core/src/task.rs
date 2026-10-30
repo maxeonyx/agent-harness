@@ -873,8 +873,8 @@ pub enum Move {
     Root(Box<Start>),
     Compact(Box<Compaction>),
     /// Max puts the task back at an entry it has been at: its start, or an
-    /// entry one of its own requests sent or received since. Retry, edit,
-    /// going back and choosing between versions of a reply are each this
+    /// entry one of its own requests sent or received since. Edit, going
+    /// back and choosing between versions of a reply are each this
     /// one move to a different entry; the path it leaves stays in the tree,
     /// where a face shows it as another version. What follows is read off
     /// the entry, so nothing beside it says what kind of move it was:
@@ -883,8 +883,8 @@ pub enum Move {
     ///   whatever the mode. Going back, or picking another version.
     /// - the head of one of its requests: the model's move. The next
     ///   request extends it with nothing new unless something is pending,
-    ///   so it is another sample of that response: a retry. On the head of
-    ///   the request that rendered Max's message, the whole turn is retried.
+    ///   so it is another sample of that response. On the head of the
+    ///   request that rendered Max's message, the whole turn is sampled again.
     /// - a response with tool uses: the model's move, its round's results
     ///   rendered again from their settlements, not run again.
     /// - its start: the model's move, from the mandate.
@@ -898,7 +898,7 @@ pub enum Move {
     /// except Max's own words, which he is leaving, and what came of calls
     /// started on the left path. When the left path changed the world (its
     /// calls wrote files, its background work still runs, it started
-    /// tasks), the next request says so ([`Note::Moved`]); a retry in a
+    /// tasks), the next request says so ([`Note::Moved`]); a move back in a
     /// chat that touched nothing is the same request as the first. Its
     /// background work runs on, the task's to keep or stop, as through a
     /// pause.
@@ -911,10 +911,8 @@ pub enum Move {
     /// is done.
     ///
     /// **Vision.** Max as a participant who "very, very frequently" changes
-    /// his mind: retry, edit and revert as in other chat apps, with nothing
-    /// lost, since every version stays in the tree and he can move back to
-    /// it; and a retry exposing the model's nondeterminism as another
-    /// record on one input ([`crate::model_call::ModelCall`]).
+    /// his mind: edit and revert as in other chat apps, with nothing lost,
+    /// since every version stays in the tree and he can move back to it.
     ///
     /// **Existing harnesses.** claude.ai keeps a reply's versions as
     /// siblings and an edit as a new branch. Claude Code's rewind truncates

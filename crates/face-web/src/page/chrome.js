@@ -36,7 +36,7 @@ const pct = (f) => f == null ? "?" : `${Math.round(f * 100)}%`;
 const resets = (ms) => {
   if (ms == null) return "";
   const d = new Date(ms);
-  return d.toDateString() === new Date().toDateString() ? `resets ${clock(ms)}` : `resets ${d.toLocaleDateString([], { weekday: "short" })} ${clock(ms)}`;
+  return d.toDateString() === new Date().toDateString() ? `Resets ${clock(ms)}` : `Resets ${d.toLocaleDateString([], { weekday: "short" })} ${clock(ms)}`;
 };
 const windowName = (n) => ({ five_hour: "5-hour", seven_day: "Weekly", seven_day_opus: "Weekly Opus", seven_day_sonnet: "Weekly Sonnet" })[n] ?? n.replaceAll("_", " ");
 // This tab's click until the view shows the call, and why the brain refused it.
@@ -53,7 +53,7 @@ async function refreshUsage() {
 }
 // Made once, so a focused button keeps its focus, and its card stays open,
 // as the view moves on.
-const gauges = el("button", "gauges"), usageCard = el("div", "usage-card"), usageAlarms = el("span", "alarms");
+const gauges = el("button", "gauges"), usageCard = el("div", "pop"), usageAlarms = el("span", "alarms");
 gauges.onclick = refreshUsage;
 $("#usage").append(gauges, usageCard, usageAlarms);
 export function renderUsage() {
@@ -67,19 +67,19 @@ export function renderUsage() {
     g.append(label, bar, el("span", "pc", pct(f)));
     gauges.append(g);
   }
-  usageCard.replaceChildren();
+  const table = el("table");
   for (const [name, x] of Object.entries(w)) {
-    const row = el("div", "row");
-    row.append(el("span", "", windowName(name)), el("b", "", pct(x.used)), el("span", "", resets(x.resets)));
-    usageCard.append(row);
+    const tr = el("tr");
+    tr.append(el("td", "", windowName(name)), el("td", "n", pct(x.used)), el("td", "", resets(x.resets)));
+    table.append(tr);
   }
-  const asOf = el("div", "as-of");
-  asOf.append(el("span", busy || failed ? "stale" : "", u?.at ? `as of ${clock(u.at)}` : "no reading yet"), busy ? " · refreshing…" : " · click to refresh");
-  usageCard.append(asOf);
+  const foot = el("div", "foot");
+  foot.append(el("span", busy || failed ? "stale" : "", u?.at ? `As of ${clock(u.at)}` : "No reading yet"), busy ? "Refreshing…" : "Click to refresh");
+  usageCard.replaceChildren(table, foot);
   if (failed && !busy) usageCard.append(el("div", "failed", failed));
   span.classList.toggle("busy", !!busy);
   usageAlarms.replaceChildren();
-  if (view.limited) usageAlarms.append(el("span", "alarm", `limited until ${clock(view.limited)} · carries on by itself`));
+  if (view.limited) usageAlarms.append(el("span", "alarm", `Limited until ${clock(view.limited)}, then carries on by itself`));
   if (view.signedOut) usageAlarms.append(signIn);
   setUsageRight(span.getBoundingClientRect().right);
 }

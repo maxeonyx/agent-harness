@@ -6,23 +6,30 @@ import { view } from "./map.js";
 // relaunch is in play, how far it has got: under way, took over and on
 // probation (a response, then a round trip through a limb), proven, or
 // gone back and why. Limbs still on the build before say so until they
-// move.
-const badge = el("span", "build");
+// move. Hovering it shows all of that as a table.
+const badge = el("span", "build"), commitEl = el("span"), nowEl = el("span", "now"), card = el("div", "pop");
+badge.tabIndex = 0;
+badge.append(commitEl, nowEl, card);
 $("#usage").after(badge);
-const tick = (done, what) => `${what} ${done ? "✓" : "·"}`;
+const tick = (done) => done ? "✓" : "Not yet";
 export function renderBuilds() {
-  const commit = (view.source || "").replace(/^(\w{7})\w*/, "$1");
   const r = view.relaunch, v = view.probation || {};
-  const parts = [commit];
-  let why = "";
-  if (r?.stage === "under way") parts.push("relaunching…");
-  else if (r?.stage === "went back") { parts.push(`went back: ${r.why}`); why = r.why; }
-  else if (r?.stage === "took over" && v.Proven) parts.push("proven ✓");
-  else if (r?.stage === "took over" && v.Refused) parts.push(`refused: ${v.Refused.message}`);
-  else if (r?.stage === "took over") parts.push(`probation: ${tick(v.Proving?.responded, "response")} ${tick(v.Proving?.round_trip, "round trip")}`);
   const old = view.superseded || [];
-  if (old.length) parts.push(`${old.length} limb${old.length > 1 ? "s" : ""} on the old build`);
-  badge.textContent = parts.join(" · ");
-  badge.title = [`Running ${view.source || "an unknown build"}`, why, old.length ? `On the old build until idle: ${old.join(", ")}` : ""].filter(Boolean).join("\n");
+  const rows = [["Build", view.source || "Unknown"]];
+  let now = "";
+  if (r?.stage === "under way") now = "Relaunching…";
+  else if (r?.stage === "went back") { now = "Went back"; rows.push(["Went back", r.why]); }
+  else if (r?.stage === "took over" && v.Proven) now = "Proven ✓";
+  else if (r?.stage === "took over" && v.Refused) { now = "Refused"; rows.push(["Refused", v.Refused.message]); }
+  else if (r?.stage === "took over") { now = "On probation"; rows.push(["Response", tick(v.Proving?.responded)], ["Round trip", tick(v.Proving?.round_trip)]); }
+  if (old.length) rows.push(["On the old build", old.join(", ")]);
+  commitEl.textContent = (view.source || "").replace(/^(\w{7})\w*/, "$1");
+  nowEl.textContent = old.length && !now ? `${old.length} limb${old.length > 1 ? "s" : ""} on the old build` : now;
   badge.classList.toggle("back", r?.stage === "went back" || !!(r?.stage === "took over" && v.Refused));
+  const key = JSON.stringify(rows);
+  if (card.dataset.key === key) return;
+  card.dataset.key = key;
+  const table = el("table");
+  for (const [k, x] of rows) { const tr = el("tr"); tr.append(el("td", null, k), el("td", null, x)); table.append(tr); }
+  card.replaceChildren(table);
 }

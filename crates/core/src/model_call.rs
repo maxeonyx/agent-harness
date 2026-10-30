@@ -25,8 +25,8 @@ use crate::id::{TaskId, Timestamp, ValueId};
 /// It is Bx's build record. The task's environment and binding are the
 /// definition, the head's [`EntryId`] is the resolved input's content
 /// identity, the response is the output, and timing, usage and quota are
-/// the execution evidence. Several model calls on one head (Max's retry, a
-/// retry after a failure, a resend after a crash) expose the model's
+/// the execution evidence. Several model calls on one head (a retry after a
+/// failure, a resend after a crash) expose the model's
 /// nondeterminism instead of hiding it, as one Bx definition with several
 /// records does; with Max's model or effort changed between them, they are
 /// one input under two definitions. Unlike Bx,
