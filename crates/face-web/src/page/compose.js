@@ -478,8 +478,16 @@ function press() {
   if (box.value.trim()) return stage();
   if (!unsaved(box.dataset.key) && lockedUntil <= Date.now()) submit();
 }
-// Only what went wrong is said; what went right shows as itself.
-export const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`; } };
+// Only what went wrong is said; what went right shows as itself. What went
+// wrong clears itself on his next edit, or after a while.
+let unsay = 0;
+export const say = (text, bad) => {
+  clearTimeout(unsay);
+  const s = $(".status", compose);
+  if (!s) return;
+  s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`;
+  if (bad) unsay = setTimeout(() => say(""), 10000);
+};
 function autosize() {
   if (!box) return;
   const field = box.parentElement, top = field.scrollTop;
@@ -570,6 +578,7 @@ function giveBlocks(key, blocks) {
 
 let prev = "";
 function onInput() {
+  if ($(".status.bad", compose)) say("");
   const now = box.value;
   if (dictation && dictation.key === box.dataset.key) {
     let x = 0;
