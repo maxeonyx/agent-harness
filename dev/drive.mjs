@@ -21,11 +21,16 @@
 // `sonnet` to keep each role's effort: the brain's `--model`). It keeps
 // the brain's port if that is free, or takes a free one in 4340-4499
 // (DRIVE_PORTS=LOW-HIGH for others), and succeeds once this launch's log
-// says it serves (`face: …`), or fails with the log's tail. The database
+// says it serves (`face: …`), or fails with the log's tail. The brain runs
+// as the transient user unit harness-drive-NAME-CLONE.service, handed to
+// the user manager, so it outlives the command that ran `up`, a limb's
+// call included; with no user manager it runs detached, in that
+// command's scope, and `up` says so. The database
 // outlives `up`, and so do its limbs, as any brain's do: the next `up`
 // relaunches a rebuilt brain on the same chats, linked to the same limbs,
 // so `kill -9 $(cat .drive.ignore/NAME/pid)` then `up` is a crash and a
-// relaunch; `down` ends everything of the brain's, and `down --wipe` forgets
+// relaunch; `down` stops the brain's unit and ends everything of the
+// brain's, and `down --wipe` forgets
 // it. The face serves the page from crates/face-web/src/page as it is on disk
 // (`--page`), so an edit to the page shows on reload, with no rebuild.
 // `--sample WAV` gives the page a recording to dictate, and `--login DB`
@@ -94,6 +99,7 @@ function brainOf(name) {
   return {
     name, dir, file, read,
     mark: `HARNESS_OWNER_drive_${name}_${clone}`,
+    unit: `harness-drive-${name}-${clone}.service`,
     recorded: () => read("port") === undefined ? undefined : Number(read("port")),
     get port() {
       return this.recorded() ?? fail(`no brain ${name}: node dev/drive.mjs up --brain ${name}`);
@@ -101,8 +107,16 @@ function brainOf(name) {
   };
 }
 
+// The user manager's word on a unit, or undefined with no user manager.
+function systemctl(...args) {
+  const r = spawnSync("systemctl", ["--user", ...args], { encoding: "utf8" });
+  return r.error || r.status === null ? undefined : r;
+}
+
 // End the brain's own process, if it still runs, and leave its limbs.
 async function stop(brain) {
+  // Its unit's cgroup holds the brain alone: its limbs run in scopes of their own.
+  systemctl("stop", brain.unit);
   const pid = Number(brain.read("pid"));
   const ours = () => {
     try { return fs.readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(`${brain.mark}=1`); } catch { return false; }
@@ -169,16 +183,13 @@ async function up(brain, args) {
 // Start the brain on `port`: its pid once this launch's log says it
 // serves, or "taken" if another process bound the port first.
 async function launch(brain, model, port, log, flags) {
-  const from = fs.existsSync(log) ? fs.statSync(log).size : 0;
-  const out = fs.openSync(log, "a");
-  const child = spawn(path.join(repo, "target/release/harness-brain"),
-    ["--roles", path.join(repo, "roles"), "--db", brain.file("brain.sqlite"), "--port", String(port), "--model", model,
-      "--page", path.join(repo, "crates/face-web/src/page"), ...flags],
-    { detached: true, stdio: ["ignore", out, out], env: { ...process.env, [brain.mark]: "1", XDG_STATE_HOME: brain.file("state") } });
-  child.unref();
-  fs.closeSync(out);
-  let exited = null;
-  child.on("exit", (code, signal) => { exited = signal ?? code; });
+  fs.closeSync(fs.openSync(log, "a"));
+  const from = fs.statSync(log).size;
+  const command = [path.join(repo, "target/release/harness-brain"),
+    "--roles", path.join(repo, "roles"), "--db", brain.file("brain.sqlite"), "--port", String(port), "--model", model,
+    "--page", path.join(repo, "crates/face-web/src/page"), ...flags];
+  const env = { ...process.env, [brain.mark]: "1", XDG_STATE_HOME: brain.file("state") };
+  const { pid, exited } = service(brain, command, env, log) ?? detached(command, env, log);
   const said = () => {
     const fd = fs.openSync(log, "r");
     const size = fs.fstatSync(fd).size;
@@ -190,17 +201,52 @@ async function launch(brain, model, port, log, flags) {
   const deadline = Date.now() + 60_000;
   for (;;) {
     const text = said();
-    if (/^face: /m.test(text)) return child.pid;
-    if (exited !== null) {
+    if (/^face: /m.test(text)) return pid;
+    if (exited() !== null) {
       if (text.includes("Address already in use")) return "taken";
-      fail(`the brain exited (${exited}) before it served:\n${tail(text, 20)}`);
+      fail(`the brain exited (${exited()}) before it served:\n${tail(text, 20)}`);
     }
     if (Date.now() > deadline) fail(`the brain has not served in 60 s:\n${tail(text, 20)}`);
     await sleep(100);
   }
 }
 
+// The brain as a transient user service, handed to the user manager as
+// any long-lived server is, so it outlives the command that started it
+// (a limb's call ends everything in its scope). Undefined with no user
+// manager.
+function service(brain, [program, ...args], env, log) {
+  systemctl("reset-failed", brain.unit);
+  // Not what the manager sets itself, for the unit's own run, nor names
+  // it refuses, such as a limb's call mark (HARNESS_OWNER_<call>).
+  const own = /^(INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|MANAGERPID|NOTIFY_SOCKET|LISTEN_\w+|WATCHDOG_\w+)$|\W/;
+  const r = spawnSync("systemd-run", ["--user", "--quiet", `--unit=${brain.unit}`, "--collect", "--same-dir",
+    `--description=drive brain ${brain.name} (${repo})`, "-p", "TimeoutStopSec=10",
+    "-p", `StandardOutput=append:${log}`, "-p", `StandardError=append:${log}`,
+    ...Object.entries(env).filter(([k]) => !own.test(k)).map(([k, v]) => `--setenv=${k}=${v}`),
+    program, ...args], { encoding: "utf8" });
+  if (r.error || r.status !== 0) {
+    console.error(`no user manager (${(r.error?.message ?? r.stderr).trim()}): the brain runs detached, and ends with this command's scope`);
+    return undefined;
+  }
+  const pid = Number(systemctl("show", "-p", "MainPID", "--value", brain.unit)?.stdout);
+  const exited = () => pid && fs.existsSync(`/proc/${pid}`) ? null : "its unit stopped";
+  return { pid, exited };
+}
+
+// The brain as a child of no one, in this command's scope.
+function detached([program, ...args], env, log) {
+  const out = fs.openSync(log, "a");
+  const child = spawn(program, args, { detached: true, stdio: ["ignore", out, out], env });
+  child.unref();
+  fs.closeSync(out);
+  let status = null;
+  child.on("exit", (code, signal) => { status = signal ?? code; });
+  return { pid: child.pid, exited: () => status };
+}
+
 function down(brain, wipe) {
+  systemctl("stop", brain.unit);
   end(brain);
   if (wipe) fs.rmSync(brain.dir, { recursive: true, force: true });
 }
