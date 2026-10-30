@@ -1985,7 +1985,7 @@ fn local_limb(id: LimbId, found: Option<&Limb>, roles: Option<&Path>) -> Result<
         user["skills"] = serde_json::json!(dir.join("skills.txt"));
     }
     let browser = match std::env::var("HARNESS_BROWSER") {
-        Ok(word) => serde_json::json!({ "browser": word }).to_string(),
+        Ok(word) => browser(&word).to_string(),
         Err(_) => (found.and_then(|l| l.offer("browser")))
             .map_or_else(|| "{}".to_owned(), |o| o.config.clone()),
     };
@@ -2004,6 +2004,21 @@ fn local_limb(id: LimbId, found: Option<&Limb>, roles: Option<&Path>) -> Result<
             offer("builds", &builds),
         ],
     })
+}
+
+/// The `browser` set's settings from one word: an endpoint to attach to
+/// (`host:port`, `http://…`, `ws://…`), or else the path of a browser to
+/// launch. Empty for the limb's default.
+fn browser(word: &str) -> serde_json::Value {
+    let word = word.trim();
+    let endpoint = word.starts_with("ws://")
+        || word.starts_with("http://")
+        || (word.rsplit_once(':')).is_some_and(|(_, port)| port.parse::<u16>().is_ok());
+    match word {
+        "" => serde_json::json!({}),
+        _ if endpoint => serde_json::json!({ "endpoint": word }),
+        _ => serde_json::json!({ "chrome": word }),
+    }
 }
 
 fn offer(set: &str, config: &str) -> Offer {

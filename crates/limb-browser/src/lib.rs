@@ -81,29 +81,6 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Settings from one word: an endpoint (`host:port`, `http://…`,
-    /// `ws://…`), or else the path of a browser to launch. Empty for the
-    /// default.
-    pub fn parse(word: &str) -> Settings {
-        let word = word.trim();
-        let endpoint = word.starts_with("ws://")
-            || word.starts_with("http://")
-            || word
-                .rsplit_once(':')
-                .is_some_and(|(_, port)| port.parse::<u16>().is_ok());
-        match word {
-            "" => Settings::default(),
-            _ if endpoint => Settings {
-                endpoint: Some(word.into()),
-                ..Settings::default()
-            },
-            _ => Settings {
-                chrome: Some(word.into()),
-                ..Settings::default()
-            },
-        }
-    }
-
     /// The offer of the browser set with these settings.
     pub fn offer(&self) -> Result<Offer, String> {
         harness_limb::offer(SET, self)
