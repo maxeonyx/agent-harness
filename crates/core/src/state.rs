@@ -1169,10 +1169,12 @@ impl State {
         }
         let mark = Mark::of(record);
         let mut task = Task::new(id, created, mark, self)?;
-        // An aside takes its source's unread words from Max with it: the
-        // talk they were for goes on there. Words the same as its mandate
-        // are its mandate.
+        // The aside his unread words open takes them all with it: the talk
+        // they were for goes on there. Words the same as its mandate are its
+        // mandate. Any other aside leaves them to its source, which reads
+        // them once its scope closes.
         if let Origin::Aside { from } = created.origin
+            && self.carries_words(created)
             && let Some(source) = self.tasks.get(&from)
         {
             let unread = self.unread_words(source);
