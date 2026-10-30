@@ -390,7 +390,7 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
 /// The time, and how full the context was at the task's last response,
 /// unless a compaction has replaced that context since (the head is its
 /// carry, or the report after it); and whether it
-/// is full enough to warn the agent to compact ([`crate::policy::WARN_AT`]).
+/// is full enough to warn the agent to compact ([`crate::policy::warn_at`]).
 fn clock(state: &State, task: &Task, now: &Now) -> (String, bool) {
     let used = state
         .last_turn(task.id)
@@ -410,13 +410,13 @@ fn clock(state: &State, task: &Task, now: &Now) -> (String, bool) {
         tokens(used),
         tokens(now.window)
     );
-    let full = used * 100 >= now.window * crate::policy::WARN_AT;
+    let full = used >= crate::policy::warn_at(now.window);
     if full {
         said.push_str(&format!(
-            " It is {}% full: wrap up the step you are on soon, and then compact with `compact_and_continue`, \
+            " That is past {}: wrap up the step you are on soon, and then compact with `compact_and_continue`, \
 or `compact_and_report` if you are done. If it fills, the \
 harness compacts it for you, with no summary of yours, and what is only in your context is lost.",
-            used * 100 / now.window
+            tokens(crate::policy::warn_at(now.window))
         ));
     }
     (said, full)
