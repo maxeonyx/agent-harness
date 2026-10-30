@@ -189,14 +189,46 @@ export function render() {
 const marksEl = $("#marks"), markEls = new Map();
 export function placeMarks() {
   if (!view) return;
-  const m = 20, seen = new Set(), placed = [];
-  // The open card covers what is under it: no mark goes there.
-  const card = openId && !panel.hidden ? panel.getBoundingClientRect() : null;
+  // The marks run round a rectangle inset from the screen, clear of the
+  // bottom bar; each sits where the line from the middle to its node crosses
+  // it, so it slides as the camera moves, round corners too.
+  const m = 20, l = m, t = m, r = innerWidth - m, b = innerHeight - m - 40;
+  const w = r - l, h = b - t, P = 2 * (w + h), ox = innerWidth / 2, oy = (t + b) / 2;
+  const marks = [];
   (view.queue || []).forEach((q, i) => {
     const id = live(q.task), p = shown.get(id);
     if (!p || id === openId) return;
     const x = cam.x + (p.x + p.w / 2) * cam.k, y = cam.y + (p.y + DOT / 2) * cam.k;
     if (x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight) return;
+    const dx = x - ox, dy = y - oy, f = Math.min(Math.abs(w / 2 / dx), Math.abs(h / 2 / dy));
+    const ex = ox + dx * f, ey = oy + dy * f;
+    // Distance along the perimeter, clockwise from the top left corner.
+    const s = Math.abs(ey - t) < 0.5 ? ex - l : Math.abs(ex - r) < 0.5 ? w + ey - t : Math.abs(ey - b) < 0.5 ? w + h + r - ex : 2 * w + h + b - ey;
+    marks.push({ id, x, y, s, next: i === 0 });
+  });
+  // Neighbours closer than a mark's width push each other apart evenly, so a
+  // group spreads and moves as one. Two whose nodes line up with the middle
+  // pass through each other within a few pixels rather than swap at once.
+  marks.sort((u, v) => u.s - v.s);
+  const n = marks.length, gap = Math.min(30, P / Math.max(n, 1));
+  const apart = (i) => marks[(i + 1) % n].s - marks[i].s + (i === n - 1 ? P : 0);
+  const want = marks.map((_, i) => gap * Math.min(1, apart(i) / 2));
+  for (let k = 0; n > 1 && k < 4 * n; k++) {
+    let moved = false;
+    for (let i = 0; i < n; i++) {
+      const u = marks[i], v = marks[(i + 1) % n], d = apart(i);
+      if (d < want[i] - 0.01) { const e = (want[i] - d) / 2; u.s -= e; v.s += e; moved = true; }
+    }
+    if (!moved) break;
+  }
+  const at = (s) => {
+    s = ((s % P) + P) % P;
+    return s < w ? [l + s, t] : s < w + h ? [r, t + s - w] : s < 2 * w + h ? [r - (s - w - h), b] : [l, b - (s - 2 * w - h)];
+  };
+  // The open card covers what is under it: a mark there fades out.
+  const card = openId && !panel.hidden ? panel.getBoundingClientRect() : null;
+  const seen = new Set();
+  for (const { id, x, y, s, next } of marks) {
     seen.add(id);
     let a = markEls.get(id);
     if (!a) {
@@ -208,17 +240,13 @@ export function placeMarks() {
       markEls.set(id, a);
     }
     a.title = byId[id]?.name || "";
-    a.classList.toggle("next", i === 0);
-    // Marks toward the same corner line up along the edge rather than stack.
-    let cx = Math.max(m, Math.min(innerWidth - m, x)), cy = Math.max(m, Math.min(innerHeight - m - 40, y));
-    const along = cx === m || cx === innerWidth - m ? [0, 30] : [30, 0];
-    while (placed.some(([px, py]) => Math.hypot(px - cx, py - cy) < 28)) { cx += along[0]; cy += along[1]; }
-    placed.push([cx, cy]);
-    a.hidden = !!card && cx > card.left - 12 && cx < card.right + 12 && cy > card.top - 12 && cy < card.bottom + 12;
+    a.classList.toggle("next", next);
+    const [cx, cy] = at(s);
+    a.classList.toggle("under", !!card && cx > card.left - 12 && cx < card.right + 12 && cy > card.top - 12 && cy < card.bottom + 12);
     a.style.left = `${cx}px`;
     a.style.top = `${cy}px`;
     $("svg", a).style.transform = `rotate(${Math.atan2(y - cy, x - cx)}rad)`;
-  });
+  }
   for (const [id, a] of markEls) if (!seen.has(id)) { a.remove(); markEls.delete(id); }
 }
 // The camera, at the zoom it has, moved to put a node in the middle.

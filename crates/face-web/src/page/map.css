@@ -93,7 +93,8 @@
   @keyframes grow { from { transform: scale(.2); opacity: 0; } }
 
   /* What needs Max but is off screen: a mark at the edge, toward it. */
-  .offscreen { position: fixed; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--yours); color: var(--paper); display: grid; place-items: center; box-shadow: 0 3px 10px rgba(122, 60, 20, .35); }
+  .offscreen { position: fixed; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--yours); color: var(--paper); display: grid; place-items: center; box-shadow: 0 3px 10px rgba(122, 60, 20, .35); transition: opacity .2s; }
+  .offscreen.under { opacity: 0; pointer-events: none; }
   .offscreen svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
   .offscreen.next::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--yours); animation: halo 2.2s var(--ease) infinite; }
 
