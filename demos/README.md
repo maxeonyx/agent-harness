@@ -29,4 +29,5 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | spine | a chat across Ctrl-C and relaunches: a call finishing, a response cut, the chat carrying on (Rust example; it owns its brain process) | scripted (`MODEL=sonnet/low`: the cache reads) | free, 1 min |
 | store | a brain killed mid-commit, reopened with every record intact | none | free, seconds |
 | substrate | two devices and one brain on one data flow | none | free, seconds |
+| ui | the face after Max's 29 Oct feedback: a tool block folded to its calls' summaries, two parts staged and sent as one message, a compaction, a busy map that opens apart around a card, and edge arrows to the chats waiting on him; leaves the brain up | scripted | free, 25 s |
 | unread | a brain opens a database holding a later build's record, skips it and keeps it byte for byte | none | free, 10 s |

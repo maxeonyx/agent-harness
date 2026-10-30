@@ -48,7 +48,7 @@ pub mod wasm;
 /// Written as a string (`task:{id}`), since a JSON object's keys are.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FaceKey {
-    /// The harness as a whole: its build, its environments and workspaces,
+    /// The harness as a whole: its build, its roles and working directories,
     /// the subscription's use.
     Harness,
     /// Max's queue, in order.
