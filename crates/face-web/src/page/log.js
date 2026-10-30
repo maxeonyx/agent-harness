@@ -269,7 +269,7 @@ function compaction({ carry, onto }, t) {
     const only = (i) => i === said ? "results" : undefined;
     if (call) {
       line.lastChild.textContent += ` at ${clock(old[end].response?.ended)}`;
-      keep(last, () => {
+      keep(line, () => {
         const s = { rows: new Map(), group: null, past: true };
         if (said >= 0) drawPast(s, last, old, said, said + 1, t, () => "words");
         drawPast(s, last, old, end, end + 1, t);
