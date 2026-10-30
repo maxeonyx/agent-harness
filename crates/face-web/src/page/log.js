@@ -451,14 +451,15 @@ function chip(m) {
   return a;
 }
 // A scope's result, each agent's part under its name (harness-program's
-// `meta::result`): `## name` alone in a text block, then what it said.
-function parts(content) {
+// `meta::result`): `## name` alone in a text block, for a name the call
+// gave, then what it said.
+function parts(content, names) {
   if (!Array.isArray(content)) return null;
   const out = new Map();
   let name = null;
   for (const b of content.map((x) => x.type === "text" ? x.text : `[${x.type}]`)) {
     const head = /^## ([^\n]+)$/.exec(b);
-    if (head) { name = head[1]; out.set(name, ""); continue; }
+    if (head && names.has(head[1])) { name = head[1]; out.set(name, ""); continue; }
     if (name === null) return null;
     out.set(name, [out.get(name), b].filter((x) => x).join("\n\n"));
   }
@@ -544,7 +545,7 @@ function result(s, b) {
     $(".line", r.row).insertBefore(open, st);
   }
   // A spawn's result is its agents' parts, each in its agent's line.
-  const byAgent = r.b.name === "spawn" && !b.is_error ? parts(b.content) : null;
+  const byAgent = r.b.name === "spawn" && !b.is_error ? parts(b.content, new Set((r.inner.tasks || []).map((x) => x.name))) : null;
   if (byAgent) { r.results = byAgent; fillMembers(s, b.tool_use_id); return; }
   for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") { const img = el("img", "res"); img.src = `data:${x.source?.media_type};base64,${x.source?.data}`; img.style.maxWidth = "100%"; detail.append(img); }
   detail.append(out);
