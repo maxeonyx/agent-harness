@@ -221,7 +221,7 @@ function moves() {
     const ids = c.nodes.map((n) => n.id).filter((id) => positions.has(id));
     if (!ids.length) continue;
     const b = bounds(new Set(ids));
-    const cut = b.x0 < o.x + o.w && b.x1 > o.x && b.y0 < o.y + o.h && b.y1 > o.y;
+    const cut = c.nodes.some((n) => n.id === seam.id);
     for (const id of ids) {
       const p = positions.get(id);
       const d = id !== seam.id && away(cut ? { x0: p.x, y0: p.y, x1: p.x + p.w, y1: p.y + p.h } : b);

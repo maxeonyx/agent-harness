@@ -108,7 +108,7 @@ export function derive() {
       const flow = awaited(byId[t.owner]).has(t.scope) && !isDone(t);
       edges.push({ from: live(t.owner), to: t.id, kind: "owns", flow, made: t.created.seq });
     }
-    if (t.origin === "resume" && byId[t.from] && !chained(t)) edges.push({ from: live(t.from), to: t.id, kind: "continues" });
+    if (t.origin === "resume" && byId[t.from] && !chained(t)) edges.push({ from: live(t.from), to: t.id, kind: "continues", made: t.created.seq });
     const waits = awaited(t);
     for (const b of [...(t.background || []), ...(t.handed || [])]) {
       if (b.status === "settled" || b.tool === "spawn") continue;
@@ -140,8 +140,7 @@ export function derive() {
   graph = { nodes, edges, comps: list };
 }
 
-// ─── Layout: ELK, laid out again only when the shape changes ──────────────
-const elk = window.ELK ? new ELK() : null;
+// ─── Layout: laid out again only when the shape changes ──────────────────
 const measure = (() => { const c = document.createElement("canvas").getContext("2d"); return (text, font) => { c.font = font; return c.measureText(text).width; }; })();
 export const DOT = 30, ROOT_DOT = 38, SAT_DOT = 20;
 export let positions = new Map();   // id -> {x, y, w, h}: laid out
@@ -161,60 +160,44 @@ function sizeOf(n, comp) {
 export const satLabel = (n) => `${n.call.owner === "max" ? "yours: " : ""}${n.call.name || `${n.call.tool} ${gist(n.call.input)}`}`.trim();
 
 // Each project is laid out on its own, as the graph it is: every edge, of
-// whatever kind, holds what it ends at below where it starts. No row holds
-// more than fits the screen, so a task with many children wraps them onto
-// rows below. Then the projects are shelved in reading order, live ones
-// first, in rows as wide as the screen: on a phone they stack, and a
-// project keeps its shape wherever it lands. A project is laid out again
-// only when its own shape changes.
-const NODE_GAP = 26, EDGE_GAP = 12;
-const ELK_OPTIONS = {
-  "elk.algorithm": "layered", "elk.direction": "DOWN",
-  "elk.layered.layering.strategy": "INTERACTIVE", "elk.edgeRouting": "SPLINES",
-  "elk.spacing.edgeEdge": `${EDGE_GAP / 2}`, "elk.spacing.edgeNode": `${EDGE_GAP / 2}`,
-  "elk.spacing.nodeNode": `${NODE_GAP}`, "elk.layered.spacing.nodeNodeBetweenLayers": "34",
-  "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
-  "elk.layered.crossingMinimization.forceNodeModelOrder": "true",
-  "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
-  "elk.padding": "[top=0,left=0,bottom=0,right=0]",
-};
+// whatever kind, holds what it ends at below where it starts. No row is
+// wider than the screen, so a task with many children wraps them onto rows
+// below. Then the projects are shelved in reading order, live ones first,
+// in rows as wide as the screen: on a phone they stack, and a project keeps
+// its shape wherever it lands. A project is laid out again only when its
+// own shape, or the screen's width band, changes.
+const NODE_GAP = 26, EDGE_GAP = 12, ROW_GAP = 34, BAND = 50;
 const GAP = 90;
-let laidOut = new Map();  // a project's shape -> where its nodes go
-export async function layout() {
-  // Shelves as wide as the screen at an easy reading zoom.
-  const screen = (innerWidth - 80) / (phone() ? .75 : 1);
+let laidOut = new Map(), laidRoom = 0;  // a project's shape -> where its nodes go, at one width
+export function layout() {
+  // Shelves as wide as the screen at an easy reading zoom, in bands, so a
+  // resize lays out again only when it crosses one.
+  const room = Math.floor((innerWidth - 80) / (phone() ? .75 : 1) / BAND) * BAND;
   const parts = graph.comps.map((c) => {
-    if (c.folded) { const z = sizeOf(graph.nodes.get(c.root.id), c); return { archived: c.last, children: [{ id: c.root.id, width: z.w, height: z.h }], edges: [] }; }
+    if (c.folded) { const z = sizeOf(graph.nodes.get(c.root.id), c); return { archived: c.last, sig: c.root.id, children: [{ id: c.root.id, width: z.w, height: z.h }] }; }
     const ns = depthFirst(c);
     const ids = new Set(ns.map((n) => n.id));
     const children = ns.map((n) => { const z = sizeOf(n, c); return { id: n.id, width: z.w, height: z.h }; });
-    const edges = graph.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).map((e, i) => ({ id: `e${i}`, sources: [e.from], targets: [e.to] }));
-    const room = Math.round(screen);
-    const sig = JSON.stringify([children.map((c) => [c.id, Math.round(c.width), c.height]), edges.map((e) => [e.sources[0], e.targets[0]]), room]);
-    return { children, edges, room, sig };
+    const edges = graph.edges.filter((e) => ids.has(e.from) && ids.has(e.to));
+    const sig = JSON.stringify([children.map((c) => [c.id, Math.round(c.width), c.height]), edges.map((e) => [e.from, e.to])]);
+    return { children, edges, sig };
   });
-  const sig = JSON.stringify([parts.map((p) => p.sig || p.children[0].id), Math.round(innerWidth / 200)]);
+  const sig = JSON.stringify([parts.map((p) => p.sig), room]);
   if (sig === shape) return false;
   shape = sig;
   const live = parts.filter((p) => p.archived == null);
   const archive = parts.filter((p) => p.archived != null).sort((a, b) => b.archived - a.archived);
-  const was = laidOut;
+  const was = room === laidRoom ? laidOut : new Map();
   laidOut = new Map();
-  const laid = await Promise.all(live.map(async (p) => {
-    let l = was.get(p.sig);
-    if (!l && !elk) { let x = 0; l = { w: 0, h: 0, nodes: p.children.map((c) => { const n = { ...c, x, y: 0 }; x += c.width + 30; return n; }) }; }
-    if (!l) {
-      const out = await elk.layout({ id: "p", layoutOptions: ELK_OPTIONS, children: rows(p.children, p.edges, p.room), edges: p.edges });
-      const at = (q) => ({ x: q.x, y: q.y });
-      const curves = out.edges.flatMap((e) => (e.sections || []).map((s) => [`${e.sources[0]}>${e.targets[0]}`, [at(s.startPoint), ...(s.bendPoints || []).map(at), at(s.endPoint)]]));
-      l = { w: out.width, h: out.height, nodes: out.children, curves };
-    }
+  laidRoom = room;
+  const laid = live.map((p) => {
+    const l = was.get(p.sig) || place(p.children, p.edges, room);
     laidOut.set(p.sig, l);
     return l;
-  }));
+  });
   const cards = archive.map((p) => { const c = p.children[0]; return { w: c.width, h: c.height, nodes: [{ ...c, x: 0, y: 0 }] }; });
   // The archive's cards, most recently finished first, on shelves of their own below.
-  const row = Math.max(screen, ...laid.map((l) => l.w));
+  const row = Math.max(room, ...laid.map((l) => l.w));
   const shelves = [];
   const shelve = (items, gap) => {
     const first = shelves.length;
@@ -243,25 +226,67 @@ export async function layout() {
   }
   return true;
 }
-// The project's nodes, each given the row it goes on: the first below every
-// node with an edge into it that has room, taking them in order, so a
-// task's children fill the rows under it as words fill lines.
-function rows(children, edges, room) {
+// One project's layout, in rows no wider than `room`. Each node goes on
+// the first row below every node with an edge into it that has room for
+// it, taking them in order, so a task's children fill the rows under it as
+// words fill lines. Each row is ordered by where its edges come from, and
+// sits as near under them as the room allows.
+function place(children, edges, room) {
+  const into = new Map(children.map((c) => [c.id, []]));
+  for (const e of edges) into.get(e.to).push(e.from);
   const row = new Map(), wide = [];
-  const into = (id) => edges.filter((e) => e.targets[0] === id).map((e) => e.sources[0]);
   for (let left = children; left.length;) {
     // The first in order whose sources all have rows (or any, in a cycle).
-    const c = left.find((n) => into(n.id).every((s) => row.has(s))) || left[0];
+    const c = left.find((n) => into.get(n.id).every((s) => row.has(s))) || left[0];
     left = left.filter((n) => n !== c);
-    const from = into(c.id).filter((s) => row.has(s)).map((s) => row.get(s));
-    let r = Math.max(0, ...from.map((s) => s + 1));
+    let r = Math.max(0, ...into.get(c.id).filter((s) => row.has(s)).map((s) => row.get(s) + 1));
     while (wide[r] && wide[r] + c.width > room) r++;
     wide[r] = (wide[r] || 0) + c.width + NODE_GAP;
-    // An edge past a row takes a little of its room.
-    for (const s of from) for (let k = s + 1; k < r; k++) wide[k] = (wide[k] || 0) + EDGE_GAP;
     row.set(c.id, r);
   }
-  return children.map((c) => ({ ...c, x: 0, y: row.get(c.id) * 100 }));
+  const rows = wide.map(() => ({ nodes: [] }));
+  for (const c of children) rows[row.get(c.id)].nodes.push(c);
+  const at = new Map();  // node id -> its box
+  const mid = (n) => n.x + n.width / 2;
+  let top = 0;
+  for (const [k, r] of rows.entries()) {
+    // Each node by the mean x of what its edges come from, in order when none.
+    const key = (c) => { const xs = into.get(c.id).filter((s) => row.get(s) < k).map((s) => mid(at.get(s))); return xs.length ? xs.reduce((a, b) => a + b) / xs.length : Infinity; };
+    const keyed = r.nodes.map((c) => ({ c, k: key(c) })).sort((a, b) => (a.k === b.k ? 0 : a.k < b.k ? -1 : 1));
+    let x = 0;
+    const xs = keyed.map(({ c }) => { const l = x; x += c.width + NODE_GAP; return l; });
+    const w = x - NODE_GAP, wants = keyed.filter((q) => q.k !== Infinity);
+    const centre = wants.length ? wants.reduce((a, q) => a + q.k, 0) / wants.length : w / 2;
+    const left = Math.max(0, Math.min(room - w, centre - w / 2));
+    r.nodes = keyed.map(({ c }, i) => ({ ...c, x: left + xs[i], y: top }));
+    for (const n of r.nodes) at.set(n.id, n);
+    r.top = top;
+    r.h = Math.max(...r.nodes.map((n) => n.height));
+    top += r.h + ROW_GAP;
+  }
+  const nodes = [...at.values()];
+  const x0 = Math.min(...nodes.map((n) => n.x)), x1 = Math.max(...nodes.map((n) => n.x + n.width));
+  // Each edge a chain of curves leaving and arriving straight down: out of
+  // its source's foot, down past each row between, stepping into the gap
+  // beside a node in its way, into its target's head.
+  const clear = (x, r) => {
+    const n = r.nodes.find((n) => x > n.x - EDGE_GAP && x < n.x + n.width + EDGE_GAP);
+    return !n ? x : x < mid(n) ? n.x - NODE_GAP / 2 : n.x + n.width + NODE_GAP / 2;
+  };
+  const curves = edges.map((e) => {
+    const a = at.get(e.from), b = at.get(e.to);
+    const way = [{ x: mid(a), y: a.y + a.height }];
+    for (let k = row.get(e.from) + 1, x = mid(a); k < row.get(e.to); k++) { x = clear(x, rows[k]); way.push({ x, y: rows[k].top }, { x, y: rows[k].top + rows[k].h }); }
+    way.push({ x: mid(b), y: b.y });
+    const pts = [way[0]];
+    for (let i = 1; i < way.length; i++) {
+      const p = way[i - 1], q = way[i], d = Math.max(20, Math.abs(q.y - p.y) / 2);
+      pts.push({ x: p.x, y: p.y + d }, { x: q.x, y: q.y - d }, q);
+    }
+    return [`${e.from}>${e.to}`, pts.map((p) => ({ x: p.x - x0, y: p.y }))];
+  });
+  for (const n of nodes) n.x -= x0;
+  return { w: x1 - x0, h: top - ROW_GAP, nodes, curves };
 }
 // A component's nodes, owners before what they own, in a stable order.
 function depthFirst(c) {
