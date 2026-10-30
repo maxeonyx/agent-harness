@@ -476,7 +476,10 @@ pub enum Origin {
     /// the task waits on, as the one member Max talks to: it is told when
     /// every other member is done ([`Prompt::Unblocked`]), it is done when
     /// he marks it done, and its result reaches the task with theirs, so the
-    /// task carries on with everything, the talk included.
+    /// task carries on with everything, the talk included. Max's words the
+    /// task has not read yet go to it: words he sent before it began to
+    /// wait open one, with the first as its mandate, as he sent it
+    /// ([`State::unread_words`], stated by the brain for him).
     Aside { from: TaskId },
 }
 
