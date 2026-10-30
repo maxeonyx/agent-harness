@@ -52,7 +52,7 @@ pub enum DraftEvent {
     /// are lost.
     Text(ValueId),
     /// Deliver exactly `text`: the words on his screen, whatever another
-    /// device typed meanwhile, for the session to read when `read` says.
+    /// device typed meanwhile.
     Send { text: ValueId },
     /// He threw it away. Text typed into it afterwards, on another device
     /// that had not seen the discard, brings it back.

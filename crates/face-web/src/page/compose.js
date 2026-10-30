@@ -326,6 +326,9 @@ export function buildCompose(id) {
   wrap.addEventListener("drop", (e) => { e.preventDefault(); wrap.classList.remove("drop"); attach(id, [...e.dataTransfer.files]); });
   mic.onclick = () => dictate(false);
   sample.onclick = () => dictate(true);
+  // Send never takes focus: the box keeps it, so the keyboard stays up and
+  // the phone's layout doesn't shift under the finger between taps.
+  send.onpointerdown = (e) => e.preventDefault();
   send.onclick = press;
   box.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
@@ -340,13 +343,12 @@ export function buildCompose(id) {
   renderComposeState(t);
 }
 // ─── Model and effort ──────────────────────────────────────────────────────
-// The bottom edge of the box, at its right: the model and effort the
-// chat's next request runs at, each a section of its own. Each is a choice of its own; choosing its role's
+// The bottom edge of the box, at its right: the model and effort the chat's
+// next request runs at, each a section of its own. Choosing its role's
 // leaves it to the role. While its cache is warm, each other model says what
 // it costs: the whole context read again without the cache. Effort is not in
-// the cached prefix, so changing it costs nothing. A new
-// chat's choice is kept with its draft and goes into the fact that starts
-// it.
+// the cached prefix, so changing it costs nothing. A new chat's choice is
+// kept with its draft and goes into the fact that starts it.
 export const modelName = (id) => view.models?.find((m) => m.id === id)?.name || id;
 function tuneOf(t) {
   if (t) return { env: view.environments.find((e) => e.name === t.environment), ...t.tuning };
