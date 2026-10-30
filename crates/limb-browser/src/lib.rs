@@ -1,12 +1,13 @@
-//! The browser limb: a real browser that agents drive with scripts, as
+//! The browser tool set: a real browser that agents drive with scripts, as
 //! calls of the harness's core model.
 //!
-//! **Concept.** A browser is a [`Limb`] of the `browser` kind, shared by the
-//! tasks whose environments hold it, as a workspace is shared by forks. It
-//! drives one browser over the Chrome DevTools Protocol ([`cdp`]): one it
-//! launches, with a profile of its own in the limb's state, or one it
-//! attaches to at an endpoint, such as a dedicated Chrome on Max's desktop
-//! through a tunnel ([`chrome`], [`Settings`]).
+//! **Concept.** A limb that offers the `browser` set shares one browser
+//! among the agents whose roles hold it, as forks share a directory. It
+//! drives it over the Chrome DevTools Protocol ([`cdp`]): one it launches,
+//! with a profile of its own in the limb's state, or one it attaches to at an endpoint, such as a dedicated
+//! Chrome on Max's desktop through a tunnel ([`chrome`], [`Settings`]). It
+//! finds or launches the browser at the first call that needs it, so a
+//! browser that cannot start fails only those calls.
 //!
 //! A tab an agent opens is held by a running call: the `tab` tool, run in
 //! the background, whose background name is the tab's name. So a tab is
@@ -24,15 +25,13 @@
 //! a script that drives tabs in a QuickJS sandbox ([`harness_script`]),
 //! `page` runs JavaScript in one tab, and `screenshot` is the costly
 //! exception ([`tools`]).
-//!
-//! It runs as a server of its own ([`harness_limb`]), `harness-limb-browser`.
 
 mod cdp;
 mod chrome;
 mod tools;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Child;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
@@ -41,19 +40,19 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use harness_core::call::{Call, Caller, Outcome, Output, Owner};
-use harness_core::environment::{Description, Instruction, Limb, LimbKey, LimbRow};
 use harness_core::fact::{Batch, Fact};
-use harness_core::id::{CallId, Digest, LimbId, TaskId};
+use harness_core::id::{CallId, Digest, TaskId};
+use harness_core::limb::{self, Instruction, LimbKey, LimbRow, Offer};
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
-use harness_limb::{Calls, Report, Rows, Voice, lock};
+use harness_limb::{Opening, Report, Rows, Running, ToolSet, Voice, lock};
 use harness_runtime::Cancel;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
 use crate::tools::{BROWSER, PAGE, SCREENSHOT, TAB};
 
-/// The plugin kind this limb is.
-pub const KIND: &str = "browser";
+/// The tool set's name.
+pub const SET: &str = "browser";
 
 /// How long one DevTools command may take.
 const COMMAND: Duration = Duration::from_secs(30);
@@ -62,7 +61,7 @@ const SCRIPT: Duration = Duration::from_secs(120);
 /// The most of a result a context is shown.
 const SHOWN: usize = 40_000;
 
-/// A browser limb's own settings: the `config` of its [`Limb`] definition.
+/// The browser set's settings: its offer's `config`.
 /// With neither `endpoint` nor `chrome`, it launches Playwright's
 /// chrome-headless-shell.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,12 +103,9 @@ impl Settings {
         }
     }
 
-    pub fn of(limb: &Limb) -> Option<Settings> {
-        harness_limb::settings(limb, KIND)
-    }
-
-    pub fn definition(&self, id: LimbId) -> Limb {
-        harness_limb::definition(id, KIND, KIND, self)
+    /// The offer of the browser set with these settings.
+    pub fn offer(&self) -> Result<Offer, String> {
+        harness_limb::offer(SET, self)
     }
 
     /// Where the browser is, in words for the instructions.
@@ -123,8 +119,38 @@ impl Settings {
     }
 }
 
-/// One running instance of the browser limb.
-pub struct Browser {
+/// Open the browser set on its offer's settings. The browser itself is
+/// found or launched by the first call that needs it.
+pub fn open(offer: &Offer, opening: &Opening) -> Result<Arc<dyn ToolSet>, String> {
+    let settings: Settings = harness_limb::settings(&offer.config)?;
+    let (events, inbox) = mpsc::channel();
+    let inner = Arc::new(Inner {
+        voice: opening.voice.clone(),
+        settings: Mutex::new(settings),
+        state: opening.state.clone(),
+        cdp: Mutex::default(),
+        process: Mutex::default(),
+        events,
+        targets: Mutex::default(),
+        sessions: Mutex::default(),
+        loads: Mutex::default(),
+        held: Mutex::default(),
+        watched: Mutex::default(),
+    });
+    let weak = Arc::downgrade(&inner);
+    thread::spawn(move || {
+        for event in inbox {
+            let Some(inner) = weak.upgrade() else { return };
+            if let Err(why) = harness_limb::guard(|| inner.event(event)) {
+                eprintln!("the browser's event: {why}");
+            }
+        }
+    });
+    Ok(Arc::new(Browser { inner }))
+}
+
+/// The browser set of one limb.
+struct Browser {
     inner: Arc<Inner>,
 }
 
@@ -147,7 +173,6 @@ struct Inner {
     loads: Mutex<HashMap<String, u64>>,
     /// The tabs running `tab` calls hold, by call.
     held: Mutex<HashMap<CallId, Held>>,
-    calls: Calls,
     watched: Mutex<HashMap<ResourceKey, Version>>,
 }
 
@@ -169,78 +194,47 @@ struct Held {
     target: Option<String>,
 }
 
-impl harness_limb::Kind for Browser {
-    fn open(definition: &Limb, voice: Arc<Voice>, state: &Path) -> Result<Browser, String> {
-        let settings = Settings::of(definition).ok_or("the definition is not a browser's")?;
-        let (events, inbox) = mpsc::channel();
-        let inner = Arc::new(Inner {
-            calls: Calls::open(voice.clone(), &state.join("started"), || {})
-                .map_err(|e| e.to_string())?,
-            voice,
-            settings: Mutex::new(settings),
-            state: state.to_path_buf(),
-            cdp: Mutex::default(),
-            process: Mutex::default(),
-            events,
-            targets: Mutex::default(),
-            sessions: Mutex::default(),
-            loads: Mutex::default(),
-            held: Mutex::default(),
-            watched: Mutex::default(),
-        });
-        inner.connect()?;
-        let weak = Arc::downgrade(&inner);
-        thread::spawn(move || {
-            for event in inbox {
-                let Some(inner) = weak.upgrade() else { return };
-                inner.event(event);
-            }
-        });
-        Ok(Browser { inner })
+impl ToolSet for Browser {
+    fn describe(&self) -> limb::ToolSet {
+        self.inner.describe()
     }
 
-    fn apply(&self, rows: &Rows, connected: bool) {
+    fn define(&self, config: &str) -> Result<(), String> {
+        self.inner.define(harness_limb::settings(config)?);
+        Ok(())
+    }
+
+    fn apply(&self, rows: &Rows, _connected: bool) {
         let inner = &self.inner;
-        if let Some(LimbRow::Definition(definition)) = rows.rows.get(&LimbKey::Definition) {
-            inner.define(definition);
-        }
-        if connected {
-            inner.voice.describe(inner.describe());
-        }
+        // The owner of a call already running moves when it is passed.
         for row in inner.voice.calls(rows) {
-            // The owner of a call already running moves when it is passed.
             if let Some(held) = lock(&inner.held).get_mut(&row.id) {
                 held.owner = row.owner;
             }
-            let (id, call, owner) = (row.id, row.call.clone(), row.owner);
-            let inner = self.inner.clone();
-            let rerun = tools::rerun(&call.tool);
-            self.inner
-                .calls
-                .call(row, rerun, move |input, cancel, _, report| {
-                    let outcome = inner.execute(id, &call, &input.0, owner, cancel, report);
-                    lock(&inner.held).remove(&id);
-                    outcome
-                });
         }
         if let Some(LimbRow::Watch { known }) = rows.rows.get(&LimbKey::Watch) {
             inner.watch(known);
         }
-        inner.calls.forget(rows);
+    }
+
+    fn rerun(&self, tool: &str) -> bool {
+        tools::rerun(tool)
+    }
+
+    fn run(&self, running: &Running<'_>, report: &mut Report) -> Outcome {
+        let inner = &self.inner;
+        let outcome = inner.execute(running, report);
+        lock(&inner.held).remove(&running.id);
+        outcome
     }
 
     fn holds(&self) -> bool {
         // A browser it launched dies with it, and Max's tabs in it.
         let inner = &self.inner;
-        inner.calls.any() || !lock(&inner.held).is_empty() || lock(&inner.process).is_some()
+        !lock(&inner.held).is_empty() || lock(&inner.process).is_some()
     }
 
-    fn stop_all(&self, within: Duration) {
-        self.inner.calls.stop_all(within);
-    }
-
-    fn join(&self) {
-        self.inner.calls.join();
+    fn close(&self) {
         if let Some(mut process) = lock(&self.inner.process).take() {
             let _ = process.kill();
             let _ = process.wait();
@@ -256,12 +250,9 @@ enum Who {
 }
 
 impl Inner {
-    /// Take a new version of the definition: a browser elsewhere is
-    /// reached from the next call on, and the tabs in the old one are gone.
-    fn define(&self, definition: &Limb) {
-        let Some(settings) = Settings::of(definition) else {
-            return;
-        };
+    /// Take new settings: a browser elsewhere is reached from the next call
+    /// on, and the tabs in the old one are gone.
+    fn define(&self, settings: Settings) {
         let mut current = lock(&self.settings);
         if *current == settings {
             return;
@@ -436,15 +427,16 @@ impl Inner {
         }
     }
 
-    fn describe(&self) -> Description {
+    fn describe(&self) -> limb::ToolSet {
         let text = tools::instructions(&lock(&self.settings).place());
-        Description {
+        limb::ToolSet {
+            name: SET.into(),
             instructions: vec![Instruction {
                 observes: Observation {
                     resource: ResourceKey {
                         limb: self.voice.limb(),
                         kind: "instructions".into(),
-                        name: String::new(),
+                        name: SET.into(),
                     },
                     version: Version::Is(Digest::of(text.as_bytes())),
                 },
@@ -455,15 +447,14 @@ impl Inner {
     }
 
     /// Run one call to its outcome.
-    fn execute(
-        self: &Arc<Self>,
-        id: CallId,
-        call: &Call,
-        input: &[u8],
-        owner: Option<Owner>,
-        cancel: &Cancel,
-        report: &mut Report,
-    ) -> Outcome {
+    fn execute(self: &Arc<Self>, running: &Running<'_>, report: &mut Report) -> Outcome {
+        let (id, call, input, owner, cancel) = (
+            running.id,
+            running.call,
+            running.input,
+            running.owner,
+            running.cancel,
+        );
         let input: Json = match serde_json::from_slice(input) {
             Ok(input) => input,
             Err(e) => return report.failed(&format!("the input is not JSON: {e}")),

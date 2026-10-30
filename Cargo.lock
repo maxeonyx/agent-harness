@@ -319,6 +319,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-limb-machine"
+version = "0.0.0"
+dependencies = [
+ "harness-limb",
+ "harness-limb-browser",
+ "harness-limb-builds",
+ "harness-limb-workspace",
+]
+
+[[package]]
 name = "harness-limb-workspace"
 version = "0.0.0"
 dependencies = [

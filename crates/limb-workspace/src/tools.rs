@@ -3,34 +3,34 @@
 
 use std::path::Path;
 
-use harness_core::environment::{Audience, Tool};
-
-use crate::Clone;
+use harness_core::limb::{Audience, Branch, Tool};
 use serde_json::json;
 
-/// How to use the workspace in `root`, rendered into every root context
-/// that reaches it; for a clone made for its agent, that it is its own.
-pub fn instructions(root: &Path, clone: Option<&Clone>) -> String {
-    let own = match clone {
-        Some(Clone { from, branch, base }) => format!(
-            "\n\nThis directory is your own clone of `{from}`, on the branch `{branch}`, made from `{base}`. \
-Nobody else works in it. Commit your work here and push it: `git push -u origin {branch}`."
+/// Where an agent works, rendered into every root of an agent there: a
+/// working directory's own instructions; for a clone made for its agent,
+/// that it is its own.
+pub fn instructions(root: &Path, branch: Option<&Branch>) -> String {
+    let own = match branch {
+        Some(Branch { from, name, base }) => format!(
+            " This directory is your own clone of `{from}`, on the branch `{name}`, made from `{base}`. \
+Nobody else works in it. Commit your work here and push it: `git push -u origin {name}`."
         ),
         None => String::new(),
     };
     format!(
         "You work in the directory `{}` through the tools `bash`, `read`, `write`, `edit` and `grep`. \
-Relative paths are relative to it.{own}\n\n{USE}",
+Relative paths are relative to it.{own}",
         root.display()
     )
 }
 
-const USE: &str = "\
+/// How to use the workspace tools, wherever an agent works.
+pub const USE: &str = "\
 Your calls to this workspace run one after another, in the order you write them, each once the one before has ended. \
 Every `bash` call starts a fresh shell there: no working directory, variables or background jobs carry over. \
 Each command owns every process it starts, and they are all killed when it ends, is interrupted or reaches its time limit. \
 A process that starts a session of its own leaves the command: `setsid server > server.log 2>&1 &` keeps a server across calls. \
-Stop it with `kill <pid>`; it is stopped anyway when the workspace closes.
+Stop it with `kill <pid>`; it is stopped anyway when the limb ends.
 
 Long `bash` and `grep` output is cut to a view: its first and last 30 lines, with markers naming the lines each gap hides, and its longest lines cut to fit about 16 KiB; binary output is not shown. \
 When anything is cut, the view ends by naming a file that holds the whole output: `read` or `grep` that file rather than running the command again. \
@@ -52,7 +52,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         tool(
             "bash",
-            "Run a bash command in the workspace directory, with stdin closed and stdout and stderr merged. \
+            "Run a bash command in your working directory, with stdin closed and stdout and stderr merged. \
              Ends with the exit code. Long output is cut to its first and last lines plus the lines matching `grep`; \
              the whole of it is kept in a file the result names.",
             json!({
@@ -114,7 +114,7 @@ pub fn tools() -> Vec<Tool> {
              Many matches are cut like `bash` output, the whole list kept in a file the result names.",
             json!({
                 "pattern": { "type": "string" },
-                "path": { "type": "string", "description": "Where to search. Default: the workspace directory." }
+                "path": { "type": "string", "description": "Where to search. Default: your working directory." }
             }),
             &["pattern"],
         ),

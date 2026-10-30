@@ -1,9 +1,10 @@
-//! `attach <limb>`: how a brain reaches a limb on this machine, starting it
-//! if it is not running. A limb on another machine, through `ssh`, is not
-//! built yet: the brain refuses one.
+//! `attach [--existing] <limb>`: how a brain reaches a limb on this
+//! machine, starting it if it is not running (unless `--existing`). A limb
+//! on another machine, through `ssh`, is not built yet: the brain refuses
+//! one.
 //!
 //! It connects to the limb's socket. If nothing is listening, it starts
-//! `serve` and waits for it to listen. Then it carries the link: its stdin
+//! `serve` and waits for it to listen; with `--existing` it fails instead. Then it carries the link: its stdin
 //! to the socket and the socket to its stdout, until either closes. A
 //! brain closing its end ends only the link; the limb runs on.
 //!
@@ -19,8 +20,9 @@
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -36,14 +38,17 @@ const POLL: Duration = Duration::from_millis(50);
 /// ending.
 const ENDING: Duration = Duration::from_secs(2);
 
-pub fn run(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
+pub fn run(limb: LimbId, start_it: bool) -> Result<ExitCode, String> {
     let state = State::enter(limb).map_err(|e| e.to_string())?;
     let from = std::fs::metadata(state.log()).map(|m| m.len()).unwrap_or(0);
     let stream = match UnixStream::connect(state.socket()) {
         Ok(stream) => stream,
-        Err(_) => start(kind, limb, &state, from)?,
+        Err(_) if start_it => start(limb, &state, from)?,
+        Err(e) => return Err(format!("the limb {limb} is not running: {e}")),
     };
-    relay(stream).map_err(|e| format!("the link: {e}"))?;
+    if relay(stream).map_err(|e| format!("the link: {e}"))? == Closed::ByBrain {
+        return Ok(ExitCode::SUCCESS);
+    }
     // The limb closed the link. If it is ending, say why.
     let until = Instant::now() + ENDING;
     while Instant::now() < until {
@@ -56,7 +61,7 @@ pub fn run(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
 }
 
 /// Start the limb and connect once it listens.
-fn start(kind: &str, limb: LimbId, state: &State, from: u64) -> Result<UnixStream, String> {
+fn start(limb: LimbId, state: &State, from: u64) -> Result<UnixStream, String> {
     let exe = std::env::current_exe().map_err(|e| format!("its own executable: {e}"))?;
     let log = std::fs::File::options()
         .create(true)
@@ -81,7 +86,7 @@ fn start(kind: &str, limb: LimbId, state: &State, from: u64) -> Result<UnixStrea
         .stdout(log)
         .stderr(log2)
         .spawn()
-        .map_err(|e| format!("harness-limb-{kind} serve: {e}"))?;
+        .map_err(|e| format!("{} serve: {e}", exe.display()))?;
     let until = Instant::now() + START;
     loop {
         if let Ok(stream) = UnixStream::connect(state.socket()) {
@@ -105,18 +110,27 @@ fn start(kind: &str, limb: LimbId, state: &State, from: u64) -> Result<UnixStrea
 /// Whether a systemd user manager runs this user's units.
 fn user_manager() -> bool {
     std::env::var_os("XDG_RUNTIME_DIR")
-        .is_some_and(|dir| Path::new(&dir).join("systemd/private").exists())
+        .is_some_and(|dir| std::path::Path::new(&dir).join("systemd/private").exists())
+}
+
+/// Which end closed the link.
+#[derive(PartialEq, Eq)]
+enum Closed {
+    ByBrain,
+    ByLimb,
 }
 
 /// Carry the link until either side closes it.
-fn relay(stream: UnixStream) -> io::Result<()> {
+fn relay(stream: UnixStream) -> io::Result<Closed> {
     let mut up = stream.try_clone()?;
     let closer = stream.try_clone()?;
+    let by_brain = Arc::new(AtomicBool::new(false));
+    let closed = by_brain.clone();
     // The brain's end closing ends the link, whichever side the limb is on.
     thread::spawn(move || {
         let _ = io::copy(&mut io::stdin().lock(), &mut up);
+        closed.store(true, Ordering::SeqCst);
         let _ = closer.shutdown(Shutdown::Both);
-        std::process::exit(0);
     });
     let mut down = stream;
     let mut out = io::stdout().lock();
@@ -124,7 +138,10 @@ fn relay(stream: UnixStream) -> io::Result<()> {
     loop {
         let n = down.read(&mut buf)?;
         if n == 0 {
-            return Ok(());
+            return Ok(match by_brain.load(Ordering::SeqCst) {
+                true => Closed::ByBrain,
+                false => Closed::ByLimb,
+            });
         }
         out.write_all(&buf[..n])?;
         out.flush()?;

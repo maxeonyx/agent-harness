@@ -1,16 +1,33 @@
-//! The builds limb's process, and relaunching a brain by hand:
+//! `harness-limb`: the limb, one process per brain, machine and user, with
+//! every tool set this build has; and relaunching a brain by hand:
 //!
-//!   harness-limb-builds attach|serve LIMB     the limb (harness_limb)
-//!   harness-limb-builds relaunch UNIT CLONE [--back]
-//!   harness-limb-builds install CLONE         prints the build's directory
-//!   harness-limb-builds start UNIT HARNESS-BRAIN ARG...   durably, see relaunch::start
+//!   harness-limb attach [--existing] LIMB   reach the limb, starting it (harness_limb)
+//!   harness-limb serve LIMB                 the limb itself, as attach starts it
+//!   harness-limb relaunch UNIT CLONE [--back]
+//!   harness-limb install CLONE              prints the build's directory
+//!   harness-limb start UNIT HARNESS-BRAIN ARG...   durably, see relaunch::start
 //!
 //! `relaunch` runs until the new build is proven (exit 0) or has gone back
 //! (exit 1), saying each step on stderr.
 use std::path::Path;
 use std::process::ExitCode;
 
+use harness_limb::Open;
 use harness_limb_builds::relaunch::{self, Ended};
+
+/// Every tool set a limb of this build can offer, by name.
+const SETS: &[(&str, Open)] = &[
+    (
+        harness_limb_workspace::WORKSPACE,
+        harness_limb_workspace::open,
+    ),
+    (
+        harness_limb_workspace::user::SET,
+        harness_limb_workspace::user::open,
+    ),
+    (harness_limb_browser::SET, harness_limb_browser::open),
+    (harness_limb_builds::SET, harness_limb_builds::open),
+];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -44,13 +61,13 @@ fn main() -> ExitCode {
             relaunch::start(unit, &argv, None).map(|()| ExitCode::SUCCESS)
         }
         ["relaunch" | "install" | "start", ..] => Err(
-            "usage: harness-limb-builds relaunch UNIT CLONE [--back] | install CLONE | start UNIT ARGV..."
+            "usage: harness-limb relaunch UNIT CLONE [--back] | install CLONE | start UNIT ARGV..."
                 .into(),
         ),
-        _ => return harness_limb::main::<harness_limb_builds::Builds>(harness_limb_builds::KIND),
+        _ => return harness_limb::main(&args, SETS),
     };
     done.unwrap_or_else(|why| {
-        eprintln!("harness-limb-builds: {why}");
+        eprintln!("harness-limb: {why}");
         ExitCode::FAILURE
     })
 }

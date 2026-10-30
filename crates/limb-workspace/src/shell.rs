@@ -8,7 +8,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use harness_core::id::CallId;
-use harness_limb::Limit;
+use harness_limb::{Limit, SHUTDOWN};
 use harness_runtime::{Cancel, Ended as TreeEnded, Group, Wake};
 
 use crate::trunc::{Truncated, Truncator};
@@ -36,6 +36,17 @@ const GRACE: Duration = Duration::from_secs(2);
 /// limb's next instance finds them by if this one is killed.
 pub fn mark(call: CallId) -> String {
     call.to_string()
+}
+
+/// End what the command of `call` left running when an earlier instance of
+/// the limb was killed: its marked processes.
+pub fn end_orphan(call: CallId) -> io::Result<()> {
+    let mark = mark(call);
+    let mut waiter = Cancel::new().waiter()?;
+    let deadline = Instant::now() + SHUTDOWN;
+    let members = || harness_runtime::marked(&mark);
+    harness_runtime::end(&mut waiter, deadline, Some(libc::SIGTERM), members, || None)?;
+    Ok(())
 }
 
 /// Run `command` with `bash -c` in `dir` as the tree of processes `call`
@@ -102,7 +113,7 @@ pub fn run(
         }
     };
     let deadline = match ended {
-        Ended::Stopped => cancel.deadline().expect("a stop was requested"),
+        Ended::Stopped => cancel.deadline().unwrap_or_else(Instant::now),
         Ended::Exited(_) | Ended::TimedOut => Instant::now() + GRACE,
     };
     let tree = group.end(&mut waiter, deadline, Some(libc::SIGTERM), || {
