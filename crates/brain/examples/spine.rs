@@ -62,8 +62,8 @@ fn main() {
     let mut brain = Brain::launch(&db, &roles, port, 1);
     let mut pc = Device::connect("pc", port);
     let mut phone = Device::connect("phone", port);
-    pc.pump_until(|d| d.environment("engineer").is_some());
-    let engineer = pc.environment("engineer").unwrap();
+    pc.pump_until(|d| d.role("engineer").is_some());
+    let engineer = pc.role("engineer").unwrap();
     let repo = fs::canonicalize(dir.join("repo")).unwrap();
     pc.chat(
         engineer,

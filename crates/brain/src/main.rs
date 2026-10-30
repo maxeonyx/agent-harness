@@ -4,22 +4,28 @@
 //! every replica's records reach it, and it folds each into its state or
 //! records why not. It works through
 //! [`State::todo`](harness_core::state::State::todo): it sends requests
-//! through the provider, dispatches calls to limbs, runs the meta limb's
-//! calls itself, and settles scopes. It reads nothing from disk but its
-//! database and its own executable, whose digest is the build it records
-//! launching ([`harness_core::build::Launched`]) (and, given `--page`, the
-//! page's files, for an edit to show on reload), and keeps nothing a
+//! through the provider, dispatches calls to limbs, runs the calls of its
+//! own tool sets itself, and settles scopes. It reads nothing from disk but
+//! its database, its own executable and the limb's beside it, whose digests
+//! are the builds it records launching ([`harness_core::build::Launched`]),
+//! the role files on a thread of their own ([`roles`]) (and, given
+//! `--page`, the page's files, for an edit to show on reload), and keeps
+//! nothing a
 //! restart would need anywhere else. A relaunch is no special case: the to-do list of the folded database says
 //! each unfinished request was lost, and each limb that reconnects is
 //! shipped the calls it holds rows for.
 //!
-//! Each plugin limb runs as a server of its own, which the brain reaches
-//! by running `harness-limb-<kind> attach <limb>` from beside its own
-//! executable: that starts the limb if it is not running, and its stdin and
-//! stdout are the link ([`link`], [`process`]). A limb outlives the brain
-//! that started it, and serves the next one. The roles
-//! limb, which states the environments read from role files, runs on a
-//! thread of the brain, linked by a channel ([`roles`]).
+//! The brain is a limb: at launch it defines its own limb, which offers its
+//! own tool sets (`meta`, `web`, `roles`), and the limb on its machine,
+//! which offers `workspace`, `user`, `browser` and `builds`, and states a
+//! new version of either whose offers changed. The limb on the machine is
+//! one process however many directories its agents work in, which the
+//! brain reaches by running `harness-limb attach <limb>` from beside its
+//! own executable: that starts the limb if it is not running, and its stdin
+//! and stdout are the link ([`link`], [`process`]). A limb outlives the
+//! brain that started it, and serves the next one. A limb from before limbs
+//! were per machine is attached to only while a call to it is unsettled,
+//! and only if it is running (`harness-limb attach --existing <limb>`).
 //!
 //! Ctrl-C, `SIGTERM` or `SIGHUP` shuts the brain down: nothing new starts,
 //! the requests in flight have [`harness_program::policy::DRAIN`] to finish, and the process
@@ -37,8 +43,8 @@
 //! go to the face's live feed, never to the database.
 //!
 //! **The session's program** is not here. What a request renders, the
-//! wording of everything the harness says to a model, the meta and web limbs'
-//! tools, and the policy the core leaves open live in
+//! wording of everything the harness says to a model, the `meta` and `web`
+//! sets' tools, and the policy the core leaves open live in
 //! `harness-program`, which does no I/O and builds for wasm32; the brain
 //! only calls it. What is left here is I/O: the database, the provider,
 //! limb links, the face, signals, and where a new clone
@@ -52,8 +58,8 @@
 //!
 //! # Processes and seams
 //!
-//! What runs where, and what crosses each seam. The meta limb is the brain
-//! itself, and the web limb runs inside the provider's responses.
+//! What runs where, and what crosses each seam. The brain's own limb is the
+//! brain itself, and its `web` set runs inside the provider's responses.
 //!
 //! ```mermaid
 //! flowchart TB
@@ -64,20 +70,20 @@
 //!     face["Face<br/>HTTPS and WebSockets"]
 //!     fold["Decider<br/>folds every replica's records"]
 //!     todo["To-do list<br/>requests, calls, scopes"]
-//!     roles["Roles limb, on a thread"]
+//!     roles["Role files reader, on a thread"]
 //!   end
 //!   db[("The brain's SQLite file<br/>records and values")]
-//!   subgraph limbs["Plugin limbs: harness-limb-KIND serve, a process each"]
-//!     ws["workspace, one per directory<br/>shells and files"]
+//!   subgraph limbs["The limb on each machine: harness-limb serve, one process"]
+//!     ws["workspace: shells and files<br/>in each agent's working directory"]
 //!     other["user, browser, builds"]
-//!     ldb[("Each limb's state directory<br/>lock, socket, SQLite records")]
+//!     ldb[("Its state directory<br/>lock, socket, SQLite records")]
 //!   end
 //!   api["Anthropic<br/>Messages API, speech-to-text"]
 //!   page <-->|"/link WebSocket: records up; rows, live progress down"| face
 //!   face <-->|"records in; folded state out"| fold
 //!   face -.->|value bytes| db
 //!   fold <--> db
-//!   roles <-->|channel| fold
+//!   roles -->|"each new reading, over a channel"| fold
 //!   fold --> todo
 //!   todo <-->|"attach: stdin and stdout"| limbs
 //!   todo -->|"requests, a socket each"| api
@@ -170,8 +176,8 @@
 //!   participant brain as The brain
 //!   participant th as Reading thread
 //!   participant api as Anthropic
-//!   page->>brain: Max clicks the gauges: a call to the usage tool on the web limb<br/>CallEvent::Made: Caller::Max, chrome.js refreshUsage
-//!   Note over brain: the call is due, and the brain runs it itself<br/>State::todo: Todo::Dispatch, as LimbKind::Provider
+//!   page->>brain: Max clicks the gauges: a call to the usage tool on the brain's limb<br/>CallEvent::Made: Caller::Max, chrome.js refreshUsage
+//!   Note over brain: the call is due, and the brain runs it itself<br/>State::todo: Todo::Dispatch, by its tool's name
 //!   brain->>brain: record it as dispatched<br/>Brain::dispatch: Brain::read_usage: CallEvent::Dispatched
 //!   brain->>th: start a thread to ask Anthropic<br/>thread::spawn: Client::usage
 //!   th->>api: GET /api/oauth/usage, with the login's bearer token
@@ -213,8 +219,8 @@ use std::process::ExitCode;
 use std::sync::{Mutex, mpsc};
 use std::thread;
 
-use harness_core::role::UnknownEffort;
 use harness_core::id::ValueId;
+use harness_core::role::UnknownEffort;
 use harness_face_web::{Dictation, Face, Feed, Source, Wiring};
 use harness_provider::{Client, Login};
 use harness_runtime::Cancel;
@@ -248,8 +254,8 @@ usage: harness-brain --db DB --port PORT [--login DB] [--roles DIR] [--sample WA
   --login DB       the database whose claude.ai login to use: the home
                    brain's (~/.local/share/agent-harness/home/brain.sqlite)
                    unless named, so one sign-in serves every brain
-  --roles DIR      the role files the roles limb reads; a new database needs
-                   it, and on an existing one it moves the limb to DIR
+  --roles DIR      the role files the brain reads; a new database needs it,
+                   and on an existing one it moves the `roles` set to DIR
   --model MODEL[/EFFORT]
                    run every role on MODEL (and at EFFORT) over its file's:
                    `sonnet/low`; `scripted` costs nothing (it answers from a
@@ -269,7 +275,7 @@ usage: harness-brain --db DB --port PORT [--login DB] [--roles DIR] [--sample WA
 HARNESS_BROWSER    the harness's browser: an endpoint to attach to
                    (host:port, http://… or ws://…) or a browser to launch;
                    empty for Playwright's headless shell. A changed value is a
-                   new version of the browser limb; unset keeps the one it has
+                   new version of the machine's limb; unset keeps the one it has
 
 Max starts a chat as he does at a tab: at the page, or from a script with
 `target/release/examples/act PORT chat ROLE DIR|- TEXT`.

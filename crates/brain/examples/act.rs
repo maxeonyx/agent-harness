@@ -7,9 +7,9 @@
 //!                         Abandon it, with MS milliseconds to finish
 //! act PORT stop CALL      Stop a call, such as one passed to Max
 //! act PORT chat ROLE DIR TEXT
-//!                         Start a chat in ROLE's environment, in a new
-//!                         workspace over DIR (`-` for a role with none),
-//!                         with TEXT as its mandate
+//!                         Start a chat in ROLE, working in DIR on the
+//!                         brain's machine (`-` for a role with none), with
+//!                         TEXT as its mandate
 //! act PORT say CHAT TEXT  Send TEXT to the chat CHAT, as its next words
 //! act PORT back CHAT ENTRY
 //!                         Move the chat CHAT back to ENTRY, where it has been
@@ -44,11 +44,11 @@ fn main() {
         && chat == "chat"
     {
         tab.pump_until(|d| d.tab.view().is_some());
-        let Some(env) = tab.environment(role) else {
+        let Some(role) = tab.role(role) else {
             println!("refused: no role {role}");
             exit(1)
         };
-        let (n, task) = tab.chat(env, (dir != "-").then_some(dir.as_str()), text);
+        let (n, task) = tab.chat(role, (dir != "-").then_some(dir.as_str()), text);
         started = Some(task);
         n
     } else if let [_, say, chat, text] = &args[..]

@@ -3,8 +3,7 @@ name: max-advocate
 description: Answers a question for Max while he is away, or judges which review findings he would want acted on, from the evidence of what he wants.
 model: sonnet
 effort: high
-limbs: [meta, user, web]
-places: []
+tools: [meta, user, web]
 starts: []
 ---
 

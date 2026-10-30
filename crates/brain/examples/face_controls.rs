@@ -52,8 +52,8 @@ fn main() {
     brain.serving();
     println!("  watch it at https://mx-hv-mj.local:{port}");
     let mut max = Device::connect("tab", port);
-    max.pump_until(|d| d.environment("orchestrator").is_some());
-    let orchestrator = max.environment("orchestrator").unwrap();
+    max.pump_until(|d| d.role("orchestrator").is_some());
+    let orchestrator = max.role("orchestrator").unwrap();
     let repo = fs::canonicalize(dir.join("repo")).unwrap();
     let mandate = fs::read_to_string("demos/brain/mandate.md").unwrap();
     max.chat(orchestrator, repo.to_str(), &mandate);

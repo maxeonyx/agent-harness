@@ -21,8 +21,8 @@
 use harness_core::call::{Call, Caller};
 use harness_core::context::Rendered;
 use harness_core::delivery::Content;
-use harness_core::limb::{Audience, Instruction, Tool, ToolSet};
 use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
+use harness_core::limb::{Audience, Instruction, Tool, ToolSet};
 use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::state::State;
 use harness_core::task::{Context, Task};

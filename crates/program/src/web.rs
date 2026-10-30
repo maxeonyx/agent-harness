@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use harness_core::call::{Outcome, Output};
-use harness_core::limb::{Audience, Tool, ToolSet};
 use harness_core::id::Timestamp;
+use harness_core::limb::{Audience, Tool, ToolSet};
 use harness_core::model_call::Window;
 use harness_core::value::Bytes;
 use serde_json::json;

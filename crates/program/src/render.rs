@@ -5,12 +5,12 @@
 use harness_core::call::{Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
-use harness_core::limb::{Instruction, ToolSet};
-use harness_core::role::Binding;
 use harness_core::fact::Author;
 use harness_core::id::{CallId, Digest, LimbId, Timestamp, ValueId};
+use harness_core::limb::{Instruction, ToolSet};
 use harness_core::model_call::{Ending, Stop};
 use harness_core::resource::Observation;
+use harness_core::role::Binding;
 use harness_core::state::{Delivered, Stale, State};
 use harness_core::task::{Abandoner, Draining, Input, Origin, Scope, Task};
 use harness_core::value::Bytes;

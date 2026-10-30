@@ -3,8 +3,7 @@ name: browser
 description: Does the browser part of a task in the harness's own browser, usually the tedious part after Max has got the page where it needs to be, and hands back.
 model: sonnet
 effort: medium
-limbs: [meta, user, web, browser]
-places: []
+tools: [meta, user, web, browser]
 starts: []
 ---
 

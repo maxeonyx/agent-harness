@@ -3,8 +3,7 @@ name: orchestrator
 description: Holds the direction of one piece of work, launches every scope of designers and engineers, and reports to Max.
 model: opus
 effort: medium
-limbs: [meta, user, web, builds]
-places: [workspace]
+tools: [meta, user, web, builds, workspace]
 starts: [designer, engineer, max-advocate]
 ---
 

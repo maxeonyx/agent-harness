@@ -7,11 +7,11 @@ use std::collections::BTreeMap;
 
 use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::delivery::Content;
-use harness_core::limb::{Defined, Host, Prepared, Reach};
-use harness_core::role::{Effort, Role};
 use harness_core::fact::Fact;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
+use harness_core::limb::{Defined, Host, Prepared, Reach};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
+use harness_core::role::{Effort, Role};
 use harness_core::state::{Ended, Hold, State, Waiting};
 use harness_core::task::{
     Drain, Draining, Input, Mode, Move, Onto, Origin, Outcome, Pause, Phase, Scope, Task, TaskEvent,
@@ -212,7 +212,8 @@ fn usage(state: &State, value: Text, brain: Option<LimbId>) -> Value {
     }
     let (mut refreshing, mut failed) = (false, None);
     let readings = state.calls().map(|(_, c)| c).filter(|c| {
-        c.limb.is_some_and(|l| brain.is_some() && state.resolve(l) == brain)
+        c.limb
+            .is_some_and(|l| brain.is_some() && state.resolve(l) == brain)
             && matches!(c.call.caller, Caller::Max { .. })
     });
     for call in readings {

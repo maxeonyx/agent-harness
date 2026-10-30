@@ -3,8 +3,7 @@ name: engineer
 description: Builds one task for the orchestrator — a spike or an integration — in its own clone, and returns a result.
 model: opus
 effort: medium
-limbs: [meta, user, web]
-places: [workspace]
+tools: [meta, user, web, workspace]
 starts: []
 ---
 

@@ -16,11 +16,11 @@ use harness_core::call::CallEvent;
 use harness_core::context::EntryId;
 use harness_core::delivery::{Content, Delivery, Prompt, Read};
 use harness_core::draft::DraftEvent;
-use harness_core::environment::{Host, Limb, LimbKind};
 use harness_core::fact::{Batch, Fact};
 use harness_core::id::{
-    CallId, DeliveryId, EnvironmentId, LimbId, ModelCallId, ReplicaId, TaskId, Timestamp,
+    CallId, DeliveryId, LimbId, ModelCallId, ReplicaId, RoleId, TaskId, Timestamp,
 };
+use harness_core::limb::{Workdir, normal};
 use harness_core::live::Live;
 use harness_core::task::{
     Abandoner, Created, Drain, Mandate, Mode, Move, Origin, Scope, TaskEvent,
@@ -235,7 +235,7 @@ impl Device {
         })
     }
 
-    /// The harness row's `list`, such as its environments or workspaces:
+    /// The harness row's `list`, such as its roles:
     /// the `id` of the one whose `key` is `value`.
     fn harness_id<T: std::str::FromStr>(&self, list: &str, key: &str, value: &str) -> Option<T> {
         self.tab.view()?;
@@ -251,39 +251,33 @@ impl Device {
             })
     }
 
-    /// The environment a role file named `name` defines.
-    pub fn environment(&self, name: &str) -> Option<EnvironmentId> {
-        self.harness_id("environments", "name", name)
+    /// The role a role file named `name` defines.
+    pub fn role(&self, name: &str) -> Option<RoleId> {
+        self.harness_id("roles", "name", name)
     }
 
-    /// Max starts a chat in `environment`, as the page's new-chat card
-    /// does: in the workspace over `dir` for an environment that names one,
-    /// a new workspace limb unless the harness has one there, and in no
-    /// place for an environment that names none.
-    pub fn chat(
-        &mut self,
-        environment: EnvironmentId,
-        dir: Option<&str>,
-        text: &str,
-    ) -> (u64, TaskId) {
+    /// The limb on the brain's machine, once the brain has defined it.
+    fn local(&self) -> Option<LimbId> {
+        self.tab.view()?;
+        let Some(FaceRow::Harness(row)) = self.rows().get(&FaceKey::Harness) else {
+            return None;
+        };
+        row["local"].as_str()?.parse().ok()
+    }
+
+    /// Max starts a chat in `role`, as the page's new-chat card does: in
+    /// the directory `dir` on the brain's machine for a role that works in
+    /// one, and in none for a role that does not.
+    pub fn chat(&mut self, role: RoleId, dir: Option<&str>, text: &str) -> (u64, TaskId) {
         // Each fact's id is the event of its own index in the batch.
-        let at = self.tab.next();
-        let known = dir.and_then(|dir| self.harness_id::<LimbId>("workspaces", "dir", dir));
-        let new = dir.filter(|_| known.is_none()).map(|dir| Limb {
-            id: LimbId(at.event(0)),
-            name: dir.into(),
-            kind: LimbKind::Plugin {
-                kind: "workspace".into(),
-                config: json!({ "dir": dir }).to_string(),
-                host: Host::Local,
-            },
+        let task = TaskId(self.tab.next().event(0));
+        let workdir = dir.map(|dir| Workdir {
+            limb: self
+                .local()
+                .expect("the brain has defined its machine's limb"),
+            dir: normal(dir.as_ref()),
+            branch: None,
         });
-        let task = TaskId(at.event(new.is_some() as u32));
-        let places = known
-            .or(new.as_ref().map(|l| l.id))
-            .map(|l| ("workspace".to_string(), l))
-            .into_iter()
-            .collect();
         let mandate = Bytes::from(text.to_string());
         println!(
             "  {}: Max starts a chat in {}: {text:?}",
@@ -292,29 +286,26 @@ impl Device {
         );
         let n = self.say(Batch {
             values: vec![mandate.clone()],
-            facts: new
-                .into_iter()
-                .map(Fact::Limb)
-                .chain([Fact::Task(
-                    task,
-                    TaskEvent::Created(Box::new(Created {
-                        name: name_from(text),
-                        by: None,
-                        scope: Scope::Max,
-                        origin: Origin::Fresh {
-                            environment,
-                            places,
-                        },
-                        mode: Mode::UserFacing,
-                        mandate: Mandate {
-                            text: mandate.id(),
-                            brief: None,
-                            quotes: Vec::new(),
-                        },
-                        tuning: Default::default(),
-                    })),
-                )])
-                .collect(),
+            facts: vec![Fact::Task(
+                task,
+                TaskEvent::Created(Box::new(Created {
+                    name: name_from(text),
+                    by: None,
+                    scope: Scope::Max,
+                    origin: Origin::Fresh {
+                        role,
+                        workdir,
+                        places: Default::default(),
+                    },
+                    mode: Mode::UserFacing,
+                    mandate: Mandate {
+                        text: mandate.id(),
+                        brief: None,
+                        quotes: Vec::new(),
+                    },
+                    tuning: Default::default(),
+                })),
+            )],
         });
         (n, task)
     }

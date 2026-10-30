@@ -33,7 +33,7 @@
 // flags): an empty database is a brain that is signed out.
 //
 // `chat` starts a chat as Max does at a tab, with no browser (the `act`
-// example): in ROLE, in a workspace over DIR or in no place, with WORDS as
+// example): in ROLE, working in DIR or in no directory, with WORDS as
 // its mandate, and prints its id. `say` sends a chat WORDS as Max's next
 // words, the same way. On the scripted model the words are the
 // script (crates/provider/src/scripted.rs). `settle` waits until the chat
@@ -46,7 +46,7 @@
 // phone: 390x844, touch, twice the pixels) and runs the steps in order:
 //
 //   chat ROLE DIR WORDS  start a chat by the clicks Max makes: +, its
-//                        role, its workspace directory (- for none), the
+//                        role, its working directory (- for none), the
 //                        words, send twice; prints its id
 //   open ID              open a chat by its link
 //   click CSS / hover CSS / type CSS TEXT / key KEY (Enter, Escape, Tab, a letter)
@@ -308,8 +308,7 @@ async function log(brain, id, full) {
     return kept.length < text.length ? `${kept} … (${all.length} lines, ${text.length} chars)` : kept;
   };
   const indent = (text) => text.replaceAll("\n", "\n    ");
-  const place = Object.values(t.places ?? {}).join(", ");
-  console.log(`${t.id} "${t.name}": ${t.environment} on ${t.tuning?.model ?? "?"}${place ? ` in ${place}` : ""}`);
+  console.log(`${t.id} "${t.name}": ${t.role} on ${t.tuning?.model ?? "?"}${t.workdir ? ` in ${t.workdir}` : ""}`);
   const chain = t.head ? await get(brain, `/context/${t.head}`) : [];
   for (const entry of chain.slice(1)) {
     const blocks = JSON.parse(entry.content);
@@ -564,11 +563,10 @@ const steps = {
       if (why) fail(why);
     }
     else if (role !== "-") fail(`there is no choice of role; use - for ${role}`);
-    const places = await b.eval(`[...document.querySelectorAll(".compose .place")].map((p) => p.dataset.place)`);
-    if (places.some((p) => p !== "workspace")) fail(`${role} names places this cannot fill: ${places.join(", ")}`);
-    if (places.length > 0 && dir === "-") fail(`${role} needs a workspace directory`);
-    if (places.length === 0 && dir !== "-") fail(`${role} has no workspace, so no directory: use -`);
-    if (places.length > 0) await b.type(".compose .place", path.resolve(dir));
+    const works = await b.eval(`!!document.querySelector(".compose .workdir")`);
+    if (works && dir === "-") fail(`${role} needs a working directory`);
+    if (!works && dir !== "-") fail(`${role} works in no directory: use -`);
+    if (works) await b.type(".compose .workdir", path.resolve(dir));
     await b.type(".compose textarea", words);
     await b.click(".compose .go.send");
     await b.click(".compose .go.send");

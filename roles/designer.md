@@ -3,8 +3,7 @@ name: designer
 description: Decides one model for the orchestrator, following Max's design doctrine, and returns the decision as a result. Launched by the orchestrator, or by a designer for a review that hasn't seen its design.
 model: opus
 effort: xhigh
-limbs: [meta, user, web]
-places: [workspace]
+tools: [meta, user, web, workspace]
 starts: [designer, max-advocate]
 ---
 
