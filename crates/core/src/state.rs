@@ -11,7 +11,7 @@ use crate::context::{Entry, EntryId, Note, Rendered, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
-use crate::build::{BuildId, Glimpsed, Launch, Launched, Probation, Trial, Verdict};
+use crate::build::{BuildId, Glanced, Glimpsed, Launch, Launched, Probation, Trial, Verdict};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::fact::{Author, Fact, Refusal, Rejected, Stated};
 use crate::id::{
@@ -98,7 +98,7 @@ use crate::value::Bytes;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
     last: Option<Seq>,
-    launch: Option<(Mark, Launched)>,
+    launch: Option<(Mark, Option<Launched>)>,
     /// What the current launch has shown since it began.
     probation: Probation,
     /// When the current launch must have exited, once it is shutting down.
@@ -660,16 +660,32 @@ impl State {
             .extend(said.values.iter().map(Bytes::id).filter(|v| v == text));
     }
 
-    /// Fold what this build can read of a record it skips: only what the
-    /// build's [`Probation`] reads, so a build is judged by the one before
-    /// it even when its records hold words that one does not know. Who
+    /// Fold what this build can read of a record it skips: where a span
+    /// begins, and what its [`Probation`] reads, so a build is judged by the
+    /// one before it even when its records hold words that one does not know. Who
     /// connected a limb may be in a record it skipped too, so a limb is any
     /// replica that is neither this brain nor one of Max's faces.
-    pub(crate) fn glimpse(&mut self, here: Time, at: Time, glimpse: &Glimpsed) {
+    pub(crate) fn glimpse(&mut self, here: Time, clock: Timestamp, at: Time, glimpse: &Glimpsed) {
         let by_limb = at.replica != here.replica && !self.faces.contains(&at.replica);
-        for trial in glimpse.trials() {
-            self.probation.see(by_limb, trial);
+        for (i, glanced) in glimpse.facts() {
+            match glanced {
+                Glanced::Launched => {
+                    let seq = Seq { n: here.n, i };
+                    self.launched(Mark { seq, at: clock }, None);
+                }
+                Glanced::Trial(trial) => self.probation.see(by_limb, trial),
+            }
         }
+    }
+
+    /// A brain began deciding at `mark`, with a build this one reads the
+    /// [`Launched`] of, or not: a span begins either way.
+    fn launched(&mut self, mark: Mark, launched: Option<Launched>) {
+        self.launch = Some((mark, launched));
+        self.probation = Probation::default();
+        self.shutdown = None;
+        // A connection belongs to the brain that made it.
+        self.reach.clear();
     }
 
     /// Who speaks from `from` to the brain at `here`: the brain itself, the
@@ -848,11 +864,7 @@ impl State {
                 {
                     return Err(Rejected::Unknown);
                 }
-                self.launch = Some((mark, launched.clone()));
-                self.probation = Probation::default();
-                self.shutdown = None;
-                // A connection belongs to the brain that made it.
-                self.reach.clear();
+                self.launched(mark, Some(launched.clone()));
             }
             Fact::Shutdown { within } => {
                 if self.launch.is_none() {
@@ -2138,10 +2150,12 @@ impl State {
     }
 
     /// The brain process writing now, and where it began.
-    pub fn launch(&self) -> Option<(Mark, &Launched)> {
+    /// Its [`Launched`] is `None` when this build could not read it: a
+    /// newer build's, glimpsed.
+    pub fn launch(&self) -> Option<(Mark, Option<&Launched>)> {
         self.launch
             .as_ref()
-            .map(|(mark, launched)| (*mark, launched))
+            .map(|(mark, launched)| (*mark, launched.as_ref()))
     }
 
     /// What the current launch has shown since it began: whether its build
@@ -2180,7 +2194,9 @@ impl State {
             },
             None => "limb",
         };
-        let (_, launched) = self.launch.as_ref()?;
+        let (_, Some(launched)) = self.launch.as_ref()? else {
+            return None;
+        };
         let wanted = *launched.limbs.get(executable)?;
         (wanted != *running).then_some(wanted)
     }

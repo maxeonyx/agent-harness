@@ -340,9 +340,10 @@ pub enum Verdict {
 /// So a record whose payload names a variant this build does not know
 /// still shows a request sent, answered or refused, and a call made or
 /// settled; a settlement it skips counts as a limb's when it came from
-/// neither the brain nor one of Max's faces. Not covered: a new kind of
-/// fact, a new way for a request to end, a change to an id's form, or a
-/// [`Launched`] this build cannot read (the span itself is then unseen).
+/// neither the brain nor one of Max's faces. A [`Launched`] it skips still
+/// begins a span, read by its name alone, so the trial is the new span's.
+/// Not covered: a new kind of fact, a new way for a request to end, a
+/// change to an id's form, or a renamed [`crate::fact::Fact::Launched`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Trial {
     Sent(ModelCallId),
@@ -386,25 +387,36 @@ pub struct Glimpsed {
 }
 
 impl Glimpsed {
-    pub(crate) fn trials(&self) -> impl Iterator<Item = Trial> + '_ {
-        self.facts.iter().filter_map(|glance| match glance {
-            Glance::Trial(fact) => fact.trial(),
-            Glance::Other(IgnoredAny) => None,
-        })
+    /// What it read of each fact, by the fact's index in the record.
+    pub(crate) fn facts(&self) -> impl Iterator<Item = (u32, Glanced)> + '_ {
+        (0..)
+            .zip(&self.facts)
+            .filter_map(|(i, glance)| match glance {
+                Glance::Read(fact) => Some((i, fact.glanced()?)),
+                Glance::Other(IgnoredAny) => None,
+            })
     }
+}
+
+/// What any build reads of one fact of a record it skips.
+pub(crate) enum Glanced {
+    /// A brain began deciding: a new span, whatever its build.
+    Launched,
+    Trial(Trial),
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Glance {
-    Trial(GlancedFact),
+    Read(GlancedFact),
     Other(IgnoredAny),
 }
 
-/// [`Fact`]'s shape, keeping only what a trial reads; any other content of
-/// the variants it names is passed over unread.
+/// [`Fact`]'s shape, keeping only what a glimpse reads; any other content
+/// of the variants it names is passed over unread.
 #[derive(Debug, Deserialize)]
 enum GlancedFact {
+    Launched(IgnoredAny),
     ModelCall(ModelCallId, GlancedModelCall),
     Call(CallId, GlancedCall),
 }
@@ -431,8 +443,9 @@ enum GlancedCall {
 }
 
 impl GlancedFact {
-    fn trial(&self) -> Option<Trial> {
-        Some(match self {
+    fn glanced(&self) -> Option<Glanced> {
+        Some(Glanced::Trial(match self {
+            GlancedFact::Launched(_) => return Some(Glanced::Launched),
             GlancedFact::ModelCall(id, GlancedModelCall::Sent(_)) => Trial::Sent(*id),
             GlancedFact::ModelCall(id, GlancedModelCall::Ended { ending }) => match ending {
                 GlancedEnding::Responded(_) => Trial::Responded(*id),
@@ -448,7 +461,7 @@ impl GlancedFact {
             },
             GlancedFact::Call(id, GlancedCall::Made(_)) => Trial::Made(*id),
             GlancedFact::Call(id, GlancedCall::Settled(_)) => Trial::Settled(*id),
-        })
+        }))
     }
 }
 

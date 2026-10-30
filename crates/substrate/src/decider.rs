@@ -224,7 +224,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                 Some(Err(u)) => {
                     divergences.push(unread(at, &u.why));
                     if let Some(glimpse) = u.glimpse::<S>() {
-                        S::glimpse(&mut decider.state, record.at, at, &glimpse);
+                        S::glimpse(&mut decider.state, record.at, record.clock, at, &glimpse);
                     }
                     None
                 }
@@ -254,7 +254,13 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                                     why: Diverged::Refused(why),
                                 });
                                 if let Some(glimpse) = glimpse::<S>(said) {
-                                    S::glimpse(&mut decider.state, record.at, at, &glimpse);
+                                    S::glimpse(
+                                        &mut decider.state,
+                                        record.at,
+                                        record.clock,
+                                        at,
+                                        &glimpse,
+                                    );
                                 }
                             }
                         }
@@ -399,7 +405,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
             // glimpsed here.
             What::Unread(u) => {
                 if let Some(glimpse) = u.glimpse::<S>() {
-                    S::glimpse(&mut state, here, record.at, &glimpse);
+                    S::glimpse(&mut state, here, clock, record.at, &glimpse);
                 }
                 (None, Some(Durability::Kept))
             }

@@ -1,7 +1,7 @@
 //! The harness as one schema on the substrate: what its replicas say, and how
 //! long the brain keeps it.
 
-use harness_substrate::{Decider, Durability, Folding, Schema, Time};
+use harness_substrate::{Decider, Durability, Folding, Schema, Time, Timestamp};
 
 use crate::build::Glimpsed;
 use crate::draft::DraftEvent;
@@ -80,8 +80,8 @@ impl Schema for Harness {
         state.fold(folding)
     }
 
-    fn glimpse(state: &mut State, here: Time, at: Time, glimpse: &Glimpsed) {
-        state.glimpse(here, at, glimpse)
+    fn glimpse(state: &mut State, here: Time, clock: Timestamp, at: Time, glimpse: &Glimpsed) {
+        state.glimpse(here, clock, at, glimpse)
     }
 
     fn refused(state: &mut State, folding: Folding<'_, Harness>, why: &Refusal) {

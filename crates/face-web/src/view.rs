@@ -112,7 +112,7 @@ pub fn rows(
         "workspaces": workspaces,
         // Where a new task's directory is: the limb on the brain's machine.
         "local": state.limbs().find(|l| l.host == Host::Local).map(|l| l.id.to_string()),
-        "launch": state.launch().map(|(_, l)| l),
+        "launch": state.launch().and_then(|(_, l)| l),
         "probation": state.probation().verdict(),
         "source": source,
         "relaunch": relaunch(state, value),
