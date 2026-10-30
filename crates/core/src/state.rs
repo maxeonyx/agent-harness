@@ -2345,7 +2345,7 @@ impl State {
 
     /// `limb` resolved, or as it is where nothing hosts it now: what a call
     /// made from a context of before is sent to.
-    fn resolved(&self, limb: LimbId) -> LimbId {
+    pub fn resolved(&self, limb: LimbId) -> LimbId {
         self.resolve(limb).unwrap_or(limb)
     }
 

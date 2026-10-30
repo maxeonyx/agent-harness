@@ -577,9 +577,11 @@ pub fn result(members: &[(String, Vec<String>)]) -> Bytes {
     blocks(&body)
 }
 
-/// What a call to `limb` expects: the versions the context knows of its
-/// resources.
-pub fn expects(context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
+/// What a call to `limb` expects: the versions the context knows of the
+/// resources of the limb the call is sent to, which for a limb of before
+/// is the one hosting it now.
+pub fn expects(state: &State, context: &Context, limb: Option<LimbId>) -> Vec<Observation> {
+    let limb = limb.map(|l| state.resolved(l));
     context
         .knows
         .iter()
@@ -621,7 +623,7 @@ pub fn background_call(
             from,
             name,
         },
-        expects: expects(context, Some(limb)),
+        expects: expects(state, context, Some(limb)),
         tool,
         input: input.id(),
     };

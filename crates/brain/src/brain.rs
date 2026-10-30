@@ -943,7 +943,8 @@ impl Brain {
     /// limb is the task's binding's; a tool it does not route is answered
     /// as unroutable.
     fn tool_uses(&self, task: TaskId, content: &[u8]) -> Vec<(Call, Bytes)> {
-        let task = self.state().task(task).expect("the responding task");
+        let state = self.state();
+        let task = state.task(task).expect("the responding task");
         let context = task.context().expect("a responding task has a context");
         // Each block's fields, with a tool's input kept exactly as written.
         type Block<'a> = BTreeMap<String, &'a serde_json::value::RawValue>;
@@ -964,7 +965,7 @@ impl Brain {
                         task: task.id,
                         tool_use: ToolUseId(field(b, "id")),
                     },
-                    expects: meta::expects(context, context.binding.limb(&tool)),
+                    expects: meta::expects(state, context, context.binding.limb(&tool)),
                     tool,
                     input: input.id(),
                 };
