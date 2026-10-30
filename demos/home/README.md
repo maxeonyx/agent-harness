@@ -18,7 +18,7 @@ What to do:
 
 What the agents get is decided by the files in `roles/`: each role's prompt, model, effort and limbs (`web` is the provider's web search and fetch; `user` is your `~/.claude`). `roles/skills.txt` lists which of your skills they are offered; edit it and running agents see the new list at their next turn.
 
-The model and dictation use the harness's own claude.ai login, which it keeps fresh. It lives in the home brain's database, and every brain on the machine uses it. To sign in once, on the page: "not signed in to claude.ai · sign in" along the bottom, then "open claude.ai", sign in, and "paste its code" with the code claude.ai shows (`CODE#STATE`). Or from a shell: `cargo run -q -p harness-provider --bin harness-api -- login` prints the URL, and `... -- login CODE#STATE` finishes it. Until then every task waits, and says so.
+The model and dictation use the harness's own claude.ai login, which it keeps fresh. It lives in the home brain's database, and every brain on the machine uses it. To sign in once, on the page: **Sign in** along the bottom opens claude.ai in a new tab and a box on the page; approve there, and paste the code claude.ai shows into the box. Or from a shell: `cargo run -q -p harness-provider --bin harness-api -- login` prints the URL, and `... -- login CODE` finishes it. Until then every task waits, and says so.
 
 It serves with the shared wildcard certificate in `~/.config/dev-certs/shared-local/` and accepts only this machine and the Windows host (the default route's gateway).
 

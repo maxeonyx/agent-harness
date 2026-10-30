@@ -1333,7 +1333,7 @@ and you cannot finish until it has.",
                         let (dir, clone) = match &branch {
                             None => (dir, None),
                             Some(branch) => {
-                                let (from, dir) = clone_of(&dir, branch);
+                                let (from, dir) = clone_of(&dir, branch)?;
                                 let clone = Clone {
                                     from,
                                     branch: branch.clone(),
@@ -1966,14 +1966,27 @@ fn mint_replica() -> ReplicaId {
 /// what `dir` itself was cloned from (or `dir`, if it has no `origin`), into
 /// a sibling directory named for the repository and the branch, the way
 /// Max names his (`agent-harness` on `dev-x` is `agent-harness-dev-x`).
-pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
-    let from = Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "remote", "get-url", "origin"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| dir.to_string_lossy().into_owned());
+/// A `dir` in no repository has nothing to clone: refused, saying so.
+pub fn clone_of(dir: &Path, branch: &str) -> Result<(String, PathBuf), String> {
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    if git(&["rev-parse", "--git-dir"]).is_none() {
+        return Err(format!(
+            "`{}` is not in a git repository, so there is nothing to clone branch `{branch}` from: \
+name a repository in `from`, or omit `branch` to work in that directory",
+            dir.display()
+        ));
+    }
+    let from =
+        git(&["remote", "get-url", "origin"]).unwrap_or_else(|| dir.to_string_lossy().into_owned());
     let repo = from
         .trim_end_matches('/')
         .rsplit(['/', ':'])
@@ -1982,7 +1995,7 @@ pub fn clone_of(dir: &Path, branch: &str) -> (String, PathBuf) {
         .trim_end_matches(".git");
     let name = format!("{repo}-{}", branch.replace('/', "-"));
     let parent = dir.parent().unwrap_or(dir);
-    (from, parent.join(name))
+    Ok((from, parent.join(name)))
 }
 
 /// One text block saying `said`: what a call the brain runs answers.
