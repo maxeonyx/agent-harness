@@ -27,8 +27,9 @@
 # NAME runs, the last proven, so its `act` is
 # ~/.local/share/agent-harness/NAME/build/bin/act.
 # The unit file, ~/.config/systemd/user/harness-NAME.service, runs that
-# link with the brain's flags; it is enabled, so the brain comes back after
-# a crash and at boot (lingering starts it before a login). Its log:
+# link with the brain's flags; it is enabled, so the brain comes back at
+# boot (lingering starts it before a login) and after any exit but
+# `systemctl stop`: a crash, or a stray `kill`. Its log:
 # journalctl --user -u harness-NAME. To retire a brain:
 #   systemctl --user disable --now harness-NAME
 #   rm ~/.config/systemd/user/harness-NAME.service

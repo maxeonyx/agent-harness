@@ -25,7 +25,8 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 ## Tasks (S2)
 
 - **Threads with no owner.** Bare `thread::spawn` calls that no task owns: `brain/src/brain.rs:331,1086`, `brain/src/link.rs:47`, `brain/src/process.rs:58,66`, `limb/src/serve.rs:86,303,320`, `limb/src/calls.rs:142`, `limb/src/attach.rs:115`, `limb-browser/src/cdp.rs:53`.
-- **The harness captures PIDs itself,** so an agent never needs `pgrep -f` or `pkill -f` to wait on or stop a process it started. Max: "the important step is *capturing the PID* - how about we make *our* harness do that automatically?" (not now).
+- **The harness captures PIDs itself,** so an agent never needs `pgrep -f` or `pkill -f` to wait on or stop a process it started. Max: "the important step is *capturing the PID* - how about we make *our* harness do that automatically?" (not now). On 30 Oct: a `bash` call whose process outlives the command returns that process's PID: "Our bash command must return the PID. If you have the PID, it's easy."
+- **A gentle instruction against `pkill` and `pgrep`.** "pkill ban in instructions is reasonable. Pgrep ban in instructions is reasonable." But "Not a terribly strict one necessarily. I don't want to be too strict on agents." Every brain's process is named `harness-brain`, so a name-based kill reaches the home brain: on 29 Oct an engineer's `pkill -x harness-brain` stopped it for about 22 hours. The limb is being rewritten in `MC-limbs-per-machine`, so this lands after it.
 - **Background shells.** `( … &)` dies with its bash call; `env -i setsid` escapes cancellation; a shell runs on a pipe, not a pty (`limb-workspace/src/shell.rs:58`).
 - **Spawn controls.** `spawn` can't set a child's model or effort (`program/src/meta.rs`); a parent can't see the progress of one member, cancel it alone or give it a time limit; there is no spawn under a background scope (`meta.rs:82`). Every spawn blocks its parent: Max wants a background spawn too, joined later by a tool call that waits on work the agent owns, with the foreground kept for fork-per-phase ([vision](vision.md#agents-that-work-well-and-cheaply)). Asides and the refusal to interrupt a parent waiting on its scope (`Rejected::Scoped`) exist because spawns block; whether they stay for foreground spawns is open.
 - **A message queued before a spawn waits for the scope.** A message sent to a task mid-turn, before it blocks on `spawn`, stays unread until the scope ends, while messages sent once it waits open asides. Max: "A queued message and a new message should go through the same mechanism." The fix needs the brain to open the aside, which changes who may create one (`core/src/state.rs`, `check_aside`): a model decision.
@@ -57,7 +58,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 
 ## Roles, agents and limbs (S4)
 
-- **No sandbox.** `bash` can read `~/.claude/.credentials.json`. The JS sandbox limb (an engine with only the limb's functions) is the planned first sandbox.
+- **No sandbox.** `bash` can read `~/.claude/.credentials.json`. The JS sandbox limb (an engine with only the limb's functions) is the planned first sandbox. Later, a PID namespace through bubblewrap, so an agent can't signal processes that aren't its own, perhaps not for every role: "maybe I should have a special role for machine maintenance stuff, like an admin role."
 - **Chats with no directory,** and roles that take parameters Max fills in when he starts one: "limb types need varying parameters, potentially". A rich picker for directories and remote environments.
 - **The SSH limb** (`Host::Ssh`, `brain/src/brain.rs:524-530`), which the browser limb needs to reach Max's own browser on his desktop. Which sites the browser agent may log into is his to say.
 - **The brain depends on limb crates' `Settings`,** and face-web's dictation depends on the provider crate.
@@ -98,6 +99,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 
 - **A text CRDT for drafts** edited on two devices; today a conflict opens a second draft.
 - **The attach button** needs a real design.
+- **The usage pill is lowercase:** "no reading yet · click to refresh" and "as of …" (`face-web/src/page/chrome.js:77`).
 - **Directory and remote picker** for starting a chat.
 - **Notifications on a closed app** (Web Push): "Nah, dw about push notifications on android - but a good feature for later!!"
 - **`/view` has no running-tasks field.**
@@ -123,4 +125,6 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **Demos.** The spine demo's step numbering (`brain/examples/spine.rs`); demos grep log wording; the relaunch and browser demos haven't been rerun since their last changes; `face-controls` needs a prior build; `dev/serve` has a scripted wait; `dev/drive.mjs` gaps; test brains that are durable need retiring.
 - **As-built diagrams.** Max wants diagrams of the current state kept up to date, as mermaid in the crate docs where each subject lives; the dashboard's Built page shows them. Still undrawn: how a limb runs a call at most once (`harness_limb::Calls::call`: running, settled, stopping, shutting down, started and not rerun, run), the brain's shutdown (`Brain::signal`, `Brain::down`), and two from the old page on `archive/dashboard-v1` that the processes-and-seams diagram may cover only in part: "One fold, many readers" (the data flow; `gen/flow.json`) and "Every copy of the data" (replicas and consistency, who decides and where each record lives; `gen/replicas.json`). Max asked whether there should be more, "for example, potentially limb launch, or um, title generation": there is no title generation to draw, since a chat is named from its first words (`nameFrom`) and Max can rename it.
 - **`Start.awaits` and `Caller::Meta`** are modelled and read, but nothing sets `awaits` (`Brain::start_of` leaves it empty, `brain/src/brain.rs:722`) or makes a `Caller::Meta`.
+- **A merged fix can sit undeployed.** On 29-30 Oct login fixes for the home brain were merged but not deployed while the orchestrator waited on a scope, so Max signed in a third time. The reviewer that merges such a fix could deploy it, or a background spawn could free the orchestrator.
+- **No agent works through this list on its own.** Max asked whether there is "an agent that's just pulling things off the to-do list and getting them done"; there isn't.
 - **Design questions for Max.** Design questions for Max "need to jog my memory": quote the claim and both sides, and ask him to confirm, deny or refine.
