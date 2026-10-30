@@ -31,16 +31,10 @@ const KILL_WAIT: Duration = Duration::from_secs(2);
 ///
 /// Marks nest: a tree started inside another carries both marks, so a
 /// limb's tree holds its calls' trees.
-///
-/// A tree made [`Group::detachable`] lets go of a member that starts a
-/// session of its own (`setsid`): the one way to leave on purpose.
 pub struct Group {
     leader: libc::pid_t,
     pidfd: OwnedFd,
     mark: String,
-    /// The session a member must stay in to be the tree's, once the tree is
-    /// detachable.
-    session: Option<libc::pid_t>,
     status: Option<ExitStatus>,
 }
 
@@ -92,19 +86,8 @@ impl Group {
             leader,
             pidfd,
             mark,
-            session: None,
             status: None,
         })
-    }
-
-    /// Let a member go once it starts a session of its own (`setsid`): it
-    /// leaves this tree, though not the trees around it, whose marks it still
-    /// carries, nor its orphan's subreaper. A command can so start a server
-    /// that outlives it, and that its owner's owner still ends.
-    pub fn detachable(mut self) -> Group {
-        // SAFETY: getsid on the leader, an unreaped child.
-        self.session = Some(unsafe { libc::getsid(self.leader) });
-        self
     }
 
     /// The leader's pidfd, readable once it has exited.
@@ -138,17 +121,14 @@ impl Group {
         ask: Option<libc::c_int>,
         serve: impl FnMut() -> Option<RawFd>,
     ) -> io::Result<Ended> {
-        let (group, mark, session) = (self.leader, self.mark.clone(), self.session);
+        let (group, mark) = (self.leader, self.mark.clone());
         end(
             waiter,
             deadline,
             ask,
             || {
                 self.exited();
-                live(|p| {
-                    p.group == group
-                        || (session.is_none_or(|s| p.session == s) && carries(p.pid, &mark))
-                })
+                live(|p| p.group == group || carries(p.pid, &mark))
             },
             serve,
         )
@@ -161,7 +141,6 @@ pub struct Process {
     pub pid: libc::pid_t,
     pub parent: libc::pid_t,
     pub group: libc::pid_t,
-    pub session: libc::pid_t,
     /// When it started, in clock ticks since boot: with the pid, an
     /// identity no later process has.
     pub start: u64,
@@ -271,28 +250,6 @@ pub fn reap_children() {
     }
 }
 
-/// Reap every child that has exited after starting a session of its own:
-/// an orphan this process adopted as subreaper, which had left its command
-/// ([`Group::detachable`]). Unlike [`reap_children`], safe while other
-/// threads wait on children of their own, which stay in this session.
-pub fn reap_detached() {
-    let me = std::process::id() as libc::pid_t;
-    // SAFETY: getsid(0) reads this process's session.
-    let session = unsafe { libc::getsid(0) };
-    let Ok(dir) = std::fs::read_dir("/proc") else {
-        return;
-    };
-    let exited = dir
-        .filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok())
-        .filter_map(stat)
-        .filter(|(p, zombie)| *zombie && p.parent == me && p.session != session);
-    for (p, _) in exited {
-        let mut status = 0;
-        // SAFETY: waitpid writes only the status.
-        unsafe { libc::waitpid(p.pid, &mut status, libc::WNOHANG) };
-    }
-}
-
 /// Become the subreaper of everything this process starts: an orphan below
 /// it is adopted by it, not by init, so it stays this process's to end.
 pub fn subreaper() -> io::Result<()> {
@@ -326,7 +283,6 @@ fn stat(pid: libc::pid_t) -> Option<(Process, bool)> {
         pid,
         parent: fields.get(1)?.parse().ok()?,
         group: fields.get(2)?.parse().ok()?,
-        session: fields.get(3)?.parse().ok()?,
         start: fields.get(19)?.parse().ok()?,
     };
     Some((process, *fields.first()? == "Z"))

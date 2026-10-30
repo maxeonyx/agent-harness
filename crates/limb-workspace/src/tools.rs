@@ -31,7 +31,7 @@ Every `bash` call starts a fresh shell there: no working directory, variables or
 Each command owns every process it starts, `setsid` or not, and they are all stopped when it ends, is interrupted or reaches its time limit. \
 To keep a server running across calls, run its command in the background, if you can: it runs until that call is stopped. \
 Stop a process by its PID (`kill <pid>`) rather than by name with `pkill`, and keep track of PIDs rather than searching with `pgrep`: \
-a name or pattern also matches other agents' processes, and every brain is named `harness-brain`.
+a name or pattern also matches other agents' processes.
 
 Long `bash` and `grep` output is cut to a view: its first and last 30 lines, with markers naming the lines each gap hides, and its longest lines cut to fit about 16 KiB; binary output is not shown. \
 When anything is cut, the view ends by naming a file that holds the whole output: `read` or `grep` that file rather than running the command again. \

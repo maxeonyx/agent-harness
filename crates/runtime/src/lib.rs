@@ -42,7 +42,5 @@ pub mod signals;
 mod socket;
 
 pub use cancel::{Cancel, Cancelled, Waiter, Wake};
-pub use group::{
-    Ended, Group, Member, Process, children, end, marked, reap_children, reap_detached, subreaper,
-};
+pub use group::{Ended, Group, Member, Process, children, end, marked, reap_children, subreaper};
 pub use socket::Socket;
