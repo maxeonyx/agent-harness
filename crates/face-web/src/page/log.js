@@ -317,7 +317,7 @@ function toolRow(s, b, t) {
   }
   if (b.name.startsWith("compact")) {
     const q = el("div", "card");
-    q.append(el("div", "label", input.fresh ? "Compacting into a new context" : "Compacting"), markdown(input.summary || ""));
+    q.append(el("div", "label", input.fresh ? "Compacting into a new context" : "Compacting"), markdown(input.carry ?? input.summary ?? ""));
     row.insertBefore(q, detail);
   }
   s.rows.set(b.id, { row, b, inner });

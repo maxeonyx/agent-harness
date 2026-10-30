@@ -3,6 +3,7 @@ import { render } from "./draw.js";
 import { liveArrived } from "./log.js";
 import { restoreLocal } from "./compose.js";
 import { viewArrived } from "./main.js";
+import * as liveness from "./liveness.js";
 
 // ─── This tab: a replica on the substrate ────────────────────────────────────
 // The tab is the wasm build of harness-face-tab: its own records, kept in
@@ -60,13 +61,15 @@ async function forget(replica) {
   await done(tx);
 }
 
-// A replica: a tab's handle in the wasm and its link to the brain.
+// A replica: a tab's handle in the wasm and its link to the brain. `link`
+// hears the link's traffic: the main tab's is the page's liveness.
+const unheard = { received() {}, sent() {}, dropped() {} };
 class Replica {
-  constructor(id, handle, onView) { this.id = id; this.h = handle; this.onView = onView; this.ws = null; this.waiting = []; this.flushing = Promise.resolve(); }
-  static async open(id, onView) {
+  constructor(id, handle, onView, link) { this.id = id; this.h = handle; this.onView = onView; this.link = link; this.ws = null; this.waiting = []; this.flushing = Promise.resolve(); }
+  static async open(id, onView, link = unheard) {
     const { ret, out } = tabCall("open", JSON.stringify({ replica: id, records: await loadReplica(id) }));
     if (ret === 0xffffffff) throw new Error(out.error);
-    return new Replica(id, ret, onView);
+    return new Replica(id, ret, onView, link);
   }
   // Make the tab's writes durable, in order.
   persist() {
@@ -85,8 +88,10 @@ class Replica {
   }
   connect() {
     const ws = this.ws = new WebSocket(`wss://${location.host}/link?replica=${this.id}`);
-    ws.onopen = () => this.shipUnsent();
+    ws.onopen = () => { this.link.received(); this.shipUnsent(); };
     ws.onmessage = (m) => {
+      this.link.received();
+      if (!m.data) return; // the brain's keepalive
       const { out } = tabCall("down", m.data, this.h);
       if (out.error) return fail("reading a message from the brain", out.error);
       if (out.live) return liveArrived(out.live.live);
@@ -100,7 +105,7 @@ class Replica {
       });
       this.onView?.(fresh);
     };
-    ws.onclose = () => { if (this.ws === ws) { this.onView?.(null); setTimeout(() => this.reconnect(), 1000); } };
+    ws.onclose = () => { this.link.dropped(); if (this.ws === ws) { setTimeout(() => this.reconnect(), 1000); } };
   }
   // Behind a login such as Cloudflare Access, a link that drops may be a
   // session that expired: the login redirects the brain's requests away.
@@ -116,8 +121,9 @@ class Replica {
   shipUnsent() {
     const { out } = tabCall("unsent", undefined, this.h);
     if (out.restored) return restored(this);
-    for (const up of out.ups) this.ws?.send(JSON.stringify(up));
+    for (const up of out.ups) this.send(up);
   }
+  send(up) { this.ws?.send(JSON.stringify(up)); this.link.sent(); }
   status(n) { return tabCall("status", undefined, this.h, n).out; }
   view() { return tabCall("view", undefined, this.h).out; }
   next() { return tabCall("next", undefined, this.h).out; }
@@ -129,7 +135,7 @@ class Replica {
     const { out } = tabCall("say", JSON.stringify(batch), this.h, Date.now());
     if (out.error) { fail(`saying facts ${JSON.stringify(batch.facts)}`, out.error); return out.error; }
     await this.persist();
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(out.up));
+    if (this.ws?.readyState === WebSocket.OPEN) this.send(out.up);
     return new Promise((ok) => this.waiting.push({ n: out.n, ok }));
   }
 }
@@ -150,7 +156,7 @@ export async function boot() {
   let id = sessionStorage.getItem("replica");
   if (!id || !(await hold(id))) { do id = mintReplica(); while (!(await hold(id))); }
   sessionStorage.setItem("replica", id);
-  tab = await Replica.open(id, viewArrived);
+  tab = await Replica.open(id, viewArrived, liveness);
   restoreLocal();
   tab.connect();
   adoptOrphans();
@@ -184,7 +190,7 @@ async function restored(replica) {
   await forget(tab.id);
   let id; do id = mintReplica(); while (!(await hold(id)));
   sessionStorage.setItem("replica", id);
-  tab = await Replica.open(id, viewArrived);
+  tab = await Replica.open(id, viewArrived, liveness);
   tab.connect();
 }
 
