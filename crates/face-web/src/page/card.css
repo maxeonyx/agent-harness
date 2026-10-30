@@ -5,18 +5,13 @@
     cursor: auto; touch-action: pan-x pan-y;
   }
   #panel > .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em 1em; border-bottom: 1px solid var(--line); min-height: 2.9em; cursor: grab; }
-  .mini { cursor: pointer; position: relative; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; background: var(--paper); }
+  .mini { cursor: pointer; position: relative; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--s, var(--ink)); flex: none; background: var(--s, var(--paper)); }
   .mini::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid transparent; }
   .mini.working::after { border-top-color: var(--ink); animation: spin 1.2s linear infinite; }
   .mini.tool::after { border: 1.5px dashed rgba(20, 20, 19, .5); animation: spin 4s linear infinite; }
   .mini.starting { border-style: dashed; }
-  .mini:is(.working, .starting, .listening) { background: var(--working); border-color: var(--working); }
-  .mini.children { background: var(--others); border-color: var(--others); }
-  .mini.needs { background: var(--yours); border-color: var(--yours); }
-  .mini.paused { border-color: var(--paused); background: var(--ground); }
-  .mini.done { background: var(--done); border-color: var(--done); }
-  .mini.failed { background: var(--failed); border-color: var(--failed); }
-  .mini.cancelled { background: var(--line); border-color: var(--paused); border-radius: 30%; }
+  .mini.paused { background: var(--ground); }
+  .mini.cancelled { background: var(--line); border-radius: 30%; }
   /* The card asleep: one button, its name in what shows of it. */
   #panel > .wake { display: none; }
   #panel.asleep { touch-action: none; box-shadow: 0 0 0 2px var(--ink), 0 22px 60px rgba(40, 30, 20, .2); }
@@ -70,7 +65,8 @@
   .prose.entry { position: relative; }
   .prose .copy { position: absolute; right: -.3em; bottom: -2em; font-size: 12px; width: 2em; height: 2em; opacity: 0; }
   .prose:hover .copy, .prose .copy:focus { opacity: 1; }
-  @media (hover: none) { .prose .copy { opacity: .6; } }
+  /* Without hover it stays shown, so it takes its own line rather than cover the next block. */
+  @media (hover: none) { .prose .copy { position: static; display: block; margin: -.4em 0 0 auto; opacity: .6; } }
   .prose > :first-child { margin-top: 0; } .prose > :last-child { margin-bottom: 0; }
   .prose p, .prose ul, .prose ol, .prose pre, .prose blockquote, .prose table { margin: .65em 0; }
   .prose h1, .prose h2, .prose h3, .prose h4 { font-family: var(--serif); line-height: 1.25; margin: 1.1em 0 .45em; }
@@ -179,13 +175,9 @@
   .io.found a { text-decoration: none; } .io.found .host { opacity: .6; }
   .chip { display: inline-flex; align-items: center; gap: .4em; padding: .25em .7em .25em .35em; border: 1px solid var(--line); border-radius: 999px; background: var(--white); font: 600 13px var(--serif); text-decoration: none; color: inherit; }
   .chip:hover { border-color: var(--ink); }
-  .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid var(--ink); display: grid; place-items: center; font: 600 9px var(--serif); }
-  .chip:is(.working, .starting, .listening) .d { background: var(--working); border-color: var(--working); color: var(--paper); }
-  .chip.children .d { background: var(--others); border-color: var(--others); color: var(--paper); }
-  .chip.done .d { background: var(--done); border-color: var(--done); color: var(--paper); }
+  .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid var(--s, var(--ink)); background: var(--s); color: var(--on, inherit); display: grid; place-items: center; font: 600 9px var(--serif); }
+  .chip:is(.paused, .cancelled) .d { background: none; }
   .chip.done { color: var(--muted); }
-  .chip.needs .d { background: var(--yours); border-color: var(--yours); color: var(--paper); }
-  .chip.failed .d { background: var(--failed); border-color: var(--failed); color: var(--paper); }
   .live-text { border-left: 2px solid var(--ink); padding-left: .9em; }
   .live-text::after { content: "▍"; animation: breathe 1s infinite; }
   .exact .io { max-height: none; }

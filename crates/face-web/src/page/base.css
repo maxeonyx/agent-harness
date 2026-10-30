@@ -11,6 +11,15 @@
     --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
     --ease: cubic-bezier(.2, .8, .2, 1);
   }
+  /* A task's state sets its colour here once, as --s, and --on for what is
+     drawn on it; whatever shows a state reads them. Paused and abandoned are
+     hollow: each place shows them unfilled. */
+  :is(.working, .starting, .listening) { --s: var(--working); --on: var(--paper); }
+  .children { --s: var(--others); --on: var(--paper); }
+  .needs { --s: var(--yours); --on: var(--paper); }
+  .done { --s: var(--done); --on: var(--paper); }
+  .failed { --s: var(--failed); --on: var(--paper); }
+  :is(.paused, .cancelled) { --s: var(--paused); --on: var(--muted); }
   * { box-sizing: border-box; }
   /* Scrollbars thin and in the page's colours, wherever they appear. */
   ::-webkit-scrollbar { width: 9px; height: 9px; }
