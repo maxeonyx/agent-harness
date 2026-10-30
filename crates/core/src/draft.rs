@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::context::EntryId;
-use crate::delivery::Read;
 use crate::fact::Rejected;
 use crate::id::{DeliveryId, EventId, ReplicaId, TaskId, ValueId};
 use crate::state::Mark;
@@ -53,8 +52,8 @@ pub enum DraftEvent {
     /// are lost.
     Text(ValueId),
     /// Deliver exactly `text`: the words on his screen, whatever another
-    /// device typed meanwhile, for the session to read when `read` says.
-    Send { text: ValueId, read: Read },
+    /// device typed meanwhile.
+    Send { text: ValueId },
     /// He threw it away. Text typed into it afterwards, on another device
     /// that had not seen the discard, brings it back.
     Discarded,

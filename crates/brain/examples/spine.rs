@@ -19,7 +19,6 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 use std::{env, fs, thread};
 
-use harness_core::delivery::Read;
 use harness_core::draft::DraftEvent;
 use harness_core::fact::{Batch, Fact};
 use harness_core::id::{DeliveryId, ModelCallId};
@@ -104,7 +103,6 @@ in as few words as you can. Now reply only `ready`, and end your turn.",
                 draft,
                 DraftEvent::Send {
                     text: finished.id(),
-                    read: Read::Next,
                 },
             ),
         ],

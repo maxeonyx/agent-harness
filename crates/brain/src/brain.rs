@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
-use harness_core::delivery::{Content, Delivery, Prompt, Read};
+use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::environment::{
     Description, Hello, Host, Limb, LimbKey, LimbKind, LimbRow, Reach,
 };
@@ -450,7 +450,6 @@ impl Brain {
             id: DeliveryId(self.decider.next().event(0)),
             to,
             content: Content::Prompt(prompt),
-            read: Read::Next,
         }));
     }
 

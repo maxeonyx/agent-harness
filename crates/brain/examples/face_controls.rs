@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use std::{env, fs, thread};
 
 use harness_core::attention::{Focus, Ranked, Ranking};
-use harness_core::delivery::{Content, Delivery, Read};
+use harness_core::delivery::{Content, Delivery};
 use harness_core::fact::{Batch, Fact};
 use harness_core::id::{DeliveryId, ModelCallId, TaskId};
 use harness_core::live::Live;
@@ -195,7 +195,6 @@ fn main() {
             id,
             to: top,
             content: Content::Words(words.id()),
-            read: Read::Next,
         })],
     });
     verdict(&mut max, "words", told);
@@ -238,7 +237,6 @@ fn main() {
             id,
             to: other,
             content: Content::Words(more.id()),
-            read: Read::Next,
         })],
     });
     verdict(&mut max, "words to the abandoned task", n);
