@@ -1,0 +1,474 @@
+<!doctype html>
+<!-- Spike S2, "metaballs": a session's spinner as one blob of four metaballs.
+     The centre ball is the session itself (its role letter); around it sit
+     the model (the Claude mark), tool calls (a gear) and Max (a microphone).
+     The one it waits on grows and merges with the centre; going from one to
+     another, the growth passes through the centre. Open the file: no build,
+     no brain. ?state=NAME holds one state; ?pips=N sets the compactions. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spinner: metaballs</title>
+<style>
+  :root {
+    --ground: #f0eee6; --paper: #faf9f5; --line: #e3dfd3; --ink: #141413; --muted: #6b6a64; --faint: #a19f96;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans);
+    background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); background-size: 22px 22px; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; display: grid; gap: 18px; }
+  h1 { margin: 0; font: 600 22px/1.2 var(--serif); }
+  p { margin: 0; color: var(--muted); }
+  button { font: inherit; color: inherit; cursor: pointer; background: var(--paper); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; }
+  button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; }
+  .now { font: 600 15px/1.3 var(--serif); min-height: 1.3em; }
+  .stage { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: stretch; }
+  @media (max-width: 560px) { .stage { grid-template-columns: 1fr; } }
+  .frame { background: rgba(250, 249, 245, .55); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; justify-items: center; align-content: start; }
+  .frame > small { justify-self: start; color: var(--faint); }
+  .mapnode { display: grid; justify-items: center; gap: 2px; padding: 20px 18px 8px; }
+  .mapnode .name { font: 600 13px/1.2 var(--serif); }
+  canvas { display: block; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px 6px; width: 100%; }
+  .cell { display: grid; justify-items: center; text-align: center; font-size: 12px; color: var(--muted); }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; color: var(--muted); }
+  dt { font-weight: 600; color: var(--ink); }
+  dd { margin: 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Spinner: metaballs</h1>
+  <p>One blob. The centre ball is the session; the model, tool calls and Max sit around it. Whatever it waits on grows out of the centre; data shows as soft disks behind it; compactions are dots on a track round its edge.</p>
+  <div class="controls" id="states"></div>
+  <div class="controls">
+    <button id="play">Auto-play</button>
+    <button id="packet">Packet</button>
+    <button id="burst">Burst of packets</button>
+    <button id="compact">Compactions: 2</button>
+    <button id="clear">Clear compactions</button>
+  </div>
+  <div class="now" id="now"></div>
+  <div class="stage">
+    <div class="frame"><small>Large</small><div id="big"></div></div>
+    <div class="frame"><small>Map node</small><div class="mapnode"><div id="node"></div><div class="name">spinner-metaballs</div></div></div>
+  </div>
+  <div class="frame"><small>Every state at map-node size</small><div class="gallery" id="gallery"></div></div>
+  <dl>
+    <dt>Session</dt><dd>The centre ball, with the role letter. When the brain itself works (between the others), the centre grows: the brain is the session doing its own step.</dd>
+    <dt>Model</dt><dd>The Claude mark, in Claude's colour. Before the first byte the ball swells and eases in time, its mark still and faint; streaming, it is full size, the mark turns, and every chunk sends out a disk.</dd>
+    <dt>Tools</dt><dd>A gear, turning in ticks. Background work it listens on is the same gear, smaller, slower and faint.</dd>
+    <dt>Max</dt><dd>A microphone: the move is his, and he answers by talking. The blob goes maroon; each keepalive (every 4 s of quiet) sends out a disk, so if the disks stop, the link has.</dd>
+    <dt>Starting, paused, held, done</dt><dd>Starting: the satellites bud out of the centre in turn. Paused and done: they merge back into one ball, grey or green. Held by the account: the model ball, red and still.</dd>
+    <dt>Data</dt><dd>Each packet starts its own disk behind the active ball, expanding and fading. They overlap; nothing is debounced.</dd>
+    <dt>Compactions</dt><dd>Dots on the blob's outline, offset a little outside it: the latest brightest at twelve o'clock, then clockwise, equally spaced along the outline and never closer to each other than that spacing.</dd>
+  </dl>
+</main>
+<script>
+// Colours: [fill, edge, icon] per state; the whole blob takes the state's.
+const CLAUDE = [217, 119, 87];
+const C = { ink: [20, 20, 19], paper: [250, 249, 245], maroon: [122, 31, 34], green: [79, 138, 85], red: [179, 53, 44],
+  faint: [161, 159, 150], muted: [107, 106, 100], slate: [52, 66, 84] };
+const tint = (c, k) => C.paper.map((p, i) => p + (c[i] - p) * k);
+
+// The balls, in field units (the canvas spans -SPAN..SPAN). Satellites sit
+// at fixed angles: the model at twelve o'clock, tools at four, Max at eight.
+const SATS = { model: -Math.PI / 2, tools: Math.PI / 6, max: 5 * Math.PI / 6 };
+const SPAN = 1.45;
+const IDLE = { r: .17, d: .56 }, ACTIVE = { r: .42, d: .66 };
+
+// A state: which ball is active, the centre's radius, and its colours.
+// t is seconds since the state began, for states that change as they wait.
+const STATES = {
+  first:     { label: "Model, first byte", core: "Model { streaming: false }", active: "model", centre: .3,
+               col: [tint(CLAUDE, .14), CLAUDE, CLAUDE] },
+  streaming: { label: "Model, streaming", core: "Model { streaming: true }", active: "model", centre: .3,
+               col: [tint(CLAUDE, .22), CLAUDE, CLAUDE] },
+  brain:     { label: "Brain", core: "Brain", active: "centre", centre: .54,
+               col: [tint(C.ink, .1), C.ink, C.ink] },
+  tools:     { label: "Tool calls", core: "Calls", active: "tools", centre: .3,
+               col: [tint(C.slate, .13), C.slate, C.slate] },
+  listening: { label: "Background", core: "Listening", active: "tools", centre: .34, size: .32,
+               col: [tint(C.slate, .06), C.faint, C.faint] },
+  max:       { label: "Max", core: "Max", active: "max", centre: .3,
+               col: [C.maroon, C.maroon, C.paper] },
+  held:      { label: "Held", core: "Held", active: "model", centre: .32, size: .36, still: true,
+               col: [tint(C.red, .12), C.red, C.red] },
+  starting:  { label: "Starting", core: "Starting", active: null, centre: .4,
+               col: [C.paper, C.faint, C.ink] },
+  paused:    { label: "Paused", core: "Paused, Parked", active: null, centre: .48, merged: true,
+               col: [[233, 229, 217], C.faint, C.muted] },
+  done:      { label: "Done", core: "Done", active: null, centre: .48, merged: true,
+               col: [C.green, C.green, C.paper] },
+};
+const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
+
+// Icons, 24x24, as Path2D. The Claude mark is Anthropic's (via Simple Icons);
+// the gear and microphone are Lucide's (ISC).
+const ICON = {
+  model: { fill: true, path: new Path2D("m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z") },
+  tools: { fill: false, path: new Path2D("M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0") },
+  max: { fill: false, path: new Path2D("M12 19v3M19 10v2a7 7 0 0 1-14 0v-2M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0z") },
+};
+
+const mix = (a, b, k) => a + (b - a) * k;
+const mixc = (a, b, k) => a.map((x, i) => mix(x, b[i], k));
+const rgba = (c, a = 1) => `rgba(${c.map(Math.round).join()},${a})`;
+const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+
+// The field: each ball a circle's signed distance, joined by a polynomial
+// smooth minimum, so balls closer than K melt together and split apart again.
+const K = .22;
+function field(balls, x, y) {
+  let f = 1e9;
+  for (const b of balls) {
+    if (b.r < .005) continue;
+    const d = Math.hypot(x - b.x, y - b.y) - b.r;
+    const h = Math.max(K - Math.abs(f - d), 0) / K;
+    f = Math.min(f, d) - h * h * K * .25;
+  }
+  return f;
+}
+
+// Marching squares over an n x n grid of the field, at the iso-levels asked
+// for: each level's closed loops, as flat [x0, y0, x1, y1, ...] arrays.
+function contours(balls, n, levels) {
+  const step = 2 * SPAN / n, m = n + 1, val = new Float32Array(m * m);
+  for (let j = 0; j < m; j++) for (let i = 0; i < m; i++) val[j * m + i] = field(balls, -SPAN + i * step, -SPAN + j * step);
+  return levels.map((lv) => trace(val, m, step, lv));
+}
+function trace(val, m, step, lv) {
+  // Edge ids: 2 * vertex + 0 for the edge going right, + 1 for the edge going down.
+  const E = 2 * m * m, nb = new Int32Array(2 * E).fill(-1), px = new Float32Array(E), py = new Float32Array(E);
+  const at = (i, j) => val[j * m + i] - lv;
+  const cross = (e, i0, j0, i1, j1) => {
+    const a = at(i0, j0), b = at(i1, j1), k = a / (a - b);
+    px[e] = -SPAN + (i0 + (i1 - i0) * k) * step;
+    py[e] = -SPAN + (j0 + (j1 - j0) * k) * step;
+    return e;
+  };
+  const link = (a, b) => { nb[2 * a + (nb[2 * a] >= 0)] = b; nb[2 * b + (nb[2 * b] >= 0)] = a; };
+  for (let j = 0; j < m - 1; j++) for (let i = 0; i < m - 1; i++) {
+    const v0 = at(i, j) < 0, v1 = at(i + 1, j) < 0, v2 = at(i + 1, j + 1) < 0, v3 = at(i, j + 1) < 0;
+    const e = [];
+    if (v0 !== v1) e[0] = cross(2 * (j * m + i), i, j, i + 1, j);
+    if (v1 !== v2) e[1] = cross(2 * (j * m + i + 1) + 1, i + 1, j, i + 1, j + 1);
+    if (v3 !== v2) e[2] = cross(2 * ((j + 1) * m + i), i, j + 1, i + 1, j + 1);
+    if (v0 !== v3) e[3] = cross(2 * (j * m + i) + 1, i, j, i, j + 1);
+    const on = [0, 1, 2, 3].filter((k) => e[k] !== undefined);
+    if (on.length === 2) link(e[on[0]], e[on[1]]);
+    else if (on.length === 4) {
+      // A saddle: the cell's centre decides which corners join.
+      const mid = (at(i, j) + at(i + 1, j) + at(i + 1, j + 1) + at(i, j + 1)) / 4 < 0;
+      if (mid === v0) { link(e[0], e[1]); link(e[2], e[3]); } else { link(e[3], e[0]); link(e[1], e[2]); }
+    }
+  }
+  const loops = [], seen = new Uint8Array(E);
+  for (let s = 0; s < E; s++) {
+    if (nb[2 * s] < 0 || seen[s]) continue;
+    const loop = [];
+    let prev = -1, cur = s;
+    while (!seen[cur]) {
+      seen[cur] = 1;
+      loop.push(px[cur], py[cur]);
+      const next = nb[2 * cur] !== prev ? nb[2 * cur] : nb[2 * cur + 1];
+      prev = cur; cur = next;
+      if (cur < 0) break;
+    }
+    if (loop.length >= 6) loops.push(loop);
+  }
+  return loops;
+}
+
+function area(loop) {
+  let a = 0;
+  for (let k = 0; k < loop.length; k += 2) {
+    const l = (k + 2) % loop.length;
+    a += loop[k] * loop[l + 1] - loop[l] * loop[k + 1];
+  }
+  return a / 2;
+}
+function length(loop) {
+  let s = 0;
+  for (let k = 0; k < loop.length; k += 2) { const l = (k + 2) % loop.length; s += Math.hypot(loop[l] - loop[k], loop[l + 1] - loop[k + 1]); }
+  return s;
+}
+
+// The compaction dots on the track (the outline offset outward): the first at
+// twelve o'clock, then clockwise, each the pitch further along the track and
+// at least the pitch away, in a straight line, from every dot before it, so a
+// neck in the blob doesn't bunch them. Few dots keep the pitch; many shrink it
+// to share the track.
+function dots(track, count, pitch) {
+  if (!count || !track) return [];
+  let loop = track;
+  if (area(loop) < 0) { // clockwise on screen, y down
+    loop = [];
+    for (let k = track.length - 2; k >= 0; k -= 2) loop.push(track[k], track[k + 1]);
+  }
+  const n = loop.length / 2, pt = (k) => [loop[2 * (k % n)], loop[2 * (k % n) + 1]];
+  // Start where the track crosses the upward vertical through the centre.
+  let start = 0, sf = 0, top = Infinity;
+  for (let k = 0; k < n; k++) {
+    const [ax, ay] = pt(k), [bx, by] = pt(k + 1);
+    if ((ax < 0) !== (bx < 0)) {
+      const f = ax / (ax - bx), y = ay + (by - ay) * f;
+      if (y < top) { top = y; start = k; sf = f; }
+    }
+  }
+  // Arc length from the start, walking the polyline.
+  const xs = [], ys = [], ss = [];
+  let [x0, y0] = pt(start), [x1, y1] = pt(start + 1);
+  let s = 0, px = x0 + (x1 - x0) * sf, py = y0 + (y1 - y0) * sf;
+  xs.push(px); ys.push(py); ss.push(0);
+  for (let k = 1; k <= n; k++) {
+    const [qx, qy] = pt(start + k);
+    s += Math.hypot(qx - px, qy - py);
+    xs.push(qx); ys.push(qy); ss.push(s);
+    px = qx; py = qy;
+  }
+  const L = s;
+  const p = Math.min(pitch, L / count);
+  let seg = 0;
+  const along = (u) => {
+    while (seg < ss.length - 2 && ss[seg + 1] < u) seg++;
+    const f = (u - ss[seg]) / (ss[seg + 1] - ss[seg] || 1);
+    return [mix(xs[seg], xs[seg + 1], f), mix(ys[seg], ys[seg + 1], f)];
+  };
+  const out = [along(0)];
+  let u = 0;
+  while (out.length < count) {
+    u += p;
+    let q = along(u);
+    while (u < L && out.some(([ox, oy]) => Math.hypot(q[0] - ox, q[1] - oy) < p * .98)) { u += p * .05; q = along(u); }
+    if (u >= L - p * .5) break;
+    out.push(q);
+  }
+  return out;
+}
+
+// A spring with a little give, so balls overshoot and settle like liquid.
+const spring = (v) => ({ v, vel: 0 });
+function pull(s, goal, dt) {
+  s.vel += ((goal - s.v) * 170 - s.vel * 17) * dt;
+  s.v += s.vel * dt;
+}
+
+// One spinner of css size px, showing a session shared with every other
+// spinner of it, with role letter `letter`.
+function spinner(px, session, letter) {
+  const cv = document.createElement("canvas"), dpr = Math.min(3, window.devicePixelRatio || 1);
+  cv.width = cv.height = Math.round(px * dpr);
+  cv.style.width = cv.style.height = px + "px";
+  const g = cv.getContext("2d"), unit = px * dpr / (2 * SPAN), onePx = 1 / unit * dpr;
+  const grid = clamp(Math.round(px * dpr / 4), 28, 84);
+  const balls = { centre: { x: 0, y: 0, r: spring(.4), d: spring(0) } };
+  for (const k in SATS) balls[k] = { x: 0, y: 0, r: spring(IDLE.r), d: spring(IDLE.d) };
+  let col = STATES[session.state].col.map((c) => c.slice()), spin = 0, gear = 0, last = performance.now();
+
+  function goals(now) {
+    const s = STATES[session.shown(now)], t = (now - session.since) / 1000, out = {};
+    out.centre = { r: s.centre, d: 0 };
+    for (const k in SATS) {
+      let g = s.merged ? { r: .12, d: .15 } : { ...IDLE };
+      if (s.active === k) g = { r: s.size || ACTIVE.r, d: ACTIVE.d };
+      if (session.shown(now) === "first" && k === "model") g.r = .36 + .06 * Math.sin(t * 5); // swelling, in time
+      if (session.shown(now) === "starting") { // budding out of the centre in turn
+        const ph = (t * .9 - Object.keys(SATS).indexOf(k) / 3) % 1;
+        g = { r: .2 * Math.sin(Math.PI * ph), d: .25 + .5 * ph };
+      }
+      out[k] = g;
+    }
+    return out;
+  }
+
+  function frame(now) {
+    const dt = Math.min(1 / 30, (now - last) / 1000);
+    last = now;
+    const name = session.shown(now), st = STATES[name], goal = goals(now);
+    for (const k in balls) {
+      const b = balls[k];
+      pull(b.r, goal[k].r, dt); pull(b.d, goal[k].d, dt);
+      const a = SATS[k] ?? 0, wob = st.still ? 0 : .015 * Math.sin(now / 700 + a * 3);
+      b.x = Math.cos(a) * (b.d.v + wob); b.y = Math.sin(a) * (b.d.v + wob);
+      b.r.v = Math.max(0, b.r.v);
+    }
+    const kc = 1 - Math.exp(-dt / .18);
+    col = col.map((c, i) => mixc(c, st.col[i], kc));
+    if (name === "streaming") spin += dt * 1.4;
+    if (name === "tools" || name === "listening") {
+      const period = name === "tools" ? .6 : 2, t = (now - session.since) / 1000, n = Math.floor(t / period), f = Math.min(1, (t / period - n) * 3);
+      gear = (n + 1 - Math.pow(1 - f, 3)) * Math.PI / 4;
+    }
+
+    const list = Object.values(balls).map((b) => ({ x: b.x, y: b.y, r: b.r.v }));
+    const trackOff = .05 + 3 * onePx;
+    const [blob, track] = contours(list, grid, [0, trackOff]);
+
+    g.setTransform(unit, 0, 0, unit, cv.width / 2, cv.height / 2);
+    g.clearRect(-SPAN, -SPAN, 2 * SPAN, 2 * SPAN);
+
+    // Liveness: one disk per packet, behind the active ball, each on its own.
+    const src = balls[st.active] || balls.centre;
+    session.packets = session.packets.filter((p0) => now - p0 < 1400);
+    for (const p0 of session.packets) {
+      const f = clamp((now - p0) / 1400, 0, 1), e = 1 - Math.pow(1 - f, 3);
+      g.beginPath();
+      g.arc(src.x, src.y, src.r.v + .34 * e, 0, 2 * Math.PI);
+      g.fillStyle = rgba(col[1], .14 * Math.pow(1 - f, 1.6));
+      g.fill();
+    }
+
+    // The blob: every loop of the outline, smoothed through edge midpoints.
+    g.beginPath();
+    for (const loop of blob) {
+      const n = loop.length / 2;
+      g.moveTo((loop[0] + loop[2]) / 2, (loop[1] + loop[3]) / 2);
+      for (let k = 1; k <= n; k++) {
+        const a = k % n, b = (k + 1) % n;
+        g.quadraticCurveTo(loop[2 * a], loop[2 * a + 1], (loop[2 * a] + loop[2 * b]) / 2, (loop[2 * a + 1] + loop[2 * b + 1]) / 2);
+      }
+      g.closePath();
+    }
+    g.fillStyle = rgba(col[0]);
+    g.fill("evenodd");
+    g.lineWidth = 1.3 * onePx;
+    g.strokeStyle = rgba(col[1]);
+    g.stroke();
+
+    // Icons, fading in as their ball gets big enough to hold one.
+    for (const k in SATS) {
+      const b = balls[k], r = b.r.v, show = clamp((r * unit / dpr - 5) / 6, 0, 1);
+      if (show <= 0) continue;
+      const active = st.active === k, ic = ICON[k], s = r * 1.15 / 24;
+      g.save();
+      g.translate(b.x, b.y);
+      if (k === "model") g.rotate(spin);
+      if (k === "tools") g.rotate(gear);
+      g.scale(s, s);
+      g.translate(-12, -12);
+      g.globalAlpha = show * (active ? (name === "first" ? .55 : 1) : .45);
+      const c = rgba(active ? col[2] : col[1]);
+      if (ic.fill) { g.fillStyle = c; g.fill(ic.path); } else {
+        g.strokeStyle = c; g.lineWidth = Math.max(2, 1.4 * onePx / s); g.lineCap = g.lineJoin = "round"; g.stroke(ic.path);
+      }
+      g.restore();
+    }
+
+    // The role letter, on the centre: ink on a light blob, paper on a dark one.
+    const cr = balls.centre.r.v, light = (col[0][0] * .3 + col[0][1] * .59 + col[0][2] * .11) / 255;
+    g.fillStyle = rgba(light > .6 ? C.ink : C.paper, .92);
+    g.font = `600 ${(Math.max(cr * 1.25, 9 * onePx)).toFixed(3)}px ${getComputedStyle(document.body).getPropertyValue("--serif")}`;
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(letter, 0, cr * .05);
+
+    // Compactions: dots on the longest loop of the track.
+    const outer = track.reduce((a, l) => (a && length(a) >= length(l) ? a : l), null);
+    const ds = dots(outer, session.pips, Math.max(.2, 9 * onePx));
+    ds.forEach(([x, y], i) => {
+      g.beginPath();
+      g.arc(x, y, Math.max(1.4 * onePx, .035), 0, 2 * Math.PI);
+      g.fillStyle = rgba(C.ink, Math.max(.22, .7 - i * .07));
+      g.fill();
+    });
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  return cv;
+}
+
+// A session: its state, its packets (times), its compactions. Going from one
+// satellite straight to another, it shows the brain for a moment, so the
+// growth passes through the centre. A streaming model sends chunks at
+// irregular short gaps; running tool calls send output now and then.
+function session(state, pips = 2) {
+  const s = { state, since: performance.now(), via: 0, pips, packets: [], lastData: performance.now(),
+    shown(now) { return now < this.via ? "brain" : this.state; },
+    set(next) {
+      const now = performance.now(), a = satOf(this.shown(now)), b = satOf(next);
+      this.via = a && b && a !== b ? now + 260 : 0;
+      this.state = next; this.since = now;
+    },
+    packet() { this.packets.push(performance.now()); this.lastData = performance.now(); } };
+  const feed = () => {
+    const gap = { streaming: [30, 150], tools: [300, 1200] }[s.state];
+    if (gap) s.packet();
+    setTimeout(feed, gap ? gap[0] + Math.random() * (gap[1] - gap[0]) : 200);
+  };
+  feed();
+  return s;
+}
+
+const params = new URLSearchParams(location.search);
+const one = session(STATES[params.get("state")] ? params.get("state") : "first", +(params.get("pips") ?? 2));
+document.getElementById("big").append(spinner(260, one, "C"));
+document.getElementById("node").append(spinner(64, one, "C"));
+const all = [one];
+
+const nowEl = document.getElementById("now");
+const show = () => {
+  nowEl.textContent = STATES[one.state].label;
+  for (const b of document.querySelectorAll("#states button")) b.classList.toggle("on", b.dataset.state === one.state);
+};
+for (const [name, s] of Object.entries(STATES)) {
+  const b = document.createElement("button");
+  b.dataset.state = name; b.textContent = s.label;
+  b.onclick = () => { stopPlay(); one.set(name); show(); };
+  document.getElementById("states").append(b);
+}
+show();
+
+// Packets: one, or a burst of 24 at random 10-70 ms gaps, each its own disk.
+document.getElementById("packet").onclick = () => one.packet();
+document.getElementById("burst").onclick = () => {
+  let k = 0;
+  const go = () => { one.packet(); if (++k < 24) setTimeout(go, 10 + Math.random() * 60); };
+  go();
+};
+const compactBtn = document.getElementById("compact");
+const showPips = () => { compactBtn.textContent = `Compactions: ${one.pips}`; };
+compactBtn.onclick = () => { one.pips++; showPips(); };
+document.getElementById("clear").onclick = () => { one.pips = 0; showPips(); };
+showPips();
+
+// The link: a keepalive is a packet the brain sends after 4 s of quiet.
+setInterval(() => { for (const s of all) if (performance.now() - s.lastData >= 4000) s.packet(); }, 250);
+
+// Auto-play: a realistic session. [state, seconds, event]
+const SCRIPT = [
+  ["first", 1.6], ["streaming", 2.4], ["brain", .3], ["tools", 3], ["brain", .25],
+  ["first", .9], ["streaming", 1.6], ["brain", .3], ["listening", 3.5], ["brain", .25],
+  ["first", 1.2], ["streaming", 3], ["brain", .4, "compact"], ["max", 9], ["brain", .3],
+];
+let playing = null;
+function stopPlay() { clearTimeout(playing?.step); playing = null; document.getElementById("play").classList.remove("on"); }
+function play(i = 0) {
+  const [state, secs, event] = SCRIPT[i % SCRIPT.length];
+  one.set(state);
+  if (event === "compact") { one.pips++; showPips(); }
+  show();
+  playing.step = setTimeout(() => play(i + 1), secs * 1000);
+}
+document.getElementById("play").onclick = (e) => {
+  if (playing) return stopPlay();
+  playing = {}; e.target.classList.add("on"); play();
+};
+if (!params.has("state")) { playing = {}; document.getElementById("play").classList.add("on"); play(); }
+
+// Every state at once, each its own session.
+for (const [name, s] of Object.entries(STATES)) {
+  const ses = session(name, 3);
+  all.push(ses);
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.title = `Core: Waiting::${s.core}`;
+  cell.append(spinner(64, ses, "C"), s.label);
+  document.getElementById("gallery").append(cell);
+}
+</script>
+</body>
+</html>
