@@ -110,9 +110,11 @@
   .card .label { font: 600 12px var(--sans); color: var(--muted); margin-bottom: .35em; display: flex; gap: .6em; align-items: baseline; }
   .card.mandate { background: transparent; }
   .card.mandate .prose { font-size: 15px; }
-  .card.compacted { background: transparent; border-style: dashed; }
-  .card.compacted > .quiet { margin-bottom: .35em; }
-  .card.compacted .replaced > .chunk { border-left: 2px solid var(--line); padding-left: .75em; margin-top: .5em; }
+  .card.carried { background: transparent; }
+  .compaction > .earlier { font: 12px var(--sans); color: var(--faint); text-align: center; padding: .5em 0 1em; }
+  .compaction > .replaced { opacity: .75; }
+  .compaction > .divider { display: flex; align-items: center; gap: .75em; margin: 1.2em 0; font: 600 12px var(--sans); color: var(--muted); }
+  .compaction > .divider::before, .compaction > .divider::after { content: ""; flex: 1; border-top: 1.5px solid var(--line); }
   .card.clip .prose { max-height: 13em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
   .more-link { font-size: 12.5px; color: var(--maroon); margin-top: .3em; cursor: pointer; }
   details > summary.more-link { margin: .1em 0 .3em 1em; }

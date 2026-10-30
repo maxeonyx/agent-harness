@@ -55,7 +55,11 @@ function appendChain(s, chain, t) {
     const into = el("div", "chunk");
     into.dataset.entry = e.id;
     if (s.exact) exactEntry(into, e);
-    else entry(s, into, e, i, t, ids[i - 1]);
+    else {
+      const carry = carryBefore(chain, i);
+      if (carry) into.append(compaction(carry, t));
+      entry(s, into, e, i, t, ids[i - 1]);
+    }
     into.dataset.role = e.role;
     s.rendered.push({ id: e.id, el: into });
     const tail = $(".tail", logEl);
@@ -79,7 +83,9 @@ export function blocksOf(e) {
   return Array.isArray(c) ? c : [];
 }
 
-function entry(s, into, e, index, t, parent) {
+// `only` draws part of a message: its tool results ("results"), or all
+// but them ("words").
+function entry(s, into, e, index, t, parent, only) {
   if (e.role === "root") { into.append(rootEntry(e)); return; }
   const blocks = blocksOf(e);
   // What the harness sent: each block as whoever wrote it, by the face's
@@ -94,7 +100,8 @@ function entry(s, into, e, index, t, parent) {
     blocks.forEach((b, k) => {
       const who = by[k] || { by: "harness" };
       if (run && run.by !== who.by) run = null;
-      if (b.type === "tool_result") { result(s, b); return; }
+      if (b.type === "tool_result") { if (only !== "words") result(s, b); return; }
+      if (only === "results") return;
       closeGroup(s);
       if (b.type === "image") { const img = el("img"); img.src = `data:${b.source?.media_type};base64,${b.source?.data}`; img.style.maxWidth = "100%"; into.append(img); return; }
       if (b.type !== "text" || who.by === "label") return;
@@ -103,7 +110,7 @@ function entry(s, into, e, index, t, parent) {
         if (run) { $(".bubble", run.el).textContent += `\n${text}`; return; }
         run = { by: "max", el: said(text, clock(who.at)) };
         // His message: edit it.
-        if (!carry && !$(".moves", into)) {
+        if (!carry && !s.past && !$(".moves", into)) {
           const bubble = $(".bubble", run.el);
           run.el.append(moves([
             ["edit", "Edit", "Edit this message: the box holds it, and sending replaces it and what followed", () => editMessage(t.id, parent, bubble.textContent)],
@@ -113,10 +120,12 @@ function entry(s, into, e, index, t, parent) {
       } else if (who.by === "prompt") {
         into.append(prompted(who.prompt, text));
       } else if (who.by === "compacted") {
-        if (!run) {
-          run = { by: who.by, el: compacted(s, parent, who.from, t, text) };
-          into.append(run.el);
-        } else run.el.append(markdown(text));
+        // The harness's framing is its note; the summary is the agent's own.
+        const carried = text.match(/^What you carried:\n\n([\s\S]*)$/);
+        if (!carried) { into.append(note(text)); return; }
+        const card = el("div", "entry card carried");
+        card.append(el("div", "label", "What it carried"), markdown(carried[1]));
+        into.append(card);
       } else if (who.by === "brief" || who.by === "mandate") {
         if (!run) {
           run = { by: who.by, el: el("div", "entry card mandate") };
@@ -229,27 +238,75 @@ function foldRow(name, summary, glimpse, detail) {
   return row;
 }
 
-// A compaction, where it happened: the summary the agent carried on with,
-// and what it replaced (the work after `parent`, up to `from`), folded
-// until opened.
-function compacted(s, parent, from, t, framing) {
-  const card = el("div", "entry card compacted");
-  const replaced = el("details", "replaced");
-  replaced.append(el("summary", "more-link", "What it replaced"));
-  replaced.ontoggle = async () => {
-    if (!replaced.open || replaced.dataset.done) return;
-    replaced.dataset.done = "1";
-    const chain = (await contextOf(from)) || [];
-    // A fresh compaction's new root is not on the old chain: all of it
-    // after its root was replaced.
-    const at = Math.max(chain.findIndex((e) => e.id === parent), 0);
-    const sub = { rows: new Map(), group: null, rendered: chain.slice(0, at + 1).map((e) => ({ id: e.id })), exact: false };
-    const body = el("div", "chunk");
-    for (let i = at + 1; i < chain.length; i++) entry(sub, body, chain[i], i, t, chain[i - 1].id);
-    replaced.append(body);
-  };
-  card.append(quiet(framing), replaced);
-  return card;
+// A compaction, as it happened, where its new context starts: what it
+// replaced, drawn once Max scrolls up to it; the harness's words the agent
+// compacted on, and its compaction call; then a line across. The new
+// context follows: a fresh one's root, then the carry.
+const isCarry = (e) => e?.by?.some((w) => w?.by === "compacted");
+// The carry whose compaction is drawn before entry `i`, and the checkpoint
+// it went back to (none for a fresh context): a fresh context's before its
+// root, one onto a checkpoint before itself.
+function carryBefore(chain, i) {
+  if (chain[i].role === "root") return isCarry(chain[i + 1]) ? { carry: chain[i + 1] } : null;
+  return i > 1 && isCarry(chain[i]) ? { carry: chain[i], onto: chain[i - 1].id } : null;
+}
+function compaction({ carry, onto }, t) {
+  const from = carry.by.find((w) => w?.by === "compacted").from;
+  const box = el("div", "compaction");
+  const earlier = el("div", "earlier", "Earlier context"), last = el("div"), line = el("div", "divider");
+  line.append(el("span", null, onto ? "Compacted back to a checkpoint" : "Compacted into a new context"));
+  box.append(earlier, last, line);
+  contextOf(from).then((old) => {
+    if (!old) return;
+    const start = onto ? old.findIndex((e) => e.id === onto) + 1 : 0;
+    const end = old.length - 1;
+    const call = old[end].role === "assistant" && blocksOf(old[end]).some((b) => b.type === "tool_use" && b.name.startsWith("compact"));
+    // The message the call answered: its words show with the call, its
+    // results with the calls above that they answer.
+    const said = call && end - 1 >= start && old[end - 1].role === "user" ? end - 1 : -1;
+    const only = (i) => i === said ? "results" : undefined;
+    if (call) {
+      line.lastChild.textContent += ` at ${clock(old[end].response?.ended)}`;
+      keep(line, () => {
+        const s = { rows: new Map(), group: null, past: true };
+        if (said >= 0) drawPast(s, last, old, said, said + 1, t, () => "words");
+        drawPast(s, last, old, end, end + 1, t);
+      });
+    } else line.lastChild.textContent = "Full: the harness started the context again";
+    const to = call ? end : end + 1;
+    if (start >= to) { earlier.remove(); return; }
+    onSight(earlier, () => {
+      const body = el("div", "replaced");
+      drawPast({ rows: new Map(), group: null, past: true }, body, old, start, to, t, only);
+      return body;
+    });
+  });
+  return box;
+}
+// Entries `from` to `to` of a context that is no longer the task's.
+function drawPast(s, into, chain, from, to, t, only = () => undefined) {
+  for (let i = from; i < to; i++) {
+    const chunk = el("div", "chunk");
+    const carry = carryBefore(chain, i);
+    if (carry) chunk.append(compaction(carry, t));
+    entry(s, chunk, chain[i], i, t, chain[i - 1]?.id, only(i));
+    into.append(chunk);
+  }
+}
+// `placeholder` replaced by what `draw` makes, once Max scrolls near it.
+function onSight(placeholder, draw) {
+  const seen = new IntersectionObserver((sighted) => {
+    if (!sighted.some((x) => x.isIntersecting)) return;
+    seen.disconnect();
+    keep(placeholder.nextElementSibling, () => placeholder.replaceWith(draw()));
+  }, { root: scrollEl, rootMargin: "200px 0px 0px 0px" });
+  seen.observe(placeholder);
+}
+// A change above `anchor` that leaves what Max sees where it was.
+function keep(anchor, change) {
+  const y = anchor.getBoundingClientRect().top;
+  change();
+  scrollEl.scrollTop += anchor.getBoundingClientRect().top - y;
 }
 
 // Words in a bubble on the right: Max's, or what his user is to an agent.
@@ -348,7 +405,9 @@ function toolRow(s, b, t) {
   detail.append(readable(unsummarised(input, b.name === "background")));
   const row = foldRow(name, summary, gist(inner), detail);
   const line = $(".line", row);
-  line.append(el("span", "st run", ""));
+  // A compaction call has no result: the context it would go to is gone.
+  const compact = b.name.startsWith("compact");
+  line.append(el("span", compact ? "st" : "st run", compact ? "✓" : ""));
   const path = inner.path;
   if (path && FILES.test(path) && (b.name === "write" || input.tool === "write")) {
     const open = el("button", "open-file", "open"); open.onclick = (e) => { e.stopPropagation(); viewFile(path, inner.content); };
@@ -358,11 +417,6 @@ function toolRow(s, b, t) {
   if (b.name === "spawn" || b.name === "add_sibling" || (b.name === "background" && input.tool === "spawn")) {
     row.members = el("div", "members");
     row.append(row.members);
-  }
-  if (b.name.startsWith("compact")) {
-    const q = el("div", "card");
-    q.append(el("div", "label", input.fresh ? "Compacting into a new context" : "Compacting"), markdown(input.carry ?? input.summary ?? ""));
-    row.insertBefore(q, detail);
   }
   s.rows.set(b.id, { row, b, inner, results: new Map(), open: new Set() });
   fillMembers(s, b.id);
