@@ -106,7 +106,7 @@ function entry(s, into, e, index, t, parent) {
         if (!carry && !$(".moves", into)) {
           const bubble = $(".bubble", run.el);
           run.el.append(moves([
-            ["✎", "Edit", "Edit this message: the box holds it, and sending replaces it and what followed", () => editMessage(t.id, parent, bubble.textContent)],
+            ["edit", "Edit", "Edit this message: the box holds it, and sending replaces it and what followed", () => editMessage(t.id, parent, bubble.textContent)],
           ]));
         }
         into.append(run.el);
@@ -146,7 +146,9 @@ function entry(s, into, e, index, t, parent) {
       const p = markdown(b.text || "");
       p.classList.add("entry");
       for (const a of p.querySelectorAll('a[title^="cite: "]')) { a.className = "cite"; a.title = a.title.slice(6); }
-      const html = p.innerHTML;
+      const shown = p.cloneNode(true);
+      $(".raw-toggle", shown).remove();
+      const html = shown.innerHTML;
       const copy = icon("copy", "copy", "Copy");
       copy.onclick = () => copied(copy, b.text || "", html);
       p.append(copy);
@@ -156,10 +158,6 @@ function entry(s, into, e, index, t, parent) {
     } else if (b.type === "web_search_tool_result" || b.type === "web_fetch_tool_result") {
       served(s, b);
     }
-  }
-  // A response that ended a turn: go back to it.
-  if (!blocks.some((b) => b.type === "tool_use")) {
-    into.append(moves([["⤺", "Back to here", "Go back to this reply: what followed stays as another version", () => moveBack(e.id, "Back")]]));
   }
   const r = e.response;
   if (r && r.ended) {
@@ -224,8 +222,8 @@ function fold(...head) {
 function foldRow(name, summary, glimpse, detail) {
   const row = el("div", "row"), line = el("div", "line");
   line.append(el("span", "tool", name));
-  if (summary) line.append(el("span", "sum", summary));
-  line.append(el("span", "gist", glimpse));
+  // The summary says what the call is for; its arguments are one click further.
+  line.append(summary ? el("span", "sum", summary) : el("span", "gist", glimpse));
   line.onclick = () => row.classList.toggle("expanded");
   row.append(line, detail);
   return row;
@@ -280,11 +278,20 @@ function note(text) {
   n.append(quiet(text));
   return n;
 }
-// The harness's words, one quiet line of Markdown until clicked.
+// The harness's words, one quiet line of Markdown, opened to all of it
+// when that line cuts it short.
+const cuts = new ResizeObserver((seen) => {
+  for (const { target: q } of seen) {
+    if (q.classList.contains("full")) continue;
+    const parts = [...q.children].filter((c) => !c.matches(".raw-toggle"));
+    q.classList.toggle("cut", parts.length > 1 || parts.some((c) => c.scrollWidth > c.clientWidth || c.scrollHeight > c.clientHeight + 1));
+  }
+});
 function quiet(text) {
   const q = markdown(text.replace(/^\[harness\] /, ""));
   q.classList.add("quiet");
-  q.onclick = (e) => { if (!e.target.closest("a") && !getSelection().toString()) q.classList.toggle("full"); };
+  q.onclick = (e) => { if (q.classList.contains("cut") && !e.target.closest("a") && !getSelection().toString()) q.classList.toggle("full"); };
+  cuts.observe(q);
   return q;
 }
 // What Max copies: the Markdown as plain text, and as rich text where it
@@ -316,14 +323,9 @@ function groupHead(g) {
   const n = g.rows.length;
   g.el.classList.toggle("one", n === 1);
   if (n === 1) return;
-  let what;
-  if (g.rows.some((r) => r.dataset.summary)) what = g.rows.map((r) => r.dataset.summary || r.dataset.tool).join(" → ");
-  else {
-    const counts = {};
-    for (const r of g.rows) counts[r.dataset.tool] = (counts[r.dataset.tool] || 0) + 1;
-    what = Object.entries(counts).map(([k, v]) => v > 1 ? `${k} ×${v}` : k).join(", ");
-  }
-  g.head.replaceChildren(el("span", "what", what), el("span", "n", `${n} calls`));
+  const what = el("span", "what");
+  what.append(...g.rows.flatMap((r, i) => [...(i ? [" → "] : []), el("span", "tool", $(".tool", r).textContent)]));
+  g.head.replaceChildren(what, el("span", "n", `${n} calls`));
 }
 function closeGroup(s) { s.group = null; }
 
@@ -345,8 +347,6 @@ function toolRow(s, b, t) {
   const detail = el("div", "detail");
   detail.append(readable(unsummarised(input, b.name === "background")));
   const row = foldRow(name, summary, gist(inner), detail);
-  row.dataset.tool = b.name;
-  row.dataset.summary = summary;
   const line = $(".line", row);
   line.append(el("span", "st run", ""));
   const path = inner.path;
@@ -354,20 +354,18 @@ function toolRow(s, b, t) {
     const open = el("button", "open-file", "open"); open.onclick = (e) => { e.stopPropagation(); viewFile(path, inner.content); };
     line.insertBefore(open, line.lastChild);
   }
-  // What a spawn or add_sibling started, beside it: each opens where it is
-  // on the map.
+  // What a spawn or add_sibling started, under its parameters.
   if (b.name === "spawn" || b.name === "add_sibling" || (b.name === "background" && input.tool === "spawn")) {
-    const chips = el("div", "chips");
-    row.insertBefore(chips, detail);
-    row.chips = chips;
+    row.members = el("div", "members");
+    row.append(row.members);
   }
   if (b.name.startsWith("compact")) {
     const q = el("div", "card");
     q.append(el("div", "label", input.fresh ? "Compacting into a new context" : "Compacting"), markdown(input.carry ?? input.summary ?? ""));
     row.insertBefore(q, detail);
   }
-  s.rows.set(b.id, { row, b, inner });
-  fillChips(s, b.id);
+  s.rows.set(b.id, { row, b, inner, results: new Map(), open: new Set() });
+  fillMembers(s, b.id);
   return row;
 }
 function unsummarised(input, wrapped) {
@@ -410,15 +408,39 @@ function joined(blocks) {
   }
   return out;
 }
-function fillChips(s, toolUse) {
+// The agents a call started: a pill to each while it works, and once it
+// is done a line, opened to its part of the call's result. Each name goes
+// to the agent. A part no agent here answers to (one the map has not
+// shown yet) is a line by its name alone.
+function fillMembers(s, toolUse) {
   const r = s.rows.get(toolUse);
-  if (!r?.row.chips) return;
+  if (!r?.row.members) return;
   const members = view.tasks.filter((x) => x.started_by === toolUse).sort(order);
-  const key = JSON.stringify(members.map((m) => [m.id, look(m).cls, glyph(m), shortName(m)]));
-  if (r.row.chips.dataset.key === key) return;
-  r.row.chips.dataset.key = key;
-  r.row.chips.replaceChildren(...members.map(chip));
+  const partOf = (m) => r.results.has(m.name) ? m.name : shortName(m);
+  const key = JSON.stringify([members.map((m) => [m.id, look(m).cls, glyph(m), shortName(m)]), [...r.results.keys()], [...r.open]]);
+  if (r.row.members.dataset.key === key) return;
+  r.row.members.dataset.key = key;
+  const working = members.filter((m) => !isDone(m) && !r.results.has(partOf(m)));
+  const named = new Set(members.map(partOf));
+  const lines = [
+    ...members.filter((m) => !working.includes(m)).map((m) => memberLine(r, partOf(m), m)),
+    ...[...r.results.keys()].filter((n) => !named.has(n)).map((n) => memberLine(r, n, null)),
+  ];
+  const pills = el("div", "chips");
+  pills.append(...working.map(chip));
+  r.row.members.replaceChildren(...lines, ...(working.length > 0 ? [pills] : []));
 }
+function memberLine(r, name, m) {
+  const said = r.results.get(name);
+  const d = el("div", `member${r.open.has(name) ? " open" : ""}${said === undefined ? "" : " has"}`);
+  const line = el("div", "line");
+  line.append(m ? chip(m) : el("span", "tool", name), el("span", "gist", said === undefined ? "" : firstLine(said)));
+  if (said !== undefined) line.onclick = (e) => { if (e.target.closest("a")) return; if (!r.open.delete(name)) r.open.add(name); d.classList.toggle("open"); };
+  d.append(line);
+  if (said !== undefined) d.append(markdown(said));
+  return d;
+}
+const firstLine = (text) => text.split("\n").map((l) => l.replace(/^[#>*\-\s]+/, "").replace(/[*_`]/g, "")).find((l) => l.trim()) || "";
 function chip(m) {
   const l = look(m);
   const a = el("a", `chip ${l.cls}`);
@@ -428,12 +450,29 @@ function chip(m) {
   a.title = l.text;
   return a;
 }
+// A scope's result, each agent's part under its name (harness-program's
+// `meta::result`): `## name` alone in a text block, for a name the call
+// gave, then what it said.
+function parts(content, names) {
+  if (!Array.isArray(content)) return null;
+  const out = new Map();
+  let name = null;
+  for (const b of content.map((x) => x.type === "text" ? x.text : `[${x.type}]`)) {
+    const head = /^## ([^\n]+)$/.exec(b);
+    if (head && names.has(head[1])) { name = head[1]; out.set(name, ""); continue; }
+    if (name === null) return null;
+    out.set(name, [out.get(name), b].filter((x) => x).join("\n\n"));
+  }
+  return out;
+}
 // Moving the chat: a row of small buttons under an entry, refused with
 // the reason while the task cannot move.
 function moves(list) {
   const row = el("div", "moves");
   for (const [glyph, label, title, run] of list) {
-    const b = el("button", "mv", `${glyph} ${label}`);
+    const b = el("button", "mv");
+    b.innerHTML = `<svg viewBox="0 0 24 24">${ICONS[glyph]}</svg>`;
+    b.append(label);
     b.type = "button"; b.title = title;
     b.onclick = (ev) => { ev.stopPropagation(); run(); };
     row.append(b);
@@ -455,7 +494,7 @@ function versionArrows(v, role) {
     const b = el("button", "mv", word);
     b.type = "button"; b.disabled = !to;
     b.title = word === "‹" ? "The version before" : "The version after";
-    b.onclick = (ev) => { ev.stopPropagation(); moveBack(to, "Version"); };
+    b.onclick = (ev) => { ev.stopPropagation(); moveBack(to); };
     return b;
   };
   if (v.of) d.append(go(v.prev, "‹"), el("span", "n", `${v.n}/${v.of}`), go(v.next, "›"));
@@ -473,13 +512,13 @@ export function unmovable(t) {
   if (["model", "calls", "starting"].includes(t.waiting?.kind)) return "it is working: stop it first";
   return null;
 }
-async function moveBack(to, what) {
+async function moveBack(to) {
   const t = byId[logState?.id];
   const blocked = unmovable(t);
-  if (blocked) return say(`${what}: ${blocked}`, true);
+  if (blocked) return say(`Version: ${blocked}`, true);
   if (!to) return;
   const why = await act({ Task: [t.id, { Moved: { Back: { to } } }] });
-  if (why) say(`${what}: ${why}`, true);
+  if (why) say(`Version: ${why}`, true);
 }
 
 // A tool use's result, shown in its row: again, if a move back drew it anew.
@@ -505,12 +544,9 @@ function result(s, b) {
     open.onclick = (e) => { e.stopPropagation(); viewFile(path, raw); };
     $(".line", r.row).insertBefore(open, st);
   }
-  if (r.b.name === "spawn") {
-    const card = el("div", "card result");
-    card.append(markdown(text));
-    const d = el("details", "res"); d.append(el("summary", "more-link", "Their results"), card);
-    r.row.insertBefore(d, detail);
-  }
+  // A spawn's result is its agents' parts, each in its agent's line.
+  const byAgent = r.b.name === "spawn" && !b.is_error ? parts(b.content, new Set((r.inner.tasks || []).map((x) => x.name))) : null;
+  if (byAgent) { r.results = byAgent; fillMembers(s, b.tool_use_id); return; }
   for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") { const img = el("img", "res"); img.src = `data:${x.source?.media_type};base64,${x.source?.data}`; img.style.maxWidth = "100%"; detail.append(img); }
   detail.append(out);
 }
@@ -542,6 +578,8 @@ function viewFile(path, content) {
   v.hidden = false;
   const head = el("header");
   const raw = el("button", "btn", "Raw"), close = el("button", "x"); close.title = "Close";
+  // Markdown has its own Raw.
+  raw.hidden = /\.(md|markdown)$/i.test(path);
   head.append(el("span", "path", path), raw, close);
   const body = el("div", "content");
   const show = (asRaw) => {
@@ -564,7 +602,7 @@ function viewFile(path, content) {
 function renderTail(s, t) {
   let tail = $(".tail", logEl);
   if (!tail) { tail = el("div", "tail"); logEl.append(tail); }
-  for (const [id] of s.rows) fillChips(s, id);
+  for (const [id] of s.rows) fillMembers(s, id);
   logEl.classList.toggle("unmovable", !!unmovable(t));
   // Running calls of the round: their rows show them running.
   for (const c of t.waiting?.kind === "calls" ? t.waiting.calls : []) {

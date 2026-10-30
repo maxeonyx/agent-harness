@@ -41,6 +41,8 @@ export const ICONS = {
   find: '<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   toward: '<path d="M9 5l7 7-7 7"/>',
+  down: '<path d="M12 5v14M5.5 12.5 12 19l6.5-6.5"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/>',
 };
 export function icon(name, cls, title) {
@@ -80,6 +82,16 @@ export function markdown(text) {
     if (lang === "mermaid") diagram(code.parentElement, code.textContent);
     else if (lang && window.hljs?.getLanguage(lang)) hljs.highlightElement(code);
   }
+  // Every passage keeps its source: Raw shows the Markdown as written.
+  const raw = el("button", "raw-toggle", "Raw");
+  raw.type = "button"; raw.title = "The Markdown as written";
+  raw.onclick = (e) => {
+    e.stopPropagation();
+    const on = div.classList.toggle("raw");
+    raw.classList.toggle("armed", on);
+    if (on && !$(":scope > .source", div)) raw.before(el("div", "io source", text));
+  };
+  div.append(raw);
   return div;
 }
 // A mermaid diagram where its source was. The library loads the first time
