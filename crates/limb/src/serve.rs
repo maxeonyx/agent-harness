@@ -7,15 +7,16 @@
 //! socket. Each connection is told [`Hello`] at once; the newest one to
 //! ship a whole view becomes the link, closing the one before, so a link
 //! the network dropped silently is replaced the moment the brain dials
-//! again. The kind opens on the first view's [`LimbRow::Definition`].
+//! again. Its tool sets open on the first view's [`LimbRow::Definition`].
 //!
 //! A brain that would start another build in its place
 //! ([`LimbRow::Superseded`]) has it exit once nothing it holds would die
 //! with it, so the brain's next attach starts that build.
 //!
 //! A brain going away is a link closing: it stops nothing. The limb exits
-//! on a signal, or once no brain has been linked for [`ABSENT`], and only
-//! once nothing it started is left: it stops every running call (`SIGTERM`,
+//! only when it cannot exist (another instance holds its lock, or its
+//! socket or records cannot be opened), on a signal, or once no brain has
+//! been linked for [`ABSENT`], and only once nothing it started is left: it stops every running call (`SIGTERM`,
 //! then `SIGKILL` at the deadline), waits for each to settle, and ends any
 //! orphan it adopted. A second signal makes the stop harder.
 //!
@@ -36,8 +37,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use harness_core::build::BuildId;
-use harness_core::environment::{Hello, LimbDown, LimbKey, LimbRow, LimbUp};
-use harness_core::id::{LimbId, ReplicaId};
+use harness_core::id::LimbId;
+use harness_core::limb::{Hello, LimbDown, LimbKey, LimbRow, LimbUp};
 use harness_core::live::Live;
 use harness_core::schema::Harness;
 use harness_runtime::{Cancel, signals};
@@ -45,7 +46,7 @@ use harness_store::Store;
 use harness_substrate::{Log, Up};
 use serde_json::Value;
 
-use crate::{ABSENT, Instance, Kind, SHUTDOWN, State};
+use crate::{ABSENT, Instance, Open, SHUTDOWN, State};
 
 /// One connection, numbered by the limb.
 type Conn = u64;
@@ -60,7 +61,7 @@ enum Event {
     Stopped,
 }
 
-pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
+pub fn run(limb: LimbId, sets: &'static [(&'static str, Open)]) -> Result<ExitCode, String> {
     let state = State::enter(limb).map_err(|e| e.to_string())?;
     let Some(_lock) = state.lock().map_err(|e| format!("its lock: {e}"))? else {
         return Err(format!(
@@ -92,12 +93,12 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
         }
     });
     let signalled = events.clone();
-    // A server a command started with `setsid` and that has since been
-    // stopped is the limb's to reap, at once, so a `kill -0` sees it gone.
+    // A process a command left that has since exited is the limb's to
+    // reap, at once, so a `kill -0` sees it gone.
     signals::forward(
         &[libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGCHLD],
         move |s| match s {
-            libc::SIGCHLD => harness_runtime::reap_detached(),
+            libc::SIGCHLD => reap_orphans(),
             _ => {
                 let _ = signalled.send(Event::Signal(s));
             }
@@ -105,14 +106,15 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
     )
     .map_err(|e| format!("signals: {e}"))?;
 
-    let mut limb_ = Served::<K> {
-        instance: None,
-        log: Some(open_log(&state)?),
+    let mut served = Served {
+        instance: Arc::new(open(&state, limb, &events, sets)?),
         state,
+        limb,
+        sets,
         events: events.clone(),
         cancel: Cancel::new(),
     };
-    let mut replica = limb_.replica();
+    let mut replica = served.instance.replica();
     // Every connection open, by number; `link` is the one that is the link.
     let mut conns: HashMap<Conn, UnixStream> = HashMap::new();
     let mut link: Option<Conn> = None;
@@ -121,28 +123,32 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
     let mut superseded: Option<BuildId> = None;
     loop {
         if let Some(by) = superseded
-            && !limb_.stopping()
-            && limb_.instance.as_ref().is_some_and(|i| !i.kind().holds())
+            && !served.stopping()
+            && !served.instance.holds()
         {
             eprintln!(
-                "harness-limb-{kind}: superseded by build {:.12}: shutting down",
+                "harness-limb: superseded by build {:.12}: shutting down",
                 by.to_string()
             );
-            limb_.down(SHUTDOWN);
+            served.down(SHUTDOWN);
         }
         let event = match inbox.recv_timeout(Duration::from_secs(1)) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
-                if link.is_none() && alone_since.elapsed() >= ABSENT && !limb_.stopping() {
+                if link.is_none() && alone_since.elapsed() >= ABSENT && !served.stopping() {
                     eprintln!(
-                        "harness-limb-{kind}: no brain for {}s: shutting down",
+                        "harness-limb: no brain for {}s: shutting down",
                         ABSENT.as_secs()
                     );
-                    limb_.down(SHUTDOWN);
+                    served.down(SHUTDOWN);
                 }
                 continue;
             }
-            Err(RecvTimeoutError::Disconnected) => unreachable!("the loop holds a sender"),
+            // The loop holds a sender, so this never comes; if it did,
+            // nothing could reach the loop again.
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err("its events stopped coming".into());
+            }
         };
         match event {
             Event::Accepted(conn, mut stream) => {
@@ -170,14 +176,14 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
                     link = Some(conn);
                 }
                 superseded = superseded_by(&down, superseded);
-                match limb_.apply(*down) {
-                    Ok(unsent) => {
+                match served.apply(*down)? {
+                    Applied::Ship(unsent) => {
                         for record in unsent {
                             ship(&mut conns, link, &Up::<Harness, Live>::Record(record));
                         }
                     }
-                    Err(Fresh) => {
-                        replica = limb_.replica();
+                    Applied::Fresh => {
+                        replica = served.instance.replica();
                         for (_, stream) in conns.drain() {
                             let _ = stream.shutdown(Shutdown::Both);
                         }
@@ -193,11 +199,8 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
             }
             Event::Up(up) => ship(&mut conns, link, &*up),
             Event::Signal(signal) => {
-                eprintln!(
-                    "harness-limb-{kind}: {}: shutting down",
-                    signals::name(signal)
-                );
-                limb_.down(if limb_.stopping() {
+                eprintln!("harness-limb: {}: shutting down", signals::name(signal));
+                served.down(if served.stopping() {
                     Duration::ZERO
                 } else {
                     SHUTDOWN
@@ -208,83 +211,51 @@ pub fn run<K: Kind>(kind: &str, limb: LimbId) -> Result<ExitCode, String> {
     }
 }
 
-/// The limb's state as the loop holds it: its records, and the instance
-/// once a brain has defined it.
-struct Served<K> {
-    instance: Option<Arc<Instance<K>>>,
-    /// Its records, until the instance opens on them.
-    log: Option<Log<Harness, Store>>,
+/// The limb as the loop holds it.
+struct Served {
+    instance: Arc<Instance>,
     state: State,
+    limb: LimbId,
+    sets: &'static [(&'static str, Open)],
     events: Sender<Event>,
     /// The shutdown's own stop: requested once it begins.
     cancel: Cancel,
 }
 
-/// The state was lost: the limb is a new replica now.
-struct Fresh;
+/// What the instance made of what the brain shipped.
+enum Applied {
+    /// Records to ship.
+    Ship(Vec<harness_core::schema::Record>),
+    /// The state was lost: the limb is a new replica now.
+    Fresh,
+}
 
-impl<K: Kind> Served<K> {
-    fn replica(&self) -> ReplicaId {
-        match &self.log {
-            Some(log) => log.here(),
-            None => unreachable!("the replica is read before the kind opens"),
-        }
-    }
-
+impl Served {
     fn stopping(&self) -> bool {
         self.cancel.is_requested()
     }
 
-    /// Hand a down to the kind, opening it on the first view's definition.
-    fn apply(&mut self, down: LimbDown) -> Result<Vec<harness_core::schema::Record>, Fresh> {
-        if self.instance.is_none() {
-            let LimbDown::View(view) = &down else {
-                return Ok(Vec::new());
-            };
-            let Some(LimbRow::Definition(definition)) = view.rows.get(&LimbKey::Definition) else {
-                eprintln!("the brain's view holds no definition of this limb");
-                return Ok(Vec::new());
-            };
-            let events = self.events.clone();
-            let out = Box::new(move |up| {
-                let _ = events.send(Event::Up(Box::new(up)));
-            });
-            let log = self.log.take().expect("records until the instance opens");
-            match Instance::open(definition, log, self.state.dir(), out) {
-                Ok(instance) => self.instance = Some(Arc::new(instance)),
-                Err(why) => {
-                    // Nothing has started: the limb cannot, and says why.
-                    eprintln!("{why}");
-                    std::process::exit(1);
-                }
-            }
+    /// Hand a down to the instance. An error is the records of a new
+    /// replica that cannot be opened: the limb cannot go on.
+    fn apply(&mut self, down: LimbDown) -> Result<Applied, String> {
+        let restored = match self.instance.apply(down) {
+            Ok(unsent) => return Ok(Applied::Ship(unsent)),
+            Err(restored) => restored,
+        };
+        eprintln!(
+            "the brain holds this limb's records up to {}, past its state's {}: \
+             its state was lost or restored, so it starts again as a new replica",
+            restored.upto, restored.next
+        );
+        self.instance.stop_all(SHUTDOWN);
+        self.instance.join();
+        for suffix in ["", "-wal", "-shm"] {
+            let mut path = self.state.records().into_os_string();
+            path.push(suffix);
+            let _ = std::fs::remove_file(path);
         }
-        let instance = self.instance.as_ref().expect("opened");
-        match instance.apply(down) {
-            Ok(unsent) => Ok(unsent),
-            Err(restored) => {
-                eprintln!(
-                    "the brain holds this limb's records up to {}, past its state's {}: \
-                     its state was lost or restored, so it starts again as a new replica",
-                    restored.upto, restored.next
-                );
-                instance.kind().stop_all(SHUTDOWN);
-                drop(self.instance.take());
-                for suffix in ["", "-wal", "-shm"] {
-                    let mut path = self.state.records().into_os_string();
-                    path.push(suffix);
-                    let _ = std::fs::remove_file(path);
-                }
-                match open_log(&self.state) {
-                    Ok(log) => self.log = Some(log),
-                    Err(why) => {
-                        eprintln!("{why}");
-                        std::process::exit(1);
-                    }
-                }
-                Err(Fresh)
-            }
-        }
+        self.instance = Arc::new(open(&self.state, self.limb, &self.events, self.sets)?);
+        Ok(Applied::Fresh)
     }
 
     /// Stop every call, each to be gone `within` from now, and once nothing
@@ -292,21 +263,33 @@ impl<K: Kind> Served<K> {
     fn down(&mut self, within: Duration) {
         let first = !self.cancel.is_requested();
         self.cancel.request(Instant::now() + within);
-        let Some(instance) = self.instance.clone() else {
-            let _ = self.events.send(Event::Stopped);
-            return;
-        };
-        instance.kind().stop_all(within);
+        self.instance.stop_all(within);
         if first {
+            let instance = self.instance.clone();
             let events = self.events.clone();
             let cancel = self.cancel.clone();
             thread::spawn(move || {
-                instance.kind().join();
+                instance.join();
                 end_adopted(&cancel);
                 let _ = events.send(Event::Stopped);
             });
         }
     }
+}
+
+/// An instance on the limb's records, shipping what it says as events.
+fn open(
+    state: &State,
+    limb: LimbId,
+    events: &Sender<Event>,
+    sets: &'static [(&'static str, Open)],
+) -> Result<Instance, String> {
+    let events = events.clone();
+    let out = Box::new(move |up| {
+        let _ = events.send(Event::Up(Box::new(up)));
+    });
+    Instance::open(limb, open_log(state)?, state.dir(), out, sets)
+        .map_err(|e| format!("{}: {e}", state.dir().display()))
 }
 
 fn open_log(state: &State) -> Result<Log<Harness, Store>, String> {
@@ -402,7 +385,7 @@ fn ship(conns: &mut HashMap<Conn, UnixStream>, link: Option<Conn>, value: &impl 
 }
 
 fn write_line(stream: &mut UnixStream, value: &impl serde::Serialize) -> io::Result<()> {
-    let mut line = serde_json::to_vec(value).expect("a link value serialises");
+    let mut line = serde_json::to_vec(value)?;
     line.push(b'\n');
     stream.write_all(&line)
 }
@@ -427,4 +410,39 @@ fn end_adopted(cancel: &Cancel) {
         Err(e) => eprintln!("ending what was left: {e}"),
     }
     harness_runtime::reap_children();
+}
+
+/// Reap every child that has exited and that no thread of the limb waits
+/// on: an orphan of a command the limb adopted as subreaper. What the limb
+/// started itself (a clone, a browser) is in its own process group, and a
+/// command's leader leads its own, so neither is taken from the thread
+/// that waits on it.
+fn reap_orphans() {
+    let me = std::process::id();
+    // SAFETY: getpgid(0) and getsid(0) read this process's own.
+    let (group, session) = unsafe { (libc::getpgid(0), libc::getsid(0)) };
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for pid in dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<libc::pid_t>().ok()) {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        let Some(close) = stat.rfind(')') else {
+            continue;
+        };
+        let fields: Vec<&str> = stat[close + 1..].split_whitespace().collect();
+        let field = |n: usize| fields.get(n).and_then(|f| f.parse::<libc::pid_t>().ok());
+        let (Some(parent), Some(pgid), Some(sid)) = (field(1), field(2), field(3)) else {
+            continue;
+        };
+        let orphan = fields.first() == Some(&"Z")
+            && u32::try_from(parent).is_ok_and(|p| p == me)
+            && (sid != session || (pgid != pid && pgid != group));
+        if orphan {
+            let mut status = 0;
+            // SAFETY: waitpid writes only the status.
+            unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        }
+    }
 }

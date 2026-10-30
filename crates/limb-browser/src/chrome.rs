@@ -4,9 +4,13 @@
 //! a launched browser's profile is the limb's, and an attached one is
 //! whatever Max chose to expose.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::time::{Duration, Instant};
+
+use harness_core::id::LimbId;
+use harness_limb::scope::{self, Scope, Scoped};
 
 use crate::Settings;
 use crate::cdp;
@@ -20,8 +24,10 @@ pub struct Browser {
 
 /// Find the browser the settings name, launching it if they name none to
 /// attach to. A browser an earlier instance of this limb launched on the
-/// same profile, still running, is reused.
-pub fn open(settings: &Settings, state: &Path) -> Result<Browser, String> {
+/// same profile, still running, is reused. One it launches runs in a
+/// systemd scope of its own, `harness-browser-<limb>.scope`, so it counts
+/// as the browser's and not the limb's.
+pub fn open(settings: &Settings, state: &Path, limb: LimbId) -> Result<Browser, String> {
     if let Some(endpoint) = &settings.endpoint {
         let url = if endpoint.starts_with("ws://") {
             endpoint.clone()
@@ -43,24 +49,42 @@ pub fn open(settings: &Settings, state: &Path) -> Result<Browser, String> {
         )?,
     };
     let _ = std::fs::remove_file(&port_file);
-    let mut command = Command::new(&program);
-    command
-        .arg("--remote-debugging-port=0")
-        .arg(format!("--user-data-dir={}", profile.display()))
-        .args([
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--window-size=1280,900",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    let mut args: Vec<OsString> = vec![
+        "--remote-debugging-port=0".into(),
+        format!("--user-data-dir={}", profile.display()).into(),
+        "--no-first-run".into(),
+        "--no-default-browser-check".into(),
+        "--window-size=1280,900".into(),
+    ];
     if settings.headless {
-        command.arg("--headless=new");
+        args.push("--headless=new".into());
     }
-    let mut process = command
-        .spawn()
-        .map_err(|e| format!("{}: {e}", program.display()))?;
+    let launch = |scope: Option<&Scope>| -> Result<(Child, Scoped), String> {
+        let mut spawn = scope::command(program.as_os_str(), &args, scope, None)
+            .map_err(|e| format!("{}: {e}", program.display()))?;
+        let child = spawn
+            .command
+            .spawn()
+            .map_err(|e| format!("{}: {e}", program.display()))?;
+        Ok((child, spawn.scoped()))
+    };
+    let scope = Scope {
+        unit: format!("harness-browser-{limb}"),
+        slice: None,
+        description: format!("the browser of the harness's limb {limb}"),
+    };
+    let mut process = match launch(Some(&scope))? {
+        (child, Scoped::In) => child,
+        (child, Scoped::Without(why)) => {
+            eprintln!("the browser runs without a scope of its own: {why}");
+            child
+        }
+        (mut failed, Scoped::Failed(why)) => {
+            eprintln!("the browser runs without a scope of its own: {why}");
+            let _ = failed.wait();
+            launch(None)?.0
+        }
+    };
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         if let Some(url) = running(&port_file) {

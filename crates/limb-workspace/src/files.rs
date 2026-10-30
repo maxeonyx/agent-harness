@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use harness_core::call::{Call, Outcome, Output};
@@ -13,13 +13,13 @@ use regex::Regex;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use harness_limb::{Limit, Report, lock};
+use harness_limb::{Report, Running, lock};
 use harness_runtime::{Cancel, Ended as TreeEnded};
 
-use crate::Inner;
 use crate::record::replace;
 use crate::shell::{self, Ended};
 use crate::trunc::{Truncated, Truncator};
+use crate::{Inner, canonical};
 
 const DEFAULT_TIMEOUT: u64 = 120_000;
 const MAX_TIMEOUT: u64 = 600_000;
@@ -77,48 +77,42 @@ const LEAD: usize = 20;
 /// base64, is 5 MB.
 const IMAGE_BUDGET: usize = 3 * 1024 * 1024;
 
-/// A path as the tools see it: where it is, and its resource name (relative
-/// to the root when inside it).
+/// A path as the tools see it: where it is, canonical, and its resource
+/// name, which is that path.
 struct Place {
     path: PathBuf,
     name: String,
 }
 
 impl Inner {
+    /// Run `call` (the running call as its caller wrote it) in `root`.
     pub(crate) fn execute(
         &self,
-        id: CallId,
+        root: &Path,
+        running: &Running<'_>,
         call: &Call,
-        input: &[u8],
-        cancel: &Cancel,
-        limit: &Limit,
         report: &mut Report,
     ) -> Outcome {
-        if self.kind == crate::Kind::User {
-            return match call.tool.as_str() {
-                "skill" => self.skill(input, report),
-                other => report.failed(&format!("Max's config has no tool `{other}`")),
-            };
-        }
+        let (id, input) = (running.id, running.input);
         let result = match call.tool.as_str() {
-            "bash" => parse(input).and_then(|i| self.bash(id, i, cancel, limit, report)),
-            "read" => parse(input).and_then(|i| self.read(i, report)),
-            "write" => parse(input).and_then(|i| self.write(id, i, call, report)),
-            "edit" => parse(input).and_then(|i| self.edit(id, i, call, report)),
-            "grep" => parse(input).and_then(|i| self.grep(id, i, cancel, report)),
-            other => Err(format!("this workspace has no tool `{other}`")),
+            "bash" => parse(input).and_then(|i| self.bash(root, running, i, report)),
+            "read" => parse(input).and_then(|i| self.read(root, i, report)),
+            "write" => parse(input).and_then(|i| self.write(root, id, i, call, report)),
+            "edit" => parse(input).and_then(|i| self.edit(root, id, i, call, report)),
+            "grep" => parse(input).and_then(|i| self.grep(root, id, i, running.cancel, report)),
+            other => Err(format!("the workspace has no tool `{other}`")),
         };
         result.unwrap_or_else(|message| report.failed(&message))
     }
 
     fn bash(
         &self,
-        call: CallId,
+        root: &Path,
+        running: &Running<'_>,
         input: Bash,
-        cancel: &Cancel,
-        limit: &Limit,
         report: &mut Report,
     ) -> Result<Outcome, String> {
+        let call = running.id;
         let timeout =
             Duration::from_millis(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT));
         let truncator = Truncator::new(pattern(input.grep.as_deref())?);
@@ -139,13 +133,15 @@ impl Inner {
         self.marks
             .running(call)
             .map_err(|e| format!("cannot record the command: {e}"))?;
+        let scope = self.scope(call, &running.call.caller, &input.command);
         let ran = shell::run(
             call,
             &input.command,
-            &self.root,
+            root,
+            &scope,
             timeout,
-            limit,
-            cancel,
+            running.limit,
+            running.cancel,
             truncator,
             progress,
         )
@@ -154,8 +150,7 @@ impl Inner {
         if !matches!(&ran.tree, TreeEnded::Killed { survivors } if !survivors.is_empty()) {
             self.marks.ran(call);
         }
-        let shutdown = self.calls.shutting_down();
-        let ended = shell::describe(&ran, timeout, shutdown);
+        let ended = shell::describe(&ran, timeout, running.shutting_down());
         let (view, full) = self.shown(call, ran.output, report);
         let output = Output {
             model: report.text(&format!("{view}{ended}")),
@@ -171,8 +166,8 @@ impl Inner {
         })
     }
 
-    fn read(&self, input: Read, report: &mut Report) -> Result<Outcome, String> {
-        let place = self.place(&input.path);
+    fn read(&self, root: &Path, input: Read, report: &mut Report) -> Result<Outcome, String> {
+        let place = place(root, &input.path);
         let shown = &input.path;
         if place.path.is_dir() {
             let mut names: Vec<String> = fs::read_dir(&place.path)
@@ -230,12 +225,13 @@ impl Inner {
 
     fn write(
         &self,
+        root: &Path,
         id: CallId,
         input: Write,
         call: &Call,
         report: &mut Report,
     ) -> Result<Outcome, String> {
-        let place = self.place(&input.path);
+        let place = place(root, &input.path);
         let _files = lock(&self.files);
         let current =
             version(&place.path).map_err(|e| format!("cannot read {}: {e}", input.path))?;
@@ -246,7 +242,7 @@ impl Inner {
             let said = format!("{} already has this content.", input.path);
             return Ok(report.completed(&said, self.observations(&place.name, target)));
         }
-        if let Some(refused) = self.refuse(id, &place, current, call, None, report) {
+        if let Some(refused) = self.refuse(root, id, &place, current, call, None, report) {
             return Ok(refused);
         }
         if let Some(parent) = place.path.parent() {
@@ -270,17 +266,18 @@ impl Inner {
     /// naming it and showing the file, which the caller has then seen.
     fn edit(
         &self,
+        root: &Path,
         id: CallId,
         input: Edit,
         call: &Call,
         report: &mut Report,
     ) -> Result<Outcome, String> {
-        let place = self.place(&input.path);
+        let place = place(root, &input.path);
         let path = &input.path;
         let first = input.edits.first().map(|r| r.old.as_str());
         let _files = lock(&self.files);
         let current = version(&place.path).map_err(|e| format!("cannot read {path}: {e}"))?;
-        if let Some(refused) = self.refuse(id, &place, current, call, first, report) {
+        if let Some(refused) = self.refuse(root, id, &place, current, call, first, report) {
             return Ok(refused);
         }
         if input.edits.is_empty() {
@@ -338,13 +335,14 @@ impl Inner {
 
     fn grep(
         &self,
+        root: &Path,
         call: CallId,
         input: Grep,
         cancel: &Cancel,
         report: &mut Report,
     ) -> Result<Outcome, String> {
         let regex = Regex::new(&input.pattern).map_err(|e| format!("invalid pattern: {e}"))?;
-        let place = self.place(input.path.as_deref().unwrap_or("."));
+        let place = place(root, input.path.as_deref().unwrap_or("."));
         let mut truncator = Truncator::matching(regex.clone());
         let mut found = 0;
         let mut pending = vec![place.path];
@@ -378,7 +376,7 @@ impl Inner {
             if bytes[..bytes.len().min(8192)].contains(&0) {
                 continue;
             }
-            let name = self.name(&path);
+            let name = shown_as(root, &path);
             for (n, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
                 if regex.is_match(line) {
                     found += 1;
@@ -424,8 +422,10 @@ impl Inner {
     /// unless its own command made it. It shows the file as `read` would,
     /// from a little before `near` (an edit's `old`) when the whole would
     /// not fit, so the caller has seen it once the refusal reaches it.
+    #[allow(clippy::too_many_arguments)]
     fn refuse(
         &self,
+        root: &Path,
         id: CallId,
         place: &Place,
         current: Version,
@@ -433,11 +433,18 @@ impl Inner {
         near: Option<&str>,
         report: &mut Report,
     ) -> Option<Outcome> {
-        let key = &self.keys(&place.name)[0];
+        let key = self.key(crate::FILE, &place.name);
+        // Named as the caller's context saw it, which may have been by
+        // another path to the same file.
         let expected = call
             .expects
             .iter()
-            .find(|o| &o.resource == key)
+            .find(|o| {
+                o.resource.kind == key.kind
+                    && o.resource.limb == key.limb
+                    && o.resource.name.starts_with('/')
+                    && canonical(Path::new(&o.resource.name)) == place.path
+            })
             .map_or(Version::Gone, |o| o.version);
         if expected == current || self.made_by(&call.caller, &place.path) {
             return None;
@@ -447,7 +454,7 @@ impl Inner {
                 "(it does not exist now)",
                 self.observations(&place.name, Version::Gone),
             )),
-            Version::Is(_) => self.look(place, near, report),
+            Version::Is(_) => self.look(root, place, near, report),
         };
         let shown = shown.map(
             |shown| match self.shown_before(id, &call.caller, &shown.observes) {
@@ -460,7 +467,7 @@ impl Inner {
         );
         Some(Outcome::Refused {
             current: vec![Observation {
-                resource: key.clone(),
+                resource: key,
                 version: current,
             }],
             shown,
@@ -469,7 +476,13 @@ impl Inner {
 
     /// What `read` returns of a file, from a little before the first line
     /// holding `near` when the file is over the budget.
-    fn look(&self, place: &Place, near: Option<&str>, report: &mut Report) -> Option<Output> {
+    fn look(
+        &self,
+        root: &Path,
+        place: &Place,
+        near: Option<&str>,
+        report: &mut Report,
+    ) -> Option<Output> {
         let offset = fs::read(&place.path)
             .ok()
             .and_then(|bytes| start(&String::from_utf8_lossy(&bytes), near));
@@ -478,7 +491,7 @@ impl Inner {
             offset,
             limit: None,
         };
-        match self.read(read, report) {
+        match self.read(root, read, report) {
             Ok(Outcome::Completed(output)) => Some(output),
             _ => None,
         }
@@ -490,20 +503,22 @@ impl Inner {
             .map(|resource| Observation { resource, version })
             .collect()
     }
+}
 
-    fn place(&self, path: &str) -> Place {
-        let path = normalize(&self.root.join(path));
-        Place {
-            name: self.name(&path),
-            path,
-        }
+/// `path` as the tools see it, relative to `root` unless absolute.
+fn place(root: &Path, path: &str) -> Place {
+    let path = canonical(&root.join(path));
+    Place {
+        name: path.to_string_lossy().into_owned(),
+        path,
     }
+}
 
-    fn name(&self, path: &Path) -> String {
-        match path.strip_prefix(&self.root) {
-            Ok(relative) => relative.to_string_lossy().into_owned(),
-            Err(_) => path.to_string_lossy().into_owned(),
-        }
+/// How a path is shown in a listing: relative to `root` when inside it.
+fn shown_as(root: &Path, path: &Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(relative) => relative.to_string_lossy().into_owned(),
+        Err(_) => path.to_string_lossy().into_owned(),
     }
 }
 
@@ -609,22 +624,6 @@ fn base64(bytes: &[u8]) -> String {
                 true => ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char,
                 false => '=',
             });
-        }
-    }
-    out
-}
-
-/// Resolve `.` and `..` without touching the disk, since the path may not
-/// exist yet.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
         }
     }
     out

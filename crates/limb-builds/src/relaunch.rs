@@ -558,7 +558,9 @@ fn stage(clone: &Path, commit: &str, staging: &Path) -> Result<(), String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("cargo: {e}"))?;
-    let stderr = cargo.stderr.take().expect("piped");
+    let (Some(stderr), Some(stdout)) = (cargo.stderr.take(), cargo.stdout.take()) else {
+        return Err("cargo's output was not piped".into());
+    };
     let errors = thread::spawn(move || {
         let lines: Vec<String> = BufReader::new(stderr)
             .lines()
@@ -567,7 +569,7 @@ fn stage(clone: &Path, commit: &str, staging: &Path) -> Result<(), String> {
         lines[lines.len().saturating_sub(20)..].join("\n")
     });
     let mut executables = Vec::new();
-    for line in BufReader::new(cargo.stdout.take().expect("piped")).lines() {
+    for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
@@ -598,7 +600,7 @@ fn stage(clone: &Path, commit: &str, staging: &Path) -> Result<(), String> {
         .arg("-x")
         .arg("-C")
         .arg(staging)
-        .stdin(tar.stdout.expect("piped"))
+        .stdin(tar.stdout.ok_or("git archive's output was not piped")?)
         .status()
         .map_err(|e| format!("tar: {e}"))?;
     if !untar.success() {

@@ -4,13 +4,13 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 
-use crate::Clone;
+use harness_core::limb::Branch;
 
-/// Clone `clone.from` into `dir` and check out `clone.branch`: from
-/// `origin/<branch>` if it exists, otherwise new from `origin/<base>`. A
+/// Clone `branch.from` into `dir` and check out `branch.name`: from
+/// `origin/<name>` if it exists, otherwise new from `origin/<base>`. A
 /// `dir` that exists already is the clone made before, and is left as it
 /// is, so making it is idempotent across restarts.
-pub fn clone(clone: &Clone, dir: &Path) -> io::Result<()> {
+pub fn clone(clone: &Branch, dir: &Path) -> io::Result<()> {
     if dir.exists() {
         return Ok(());
     }
@@ -30,7 +30,7 @@ pub fn clone(clone: &Clone, dir: &Path) -> io::Result<()> {
             &path,
         ],
     )?;
-    let remote = format!("origin/{}", clone.branch);
+    let remote = format!("origin/{}", clone.name);
     let exists = git(
         Some(&partial),
         &["rev-parse", "--verify", "--quiet", &remote],
@@ -40,7 +40,7 @@ pub fn clone(clone: &Clone, dir: &Path) -> io::Result<()> {
     if exists {
         git(
             Some(&partial),
-            &["checkout", "--quiet", "-B", &clone.branch, &remote],
+            &["checkout", "--quiet", "-B", &clone.name, &remote],
         )?;
     } else {
         git(
@@ -50,7 +50,7 @@ pub fn clone(clone: &Clone, dir: &Path) -> io::Result<()> {
                 "--quiet",
                 "--no-track",
                 "-b",
-                &clone.branch,
+                &clone.name,
                 &base,
             ],
         )?;
