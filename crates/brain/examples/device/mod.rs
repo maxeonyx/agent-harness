@@ -14,7 +14,7 @@ use std::{env, fs, thread};
 
 use harness_core::call::CallEvent;
 use harness_core::context::EntryId;
-use harness_core::delivery::{Content, Delivery, Prompt, Read};
+use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::draft::DraftEvent;
 use harness_core::environment::{Host, Limb, LimbKind};
 use harness_core::fact::{Batch, Fact};
@@ -210,13 +210,7 @@ impl Device {
             values: vec![words.clone()],
             facts: vec![
                 Fact::Draft(draft, DraftEvent::Opened { session, at: None }),
-                Fact::Draft(
-                    draft,
-                    DraftEvent::Send {
-                        text: words.id(),
-                        read: Read::Next,
-                    },
-                ),
+                Fact::Draft(draft, DraftEvent::Send { text: words.id() }),
             ],
         })
     }
@@ -230,7 +224,6 @@ impl Device {
                 id,
                 to: session,
                 content: Content::Prompt(Prompt::Done),
-                read: Read::Next,
             })],
         })
     }

@@ -173,25 +173,61 @@ function entry(s, into, e, index, t, parent) {
   }
 }
 
-// The root, marked up: the system prompt as it reads, and each tool by its
-// name and what it says it does, its schema folded.
+// The root, marked up, as one folded block like a round of tool calls: the
+// system prompt as it reads, a section to each of its blocks, then each tool
+// by its name and the first line of what it says it does, opened to the rest
+// and its parameters.
 function rootEntry(e) {
-  const d = el("details", "thought root");
   const system = parse(e.system), tools = parse(e.tools) || [];
-  d.append(el("summary", null, `${e.model}: system prompt and ${tools.length} tools`));
-  const prompt = el("div", "card system");
-  for (const b of Array.isArray(system) ? system : [{ text: e.system || "" }]) prompt.append(markdown(b.text || ""));
-  const defs = el("div", "tool-defs");
-  for (const { name, description, input_schema, ...rest } of tools) {
-    const def = el("div", "tool-def");
-    def.append(el("div", "tool", name), markdown(description || ""));
-    const schema = el("details", "schema");
-    schema.append(el("summary", null, "Schema"), el("div", "io", JSON.stringify(input_schema || rest, null, 2)));
-    def.append(schema);
-    defs.append(def);
+  const d = fold(el("span", "what", `System prompt and ${tools.length} tools`), el("span", "n", modelName(e.model)));
+  for (const b of Array.isArray(system) ? system : [{ text: e.system || "" }]) {
+    const section = markdown(b.text || "");
+    section.classList.add("section");
+    d.append(section);
   }
-  d.append(prompt, defs);
+  for (const { name, description = "", input_schema, ...rest } of tools) {
+    const [first, ...more] = description.split("\n");
+    const detail = el("div", "detail");
+    if (more.join("").trim()) detail.append(markdown(more.join("\n")));
+    detail.append(params(input_schema || rest));
+    d.append(foldRow(name, first, "", detail));
+  }
   return d;
+}
+// A tool's parameters, each by its name and what it is for, a list of
+// records by the fields of each.
+function params(schema) {
+  const d = el("div", "args");
+  for (const [k, p] of Object.entries(schema?.properties || {})) {
+    const v = el("div", "v");
+    const inner = p.items?.properties ? p.items : p.properties ? p : null;
+    if (p.description || !inner) v.append(markdown(p.description || p.type || ""));
+    if (inner) v.append(params(inner));
+    const f = el("div", "arg");
+    f.append(el("span", "k", schema.required?.includes(k) ? k : `${k}?`), v);
+    d.append(f);
+  }
+  return d;
+}
+
+// A block that folds to one line, its head, opened to rows that each open
+// in turn: a round of tool calls, or the root.
+function fold(...head) {
+  const d = el("div", "fold folded");
+  const h = el("div", "line head");
+  h.append(...head);
+  h.onclick = () => d.classList.toggle("folded");
+  d.append(h);
+  return d;
+}
+function foldRow(name, summary, glimpse, detail) {
+  const row = el("div", "row"), line = el("div", "line");
+  line.append(el("span", "tool", name));
+  if (summary) line.append(el("span", "sum", summary));
+  line.append(el("span", "gist", glimpse));
+  line.onclick = () => row.classList.toggle("expanded");
+  row.append(line, detail);
+  return row;
 }
 
 // A compaction, where it happened: the summary the agent carried on with,
@@ -261,16 +297,13 @@ async function copied(button, text, html) {
   setTimeout(() => { $("svg", button).innerHTML = ICONS.copy; }, 1200);
 }
 
-// Consecutive tool steps with no words between them fold into one group,
-// which shows its latest step until opened.
+// Consecutive tool calls with no words between them are one block, folded
+// to what they did: each call's summary in turn, or the tools' names when
+// the calls have none. A block of one call is just its row.
 function step(s, into, b, t) {
   if (!s.group) {
-    const g = el("div", "steps folded");
-    const head = el("div", "head");
-    const group = { el: g, head, rows: [], opened: false };
-    head.onclick = () => { group.opened = g.classList.contains("folded"); groupHead(group); };
-    g.append(head);
-    s.group = group;
+    const g = fold();
+    s.group = { el: g, head: $(".head", g), rows: [] };
     into.append(g);
   }
   const row = toolRow(s, b, t);
@@ -280,29 +313,41 @@ function step(s, into, b, t) {
 }
 function groupHead(g) {
   const n = g.rows.length;
-  g.head.hidden = n < 3;
-  g.el.classList.toggle("folded", n >= 3 && !g.opened);
-  if (n < 3) return;
-  const counts = {};
-  for (const r of g.rows) counts[r.dataset.tool] = (counts[r.dataset.tool] || 0) + 1;
-  const what = Object.entries(counts).map(([k, v]) => v > 1 ? `${k} ×${v}` : k).join(", ");
-  g.head.textContent = `${g.el.classList.contains("folded") ? "▸" : "▾"} ${n} steps · ${what}`;
+  g.el.classList.toggle("one", n === 1);
+  if (n === 1) return;
+  let what;
+  if (g.rows.some((r) => r.dataset.summary)) what = g.rows.map((r) => r.dataset.summary || r.dataset.tool).join(" → ");
+  else {
+    const counts = {};
+    for (const r of g.rows) counts[r.dataset.tool] = (counts[r.dataset.tool] || 0) + 1;
+    what = Object.entries(counts).map(([k, v]) => v > 1 ? `${k} ×${v}` : k).join(", ");
+  }
+  g.head.replaceChildren(el("span", "what", what), el("span", "n", `${n} calls`));
 }
 function closeGroup(s) { s.group = null; }
 
 const FILES = /\.(md|markdown|svg|html?|txt|json|rs|py|js|ts|toml|ya?ml|sh|css)$/i;
+// A call's row: its tool, the agent's summary of it (its input's last
+// field, `summary`), and a glimpse of its real arguments; opened, its input
+// and result. A compaction carries on with its `carry`; one recorded before
+// `carry` existed has its text in `summary` instead.
 function toolRow(s, b, t) {
-  const row = el("div", "row");
-  row.dataset.tool = b.name;
-  const line = el("div", "line");
-  const input = b.input || {};
+  let input = b.input || {};
+  if (b.name.startsWith("compact") && input.carry === undefined) {
+    const { summary: carry, ...rest } = input;
+    input = { ...rest, carry };
+  }
   const inner = b.name === "background" ? input.input || {} : input;
   const name = b.name === "background" ? `${input.tool} ↷` : b.name;
-  line.append(el("span", "tool", name), el("span", "gist", gist(inner)), el("span", "st run", ""));
+  const said = input.summary ?? inner.summary;
+  const summary = typeof said === "string" ? said : "";
   const detail = el("div", "detail");
-  detail.append(readable(input));
-  row.append(line, detail);
-  line.onclick = () => row.classList.toggle("expanded");
+  detail.append(readable(unsummarised(input, b.name === "background")));
+  const row = foldRow(name, summary, gist(inner), detail);
+  row.dataset.tool = b.name;
+  row.dataset.summary = summary;
+  const line = $(".line", row);
+  line.append(el("span", "st run", ""));
   const path = inner.path;
   if (path && FILES.test(path) && (b.name === "write" || input.tool === "write")) {
     const open = el("button", "open-file", "open"); open.onclick = (e) => { e.stopPropagation(); viewFile(path, inner.content); };
@@ -324,6 +369,11 @@ function toolRow(s, b, t) {
   fillChips(s, b.id);
   return row;
 }
+function unsummarised(input, wrapped) {
+  const { summary, ...rest } = input;
+  if (wrapped && rest.input && typeof rest.input === "object") { const { summary, ...inner } = rest.input; rest.input = inner; }
+  return rest;
+}
 // What the provider's web search or fetch found, in the row of its use.
 function served(s, b) {
   const r = s.rows.get(b.tool_use_id);
@@ -331,14 +381,14 @@ function served(s, b) {
   const c = b.content, failed = c && !Array.isArray(c) && c.error_code;
   const st = $(".st", r.row);
   st.className = `st${failed ? " bad" : ""}`;
-  st.textContent = failed ? "failed" : "✓";
+  st.textContent = failed ? "Failed" : "✓";
   const found = Array.isArray(c) ? c.filter((x) => x.url) : c?.url ? [{ url: c.url, title: c.content?.title }] : [];
   const out = el("div", "io found");
   if (failed) out.textContent = c.error_code;
   for (const x of found) {
     const a = el("a", null, x.title || x.url);
     a.href = x.url; a.target = "_blank"; a.rel = "noopener";
-    const li = el("div"); li.append(a, el("span", "host", ` ${new URL(x.url).host}${x.page_age ? ` · ${x.page_age}` : ""}`)); out.append(li);
+    const li = el("div"); li.append(a, el("span", "host", ` ${new URL(x.url).host}${x.page_age ? `, ${x.page_age}` : ""}`)); out.append(li);
   }
   $(".detail", r.row).append(out);
 }
@@ -436,10 +486,12 @@ function result(s, b) {
   const r = s.rows.get(b.tool_use_id);
   if (!r) return;
   for (const old of r.row.querySelectorAll(".res")) old.remove();
+  // A call watched live folds when it settles, so its output does not stay in the chat.
+  if (r.row.classList.contains("live")) r.row.classList.remove("live", "expanded");
   const st = $(".st", r.row);
   const text = typeof b.content === "string" ? b.content : (b.content || []).map((x) => x.type === "text" ? x.text : `[${x.type}]`).join("\n");
   st.className = `st${b.is_error ? " bad" : ""}`;
-  st.textContent = b.is_error ? "failed" : "✓";
+  st.textContent = b.is_error ? "Failed" : "✓";
   const detail = $(".detail", r.row);
   const fields = parse(text);
   const out = fields && typeof fields === "object" ? readable(fields) : el("div", "io", text);
@@ -524,7 +576,7 @@ function renderTail(s, t) {
   else stopModel();
   // Not read yet: dashed, until the request that reads it.
   for (const p of t.pending || []) {
-    const when = `${clock(p.at)}, ${p.read === "TurnEnd" ? "read when its turn ends" : "not read yet"}`;
+    const when = `${clock(p.at)}, not read yet`;
     parts.push(p.prompt ? said(PROMPTS[p.prompt] || p.prompt, when, "queued-words prompt") : said(p.content, when, "queued-words"));
   }
   if (!t.head && !isDone(t)) parts.push(t.owner ? mandateCard(t) : said(t.mandate || "", "Not read yet", "queued-words"));
@@ -590,16 +642,17 @@ function followModel(call) {
 function stopModel() { if (modelStream) { watchers.delete(`Model:${modelStream.call}`); modelStream = null; } }
 function followCall(c, row) {
   if (callStreams.has(c.id)) return;
-  const out = el("div", "io");
+  // Shown while it runs, even in a folded block; its result replaces it.
+  const out = el("div", "io res");
   $(".detail", row).append(out);
-  row.classList.add("expanded");
+  row.classList.add("expanded", "live");
   callStreams.add(c.id);
-  watch(`Call:${c.id}`, (raw) => stick(() => { out.textContent = screen(raw); out.scrollTop = out.scrollHeight; }));
+  watch(`Call:${c.id}`, (raw) => stick(() => { out.textContent = screen(raw); }));
 }
 export function stopFollowing() { stopModel(); for (const id of callStreams) watchers.delete(`Call:${id}`); callStreams.clear(); }
-// A command's output as a terminal would leave it: only the last lines.
+// A command's output as a terminal would leave it: only the last screenful.
 function screen(raw) {
   const lines = raw.replace(/\r\n/g, "\n").split("\n").map((l) => l.slice(l.lastIndexOf("\r") + 1));
-  return (lines.length > 300 ? [`[${lines.length - 300} earlier lines]`, ...lines.slice(-300)] : lines).join("\n");
+  return (lines.length > 12 ? [`[${lines.length - 12} earlier lines]`, ...lines.slice(-12)] : lines).join("\n");
 }
 

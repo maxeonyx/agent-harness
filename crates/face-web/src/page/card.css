@@ -123,30 +123,44 @@
   .versions.user { justify-content: flex-end; }
   .versions .tries { margin-left: .4em; }
   .meta { display: flex; flex-wrap: wrap; gap: 0 1.1em; font-size: 11.5px; color: var(--faint); margin: -.5em 0 1.1em; opacity: 0; transition: opacity .15s; font-variant-numeric: tabular-nums; }
-  .chunk:hover .meta, .row:hover > .meta { opacity: 1; }
+  .chunk:hover .meta, .row.expanded > .meta { opacity: 1; }
   .thought { font-size: 13px; color: var(--muted); margin: 0 0 .7em; }
   .thought > summary { cursor: pointer; list-style: none; }
   .thought > summary::before { content: "◌ "; }
-  .thought.root > summary::before { content: "▸ "; }
-  .thought.root[open] > summary::before { content: "▾ "; }
   .thought .plain { font-style: italic; margin: .3em 0 0 1.1em; }
-  .steps { margin: 0 0 1.1em; border-left: 2px solid var(--line); padding-left: .2em; }
-  .steps > .head { font-size: 12.5px; color: var(--muted); padding: .1em .5em .3em; cursor: pointer; }
-  .steps > .head:hover { color: var(--ink); }
-  .steps.folded > .row:not(:last-child) { display: none; }
-  .row { margin: 0 0 .15em; }
-  .row > .line { display: flex; align-items: baseline; gap: .55em; padding: .22em .5em; border-radius: 7px; cursor: pointer; font-size: 13.5px; min-width: 0; }
-  .row > .line:hover { background: var(--hover); }
-  .row .tool { font: 600 12px var(--mono); color: var(--ink); }
-  .row .gist { font: 12.5px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-  .row .st { font-size: 12px; color: var(--muted); white-space: nowrap; }
-  .row .st.bad { color: var(--red); }
-  .row .st.run::before { content: ""; display: inline-block; width: .7em; height: .7em; border: 1.5px solid var(--ink); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -.05em; margin-right: .3em; }
-  .row .open-file { font-size: 12px; color: var(--maroon); }
-  .row > .meta { margin: 0 0 .3em .5em; }
-  .row > .detail { margin: .2em 0 .6em 1em; }
+  /* A folded block: a round of tool calls, or the root. One line until
+     opened, then a row to each call, each opened to all of it. Nothing in
+     it scrolls: it grows. */
+  .fold { margin: 0 0 1.1em; border: 1px solid var(--line); border-radius: 10px; background: var(--white); font: 13.5px/1.5 var(--sans); }
+  .fold > * + * { border-top: 1px solid var(--line); }
+  .fold > .head { color: var(--ink); }
+  .fold > .head .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fold > .head .n { flex: none; font-size: 12px; color: var(--muted); }
+  .fold > .head::after { content: "›"; flex: none; color: var(--muted); transition: transform .15s; transform: rotate(90deg); }
+  .fold.folded > .head::after { transform: none; }
+  .fold.folded:not(.one) > :not(.head):not(.live), .fold.one > .head { display: none; }
+  .fold.folded > .head { border-radius: 10px; }
+  .fold:has(.st.bad) > .head .n { color: var(--red); }
+  .fold .line { display: flex; align-items: baseline; gap: .6em; padding: .4em .8em; cursor: pointer; min-width: 0; }
+  .fold .line:hover { background: var(--hover); }
+  .fold .tool { flex: none; font: 600 12px var(--mono); color: var(--ink); }
+  .fold .sum { flex: 0 1 auto; min-width: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fold .gist { flex: 1 1 0; font: 12px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .fold .st { flex: none; font-size: 12px; color: var(--faint); white-space: nowrap; }
+  .fold .st.bad { color: var(--red); }
+  .fold:has(.st.run) > .head .n::before, .fold .st.run::before { content: ""; display: inline-block; width: .7em; height: .7em; border: 1.5px solid var(--ink); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -.05em; }
+  .fold:has(.st.run) > .head .n::before { margin-right: .4em; }
+  .fold .open-file { font-size: 12px; color: var(--maroon); }
+  .fold > .thought { padding: .4em .8em; margin: 0; }
+  .row > .meta { margin: 0 .8em .4em; }
+  .row:not(.expanded) > .meta { display: none; }
+  .row > .detail { padding: .1em .8em .6em; }
   .row:not(.expanded) > .detail { display: none; }
-  .io { font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f1ea; border: 1px solid var(--line); border-radius: 8px; padding: .55em .75em; margin: .3em 0; max-height: 28em; overflow: auto; }
+  .row.expanded > .line { background: var(--hover); }
+  .fold > .section { padding: .7em 1em; font-size: 14.5px; }
+  .fold .detail .prose { font: 13.5px/1.5 var(--sans); }
+  .fold .detail .prose pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .io { font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f1ea; border: 1px solid var(--line); border-radius: 8px; padding: .55em .75em; margin: .3em 0; }
   .io.err { border-color: var(--red); }
   /* A call's fields, or a result that is data: each by its name. */
   .args { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25em .8em; font-size: 13px; margin: .3em 0; }
@@ -159,16 +173,6 @@
   .v.code { font: 12px/1.6 var(--mono); }
   .prose.v { font: 13.5px/1.5 var(--sans); }
   .prose.v > * { margin: 0 0 .3em; }
-  /* The root, marked up: the system prompt, then each tool. */
-  .thought.root[open] > summary { margin-bottom: .5em; }
-  .card.system { color: var(--ink); }
-  .tool-def .io { max-height: none; overflow: visible; }
-  .card.system .prose { font-size: 14.5px; }
-  .tool-defs { margin: .8em 0 0; }
-  .tool-def { padding: .55em 0; border-top: 1px solid var(--line); color: var(--ink); }
-  .tool-def .tool { font: 600 12.5px var(--mono); margin-bottom: .2em; }
-  .tool-def .prose { font: 13.5px/1.5 var(--sans); }
-  .tool-def .schema > summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-top: .3em; }
   .io .k { color: var(--muted); }
   .chips { display: flex; flex-wrap: wrap; gap: .4em; margin: .25em 0 .5em 1em; }
   a.cite { font-size: .75em; padding: 0 .4em; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: var(--muted, #777); white-space: nowrap; vertical-align: .1em; }
@@ -180,7 +184,6 @@
   .chip.done { color: var(--muted); }
   .live-text { border-left: 2px solid var(--ink); padding-left: .9em; }
   .live-text::after { content: "▍"; animation: breathe 1s infinite; }
-  .exact .io { max-height: none; }
   .exact-entry { margin: 0 0 1em; }
   .exact-entry .who { font: 600 12px var(--sans); color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }

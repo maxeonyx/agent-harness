@@ -272,7 +272,7 @@ export async function start(how, text, files, after = []) {
       name: h.name, by: null, scope: h.scope, origin: h.origin,
       mode: "UserFacing", mandate: { text: mandate, brief: null, quotes: [] }, tuning: h.tuning || {},
     } }] });
-    if (words) out.push({ Delivery: { id: next(), to: id, content: { Words: digest(words) }, read: "Next" } });
+    if (words) out.push({ Delivery: { id: next(), to: id, content: { Words: digest(words) } } });
     return [...out, ...after];
   }, words ? [text, words] : [text]);
   if (!why) { pendingOpen = id; stay = true; }

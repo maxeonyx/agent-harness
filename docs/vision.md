@@ -20,7 +20,7 @@ What Max does with the harness when it is finished, grouped by the part of his d
 ### Talking to agents
 
 - **One text box, dictated into, everywhere.** Max dictates most of what he says. Every place he answers is a free-text box, and dictation is built in, so it works where his operating system gives him none.
-- **A staging box with two sends.** Enter or a click only stages: "I very, very frequently change my mind." A second Enter or click sends. **Send now** reaches the agent at its next request, saying what Max had seen when he wrote it; **Queue** holds the message until the agent's turn ends.
+- **A staging box with one Send.** "I very, very frequently change my mind." A press of Send with words in the box stages them: they move up to the top of the box, above a divider, and the box empties for more. An attachment stages the same way, and so will the user turn's other contributions. A press with the box empty sends everything staged, which reaches the agent at its next request, saying what Max had seen when he wrote it. There is no queue: "I don't think we need queue at all. I don't use it."
 - **Nothing he types is lost.** Every text box is durable: a reload, a crash or the scheduler moving him elsewhere keeps his words, and the draft follows him from the PC to the phone. Typing in one draft on two devices never silently loses text (a text CRDT is the eventual answer; today a conflict opens a second draft).
 - **Answering is just talking.** An agent facing Max ends its turn with whatever it needs from him; he replies in the chat, and he can reject its framing. There is no separate question tool or answer box.
 - **Done is up to him.** A user-facing chat is waiting on Max whenever its turn has ended, and it is finished only when he says so.
