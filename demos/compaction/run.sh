@@ -54,7 +54,7 @@ git -C "$dir/repo" log --format='%h %s'
 if [ "$model" = scripted ]; then
   echo
   echo "== an agent compacting in a loop: a compact_and_continue with no call since the last compaction is refused"
-  loop=$(drive chat chat "$dir/repo" 'tool compact_and_continue {"summary": "tool compact_and_continue {\"summary\": \"again\"}"}')
+  loop=$(drive chat chat "$dir/repo" 'tool compact_and_continue {"carry": "tool compact_and_continue {\"carry\": \"again\"}"}')
   drive settle "$loop"
   drive log "$loop" | grep -E '^  (→|←)'
 fi

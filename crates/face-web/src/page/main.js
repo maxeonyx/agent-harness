@@ -14,8 +14,6 @@ import "./hints.js";
 
 // ─── The page, started ─────────────────────────────────────────────────────
 export async function viewArrived(fresh) {
-  if (fresh === null) { $("#link").className = "down"; $("#link").title = "reconnecting"; return; }
-  $("#link").className = ""; $("#link").title = "live";
   if (fresh) liveReset();
   takeView(tab.view());
   settleLocal();
