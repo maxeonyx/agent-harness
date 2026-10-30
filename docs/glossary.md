@@ -7,11 +7,11 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Term | Meaning | In code |
 |---|---|---|
 | Brain | The one process that owns model calls, storage and decisions for a domain. Faces and limbs connect to it. It is a limb too: it hosts the harness's own tool sets. | `crates/brain` |
-| Limb | A process the harness gets onto a machine, as one user, so that agents can do things there: one per brain, machine and user, whatever directories its agents work in. What it does varies with the tool sets it offers. Infrastructure, not part of the agent model. It outlives a brain restart. | Differs: each workspace directory, the browser, the builds and Max's config are each an `environment::Limb` with a process of its own; `crates/limb*` |
+| Limb | A process the harness gets onto a machine, as one user, so that agents can do things there: one per brain, machine and user, whatever directories its agents work in. What it does varies with the tool sets it offers. Infrastructure, not part of the agent model. It outlives a brain restart. | `limb::Limb`; one `harness-limb serve` per brain, machine and user (`crates/limb`, `crates/limb-machine`) |
 | Face | What Max sees and acts through: the page, on the PC or the phone. Each tab is a replica. | `crates/face-web`, `crates/face-tab` |
 | Domain | A sphere of Max's obligations (home, work) with one attention: its own brain, queue, priority document and data. | Not built. |
 | Area | A mode of Max's life within a domain (hobby programming, life admin, Kibra's study), with a main agent that owns its work. | Not built. |
-| Tool set | A named set of tools and the instructions for using them, offered by a limb and held by roles: currently `workspace` (a shell and files in the working directory), `user` (Max's own instructions and skills), `web`, `meta`, `browser`, `builds`. | Differs: each is a limb of its own. |
+| Tool set | A named set of tools and the instructions for using them, offered by a limb and held by roles: currently `workspace` (a shell and files in the working directory), `user` (Max's own instructions and skills), `web`, `meta`, `browser`, `builds`. | `limb::ToolSet`, offered by a limb as a `limb::Offer`; `harness_limb::ToolSet` runs one |
 | Build | One compiled version of the harness, named by the hash of its executable. A supervisor starts a new build beside the old and rolls back if it fails. | `build::BuildId`, `crates/limb-builds` |
 | Program | Everything a session's behaviour depends on that can change under it: how its records fold, its policy, how its requests are written. No I/O, so it can later load as WASM. | `crates/program` |
 
@@ -32,10 +32,10 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Term | Meaning | In code |
 |---|---|---|
 | Task | Anything asynchronous with one owner: a process, a request, a tool call, an agent, a chat. Everything that runs is a task in one tree. | Differs: `task::Task` is one agent working toward a result. Requests and calls have their own types (below). |
-| Role | The abstract kind of agent: its system prompt, the tool sets it holds (with their instructions and skills), its model and effort, and the roles it can start. It names no limb and no directory. | Differs: `environment::Environment`, which names limbs (`limbs`) and the kinds of limb each agent gets (`places`). |
+| Role | The abstract kind of agent: its system prompt, the tool sets it holds (with their instructions and skills), its model and effort, and the roles it can start. It names no limb and no directory. | `role::Role`, its tool sets in `tools`; `role::Binding` finds them on limbs for one agent |
 | Meta role | A role that holds only the brain's tool sets: its agents have no working directory and need no process anywhere. | Not built. |
 | Agent | The concrete one: a context, a working directory and a role. A model working in a loop toward a result. | `task::Task` |
-| Working directory | Where an agent's shell and file tools run, on one limb: given when the agent is created, fixed for its life, and shared by its forks. | Differs: a workspace limb per directory, in `task::Task::places`. |
+| Working directory | Where an agent's shell and file tools run, on one limb: given when the agent is created, fixed for its life, and shared by its forks. | `task::Task::workdir`, a `limb::Workdir` |
 | Chat | An agent Max started or opened: user-facing. It waits on him whenever its turn ends, and only he says it is done. | `task::Mode::UserFacing`; `state::Waiting::Max` |
 | Request | One call to the model. | `model_call::ModelCall` |
 | Call | One tool call. | `call::Call` |
