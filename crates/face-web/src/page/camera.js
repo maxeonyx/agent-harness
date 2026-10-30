@@ -275,17 +275,22 @@ function clipCard(v, b) {
   panel.style.clipPath = sx > .5 || sy > .5 ? `inset(0 ${sx}px ${sy}px ${sx}px round ${Math.min(18, v.w / 2, v.h / 2)}px)` : "";
 }
 const lerpRect = (a, b, e) => ({ x: lerp(a.x, b.x, e), y: lerp(a.y, b.y, e), w: lerp(a.w, b.w, e), h: lerp(a.h, b.h, e) });
-// The floating controls hide when the card would sit under them.
-let usageRight = 0;
-export const setUsageRight = (r) => { usageRight = r; };
+// When the card would sit under the floating controls, those at the right
+// hide, and the usage and the build at the left join the card's bottom bar.
+const bottom = $("#bottom"), corner = $("#corner");
+let cornerRight = 0;
 export function coverCheck() {
+  if (corner.parentElement === bottom) cornerRight = corner.getBoundingClientRect().right;
   let covered = false;
   if (openId && cardShown) {
     const l = cam.x + cardShown.x * cam.k, r = l + cardShown.w * cam.k;
     const t = cam.y + cardShown.y * cam.k, b = t + cardShown.h * cam.k;
-    covered = b > innerHeight - 60 && t < innerHeight && (l < usageRight + 24 || r > innerWidth - 120);
+    covered = b > innerHeight - 60 && t < innerHeight && (l < cornerRight + 24 || r > innerWidth - 120);
   }
   document.body.classList.toggle("covered", covered);
+  const dock = covered ? $(".compose .dock", panel) : null;
+  if (dock && corner.parentElement !== dock) dock.append(corner);
+  if (!dock && corner.parentElement !== bottom) bottom.prepend(corner);
 }
 
 // The card fits the window it is in, a phone's keyboard opening shrinks it,

@@ -315,6 +315,7 @@ export function buildCompose(id) {
   // What is staged and what is typed scroll as one, under the buttons.
   const field = el("div", "field");
   field.append(el("div", "parts"), box);
+  field.addEventListener("scroll", () => fade(field), { passive: true });
   const line = el("div", "line");
   line.append(field, side);
   // Its height follows its words at the width it is shown at.
@@ -322,7 +323,7 @@ export function buildCompose(id) {
   new ResizeObserver(([e]) => { if (e.contentRect.width !== width) { width = e.contentRect.width; autosize(); } }).observe(field);
   const row = el("div", "row2");
   const sample = el("button", "later sample", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
-  row.append(el("span", "picks"), el("span", "status"), sample, el("span", "tune"));
+  row.append(el("span", "dock"), el("span", "picks"), el("span", "status"), sample, el("span", "tune"));
   wrap.append(el("div", "others"), line, row);
   // What Max can do to the task itself floats outside the card, beside it.
   compose.append(wrap, el("div", "acts"));
@@ -477,15 +478,30 @@ function press() {
   if (box.value.trim()) return stage();
   if (!unsaved(box.dataset.key) && lockedUntil <= Date.now()) submit();
 }
-// Only what went wrong is said; what went right shows as itself.
-export const say = (text, bad) => { const s = $(".status", compose); if (s) { s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`; } };
+// Only what went wrong is said; what went right shows as itself. What went
+// wrong clears itself on his next edit, or after a while.
+let unsay = 0;
+export const say = (text, bad) => {
+  clearTimeout(unsay);
+  const s = $(".status", compose);
+  if (!s) return;
+  s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`;
+  if (bad) unsay = setTimeout(() => say(""), 10000);
+};
 function autosize() {
   if (!box) return;
+  const field = box.parentElement, top = field.scrollTop;
+  const following = top + field.clientHeight >= field.scrollHeight - 2 && box.selectionEnd === box.value.length;
   box.style.height = "auto";
   box.style.height = `${box.scrollHeight}px`;
-  // Typing at the end keeps the end in view.
-  if (box.selectionEnd === box.value.length) box.parentElement.scrollTop = box.parentElement.scrollHeight;
+  // Measuring collapses the box for a moment, which pulls the field's scroll
+  // to its top: what Max was reading stays where it was, and words arriving
+  // at the end he is watching keep it in view.
+  field.scrollTop = following ? field.scrollHeight : top;
+  fade(field);
 }
+// Words scrolled up out of a full box fade at its top edge.
+const fade = (field) => field.classList.toggle("scrolled", field.scrollTop > 0);
 
 // Sending what is staged: to a task working or between turns, the draft's
 // Send; to a task waiting on agents it started, an aside that talks now;
@@ -562,6 +578,7 @@ function giveBlocks(key, blocks) {
 
 let prev = "";
 function onInput() {
+  if ($(".status.bad", compose)) say("");
   const now = box.value;
   if (dictation && dictation.key === box.dataset.key) {
     let x = 0;
