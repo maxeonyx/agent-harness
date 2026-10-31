@@ -676,9 +676,7 @@ function renderTail(s, t) {
   const parts = [];
   if (t.waiting?.kind === "model") parts.push(followModel(t.waiting.call));
   else stopModel();
-  const shape = BLOB_STATE[t.waiting?.kind]?.(t.waiting);
-  const blob = shape && showBlob(t, shape);
-  if (blob) parts.push(blob);
+  showBlob(t, BLOB_STATE[t.waiting?.kind]?.(t.waiting));
   // Not read yet: dashed, until the request that reads it.
   for (const p of t.pending || []) {
     const when = `${clock(p.at)}, not read yet`;
@@ -693,27 +691,50 @@ function renderTail(s, t) {
   if (tail.dataset.key !== key || parts.some((p) => p.classList?.contains("live-holder"))) {
     tail.dataset.key = key;
     tail.replaceChildren(...parts);
-    blobs?.moved();
   }
 }
 
-// While it works, the live end of the log shows its blob (`blobs.js`), below
-// what is streaming: what it waits on, and a disk for each piece of data.
-const BLOB_PX = 64, BLOB_STATE = {
+// While it works, the log ends in its blob (`blobs.js`): what it waits on,
+// and a disk for each piece of data. It sits big below the last entry and
+// scrolls with the log; scrolled past, it stays docked small above the
+// entry box on a disc, standing in for Go to bottom: a tap goes there. The
+// dock is sticky, so the compositor moves it with the scroll, and the
+// blob's size, place and disc follow how far the end is below.
+const BIG = 128, SMALL = 56, DOCK = BIG + 24, DOCKED = SMALL, TRAVEL = DOCK - DOCKED, BLOB_STATE = {
   model: (w) => (w.streaming ? "streaming" : "first"), calls: () => "tools", harness: () => "brain",
   starting: () => "starting", listening: () => "listening",
 };
-const blobSession = session();
+const blobSession = session(), dock = $(".dock", panel);
+dock.style.cssText = `width: ${DOCK}px; height: ${DOCK}px; bottom: ${-TRAVEL}px`;
 let blobs, blobBox = null, blobTask = null;
 function showBlob(t, shape) {
-  if (blobs === undefined) blobs = layer($(".lane", panel), scrollEl);
-  if (!blobs) return null;
-  blobBox ??= blobs.add(BLOB_PX, blobSession);
-  blobSession.letter = glyph(t);
-  blobSession.set(shape, blobTask !== t.id);
-  blobTask = t.id;
-  return blobBox;
+  if (shape && blobs === undefined) blobs = layer(dock);
+  const shown = !!(shape && blobs);
+  dock.hidden = !shown;
+  if (shown) {
+    if (!blobBox) {
+      blobBox = blobs.add(BIG, blobSession);
+      blobBox.title = "Go to bottom";
+      blobBox.onclick = toBottom;
+      dock.append(blobBox);
+    }
+    blobSession.letter = glyph(t);
+    blobSession.set(shape, blobTask !== t.id);
+    blobTask = t.id;
+  }
+  fitBlob();
 }
+// From big in the middle of the dock (the end in view) to small at its top
+// (the end a dock's travel below), in step with the scroll.
+function fitBlob() {
+  if (!blobBox || dock.hidden) return;
+  const f = Math.min(1, Math.max(0, below() / TRAVEL)), size = BIG + (SMALL - BIG) * f, y = DOCK / 2 + (DOCKED - DOCK) / 2 * f;
+  blobBox.style.transform = `translate(-50%, -50%) translateY(${y}px) scale(${size / BIG})`;
+  blobBox.style.setProperty("--docked", f);
+  blobs.moved();
+}
+const below = () => scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+const toBottom = () => scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" });
 function unread(t) {
   const c = mandateCard(`From ${byId[t.owner]?.name || "its owner"}`);
   $(".body", c).append(markdown(t.mandate || ""));
@@ -731,13 +752,18 @@ function mandateCard(title) {
 // The log keeps to its bottom while Max is there, so live text scrolls into
 // view; once he scrolls up, it stays where he is.
 function stick(change) {
-  const atBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80 || logState?.follow;
+  const atBottom = below() < 80 || logState?.follow;
   change();
   if (atBottom) { scrollEl.scrollTop = scrollEl.scrollHeight; if (logState) logState.follow = false; }
-  else $(".jump", panel).hidden = false;
+  jumped();
 }
-scrollEl.addEventListener("scroll", () => { if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80) $(".jump", panel).hidden = true; });
-$(".jump", panel).onclick = () => { scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" }); };
+// Go to bottom shows while the end is out of view, unless the blob does.
+function jumped() {
+  $(".jump", panel).hidden = below() < 80 || !dock.hidden;
+  fitBlob();
+}
+scrollEl.addEventListener("scroll", jumped);
+$(".jump", panel).onclick = toBottom;
 
 // A request streaming, or a command printing: neither is a fact. Each
 // arrives on the link as live pieces, all of them again after a reconnect.
