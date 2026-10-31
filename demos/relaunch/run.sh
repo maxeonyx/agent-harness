@@ -66,10 +66,12 @@ relaunch() {
     printf '%b\n' "${said:-no result in 30 minutes}"
 }
 
-step "serve $(git -C "$work/clone" rev-parse --short=12 HEAD)"
+base=$(git -C "$work/clone" rev-parse --short=12 HEAD)
+# A build of HEAD installed before the demo may be another brain's: keep it.
+[[ -d $home/builds/$base ]] && installed="" || installed=$base
+step "serve $base"
 "$work/clone/dev/serve" "$name" "$port" --model scripted
 cp "$home/$name/build/bin/act" "$work/act"
-base=$(git -C "$work/clone" rev-parse --short=12 HEAD)
 runs
 
 step "1. relaunch onto a good build"
@@ -111,7 +113,7 @@ step "end: retire the brain's unit and delete the demo's builds"
 systemctl --user disable --now --quiet "$unit"
 rm "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
 systemctl --user daemon-reload
-for build in "$base" "$good" "$check" "$live" "$dies" "$oneway"; do
+for build in $installed "$good" "$check" "$live" "$dies" "$oneway"; do
     [[ -d $home/builds/$build ]] && chmod -R u+w "$home/builds/$build" && rm -rf "$home/builds/$build"
 done
 echo "its limbs end themselves 15 minutes after their brain"
