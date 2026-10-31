@@ -251,8 +251,7 @@ export function placeMarks() {
     a.classList.toggle("next", next);
     const [cx, cy] = at(s);
     a.classList.toggle("under", ui.some((u) => cx > u.left - 12 && cx < u.right + 12 && cy > u.top - 12 && cy < u.bottom + 12));
-    a.style.left = `${cx}px`;
-    a.style.top = `${cy}px`;
+    a.style.transform = `translate(${cx}px, ${cy}px)`;
     $("svg", a).style.transform = `rotate(${Math.atan2(y - cy, x - cx)}rad)`;
   }
   for (const [id, a] of markEls) if (!seen.has(id)) { a.remove(); markEls.delete(id); }

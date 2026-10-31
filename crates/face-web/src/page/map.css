@@ -5,13 +5,15 @@
   @keyframes late { from { opacity: 0; } to { opacity: 1; } }
 
   /* The map: an endless dotted ground, the world on it. */
-  #map { position: fixed; inset: 0; overflow: hidden; touch-action: none; cursor: grab;
-    background-color: var(--ground);
+  /* The ground is painted once per zoom and slid by less than a dot's spacing,
+     so a pan moves a picture rather than painting it again. */
+  #map { position: fixed; inset: 0; overflow: hidden; touch-action: none; cursor: grab; background-color: var(--ground); }
+  #grid { position: absolute; left: 0; top: 0; right: -80px; bottom: -80px; pointer-events: none;
     background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); }
   #map.grabbing { cursor: grabbing; }
   #map.grabbing #panel { user-select: none; -webkit-user-select: none; }
   #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-  #map.moving #world, #map.moving #panel { will-change: transform; }
+  #map.moving #grid, #map.moving #world, #map.moving #panel { will-change: transform; }
   #nodes { user-select: none; -webkit-user-select: none; }
   #edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
   #empty { position: fixed; inset: 0; display: grid; place-content: center; color: var(--faint); font: 16px var(--serif); pointer-events: none; }
@@ -89,7 +91,7 @@
   @keyframes grow { from { transform: scale(.2); opacity: 0; } }
 
   /* What needs Max but is off screen: a mark at the edge, toward it. */
-  .offscreen { position: fixed; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--yours); color: var(--paper); display: grid; place-items: center; box-shadow: 0 3px 10px rgba(122, 60, 20, .35); transition: opacity .2s; }
+  .offscreen { position: fixed; left: 0; top: 0; will-change: transform; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--yours); color: var(--paper); display: grid; place-items: center; box-shadow: 0 3px 10px rgba(122, 60, 20, .35); transition: opacity .2s; }
   .offscreen.under { opacity: 0; pointer-events: none; }
   .offscreen svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
   .offscreen.next::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--yours); animation: halo 2.2s var(--ease) infinite; }
