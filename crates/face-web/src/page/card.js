@@ -1,7 +1,7 @@
 import { $, el, kTokens, logEl, panel, scrollEl } from "./base.js";
 import { act, can, digest } from "./tab.js";
 import { byId, graph, live, look, parentOf, unfolded, view } from "./map.js";
-import { cam, camFor, cardRect, cardShown, closing, coverCheck, dotRect, drag, fly, framed, framing, heldAt, newPoint, refocus, seam, seamFor, setCardShown, setFramed, setSeam } from "./camera.js";
+import { cam, camFor, cardRect, cardShown, closing, coverCheck, dotRect, fly, framed, framing, heldAt, newPoint, refocus, seam, seamFor, setCardShown, setFramed, setSeam } from "./camera.js";
 import { nodeEls, rebuild, render } from "./draw.js";
 import { hideTip, hoverable } from "./hover.js";
 import { actionButton, actionsKey, actionsOf } from "./actions.js";
@@ -135,9 +135,6 @@ function buildPanel(id) {
   else renderPanel();
 }
 $(".x", panel).onclick = closeNode;
-// A tap on the top bar's empty rest closes it too, as one on the map does:
-// on a phone the card fills the screen, and there is no map to tap.
-$(".bar", panel).addEventListener("click", (e) => { if (!drag?.moved && !e.target.closest(".title, .mini, button")) closeNode(); });
 hoverable(mini, () => openId);
 mini.onclick = refocus;
 
