@@ -38,6 +38,9 @@
   dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; color: var(--muted); }
   dt { font-weight: 600; color: var(--ink); }
   dd { margin: 0; }
+  .stress { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px 2px; width: 100%; }
+  .stress .cell { padding-top: 6px; font: 600 11px/1.2 var(--serif); color: var(--ink); }
+  #fps { position: fixed; right: 8px; bottom: 8px; z-index: 2; background: var(--ink); color: var(--paper); font: 12px/1.3 ui-monospace, monospace; padding: 4px 8px; border-radius: 6px; white-space: pre; }
 </style>
 </head>
 <body>
@@ -58,6 +61,7 @@
     <div class="frame"><small>Map node</small><div class="mapnode"><div id="node"></div><div class="name">spinner-metaballs</div></div></div>
   </div>
   <div class="frame"><small>Every state at map-node size</small><div class="gallery" id="gallery"></div></div>
+  <div class="frame" id="stressframe" hidden><small id="stresslabel"></small><div class="stress" id="stress"></div></div>
   <dl>
     <dt>Session</dt><dd>The centre ball, with the role letter. When the brain itself works (between the others), the centre grows: the brain is the session doing its own step.</dd>
     <dt>Model</dt><dd>The Claude mark, in Claude's colour. Before the first byte the ball swells and eases in time, its mark still and faint; streaming, it is full size, the mark turns, and every chunk sends out a disk.</dd>
@@ -483,6 +487,49 @@ for (const [name, s] of Object.entries(STATES)) {
   cell.title = `Core: Waiting::${s.core}`;
   cell.append(spinner(64, ses, "C"), s.label);
   document.getElementById("gallery").append(cell);
+}
+
+// ?n=N: a stress grid of N map nodes in mixed states, like the map: mostly
+// finished or paused, a few streaming, running tools or waiting on Max. A
+// seeded random, so every load is the same map. ?fps shows frame times.
+const stressN = +(params.get("n") ?? 0);
+if (stressN > 0) {
+  let seed = 7;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const MIX = [["done", 30], ["paused", 20], ["streaming", 12], ["first", 6], ["tools", 10], ["listening", 6],
+    ["max", 8], ["brain", 4], ["held", 2], ["starting", 2]];
+  const total = MIX.reduce((a, [, w]) => a + w, 0), LETTERS = "COEDR";
+  const pick = () => { let u = rand() * total; for (const [s, w] of MIX) if ((u -= w) < 0) return s; return "done"; };
+  const grid = document.getElementById("stress");
+  for (let i = 0; i < stressN; i++) {
+    const ses = session(pick(), Math.floor(rand() * 5));
+    all.push(ses);
+    const cell = document.createElement("div");
+    cell.className = "cell";
+    cell.append(spinner(64, ses, LETTERS[i % LETTERS.length]), `node-${i + 1}`);
+    grid.append(cell);
+  }
+  document.getElementById("stresslabel").textContent = `Stress: ${stressN} map nodes`;
+  document.getElementById("stressframe").hidden = false;
+}
+if (params.has("fps") || stressN > 0) {
+  // Frame intervals over the last 2 s: mean and 95th percentile.
+  const el = document.createElement("div"), times = [];
+  el.id = "fps";
+  document.body.append(el);
+  let prev = performance.now(), shown = prev;
+  const tick = (now) => {
+    times.push(now - prev); prev = now;
+    if (now - shown > 500) {
+      shown = now;
+      while (times.length > 120) times.shift();
+      const sorted = times.slice().sort((a, b) => a - b), mean = times.reduce((a, b) => a + b, 0) / times.length;
+      window.frameStats = { mean, p95: sorted[Math.floor(sorted.length * .95)] };
+      el.textContent = `frame ${mean.toFixed(1)} ms  p95 ${window.frameStats.p95.toFixed(1)} ms`;
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
 }
 
 // ?measure: every frame of the large spinner, across each state held for
