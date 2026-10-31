@@ -59,9 +59,8 @@
 //! with `one_way`, as with `back`. Max: "The tool call rejects initially
 //! and says, this would be one way, call it again with the one-way flag."
 //!
-//! **Built so far.** All of the above but the page: the rehearsal loads no
-//! page in headless Chrome. [`Probation`] is today's trial on real
-//! sessions, which nothing judges any more; the face still shows it.
+//! **Built so far.** All of the above. [`Probation`] is today's trial on
+//! real sessions, which nothing judges any more; the face still shows it.
 //!
 //! **Limbs move with the brain, once it is proven.** A [`Launched`] names
 //! the executable it would start for each kind of limb. Once its build is
@@ -318,7 +317,7 @@ pub enum Pathway {
     Response,
     /// Its port bound with its certificate, and its face served read-only
     /// over what it folded, so the page Max has open shows the state it
-    /// found while it checks, and what he sends waits in his tab.
+    /// found while it checks the rest, and what he sends waits in his tab.
     Serve,
     /// The rehearsal's: the page, served over the copy, loads in headless
     /// Chrome and renders its first view with no uncaught exception. A page
@@ -350,9 +349,9 @@ impl Pathway {
     pub const GATE: [Pathway; 5] = [
         Pathway::Fold,
         Pathway::Decide,
+        Pathway::Serve,
         Pathway::Requests,
         Pathway::Response,
-        Pathway::Serve,
     ];
     /// The rehearsal's own, after the gate on a copy.
     pub const REHEARSAL: [Pathway; 4] = [

@@ -1,5 +1,5 @@
 import { el, icon } from "./base.js";
-import { act, can } from "./tab.js";
+import { act } from "./tab.js";
 import { heldBy, isDone } from "./map.js";
 
 // ─── What Max can do to a task ─────────────────────────────────────────────
@@ -15,7 +15,7 @@ import { heldBy, isDone } from "./map.js";
 // and what it started; while that tidies up, End now ends it at once. Done,
 // in a chat, has it write its result.
 export function actionsOf(t) {
-  if (!can.act || !t || isDone(t)) return [];
+  if (!t || isDone(t)) return [];
   const out = [], holder = heldBy(t), stopping = !!t.stop;
   if (!stopping && holder) out.push(
     { icon: "play", label: "Resume", title: holder === t ? "It and everything under it carry on" : `Paused with ${holder.name}: it and everything under it carry on`, facts: () => ({ Task: [holder.id, { Pause: "Off" }] }) },
@@ -30,7 +30,7 @@ export function actionsOf(t) {
 // What Max can do to background work: stop it. What an agent passed to him
 // is his to end; an agent's own he can stop too, and the agent is told.
 export function callActionsOf(call) {
-  if (!can.act || call.status === "settled" || call.abandoned) return [];
+  if (call.status === "settled" || call.abandoned) return [];
   const yours = call.owner === "max";
   return [{ icon: "stop", label: "Stop", confirm: !yours, title: yours ? "Stop it: it was passed to you, so it is yours to end" : "Stop it: the agent that owns it gets its outcome", facts: () => ({ Call: [call.id, "Abandon"] }) }];
 }

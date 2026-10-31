@@ -1,9 +1,10 @@
 import { $, el } from "./base.js";
 import { view } from "./map.js";
+import { can } from "./tab.js";
 
 // ─── Which build runs ──────────────────────────────────────────────────────
 // A quiet line beside the usage: the commit the brain runs, and while a
-// relaunch is in play, how far it has got: under way, took over and on
+// relaunch is in play, how far it has got: checking a build, read-only, under way, took over and on
 // probation (a response, then a round trip through a limb), proven, or
 // gone back and why. Limbs still on the build before say so until they
 // move. Hovering it shows all of that as a table.
@@ -17,7 +18,8 @@ export function renderBuilds() {
   const old = view.superseded || [];
   const rows = [["Build", view.source || "Unknown"]];
   let now = "";
-  if (r?.stage === "under way") now = "Relaunching…";
+  if (can.checking) { now = `Checking build ${can.checking.slice(0, 7)}`; rows.push(["Checking", `${can.checking}: what you send waits here until a build opens`]); }
+  else if (r?.stage === "under way") now = "Relaunching…";
   else if (r?.stage === "went back") { now = "Went back"; rows.push(["Went back", r.why]); }
   else if (r?.stage === "took over" && v.Proven) now = "Proven ✓";
   else if (r?.stage === "took over" && v.Refused) { now = "Refused"; rows.push(["Refused", v.Refused.message]); }

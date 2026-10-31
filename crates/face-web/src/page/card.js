@@ -1,5 +1,5 @@
 import { $, el, kTokens, logEl, panel, scrollEl } from "./base.js";
-import { act, can, digest } from "./tab.js";
+import { act, digest } from "./tab.js";
 import { byId, graph, live, look, parentOf, unfolded, view } from "./map.js";
 import { cam, camFor, cardRect, cardShown, closing, coverCheck, dotRect, fly, framed, framing, heldAt, newPoint, refocus, seam, seamFor, setCardShown, setFramed, setSeam } from "./camera.js";
 import { nodeEls, rebuild, render } from "./draw.js";
@@ -165,7 +165,7 @@ export function renderPanel() {
 
 // The name is renamed where it is: a double click, then Enter.
 title.addEventListener("dblclick", () => {
-  if (!byId[openId] || !can.act) return;
+  if (!byId[openId]) return;
   title.contentEditable = "plaintext-only";
   title.focus();
   getSelection().selectAllChildren(title);
