@@ -18,6 +18,7 @@ const args = process.argv.slice(2);
 const flag = (name, d) => { const i = args.indexOf(name); return i < 0 ? d : args.splice(i, 2)[1]; };
 const phone = args.includes("--phone") && args.splice(args.indexOf("--phone"), 1);
 const lag = args.includes("--lag") && args.splice(args.indexOf("--lag"), 1);
+const dotsFlag = args.includes("--dots") && args.splice(args.indexOf("--dots"), 1);
 const throttle = +flag("--throttle", 1), secs = +flag("--secs", 5), shot = flag("--shot"), tall = flag("--height");
 const query = args[0] ?? "?n=300";
 const page = "file://" + path.resolve(path.dirname(new URL(import.meta.url).pathname), "metaballs.html") + query;
@@ -68,6 +69,7 @@ const after = await metrics();
 const t = r.result.value, sorted = t.slice().sort((a, b) => a - b);
 const per = (k) => ((after[k] - before[k]) * 1000 / t.length).toFixed(1);
 console.log(`${query} ${phone ? "phone" : "desktop"} x${throttle}: frame ${(t.reduce((a, b) => a + b, 0) / t.length).toFixed(1)} ms, p95 ${sorted[Math.floor(t.length * .95)].toFixed(1)} ms, ${t.length} frames in ${secs} s; main thread per frame: task ${per("TaskDuration")} ms, script ${per("ScriptDuration")} ms`);
+if (dotsFlag) dotJitter((await s("Runtime.evaluate", { returnByValue: true, expression: "window.dotTrace" })).result.value);
 if (shot) {
   await s("Runtime.evaluate", { expression: `document.getElementById("stress")?.scrollIntoView()` });
   await new Promise((ok) => setTimeout(ok, 500));
@@ -79,6 +81,35 @@ function done() {
   proc.kill();
   fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
   process.exit(0);
+}
+
+// With ?dots, the big spinner's and the map node's compaction dots per frame,
+// in spinner units, scaled to the big one's pixels: the jitter is each dot's
+// change in velocity from one frame to the next (the motion's own
+// acceleration is far below a pixel), and the node against the big one in
+// the same frame shows whether it is a scaled copy.
+function dotJitter([big, node]) {
+  const px = 260 / 2.9, q = (a, f) => a.slice().sort((x, y) => x - y)[Math.floor(f * (a.length - 1))] ?? 0;
+  const jitter = (tr) => {
+    const j = [];
+    for (let f = 2; f < tr.length; f++) {
+      const [a, b, c] = [tr[f - 2], tr[f - 1], tr[f]];
+      if (a.length !== b.length || b.length !== c.length) continue;
+      for (let k = 1; k < c.length; k += 2) j.push(px * Math.hypot(c[k] - 2 * b[k] + a[k], c[k + 1] - 2 * b[k + 1] + a[k + 1]));
+    }
+    const dots = tr.map((f) => (f.length - 1) / 2);
+    return `${tr.length} frames, ${Math.min(...dots)}-${Math.max(...dots)} dots; jitter in big px: mean ${(j.reduce((x, y) => x + y, 0) / j.length).toFixed(3)}, p99 ${q(j, .99).toFixed(2)}, max ${q(j, 1).toFixed(2)}, over 1 px ${j.filter((v) => v > 1).length} of ${j.length}`;
+  };
+  console.log(`big:  ${jitter(big)}\nnode: ${jitter(node)}`);
+  const at = new Map(big.map((f) => [f[0], f])), d = [];
+  let unlike = 0;
+  for (const f of node) {
+    const b = at.get(f[0]);
+    if (!b) continue;
+    if (b.length !== f.length) { unlike++; continue; }
+    for (let k = 1; k < f.length; k++) d.push(px * Math.abs(f[k] - b[k]));
+  }
+  console.log(`node against big, same frame, big px: mean ${(d.reduce((x, y) => x + y, 0) / d.length).toFixed(3)}, max ${q(d, 1).toFixed(2)}; frames with a different dot count ${unlike}`);
 }
 
 // The ball of a finished node (one green ball, still) against a magenta

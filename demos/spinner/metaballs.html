@@ -6,7 +6,8 @@
      another, the growth passes through the centre. Open the file: no build,
      no brain. ?state=NAME holds one state; ?pips=N sets the compactions;
      ?n=N adds a stress grid of N map nodes; ?map shows them as a map that
-     pans with a JS transform, as #map does; ?fps shows frame times. -->
+     pans with a JS transform, as #map does; ?fps shows frame times; ?dots records the
+     compaction dots for perf.mjs --dots. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -588,7 +589,13 @@ function place() {
   return [0, -top];
 }
 
+// The track and the dots' pitch, in spinner units, laid out as on the big
+// spinner whatever the size: a map node's dots are a scaled copy of its.
+const TRACK_PX = 260, TRACK_LEVEL = .05 + 3 * 2 * SPAN / TRACK_PX, TRACK_PITCH = Math.max(.2, 9 * 2 * SPAN / TRACK_PX);
 let dots = new Float32Array(4 * 256), last = performance.now();
+// ?dots: every frame, the big spinner's and the map node's dot positions, in
+// spinner units, for perf.mjs --dots.
+const dotTrace = params.has("dots") ? (window.dotTrace = [[], []]) : null;
 const work = { ms: 0 };
 function frame(now) {
   requestAnimationFrame(frame);
@@ -659,14 +666,15 @@ function frame(now) {
     if (pips > 0) {
       ball[0] = 0; ball[1] = 0; ball[2] = c0;
       for (let k = 0; k < 3; k++) { ball[3 + 3 * k] = X[3 * i + k]; ball[4 + 3 * k] = Y[3 * i + k]; ball[5 + 3 * k] = R[4 * i + 1 + k]; }
-      const n = longestLoop(clamp(Math.round(px / 2.5), 24, TN), .05 + 3 * onePx);
-      const placed = n ? placeDots(n, pips, Math.max(.2, 9 * onePx)) : 0, unit = size / (2 * SPAN);
+      const n = longestLoop(TN, TRACK_LEVEL);
+      const placed = n ? placeDots(n, pips, TRACK_PITCH) : 0, unit = size / (2 * SPAN);
       if (4 * (ndots + placed) > dots.length) { const d = new Float32Array(dots.length * 2 + 4 * placed); d.set(dots); dots = d; }
       for (let d = 0; d < placed; d++) {
         const b = 4 * ndots++;
         dots[b] = x + size / 2 + dotX[d] * unit; dots[b + 1] = y + size / 2 + dotY[d] * unit;
         dots[b + 2] = Math.max(1.4 * onePx, .035) * unit; dots[b + 3] = Math.max(.22, .7 - d * .07);
       }
+      if (dotTrace && i < 2) dotTrace[i].push([now, ...Array.from(dotX.subarray(0, placed), (v, d) => [v, dotY[d]]).flat()]);
     }
   }
 
