@@ -5,10 +5,7 @@
     cursor: auto; touch-action: pan-x pan-y;
   }
   #panel > .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em 1em; border-bottom: 1px solid var(--line); min-height: 2.9em; cursor: grab; }
-  .mini { cursor: pointer; position: relative; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--s, var(--ink)); flex: none; background: var(--s, var(--paper)); }
-  .mini::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid transparent; }
-  .mini.working::after { border-top-color: var(--ink); animation: spin 1.2s linear infinite; }
-  .mini.tool::after { border: 1.5px dashed rgba(20, 20, 19, .5); animation: spin 4s linear infinite; }
+  .mini { cursor: pointer; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--s, var(--ink)); flex: none; background: var(--s, var(--paper)); }
   .mini.starting { border-style: dashed; }
   .mini.paused { background: var(--ground); }
   .mini.cancelled { background: var(--line); border-radius: 30%; }
@@ -218,8 +215,10 @@
   .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid var(--s, var(--ink)); background: var(--s); color: var(--on, inherit); display: grid; place-items: center; font: 600 9px var(--serif); }
   .chip:is(.paused, .cancelled) .d { background: none; }
   .chip.done { color: var(--muted); }
-  .live-text { border-left: 2px solid var(--ink); padding-left: .9em; }
-  .live-text::after { content: "▍"; animation: breathe 1s infinite; }
+  /* The log's canvas draws the blob in its box (`blobs.js`), its centre
+     ball near the text's edge. */
+  .lane { position: relative; }
+  .tail .blob { margin: .2em 0 0 -22px; }
   .exact-entry { margin: 0 0 1em; }
   .exact-entry .who { font: 600 12px var(--sans); color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }
