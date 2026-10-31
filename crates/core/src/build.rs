@@ -48,10 +48,12 @@
 //! older build under the same gate: it folds every record the newer one
 //! wrote, or it refuses. So a way back is lossless or it does not happen.
 //!
-//! **Built so far.** The rehearsal runs part of the gate on a copy
-//! (`harness-brain --check`: the fold, each live session's next request
-//! counted, one short response) and one scripted round trip through a
-//! fresh limb of the new build; it loads no page. The takeover then resumes
+//! **Built so far.** The brain runs the gate's pathways
+//! (`harness-brain --check` on a copy, and `--candidate`, which opens only
+//! once they pass and then moves the installed link), but the builds limb
+//! does not start a candidate yet. The rehearsal runs the gate on a copy and
+//! one scripted round trip through a fresh limb of the new build; it loads
+//! no page. The takeover then resumes
 //! every real session at once, on [`Probation`], which the builds limb
 //! judges by folding the live database with the old build's code, going
 //! back on a failure. On 31 Oct that judge could not read the new build's
