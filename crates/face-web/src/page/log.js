@@ -677,7 +677,8 @@ function renderTail(s, t) {
   if (t.waiting?.kind === "model") parts.push(followModel(t.waiting.call));
   else stopModel();
   const shape = BLOB_STATE[t.waiting?.kind]?.(t.waiting);
-  if (shape) parts.push(showBlob(t, shape));
+  const blob = shape && showBlob(t, shape);
+  if (blob) parts.push(blob);
   // Not read yet: dashed, until the request that reads it.
   for (const p of t.pending || []) {
     const when = `${clock(p.at)}, not read yet`;
@@ -703,9 +704,10 @@ const BLOB_PX = 64, BLOB_STATE = {
   starting: () => "starting", listening: () => "listening",
 };
 const blobSession = session();
-let blobs = null, blobBox = null, blobTask = null;
+let blobs, blobBox = null, blobTask = null;
 function showBlob(t, shape) {
-  blobs ??= layer($(".lane", panel), scrollEl);
+  if (blobs === undefined) blobs = layer($(".lane", panel), scrollEl);
+  if (!blobs) return null;
   blobBox ??= blobs.add(BLOB_PX, blobSession);
   blobSession.letter = glyph(t);
   blobSession.set(shape, blobTask !== t.id);

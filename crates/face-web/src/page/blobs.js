@@ -16,7 +16,7 @@
 // blob, nothing runs at all.
 //
 //   const s = session();               what one session is doing
-//   const blobs = layer(host, scroller);
+//   const blobs = layer(host, scroller);   null without WebGL2
 //   const box = blobs.add(56, s);      an empty box the canvas draws a blob in
 //   s.set("streaming"); s.packet();    and the blob follows
 //
@@ -433,40 +433,49 @@ function frame(now) {
 }
 
 // ─── A layer: one canvas, and every blob in it ─────────────────────────────
+// Null without WebGL2: the page then shows no blobs. A lost context draws
+// nothing until the browser restores it, and then everything is rebuilt.
 export function layer(host, scroller) {
   const clip = document.createElement("div"), cv = document.createElement("canvas");
+  const gl = cv.getContext("webgl2", { antialias: false });
+  if (!gl) return null;
   clip.style.cssText = "position: absolute; inset: 0; overflow: clip; pointer-events: none; z-index: 1";
   cv.style.cssText = "position: absolute; left: 0; top: 0";
   clip.append(cv);
   host.append(clip);
-  const gl = cv.getContext("webgl2", { antialias: false });
 
-  const blobProg = program(gl, BLOB_VS, BLOB_FS), dotProg = program(gl, DOT_VS, DOT_FS);
-  const blobView = gl.getUniformLocation(blobProg, "view"), blobAtlas = gl.getUniformLocation(blobProg, "atlasSize"), dotView = gl.getUniformLocation(dotProg, "view");
-  const quad = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
-  // A vertex array per program: the quad's corners, then per-instance vec4s.
-  const vao = (buf, vec4s) => {
-    const v = gl.createVertexArray();
-    gl.bindVertexArray(v);
+  let blobProg, dotProg, blobView, blobAtlas, dotView, instBuf, dotBuf, blobVao, dotVao, atlasTex, uploaded;
+  const build = () => {
+    blobProg = program(gl, BLOB_VS, BLOB_FS); dotProg = program(gl, DOT_VS, DOT_FS);
+    blobView = gl.getUniformLocation(blobProg, "view"); blobAtlas = gl.getUniformLocation(blobProg, "atlasSize"); dotView = gl.getUniformLocation(dotProg, "view");
+    const quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    for (let k = 0; k < vec4s; k++) {
-      gl.enableVertexAttribArray(k + 1);
-      gl.vertexAttribPointer(k + 1, 4, gl.FLOAT, false, vec4s * 16, k * 16);
-      gl.vertexAttribDivisor(k + 1, 1);
-    }
-    return v;
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+    // A vertex array per program: the quad's corners, then per-instance vec4s.
+    const vao = (buf, vec4s) => {
+      const v = gl.createVertexArray();
+      gl.bindVertexArray(v);
+      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      for (let k = 0; k < vec4s; k++) {
+        gl.enableVertexAttribArray(k + 1);
+        gl.vertexAttribPointer(k + 1, 4, gl.FLOAT, false, vec4s * 16, k * 16);
+        gl.vertexAttribDivisor(k + 1, 1);
+      }
+      return v;
+    };
+    instBuf = gl.createBuffer(); dotBuf = gl.createBuffer();
+    blobVao = vao(instBuf, INST / 4); dotVao = vao(dotBuf, 1);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    atlasTex = gl.createTexture();
+    uploaded = -1;
   };
-  const instBuf = gl.createBuffer(), dotBuf = gl.createBuffer();
-  const blobVao = vao(instBuf, INST / 4), dotVao = vao(dotBuf, 1);
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  const atlasTex = gl.createTexture();
-  let uploaded = -1;
+  build();
+  cv.addEventListener("webglcontextlost", (e) => e.preventDefault());
+  cv.addEventListener("webglcontextrestored", () => { build(); wake(); });
 
   // The blobs, struct-of-arrays: per blob, its box, the session it shows,
   // where its box is in `host`, its balls' radii and gaps and their
@@ -529,6 +538,7 @@ export function layer(host, scroller) {
     // Boxes moved without `host` changing size.
     moved() { dirty = true; wake(); },
     draw(now, dt) {
+      if (gl.isContextLost()) return false;
       if (dirty) measure();
       const w = host.clientWidth, h = Math.round(1.25 * scroller.clientHeight);
       if (w !== cvW || h !== cvH) { cvW = w; cvH = h; cv.style.width = w + "px"; cv.style.height = h + "px"; }
