@@ -5,6 +5,7 @@ import { trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { editMessage, modelName, say } from "./compose.js";
 import { revealIn } from "./newchat.js";
+import { layer, session } from "./blobs.js";
 
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
 const contexts = new Map();
@@ -675,6 +676,8 @@ function renderTail(s, t) {
   const parts = [];
   if (t.waiting?.kind === "model") parts.push(followModel(t.waiting.call));
   else stopModel();
+  const shape = BLOB_STATE[t.waiting?.kind]?.(t.waiting);
+  if (shape) parts.push(showBlob(t, shape));
   // Not read yet: dashed, until the request that reads it.
   for (const p of t.pending || []) {
     const when = `${clock(p.at)}, not read yet`;
@@ -689,7 +692,25 @@ function renderTail(s, t) {
   if (tail.dataset.key !== key || parts.some((p) => p.classList?.contains("live-holder"))) {
     tail.dataset.key = key;
     tail.replaceChildren(...parts);
+    blobs?.moved();
   }
+}
+
+// While it works, the live end of the log shows its blob (`blobs.js`), below
+// what is streaming: what it waits on, and a disk for each piece of data.
+const BLOB_PX = 64, BLOB_STATE = {
+  model: (w) => (w.streaming ? "streaming" : "first"), calls: () => "tools", harness: () => "brain",
+  starting: () => "starting", listening: () => "listening",
+};
+const blobSession = session();
+let blobs = null, blobBox = null, blobTask = null;
+function showBlob(t, shape) {
+  blobs ??= layer($(".lane", panel), scrollEl);
+  blobBox ??= blobs.add(BLOB_PX, blobSession);
+  blobSession.letter = glyph(t);
+  blobSession.set(shape, blobTask !== t.id);
+  blobTask = t.id;
+  return blobBox;
 }
 function unread(t) {
   const c = mandateCard(`From ${byId[t.owner]?.name || "its owner"}`);
@@ -733,12 +754,13 @@ function followModel(call) {
   if (modelStream?.call === call) return modelStream.holder;
   stopModel();
   const holder = el("div", "entry live-holder");
-  const prose = el("div", "prose live-text");
+  const prose = el("div", "prose");
   holder.append(prose);
   let text = "", pendingDraw = null;
   modelStream = { call, holder };
   watch(`Model:${call}`, (t) => {
     text = t;
+    blobSession.packet();
     if (pendingDraw) return;
     pendingDraw = setTimeout(() => {
       pendingDraw = null;
@@ -755,7 +777,7 @@ function followCall(c, row) {
   $(".detail", row).append(out);
   row.classList.add("expanded", "live");
   callStreams.add(c.id);
-  watch(`Call:${c.id}`, (raw) => stick(() => { out.textContent = screen(raw); }));
+  watch(`Call:${c.id}`, (raw) => { blobSession.packet(); stick(() => { out.textContent = screen(raw); }); });
 }
 export function stopFollowing() { stopModel(); for (const id of callStreams) watchers.delete(`Call:${id}`); callStreams.clear(); }
 // A command's output as a terminal would leave it: only the last screenful.
