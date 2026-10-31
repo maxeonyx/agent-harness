@@ -107,11 +107,11 @@ function entry(s, into, e, index, t, parent, only) {
       if (b.type !== "text" || who.by === "label") return;
       const text = b.text || "";
       if (who.by === "max" && carry) {
-        if (run) { run.text += `\n${text}`; run.el.lastChild.replaceWith(quiet(run.text)); return; }
+        if (run) { run.text += `\n${text}`; run.el.lastChild.replaceWith(quiet(run.text, true)); return; }
         run = { by: "max", text, el: el("div", "note kept") };
         const w = el("span", "who", "Max wrote");
         w.title = `Carried from the work it replaced; he wrote it at ${clock(who.at)}`;
-        run.el.append(w, quiet(text));
+        run.el.append(w, quiet(text, true));
         into.append(run.el);
       } else if (who.by === "max") {
         if (run) { $(".bubble", run.el).textContent += `\n${text}`; return; }
@@ -343,16 +343,18 @@ function note(text) {
   return n;
 }
 // The harness's words, one quiet line of Markdown, opened to all of it
-// when that line cuts it short.
+// when that line cuts it short. Max's words it hands back are plain, as
+// his bubbles are.
 const cuts = new ResizeObserver((seen) => {
   for (const { target: q } of seen) {
     if (q.classList.contains("full")) continue;
     const parts = [...q.children].filter((c) => !c.matches(".raw-toggle"));
-    q.classList.toggle("cut", parts.length > 1 || parts.some((c) => c.scrollWidth > c.clientWidth || c.scrollHeight > c.clientHeight + 1));
+    q.classList.toggle("cut", parts.length > 1 || parts.some((c) => c.scrollWidth > c.clientWidth || c.scrollHeight > c.clientHeight + 1 || (c.matches(".plain") && c.textContent.includes("\n"))));
   }
 });
-function quiet(text) {
-  const q = markdown(text.replace(/^\[harness\] /, ""));
+function quiet(text, plain) {
+  const q = plain ? el("div", "prose") : markdown(text.replace(/^\[harness\] /, ""));
+  if (plain) q.append(el("div", "plain", text));
   q.classList.add("quiet");
   q.onclick = (e) => { if (q.classList.contains("cut") && !e.target.closest("a") && !getSelection().toString()) q.classList.toggle("full"); };
   cuts.observe(q);
