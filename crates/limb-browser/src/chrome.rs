@@ -109,7 +109,7 @@ pub fn open(settings: &Settings, state: &Path, limb: LimbId) -> Result<Browser, 
 
 /// The websocket URL a browser wrote to its profile, if one is listening
 /// there.
-fn running(port_file: &Path) -> Option<String> {
+pub(crate) fn running(port_file: &Path) -> Option<String> {
     let text = std::fs::read_to_string(port_file).ok()?;
     let mut lines = text.lines();
     let port = lines.next()?.trim();
@@ -119,7 +119,7 @@ fn running(port_file: &Path) -> Option<String> {
 }
 
 /// The newest chrome-headless-shell Playwright installed.
-fn playwright() -> Option<PathBuf> {
+pub(crate) fn playwright() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
     let mut found: Vec<PathBuf> = std::fs::read_dir(home.join(".cache/ms-playwright"))
         .ok()?

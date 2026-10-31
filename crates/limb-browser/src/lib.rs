@@ -26,9 +26,14 @@
 //! a script that drives tabs in a QuickJS sandbox ([`harness_script`]),
 //! `page` runs JavaScript in one tab, and `screenshot` is the costly
 //! exception ([`tools`]).
+//!
+//! Beside the tool set, [`uncaught`] loads one page in a headless browser
+//! of its own and returns the exceptions it throws: a relaunch's rehearsal
+//! loading the new build's page.
 
 mod cdp;
 mod chrome;
+mod load;
 mod tools;
 
 use std::collections::HashMap;
@@ -50,6 +55,7 @@ use harness_runtime::Cancel;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
+pub use crate::load::uncaught;
 use crate::tools::{BROWSER, PAGE, SCREENSHOT, TAB};
 
 /// The tool set's name.
