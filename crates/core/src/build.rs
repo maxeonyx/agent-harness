@@ -59,19 +59,19 @@
 //! with `one_way`, as with `back`. Max: "The tool call rejects initially
 //! and says, this would be one way, call it again with the one-way flag."
 //!
-//! **Built so far.** All of the above. [`Probation`] is today's trial on
-//! real sessions, which nothing judges any more; the face still shows it.
+//! The face shows where the latest relaunch stands from the `relaunch`
+//! call alone: under way, then the stage it ended at, in the builds limb's
+//! words.
 //!
-//! **Limbs move with the brain, once it is proven.** A [`Launched`] names
-//! the executable it would start for each kind of limb. Once its build is
-//! proven, a limb running other bytes is superseded
+//! **Limbs move with the brain.** A [`Launched`] names the executable it
+//! would start for each kind of limb, and a build writes it only once its
+//! gate has passed, so from then a limb running other bytes is superseded
 //! ([`crate::state::State::superseded`]): its view says so, and it exits
 //! once nothing it holds would die with it, so the brain's next attach
-//! starts it from the new build. Waiting for the proof means a build that
-//! goes back never has to move a limb back, and probation shows the new
-//! brain working with the limbs it inherited, the mixed case. A limb
-//! running a long command stays on its build until the command ends;
-//! facts are the contract between the two.
+//! starts it from the new build. On the way back the build before writes
+//! its own [`Launched`], and limbs move back the same way. A limb running a
+//! long command stays on its build until the command ends; facts are the
+//! contract between the two.
 //!
 //! **Where it goes next.** A version as a place: the candidate folds the
 //! database while the old brain serves and takes over its socket with no
@@ -97,14 +97,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
-use imbl::OrdSet;
-use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
-use crate::call::CallEvent;
-use crate::fact::Fact;
-use crate::id::{CallId, ModelCallId, ParseError, ValueId};
-use crate::model_call::{Ending, ModelCallEvent};
+use crate::id::{CallId, ParseError, ValueId};
 
 /// One executable of a build: the digest of its bytes.
 ///
@@ -392,265 +387,6 @@ pub enum Launch {
     /// the new one's process ended in its window after opening. `None` when
     /// Max restarted it himself.
     Relaunched { from: BuildId, by: Option<CallId> },
-}
-
-/// What a build has shown since it took over: whether it works end to end.
-/// Today's trial on real sessions, which the gate replaces ([`Start`]):
-/// once nothing real runs before a build is proven, there is nothing left
-/// for it to judge.
-///
-/// **Concept.** The end of a build's trial. Before it took over, on its own
-/// processes, it showed that it folds a copy of the database, renders
-/// every live session's next request in a shape the provider accepts
-/// (checked by the provider's token count, which generates nothing),
-/// streams a minimal response, serves a page that loads, and makes a round
-/// trip through a fresh limb of its own build. What only the live brain can
-/// show is that it keeps working with the real sessions and the limbs it
-/// inherited: a response to a request of this span, and a settlement by a
-/// limb of a call made in this span. A refusal the build is to blame for
-/// ([`blames_build`]) before both is its failure; so are its process
-/// ending and a request of the span left unanswered past the watcher's
-/// deadline, which the watcher sees and this fold does not. Once proven,
-/// later refusals are ordinary trouble.
-///
-/// The span's first request is due at once, because the relaunch call's
-/// settlement wakes the session that made it; so a span that stays
-/// unanswered is a hang, not an idle brain.
-///
-/// The running brain folds it into [`crate::state::State::probation`] for
-/// the face. Nothing else reads it: the builds limb judges a new build by
-/// the installed link and the unit's process, never by its records.
-///
-/// **Vision.** "A broken build bricks nothing", and the advocate's answer
-/// to what proves a build: "its first full tool round trip; before taking
-/// over it renders every live session's next request without sending; and
-/// a way back that never runs the new build's code."
-///
-/// **Existing harnesses.** Restart into the new code and hope: nothing
-/// tells a build that starts from one that works.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Probation {
-    /// The requests this span sent.
-    sent: OrdSet<ModelCallId>,
-    /// The calls made in this span.
-    made: OrdSet<CallId>,
-    responded: Option<ModelCallId>,
-    round_trip: Option<CallId>,
-    refused: Option<Refused>,
-}
-
-impl Probation {
-    /// Fold one fact of the span, said by a limb if `by_limb`. Facts of
-    /// other spans are not shown it.
-    pub(crate) fn see(&mut self, by_limb: bool, trial: Trial) {
-        if self.refused.is_some() || self.proven().is_some() {
-            return;
-        }
-        match trial {
-            Trial::Sent(id) => {
-                self.sent.insert(id);
-            }
-            Trial::Responded(id) if self.sent.contains(&id) => {
-                self.responded.get_or_insert(id);
-            }
-            Trial::Failed(refused)
-                if self.sent.contains(&refused.request) && blames_build(refused.status) =>
-            {
-                self.refused = Some(refused);
-            }
-            Trial::Made(id) => {
-                self.made.insert(id);
-            }
-            Trial::Settled(id) if by_limb && self.made.contains(&id) => {
-                self.round_trip.get_or_insert(id);
-            }
-            _ => {}
-        }
-    }
-
-    /// Where the trial stands.
-    pub fn verdict(&self) -> Verdict {
-        if let Some(refused) = &self.refused {
-            return Verdict::Refused(refused.clone());
-        }
-        match self.proven() {
-            Some((response, round_trip)) => Verdict::Proven {
-                response,
-                round_trip,
-            },
-            None => Verdict::Proving {
-                responded: self.responded,
-                round_trip: self.round_trip,
-            },
-        }
-    }
-
-    fn proven(&self) -> Option<(ModelCallId, CallId)> {
-        Some((self.responded?, self.round_trip?))
-    }
-}
-
-/// Where a build's [`Probation`] stands.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Verdict {
-    /// Not yet shown both: what it has shown so far.
-    Proving {
-        responded: Option<ModelCallId>,
-        round_trip: Option<CallId>,
-    },
-    /// It works end to end.
-    Proven {
-        response: ModelCallId,
-        round_trip: CallId,
-    },
-    /// The provider refused a request it rendered before it was proven.
-    Refused(Refused),
-}
-
-/// A fact a [`Probation`] reads: what a span's requests and calls did.
-///
-/// **Concept.** The judge of a build is the build before it, which may not
-/// know every word the new build's records hold: a request carries every
-/// span it rendered, a response its content. So what the trial reads is
-/// only kinds and ids, and how a request ended, read either from a fact
-/// this build folds ([`Trial::of`]) or from the [`Glimpsed`] record of one
-/// it skips: one it cannot parse, or one its rules refuse because it is
-/// about something it skipped (a response to a request it could not read).
-/// So a record whose payload names a variant this build does not know
-/// still shows a request sent, answered or refused, and a call made or
-/// settled; a settlement it skips counts as a limb's when it came from
-/// neither the brain nor one of Max's faces. A [`Launched`] it skips still
-/// begins a span, read by its name alone, so the trial is the new span's.
-/// Not covered: a new kind of fact, a new way for a request to end, a
-/// change to an id's form, or a renamed [`crate::fact::Fact::Launched`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Trial {
-    Sent(ModelCallId),
-    Responded(ModelCallId),
-    /// The provider failed the request with a status.
-    Failed(Refused),
-    Made(CallId),
-    Settled(CallId),
-}
-
-impl Trial {
-    pub fn of(fact: &Fact) -> Option<Trial> {
-        Some(match fact {
-            Fact::ModelCall(id, ModelCallEvent::Sent(_)) => Trial::Sent(*id),
-            Fact::ModelCall(id, ModelCallEvent::Ended { ending, .. }) => match ending {
-                Ending::Responded { .. } => Trial::Responded(*id),
-                Ending::Failed {
-                    status: Some(status),
-                    message,
-                    ..
-                } => Trial::Failed(Refused {
-                    request: *id,
-                    status: *status,
-                    message: message.clone(),
-                }),
-                _ => return None,
-            },
-            Fact::Call(id, CallEvent::Made(_)) => Trial::Made(*id),
-            Fact::Call(id, CallEvent::Settled(_)) => Trial::Settled(*id),
-            _ => return None,
-        })
-    }
-}
-
-/// What any build reads of a [`crate::fact::Batch`] it cannot parse: the
-/// harness's [`harness_substrate::Schema::Glimpse`]. Each fact is read on
-/// its own, so one this build has no word for hides only itself.
-#[derive(Debug, Deserialize)]
-pub struct Glimpsed {
-    facts: Vec<Glance>,
-}
-
-impl Glimpsed {
-    /// What it read of each fact, by the fact's index in the record.
-    pub(crate) fn facts(&self) -> impl Iterator<Item = (u32, Glanced)> + '_ {
-        (0..)
-            .zip(&self.facts)
-            .filter_map(|(i, glance)| match glance {
-                Glance::Read(fact) => Some((i, fact.glanced()?)),
-                Glance::Other(IgnoredAny) => None,
-            })
-    }
-}
-
-/// What any build reads of one fact of a record it skips.
-pub(crate) enum Glanced {
-    /// A brain began deciding: a new span, whatever its build.
-    Launched,
-    Trial(Trial),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum Glance {
-    Read(GlancedFact),
-    Other(IgnoredAny),
-}
-
-/// [`Fact`]'s shape, keeping only what a glimpse reads; any other content
-/// of the variants it names is passed over unread.
-#[derive(Debug, Deserialize)]
-enum GlancedFact {
-    Launched(IgnoredAny),
-    ModelCall(ModelCallId, GlancedModelCall),
-    Call(CallId, GlancedCall),
-}
-
-#[derive(Debug, Deserialize)]
-enum GlancedModelCall {
-    Sent(IgnoredAny),
-    Ended { ending: GlancedEnding },
-}
-
-#[derive(Debug, Deserialize)]
-enum GlancedEnding {
-    Responded(IgnoredAny),
-    Failed {
-        status: Option<u16>,
-        message: String,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-enum GlancedCall {
-    Made(IgnoredAny),
-    Settled(IgnoredAny),
-}
-
-impl GlancedFact {
-    fn glanced(&self) -> Option<Glanced> {
-        Some(Glanced::Trial(match self {
-            GlancedFact::Launched(_) => return Some(Glanced::Launched),
-            GlancedFact::ModelCall(id, GlancedModelCall::Sent(_)) => Trial::Sent(*id),
-            GlancedFact::ModelCall(id, GlancedModelCall::Ended { ending }) => match ending {
-                GlancedEnding::Responded(_) => Trial::Responded(*id),
-                GlancedEnding::Failed {
-                    status: Some(status),
-                    message,
-                } => Trial::Failed(Refused {
-                    request: *id,
-                    status: *status,
-                    message: message.clone(),
-                }),
-                GlancedEnding::Failed { status: None, .. } => return None,
-            },
-            GlancedFact::Call(id, GlancedCall::Made(_)) => Trial::Made(*id),
-            GlancedFact::Call(id, GlancedCall::Settled(_)) => Trial::Settled(*id),
-        }))
-    }
-}
-
-/// A request of a span on probation that the provider refused, in its
-/// words: what the agent and Max read about why the harness went back.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Refused {
-    pub request: ModelCallId,
-    pub status: u16,
-    pub message: String,
 }
 
 /// Whether a provider's refusal with `status` is the fault of the build

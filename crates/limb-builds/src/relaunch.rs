@@ -164,6 +164,8 @@ pub enum Ended {
 }
 
 impl Ended {
+    /// The stage, as the call's result begins: the face's view of the
+    /// relaunch reads these words (`face-web`'s `view.rs`).
     pub fn stage(&self) -> &'static str {
         match self {
             Ended::Refused(_) => "refused at rehearsal",

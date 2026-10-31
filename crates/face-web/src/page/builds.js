@@ -4,30 +4,27 @@ import { can } from "./tab.js";
 
 // ─── Which build runs ──────────────────────────────────────────────────────
 // A quiet line beside the usage: the commit the brain runs, and while a
-// relaunch is in play, how far it has got: checking a build, read-only, under way, took over and on
-// probation (a response, then a round trip through a limb), proven, or
-// gone back and why. Limbs still on the build before say so until they
-// move. Hovering it shows all of that as a table.
+// relaunch is in play, how it stands: a build checking its gate, with
+// the face read-only, then under way, or how it ended: opened, refused at
+// rehearsal, failed its gate, or went back, and why. Limbs still on the
+// build before say so until they move. Hovering it shows all of that as a
+// table.
 const badge = el("span", "build"), commitEl = el("span"), nowEl = el("span", "now"), card = el("div", "pop");
 badge.tabIndex = 0;
 badge.append(commitEl, nowEl, card);
 $("#corner").append(badge);
-const tick = (done) => done ? "✓" : "Not yet";
 export function renderBuilds() {
-  const r = view.relaunch, v = view.probation || {};
+  const r = view.relaunch;
   const old = view.superseded || [];
   const rows = [["Build", view.source || "Unknown"]];
   let now = "";
   if (can.checking) { now = `Checking build ${can.checking.slice(0, 7)}`; rows.push(["Checking", `${can.checking}: what you send waits here until a build opens`]); }
   else if (r?.stage === "under way") now = "Relaunching…";
-  else if (r?.stage === "went back") { now = "Went back"; rows.push(["Went back", r.why]); }
-  else if (r?.stage === "took over" && v.Proven) now = "Proven ✓";
-  else if (r?.stage === "took over" && v.Refused) { now = "Refused"; rows.push(["Refused", v.Refused.message]); }
-  else if (r?.stage === "took over") { now = "On probation"; rows.push(["Response", tick(v.Proving?.responded)], ["Round trip", tick(v.Proving?.round_trip)]); }
+  else if (r) { now = r.stage[0].toUpperCase() + r.stage.slice(1); rows.push([now, r.why || ""]); }
   if (old.length) rows.push(["On the old build", old.join(", ")]);
   commitEl.textContent = (view.source || "").replace(/^(\w{7})\w*/, "$1");
   nowEl.textContent = old.length && !now ? `${old.length} limb${old.length > 1 ? "s" : ""} on the old build` : now;
-  badge.classList.toggle("back", r?.stage === "went back" || !!(r?.stage === "took over" && v.Refused));
+  badge.classList.toggle("back", !can.checking && !!r && r.stage !== "under way" && r.stage !== "opened");
   const key = JSON.stringify(rows);
   if (card.dataset.key === key) return;
   card.dataset.key = key;

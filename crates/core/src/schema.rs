@@ -1,9 +1,8 @@
 //! The harness as one schema on the substrate: what its replicas say, and how
 //! long the brain keeps it.
 
-use harness_substrate::{Decider, Durability, Folding, Schema, Time, Timestamp};
+use harness_substrate::{Decider, Durability, Folding, Schema, Time};
 
-use crate::build::Glimpsed;
 use crate::draft::DraftEvent;
 use crate::fact::{Batch, Fact, Refusal};
 use crate::id::{DeliveryId, ReplicaId};
@@ -54,7 +53,6 @@ impl Schema for Harness {
     type Refusal = Refusal;
     type State = State;
     type Key = Key;
-    type Glimpse = Glimpsed;
 
     /// Kept, unless every fact but its [`Fact::Seen`] is the newest of one
     /// key. An act carries its `Seen`, so what Max had seen is kept with
@@ -78,10 +76,6 @@ impl Schema for Harness {
 
     fn fold(state: &mut State, folding: Folding<'_, Harness>) -> Result<(), Refusal> {
         state.fold(folding)
-    }
-
-    fn glimpse(state: &mut State, here: Time, clock: Timestamp, at: Time, glimpse: &Glimpsed) {
-        state.glimpse(here, clock, at, glimpse)
     }
 
     fn refused(state: &mut State, folding: Folding<'_, Harness>, why: &Refusal) {

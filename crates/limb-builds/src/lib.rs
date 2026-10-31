@@ -13,7 +13,8 @@
 //! the call's result arrives only after the relaunch. Otherwise the running
 //! brain drains and stops, the new build starts as a candidate, and the
 //! call settles once, after a window in which the limb watches the opened
-//! build: with the stage it reached, in words, and whether it went back.
+//! build: with the stage it reached ([`Ended::stage`]), then its words,
+//! which the face reads as where the relaunch stands.
 //!
 //! The limb is a process of the build that was running, and outlives the
 //! brain it relaunches, so the judge of the new build, and the way back,
