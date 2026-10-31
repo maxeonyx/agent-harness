@@ -8,10 +8,12 @@
 # top, and each call's result is printed once it settles:
 #   1. a good build: rehearsed, opened as a candidate, watched for 3 min;
 #   2. one whose --check fails: refused at rehearsal with its gate: line;
-#   3. one whose gate fails only on the live database: it writes nothing,
+#   3. one whose page throws as it loads: refused at rehearsal, naming the
+#      exception headless Chrome saw;
+#   4. one whose gate fails only on the live database: it writes nothing,
 #      and the build before runs again;
-#   4. one whose brain dies 20 s after opening: the harness goes back;
-#   5. one the running build cannot read back (it renames a field of
+#   5. one whose brain dies 20 s after opening: the harness goes back;
+#   6. one the running build cannot read back (it renames a field of
 #      Launched): refused as one-way, then opened with `one_way: true`.
 # Each rehearsal and each candidate has the provider count tokens and
 # stream one short response: a few real requests.
@@ -81,27 +83,34 @@ runs
 
 step "2. onto a build whose --check fails: refused at rehearsal"
 check=$(variant "$good" crates/brain/src/main.rs \
-    's|^    if let Some(copy) = check {$|&\n        return Err("gate: decide: the demo build fails its check".into());|' \
+    's|^        gate::gate(&db, &client, roles.as_deref(), port, passed, serve)?;$|        return Err("gate: decide: the demo build fails its check".into());\n&|' \
     "demo: a build whose check fails")
 relaunch "$check" ""
 runs
 
-step "3. onto a build whose gate fails only on the live database"
+step "3. onto a build whose page throws: refused at rehearsal"
+page=$(variant "$good" crates/face-web/src/page/builds.js \
+    's|^import { can } from "./tab.js";$|&\nthrow new Error("demo: builds.js breaks on load");|' \
+    "demo: a build whose page throws")
+relaunch "$page" ""
+runs
+
+step "4. onto a build whose gate fails only on the live database"
 live=$(variant "$good" crates/brain/src/main.rs \
-    's|^        Start::Candidate => {$|&\n            return Err("gate: decide: the demo build fails on the live database".into());|' \
+    's|^        None => {$|&\n            return Err("gate: decide: the demo build fails on the live database".into());|' \
     "demo: a build whose gate fails on the live database")
 relaunch "$live" ""
 runs
 echo "records naming $live in the database: $(sqlite3 "$db" "select count(*) from record where record like '%$live%'")"
 
-step "4. onto a build whose brain dies 20 s after opening: the way back"
+step "5. onto a build whose brain dies 20 s after opening: the way back"
 dies=$(variant "$good" crates/brain/src/main.rs \
     's|^            install(&db)?;$|&\n            std::thread::spawn(\|\| {\n                std::thread::sleep(Duration::from_secs(20));\n                std::process::exit(3);\n            });|' \
     "demo: a build whose brain dies 20 s after opening")
 relaunch "$dies" ""
 runs
 
-step "5. onto a one-way build: refused, then opened with one_way"
+step "6. onto a one-way build: refused, then opened with one_way"
 oneway=$(variant "$good" crates/core/src/build.rs \
     's|^    pub build: BuildId,$|    #[serde(rename = "build_id", alias = "build")]\n&|' \
     "demo: a build that writes Launched's build as build_id")
@@ -113,7 +122,7 @@ step "end: retire the brain's unit and delete the demo's builds"
 systemctl --user disable --now --quiet "$unit"
 rm "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
 systemctl --user daemon-reload
-for build in $installed "$good" "$check" "$live" "$dies" "$oneway"; do
+for build in $installed "$good" "$check" "$page" "$live" "$dies" "$oneway"; do
     [[ -d $home/builds/$build ]] && chmod -R u+w "$home/builds/$build" && rm -rf "$home/builds/$build"
 done
 echo "its limbs end themselves 15 minutes after their brain"

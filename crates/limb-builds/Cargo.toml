@@ -8,6 +8,7 @@ description = "The builds tool set: relaunches its brain onto a commit through a
 [dependencies]
 harness-core = { path = "../core" }
 harness-limb = { path = "../limb" }
+harness-limb-browser = { path = "../limb-browser" }
 harness-provider = { path = "../provider" }
 harness-store = { path = "../store" }
 libc = "0.2"

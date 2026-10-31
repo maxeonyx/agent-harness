@@ -5,6 +5,8 @@
 //! - **Decide**: what its launch would say first ([`Opening`]) is computed
 //!   and accepted by the state, and on the state it would leave, the to-do
 //!   list and the face's view are derived, none of them panicking.
+//! - **Serve**: the face's certificate loads, its port is bound, and the
+//!   face serves what it folded, read-only, while the rest is checked.
 //! - **Requests**: each live session's next request is rendered as [`next`]
 //!   would for the live brain, and the provider counts its tokens, which
 //!   generates nothing ([`Client::count`]). A session still waiting on a
@@ -12,7 +14,6 @@
 //!   shape of everything the build renders around it.
 //! - **Response**: one short response is streamed ([`Client::ping`]), made
 //!   to use one tool, and that tool use is parsed as a session's would be.
-//! - **Serve**: the face's certificate loads and its port is bound.
 //!
 //! A refusal the build is to blame for ([`blames_build`]) fails at once;
 //! provider trouble that is not the build's is tried again for a minute.
@@ -54,13 +55,10 @@ const RETRY: Duration = Duration::from_secs(60);
 /// How long it waits between tries.
 const PAUSE: Duration = Duration::from_secs(5);
 
-/// What a passed gate leaves to launch on: the fold, what it says first,
-/// and the face's port and certificate.
+/// What a passed gate leaves to launch on: the fold and what it says first.
 pub struct Passed {
     pub decider: schema::Brain<Store>,
     pub opening: Opening,
-    pub listener: TcpListener,
-    pub tls: Arc<rustls::ServerConfig>,
 }
 
 /// A pathway that failed, and why.
@@ -76,15 +74,18 @@ impl fmt::Display for Failure {
 }
 
 /// Run the gate on the database at `db`, reading the role files in `roles`
-/// and binding `port` (0 for any), with `client`. Each pathway that passes
-/// is handed to `passed` with how long it took; every one that fails is
-/// returned. A pathway that cannot run without one before it is not run.
+/// and binding `port` (0 for any), with `client`. Once it has decided, the
+/// fold, the port and its certificate go to `face`, which serves them
+/// read-only. Each pathway that passes is handed to `passed` with how long
+/// it took; every one that fails is returned. A pathway that cannot run
+/// without one before it is not run.
 pub fn gate(
     db: &Path,
     client: &Client,
     roles: Option<&Path>,
     port: u16,
     mut passed: impl FnMut(Pathway, Duration),
+    face: impl FnOnce(&schema::Brain<Store>, TcpListener, Arc<rustls::ServerConfig>),
 ) -> Result<Passed, Vec<Failure>> {
     let mut failures = Vec::new();
     let mut check = |pathway: Pathway, run: Result<(), Vec<String>>, started: Instant| match run {
@@ -110,6 +111,14 @@ pub fn gate(
         .map_err(|why| vec![why.clone()]);
     check(Pathway::Decide, decided, started);
 
+    // The face's view is derived as Decide derived it: if that panicked,
+    // so would the face.
+    if opening.is_ok() {
+        let started = Instant::now();
+        let served = serve(port).map(|(listener, tls)| face(&decider, listener, tls));
+        check(Pathway::Serve, served.map_err(|why| vec![why]), started);
+    }
+
     let started = Instant::now();
     check(Pathway::Requests, requests(&decider, client), started);
 
@@ -120,21 +129,8 @@ pub fn gate(
         started,
     );
 
-    let started = Instant::now();
-    let serving = serve(port);
-    let served = serving
-        .as_ref()
-        .map(|_| ())
-        .map_err(|why| vec![why.clone()]);
-    check(Pathway::Serve, served, started);
-
-    match (opening, serving) {
-        (Ok(opening), Ok((listener, tls))) if failures.is_empty() => Ok(Passed {
-            decider,
-            opening,
-            listener,
-            tls,
-        }),
+    match opening {
+        Ok(opening) if failures.is_empty() => Ok(Passed { decider, opening }),
         _ => Err(failures),
     }
 }

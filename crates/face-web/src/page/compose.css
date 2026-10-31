@@ -94,4 +94,3 @@
   .act.armed { width: auto; display: inline-flex; gap: .3em; padding: 0 .7em 0 .45em; border-radius: 999px; background: var(--maroon); color: var(--paper); font-size: 12.5px; font-weight: 600; }
   .act.armed:hover { background: var(--maroon); color: var(--paper); }
   .act.row { width: 100%; height: auto; display: flex; justify-content: flex-start; gap: .55em; padding: .35em .55em; border-radius: 7px; font-size: 13px; color: var(--ink); }
-  .compose .closed { color: var(--muted); font-size: 13px; text-align: center; padding: .4em; border-top: 1px solid var(--line); }

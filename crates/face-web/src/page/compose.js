@@ -297,7 +297,6 @@ export function buildCompose(id) {
   box = null;
   const t = byId[id];
   if (id !== NEW && !t) return;
-  if (!can.act) { compose.append(el("div", "closed", "This face only watches.")); return; }
   const wrap = el("div", "box");
   box = el("textarea");
   box.rows = id === NEW ? 2 : 1;

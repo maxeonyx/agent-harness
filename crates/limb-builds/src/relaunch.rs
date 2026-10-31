@@ -17,7 +17,7 @@
 //!
 //! ```mermaid
 //! flowchart TD
-//!   R["Rehearsal, beside A, which serves on:<br/>B --check on a copy (gate: lines);<br/>sign-in read alike by A and B;<br/>two scratch brains of B, through A's limb and B's own:<br/>spawn, a bash token, a copy A checks;<br/>A folds what they wrote (readback)"]
+//!   R["Rehearsal, beside A, which serves on:<br/>B --check on a copy (gate: lines),<br/>its page, served read-only, loaded in headless Chrome:<br/>no uncaught exception;<br/>sign-in read alike by A and B;<br/>two scratch brains of B, through A's limb and B's own:<br/>spawn, a bash token, a copy A checks;<br/>A folds what they wrote (readback)"]
 //!   R -->|"a pathway fails, or one-way without one_way"| Refused["Refused: A never stopped"]
 //!   R --> T["Takeover: A drains and stops;<br/>B starts with --candidate"]
 //!   T -->|"its process ends, or 3 min pass (killed)"| Failed["Failed: the unit restarts the link, A,<br/>on the bytes A left"]
@@ -56,6 +56,8 @@ const OPENING: Duration = Duration::from_secs(3 * 60);
 const WINDOW: Duration = Duration::from_secs(3 * 60);
 /// How long a scratch brain gets to serve, and then to make its round trip.
 const ROUND_TRIP: Duration = Duration::from_secs(90);
+/// How long the page gets after it loads to render its first view.
+const PAGE_SETTLES: Duration = Duration::from_secs(3);
 /// How often a stage looks at the unit.
 const EVERY: Duration = Duration::from_millis(500);
 
@@ -335,20 +337,7 @@ fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<Vec<String
     Store::open(&running.db)
         .and_then(|store| store.copy_to(&copy))
         .map_err(|e| format!("copying {}: {e}", running.db.display()))?;
-    let out = Command::new(build.join("bin/harness-brain"))
-        .arg("--check")
-        .arg(&copy)
-        .args(&login)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("{commit}'s harness-brain --check: {e}"))?;
-    let said = String::from_utf8_lossy(&out.stdout);
-    if !out.status.success() {
-        return Err(format!(
-            "{commit} failed its gate on a copy of the database:\n{}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
+    let said = check(dir, build, &copy, &login)?;
     // Both builds read the login alike.
     let theirs = said.lines().find_map(|l| l.strip_prefix("signed in: "));
     let ours = match running.login() {
@@ -393,6 +382,67 @@ fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<Vec<String
         skipped.extend(readback(&at.join("scratch.sqlite"))?);
     }
     Ok(skipped)
+}
+
+/// Run the gate of `build` on `copy`, then load the page it serves
+/// read-only in headless Chrome, and stop it: what it printed, or why it
+/// failed. Its stderr is kept in `dir`.
+fn check(dir: &Path, build: &Path, copy: &Path, login: &[&str]) -> Result<String, String> {
+    let commit = name(build);
+    let errors = dir.join("check.log");
+    let mut child = Command::new(build.join("bin/harness-brain"))
+        .arg("--check")
+        .arg(copy)
+        .args(login)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(File::create(&errors).map_err(|e| format!("{}: {e}", errors.display()))?)
+        .spawn()
+        .map_err(|e| format!("{commit}'s harness-brain --check: {e}"))?;
+    let mut said = String::new();
+    let mut passed = false;
+    if let Some(out) = child.stdout.take() {
+        for line in BufReader::new(out).lines().map_while(Result::ok) {
+            said.push_str(&line);
+            said.push('\n');
+            if line.starts_with("gate: passed;") {
+                passed = true;
+                break;
+            }
+        }
+    }
+    if !passed {
+        let _ = child.wait();
+        let why = std::fs::read_to_string(&errors).unwrap_or_default();
+        return Err(format!(
+            "{commit} failed its gate on a copy of the database:\n{}",
+            why.trim()
+        ));
+    }
+    // The port is the face's line's last word.
+    let port = said
+        .lines()
+        .find_map(|l| l.strip_prefix("face: "))
+        .and_then(|url| url.rsplit(':').next())
+        .unwrap_or_default()
+        .to_owned();
+    let page = harness_limb_browser::uncaught(
+        &format!("https://localhost:{port}/"),
+        &dir.join("chrome"),
+        PAGE_SETTLES,
+    );
+    // SIGTERM, which a checking brain ends at.
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    let _ = child.wait();
+    let pathway = Pathway::Page;
+    match page {
+        Ok(thrown) if thrown.is_empty() => Ok(said),
+        Ok(thrown) => Err(format!(
+            "{pathway}: {commit}'s page threw: {}",
+            thrown.join("; ")
+        )),
+        Err(why) => Err(format!("{pathway}: {why}")),
+    }
 }
 
 /// What this build, the running one, could not read of the database at

@@ -63,9 +63,6 @@
 //! call alone: under way, then the stage it ended at, in the builds limb's
 //! words.
 //!
-//! **Built so far.** All of the above but the page: the rehearsal loads no
-//! page in headless Chrome.
-//!
 //! **Limbs move with the brain.** A [`Launched`] names the executable it
 //! would start for each kind of limb, and a build writes it only once its
 //! gate has passed, so from then a limb running other bytes is superseded
@@ -315,7 +312,7 @@ pub enum Pathway {
     Response,
     /// Its port bound with its certificate, and its face served read-only
     /// over what it folded, so the page Max has open shows the state it
-    /// found while it checks, and what he sends waits in his tab.
+    /// found while it checks the rest, and what he sends waits in his tab.
     Serve,
     /// The rehearsal's: the page, served over the copy, loads in headless
     /// Chrome and renders its first view with no uncaught exception. A page
@@ -347,9 +344,9 @@ impl Pathway {
     pub const GATE: [Pathway; 5] = [
         Pathway::Fold,
         Pathway::Decide,
+        Pathway::Serve,
         Pathway::Requests,
         Pathway::Response,
-        Pathway::Serve,
     ];
     /// The rehearsal's own, after the gate on a copy.
     pub const REHEARSAL: [Pathway; 4] = [
