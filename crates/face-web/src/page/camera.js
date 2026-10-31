@@ -77,9 +77,8 @@ let caught = false;  // the press stopped a coast
 const cards = (e) => e.target.closest?.("#panel") && !asleep && (!e.target.closest("#panel > .bar") || e.target.closest("button, [contenteditable]"));
 map.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 && e.pointerType === "mouse") return;
-  const coasting = stop("coast");
+  caught = stop("coast");
   if (cards(e)) return;
-  caught = coasting && !e.target.closest(".offscreen");
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   drag = { moved: caught, start: { x: e.clientX, y: e.clientY }, cam: { ...cam }, pinch: pointers.size === 2 ? pinchOf() : null, trail: [] };
 });
@@ -120,6 +119,8 @@ const lift = (e) => {
   if (!pointers.delete(e.pointerId)) return;
   if (!pointers.size) {
     map.classList.remove("grabbing");
+    // A touch that dragged is not a tap, so no click comes to forget it.
+    if (drag?.panning) caught = false;
     if (drag?.panning && e.type === "pointerup") coast(drag.trail, e.timeStamp);
     setTimeout(() => { drag = null; }, 0);
   }
