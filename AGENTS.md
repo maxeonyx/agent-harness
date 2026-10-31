@@ -10,7 +10,7 @@ The repo was reset on 2026-10-16 (NZT). The earlier attempt is the unconnected t
 - [`docs/plan.md`](docs/plan.md): read before choosing the next piece of work. Milestones, what is next, the process and Max's open questions.
 - [`docs/todo.md`](docs/todo.md): read before starting work in an area. Add what you find; delete an item when it is done. The open work, by structure.
 - [`docs/glossary.md`](docs/glossary.md): read when a word in the vision, the plan or Max's messages is unfamiliar, or when naming something in code.
-- [`docs/underview-stories.html`](docs/underview-stories.html): read before designing the graph, questions, user actions, the attention scheduler or anything else that decides what reaches Max. The needs behind Underview, his work dashboard and its agents, as user stories with the episode that showed each need; its last section lists the tensions a design has to settle.
+- [`docs/attention.md`](docs/attention.md): read before designing the graph, questions, user actions, the planner, the scheduler or anything else that decides what reaches Max. One day as he lives it, the parts, and every need, adapted from Underview, his work dashboard, and reviewed by him; then what is open.
 - [`docs/opencode-fork.md`](docs/opencode-fork.md): read before building a feature his OpenCode fork had, so the behaviour matches.
 
 ## What is settled
