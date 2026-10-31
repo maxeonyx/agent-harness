@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CallId, DeliveryId, Digest, ParseError, ValueId};
+use crate::id::{CallId, DeliveryId, Digest, ParseError, TaskId, Timestamp, ValueId};
 use crate::resource::Observation;
 
 /// The identity of an entry, and so of the context that ends at it: the
@@ -348,4 +348,119 @@ pub enum Note {
     /// before the rest of what a request says when it has text to say, so
     /// only new messages carry it.
     Now,
+}
+
+/// One stretch of one task's context: a node of the map's graph.
+///
+/// **Concept.** The context tree says what each context holds; legs say how
+/// contexts began, compacted, forked, spawned, joined and were edited. A
+/// task's context is one leg until one of four moments ([`Began`]) begins
+/// another, so ordinary turns, synchronous tool calls and Max's own messages
+/// never add one, and a plain chat is one node. Each leg names what it
+/// depends on ([`Dep`]): the arrows of the graph, pointing from the newer
+/// node back to the older one. The fold derives every leg from facts it
+/// already applies ([`crate::state::State::legs`]), so nothing new is
+/// stated, and a restart rebuilds them exactly.
+///
+/// **Vision.** Max's "little dense networks showing the exact life cycle
+/// of contexts": the context tree, "except that [...] as summaries enter a
+/// context, we add graph nodes". The map draws them; tapping one opens its
+/// chat at [`Leg::first`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Leg {
+    pub began: Began,
+    /// When it began: the time of the fact that began it.
+    pub at: Timestamp,
+    /// Its first entry: the context's start, a carry, a request's head or
+    /// a diverging entry. `None` for a fresh task before its first root.
+    pub first: Option<EntryId>,
+    pub on: Vec<Dep>,
+    /// The latest entry of this stretch, where a move back splits it.
+    pub(crate) last: Option<EntryId>,
+}
+
+/// The moment a leg began, and so its name within its task ([`LegId`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Began {
+    /// The task was created: fresh, a fork, resume or aside, or a spawned
+    /// member.
+    Start,
+    /// A compaction, at its carry: what it replaced is the leg before it.
+    Carry(EntryId),
+    /// The first request, by its head, to take in results not yet taken in:
+    /// a spawn's members', or a background call's.
+    Join(EntryId),
+    /// Max moved the task back and what followed diverged, at the first
+    /// diverging entry: the new version, or the old one split off behind it.
+    Version(EntryId),
+}
+
+/// A leg, named by its cause, never by its position: a [`Began::Version`]
+/// split inserts legs. Written `<task>/start`, `<task>/carry:<entry>`,
+/// `<task>/join:<entry>` or `<task>/version:<entry>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LegId {
+    pub task: TaskId,
+    pub began: Began,
+}
+
+impl fmt::Display for LegId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.began {
+            Began::Start => write!(f, "{}/start", self.task),
+            Began::Carry(e) => write!(f, "{}/carry:{e}", self.task),
+            Began::Join(e) => write!(f, "{}/join:{e}", self.task),
+            Began::Version(e) => write!(f, "{}/version:{e}", self.task),
+        }
+    }
+}
+
+/// What a leg depends on: an edge of the map's graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dep {
+    /// A leg, at the entry where this one was taken from it: a fork's
+    /// source at its head, a spawner at the spawn's response, a compacted
+    /// stretch at the head it replaced, a joined member at its last entry.
+    Leg { leg: LegId, at: EntryId },
+    /// A background call whose result this leg took in.
+    Work(CallId),
+}
+
+/// A background call that is not a spawn: the one node of the graph that
+/// is not a context. It hangs from the leg that started it, at the response
+/// whose tool use started it, until a [`Began::Join`] takes its result in.
+///
+/// **Vision.** "I actually like that background tool calls showing on the
+/// graph" (Max).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Work {
+    pub call: CallId,
+    pub leg: LegId,
+    pub at: EntryId,
+}
+
+/// A task's legs, as the fold keeps them ([`crate::state::State::legs`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Legs {
+    /// In the order they began; an old version split off sits right after
+    /// the leg it was split from.
+    pub legs: imbl::Vector<Leg>,
+    /// The leg holding the task's head.
+    pub head: LegId,
+    /// Its background calls, in the order they were made.
+    pub work: imbl::Vector<Work>,
+    /// Max moved it back, and nothing has diverged since.
+    pub(crate) back: bool,
+    /// The calls whose results a request has taken in, so a retried
+    /// request begins no second join.
+    pub(crate) taken: imbl::OrdSet<CallId>,
+}
+
+impl Leg {
+    pub fn id(&self, task: TaskId) -> LegId {
+        LegId {
+            task,
+            began: self.began,
+        }
+    }
 }
