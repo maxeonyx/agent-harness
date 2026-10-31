@@ -470,19 +470,26 @@ fn round_trip(
         "mandate": format!("tool bash {child}\nsay done"),
     }]});
     let copy = json!({ "command": "cp token copy" });
-    let chat = Command::new(build.join("bin/act"))
-        .args([&port, "chat", "engineer"])
-        .arg(&ws)
-        .arg(format!("tool spawn {spawn}\ntool bash {copy}\nsay done"))
-        .env(mark, "1")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("could not be acted on: {e}"))?;
-    if !chat.status.success() {
-        return Err(format!(
-            "refused a chat: {}",
-            String::from_utf8_lossy(&chat.stdout).trim()
-        ));
+    // The brain serves before it has read its role files, so a chat is
+    // refused until it has.
+    let until = Instant::now() + ROUND_TRIP;
+    loop {
+        let chat = Command::new(build.join("bin/act"))
+            .args([&port, "chat", "engineer"])
+            .arg(&ws)
+            .arg(format!("tool spawn {spawn}\ntool bash {copy}\nsay done"))
+            .env(mark, "1")
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("could not be acted on: {e}"))?;
+        if chat.status.success() {
+            break;
+        }
+        let refused = String::from_utf8_lossy(&chat.stdout);
+        if !refused.contains("no role engineer") || Instant::now() > until {
+            return Err(format!("refused a chat: {}", refused.trim()));
+        }
+        thread::sleep(EVERY);
     }
     let until = Instant::now() + ROUND_TRIP;
     loop {
