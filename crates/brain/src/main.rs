@@ -403,6 +403,13 @@ fn run() -> Result<(), Failed> {
         errln!("harness-brain: the provider's models: {e}; aliases keep what they resolved to");
         vec![harness_provider::scripted()]
     });
+    // An installed start makes a new database if none is there.
+    let installed = match (&check, start) {
+        (None, Start::Installed) => {
+            Some(Store::open(&db).map_err(|e| format!("the database opens: {e}"))?)
+        }
+        _ => None,
+    };
     // The face serves from the gate's Serve on, read-only until the brain
     // opens: what it found, while the rest is checked.
     let values = Store::read(&db).map_err(|e| format!("the database opens: {e}"))?;
@@ -453,9 +460,8 @@ fn run() -> Result<(), Failed> {
             thread::park();
         }
     }
-    let (decider, opening) = match start {
-        Start::Installed => {
-            let store = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
+    let (decider, opening) = match installed {
+        Some(store) => {
             let (decider, divergences) = schema::Brain::open(store.replica(), store)
                 .map_err(|e| format!("the database folds: {e}"))?;
             for d in &divergences {
@@ -466,7 +472,7 @@ fn run() -> Result<(), Failed> {
             serve(&decider, listener, tls);
             (decider, opening)
         }
-        Start::Candidate => {
+        None => {
             let gate::Passed { decider, opening } =
                 gate::gate(&db, &client, roles.as_deref(), port, passed, serve)?;
             (decider.storage().write()).map_err(|e| format!("the database writes: {e}"))?;
