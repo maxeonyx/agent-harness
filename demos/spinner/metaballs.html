@@ -4,7 +4,8 @@
      the model (the Claude mark), tool calls (a gear) and Max (a microphone).
      The one it waits on grows and merges with the centre; going from one to
      another, the growth passes through the centre. Open the file: no build,
-     no brain. ?state=NAME holds one state; ?pips=N sets the compactions. -->
+     no brain. ?state=NAME holds one state; ?pips=N sets the compactions;
+     ?n=N adds a stress grid of N map nodes; ?fps shows frame times. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -17,6 +18,7 @@
     --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; min-height: 100vh; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans);
     background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); background-size: 22px 22px; }
   main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; display: grid; gap: 18px; }
@@ -68,7 +70,7 @@
     <dt>Tools</dt><dd>A gear, turning in ticks. Background work it listens on is the same gear, smaller, slower and faint.</dd>
     <dt>Max</dt><dd>A microphone: the move is his, and he answers by talking. The blob goes maroon; each keepalive (every 4 s of quiet) sends out a disk, so if the disks stop, the link has.</dd>
     <dt>Starting, paused, held, done</dt><dd>Starting: the satellites bud out of the centre in turn. Paused and done: they merge back into one ball, grey or green. Held by the account: the model ball, red and still.</dd>
-    <dt>Data</dt><dd>Each packet starts its own disk behind the active ball, expanding and fading. They overlap; nothing is debounced.</dd>
+    <dt>Data</dt><dd>Packets start disks behind the active ball, expanding and fading: at most one every 0.2 s, so a fast stream shows five a second, overlapping.</dd>
     <dt>Compactions</dt><dd>Dots on the blob's outline, offset a little outside it: the latest brightest at twelve o'clock, then clockwise, equally spaced along the outline and never closer to each other than that spacing.</dd>
   </dl>
 </main>
@@ -131,13 +133,11 @@ const ICON = {
   max: { fill: false, path: new Path2D("M12 19v3M19 10v2a7 7 0 0 1-14 0v-2M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0z") },
 };
 
-const mix = (a, b, k) => a + (b - a) * k;
-const mixc = (a, b, k) => a.map((x, i) => mix(x, b[i], k));
-const rgba = (c, a = 1) => `rgba(${c.map(Math.round).join()},${a})`;
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 
 // The field: each ball a circle's signed distance, joined by a polynomial
 // smooth minimum, so balls closer than K melt together and split apart again.
+// The shader below computes the same per pixel; this copy serves ?measure.
 const K = .22;
 function field(balls, x, y) {
   let f = 1e9;
@@ -150,269 +150,533 @@ function field(balls, x, y) {
   return f;
 }
 
-// Marching squares over an n x n grid of the field, at the iso-levels asked
-// for: each level's closed loops, as flat [x0, y0, x1, y1, ...] arrays.
-function contours(balls, n, levels) {
-  const step = 2 * SPAN / n, m = n + 1, val = new Float32Array(m * m);
-  for (let j = 0; j < m; j++) for (let i = 0; i < m; i++) val[j * m + i] = field(balls, -SPAN + i * step, -SPAN + j * step);
-  return levels.map((lv) => trace(val, m, step, lv));
+// ─── Every spinner on the page, drawn in one pass ──────────────────────────
+// One canvas, fixed over the page, and one WebGL draw: an instanced square
+// per spinner, whose fragment shader computes the field per pixel and draws
+// the liveness disks, the blob, its outline, the icons and the role letter.
+// The spinners' state is struct-of-arrays in typed arrays, one index each,
+// and nothing is allocated per frame. Only the compaction dots need the CPU:
+// marching squares traces the track, and a second draw puts a dot per quad.
+// A spinner off screen is neither animated nor drawn.
+
+const SAT_KEYS = Object.keys(SATS), SAT_ANG = SAT_KEYS.map((k) => SATS[k]);
+const DISKS = 8, DISK_MS = 1400, DISK_GAP = 200; // at most one disk per 0.2 s
+const INST = 44; // floats per spinner instance: 11 vec4
+
+let cap = 0, count = 0;
+const slots = [], sessions = [];
+let SIZE, DOCX, DOCY, R, RV, G, GV, X, Y, COL, SPIN, GEAR, DISK, DISKAT, LASTDISK, SEEN, LETTER, inst;
+function grow() {
+  const n = Math.max(64, cap * 2), re = (A, per, old) => { const a = new A(n * per); if (old) a.set(old); return a; };
+  SIZE = re(Float32Array, 1, SIZE); DOCX = re(Float32Array, 1, DOCX); DOCY = re(Float32Array, 1, DOCY);
+  R = re(Float32Array, 4, R); RV = re(Float32Array, 4, RV); // radii: centre, then the satellites
+  G = re(Float32Array, 3, G); GV = re(Float32Array, 3, GV); // the satellites' gaps
+  X = re(Float32Array, 3, X); Y = re(Float32Array, 3, Y);
+  COL = re(Float32Array, 9, COL); SPIN = re(Float32Array, 1, SPIN); GEAR = re(Float32Array, 1, GEAR);
+  DISK = re(Float64Array, DISKS, DISK); DISKAT = re(Uint8Array, 1, DISKAT); // disk start times, a ring
+  LASTDISK = re(Float64Array, 1, LASTDISK); SEEN = re(Float64Array, 1, SEEN); LETTER = re(Float32Array, 1, LETTER);
+  inst = re(Float32Array, INST, inst);
+  cap = n;
 }
-function trace(val, m, step, lv) {
-  // Edge ids: 2 * vertex + 0 for the edge going right, + 1 for the edge going down.
-  const E = 2 * m * m, nb = new Int32Array(2 * E).fill(-1), px = new Float32Array(E), py = new Float32Array(E);
-  const at = (i, j) => val[j * m + i] - lv;
-  const cross = (e, i0, j0, i1, j1) => {
-    const a = at(i0, j0), b = at(i1, j1), k = a / (a - b);
-    px[e] = -SPAN + (i0 + (i1 - i0) * k) * step;
-    py[e] = -SPAN + (j0 + (j1 - j0) * k) * step;
-    return e;
-  };
-  const link = (a, b) => { nb[2 * a + (nb[2 * a] >= 0)] = b; nb[2 * b + (nb[2 * b] >= 0)] = a; };
-  for (let j = 0; j < m - 1; j++) for (let i = 0; i < m - 1; i++) {
-    const v0 = at(i, j) < 0, v1 = at(i + 1, j) < 0, v2 = at(i + 1, j + 1) < 0, v3 = at(i, j + 1) < 0;
-    const e = [];
-    if (v0 !== v1) e[0] = cross(2 * (j * m + i), i, j, i + 1, j);
-    if (v1 !== v2) e[1] = cross(2 * (j * m + i + 1) + 1, i + 1, j, i + 1, j + 1);
-    if (v3 !== v2) e[2] = cross(2 * ((j + 1) * m + i), i, j + 1, i + 1, j + 1);
-    if (v0 !== v3) e[3] = cross(2 * (j * m + i) + 1, i, j, i, j + 1);
-    const on = [0, 1, 2, 3].filter((k) => e[k] !== undefined);
-    if (on.length === 2) link(e[on[0]], e[on[1]]);
-    else if (on.length === 4) {
-      // A saddle: the cell's centre decides which corners join.
-      const mid = (at(i, j) + at(i + 1, j) + at(i + 1, j + 1) + at(i, j + 1)) / 4 < 0;
-      if (mid === v0) { link(e[0], e[1]); link(e[2], e[3]); } else { link(e[3], e[0]); link(e[1], e[2]); }
-    }
+
+// One spinner of css size px, showing a session shared with every other
+// spinner of it, with role letter `letter`: an empty box the canvas draws in.
+function spinner(px, session, letter) {
+  const el = document.createElement("div");
+  el.style.width = el.style.height = px + "px";
+  if (count === cap) grow();
+  const i = count++;
+  slots[i] = el; sessions[i] = session;
+  SIZE[i] = px; LETTER[i] = glyph(letter); LASTDISK[i] = -1e9;
+  R[4 * i] = .4;
+  for (let k = 0; k < 3; k++) { R[4 * i + 1 + k] = IDLE.r; G[3 * i + k] = IDLE.g; }
+  COL.set(STATES[session.state].col.flat(), 9 * i);
+  layoutDirty = true;
+  return el;
+}
+
+// The canvas and its two programs.
+const cv = document.createElement("canvas");
+cv.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1";
+document.body.append(cv);
+const gl = cv.getContext("webgl2", { antialias: false });
+
+const BLOB_VS = `#version 300 es
+layout(location = 0) in vec2 corner;
+${[...Array(11)].map((_, k) => `layout(location = ${k + 1}) in vec4 a${k};`).join("\n")}
+uniform vec2 view;
+out vec2 p;
+${[...Array(11)].map((_, k) => `flat out vec4 v${k};`).join("\n")}
+void main() {
+  vec2 dev = a0.xy + corner * a0.z;
+  gl_Position = vec4(dev.x / view.x * 2. - 1., 1. - dev.y / view.y * 2., 0., 1.);
+  p = (corner * 2. - 1.) * ${SPAN};
+  ${[...Array(11)].map((_, k) => `v${k} = a${k};`).join(" ")}
+}`;
+// v0: device x, y, size, field units per css px. v1: centre radius, active
+// ball (0 centre, 1-3 a satellite), letter cell, letter size. v2-v4: the
+// satellites' x, y, r and icon alpha. v5-v7: fill, edge and icon colours,
+// with the model's and gear's turns and nothing. v8: letter colour. v9-v10:
+// the disks' ages, 0-1, or -1.
+const BLOB_FS = `#version 300 es
+precision highp float;
+in vec2 p;
+${[...Array(11)].map((_, k) => `flat in vec4 v${k};`).join("\n")}
+uniform sampler2D atlas;
+uniform vec2 atlasSize;
+out vec4 o;
+const float K = ${K}, CELL = 128., COLS = 8.;
+float smin(float f, vec3 b) {
+  if (b.z < .005) return f;
+  float d = length(p - b.xy) - b.z, h = max(K - abs(f - d), 0.) / K;
+  return min(f, d) - h * h * K * .25;
+}
+vec4 over(vec4 dst, vec3 c, float a) { return vec4(c * a, a) + dst * (1. - a); }
+// Signed distance, in atlas pixels, at q in a cell's pixels.
+float sdf(float cell, vec2 q) {
+  q = clamp(q, .5, CELL - .5);
+  return texture(atlas, (vec2(mod(cell, COLS), floor(cell / COLS)) * CELL + q) / atlasSize).r;
+}
+vec4 disk(vec4 c, vec3 src, float age, float unit) {
+  if (age < 0.) return c;
+  float e = 1. - pow(1. - age, 3.), d = (length(p - src.xy) - src.z - .34 * e) * unit;
+  return over(c, v6.rgb, .14 * pow(1. - age, 1.6) * clamp(.5 - d, 0., 1.));
+}
+// An icon, 24 units square, centred on its ball and turned by a; the atlas
+// holds it at 4 px a unit with a 4-unit margin. A stroked icon's distance is
+// from a 2-unit stroke; filled, from its fill.
+vec4 icon(vec4 c, vec4 b, float a, float cell, bool filled, vec3 col, float unit, float css) {
+  if (b.w <= 0.) return c;
+  float s = b.z * 1.15 / 24., cs = cos(a), sn = sin(a);
+  vec2 q = mat2(cs, -sn, sn, cs) * (p - b.xy) / s + 12.;
+  float d = sdf(cell, (q + 4.) * 4.) / 4., px = 1. / (s * unit);
+  float cov = filled ? clamp(.5 - d / px, 0., 1.)
+                     : clamp((max(2., 1.4 * css / s) * .5 - (d + 1.)) / px + .5, 0., 1.);
+  return over(c, col, b.w * cov);
+}
+void main() {
+  float unit = v0.z / ${2 * SPAN}, css = v0.w, dpr = css * unit;
+  float f = smin(smin(smin(length(p) - v1.x, v2.xyz), v3.xyz), v4.xyz);
+  float fpx = f / max(length(vec2(dFdx(f), dFdy(f))), 1e-6); // device px
+
+  int act = int(v1.y);
+  vec3 src = act == 1 ? v2.xyz : act == 2 ? v3.xyz : act == 3 ? v4.xyz : vec3(0., 0., v1.x);
+  vec4 c = vec4(0.);
+  c = disk(c, src, v9.x, unit); c = disk(c, src, v9.y, unit); c = disk(c, src, v9.z, unit); c = disk(c, src, v9.w, unit);
+  c = disk(c, src, v10.x, unit); c = disk(c, src, v10.y, unit); c = disk(c, src, v10.z, unit); c = disk(c, src, v10.w, unit);
+
+  c = over(c, v5.rgb, clamp(.5 - fpx, 0., 1.));
+  c = over(c, v6.rgb, clamp(.65 * dpr + .5 - abs(fpx), 0., 1.));
+
+  c = icon(c, v2, v5.w, 0., true, act == 1 ? v7.rgb : v6.rgb, unit, css);
+  c = icon(c, v3, v6.w, 1., false, act == 2 ? v7.rgb : v6.rgb, unit, css);
+  c = icon(c, v4, 0., 2., false, act == 3 ? v7.rgb : v6.rgb, unit, css);
+
+  float k = v1.w / 80.; // the letter is drawn 80 px high in its cell
+  float d = sdf(v1.z, (p - vec2(0., v1.x * .05)) / k + CELL / 2.) * k * unit;
+  o = over(c, v8.rgb, .92 * clamp(.5 - d, 0., 1.));
+}`;
+const DOT_VS = `#version 300 es
+layout(location = 0) in vec2 corner;
+layout(location = 1) in vec4 dot; // device x, y, radius, alpha
+uniform vec2 view;
+out vec2 q;
+flat out vec4 d;
+void main() {
+  q = dot.xy + (corner * 2. - 1.) * (dot.z + 1.);
+  gl_Position = vec4(q.x / view.x * 2. - 1., 1. - q.y / view.y * 2., 0., 1.);
+  d = dot;
+}`;
+const DOT_FS = `#version 300 es
+precision highp float;
+in vec2 q;
+flat in vec4 d;
+out vec4 o;
+void main() { float a = d.w * clamp(d.z + .5 - length(q - d.xy), 0., 1.); o = vec4(${C.ink.map((x) => (x / 255).toFixed(4))} , 1.) * a; }`;
+
+function program(vs, fs) {
+  const p = gl.createProgram();
+  for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    gl.attachShader(p, s);
   }
-  const loops = [], seen = new Uint8Array(E);
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+const blobProg = program(BLOB_VS, BLOB_FS), dotProg = program(DOT_VS, DOT_FS);
+const blobView = gl.getUniformLocation(blobProg, "view"), blobAtlas = gl.getUniformLocation(blobProg, "atlasSize"), dotView = gl.getUniformLocation(dotProg, "view");
+const quad = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+// A vertex array per program: the quad's corners, then per-instance vec4s.
+function vao(buf, vec4s) {
+  const v = gl.createVertexArray();
+  gl.bindVertexArray(v);
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  for (let k = 0; k < vec4s; k++) {
+    gl.enableVertexAttribArray(k + 1);
+    gl.vertexAttribPointer(k + 1, 4, gl.FLOAT, false, vec4s * 16, k * 16);
+    gl.vertexAttribDivisor(k + 1, 1);
+  }
+  return v;
+}
+const instBuf = gl.createBuffer(), dotBuf = gl.createBuffer();
+const blobVao = vao(instBuf, INST / 4), dotVao = vao(dotBuf, 1);
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+// The atlas: signed distance fields of the icons and the role letters, in
+// 128 px cells, 8 to a row. A cell is drawn on a 2D canvas and turned into
+// distances by the Felzenszwalb transform, with the edge pixels' coverage
+// kept as sub-pixel distance (as Mapbox's tiny-sdf does).
+const CELL = 128, COLS = 8, glyphs = new Map();
+let atlas = new Float32Array(0), atlasRows = 0, atlasDirty = true;
+const atlasTex = gl.createTexture();
+function addCell(draw) {
+  const n = glyphs.size, row = Math.floor(n / COLS);
+  if (row >= atlasRows) {
+    const grown = new Float32Array(COLS * CELL * CELL * (row + 1)).fill(1e3);
+    grown.set(atlas); atlas = grown; atlasRows = row + 1;
+  }
+  const c = document.createElement("canvas");
+  c.width = c.height = CELL;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  draw(g);
+  const a = g.getImageData(0, 0, CELL, CELL).data, N = CELL * CELL, out = new Float64Array(N), inn = new Float64Array(N);
+  for (let j = 0; j < N; j++) {
+    const v = a[4 * j + 3] / 255;
+    out[j] = v === 1 ? 0 : v === 0 ? 1e20 : Math.max(0, .5 - v) ** 2;
+    inn[j] = v === 1 ? 1e20 : v === 0 ? 0 : Math.max(0, v - .5) ** 2;
+  }
+  edt(out); edt(inn);
+  const x0 = (n % COLS) * CELL, y0 = row * CELL;
+  for (let y = 0; y < CELL; y++) for (let x = 0; x < CELL; x++) {
+    const j = y * CELL + x;
+    atlas[(y0 + y) * COLS * CELL + x0 + x] = Math.sqrt(out[j]) - Math.sqrt(inn[j]);
+  }
+  atlasDirty = true;
+  return n;
+}
+// Squared Euclidean distance transform, in place, of a CELL x CELL grid.
+const eF = new Float64Array(CELL), eD = new Float64Array(CELL), eV = new Int32Array(CELL), eZ = new Float64Array(CELL + 1);
+function edt(grid) {
+  for (let pass = 0; pass < 2; pass++) for (let a = 0; a < CELL; a++) {
+    const at = (b) => (pass ? a * CELL + b : b * CELL + a);
+    for (let b = 0; b < CELL; b++) eF[b] = grid[at(b)];
+    let k = 0;
+    eV[0] = 0; eZ[0] = -1e20; eZ[1] = 1e20;
+    for (let q = 1; q < CELL; q++) {
+      let s;
+      while ((s = (eF[q] + q * q - eF[eV[k]] - eV[k] * eV[k]) / (2 * q - 2 * eV[k])) <= eZ[k]) k--;
+      k++; eV[k] = q; eZ[k] = s; eZ[k + 1] = 1e20;
+    }
+    k = 0;
+    for (let q = 0; q < CELL; q++) { while (eZ[k + 1] < q) k++; eD[q] = (q - eV[k]) ** 2 + eF[eV[k]]; }
+    for (let b = 0; b < CELL; b++) grid[at(b)] = eD[b];
+  }
+}
+for (const k of SAT_KEYS) glyphs.set("icon " + k, addCell((g) => {
+  const ic = ICON[k];
+  g.setTransform(4, 0, 0, 4, 16, 16);
+  if (ic.fill) g.fill(ic.path);
+  else { g.lineWidth = 2; g.lineCap = g.lineJoin = "round"; g.stroke(ic.path); }
+}));
+const serif = getComputedStyle(document.body).getPropertyValue("--serif");
+function glyph(ch) {
+  if (!glyphs.has("letter " + ch)) glyphs.set("letter " + ch, addCell((g) => {
+    g.font = `600 80px ${serif}`; g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(ch, CELL / 2, CELL / 2);
+  }));
+  return glyphs.get("letter " + ch);
+}
+
+// The compaction track: marching squares over an n x n grid of the field at
+// one level, keeping only its longest loop. Scratch sized for the finest
+// grid, reused.
+const TN = 64, TM = TN + 1, TE = 2 * TM * TM;
+const tVal = new Float32Array(TM * TM), tNb = new Int32Array(2 * TE), tPx = new Float32Array(TE), tPy = new Float32Array(TE), tSeen = new Uint8Array(TE);
+let loopA = new Float32Array(2 * TE), loopB = new Float32Array(2 * TE);
+const ball = new Float32Array(12); // x, y, r of the traced spinner's four balls
+function fieldAt(x, y) {
+  let f = 1e9;
+  for (let b = 0; b < 12; b += 3) {
+    const r = ball[b + 2];
+    if (r < .005) continue;
+    const dx = x - ball[b], dy = y - ball[b + 1], d = Math.sqrt(dx * dx + dy * dy) - r;
+    const h = Math.max(K - Math.abs(f - d), 0) / K;
+    f = Math.min(f, d) - h * h * K * .25;
+  }
+  return f;
+}
+let tm = 0, tstep = 0;
+// Edge ids: 2 * vertex + 0 for the edge going right, + 1 for the edge going down.
+function cross(e, i, j, a, b, di, dj) {
+  const k = a / (a - b);
+  tPx[e] = -SPAN + (i + di * k) * tstep; tPy[e] = -SPAN + (j + dj * k) * tstep;
+  return e;
+}
+function link(a, b) { tNb[2 * a + (tNb[2 * a] >= 0)] = b; tNb[2 * b + (tNb[2 * b] >= 0)] = a; }
+function loopLength(L, n) {
+  let s = 0;
+  for (let k = 0; k < n; k++) { const l = (k + 1) % n; s += Math.hypot(L[2 * l] - L[2 * k], L[2 * l + 1] - L[2 * k + 1]); }
+  return s;
+}
+// The longest loop's points into loopB; returns how many.
+function longestLoop(n, lv) {
+  const m = n + 1, E = 2 * m * m;
+  tm = m; tstep = 2 * SPAN / n;
+  // Only within the balls' bounds, grown by the level and the smooth
+  // minimum's reach: everywhere else is outside.
+  let x0 = SPAN, x1 = -SPAN, y0 = SPAN, y1 = -SPAN;
+  for (let b = 0; b < 12; b += 3) {
+    const r = ball[b + 2] + lv + K / 4;
+    if (ball[b + 2] < .005) continue;
+    x0 = Math.min(x0, ball[b] - r); x1 = Math.max(x1, ball[b] + r); y0 = Math.min(y0, ball[b + 1] - r); y1 = Math.max(y1, ball[b + 1] + r);
+  }
+  const i0 = clamp(Math.floor((x0 + SPAN) / tstep), 0, n), i1 = clamp(Math.ceil((x1 + SPAN) / tstep), 0, n);
+  const j0 = clamp(Math.floor((y0 + SPAN) / tstep), 0, n), j1 = clamp(Math.ceil((y1 + SPAN) / tstep), 0, n);
+  tVal.fill(1, 0, m * m);
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) tVal[j * m + i] = fieldAt(-SPAN + i * tstep, -SPAN + j * tstep) - lv;
+  tNb.fill(-1, 0, 2 * E); tSeen.fill(0, 0, E);
+  for (let j = Math.max(0, j0 - 1); j < Math.min(n, j1 + 1); j++) for (let i = Math.max(0, i0 - 1); i < Math.min(n, i1 + 1); i++) {
+    const a0 = tVal[j * m + i], a1 = tVal[j * m + i + 1], a2 = tVal[(j + 1) * m + i + 1], a3 = tVal[(j + 1) * m + i];
+    const v0 = a0 < 0, v1 = a1 < 0, v2 = a2 < 0, v3 = a3 < 0;
+    if (v0 === v1 && v1 === v2 && v2 === v3) continue;
+    const e0 = v0 !== v1 ? cross(2 * (j * m + i), i, j, a0, a1, 1, 0) : -1;
+    const e1 = v1 !== v2 ? cross(2 * (j * m + i + 1) + 1, i + 1, j, a1, a2, 0, 1) : -1;
+    const e2 = v3 !== v2 ? cross(2 * ((j + 1) * m + i), i, j + 1, a3, a2, 1, 0) : -1;
+    const e3 = v0 !== v3 ? cross(2 * (j * m + i) + 1, i, j, a0, a3, 0, 1) : -1;
+    if (e0 >= 0 && e1 >= 0 && e2 >= 0 && e3 >= 0) {
+      // A saddle: the cell's centre decides which corners join.
+      if ((a0 + a1 + a2 + a3) / 4 < 0 === v0) { link(e0, e1); link(e2, e3); } else { link(e3, e0); link(e1, e2); }
+    } else link(e0 >= 0 ? e0 : e1 >= 0 ? e1 : e2, e3 >= 0 ? e3 : e2 >= 0 ? e2 : e1);
+  }
+  let best = -1, bestN = 0;
   for (let s = 0; s < E; s++) {
-    if (nb[2 * s] < 0 || seen[s]) continue;
-    const loop = [];
-    let prev = -1, cur = s;
-    while (!seen[cur]) {
-      seen[cur] = 1;
-      loop.push(px[cur], py[cur]);
-      const next = nb[2 * cur] !== prev ? nb[2 * cur] : nb[2 * cur + 1];
+    if (tNb[2 * s] < 0 || tSeen[s]) continue;
+    let n2 = 0, prev = -1, cur = s;
+    while (!tSeen[cur]) {
+      tSeen[cur] = 1;
+      loopA[n2++] = tPx[cur]; loopA[n2++] = tPy[cur];
+      const next = tNb[2 * cur] !== prev ? tNb[2 * cur] : tNb[2 * cur + 1];
       prev = cur; cur = next;
       if (cur < 0) break;
     }
-    if (loop.length >= 6) loops.push(loop);
+    if (n2 < 6) continue;
+    const len = loopLength(loopA, n2 / 2);
+    if (len > best) { best = len; bestN = n2 / 2; const t = loopA; loopA = loopB; loopB = t; }
   }
-  return loops;
-}
-
-function area(loop) {
-  let a = 0;
-  for (let k = 0; k < loop.length; k += 2) {
-    const l = (k + 2) % loop.length;
-    a += loop[k] * loop[l + 1] - loop[l] * loop[k + 1];
-  }
-  return a / 2;
-}
-function length(loop) {
-  let s = 0;
-  for (let k = 0; k < loop.length; k += 2) { const l = (k + 2) % loop.length; s += Math.hypot(loop[l] - loop[k], loop[l + 1] - loop[k + 1]); }
-  return s;
+  return bestN;
 }
 
 // The compaction dots on the track (the outline offset outward): the first at
 // twelve o'clock, then clockwise, each the pitch further along the track and
 // at least the pitch away, in a straight line, from every dot before it, so a
 // neck in the blob doesn't bunch them. Few dots keep the pitch; many shrink it
-// to share the track.
-function dots(track, count, pitch) {
-  if (!count || !track) return [];
-  let loop = track;
-  if (area(loop) < 0) { // clockwise on screen, y down
-    loop = [];
-    for (let k = track.length - 2; k >= 0; k -= 2) loop.push(track[k], track[k + 1]);
-  }
-  const n = loop.length / 2, pt = (k) => [loop[2 * (k % n)], loop[2 * (k % n) + 1]];
+// to share the track. Into dotX, dotY; returns how many.
+const MAXDOTS = 64, dotX = new Float32Array(MAXDOTS), dotY = new Float32Array(MAXDOTS);
+const wX = new Float32Array(TE + 1), wY = new Float32Array(TE + 1), wS = new Float32Array(TE + 1);
+let pn = 0, prev = false, seg = 0, qx = 0, qy = 0;
+const at = (k) => (prev ? pn - 1 - (k % pn) : k % pn); // clockwise on screen, y down
+function along(n, v) {
+  while (seg < n - 2 && wS[seg + 1] < v) seg++; // n points walked
+  const f = (v - wS[seg]) / (wS[seg + 1] - wS[seg] || 1);
+  qx = wX[seg] + (wX[seg + 1] - wX[seg]) * f; qy = wY[seg] + (wY[seg + 1] - wY[seg]) * f;
+}
+function near(out, p) {
+  for (let d = 0; d < out; d++) if (Math.hypot(qx - dotX[d], qy - dotY[d]) < p * .98) return true;
+  return false;
+}
+function placeDots(n, count, pitch) {
+  const L = loopB;
+  let a = 0;
+  for (let k = 0; k < n; k++) { const l = (k + 1) % n; a += L[2 * k] * L[2 * l + 1] - L[2 * l] * L[2 * k + 1]; }
+  pn = n; prev = a < 0;
   // Start where the track crosses the upward vertical through the centre.
   let start = 0, sf = 0, top = Infinity;
   for (let k = 0; k < n; k++) {
-    const [ax, ay] = pt(k), [bx, by] = pt(k + 1);
+    const ax = L[2 * at(k)], ay = L[2 * at(k) + 1], bx = L[2 * at(k + 1)], by = L[2 * at(k + 1) + 1];
     if ((ax < 0) !== (bx < 0)) {
       const f = ax / (ax - bx), y = ay + (by - ay) * f;
       if (y < top) { top = y; start = k; sf = f; }
     }
   }
   // Arc length from the start, walking the polyline.
-  const xs = [], ys = [], ss = [];
-  let [x0, y0] = pt(start), [x1, y1] = pt(start + 1);
-  let s = 0, px = x0 + (x1 - x0) * sf, py = y0 + (y1 - y0) * sf;
-  xs.push(px); ys.push(py); ss.push(0);
+  const x0 = L[2 * at(start)], y0 = L[2 * at(start) + 1];
+  let px = x0 + (L[2 * at(start + 1)] - x0) * sf, py = y0 + (L[2 * at(start + 1) + 1] - y0) * sf, s = 0;
+  wX[0] = px; wY[0] = py; wS[0] = 0;
   for (let k = 1; k <= n; k++) {
-    const [qx, qy] = pt(start + k);
-    s += Math.hypot(qx - px, qy - py);
-    xs.push(qx); ys.push(qy); ss.push(s);
-    px = qx; py = qy;
+    const x = L[2 * at(start + k)], y = L[2 * at(start + k) + 1];
+    s += Math.hypot(x - px, y - py);
+    wX[k] = x; wY[k] = y; wS[k] = s;
+    px = x; py = y;
   }
-  const L = s;
-  const p = Math.min(pitch, L / count);
-  let seg = 0;
-  const along = (u) => {
-    while (seg < ss.length - 2 && ss[seg + 1] < u) seg++;
-    const f = (u - ss[seg]) / (ss[seg + 1] - ss[seg] || 1);
-    return [mix(xs[seg], xs[seg + 1], f), mix(ys[seg], ys[seg + 1], f)];
-  };
-  const out = [along(0)];
-  let u = 0;
-  while (out.length < count) {
-    u += p;
-    let q = along(u);
-    while (u < L && out.some(([ox, oy]) => Math.hypot(q[0] - ox, q[1] - oy) < p * .98)) { u += p * .05; q = along(u); }
-    if (u >= L - p * .5) break;
-    out.push(q);
+  const p = Math.min(pitch, s / count), want = Math.min(count, MAXDOTS);
+  let u = 0, out = 0;
+  seg = 0;
+  along(n + 1, 0); dotX[out] = qx; dotY[out++] = qy;
+  while (out < want) {
+    u += p; along(n + 1, u);
+    while (u < s && near(out, p)) { u += p * .05; along(n + 1, u); }
+    if (u >= s - p * .5) break;
+    dotX[out] = qx; dotY[out++] = qy;
   }
   return out;
 }
 
 // A spring with a little give, so balls overshoot and settle like liquid;
 // critically damped (26), it settles without overshooting.
-const spring = (v) => ({ v, vel: 0 });
-function pull(s, goal, dt, damp = 17) {
-  s.vel += ((goal - s.v) * 170 - s.vel * damp) * dt;
-  s.v += s.vel * dt;
+function pull(v, vel, i, goal, dt, damp) {
+  vel[i] += ((goal - v[i]) * 170 - vel[i] * damp) * dt;
+  v[i] += vel[i] * dt;
 }
 
-// One spinner of css size px, showing a session shared with every other
-// spinner of it, with role letter `letter`.
-function spinner(px, session, letter) {
-  const cv = document.createElement("canvas"), dpr = Math.min(3, window.devicePixelRatio || 1);
-  cv.width = cv.height = Math.round(px * dpr);
-  cv.style.width = cv.style.height = px + "px";
-  const g = cv.getContext("2d"), unit = px * dpr / (2 * SPAN), onePx = 1 / unit * dpr;
-  const grid = clamp(Math.round(px * dpr / 4), 28, 84);
-  const balls = { centre: { x: 0, y: 0, r: spring(.4) } };
-  for (const k in SATS) balls[k] = { x: 0, y: 0, r: spring(IDLE.r), g: spring(IDLE.g) };
-  let col = STATES[session.state].col.map((c) => c.slice()), spin = 0, gear = 0, last = performance.now();
-
-  function goals(now) {
-    const s = STATES[session.shown(now)], t = (now - session.since) / 1000, out = {};
-    out.centre = { r: s.centre };
-    for (const k in SATS) {
-      let g = s.merged ? { r: .12, g: -.45 } : { r: IDLE.r, g: s.gap ?? IDLE.g };
-      if (s.active === k) g = { r: s.size || ACTIVE.r, g: ACTIVE.g };
-      if (session.shown(now) === "first" && k === "model") g.r = .36 + .06 * Math.sin(t * 5); // swelling, in time
-      if (session.shown(now) === "starting") { // budding out of the centre in turn, and off it
-        const ph = (t * .9 - Object.keys(SATS).indexOf(k) / 3) % 1, r = .2 * Math.sin(Math.PI * ph);
-        g = { r, g: .25 + .5 * ph - s.centre - r };
-      }
-      out[k] = g;
-    }
-    return out;
+// Where each spinner's box is on the page, read only when the layout changes.
+let layoutDirty = true;
+new ResizeObserver(() => { layoutDirty = true; }).observe(document.body);
+addEventListener("resize", () => { layoutDirty = true; });
+function measureLayout() {
+  for (let i = 0; i < count; i++) {
+    const r = slots[i].getBoundingClientRect();
+    DOCX[i] = r.left + scrollX; DOCY[i] = r.top + scrollY;
   }
+  layoutDirty = false;
+}
 
-  function frame(now) {
-    const dt = Math.min(1 / 30, (now - last) / 1000);
-    last = now;
-    const name = session.shown(now), st = STATES[name], goal = goals(now);
-    pull(balls.centre.r, goal.centre.r, dt);
-    for (const k in SATS) {
-      const b = balls[k], a = SATS[k];
-      pull(b.r, goal[k].r, dt); pull(b.g, goal[k].g, dt, 26);
-      b.r.v = Math.max(0, b.r.v);
-      const d = balls.centre.r.v + b.r.v + b.g.v + (st.still ? 0 : WOB * Math.sin(now / 700 + a * 3));
-      b.x = Math.cos(a) * d; b.y = Math.sin(a) * d;
+let dots = new Float32Array(4 * 256), last = performance.now();
+const work = { ms: 0 };
+function frame(now) {
+  requestAnimationFrame(frame);
+  const t0 = performance.now(), dt = Math.min(1 / 30, (now - last) / 1000);
+  last = now;
+  if (layoutDirty) measureLayout();
+  const dpr = Math.min(3, devicePixelRatio || 1), W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const sx = scrollX, sy = scrollY, kc = 1 - Math.exp(-dt / .18);
+  let drawn = 0, ndots = 0;
+  for (let i = 0; i < count; i++) {
+    const px = SIZE[i], x = (DOCX[i] - sx) * dpr, y = (DOCY[i] - sy) * dpr, size = px * dpr;
+    if (x + size < 0 || y + size < 0 || x > W || y > H) continue;
+    const ses = sessions[i], name = ses.shown(now), st = STATES[name], t = (now - ses.since) / 1000;
+
+    // The balls: each radius and gap springs towards the state's.
+    pull(R, RV, 4 * i, st.centre, dt, 17);
+    const c0 = R[4 * i];
+    for (let k = 0; k < 3; k++) {
+      let gr = IDLE.r, gg = st.gap ?? IDLE.g;
+      if (st.merged) { gr = .12; gg = -.45; }
+      if (st.active === SAT_KEYS[k]) { gr = st.size || ACTIVE.r; gg = ACTIVE.g; }
+      if (name === "first" && k === 0) gr = .36 + .06 * Math.sin(t * 5); // swelling, in time
+      if (name === "starting") { // budding out of the centre in turn, and off it
+        const ph = (t * .9 - k / 3) % 1;
+        gr = .2 * Math.sin(Math.PI * ph); gg = .25 + .5 * ph - st.centre - gr;
+      }
+      const r = 4 * i + 1 + k, g = 3 * i + k, a = SAT_ANG[k];
+      pull(R, RV, r, gr, dt, 17); pull(G, GV, g, gg, dt, 26);
+      if (R[r] < 0) R[r] = 0;
+      const d = c0 + R[r] + G[g] + (st.still ? 0 : WOB * Math.sin(now / 700 + a * 3));
+      X[g] = Math.cos(a) * d; Y[g] = Math.sin(a) * d;
     }
-    const kc = 1 - Math.exp(-dt / .18);
-    col = col.map((c, i) => mixc(c, st.col[i], kc));
-    if (name === "streaming") spin += dt * 1.4;
+    for (let k = 0; k < 9; k++) COL[9 * i + k] += (st.col[k / 3 | 0][k % 3] - COL[9 * i + k]) * kc;
+    if (name === "streaming") SPIN[i] += dt * 1.4;
     if (name === "tools" || name === "listening") {
-      const period = name === "tools" ? .6 : 2, t = (now - session.since) / 1000, n = Math.floor(t / period), f = Math.min(1, (t / period - n) * 3);
-      gear = (n + 1 - Math.pow(1 - f, 3)) * Math.PI / 4;
+      const period = name === "tools" ? .6 : 2, n = Math.floor(t / period), f = Math.min(1, (t / period - n) * 3);
+      GEAR[i] = (n + 1 - Math.pow(1 - f, 3)) * Math.PI / 4;
+    }
+    if (ses.measure) ses.measure([{ x: 0, y: 0, r: c0 }, ...[0, 1, 2].map((k) => ({ x: X[3 * i + k], y: Y[3 * i + k], r: R[4 * i + 1 + k] }))], name);
+
+    // Liveness: a packet since the last disk starts one, at most every 0.2 s.
+    if (ses.lastPacket > SEEN[i] && now - LASTDISK[i] >= DISK_GAP) {
+      SEEN[i] = ses.lastPacket; LASTDISK[i] = now;
+      DISK[DISKS * i + DISKAT[i]] = now; DISKAT[i] = (DISKAT[i] + 1) % DISKS;
     }
 
-    const list = Object.values(balls).map((b) => ({ x: b.x, y: b.y, r: b.r.v }));
-    session.measure?.(list, name);
-    const trackOff = .05 + 3 * onePx;
-    const [blob, track] = contours(list, grid, [0, trackOff]);
-
-    g.setTransform(unit, 0, 0, unit, cv.width / 2, cv.height / 2);
-    g.clearRect(-SPAN, -SPAN, 2 * SPAN, 2 * SPAN);
-
-    // Liveness: one disk per packet, behind the active ball, each on its own.
-    const src = balls[st.active] || balls.centre;
-    session.packets = session.packets.filter((p0) => now - p0 < 1400);
-    for (const p0 of session.packets) {
-      const f = clamp((now - p0) / 1400, 0, 1), e = 1 - Math.pow(1 - f, 3);
-      g.beginPath();
-      g.arc(src.x, src.y, src.r.v + .34 * e, 0, 2 * Math.PI);
-      g.fillStyle = rgba(col[1], .14 * Math.pow(1 - f, 1.6));
-      g.fill();
+    const o = INST * drawn++, onePx = 2 * SPAN / px, active = SAT_KEYS.indexOf(st.active) + 1;
+    inst[o] = x; inst[o + 1] = y; inst[o + 2] = size; inst[o + 3] = onePx;
+    inst[o + 4] = c0; inst[o + 5] = active; inst[o + 6] = LETTER[i]; inst[o + 7] = Math.max(c0 * 1.25, 9 * onePx);
+    for (let k = 0; k < 3; k++) {
+      const r = R[4 * i + 1 + k], show = clamp((r * px / (2 * SPAN) - 5) / 6, 0, 1), b = o + 8 + 4 * k;
+      inst[b] = X[3 * i + k]; inst[b + 1] = Y[3 * i + k]; inst[b + 2] = r;
+      inst[b + 3] = show * (active === k + 1 ? (name === "first" ? .55 : 1) : .45);
     }
-
-    // The blob: every loop of the outline, smoothed through edge midpoints.
-    g.beginPath();
-    for (const loop of blob) {
-      const n = loop.length / 2;
-      g.moveTo((loop[0] + loop[2]) / 2, (loop[1] + loop[3]) / 2);
-      for (let k = 1; k <= n; k++) {
-        const a = k % n, b = (k + 1) % n;
-        g.quadraticCurveTo(loop[2 * a], loop[2 * a + 1], (loop[2 * a] + loop[2 * b]) / 2, (loop[2 * a + 1] + loop[2 * b + 1]) / 2);
-      }
-      g.closePath();
+    for (let k = 0; k < 9; k++) inst[o + 20 + 4 * (k / 3 | 0) + k % 3] = COL[9 * i + k] / 255;
+    inst[o + 23] = SPIN[i]; inst[o + 27] = GEAR[i]; inst[o + 31] = 0;
+    // The role letter: ink on a light blob, paper on a dark one.
+    const light = (COL[9 * i] * .3 + COL[9 * i + 1] * .59 + COL[9 * i + 2] * .11) / 255, lc = light > .6 ? C.ink : C.paper;
+    inst[o + 32] = lc[0] / 255; inst[o + 33] = lc[1] / 255; inst[o + 34] = lc[2] / 255; inst[o + 35] = 0;
+    for (let k = 0; k < DISKS; k++) {
+      const t1 = DISK[DISKS * i + (DISKAT[i] + k) % DISKS], age = (now - t1) / DISK_MS; // oldest first
+      inst[o + 36 + k] = t1 > 0 && age < 1 ? age : -1;
     }
-    g.fillStyle = rgba(col[0]);
-    g.fill("evenodd");
-    g.lineWidth = 1.3 * onePx;
-    g.strokeStyle = rgba(col[1]);
-    g.stroke();
-
-    // Icons, fading in as their ball gets big enough to hold one.
-    for (const k in SATS) {
-      const b = balls[k], r = b.r.v, show = clamp((r * unit / dpr - 5) / 6, 0, 1);
-      if (show <= 0) continue;
-      const active = st.active === k, ic = ICON[k], s = r * 1.15 / 24;
-      g.save();
-      g.translate(b.x, b.y);
-      if (k === "model") g.rotate(spin);
-      if (k === "tools") g.rotate(gear);
-      g.scale(s, s);
-      g.translate(-12, -12);
-      g.globalAlpha = show * (active ? (name === "first" ? .55 : 1) : .45);
-      const c = rgba(active ? col[2] : col[1]);
-      if (ic.fill) { g.fillStyle = c; g.fill(ic.path); } else {
-        g.strokeStyle = c; g.lineWidth = Math.max(2, 1.4 * onePx / s); g.lineCap = g.lineJoin = "round"; g.stroke(ic.path);
-      }
-      g.restore();
-    }
-
-    // The role letter, on the centre: ink on a light blob, paper on a dark one.
-    const cr = balls.centre.r.v, light = (col[0][0] * .3 + col[0][1] * .59 + col[0][2] * .11) / 255;
-    g.fillStyle = rgba(light > .6 ? C.ink : C.paper, .92);
-    g.font = `600 ${(Math.max(cr * 1.25, 9 * onePx)).toFixed(3)}px ${getComputedStyle(document.body).getPropertyValue("--serif")}`;
-    g.textAlign = "center"; g.textBaseline = "middle";
-    g.fillText(letter, 0, cr * .05);
 
     // Compactions: dots on the longest loop of the track.
-    const outer = track.reduce((a, l) => (a && length(a) >= length(l) ? a : l), null);
-    const ds = dots(outer, session.pips, Math.max(.2, 9 * onePx));
-    ds.forEach(([x, y], i) => {
-      g.beginPath();
-      g.arc(x, y, Math.max(1.4 * onePx, .035), 0, 2 * Math.PI);
-      g.fillStyle = rgba(C.ink, Math.max(.22, .7 - i * .07));
-      g.fill();
-    });
-    requestAnimationFrame(frame);
+    const pips = ses.pips;
+    if (pips > 0) {
+      ball[0] = 0; ball[1] = 0; ball[2] = c0;
+      for (let k = 0; k < 3; k++) { ball[3 + 3 * k] = X[3 * i + k]; ball[4 + 3 * k] = Y[3 * i + k]; ball[5 + 3 * k] = R[4 * i + 1 + k]; }
+      const n = longestLoop(clamp(Math.round(px / 2.5), 24, TN), .05 + 3 * onePx);
+      const placed = n ? placeDots(n, pips, Math.max(.2, 9 * onePx)) : 0, unit = size / (2 * SPAN);
+      if (4 * (ndots + placed) > dots.length) { const d = new Float32Array(dots.length * 2 + 4 * placed); d.set(dots); dots = d; }
+      for (let d = 0; d < placed; d++) {
+        const b = 4 * ndots++;
+        dots[b] = x + size / 2 + dotX[d] * unit; dots[b + 1] = y + size / 2 + dotY[d] * unit;
+        dots[b + 2] = Math.max(1.4 * onePx, .035) * unit; dots[b + 3] = Math.max(.22, .7 - d * .07);
+      }
+    }
   }
-  requestAnimationFrame(frame);
-  return cv;
-}
 
-// A session: its state, its packets (times), its compactions. Going from one
-// satellite straight to another, it shows the brain for a moment, so the
-// growth passes through the centre. A streaming model sends chunks at
+  gl.viewport(0, 0, W, H);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  if (atlasDirty) {
+    gl.bindTexture(gl.TEXTURE_2D, atlasTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, COLS * CELL, atlasRows * CELL, 0, gl.RED, gl.FLOAT, atlas);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    atlasDirty = false;
+  }
+  if (drawn) {
+    gl.useProgram(blobProg);
+    gl.uniform2f(blobView, W, H);
+    gl.uniform2f(blobAtlas, COLS * CELL, atlasRows * CELL);
+    gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, inst.subarray(0, INST * drawn), gl.STREAM_DRAW);
+    gl.bindVertexArray(blobVao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, drawn);
+  }
+  if (ndots) {
+    gl.useProgram(dotProg);
+    gl.uniform2f(dotView, W, H);
+    gl.bindBuffer(gl.ARRAY_BUFFER, dotBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, dots.subarray(0, 4 * ndots), gl.STREAM_DRAW);
+    gl.bindVertexArray(dotVao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, ndots);
+  }
+  work.ms += (performance.now() - t0 - work.ms) * .05;
+  work.drawn = drawn;
+}
+requestAnimationFrame(frame);
+
+// A session: its state, when its last packet came, its compactions. Going
+// from one satellite straight to another, it shows the brain for a moment,
+// so the growth passes through the centre. A streaming model sends chunks at
 // irregular short gaps; running tool calls send output now and then.
 function session(state, pips = 2) {
-  const s = { state, since: performance.now(), via: 0, pips, packets: [], lastData: performance.now(),
+  const s = { state, since: performance.now(), via: 0, pips, lastPacket: 0, lastData: performance.now(),
     shown(now) { return now < this.via ? "brain" : this.state; },
     set(next) {
       const now = performance.now(), a = satOf(this.shown(now)), b = satOf(next);
       this.via = a && b && a !== b ? now + 260 : 0;
       this.state = next; this.since = now;
     },
-    packet() { this.packets.push(performance.now()); this.lastData = performance.now(); } };
+    packet() { this.lastPacket = this.lastData = performance.now(); } };
   const feed = () => {
     const gap = { streaming: [30, 150], tools: [300, 1200] }[s.state];
     if (gap) s.packet();
@@ -421,7 +685,6 @@ function session(state, pips = 2) {
   feed();
   return s;
 }
-
 const params = new URLSearchParams(location.search);
 const one = session(STATES[params.get("state")] ? params.get("state") : "first", +(params.get("pips") ?? 2));
 document.getElementById("big").append(spinner(260, one, "C"));
@@ -441,7 +704,7 @@ for (const [name, s] of Object.entries(STATES)) {
 }
 show();
 
-// Packets: one, or a burst of 24 at random 10-70 ms gaps, each its own disk.
+// Packets: one, or a burst of 24 at random 10-70 ms gaps.
 document.getElementById("packet").onclick = () => one.packet();
 document.getElementById("burst").onclick = () => {
   let k = 0;
