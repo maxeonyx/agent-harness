@@ -74,6 +74,7 @@ mod login;
 pub mod request;
 mod response;
 mod scripted;
+mod server_tool;
 
 pub use client::{Client, Counted, Finished, Progress};
 pub use http::{Body, Response, TrustError, tls};

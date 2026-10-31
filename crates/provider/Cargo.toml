@@ -7,7 +7,7 @@ description = "The Anthropic Messages API on a Claude subscription login, in ter
 
 [dependencies]
 harness-core = { path = "../core" }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 harness-runtime = { path = "../runtime" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-native-certs = "0.8"
