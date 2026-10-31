@@ -41,25 +41,27 @@
 //! shape the new build's records take: the link moved, the unit's process
 //! ended (in the candidate's own words), or a deadline passed (it ends the
 //! candidate). So the judge never reads the new build's records, and the
-//! `relaunch` call settles once, with the outcome. The rehearsal also folds
-//! what the scratch brains wrote with the running build's code: if it skips
-//! any, the relaunch is one-way, and the call says so. Once a build has
-//! opened, going back is a relaunch with `back`, whose candidate is the
-//! older build under the same gate: it folds every record the newer one
-//! wrote, or it refuses. So a way back is lossless or it does not happen.
+//! `relaunch` call settles once, with the outcome.
 //!
-//! **Built so far.** The brain runs the gate's pathways
-//! (`harness-brain --check` on a copy, and `--candidate`, which opens only
-//! once they pass and then moves the installed link), but the builds limb
-//! does not start a candidate yet. The rehearsal runs the gate on a copy and
-//! one scripted round trip through a fresh limb of the new build; it loads
-//! no page. The takeover then resumes
-//! every real session at once, on [`Probation`], which the builds limb
-//! judges by folding the live database with the old build's code, going
-//! back on a failure. On 31 Oct that judge could not read the new build's
-//! records and rolled back a healthy build, and the old build then ran a
-//! call a second time. [`Start`] and [`Pathway`] are the model that
-//! replaces it (`docs/todo.md`, S5).
+//! **The way back.** For a short window after the new build opens, the
+//! builds limb watches its process. If it ends, the limb points the link at
+//! the build before and starts it the same way it rolled forward, and this
+//! is never refused: the older build folds what it can of what the newer
+//! one wrote, and skips and logs the rest. Max (31 Oct): "Sending two is
+//! better than bricking." Whether a way back is lossless is checked before
+//! the deploy: the rehearsal folds what the scratch brains wrote with the
+//! running build's code. If it skips nothing, the relaunch is two-way, and
+//! a way back loses nothing. If it skips any, the relaunch is one-way: a way
+//! back would skip such records and may run a call a second time. The
+//! `relaunch` call's result arrives only after the relaunch, too late to
+//! warn, so the call refuses a one-way relaunch at rehearsal, naming what
+//! the running build could not read, and goes ahead only when called again
+//! with `one_way`, as with `back`. Max: "The tool call rejects initially
+//! and says, this would be one way, call it again with the one-way flag."
+//!
+//! **Built so far.** All of the above but the page: the rehearsal loads no
+//! page in headless Chrome. [`Probation`] is today's trial on real
+//! sessions, which nothing judges any more; the face still shows it.
 //!
 //! **Limbs move with the brain, once it is proven.** A [`Launched`] names
 //! the executable it would start for each kind of limb. Once its build is
@@ -388,8 +390,8 @@ pub enum Launch {
     /// be the same build, restarted by hand). `by` is the builds limb's
     /// relaunch call that started it: on the way forward, onto the build the
     /// call asked for, and on the way back, onto the build before it when
-    /// the new one failed its [`Probation`]. `None` when Max restarted it
-    /// himself.
+    /// the new one's process ended in its window after opening. `None` when
+    /// Max restarted it himself.
     Relaunched { from: BuildId, by: Option<CallId> },
 }
 
@@ -416,14 +418,9 @@ pub enum Launch {
 /// settlement wakes the session that made it; so a span that stays
 /// unanswered is a hang, not an idle brain.
 ///
-/// One fold, compiled twice: the running brain folds it into
-/// [`crate::state::State::probation`] for the face, and the builds limb,
-/// built from the code before, folds the same records with its own code to
-/// decide whether to go back. So the judge of a new build is never the new
-/// build. The watch outlives the relaunch call, which settles at takeover
-/// so the session that asked can make the request that proves it; the
-/// limb owns the watch as part of its resource, the brain's service, as a
-/// browser limb owns a tab.
+/// The running brain folds it into [`crate::state::State::probation`] for
+/// the face. Nothing else reads it: the builds limb judges a new build by
+/// the installed link and the unit's process, never by its records.
 ///
 /// **Vision.** "A broken build bricks nothing", and the advocate's answer
 /// to what proves a build: "its first full tool round trip; before taking
@@ -502,16 +499,12 @@ pub enum Verdict {
         responded: Option<ModelCallId>,
         round_trip: Option<CallId>,
     },
-    /// It works end to end: the builds limb moves the brain's installed
-    /// link to it, so a restart runs it, and it is what a later failure
-    /// goes back to.
+    /// It works end to end.
     Proven {
         response: ModelCallId,
         round_trip: CallId,
     },
-    /// The provider refused a request it rendered before it was proven:
-    /// the builds limb goes back, and the build before it sends that
-    /// request again ([`crate::state::State::todo`]).
+    /// The provider refused a request it rendered before it was proven.
     Refused(Refused),
 }
 
