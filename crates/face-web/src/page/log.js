@@ -94,8 +94,8 @@ function entry(s, into, e, index, t, parent, only) {
   if (e.role === "user") {
     const by = e.by || [];
     let run = null; // Max's bubble or the mandate's card a block continues
-    // A compaction's carry keeps his words from what it replaced: his, but
-    // editing them would replace the carry.
+    // A compaction's carry keeps his words from what it replaced: the
+    // harness handing them back, so a note of his words, not a new turn.
     const carry = by.some((w) => w?.by === "compacted");
     blocks.forEach((b, k) => {
       const who = by[k] || { by: "harness" };
@@ -106,7 +106,14 @@ function entry(s, into, e, index, t, parent, only) {
       if (b.type === "image") { const img = el("img"); img.src = `data:${b.source?.media_type};base64,${b.source?.data}`; img.style.maxWidth = "100%"; into.append(img); return; }
       if (b.type !== "text" || who.by === "label") return;
       const text = b.text || "";
-      if (who.by === "max") {
+      if (who.by === "max" && carry) {
+        if (run) { run.text += `\n${text}`; run.el.lastChild.replaceWith(quiet(run.text, true)); return; }
+        run = { by: "max", text, el: el("div", "note kept") };
+        const w = el("span", "who", "Max wrote");
+        w.title = `Carried from the work it replaced; he wrote it at ${clock(who.at)}`;
+        run.el.append(w, quiet(text, true));
+        into.append(run.el);
+      } else if (who.by === "max") {
         if (run) { $(".bubble", run.el).textContent += `\n${text}`; return; }
         run = { by: "max", el: said(text, clock(who.at)) };
         // His message: edit it.
@@ -128,17 +135,10 @@ function entry(s, into, e, index, t, parent, only) {
         into.append(card);
       } else if (who.by === "brief" || who.by === "mandate") {
         if (!run) {
-          run = { by: who.by, el: el("div", "entry card mandate") };
-          run.el.title = who.by === "brief" ? "The brief its spawn shares" : `From ${byId[t.owner]?.name || "its owner"}`;
+          run = { by: who.by, el: mandateCard(who.by === "brief" ? "The brief its spawn shares" : `From ${byId[t.owner]?.name || "its owner"}`) };
           into.append(run.el);
         }
-        run.el.append(markdown(text));
-        if (text.length > 900 && !$(".more-link", run.el)) {
-          const card = run.el, m = el("button", "more-link", "Show all");
-          card.classList.add("clip");
-          m.onclick = () => { card.classList.toggle("clip"); m.textContent = card.classList.contains("clip") ? "Show all" : "Show less"; };
-          card.after(m);
-        }
+        $(".body", run.el).append(markdown(text));
       } else into.append(note(text));
     });
     return;
@@ -335,20 +335,28 @@ function note(text) {
   n.append(quiet(text));
   return n;
 }
-// The harness's words, one quiet line of Markdown, opened to all of it
-// when that line cuts it short.
+// What its CSS cuts short (`cutShort` says when) opens to all of it at a
+// tap on itself, and closes again at another; what fits has no affordance.
 const cuts = new ResizeObserver((seen) => {
-  for (const { target: q } of seen) {
-    if (q.classList.contains("full")) continue;
-    const parts = [...q.children].filter((c) => !c.matches(".raw-toggle"));
-    q.classList.toggle("cut", parts.length > 1 || parts.some((c) => c.scrollWidth > c.clientWidth || c.scrollHeight > c.clientHeight + 1));
-  }
+  for (const { target } of seen) if (!target.classList.contains("full")) target.classList.toggle("cut", target.cutShort());
 });
-function quiet(text) {
-  const q = markdown(text.replace(/^\[harness\] /, ""));
+function openable(node, cutShort) {
+  node.cutShort = cutShort;
+  node.addEventListener("click", (e) => {
+    if (node.classList.contains("cut") && !e.target.closest("a, button") && !getSelection().toString()) node.classList.toggle("full");
+  });
+  cuts.observe(node);
+}
+// The harness's words, one quiet line of Markdown. Max's words it hands
+// back are plain, as his bubbles are.
+function quiet(text, plain) {
+  const q = plain ? el("div", "prose") : markdown(text.replace(/^\[harness\] /, ""));
+  if (plain) q.append(el("div", "plain", text));
   q.classList.add("quiet");
-  q.onclick = (e) => { if (q.classList.contains("cut") && !e.target.closest("a") && !getSelection().toString()) q.classList.toggle("full"); };
-  cuts.observe(q);
+  openable(q, () => {
+    const parts = [...q.children].filter((c) => !c.matches(".raw-toggle"));
+    return parts.length > 1 || parts.some((c) => c.scrollWidth > c.clientWidth || c.scrollHeight > c.clientHeight + 1 || (c.matches(".plain") && c.textContent.includes("\n")));
+  });
   return q;
 }
 // What Max copies: the Markdown as plain text, and as rich text where it
@@ -410,7 +418,7 @@ function toolRow(s, b, t) {
   line.append(el("span", compact ? "st" : "st run", compact ? "✓" : ""));
   const path = inner.path;
   if (path && FILES.test(path) && (b.name === "write" || input.tool === "write")) {
-    const open = el("button", "open-file", "open"); open.onclick = (e) => { e.stopPropagation(); viewFile(path, inner.content); };
+    const open = icon("open", "open-file", "Open"); open.onclick = (e) => { e.stopPropagation(); viewFile(path, inner.content); };
     line.insertBefore(open, line.lastChild);
   }
   // What a spawn or add_sibling started, under its parameters.
@@ -594,7 +602,7 @@ function result(s, b) {
   const path = r.inner.path;
   if (r.b.name === "read" && path && /\.(md|markdown|svg|html?)$/i.test(path) && !b.is_error) {
     const raw = text.split("\n").map((l) => l.replace(/^\s*\d+[\t│|:] ?/, "")).join("\n");
-    const open = el("button", "open-file res", "open");
+    const open = icon("open", "open-file res", "Open");
     open.onclick = (e) => { e.stopPropagation(); viewFile(path, raw); };
     $(".line", r.row).insertBefore(open, st);
   }
@@ -672,7 +680,7 @@ function renderTail(s, t) {
     const when = `${clock(p.at)}, not read yet`;
     parts.push(p.prompt ? said(PROMPTS[p.prompt] || p.prompt, when, "queued-words prompt") : said(p.content, when, "queued-words"));
   }
-  if (!t.head && !isDone(t)) parts.push(t.owner ? mandateCard(t) : said(t.mandate || "", "Not read yet", "queued-words"));
+  if (!t.head && !isDone(t)) parts.push(t.owner ? unread(t) : said(t.mandate || "", "Not read yet", "queued-words"));
   const bad = trouble(t);
   if (bad) parts.push(el("div", "entry card ended", bad));
   const o = t.outcome;
@@ -683,10 +691,17 @@ function renderTail(s, t) {
     tail.replaceChildren(...parts);
   }
 }
-function mandateCard(t) {
-  const c = el("div", "entry card mandate");
-  c.title = `From ${byId[t.owner]?.name || "its owner"}`;
-  c.append(markdown(t.mandate || ""));
+function unread(t) {
+  const c = mandateCard(`From ${byId[t.owner]?.name || "its owner"}`);
+  $(".body", c).append(markdown(t.mandate || ""));
+  return c;
+}
+// A card of an agent's brief or mandate, cut short when long.
+function mandateCard(title) {
+  const c = el("div", "entry card mandate"), body = el("div", "body");
+  c.title = title;
+  c.append(body);
+  openable(c, () => body.scrollHeight > body.clientHeight + 1);
   return c;
 }
 
