@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# The harness relaunches itself, and a broken build bricks nothing.
+# The harness relaunches itself through a rehearsal and a gated opening,
+# and a broken build bricks nothing.
 #
 # A throwaway long-lived brain (`dev/serve`, unit harness-relaunch-demo,
 # port 4392, the scripted model) runs this clone's HEAD, from a scratch
-# clone of it. A session calls the builds limb's `relaunch` onto a commit
-# on top: the brain drains, the new build takes over, the session carries
-# on into a tool round trip, and the face's view says it is proven. Then
-# onto a commit whose brain panics as it starts: its rehearsal (a scratch
-# brain of it, beside the running one) fails, the call is refused saying
-# why, and the old build never stopped. Then onto a commit whose brain
-# exits 20 s after it starts, which the rehearsal cannot see: the old
-# build's builds limb sees it die, starts the old bytes again, and the
-# session is woken to read why. Each rehearsal has the provider
-# count tokens and stream one short response: a few real requests.
+# clone of it. A session calls the builds limb's `relaunch` onto commits on
+# top, and each call's result is printed once it settles:
+#   1. a good build: rehearsed, opened as a candidate, watched for 3 min;
+#   2. one whose --check fails: refused at rehearsal with its gate: line;
+#   3. one whose gate fails only on the live database: it writes nothing,
+#      and the build before runs again;
+#   4. one whose brain dies 20 s after opening: the harness goes back;
+#   5. one the running build cannot read back (it renames a field of
+#      Launched): refused as one-way, then opened with `one_way: true`.
+# Each rehearsal and each candidate has the provider count tokens and
+# stream one short response: a few real requests.
 set -euo pipefail
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 name=${NAME:-relaunch-demo} port=${PORT:-4392}
 unit=harness-$name.service
 home=${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness
+db=$home/$name/brain.sqlite
 work=$repo/.demo-relaunch.ignore
 step() { printf '\n== %s\n' "$*"; }
-view() { curl -sk "https://localhost:$port/view" | jq -c '.rows.harness.Harness | {source, how: .launch.how, relaunch, probation, superseded}'; }
+runs() {
+    local exe
+    exe=$(readlink -f "/proc/$(systemctl --user show -p MainPID --value "$unit")/exe")
+    echo "$unit runs $(basename "$(dirname "$(dirname "$exe")")"); $name/build -> $(basename "$(readlink "$home/$name/build")")"
+}
 
 systemctl --user -q is-active "$unit" && systemctl --user stop "$unit"
 rm -rf "$work" "$home/$name"
@@ -35,72 +42,78 @@ printf '[build]\ntarget-dir = "%s/.demo-relaunch-target.ignore"\n' "$repo" > "$w
 git -C "$work/clone" config user.name demo
 git -C "$work/clone" config user.email demo@localhost
 
-step "serve $(git -C "$work/clone" rev-parse --short=12 HEAD)"
+# Commit on top of $1 the change the sed script $3 makes to the file $2
+# (none if it is empty), with the message $4; print the commit.
+variant() {
+    git -C "$work/clone" checkout -q --detach "$1"
+    [[ -z $2 ]] || sed -i "$3" "$work/clone/$2"
+    git -C "$work/clone" commit -q --allow-empty -am "$4"
+    git -C "$work/clone" rev-parse --short=12 HEAD
+}
+
+# A session calls `relaunch` onto commit $1 with the extra input $2, and
+# this prints the call's result once it settles: its stage, then its words.
+relaunch() {
+    "$work/act" "$port" chat orchestrator "$work/ws" "tool relaunch {\"clone\":\"$work/clone\"$2}" >/dev/null
+    local said=""
+    for _ in $(seq 1800); do
+        said=$(sqlite3 "$db" "select cast(bytes as text) from value" 2>/dev/null |
+            grep -a -o -E '(refused at rehearsal|failed its gate|opened|went back): ([^"\\]|\\.)*' |
+            grep -a -F "$1" | grep -a -v -F "${3:-no such words}" | head -1) || true
+        [[ -n $said ]] && break
+        sleep 1
+    done
+    printf '%b\n' "${said:-no result in 30 minutes}"
+}
+
+base=$(git -C "$work/clone" rev-parse --short=12 HEAD)
+# A build of HEAD installed before the demo may be another brain's: keep it.
+[[ -d $home/builds/$base ]] && installed="" || installed=$base
+step "serve $base"
 "$work/clone/dev/serve" "$name" "$port" --model scripted
-act=$home/$name/build/bin/act
-view
+cp "$home/$name/build/bin/act" "$work/act"
+runs
 
-step "relaunch onto a good commit"
-git -C "$work/clone" commit -q --allow-empty -m "demo: a good build"
-good=$(git -C "$work/clone" rev-parse --short=12 HEAD)
-"$act" "$port" chat orchestrator "$work/ws" "tool relaunch {\"clone\":\"$work/clone\"}
-tool bash {\"command\":\"echo a round trip on the new build\"}
-say done" | tail -1
-# Proven, the builds limb moves NAME/build, and its watch ends.
-for _ in $(seq 300); do
-    [[ $(readlink "$home/$name/build") == */$good ]] && break
-    sleep 1
-done
-sleep 1
-view
-echo "NAME/build -> $(readlink "$home/$name/build")"
+step "1. relaunch onto a good build"
+good=$(variant "$base" "" "" "demo: a good build")
+relaunch "$good" ""
+runs
 
-step "relaunch onto a brain that panics as it starts"
-pid=$(systemctl --user show -p MainPID --value "$unit")
-sed -i 's/^fn main() -> ExitCode {$/fn main() -> ExitCode {\n    if std::env::args().any(|a| a == "--port") {\n        panic!("demo: this build panics as it starts");\n    }/' "$work/clone/crates/brain/src/main.rs"
-git -C "$work/clone" commit -q -am "demo: a brain that panics as it starts"
-panics=$(git -C "$work/clone" rev-parse --short=12 HEAD)
-"$act" "$port" chat orchestrator "$work/ws" "tool relaunch {\"clone\":\"$work/clone\"}
-say refused" | tail -1
-for _ in $(seq 600); do
-    said=$(sqlite3 "$home/$name/brain.sqlite" "select cast(bytes as text) from value" |
-        grep -a -o "$panics's scratch brain [^\"]*" | head -1) || true
-    [[ -n $said ]] && break
-    sleep 1
-done
-printf '%b\n' "$said"
-view
-echo "the brain's process: $pid before, $(systemctl --user show -p MainPID --value "$unit") now"
-git -C "$work/clone" revert --no-edit HEAD >/dev/null
+step "2. onto a build whose --check fails: refused at rehearsal"
+check=$(variant "$good" crates/brain/src/main.rs \
+    's|^    if let Some(copy) = check {$|&\n        return Err("gate: decide: the demo build fails its check".into());|' \
+    "demo: a build whose check fails")
+relaunch "$check" ""
+runs
 
-step "relaunch onto a brain that exits 20 s after it starts"
-sed -i 's/^fn main() -> ExitCode {$/fn main() -> ExitCode {\n    if !std::env::args().any(|a| a == "--version") {\n        std::thread::spawn(|| {\n            std::thread::sleep(std::time::Duration::from_secs(20));\n            std::process::exit(3);\n        });\n    }/' "$work/clone/crates/brain/src/main.rs"
-git -C "$work/clone" commit -q -am "demo: a brain that exits 20 s after it starts"
-bad=$(git -C "$work/clone" rev-parse --short=12 HEAD)
-chat=$("$act" "$port" chat orchestrator "$work/ws" "tool relaunch {\"clone\":\"$work/clone\"}
-slow 30000 say hung
-say after going back" | tail -1)
-chat=${chat#chat }
-for _ in $(seq 300); do
-    journalctl --user -u "$unit" --no-pager -o cat | grep -q "service $unit changed" && break
-    sleep 1
-done
-view
-echo "NAME/build -> $(readlink "$home/$name/build")"
-step "the session wakes, unasked, and reads why"
-for _ in $(seq 240); do
-    said=$(sqlite3 "$home/$name/brain.sqlite" "select cast(bytes as text) from value" |
-        grep -a '(scripted) Noted' | grep -a -o "\[harness\] $unit: [^\"]*" | tail -1) || true
-    [[ -n $said ]] && break
-    sleep 1
-done
-echo "${said%%\\n*}"
+step "3. onto a build whose gate fails only on the live database"
+live=$(variant "$good" crates/brain/src/main.rs \
+    's|^        Start::Candidate => {$|&\n            return Err("gate: decide: the demo build fails on the live database".into());|' \
+    "demo: a build whose gate fails on the live database")
+relaunch "$live" ""
+runs
+echo "records naming $live in the database: $(sqlite3 "$db" "select count(*) from record where record like '%$live%'")"
+
+step "4. onto a build whose brain dies 20 s after opening: the way back"
+dies=$(variant "$good" crates/brain/src/main.rs \
+    's|^            install(&db)?;$|&\n            std::thread::spawn(\|\| {\n                std::thread::sleep(Duration::from_secs(20));\n                std::process::exit(3);\n            });|' \
+    "demo: a build whose brain dies 20 s after opening")
+relaunch "$dies" ""
+runs
+
+step "5. onto a one-way build: refused, then opened with one_way"
+oneway=$(variant "$good" crates/core/src/build.rs \
+    's|^    pub build: BuildId,$|    #[serde(rename = "build_id", alias = "build")]\n&|' \
+    "demo: a build that writes Launched's build as build_id")
+relaunch "$oneway" ""
+relaunch "$oneway" ',"one_way":true' "refused at rehearsal"
+runs
 
 step "end: retire the brain's unit and delete the demo's builds"
 systemctl --user disable --now --quiet "$unit"
 rm "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
 systemctl --user daemon-reload
-for build in "$good" "$panics" "$bad"; do
+for build in $installed "$good" "$check" "$live" "$dies" "$oneway"; do
     [[ -d $home/builds/$build ]] && chmod -R u+w "$home/builds/$build" && rm -rf "$home/builds/$build"
 done
 echo "its limbs end themselves 15 minutes after their brain"

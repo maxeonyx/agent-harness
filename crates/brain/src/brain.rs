@@ -1936,12 +1936,12 @@ pub fn now() -> Timestamp {
     )
 }
 
-/// The executable the brain starts for a limb on a machine: the
-/// `harness-limb` beside its own, by digest, as [`Launched::limbs`]'s
+/// The executable the brain starts for a limb on a machine
+/// ([`crate::process::program`]), by digest, as [`Launched::limbs`]'s
 /// `limb`. A limb connected with other bytes is superseded
 /// ([`harness_core::state::State::superseded`]).
 fn limb_builds() -> BTreeMap<String, BuildId> {
-    let limb = std::env::current_exe().map(|e| e.with_file_name("harness-limb"));
+    let limb = crate::process::program();
     match limb.and_then(std::fs::read) {
         Ok(bytes) => BTreeMap::from([("limb".to_owned(), BuildId::of(&bytes))]),
         Err(_) => BTreeMap::new(),

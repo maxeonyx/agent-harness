@@ -384,6 +384,7 @@ version = "0.0.0"
 dependencies = [
  "harness-core",
  "harness-limb",
+ "harness-provider",
  "harness-store",
  "libc",
  "serde",
