@@ -5,6 +5,7 @@ use harness_core::id::ValueId;
 use harness_core::model_call::ModelCall;
 
 use crate::image::shrunk;
+use crate::server_tool::answerable;
 
 /// The identity string the subscription requires as `system[0]`. Without it
 /// Opus refuses with a 429 that pretends to be a rate limit.
@@ -39,7 +40,9 @@ pub fn model<'a>(call: &'a ModelCall, base: &[(EntryId, &'a Entry)]) -> Option<&
 /// adds `cache_control` to the last block of the entry it names (the last
 /// `system` block, for a root). Nothing is parsed and written again, so what
 /// was stored is what is sent, except a message holding an image too large
-/// for the API, which is sent [`shrunk`].
+/// for the API, which is sent [`shrunk`], and a response holding a server
+/// tool use the provider will not answer, which is sent without it
+/// ([`answerable`]).
 pub fn body(
     call: &ModelCall,
     base: &[(EntryId, &Entry)],
@@ -119,15 +122,21 @@ pub fn body(
     out.extend_from_slice(&tools);
     out.extend_from_slice(b",\"system\":");
     out.extend_from_slice(&system);
+    let mut contents = messages
+        .iter()
+        .map(|(_, m)| Ok((m.role, bytes(m.content)?)))
+        .collect::<Result<Vec<_>, RequestError>>()?;
+    answerable(&mut contents);
+
     out.extend_from_slice(b",\"messages\":[");
-    for (i, (id, message)) in messages.iter().enumerate() {
+    for (i, ((id, _), (role, content))) in messages.iter().zip(contents).enumerate() {
         if i > 0 {
             out.push(b',');
         }
         out.extend_from_slice(b"{\"role\":\"");
-        out.extend_from_slice(message.role.as_str().as_bytes());
+        out.extend_from_slice(role.as_str().as_bytes());
         out.extend_from_slice(b"\",\"content\":");
-        out.extend_from_slice(&marked(shrunk(bytes(message.content)?), *id)?);
+        out.extend_from_slice(&marked(shrunk(content), *id)?);
         out.push(b'}');
     }
     out.extend_from_slice(b"],\"stream\":true");

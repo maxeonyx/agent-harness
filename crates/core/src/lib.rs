@@ -259,7 +259,7 @@
 //!   ended -->|"Responded, with tool uses"| acting["Task: Acting<br/>CallEvent::Made, in the same batch"]
 //!   ended -->|"Responded, Stop::EndTurn, no tool uses"| turn["Task::turn_ended"]
 //!   ended -->|"Responded, another Stop"| short["Task: Ready<br/>Brain::send: ContextWindow roots anew, Refused fails<br/>MaxTokens, PauseTurn: Note::Continue"]
-//!   ended -->|"Failed"| failed["Task: Ready, failures + 1<br/>resend after the retry time or backoff_ms,<br/>after GIVE_UP, Drain::Fail"]
+//!   ended -->|"Failed"| failed["Task: Ready, failures + 1<br/>resend after the retry time or backoff_ms,<br/>after GIVE_UP, or at once when the request is rejected, Drain::Fail"]
 //!   ended -->|"Limited until"| limited["Task: Ready<br/>Hold::Limited: no Todo::Send until then"]
 //!   ended -->|"SignedOut"| signedout["Task: Ready<br/>Hold::SignedOut: no Todo::Send, Todo::SignIn<br/>until Fact::SignedIn"]
 //!   ended -->|"Cut: Todo::Cut"| cut["Task::drained<br/>abandon, interrupt, or shutdown"]
