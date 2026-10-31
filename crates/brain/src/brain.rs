@@ -808,11 +808,27 @@ impl Brain {
         }
         let head = task.head().expect("a ready task has a context");
         let failures = task.live().map_or(0, |l| l.failures);
-        if failures >= policy::GIVE_UP {
-            return self.fail_task(id, format!("the provider failed {failures} times in a row"));
-        }
         // Nothing is in flight for a ready task, so every turn has ended.
         let last = self.state().last_turn(id).cloned();
+        if failures > 0
+            && let Some(Ending::Failed {
+                status, message, ..
+            }) = last.as_ref().map(|e| &e.ending)
+        {
+            let said = match status {
+                Some(s) => format!("{s}: {message}"),
+                None => message.clone(),
+            };
+            if policy::rejected(*status) {
+                return self.fail_task(id, format!("the provider rejected the request, {said}"));
+            }
+            if failures >= policy::GIVE_UP {
+                return self.fail_task(
+                    id,
+                    format!("the provider failed {failures} times in a row, last with {said}"),
+                );
+            }
+        }
         if failures > 0
             && let Some(ended) = &last
         {

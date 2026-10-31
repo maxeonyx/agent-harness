@@ -25,6 +25,18 @@ pub fn offer_at(window: u64) -> u64 {
 /// Requests that may fail in a row before the task fails.
 pub const GIVE_UP: u32 = 5;
 
+/// Whether a failed request's `status` says sending it again fails the same
+/// way: the request is wrong (invalid 400, naming what does not exist 404,
+/// too large 413), or the account is, until Max changes it (billing 402, no
+/// permission 403). Anything else may pass on a retry: a network failure or
+/// a login that could not refresh (no status), a rate limit (429), a server
+/// error (500, 502, 503, a timeout 504) or an overload (529). A 401 never
+/// arrives here: the client refreshes the token and resends once, and signs
+/// out if even the fresh token is refused.
+pub fn rejected(status: Option<u16>) -> bool {
+    matches!(status, Some(400 | 402 | 403 | 404 | 413))
+}
+
 /// How long to wait before resending after `failures` failures in a row,
 /// when the provider did not say: 2, 4, 8, 16 seconds.
 pub fn backoff_ms(failures: u32) -> i64 {
