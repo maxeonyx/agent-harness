@@ -79,16 +79,28 @@ const tint = (c, k) => C.paper.map((p, i) => p + (c[i] - p) * k);
 // at fixed angles: the model at twelve o'clock, tools at four, Max at eight.
 const SATS = { model: -Math.PI / 2, tools: Math.PI / 6, max: 5 * Math.PI / 6 };
 const SPAN = 1.45;
-const IDLE = { r: .17, d: .56 }, ACTIVE = { r: .42, d: .66 };
 
-// A state: which ball is active, the centre's radius, and its colours.
+// Joined or apart. A satellite sits at the centre's radius plus its own plus
+// a gap: the distance between their circles. Two circles a gap g apart meet,
+// under the smooth minimum, at g/2 - K/4 midway between them, so they join
+// while g < K/2. The neck thins as g nears that: it stays at least half the
+// smaller ball's diameter while g <= NECK (?measure shows it). So a joined
+// satellite's gap is at most NECK - WOB, and its wobble moves only the gap,
+// by WOB; nothing else does, and the gap's spring never overshoots. Every
+// satellite stays joined, except while starting: there each one buds off
+// the centre, pinches off and fades.
+const NECK = .03, WOB = .025;
+const IDLE = { r: .17, g: 0 }, ACTIVE = { r: .42, g: -.05 };
+
+// A state: which ball is active, the centre's radius, the idle satellites'
+// gap if not IDLE's, and its colours.
 // t is seconds since the state began, for states that change as they wait.
 const STATES = {
   first:     { label: "Model, first byte", core: "Model { streaming: false }", active: "model", centre: .3,
                col: [tint(CLAUDE, .14), CLAUDE, CLAUDE] },
   streaming: { label: "Model, streaming", core: "Model { streaming: true }", active: "model", centre: .3,
                col: [tint(CLAUDE, .22), CLAUDE, CLAUDE] },
-  brain:     { label: "Brain", core: "Brain", active: "centre", centre: .54,
+  brain:     { label: "Brain", core: "Brain", active: "centre", centre: .54, gap: -.15,
                col: [tint(C.ink, .1), C.ink, C.ink] },
   tools:     { label: "Tool calls", core: "Calls", active: "tools", centre: .3,
                col: [tint(C.slate, .13), C.slate, C.slate] },
@@ -251,10 +263,11 @@ function dots(track, count, pitch) {
   return out;
 }
 
-// A spring with a little give, so balls overshoot and settle like liquid.
+// A spring with a little give, so balls overshoot and settle like liquid;
+// critically damped (26), it settles without overshooting.
 const spring = (v) => ({ v, vel: 0 });
-function pull(s, goal, dt) {
-  s.vel += ((goal - s.v) * 170 - s.vel * 17) * dt;
+function pull(s, goal, dt, damp = 17) {
+  s.vel += ((goal - s.v) * 170 - s.vel * damp) * dt;
   s.v += s.vel * dt;
 }
 
@@ -266,20 +279,20 @@ function spinner(px, session, letter) {
   cv.style.width = cv.style.height = px + "px";
   const g = cv.getContext("2d"), unit = px * dpr / (2 * SPAN), onePx = 1 / unit * dpr;
   const grid = clamp(Math.round(px * dpr / 4), 28, 84);
-  const balls = { centre: { x: 0, y: 0, r: spring(.4), d: spring(0) } };
-  for (const k in SATS) balls[k] = { x: 0, y: 0, r: spring(IDLE.r), d: spring(IDLE.d) };
+  const balls = { centre: { x: 0, y: 0, r: spring(.4) } };
+  for (const k in SATS) balls[k] = { x: 0, y: 0, r: spring(IDLE.r), g: spring(IDLE.g) };
   let col = STATES[session.state].col.map((c) => c.slice()), spin = 0, gear = 0, last = performance.now();
 
   function goals(now) {
     const s = STATES[session.shown(now)], t = (now - session.since) / 1000, out = {};
-    out.centre = { r: s.centre, d: 0 };
+    out.centre = { r: s.centre };
     for (const k in SATS) {
-      let g = s.merged ? { r: .12, d: .15 } : { ...IDLE };
-      if (s.active === k) g = { r: s.size || ACTIVE.r, d: ACTIVE.d };
+      let g = s.merged ? { r: .12, g: -.45 } : { r: IDLE.r, g: s.gap ?? IDLE.g };
+      if (s.active === k) g = { r: s.size || ACTIVE.r, g: ACTIVE.g };
       if (session.shown(now) === "first" && k === "model") g.r = .36 + .06 * Math.sin(t * 5); // swelling, in time
-      if (session.shown(now) === "starting") { // budding out of the centre in turn
-        const ph = (t * .9 - Object.keys(SATS).indexOf(k) / 3) % 1;
-        g = { r: .2 * Math.sin(Math.PI * ph), d: .25 + .5 * ph };
+      if (session.shown(now) === "starting") { // budding out of the centre in turn, and off it
+        const ph = (t * .9 - Object.keys(SATS).indexOf(k) / 3) % 1, r = .2 * Math.sin(Math.PI * ph);
+        g = { r, g: .25 + .5 * ph - s.centre - r };
       }
       out[k] = g;
     }
@@ -290,12 +303,13 @@ function spinner(px, session, letter) {
     const dt = Math.min(1 / 30, (now - last) / 1000);
     last = now;
     const name = session.shown(now), st = STATES[name], goal = goals(now);
-    for (const k in balls) {
-      const b = balls[k];
-      pull(b.r, goal[k].r, dt); pull(b.d, goal[k].d, dt);
-      const a = SATS[k] ?? 0, wob = st.still ? 0 : .015 * Math.sin(now / 700 + a * 3);
-      b.x = Math.cos(a) * (b.d.v + wob); b.y = Math.sin(a) * (b.d.v + wob);
+    pull(balls.centre.r, goal.centre.r, dt);
+    for (const k in SATS) {
+      const b = balls[k], a = SATS[k];
+      pull(b.r, goal[k].r, dt); pull(b.g, goal[k].g, dt, 26);
       b.r.v = Math.max(0, b.r.v);
+      const d = balls.centre.r.v + b.r.v + b.g.v + (st.still ? 0 : WOB * Math.sin(now / 700 + a * 3));
+      b.x = Math.cos(a) * d; b.y = Math.sin(a) * d;
     }
     const kc = 1 - Math.exp(-dt / .18);
     col = col.map((c, i) => mixc(c, st.col[i], kc));
@@ -306,6 +320,7 @@ function spinner(px, session, letter) {
     }
 
     const list = Object.values(balls).map((b) => ({ x: b.x, y: b.y, r: b.r.v }));
+    session.measure?.(list, name);
     const trackOff = .05 + 3 * onePx;
     const [blob, track] = contours(list, grid, [0, trackOff]);
 
@@ -457,7 +472,7 @@ document.getElementById("play").onclick = (e) => {
   if (playing) return stopPlay();
   playing = {}; e.target.classList.add("on"); play();
 };
-if (!params.has("state")) { playing = {}; document.getElementById("play").classList.add("on"); play(); }
+if (!params.has("state") && !params.has("measure")) { playing = {}; document.getElementById("play").classList.add("on"); play(); }
 
 // Every state at once, each its own session.
 for (const [name, s] of Object.entries(STATES)) {
@@ -468,6 +483,67 @@ for (const [name, s] of Object.entries(STATES)) {
   cell.title = `Core: Waiting::${s.core}`;
   cell.append(spinner(64, ses, "C"), s.label);
   document.getElementById("gallery").append(cell);
+}
+
+// ?measure: every frame of the large spinner, across each state held for
+// 6 s and then the auto-play script twice, measures between the centre and
+// each satellite the neck: the blob's narrowest width across the line
+// between them, over the smaller ball's diameter, 0 where they part. Between
+// satellites, the centre left out, it measures their field's greatest value
+// on the line between them: above 0, they are apart. Then it shows the
+// extremes per state.
+function neck(balls, a, b) {
+  const L = Math.hypot(b.x - a.x, b.y - a.y), ux = (b.x - a.x) / L, uy = (b.y - a.y) / L;
+  let w = Infinity, high = -Infinity;
+  for (let i = 0; i <= 100; i++) {
+    const x = a.x + ux * L * i / 100, y = a.y + uy * L * i / 100, f = field(balls, x, y);
+    high = Math.max(high, f);
+    if (f >= 0) { w = 0; continue; }
+    let across = 0;
+    for (const s of [1, -1]) {
+      let m = 0;
+      while (m < 2 * SPAN && field(balls, x - uy * s * m, y + ux * s * m) < 0) m += .004;
+      across += m;
+    }
+    w = Math.min(w, across / (2 * Math.min(a.r, b.r)));
+  }
+  return { w, high };
+}
+if (params.has("measure")) {
+  const seen = {}, sats = Object.keys(SATS);
+  one.measure = (list, name) => {
+    const m = (seen[name] ??= { frames: 0, neck: Infinity, parted: 0, thin: 0, apart: Infinity });
+    m.frames++;
+    const [centre, ...ss] = list;
+    let parted = false, thin = false;
+    ss.forEach((b, i) => {
+      if (b.r > .02) {
+        const { w } = neck(list, centre, b);
+        m.neck = Math.min(m.neck, w);
+        parted ||= w === 0; thin ||= w > 0 && w < .5;
+      }
+      const c = ss[(i + 1) % ss.length];
+      if (b.r > .02 && c.r > .02) m.apart = Math.min(m.apart, neck([b, c], b, c).high);
+    });
+    m.parted += parted; m.thin += thin;
+  };
+  const steps = [...Object.keys(STATES).map((s) => [s, 6]), ...SCRIPT, ...SCRIPT];
+  const run = (i) => {
+    if (i === steps.length) {
+      const pct = (n, of) => `${Math.round(100 * n / of)}%`;
+      const rows = Object.entries(seen).map(([s, m]) =>
+        [s, m.frames, m.neck.toFixed(2), pct(m.parted, m.frames), pct(m.thin, m.frames), m.apart.toFixed(3)].map(String).map((c) => c.padEnd(11)).join(""));
+      const pre = document.createElement("pre");
+      pre.id = "measure";
+      pre.textContent = ["state      frames     least neck parted     thin neck  sat-sat gap (> 0 apart)", ...rows].join("\n");
+      document.querySelector("main").prepend(pre);
+      document.title = "measured";
+      return;
+    }
+    one.set(steps[i][0]); show();
+    setTimeout(() => run(i + 1), steps[i][1] * 1000);
+  };
+  run(0);
 }
 </script>
 </body>
