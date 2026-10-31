@@ -28,9 +28,10 @@
 //! valid, else waits for the claimant's; a claim left by a crash lapses
 //! after a minute, and a claimant whose claim lapsed during a slow request
 //! neither clears another's claim nor signs out a login another has since
-//! refreshed. A refresh token the endpoint rejects, while the row still
-//! holds it, signs the harness out: the tokens are deleted and
-//! [`LoginError::SignedOut`] says so.
+//! refreshed. A refresh token the endpoint rejects, or a fresh access token
+//! the API still refuses with 401, while the row still holds it, signs the
+//! harness out: the tokens are deleted and [`LoginError::SignedOut`] says
+//! so.
 //!
 //! **Signing in once.** [`Login::begin`] gives the URL Max opens; claude.ai
 //! then shows him a code (`CODE#STATE`; the code alone will do), which
@@ -154,6 +155,29 @@ impl Login {
     /// another request has refreshed it since, else a new one.
     pub fn refused(&self, stale: &Token) -> Result<Token, LoginError> {
         self.refresh(Some(stale))
+    }
+
+    /// Sign out after even the token [`Login::refused`] gave was refused,
+    /// `why`: no refresh will make this login usable, so only Max signing in
+    /// again does. Signed out only if the row still holds `token`: a
+    /// sign-in may have replaced it since.
+    pub fn revoked(&self, token: &Token, why: &str) -> LoginError {
+        let cleared = self.open().and_then(|db| {
+            db.execute(
+                "UPDATE login SET access = NULL, refresh = NULL, expires_at = NULL, \
+                 refresh_at = NULL WHERE access = ?",
+                [&token.0],
+            )
+            .map_err(failed)
+        });
+        match cleared {
+            Ok(0) => LoginError::Failed(format!("a token was refused, {why}")),
+            Ok(_) => {
+                eprintln!("harness: login: a fresh token was refused, {why}: signed out");
+                LoginError::SignedOut
+            }
+            Err(e) => e,
+        }
     }
 
     /// Refresh the token whenever it is due, on a thread of its own, so a

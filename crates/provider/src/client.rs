@@ -117,7 +117,17 @@ impl Client {
             return Ok(response);
         }
         // A token refused before its time: refreshed once, and sent again.
-        send(&self.login.refused(&token)?)
+        let fresh = self.login.refused(&token)?;
+        let mut response = send(&fresh)?;
+        if response.status != 401 {
+            return Ok(response);
+        }
+        let mut text = String::new();
+        response.body.read_to_string(&mut text).map_err(Error::Io)?;
+        Err(self
+            .login
+            .revoked(&fresh, &format!("401: {}", message(&text)))
+            .into())
     }
 
     /// A GET of `path`, its body as JSON. `Err` says why there is none; it
@@ -302,13 +312,9 @@ impl Client {
             {
                 return Ok(end(Ending::Cut { partial: None }, None, quota));
             }
-            let message = serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .and_then(|v| v["error"]["message"].as_str().map(str::to_owned))
-                .unwrap_or(text);
             let ending = match limited {
                 Some(until) => Ending::Limited { until },
-                None => failed(Some(status), message, retry),
+                None => failed(Some(status), message(&text), retry),
             };
             return Ok(end(ending, None, quota));
         }
@@ -426,6 +432,15 @@ fn text_delta<'a>(name: &str, data: &'a serde_json::Value) -> Option<&'a str> {
     (name == "content_block_delta" && delta["type"] == "text_delta")
         .then(|| delta["text"].as_str())
         .flatten()
+}
+
+/// The provider's own words in an error body (`{"error": {"message"}}`),
+/// else the body as it came.
+fn message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["error"]["message"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| body.to_owned())
 }
 
 fn failed(status: Option<u16>, message: String, retry: Option<Timestamp>) -> Ending {

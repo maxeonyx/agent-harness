@@ -45,7 +45,8 @@
 //! unified status is `rejected` is the plan's limit, ending
 //! [`harness_core::model_call::Ending::Limited`] until its reset; any other
 //! refusal is a failure of that request. A request with no login to send it
-//! on is [`LoginError::SignedOut`], which the brain ends as
+//! on, or refused with 401 even after a refresh, which signs the login out,
+//! is [`LoginError::SignedOut`], which the brain ends as
 //! [`harness_core::model_call::Ending::SignedOut`].
 //!
 //! **The login.** [`Login`] is the one owner of the claude.ai credential,
