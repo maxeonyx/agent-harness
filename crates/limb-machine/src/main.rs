@@ -3,17 +3,18 @@
 //!
 //!   harness-limb attach [--existing] LIMB   reach the limb, starting it (harness_limb)
 //!   harness-limb serve LIMB                 the limb itself, as attach starts it
-//!   harness-limb relaunch UNIT CLONE [--back]
+//!   harness-limb relaunch UNIT CLONE [--back] [--one-way]
 //!   harness-limb install CLONE              prints the build's directory
 //!   harness-limb start UNIT HARNESS-BRAIN ARG...   durably, see relaunch::start
 //!
-//! `relaunch` runs until the new build is proven (exit 0) or has gone back
-//! (exit 1), saying each step on stderr.
+//! `relaunch` runs as the `relaunch` tool does, saying each step on stderr,
+//! and exits 0 once the new build has opened and outlived its window, 1
+//! otherwise.
 use std::path::Path;
 use std::process::ExitCode;
 
 use harness_limb::Open;
-use harness_limb_builds::relaunch::{self, Ended};
+use harness_limb_builds::relaunch::{self, Asked, Ended};
 
 /// Every tool set a limb of this build can offer, by name.
 const SETS: &[(&str, Open)] = &[
@@ -34,22 +35,18 @@ fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let say = |line: &str| eprintln!("{line}");
     let done = match args.as_slice() {
-        ["relaunch", unit, clone, rest @ ..] if rest.is_empty() || rest == ["--back"] => {
-            relaunch::take_over(unit, Path::new(clone), !rest.is_empty(), None, &say).map(|takeover| {
-                say(&format!(
-                    "{unit} runs {}, on probation until it has a response and a limb's settlement",
-                    takeover.new.commit
-                ));
-                match takeover.watch() {
-                    Ended::Proven => {
-                        say("proven");
-                        ExitCode::SUCCESS
-                    }
-                    Ended::Back(why) => {
-                        say(&why);
-                        ExitCode::FAILURE
-                    }
-                }
+        ["relaunch", unit, clone, flags @ ..]
+            if flags.iter().all(|f| ["--back", "--one-way"].contains(f)) =>
+        {
+            let asked = Asked {
+                back: flags.contains(&"--back"),
+                one_way: flags.contains(&"--one-way"),
+            };
+            let ended = relaunch::relaunch(unit, Path::new(clone), asked, None, &say);
+            say(&format!("{}: {}", ended.stage(), ended.words()));
+            Ok(match ended {
+                Ended::Opened(_) => ExitCode::SUCCESS,
+                Ended::Refused(_) | Ended::Failed(_) | Ended::WentBack(_) => ExitCode::FAILURE,
             })
         }
         ["install", clone] => relaunch::install(Path::new(clone), &say).map(|build| {
@@ -61,7 +58,7 @@ fn main() -> ExitCode {
             relaunch::start(unit, &argv, None).map(|()| ExitCode::SUCCESS)
         }
         ["relaunch" | "install" | "start", ..] => Err(
-            "usage: harness-limb relaunch UNIT CLONE [--back] | install CLONE | start UNIT ARGV..."
+            "usage: harness-limb relaunch UNIT CLONE [--back] [--one-way] | install CLONE | start UNIT ARGV..."
                 .into(),
         ),
         _ => return harness_limb::main(&args, SETS),

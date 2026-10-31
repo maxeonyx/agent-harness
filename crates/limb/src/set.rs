@@ -45,8 +45,7 @@ pub trait ToolSet: Send + Sync {
     fn run(&self, call: &Running<'_>, report: &mut Report) -> Outcome;
 
     /// Whether anything it holds besides its calls would die with the
-    /// process: a browser it launched and the tabs in it, a relaunch it
-    /// still watches.
+    /// process: a browser it launched and the tabs in it.
     fn holds(&self) -> bool {
         false
     }

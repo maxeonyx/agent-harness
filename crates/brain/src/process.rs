@@ -1,5 +1,6 @@
 //! A limb the brain is linked to: `harness-limb attach <limb>`, found
-//! beside the brain's own executable, run as a child whose stdin and stdout
+//! beside the brain's own executable or in the directory `--limbs` names
+//! ([`program`]), run as a child whose stdin and stdout
 //! are the link ([`crate::link`]) and whose stderr is why, if it fails. It
 //! starts the limb if it is not running, or with `--existing`, for a limb
 //! from before limbs were per machine, only attaches to one that is; the
@@ -12,13 +13,26 @@
 
 use std::io::{self, BufRead, BufReader};
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use harness_core::id::LimbId;
 
 use crate::link::{self, Conn, Said};
+
+/// The directory `--limbs` named, set once as the brain starts.
+pub static LIMBS: OnceLock<PathBuf> = OnceLock::new();
+
+/// The `harness-limb` the brain starts: in [`LIMBS`] if it was named, so a
+/// rehearsal can meet another build's limb, and beside its own otherwise.
+pub fn program() -> io::Result<PathBuf> {
+    match LIMBS.get() {
+        Some(dir) => Ok(dir.join("harness-limb")),
+        None => Ok(std::env::current_exe()?.with_file_name("harness-limb")),
+    }
+}
 
 /// One link to a limb, through the `attach` child carrying it.
 pub struct Process {
@@ -36,7 +50,7 @@ impl Process {
         conn: Conn,
         said: impl Fn(Conn, Said) + Send + 'static,
     ) -> io::Result<Process> {
-        let program = std::env::current_exe()?.with_file_name("harness-limb");
+        let program = program()?;
         let mut child = Command::new(&program)
             .arg("attach")
             .args(existing.then_some("--existing"))

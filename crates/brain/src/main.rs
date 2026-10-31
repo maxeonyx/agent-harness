@@ -249,7 +249,7 @@ const SOURCE: &str = env!("HARNESS_SOURCE");
 /// What `harness-brain --help` prints. `--model scripted` is
 /// [`harness_provider::SCRIPTED`].
 const USAGE: &str = "\
-usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR] [--sample WAV] [--model MODEL[/EFFORT]] [--page DIR]
+usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR] [--sample WAV] [--model MODEL[/EFFORT]] [--page DIR] [--limbs DIR]
        harness-brain --check DB [--login DB] [--roles DIR] [--port PORT]
        harness-brain --version
 
@@ -269,6 +269,9 @@ usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR
   --page DIR       serve the page's files from DIR (crates/face-web/src/page)
                    as they are on disk, so an edit shows on reload, instead of
                    the ones built in
+  --limbs DIR      start the harness-limb in DIR for a machine's limb, not
+                   the one beside this executable: a rehearsal's scratch
+                   brain meeting the running build's limb
   --candidate      open DB only once the gate has passed on it, writing
                    nothing before: then point the installed link (`build`
                    beside DB) at this build, and launch; otherwise exit 1
@@ -276,8 +279,9 @@ usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR
                    it, decide without acting, have the provider count each
                    live session's next request, stream one short response
                    using a tool, bind the port (any, unless named); print
-                   each pathway that passed, and fail with a line for each
-                   that did not (a few real tokens)
+                   `signed in: yes` or `no` as it reads the login, each
+                   pathway that passed, and fail with a line for each that
+                   did not (a few real tokens)
   --version        print the commit it was built from
   --help           print this
 
@@ -347,6 +351,9 @@ fn run() -> Result<(), Failed> {
             "--page" => page = Some(PathBuf::from(value()?)),
             "--login" => login = Some(Login::at(PathBuf::from(value()?))),
             "--check" => check = Some(PathBuf::from(value()?)),
+            "--limbs" => {
+                let _ = process::LIMBS.set(PathBuf::from(value()?));
+            }
             Start::FLAG => start = Start::Candidate,
             "--help" | "-h" => {
                 outln!("{}", USAGE.trim_end());
@@ -361,6 +368,8 @@ fn run() -> Result<(), Failed> {
     };
     let client = Client::new(login.clone()).map_err(|e| e.0)?;
     if let Some(copy) = check {
+        let signed_in = (login.signed_in()).map_err(|e| format!("the login: {e}"))?;
+        outln!("signed in: {}", if signed_in { "yes" } else { "no" });
         gate::gate(&copy, &client, roles.as_deref(), port.unwrap_or(0), passed)?;
         return Ok(());
     }

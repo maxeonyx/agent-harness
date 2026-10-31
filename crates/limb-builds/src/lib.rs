@@ -1,28 +1,24 @@
 //! The builds tool set: relaunches its brain onto the commit of a clone,
-//! as a call of the harness's core model, and goes back when the new build
-//! fails ([`harness_core::build`] holds the model).
+//! as a call of the harness's core model, through a rehearsal and a gated
+//! opening, and goes back if the new build dies just after it opens
+//! ([`harness_core::build`] holds the model, [`relaunch`] the procedure).
 //!
 //! **Concept.** Offered by the limb on the brain's machine, its resource is
 //! the brain's own service, the systemd user unit its settings name
 //! ([`Settings`]). Its `relaunch` tool refuses in band a clone with
 //! uncommitted changes, a commit that does not descend from the running one
-//! unless the call says `back`, and a second relaunch while one is under
-//! way. Otherwise it builds and installs the commit, stops the brain (it
-//! drains), starts the new build on the same database, and settles the
-//! call: the settlement wakes the caller, whose next request is the new
-//! build's first. Its result observes the service, so the limb watching the
-//! new build ([`relaunch::Takeover::watch`]) and going back is a change of
-//! that resource, saying why, at the caller's next turn.
+//! unless the call says `back`, a second relaunch while one is under way,
+//! a build that fails its rehearsal, and a one-way relaunch unless the call
+//! says `one_way`: each before anything touches the live database, since
+//! the call's result arrives only after the relaunch. Otherwise the running
+//! brain drains and stops, the new build starts as a candidate, and the
+//! call settles once, after a window in which the limb watches the opened
+//! build: with the stage it reached, in words, and whether it went back.
 //!
 //! The limb is a process of the build that was running, and outlives the
-//! brain it relaunches, so the way back never runs the new build's code.
+//! brain it relaunches, so the judge of the new build, and the way back,
+//! never run the new build's code.
 //!
-//! **Decided, not built: the gate** ([`harness_core::build::Start`]). The
-//! call will start the new build as a candidate, which writes nothing until
-//! it has checked itself on the live database, and settle once, with the
-//! outcome it reads off the installed link and the unit's process. The
-//! watch on probation, its fold of the database and the change that says
-//! the harness went back give way to that.
 //! The limb's executable, `harness-limb`, also relaunches a unit by hand
 //! (`relaunch`), and installs and starts a build for a brain's first launch
 //! (`install`, `start`): what `dev/serve` runs.
@@ -31,19 +27,16 @@ pub mod relaunch;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
 
 use harness_core::call::Outcome;
-use harness_core::fact::{Batch, Fact};
 use harness_core::id::Digest;
 use harness_core::limb::{self, Audience, Instruction, Offer, Tool};
-use harness_core::resource::{Change, Observation, ResourceKey, Version};
-use harness_core::value::Bytes;
+use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_limb::{Opening, Report, Running, ToolSet, Voice, lock};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::relaunch::Ended;
+use crate::relaunch::{Asked, Ended};
 
 /// The tool set's name.
 pub const SET: &str = "builds";
@@ -53,7 +46,7 @@ pub const RELAUNCH: &str = "relaunch";
 const SERVICE: &str = "service";
 /// The environment variable that tells a brain the `relaunch` call that
 /// started it: `Launch::Relaunched`'s `by`. In the unit's environment, not
-/// its command line, which the way back starts again as it was.
+/// its command line, which a way back starts again as it was.
 pub const RELAUNCHED_BY: &str = "HARNESS_RELAUNCHED_BY";
 
 /// The builds set's settings: its offer's `config`.
@@ -88,7 +81,6 @@ pub fn open(offer: &Offer, opening: &Opening) -> Result<Arc<dyn ToolSet>, String
     Ok(Arc::new(Builds {
         voice: opening.voice.clone(),
         settings: Mutex::new(harness_limb::settings(&offer.config)?),
-        watching: Mutex::default(),
     }))
 }
 
@@ -96,9 +88,6 @@ pub fn open(offer: &Offer, opening: &Opening) -> Result<Arc<dyn ToolSet>, String
 struct Builds {
     voice: Arc<Voice>,
     settings: Mutex<Settings>,
-    /// The relaunches it still watches on probation, after their calls
-    /// settled.
-    watching: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl ToolSet for Builds {
@@ -106,12 +95,19 @@ impl ToolSet for Builds {
         let unit = lock(&self.settings).unit.clone();
         let text = format!(
             "## Relaunching the harness\n\n\
-`relaunch` moves the brain you run on ({}) onto the commit a clone has checked out: it builds and installs \
-it, the brain stops (its requests in flight finish first), and the new build carries on every session, \
-yours included, from the same records. Merge your work first: it refuses a clone with uncommitted changes, \
-and a commit that does not descend from the one running unless you say `back`. Relaunch only at a moment \
-no other agent's work would be lost. A broken build bricks nothing: until it is proven the harness watches it \
-from the build before, and goes back on its own.\n",
+`relaunch` moves the brain you run on ({}) onto the commit a clone has checked out, and every session, \
+yours included, carries on from the same records on the new build. It builds and installs the commit, and \
+rehearses it beside the running brain: the new build's gate on a copy of the database, two scratch brains \
+of it making a tool round trip through the running build's limb and its own, and the running build reading \
+back what they wrote. Then the brain stops (its requests in flight finish first), and the new build opens \
+only once its gate has passed on the live database, writing nothing before. For a few minutes after it \
+opens, if its process ends, the harness goes back to the build before. The call returns once, after that, \
+saying how it went; your next turn may be on either build.\n\n\
+Merge your work first: it refuses a clone with uncommitted changes, and a commit that does not descend \
+from the one running unless you say `back`. It refuses a one-way relaunch, one the running build could \
+not read back, naming what it could not read, unless you say `one_way`: going back after a one-way \
+relaunch skips what the older build cannot read and may run a call a second time. Relaunch only at a \
+moment no other agent's work would be lost.\n",
             unit.as_deref()
                 .unwrap_or("no systemd unit: it cannot be relaunched")
         );
@@ -137,11 +133,9 @@ from the build before, and goes back on its own.\n",
         Ok(())
     }
 
-    /// Builds, stops the brain, and starts the new build: the call settles
-    /// once the new build has taken over, and the set watches it on
-    /// probation after, going back if it fails. Never stopped part way:
-    /// stopping the brain mid-way is the one thing it must not leave half
-    /// done.
+    /// The relaunch, to its end ([`relaunch::relaunch`]). Never stopped
+    /// part way: stopping the brain mid-way is the one thing it must not
+    /// leave half done.
     fn run(&self, running: &Running<'_>, report: &mut Report) -> Outcome {
         if running.call.tool != RELAUNCH {
             return report.failed(&format!(
@@ -160,57 +154,20 @@ from the build before, and goes back on its own.\n",
             let unit = unit.clone();
             move |line: &str| eprintln!("{unit}: {line}")
         };
-        let takeover = match relaunch::take_over(
-            &unit,
-            &request.clone,
-            request.back,
-            Some(running.id),
-            &say,
-        ) {
-            Ok(takeover) => takeover,
-            Err(why) => return report.failed(&why),
+        let asked = Asked {
+            back: request.back,
+            one_way: request.one_way,
         };
-        let (old, new) = (takeover.old.commit.clone(), takeover.new.commit.clone());
-        let said = format!(
-            "{unit} runs {new} now, which took over from {old}: this session carries on, on it. \
-             It is on probation until it has had a response and a call settled by a limb; until then, \
-             a refused request, its process ending, or a request unanswered for 5 minutes makes the harness \
-             go back to {old}, and you will be told why as a change of `{unit}`."
-        );
-        let outcome = report.completed(&said, vec![observe(&self.voice, &unit, &new)]);
-        let voice = self.voice.clone();
-        let watch = thread::spawn(move || match takeover.watch() {
-            Ended::Proven => say(&format!("{new} is proven")),
-            Ended::Back(why) => {
-                say(&why);
-                let content = Bytes(why.into_bytes());
-                let observed = observe(&voice, &unit, &old);
-                voice.say(Batch {
-                    facts: vec![Fact::Change(Change {
-                        resource: observed.resource,
-                        version: observed.version,
-                        by: None,
-                        content: Some(content.id()),
-                        wakes: true,
-                    })],
-                    values: vec![content],
-                });
+        let ended = relaunch::relaunch(&unit, &request.clone, asked, Some(running.id), &say);
+        let said = format!("{}: {}", ended.stage(), ended.words());
+        say(&said);
+        match ended {
+            Ended::Opened(_) => {
+                let commit =
+                    relaunch::Running::of(&unit).map_or_else(|_| String::new(), |r| r.commit);
+                report.completed(&said, vec![observe(&self.voice, &unit, &commit)])
             }
-        });
-        let mut watching = lock(&self.watching);
-        watching.retain(|w| !w.is_finished());
-        watching.push(watch);
-        outcome
-    }
-
-    fn holds(&self) -> bool {
-        lock(&self.watching).iter().any(|w| !w.is_finished())
-    }
-
-    fn close(&self) {
-        let watching: Vec<JoinHandle<()>> = lock(&self.watching).drain(..).collect();
-        for watch in watching {
-            let _ = watch.join();
+            Ended::Refused(_) | Ended::Failed(_) | Ended::WentBack(_) => report.failed(&said),
         }
     }
 }
@@ -233,16 +190,22 @@ struct Request {
     clone: PathBuf,
     #[serde(default)]
     back: bool,
+    #[serde(default)]
+    one_way: bool,
 }
 
 fn tool() -> Tool {
     let definition = json!({
         "name": RELAUNCH,
-        "description": "Relaunch the harness onto the commit a clone has checked out. It returns once the new build \
-    has taken over; your next turn is its first request.",
+        "description": "Relaunch the harness onto the commit a clone has checked out, through a rehearsal and a \
+    gated opening. It returns a few minutes after the new build opens, or when the relaunch is refused or fails, \
+    saying the stage it reached and whether the harness went back.",
         "input_schema": { "type": "object", "properties": {
             "clone": { "type": "string", "description": "The clone's directory: its HEAD is built." },
             "back": { "type": "boolean", "description": "Allow a commit that does not descend from the running one." },
+            "one_way": { "type": "boolean", "description": "Allow a one-way relaunch: one whose records the running build \
+    cannot all read, so going back after it skips those and may run a call a second time. A relaunch refused as \
+    one-way says so; call again with this to go ahead." },
         }, "required": ["clone"] },
     });
     Tool {
