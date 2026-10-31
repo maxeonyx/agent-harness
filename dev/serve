@@ -16,15 +16,15 @@
 #   `--sample WAV`). It prints the commit and the URL once the brain serves
 #   its face.
 # - If it runs, it relaunches it, as the `relaunch` tool does, with the
-#   running build's own `builds` set: the brain drains (its requests in
-#   flight get up to five minutes), the new build starts on the same
-#   database with the same flags, and it waits until the build is proven
-#   (a response, and a call a limb settled, in its span) or has gone back
-#   to the build before. It keeps the flags the brain runs with: stop
-#   the unit to change them.
+#   running build's own `builds` set: it rehearses the new build on a
+#   copy, the brain drains (its requests in flight get up to five
+#   minutes), the new build starts as a candidate on the same database
+#   with the same flags, and it waits until the build has opened and run
+#   3 minutes, or has gone back to the build before. It keeps the flags
+#   the brain runs with: stop the unit to change them.
 #
 # ~/.local/share/agent-harness/NAME/build links to the build a restart of
-# NAME runs, the last proven, so its `act` is
+# NAME runs, the last that opened, so its `act` is
 # ~/.local/share/agent-harness/NAME/build/bin/act.
 # The unit file, ~/.config/systemd/user/harness-NAME.service, runs that
 # link with the brain's flags; it is enabled, so the brain comes back at
