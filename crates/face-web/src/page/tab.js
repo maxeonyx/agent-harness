@@ -12,8 +12,11 @@ import * as liveness from "./liveness.js";
 // IndexedDB. Whatever the tab says is parsed into core's facts by the wasm,
 // stored, and only then shipped; what became of it is read off the tab's
 // standing in a later view, so a refusal shows here, where it was made.
-export let can = { act: false, dictation: false, sample: false };
-fetch("/wiring").then((r) => r.json()).then((c) => { can = c; render(); });
+// Read again each time the tab links, since a brain that was checking a
+// build (`checking`, its commit) holds what Max sends until one opens.
+export let can = { dictation: false, sample: false, checking: null };
+const wire = () => fetch("/wiring", { cache: "no-store" }).then((r) => r.json()).then((c) => { can = c; render(); });
+wire();
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 let wasm = null;
@@ -88,7 +91,7 @@ class Replica {
   }
   connect() {
     const ws = this.ws = new WebSocket(`wss://${location.host}/link?replica=${this.id}`);
-    ws.onopen = () => { this.link.received(); this.shipUnsent(); };
+    ws.onopen = () => { this.link.received(); this.shipUnsent(); if (this === tab) wire(); };
     ws.onmessage = (m) => {
       this.link.received();
       if (!m.data) return; // the brain's keepalive

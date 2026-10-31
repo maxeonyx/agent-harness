@@ -212,11 +212,11 @@ mod link;
 mod process;
 mod roles;
 
-use std::net::IpAddr;
+use std::net::{IpAddr, TcpListener};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -225,7 +225,7 @@ use harness_core::schema;
 
 use harness_core::id::ValueId;
 use harness_core::role::UnknownEffort;
-use harness_face_web::{Dictation, Face, Feed, Source, Wiring};
+use harness_face_web::{Dictation, Face, Feed, Folded, Source, Wiring};
 use harness_provider::{Client, Login};
 use harness_runtime::Cancel;
 use harness_store::Store;
@@ -249,7 +249,7 @@ const SOURCE: &str = env!("HARNESS_SOURCE");
 /// What `harness-brain --help` prints. `--model scripted` is
 /// [`harness_provider::SCRIPTED`].
 const USAGE: &str = "\
-usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR] [--sample WAV] [--model MODEL[/EFFORT]] [--page DIR]
+usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR] [--sample WAV] [--model MODEL[/EFFORT]] [--page DIR] [--limbs DIR]
        harness-brain --check DB [--login DB] [--roles DIR] [--port PORT]
        harness-brain --version
 
@@ -269,15 +269,20 @@ usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR
   --page DIR       serve the page's files from DIR (crates/face-web/src/page)
                    as they are on disk, so an edit shows on reload, instead of
                    the ones built in
+  --limbs DIR      start the harness-limb in DIR for a machine's limb, not
+                   the one beside this executable: a rehearsal's scratch
+                   brain meeting the running build's limb
   --candidate      open DB only once the gate has passed on it, writing
                    nothing before: then point the installed link (`build`
                    beside DB) at this build, and launch; otherwise exit 1
   --check DB       run the gate on DB, a copy of a brain's database: fold
                    it, decide without acting, have the provider count each
                    live session's next request, stream one short response
-                   using a tool, bind the port (any, unless named); print
-                   each pathway that passed, and fail with a line for each
-                   that did not (a few real tokens)
+                   using a tool, bind the port (any, unless named) and serve
+                   the face read-only; print `signed in: yes` or `no` as it
+                   reads the login, each pathway that passed, and fail with a
+                   line for each that did not (a few real tokens); once it
+                   passes, serve read-only until SIGTERM
   --version        print the commit it was built from
   --help           print this
 
@@ -347,6 +352,9 @@ fn run() -> Result<(), Failed> {
             "--page" => page = Some(PathBuf::from(value()?)),
             "--login" => login = Some(Login::at(PathBuf::from(value()?))),
             "--check" => check = Some(PathBuf::from(value()?)),
+            "--limbs" => {
+                let _ = process::LIMBS.set(PathBuf::from(value()?));
+            }
             Start::FLAG => start = Start::Candidate,
             "--help" | "-h" => {
                 outln!("{}", USAGE.trim_end());
@@ -360,11 +368,6 @@ fn run() -> Result<(), Failed> {
         None => Login::home().map_err(|e| e.to_string())?,
     };
     let client = Client::new(login.clone()).map_err(|e| e.0)?;
-    if let Some(copy) = check {
-        gate::gate(&copy, &client, roles.as_deref(), port.unwrap_or(0), passed)?;
-        return Ok(());
-    }
-    let db = db.ok_or("--db is required")?;
     // `--model sonnet/low`: the model, and the effort after a slash.
     let (every, effort) = match model
         .as_deref()
@@ -382,42 +385,35 @@ fn run() -> Result<(), Failed> {
             },
         ),
     };
-    outln!("harness-brain {SOURCE}");
-    let port: u16 = port.ok_or("--port is required")?;
-    let (decider, opening, listener, tls) = match start {
-        Start::Installed => {
-            let store = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
-            let (decider, divergences) = schema::Brain::open(store.replica(), store)
-                .map_err(|e| format!("the database folds: {e}"))?;
-            for d in &divergences {
-                errln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
-            }
-            let opening = Opening::of(decider.state(), decider.next(), roles.as_deref())?;
-            let (listener, tls) = gate::serve(port)?;
-            (decider, opening, listener, tls)
-        }
-        Start::Candidate => {
-            let gate::Passed {
-                decider,
-                opening,
-                listener,
-                tls,
-            } = gate::gate(&db, &client, roles.as_deref(), port, passed)?;
-            (decider.storage().write()).map_err(|e| format!("the database writes: {e}"))?;
-            install(&db)?;
-            (decider, opening, listener, tls)
-        }
+    let db = match (&check, db) {
+        (Some(copy), _) => copy.clone(),
+        (None, db) => db.ok_or("--db is required")?,
     };
-    let values = Store::open(&db).map_err(|e| format!("the database opens: {e}"))?;
-    let (folds, followed) = mpsc::channel();
-    let inbox = Inbox::new();
-    inbox.signals()?;
-    let feed = Feed::default();
-    login.keep_fresh();
+    let port = match check {
+        Some(_) => port.unwrap_or(0),
+        None => port.ok_or("--port is required")?,
+    };
+    if check.is_some() {
+        let signed_in = (login.signed_in()).map_err(|e| format!("the login: {e}"))?;
+        outln!("signed in: {}", if signed_in { "yes" } else { "no" });
+    } else {
+        outln!("harness-brain {SOURCE}");
+    }
     let offered = client.models(&Cancel::new()).unwrap_or_else(|e| {
         errln!("harness-brain: the provider's models: {e}; aliases keep what they resolved to");
         vec![harness_provider::scripted()]
     });
+    // An installed start makes a new database if none is there.
+    let installed = match (&check, start) {
+        (None, Start::Installed) => {
+            Some(Store::open(&db).map_err(|e| format!("the database opens: {e}"))?)
+        }
+        _ => None,
+    };
+    // The face serves from the gate's Serve on, read-only until the brain
+    // opens: what it found, while the rest is checked.
+    let values = Store::read(&db).map_err(|e| format!("the database opens: {e}"))?;
+    let feed = Feed::default();
     let mut dictation = Dictation::new(login.clone()).map_err(|e| e.0)?;
     if let Some(sample) = sample {
         dictation = dictation.with_sample(&sample)?;
@@ -425,9 +421,8 @@ fn run() -> Result<(), Failed> {
     let face = Face::with(
         Values(Mutex::new(values)),
         Wiring {
-            include: Some(inbox.include()),
             dictation: Some(dictation),
-            login: Some(login),
+            login: Some(login.clone()),
             feed: feed.clone(),
             models: offered.clone(),
             source: SOURCE.into(),
@@ -435,8 +430,60 @@ fn run() -> Result<(), Failed> {
             report: Box::new(|error| errln!("harness-brain: {error}")),
         },
     );
-    // The Windows host, read again for each connection: DHCP can move it.
-    let allow = |peer: IpAddr| Some(peer) == harness_face_web::default_gateway().map(IpAddr::V4);
+    let (folds, followed) = mpsc::channel();
+    thread::spawn({
+        let face = Arc::clone(&face);
+        move || face.follow(followed)
+    });
+    let serve = |decider: &schema::Brain<Store>, listener: TcpListener, tls| {
+        let _ = folds.send(Folded {
+            state: decider.state().clone(),
+            as_of: decider.head(),
+            standing: decider.standings().clone(),
+        });
+        let port = listener.local_addr().map_or(port, |a| a.port());
+        outln!("face: https://mx-hv-mj.local:{port}");
+        let face = Arc::clone(&face);
+        // The Windows host, read again for each connection: DHCP can move it.
+        let allow =
+            |peer: IpAddr| Some(peer) == harness_face_web::default_gateway().map(IpAddr::V4);
+        thread::spawn(move || {
+            if let Err(e) = harness_face_web::serve(&face, listener, tls, allow) {
+                errln!("harness-brain: the face stopped serving: {e}");
+            }
+        });
+    };
+    if check.is_some() {
+        gate::gate(&db, &client, roles.as_deref(), port, passed, serve)?;
+        outln!("gate: passed; serving read-only until stopped");
+        loop {
+            thread::park();
+        }
+    }
+    let (decider, opening) = match installed {
+        Some(store) => {
+            let (decider, divergences) = schema::Brain::open(store.replica(), store)
+                .map_err(|e| format!("the database folds: {e}"))?;
+            for d in &divergences {
+                errln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
+            }
+            let opening = Opening::of(decider.state(), decider.next(), roles.as_deref())?;
+            let (listener, tls) = gate::serve(port)?;
+            serve(&decider, listener, tls);
+            (decider, opening)
+        }
+        None => {
+            let gate::Passed { decider, opening } =
+                gate::gate(&db, &client, roles.as_deref(), port, passed, serve)?;
+            (decider.storage().write()).map_err(|e| format!("the database writes: {e}"))?;
+            install(&db)?;
+            (decider, opening)
+        }
+    };
+    let inbox = Inbox::new();
+    inbox.signals()?;
+    face.open(inbox.include());
+    login.keep_fresh();
     let mut brain = Brain::launch(
         decider,
         opening,
@@ -450,21 +497,10 @@ fn run() -> Result<(), Failed> {
         inbox,
         feed,
     );
-    // The face serves until the brain has shut down or panicked: the scope
-    // would wait for the face forever, so the process exits from inside it.
-    thread::scope(|s| {
-        s.spawn(|| face.follow(followed));
-        s.spawn(|| {
-            if let Err(e) = harness_face_web::serve(&face, listener, tls, allow) {
-                errln!("harness-brain: the face stopped serving: {e}");
-            }
-        });
-        outln!("face: https://mx-hv-mj.local:{port}");
-        let ran = panic::catch_unwind(AssertUnwindSafe(|| brain.run()));
-        errln!("harness-brain: shut down");
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-        std::process::exit(if ran.is_ok() { 0 } else { 101 })
-    })
+    let ran = panic::catch_unwind(AssertUnwindSafe(|| brain.run()));
+    errln!("harness-brain: shut down");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    std::process::exit(if ran.is_ok() { 0 } else { 101 })
 }
 
 /// Point the domain's installed link, `build` beside the database `db`, at

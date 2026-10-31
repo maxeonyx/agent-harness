@@ -5,10 +5,19 @@
 //! tab's own log, kept in IndexedDB, and its replica of the rows this face
 //! derives for it. One WebSocket per tab, `/link?replica=<id>`, carries the
 //! substrate's [`Up`] and [`Down`] as JSON. What Max does is a record at his
-//! tab: every [`Up::Record`] goes to the brain ([`Wiring::include`]), which
+//! tab: every [`Up::Record`] goes to the brain ([`Face::open`]), which
 //! answers only with what it folds. So a refusal is in band, in the tab's
 //! standing, beside the view that shows what he acted on; there is no reply
 //! to a request, because there is no request.
+//!
+//! **Read-only until a brain opens.** A face serves before its brain opens
+//! the database: while a build is checked (`harness-brain --check`, or a
+//! candidate's gate), it shows what that build folded, and its `/wiring`
+//! says `checking` and the build. A record a tab ships then goes nowhere,
+//! so it stays in the tab, pending. Once the brain opens, each link opened
+//! before ends, and its tab links again and ships what it held; if this
+//! build never opens, its process ends, and the tab ships it to whichever
+//! build serves next.
 //!
 //! **Rows.** After every fold the brain hands the face a [`Folded`]: the
 //! state, the brain time it is as of, and every replica's standing. The face
@@ -98,7 +107,7 @@ use std::io::{self, ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -126,10 +135,6 @@ pub trait Source: Send + Sync + 'static {
 
 /// What a face is wired to.
 pub struct Wiring {
-    /// Where each tab's records go: the brain, which states that the tab
-    /// is Max's if it is new to it, includes the record, and answers with
-    /// a later [`Folded`]. Without it, a face only watches.
-    pub include: Option<Box<dyn Fn(Record) + Send + Sync>>,
     pub dictation: Option<Dictation>,
     /// The claude.ai login Max signs in to from the page (`/login`).
     pub login: Option<harness_provider::Login>,
@@ -192,7 +197,14 @@ pub struct Face<S> {
     state: RwLock<State>,
     shown: Mutex<Option<Arc<Shown>>>,
     said: find::Said,
+    /// Where each tab's records go once the brain opens ([`Face::open`]).
+    include: OnceLock<Include>,
 }
+
+/// Where a tab's records go: the brain, which states that the tab is Max's
+/// if it is new to it, includes the record, and answers with a later
+/// [`Folded`].
+pub type Include = Box<dyn Fn(Record) + Send + Sync>;
 
 /// What every link publishes from: the rows, derived once per fold.
 struct Shown {
@@ -210,8 +222,8 @@ const TURN: Duration = Duration::from_millis(20);
 pub const KEEPALIVE: Duration = Duration::from_secs(4);
 
 impl<S: Source> Face<S> {
-    /// A face that includes, dictates and shows live progress as `wiring`
-    /// allows.
+    /// A face that dictates and shows live progress as `wiring` allows,
+    /// read-only until [`Face::open`].
     pub fn with(source: S, wiring: Wiring) -> Arc<Face<S>> {
         Arc::new(Face {
             source,
@@ -219,7 +231,14 @@ impl<S: Source> Face<S> {
             state: RwLock::new(State::default()),
             shown: Mutex::new(None),
             said: find::Said::default(),
+            include: OnceLock::new(),
         })
+    }
+
+    /// The brain has opened: each tab's records go to `include` from now
+    /// on, and each link opened before ends, so its tab ships what it held.
+    pub fn open(&self, include: Include) {
+        let _ = self.include.set(include);
     }
 
     /// Follow the brain's folds until it stops sending them. Folds that
@@ -287,8 +306,9 @@ impl<S: Source> Face<S> {
             "/icon.png" => http::respond(&mut stream, "image/png", ICON, false),
             "/wiring" => {
                 let dictation = self.wiring.dictation.as_ref();
+                let checking = self.include.get().is_none().then_some(&self.wiring.source);
                 let can = json!({
-                    "act": self.wiring.include.is_some(),
+                    "checking": checking,
                     "dictation": dictation.is_some(),
                     "sample": dictation.is_some_and(Dictation::has_sample),
                 });
@@ -388,11 +408,16 @@ impl<S: Source> Face<S> {
         let mut published: Option<Arc<Shown>> = None;
         let mut live = HashMap::new();
         let mut shipped = Instant::now();
+        let read_only = self.include.get().is_none();
         loop {
+            if read_only && self.include.get().is_some() {
+                return Ok(());
+            }
             match tab.read() {
                 Ok(Message::Text(text)) => match serde_json::from_str::<Up>(&text) {
+                    // Read-only, it goes nowhere, and stays pending in the tab.
                     Ok(Up::Record(record)) if record.at.replica == replica => {
-                        if let Some(include) = &self.wiring.include {
+                        if let Some(include) = self.include.get() {
                             include(record);
                         }
                     }

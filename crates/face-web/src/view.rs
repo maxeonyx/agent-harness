@@ -124,8 +124,7 @@ pub fn rows(
         "workspaces": workspaces,
         // Where a new task's directory is: the limb on the brain's machine.
         "local": state.limbs().find(|l| l.host == Host::Local).map(|l| l.id.to_string()),
-        "launch": state.launch().and_then(|(_, l)| l),
-        "probation": state.probation().verdict(),
+        "launch": state.launch().map(|(_, l)| l),
         "source": source,
         "relaunch": relaunch(state, value),
         "superseded": state
@@ -162,12 +161,13 @@ pub fn rows(
 }
 
 /// Where the latest relaunch of the brain stands, as far as it concerns the
-/// build running now: `under way` while the `builds` set is building and
-/// rehearsing it; `took over` once it settled in this launch's span, when
-/// `probation` says how far the build has proven itself; `went back` with
-/// the `builds` set's reason, the content of its change of the service it
-/// relaunched, when that change came after this launch. `null` when the
-/// running build did not come from a relaunch.
+/// build running now: `under way` while the `builds` set relaunches it, then
+/// the stage it ended at, with the `builds` set's words for why, once it
+/// settled in this launch's span. The stage is the start of the call's
+/// result, as `relaunch.rs`'s `Ended::stage` writes it: `opened`,
+/// `refused at rehearsal`, `failed its gate` or `went back`; any other
+/// failure is `failed`, with the whole result. `null` when no relaunch
+/// settled since the running build launched.
 fn relaunch(state: &State, value: Text) -> Value {
     let builds = |limb: Option<LimbId>| {
         (limb.and_then(|l| state.resolve(l)))
@@ -184,20 +184,24 @@ fn relaunch(state: &State, value: Text) -> Value {
     let Some(settled) = &call.settled else {
         return json!({"stage": "under way"});
     };
-    let CallOutcome::Completed(output) = &settled.outcome else {
+    if Some(settled.at.seq) <= state.launch().map(|(mark, _)| mark.seq) {
         return Value::Null;
+    }
+    let Some(said) = (settled.outcome.output())
+        .and_then(|o| text(value, o.model))
+        .map(|t| visible(&t))
+    else {
+        return json!({"stage": "failed"});
     };
-    let since = state.launch().map(|(mark, _)| mark.seq);
-    let back = output
-        .observes
-        .iter()
-        .filter_map(|o| state.resource(&o.resource))
-        .find(|c| Some(c.at.seq) > since)
-        .and_then(|c| c.content);
-    match back {
-        Some(why) => json!({"stage": "went back", "why": text(value, why)}),
-        None if Some(settled.at.seq) > since => json!({"stage": "took over"}),
-        None => Value::Null,
+    const STAGES: [&str; 4] = [
+        "opened",
+        "refused at rehearsal",
+        "failed its gate",
+        "went back",
+    ];
+    match said.split_once(": ") {
+        Some((stage, why)) if STAGES.contains(&stage) => json!({"stage": stage, "why": why}),
+        _ => json!({"stage": "failed", "why": said}),
     }
 }
 

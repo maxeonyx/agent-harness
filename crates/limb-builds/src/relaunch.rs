@@ -1,6 +1,5 @@
-//! Relaunching a brain's service onto the commit of a clone, and the watch
-//! that goes back when the new build fails: the procedure the `relaunch`
-//! tool and the command line share.
+//! Relaunching a brain's service onto the commit of a clone: the procedure
+//! the `relaunch` tool and the command line share.
 //!
 //! A brain runs as the durable systemd user unit `harness-NAME.service`
 //! (see [`start`]), from an installed build:
@@ -10,7 +9,28 @@
 //! database (`--db`), the port and its flags, and a relaunch starts the
 //! same command line in another build's directory. `NAME/build` beside
 //! the database links to the build a restart or a reboot runs: the last
-//! one proven.
+//! one to open the database.
+//!
+//! The relaunch from the running build A onto a new build B
+//! ([`relaunch`]), each stage judged by A's code and by what any build
+//! shows, never by B's records:
+//!
+//! ```mermaid
+//! flowchart TD
+//!   R["Rehearsal, beside A, which serves on:<br/>B --check on a copy (gate: lines),<br/>its page, served read-only, loaded in headless Chrome:<br/>no uncaught exception;<br/>sign-in read alike by A and B;<br/>two scratch brains of B, through A's limb and B's own:<br/>spawn, a bash token, a copy A checks;<br/>A folds what they wrote (readback)"]
+//!   R -->|"a pathway fails, or one-way without one_way"| Refused["Refused: A never stopped"]
+//!   R --> T["Takeover: A drains and stops;<br/>B starts with --candidate"]
+//!   T -->|"its process ends, or 3 min pass (killed)"| Failed["Failed: the unit restarts the link, A,<br/>on the bytes A left"]
+//!   T -->|"the link names B"| W["Opened: watched for 3 min"]
+//!   W -->|"B's process ends"| Back["Went back: the link is A again,<br/>and A starts, skipping and logging<br/>what it cannot read"]
+//!   W -->|"B outlives the window"| Opened["Opened"]
+//! ```
+//!
+//! A relaunch is two-way when A folds everything B's scratch brains wrote:
+//! going back is then lossless. Otherwise it is one-way, and refused unless
+//! asked for ([`Asked::one_way`]): a way back after it skips what A cannot
+//! read and may run a call a second time. The way back is never refused.
+//! Max (31 Oct): "Sending two is better than bricking."
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -20,18 +40,26 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use harness_core::build::Verdict;
-use harness_core::id::{CallId, Seq};
+use harness_core::build::{Pathway, Start, Through};
+use harness_core::id::CallId;
 use harness_core::schema;
+use harness_provider::Login;
 use harness_store::Store;
+use serde_json::json;
 
-/// How long a new build gets to state its launch.
-const STARTING: Duration = Duration::from_secs(120);
-/// How long a request of the new build's span may go without a first
-/// byte before the build is taken to hang.
-const UNANSWERED: Duration = Duration::from_secs(5 * 60);
-/// How often the watch folds the database.
-const EVERY: Duration = Duration::from_secs(2);
+/// How long a candidate gets to open the live database before it is
+/// killed: its gate's pathways take a few seconds, and retry provider
+/// trouble for a minute.
+const OPENING: Duration = Duration::from_secs(3 * 60);
+/// How long an opened build is watched, so that its process ending goes
+/// back to the build before.
+const WINDOW: Duration = Duration::from_secs(3 * 60);
+/// How long a scratch brain gets to serve, and then to make its round trip.
+const ROUND_TRIP: Duration = Duration::from_secs(90);
+/// How long the page gets after it loads to render its first view.
+const PAGE_SETTLES: Duration = Duration::from_secs(3);
+/// How often a stage looks at the unit.
+const EVERY: Duration = Duration::from_millis(500);
 
 /// Where builds and brains live: `$XDG_DATA_HOME/agent-harness`.
 pub fn home() -> PathBuf {
@@ -46,8 +74,8 @@ pub fn home() -> PathBuf {
 #[derive(Clone, Debug)]
 pub struct Running {
     pub unit: String,
-    pid: u32,
-    /// Its command line, the executable first.
+    /// Its command line, the executable first, as an installed start: with
+    /// no [`Start::FLAG`].
     argv: Vec<String>,
     /// The installed build it runs from.
     pub build: PathBuf,
@@ -64,6 +92,7 @@ impl Running {
             .split(|b| *b == 0)
             .filter(|a| !a.is_empty())
             .map(|a| String::from_utf8_lossy(a).into_owned())
+            .filter(|a| a != Start::FLAG)
             .collect();
         let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
             .map_err(|e| format!("{unit}'s process {pid}: {e}"))?;
@@ -74,10 +103,7 @@ impl Running {
             .ok_or_else(|| format!("{unit} runs {}, not an installed build", exe.display()))?
             .to_path_buf();
         let commit = name(&build);
-        let db = argv
-            .iter()
-            .skip_while(|a| *a != "--db")
-            .nth(1)
+        let db = flag(&argv, "--db")
             .map(PathBuf::from)
             .ok_or_else(|| format!("{unit}'s command line names no --db"))?;
         // Started by the unit file, it names its build through the link.
@@ -88,7 +114,6 @@ impl Running {
             .collect();
         Ok(Running {
             unit: unit.into(),
-            pid,
             argv,
             build,
             commit,
@@ -105,46 +130,138 @@ impl Running {
     fn data(&self) -> PathBuf {
         self.db.parent().unwrap_or(Path::new("/")).to_path_buf()
     }
+
+    /// The login its brain reads: the one `--login` names, or the home
+    /// brain's, as the brain defaults.
+    fn login(&self) -> Option<&str> {
+        flag(&self.argv, "--login")
+    }
 }
 
-/// A relaunch that has taken over: the new build serves, on probation, and
-/// no other relaunch of the unit can start until its watch ends.
-pub struct Takeover {
-    _lock: File,
-    pub old: Running,
-    pub new: Running,
-    /// The brain's last launch before the new one.
-    before: Option<Seq>,
-    /// The `relaunch` call that started it, which the way back names too.
-    by: Option<CallId>,
-    started: Instant,
+/// What a relaunch call asks besides its clone.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Asked {
+    /// Allow a commit that does not descend from the running one.
+    pub back: bool,
+    /// Allow a one-way relaunch: one the running build could not go back
+    /// from without skipping what the new one writes.
+    pub one_way: bool,
 }
 
-/// How a watch ended.
+/// How a relaunch ended: the stage it reached, in words.
+#[derive(Debug)]
 pub enum Ended {
-    Proven,
-    /// It went back to the old build, for this reason.
-    Back(String),
+    /// Refused before the running build was stopped: nothing changed.
+    Refused(String),
+    /// The candidate did not open on the live database, and wrote nothing:
+    /// the unit runs the build before again, on the bytes it left.
+    Failed(String),
+    /// The new build opened and outlived the window.
+    Opened(String),
+    /// The new build opened, then its process ended within the window, so
+    /// the build before runs again.
+    WentBack(String),
 }
 
-/// Relaunch `unit` onto the commit `clone` has checked out: refuse a tree
-/// with changes, a commit that does not descend from the running one
-/// unless `back`, and a second relaunch; build and install it; rehearse it;
-/// stop the running brain (it drains) and start the new build on the same
-/// database. What it returns as an error is why nothing changed, unless
-/// it says otherwise.
-pub fn take_over(
+impl Ended {
+    /// The stage, as the call's result begins: the face's view of the
+    /// relaunch reads these words (`face-web`'s `view.rs`).
+    pub fn stage(&self) -> &'static str {
+        match self {
+            Ended::Refused(_) => "refused at rehearsal",
+            Ended::Failed(_) => "failed its gate",
+            Ended::Opened(_) => "opened",
+            Ended::WentBack(_) => "went back",
+        }
+    }
+
+    pub fn words(&self) -> &str {
+        match self {
+            Ended::Refused(w) | Ended::Failed(w) | Ended::Opened(w) | Ended::WentBack(w) => w,
+        }
+    }
+}
+
+/// Relaunch `unit` onto the commit `clone` has checked out, for the call
+/// `by` if one asked: rehearse it beside the running build, then start it
+/// as a candidate on the live database, then watch it for a window and go
+/// back if its process ends. Returns once, after the window or at the
+/// stage that ended it.
+pub fn relaunch(
     unit: &str,
     clone: &Path,
-    back: bool,
+    asked: Asked,
     by: Option<CallId>,
     say: &dyn Fn(&str),
-) -> Result<Takeover, String> {
+) -> Ended {
+    let (_lock, old, build, one_way) = match prepare(unit, clone, asked, say) {
+        Ok(prepared) => prepared,
+        Err(why) => {
+            return Ended::Refused(format!("{why}\nNothing changed: {unit} was never stopped."));
+        }
+    };
+    let commit = name(&build);
+    say(&format!(
+        "stopping {unit} on {}: its requests in flight drain first",
+        old.commit
+    ));
+    if let Err(why) = stop(unit) {
+        return Ended::Failed(format!("{unit} would not stop: {why}"));
+    }
+    let since = SystemTime::now();
+    say(&format!("starting {commit} on {unit} as a candidate"));
+    let mut candidate = old.on(&build);
+    candidate.push(Start::FLAG.into());
+    if let Err(why) = start(unit, &candidate, by) {
+        let again = match start(unit, &old.argv, by) {
+            Ok(()) => format!("{unit} runs {} again", old.commit),
+            Err(e) => format!("nor would {} start again: {e}", old.commit),
+        };
+        return Ended::Failed(format!("{commit} would not start ({why}); {again}."));
+    }
+    let pid = match open(unit, &old, &build, since) {
+        Ok(pid) => pid,
+        Err(why) => {
+            return Ended::Failed(format!(
+                "{commit} did not open: {why}\n{}",
+                restarted(unit, &old)
+            ));
+        }
+    };
+    say(&format!(
+        "{commit} opened; watching it for {}s",
+        WINDOW.as_secs()
+    ));
+    if let Some(why) = died(unit, pid, since) {
+        say(&format!("{commit} {why}; going back to {}", old.commit));
+        return Ended::WentBack(format!(
+            "{commit} opened, then {why}.\n{}",
+            back(unit, &old, by)
+        ));
+    }
+    Ended::Opened(format!(
+        "{unit} runs {commit}, which took over from {} and ran for {}s after opening; every \
+         session carries on, on it.{one_way}",
+        old.commit,
+        WINDOW.as_secs()
+    ))
+}
+
+/// Everything before the running brain is stopped: the refusals, the
+/// install and the rehearsal. The lock held until the relaunch ends, the
+/// running brain, the new build's directory, and what the result says of a
+/// one-way relaunch it was asked to make.
+fn prepare(
+    unit: &str,
+    clone: &Path,
+    asked: Asked,
+    say: &dyn Fn(&str),
+) -> Result<(File, Running, PathBuf, String), String> {
     let old = Running::of(unit)?;
     let lock = lock(&old.data().join("relaunch.lock"))?
         .ok_or_else(|| format!("a relaunch of {unit} is under way; wait for it to end"))?;
     let commit = clean_commit(clone)?;
-    if !back && !descends(clone, &old.commit, &commit)? {
+    if !asked.back && !descends(clone, &old.commit, &commit)? {
         return Err(format!(
             "{commit} does not descend from {}, which {unit} runs: relaunching would undo commits. \
              Merge it first, or say `back` to go back on purpose",
@@ -152,57 +269,51 @@ pub fn take_over(
         ));
     }
     let build = install(clone, say)?;
-    rehearse(&build, &old, say).map_err(|why| {
-        format!(
-            "{why}\n{unit} runs {} still: it was never stopped.",
-            old.commit
-        )
-    })?;
-    let before = fold_span(&old.db)?.0;
-    say(&format!(
-        "stopping {unit} on {}: its requests in flight drain first",
-        old.commit
-    ));
-    stop(unit)?;
-    say(&format!("starting {unit} on {commit}"));
-    if let Err(why) = start(unit, &old.on(&build), by) {
-        return Err(match start(unit, &old.argv, by) {
-            Ok(()) => format!(
-                "{commit} would not start ({why}), so {unit} runs {} again",
-                old.commit
-            ),
-            Err(again) => format!(
-                "{commit} would not start ({why}), nor {} again: {again}",
-                old.commit
-            ),
-        });
+    let help = run(Command::new(build.join("bin/harness-brain")).arg("--help"))?;
+    if !help.contains(Start::FLAG) {
+        return Err(format!(
+            "{commit}'s harness-brain does not know `{}`, so it would open with no gate",
+            Start::FLAG
+        ));
     }
-    let argv = old.on(&build);
-    let new = Running {
-        pid: started(unit, Path::new(&argv[0])),
-        argv,
-        build,
-        commit,
-        ..old.clone()
+    let skipped = rehearse(&build, &old, say)?;
+    let one_way = match skipped.split_first() {
+        None => String::new(),
+        Some((first, rest)) => {
+            let unread = match rest.len() {
+                0 => format!("the record at {first}"),
+                more => format!("the record at {first}, and {more} more"),
+            };
+            if !asked.one_way {
+                return Err(format!(
+                    "this relaunch would be one-way: {} could not read what {commit} wrote in the \
+                     rehearsal ({unread}), so going back after {commit} opens would skip those \
+                     records and may run a call a second time. Call `relaunch` again with \
+                     `one_way: true` to go ahead",
+                    old.commit
+                ));
+            }
+            format!(
+                " It is one-way, as asked: {} could not read what {commit} wrote in the \
+                 rehearsal ({unread}), so a way back would skip such records and may run a call \
+                 a second time.",
+                old.commit
+            )
+        }
     };
-    Ok(Takeover {
-        _lock: lock,
-        old,
-        new,
-        before,
-        by,
-        started: Instant::now(),
-    })
+    Ok((lock, old, build, one_way))
 }
 
 /// Prove the new build beside the running brain without touching it, in
-/// `NAME/rehearsal/`: why not, in the words of the program that failed.
-/// The directory is deleted once the build passes; when it fails it is kept,
-/// with the logs its words name, until the next rehearsal.
-fn rehearse(build: &Path, running: &Running, say: &dyn Fn(&str)) -> Result<(), String> {
+/// `NAME/rehearsal/`: what the running build could not read of what the
+/// new one wrote, or why it failed, as `{pathway}: {why}` in the words of
+/// the program that failed. The directory is deleted once the build
+/// passes; when it fails it is kept, with the logs its words name, until
+/// the next rehearsal.
+fn rehearse(build: &Path, running: &Running, say: &dyn Fn(&str)) -> Result<Vec<String>, String> {
     let dir = running.data().join("rehearsal");
     remove(&dir);
-    std::fs::create_dir_all(dir.join("ws")).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     say(&format!(
         "rehearsing {} beside {}",
         name(build),
@@ -215,78 +326,151 @@ fn rehearse(build: &Path, running: &Running, say: &dyn Fn(&str)) -> Result<(), S
     done
 }
 
-fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<(), String> {
+fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<Vec<String>, String> {
     let commit = name(build);
-    // The new build reads a copy of the live database as if it took over:
-    // it folds every record, has the provider count each live session's
-    // next request, and streams one short response.
+    let login: Vec<&str> = running
+        .login()
+        .map(|l| vec!["--login", l])
+        .unwrap_or_default();
+    // The gate, on a copy of the live database.
     let copy = dir.join("copy.sqlite");
     Store::open(&running.db)
         .and_then(|store| store.copy_to(&copy))
         .map_err(|e| format!("copying {}: {e}", running.db.display()))?;
-    let out = Command::new(build.join("bin/harness-brain"))
-        .arg("--check")
-        .arg(&copy)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("{commit}'s harness-brain --check: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "{commit} failed its check on a copy of the database: {}{}",
-            String::from_utf8_lossy(&out.stderr).trim(),
-            failures(&String::from_utf8_lossy(&out.stdout)),
-        ));
+    let said = check(dir, build, &copy, &login)?;
+    // Both builds read the login alike.
+    let theirs = said.lines().find_map(|l| l.strip_prefix("signed in: "));
+    let ours = match running.login() {
+        Some(db) => Ok(Login::at(PathBuf::from(db))),
+        None => Login::home(),
     }
-    // The way back: this build, the old one, reads what the new one left.
-    fold_span(&copy).map_err(|e| {
+    .and_then(|login| login.signed_in())
+    .map(|signed_in| if signed_in { "yes" } else { "no" })
+    .map_err(|e| {
         format!(
-            "{}, which {} runs, could not read the copy once {commit} had: {e}",
-            running.commit, running.unit
+            "{}: {} reading the login: {e}",
+            Pathway::SignIn,
+            running.commit
         )
     })?;
-    // A scratch brain of the new build, on the scripted model, makes a
-    // round trip through a limb of the new build.
-    let mark = format!("HARNESS_OWNER_rehearsal_{}", std::process::id());
-    let done = scratch(dir, build, &mark);
-    end(&mark);
-    done.map_err(|why| format!("{commit}'s scratch brain {why}"))
+    if theirs != Some(ours) {
+        return Err(format!(
+            "{}: {} reads the login as signed in: {ours}, and {commit} as {}",
+            Pathway::SignIn,
+            running.commit,
+            theirs.map_or("nothing: it printed no `signed in:` line".into(), |t| {
+                format!("signed in: {t}")
+            })
+        ));
+    }
+    // A round trip through each build's limb, and the readback of what
+    // each scratch brain wrote.
+    let mut skipped = Vec::new();
+    for (through, limbs) in [
+        (Through::Running, running.build.join("bin")),
+        (Through::Own, build.join("bin")),
+    ] {
+        let pathway = Pathway::RoundTrip(through);
+        let at = dir.join(match through {
+            Through::Running => "through-running",
+            Through::Own => "through-own",
+        });
+        let mark = format!("HARNESS_OWNER_rehearsal_{}", std::process::id());
+        let done = round_trip(&at, build, &limbs, &login, &mark);
+        end(&mark);
+        done.map_err(|why| format!("{pathway}: {commit}'s scratch brain {why}"))?;
+        skipped.extend(readback(&at.join("scratch.sqlite"))?);
+    }
+    Ok(skipped)
 }
 
-/// What a `--check` report says failed, one line each. Of the records it
-/// could not fold, only the first, in fold order: the rest may follow from
-/// it.
-fn failures(report: &str) -> String {
-    let Ok(report) = serde_json::from_str::<serde_json::Value>(report) else {
-        return format!("\n{}", report.trim());
-    };
-    let skipped = report["skipped"].as_array().map_or(&[][..], Vec::as_slice);
-    let sessions = report["sessions"].as_array().into_iter().flatten();
-    let said: Vec<String> = (skipped.first())
-        .map(|s| match skipped.len() - 1 {
-            0 => format!("\nit could not fold a record: {s}"),
-            more => format!("\nit could not fold a record: {s}, nor {more} after it"),
-        })
-        .into_iter()
-        .chain(
-            sessions
-                .filter(|s| s.get("tokens").is_none())
-                .map(|s| format!("\na session's next request: {s}")),
-        )
-        .chain(
-            report["ping"]
-                .get("failed")
-                .map(|f| format!("\nits streamed request: {f}")),
-        )
-        .collect();
-    said.concat()
+/// Run the gate of `build` on `copy`, then load the page it serves
+/// read-only in headless Chrome, and stop it: what it printed, or why it
+/// failed. Its stderr is kept in `dir`.
+fn check(dir: &Path, build: &Path, copy: &Path, login: &[&str]) -> Result<String, String> {
+    let commit = name(build);
+    let errors = dir.join("check.log");
+    let mut child = Command::new(build.join("bin/harness-brain"))
+        .arg("--check")
+        .arg(copy)
+        .args(login)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(File::create(&errors).map_err(|e| format!("{}: {e}", errors.display()))?)
+        .spawn()
+        .map_err(|e| format!("{commit}'s harness-brain --check: {e}"))?;
+    let mut said = String::new();
+    let mut passed = false;
+    if let Some(out) = child.stdout.take() {
+        for line in BufReader::new(out).lines().map_while(Result::ok) {
+            said.push_str(&line);
+            said.push('\n');
+            if line.starts_with("gate: passed;") {
+                passed = true;
+                break;
+            }
+        }
+    }
+    if !passed {
+        let _ = child.wait();
+        let why = std::fs::read_to_string(&errors).unwrap_or_default();
+        return Err(format!(
+            "{commit} failed its gate on a copy of the database:\n{}",
+            why.trim()
+        ));
+    }
+    // The port is the face's line's last word.
+    let port = said
+        .lines()
+        .find_map(|l| l.strip_prefix("face: "))
+        .and_then(|url| url.rsplit(':').next())
+        .unwrap_or_default()
+        .to_owned();
+    let page = harness_limb_browser::uncaught(
+        &format!("https://localhost:{port}/"),
+        &dir.join("chrome"),
+        PAGE_SETTLES,
+    );
+    // SIGTERM, which a checking brain ends at.
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    let _ = child.wait();
+    let pathway = Pathway::Page;
+    match page {
+        Ok(thrown) if thrown.is_empty() => Ok(said),
+        Ok(thrown) => Err(format!(
+            "{pathway}: {commit}'s page threw: {}",
+            thrown.join("; ")
+        )),
+        Err(why) => Err(format!("{pathway}: {why}")),
+    }
 }
 
-/// Serve a scratch brain of `build` on a new database in `dir`, every
-/// process of it carrying `mark`, and have one chat make a tool call
-/// through a limb: why not, as the brain's own words end.
-fn scratch(dir: &Path, build: &Path, mark: &str) -> Result<(), String> {
-    const WITHIN: Duration = Duration::from_secs(90);
-    let db = dir.join("scratch.sqlite");
+/// What this build, the running one, could not read of the database at
+/// `db`: each record it skips, by its position and why.
+fn readback(db: &Path) -> Result<Vec<String>, String> {
+    let store = Store::read(db).map_err(|e| format!("{}: {e}", db.display()))?;
+    let (_, divergences) = schema::Brain::open(store.replica(), store)
+        .map_err(|e| format!("reading back {}: {e}", db.display()))?;
+    Ok(divergences
+        .iter()
+        .map(|d| format!("{}: {}", d.at, d.why))
+        .collect())
+}
+
+/// Serve a scratch brain of `build` on a new database in `dir`, starting
+/// the `harness-limb` in `limbs`, every process of it carrying `mark`: its
+/// root spawns a child, whose `bash` writes a token to a file, and the
+/// root's next call copies it. Then this build checks the copy. Why not,
+/// as the brain's own words end.
+fn round_trip(
+    dir: &Path,
+    build: &Path,
+    limbs: &Path,
+    login: &[&str],
+    mark: &str,
+) -> Result<(), String> {
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(&ws).map_err(|e| format!("{}: {e}", ws.display()))?;
     let log_path = dir.join("scratch.log");
     let log = File::create(&log_path).map_err(|e| format!("{}: {e}", log_path.display()))?;
     let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -296,9 +480,12 @@ fn scratch(dir: &Path, build: &Path, mark: &str) -> Result<(), String> {
         .to_string();
     let mut brain = Command::new(build.join("bin/harness-brain"))
         .arg("--db")
-        .arg(&db)
+        .arg(dir.join("scratch.sqlite"))
         .args(["--port", &port, "--model", "scripted", "--roles"])
         .arg(build.join("roles"))
+        .arg("--limbs")
+        .arg(limbs)
+        .args(login)
         .env(mark, "1")
         .env("XDG_STATE_HOME", dir.join("state"))
         .current_dir(dir)
@@ -308,7 +495,7 @@ fn scratch(dir: &Path, build: &Path, mark: &str) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("would not start: {e}"))?;
     let said = || std::fs::read_to_string(&log_path).unwrap_or_default();
-    let ended = |brain: &mut std::process::Child, what: &str| {
+    let mut ended = |what: &str| {
         let lines: Vec<String> = said().lines().map(String::from).collect();
         let tail = lines[lines.len().saturating_sub(5)..].join("\n");
         match brain.try_wait() {
@@ -316,50 +503,60 @@ fn scratch(dir: &Path, build: &Path, mark: &str) -> Result<(), String> {
             _ => None,
         }
     };
-    let until = Instant::now() + WITHIN;
+    let until = Instant::now() + ROUND_TRIP;
     while !said().contains("face: ") {
-        if let Some(why) = ended(&mut brain, "before it served") {
+        if let Some(why) = ended("before it served") {
             return Err(why);
         }
         if Instant::now() > until {
-            return Err(format!("did not serve in {}s", WITHIN.as_secs()));
+            return Err(format!("did not serve in {}s", ROUND_TRIP.as_secs()));
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(EVERY);
     }
-    let chat = Command::new(build.join("bin/act"))
-        .args([&port, "chat", "engineer"])
-        .arg(dir.join("ws"))
-        .arg("tool bash {\"command\":\"echo a round trip\"}\nsay done")
-        .env(mark, "1")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("could not be acted on: {e}"))?;
-    let chatted = String::from_utf8_lossy(&chat.stdout);
-    if !chat.status.success() {
-        return Err(format!("refused a chat: {}", chatted.trim()));
-    }
+    let token = format!("{mark}_{}", harness_limb::now().0);
+    let child = json!({ "command": format!("printf %s {token} > token") });
+    let spawn = json!({ "tasks": [{
+        "name": "child",
+        "mandate": format!("tool bash {child}\nsay done"),
+    }]});
+    let copy = json!({ "command": "cp token copy" });
+    // The brain serves before it has read its role files, so a chat is
+    // refused until it has.
+    let until = Instant::now() + ROUND_TRIP;
     loop {
-        thread::sleep(Duration::from_millis(500));
-        if let Some(why) = ended(&mut brain, "during a scripted round trip") {
+        let chat = Command::new(build.join("bin/act"))
+            .args([&port, "chat", "engineer"])
+            .arg(&ws)
+            .arg(format!("tool spawn {spawn}\ntool bash {copy}\nsay done"))
+            .env(mark, "1")
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("could not be acted on: {e}"))?;
+        if chat.status.success() {
+            break;
+        }
+        let refused = String::from_utf8_lossy(&chat.stdout);
+        if !refused.contains("no role engineer") || Instant::now() > until {
+            return Err(format!("refused a chat: {}", refused.trim()));
+        }
+        thread::sleep(EVERY);
+    }
+    let until = Instant::now() + ROUND_TRIP;
+    loop {
+        if std::fs::read_to_string(ws.join("copy")).is_ok_and(|c| c == token) {
+            return Ok(());
+        }
+        if let Some(why) = ended("during its round trip") {
             return Err(why);
         }
-        match fold_span(&db)?.1 {
-            Verdict::Proven { .. } => return Ok(()),
-            Verdict::Refused(r) => {
-                return Err(format!(
-                    "had its request refused with {}: {}",
-                    r.status, r.message
-                ));
-            }
-            Verdict::Proving { .. } if Instant::now() > until => {
-                return Err(format!(
-                    "made no scripted round trip through a limb in {}s; its log: {}",
-                    WITHIN.as_secs(),
-                    log_path.display()
-                ));
-            }
-            Verdict::Proving { .. } => {}
+        if Instant::now() > until {
+            return Err(format!(
+                "left no copy of its child's token in {}s; its log: {}",
+                ROUND_TRIP.as_secs(),
+                log_path.display()
+            ));
         }
+        thread::sleep(EVERY);
     }
 }
 
@@ -394,103 +591,88 @@ fn end(mark: &str) {
     signal(libc::SIGKILL);
 }
 
-impl Takeover {
-    /// Watch the new build until it is proven, then move the installed link
-    /// to it; or until it fails, then start the old build's bytes again.
-    /// The judge is this process's own code, the old build's.
-    pub fn watch(self) -> Ended {
-        loop {
-            thread::sleep(EVERY);
-            match self.check() {
-                None => continue,
-                Some(Ok(())) => {
-                    return match link(&self.new.data().join("build"), &self.new.build) {
-                        Ok(()) => Ended::Proven,
-                        Err(e) => Ended::Back(format!("it was proven, but its link: {e}")),
-                    };
-                }
-                Some(Err(why)) => return Ended::Back(self.back(why)),
-            }
+/// Wait for the candidate `unit` runs from `build` to open: the installed
+/// link names it. Its process, or why it did not open: its process ended
+/// (in its own words), or [`OPENING`] passed and it was killed.
+fn open(unit: &str, old: &Running, build: &Path, since: SystemTime) -> Result<u32, String> {
+    let link = old.data().join("build");
+    let opened = || std::fs::canonicalize(&link).is_ok_and(|to| to == build);
+    let pid = started(unit, &build.join("bin/harness-brain"));
+    let until = Instant::now() + OPENING;
+    loop {
+        if opened() {
+            return Ok(pid);
         }
-    }
-
-    fn check(&self) -> Option<Result<(), String>> {
-        let unit = &self.new.unit;
-        match main_pid(unit) {
-            Ok(Some(pid)) if pid == self.new.pid => {}
-            _ => {
-                return Some(Err(format!(
-                    "its brain exited{}",
-                    last_words(unit, self.started)
-                )));
-            }
+        let gone = pid == 0 || main_pid(unit).is_ok_and(|now| now != Some(pid));
+        if gone && !opened() {
+            return Err(format!("its process ended{}", last_words(unit, since)));
         }
-        let (launch, verdict, unanswered) = match fold_span(&self.new.db) {
-            Ok(folded) => folded,
-            Err(e) => return Some(Err(e)),
-        };
-        if launch <= self.before {
-            return (self.started.elapsed() > STARTING).then(|| {
-                Err(format!(
-                    "its brain did not launch in {}s",
-                    STARTING.as_secs()
-                ))
-            });
+        if Instant::now() > until {
+            let _ = systemctl(&["kill", "--kill-whom=main", "-s", "SIGKILL", unit]);
+            return Err(format!(
+                "it had not opened in {}s, so it was killed{}",
+                OPENING.as_secs(),
+                last_words(unit, since)
+            ));
         }
-        match verdict {
-            Verdict::Proven { .. } => Some(Ok(())),
-            Verdict::Refused(r) => Some(Err(format!(
-                "the provider refused its request {} with {}: {}",
-                r.request, r.status, r.message
-            ))),
-            Verdict::Proving { .. } if unanswered => Some(Err(format!(
-                "a request it sent had no answer in {}s",
-                UNANSWERED.as_secs()
-            ))),
-            Verdict::Proving { .. } => None,
-        }
-    }
-
-    /// End the new build's brain without its drain (it is not trusted) and
-    /// start the old one's bytes again. What it says is why, and how.
-    fn back(&self, why: String) -> String {
-        let unit = &self.new.unit;
-        let _ = systemctl(&["kill", "-s", "SIGKILL", unit]);
-        let _ = systemctl(&["stop", unit]);
-        let how = match start(unit, &self.old.argv, self.by) {
-            Ok(()) => format!("{unit} runs {} again", self.old.commit),
-            Err(e) => format!("and {} would not start again: {e}", self.old.commit),
-        };
-        format!(
-            "{} failed its probation: {why}. {how}; what it left unanswered is sent again.",
-            self.new.commit
-        )
+        thread::sleep(EVERY);
     }
 }
 
-/// Fold the database with this build's code: the last launch's position,
-/// its build's verdict, and whether a request of its span has gone
-/// unanswered too long.
-fn fold_span(db: &Path) -> Result<(Option<Seq>, Verdict, bool), String> {
-    let store = Store::open(db).map_err(|e| format!("{}: {e}", db.display()))?;
-    let (decider, _) = schema::Brain::open(store.replica(), store)
-        .map_err(|e| format!("folding {}: {e}", db.display()))?;
-    let state = decider.state();
-    let launch = state.launch().map(|(mark, _)| mark);
-    let now = harness_limb::now().0;
-    let unanswered = launch.is_some_and(|l| {
-        state.model_calls().any(|(_, m)| {
-            m.sent.seq > l.seq
-                && m.first_byte.is_none()
-                && m.ended.is_none()
-                && now - m.sent.at.0 > UNANSWERED.as_millis() as i64
-        })
-    });
-    Ok((
-        launch.map(|l| l.seq),
-        state.probation().verdict(),
-        unanswered,
-    ))
+/// Once a candidate has ended unopened, the unit's restart runs the
+/// installed link, still the build before: whether it did.
+fn restarted(unit: &str, old: &Running) -> String {
+    let exe = old.build.join("bin/harness-brain");
+    match started(unit, &exe) {
+        0 => format!(
+            "{} has not started again within 30s: see `systemctl --user status {unit}`.",
+            old.commit
+        ),
+        _ => format!(
+            "{unit} runs {} again, on the bytes it left: the candidate wrote nothing.",
+            old.commit
+        ),
+    }
+}
+
+/// Watch the opened build's process `pid` for [`WINDOW`]: why it ended,
+/// if it did.
+fn died(unit: &str, pid: u32, since: SystemTime) -> Option<String> {
+    let until = Instant::now() + WINDOW;
+    while Instant::now() < until {
+        thread::sleep(EVERY);
+        if main_pid(unit).is_ok_and(|now| now != Some(pid)) {
+            return Some(format!("its process ended{}", last_words(unit, since)));
+        }
+    }
+    None
+}
+
+/// Go back to the build before: end the new build's brain without its
+/// drain (it is not trusted), point the installed link at the old build,
+/// and start it, as an installed start, which is never refused: it folds
+/// what it can of what the new build wrote, and skips and logs the rest.
+/// What it says is how it went.
+fn back(unit: &str, old: &Running, by: Option<CallId>) -> String {
+    let _ = systemctl(&["kill", "--kill-whom=main", "-s", "SIGKILL", unit]);
+    let _ = systemctl(&["stop", unit]);
+    let relinked = link(&old.data().join("build"), &old.build);
+    match relinked.and_then(|()| start(unit, &old.argv, by)) {
+        Ok(()) => format!(
+            "{unit} runs {} again; it skips any record it cannot read of what the new build \
+             wrote, logging each, and may run a call a second time.",
+            old.commit
+        ),
+        Err(e) => format!("{} would not start again: {e}", old.commit),
+    }
+}
+
+/// The value of `name` on a command line.
+fn flag<'a>(argv: &'a [String], name: &str) -> Option<&'a str> {
+    argv.iter()
+        .skip_while(|a| *a != name)
+        .nth(1)
+        .map(String::as_str)
 }
 
 /// The commit `clone` has checked out, refusing a tree with changes: it
@@ -663,9 +845,9 @@ fn remove(dir: &Path) {
 /// `default.target`, so it starts at boot (with lingering, before a login)
 /// and again after any exit systemd did not ask for: a crash, or a signal
 /// from anything but `systemctl stop`, which a relaunch uses. Its command
-/// line runs the build `NAME/build` links to, the last proven, so it is
-/// the same file whatever build `argv` names. This one start runs `argv`
-/// itself, with `by` in its environment, through a drop-in in
+/// line runs the build `NAME/build` links to, the last to open the
+/// database, as an installed start (no [`Start::FLAG`]), so it is the same
+/// file whatever build `argv` names. This one start runs `argv` itself, with `by` in its environment, through a drop-in in
 /// `$XDG_RUNTIME_DIR` that is deleted once it has started: a restart or a
 /// reboot runs the link again.
 ///
@@ -685,6 +867,7 @@ pub fn start(unit: &str, argv: &[String], by: Option<CallId>) -> Result<(), Stri
         .ok_or("the command line names no --db")?;
     let linked: Vec<String> = argv
         .iter()
+        .filter(|a| *a != Start::FLAG)
         .map(|a| {
             rebase(
                 a,
@@ -786,7 +969,7 @@ fn stop(unit: &str) -> Result<(), String> {
 }
 
 /// The process `unit` runs once it has become `exe`, or 0 (no process)
-/// if it does not within 30 s: the watch then sees it gone.
+/// if it does not within 30 s.
 fn started(unit: &str, exe: &Path) -> u32 {
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
@@ -809,13 +992,12 @@ fn systemctl(args: &[&str]) -> Result<String, String> {
     run(Command::new("systemctl").arg("--user").args(args))
 }
 
-/// Why the unit's process ended since `since`, after a colon: systemd's
-/// word on how it exited, and a panic if it printed one.
-fn last_words(unit: &str, since: Instant) -> String {
-    let secs = SystemTime::now()
-        .checked_sub(since.elapsed())
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs());
+/// Why the unit's process ended since `since`, after a colon: its `gate:`
+/// lines, a panic if it printed one, and systemd's word on how it exited.
+fn last_words(unit: &str, since: SystemTime) -> String {
+    // The journal has its last lines a moment after it ends.
+    thread::sleep(Duration::from_secs(1));
+    let secs = (since.duration_since(UNIX_EPOCH)).map_or(0, |d| d.as_secs());
     let out = Command::new("journalctl")
         .args(["--user", "-u", unit, "--no-pager", "-o", "cat"])
         .arg(format!("--since=@{secs}"))
@@ -825,12 +1007,14 @@ fn last_words(unit: &str, since: Instant) -> String {
         .as_deref()
         .unwrap_or_default()
         .lines()
-        .filter(|l| l.contains("panicked") || l.contains("Main process exited"))
+        .filter(|l| {
+            l.contains("gate: ") || l.contains("panicked") || l.contains("Main process exited")
+        })
         .map(|l| l.trim_start_matches(&format!("{unit}: ")).trim())
         .collect();
     match said.is_empty() {
         true => String::new(),
-        false => format!(", saying: {}", said.join(" / ")),
+        false => format!(", saying:\n{}", said.join("\n")),
     }
 }
 

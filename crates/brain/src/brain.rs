@@ -1936,12 +1936,12 @@ pub fn now() -> Timestamp {
     )
 }
 
-/// The executable the brain starts for a limb on a machine: the
-/// `harness-limb` beside its own, by digest, as [`Launched::limbs`]'s
+/// The executable the brain starts for a limb on a machine
+/// ([`crate::process::program`]), by digest, as [`Launched::limbs`]'s
 /// `limb`. A limb connected with other bytes is superseded
 /// ([`harness_core::state::State::superseded`]).
 fn limb_builds() -> BTreeMap<String, BuildId> {
-    let limb = std::env::current_exe().map(|e| e.with_file_name("harness-limb"));
+    let limb = crate::process::program();
     match limb.and_then(std::fs::read) {
         Ok(bytes) => BTreeMap::from([("limb".to_owned(), BuildId::of(&bytes))]),
         Err(_) => BTreeMap::new(),
@@ -2133,20 +2133,19 @@ const RELAUNCHED_BY: &str = "HARNESS_RELAUNCHED_BY";
 /// How this launch came: [`Launch::Relaunched`] after a brain that shut
 /// down, or by the builds limb's `relaunch` call its unit's environment
 /// names (forward, or back after the new build failed: then the brain
-/// before was killed); [`Launch::Started`] after a crash, on a new
-/// database, or after a build this one cannot read.
+/// before was killed); [`Launch::Started`] after a crash or on a new
+/// database. After a build whose [`Launched`] this one cannot read, `from`
+/// is the last build it can.
 fn launch_how(state: &State) -> Launch {
     let by = std::env::var(RELAUNCHED_BY)
         .ok()
         .and_then(|call| call.parse().ok())
         .filter(|call| state.call(*call).is_some());
     match state.launch() {
-        Some((_, Some(before))) if by.is_some() || state.shutdown().is_some() => {
-            Launch::Relaunched {
-                from: before.build,
-                by,
-            }
-        }
+        Some((_, before)) if by.is_some() || state.shutdown().is_some() => Launch::Relaunched {
+            from: before.build,
+            by,
+        },
         _ => Launch::Started,
     }
 }
