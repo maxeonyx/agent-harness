@@ -187,7 +187,10 @@ fn relaunch(state: &State, value: Text) -> Value {
     if Some(settled.at.seq) <= state.launch().map(|(mark, _)| mark.seq) {
         return Value::Null;
     }
-    let Some(said) = settled.outcome.output().and_then(|o| text(value, o.model)) else {
+    let Some(said) = (settled.outcome.output())
+        .and_then(|o| text(value, o.model))
+        .map(|t| visible(&t))
+    else {
         return json!({"stage": "failed"});
     };
     const STAGES: [&str; 4] = [
