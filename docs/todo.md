@@ -19,7 +19,6 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **`cold` duplicates fold state** (`brain/src/brain.rs:146,934,969`).
 - **Credentials in the domain's database,** replicated only within a brain, perhaps encrypted by the OS keychain (Max, 2026-08). On 28 Oct he chose the database over a token file for the harness's own login, "so that it can sync across machines, ideally", with encryption from "some kind of keychain or SSH agent" in the future. Today the login is a `login` table beside the home brain's records, unencrypted and not replicated: every brain on the machine reads it there (`provider/src/login.rs`).
 - **Any 400 from a refresh signs the harness out** (`provider/src/login.rs`, `post`: `rejected` is 400 or 401), including `invalid_scope`, which is the harness's own mistake and leaves the refresh token good. Only `invalid_grant` (and 401) says the refresh token is dead; anything else could keep the tokens and fail, as a network error does. Kept for now because signed out is the state the page offers a way out of.
-- **A relaunch while signed out stays on probation until Max signs in.** The check passes signed out (`brain/src/check.rs`), but the new build sends no request until then, so `Verdict::Proving` holds and the builds limb watches it with no deadline (`limb-builds/src/relaunch.rs`, `watch`); after the sign-in it proves itself as usual.
 
 ## Tasks (S2)
 
@@ -81,10 +80,10 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 
 - **One binary** running any mix of brain, limb and face.
 - **Old sessions on old builds:** the old process finishing its work after a relaunch, deadlines, and collecting old builds.
-- **No go-back button after a relaunch** (`face-web/src/page/builds.js:19`), and rehearsal doesn't catch a broken page.
+- **Gated opening: decided 31 Oct, not built.** A new build runs no real session until it has proven itself, and writes nothing to the live database until then: a rehearsal beside the running brain, then a candidate's gate on the live database, with the installed link as the commit point. The model is `build::Start` and `build::Pathway` in `crates/core`. Today the takeover resumes every session at once, and the builds limb judges probation by folding the new build's records with the old build's code, every 2 s. On 31 Oct that judge could not read the new build's `Launched` and rolled back a healthy 9c5a5fa; 2dace7a then ran on for 32 minutes past the 27 records it skipped, running a read-only `bash` call a second time, and moving forward needed those records deleted by hand. The rehearsal also loads no page, and a relaunch while signed out stays on probation, watched with no deadline, until Max signs in.
+- **No way back once a build opens,** under the gate. A build that crashes on real work after its gate loops on the unit's restart (the link names it) until someone relaunches `back`. The shape that keeps a rollback lossless: the `relaunch` call watches the opened build's process for a short window and, if it ends, relaunches back through the older build's gate, which reads every record the newer one wrote or refuses. Max to decide whether he wants it.
+- **No go-back button after a relaunch** (`face-web/src/page/builds.js:19`).
 - **TLS certificate path and bind address are hard-wired** (`brain/src/main.rs:213-219,245`).
-- **The relaunch watcher folds every 2 s.**
-- **A rollback forks history.** On 31 Oct the first move of the home brain onto 9c5a5fa rolled back because the old build's watcher couldn't read the record holding the new build's `Launched`. The old build then ran again for 32 minutes: it skipped the 27 records the new build had written, ran a read-only `bash` call a second time (its settlement was in a skipped record), and carried sessions on from an earlier point. Moving forward needed a backup and those 27 records deleted by hand; a mutating call would also have run twice. The design is open; one shape suggested: any build folds a rolled-back span only as far as the build that took back over could read it.
 - **A missing limb at relaunch fails a task permanently,** where it should wait, as a signed-out login does (`Hold::SignedOut`).
 
 ## Max and his attention (S6)

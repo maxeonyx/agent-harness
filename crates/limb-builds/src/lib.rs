@@ -16,6 +16,13 @@
 //!
 //! The limb is a process of the build that was running, and outlives the
 //! brain it relaunches, so the way back never runs the new build's code.
+//!
+//! **Decided, not built: the gate** ([`harness_core::build::Start`]). The
+//! call will start the new build as a candidate, which writes nothing until
+//! it has checked itself on the live database, and settle once, with the
+//! outcome it reads off the installed link and the unit's process. The
+//! watch on probation, its fold of the database and the change that says
+//! the harness went back give way to that.
 //! The limb's executable, `harness-limb`, also relaunches a unit by hand
 //! (`relaunch`), and installs and starts a build for a brain's first launch
 //! (`install`, `start`): what `dev/serve` runs.

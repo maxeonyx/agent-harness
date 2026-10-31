@@ -13,25 +13,51 @@
 //! the provider's cache still hits, and the tool definitions its root
 //! declared are in those bytes.
 //!
-//! **Relaunching** is an act of the `builds` tool set, offered by the limb
-//! of the brain's machine, whose resource is the brain's own service. An
-//! agent whose role holds it calls its `relaunch` tool on a clone; the limb
-//! builds and installs that clone's commit and proves the new build beside
-//! the running brain without touching it: on a copy of the live database
-//! it folds every record, renders every live session's next request and
-//! has the provider check each one without generating anything, sends one
-//! minimal request, and serves the face for a headless page load; the old
-//! build then opens the same copy, so the way back is known to read what
-//! the new build leaves behind; and a scratch brain of the new build, on
-//! the scripted model, makes a full round trip through a limb of the new
-//! build. Only then does it stop the running brain (it drains), start the
-//! new build on the same database and settle the call. The new build is
-//! then on [`Probation`] until it shows what only the live brain can.
-//! Until then the limb, a process of the old build, watches its resource
-//! by folding the database with its own code, and on any failure starts
-//! the old build again from its installed bytes, telling the session why
-//! as a change of that resource. So the way back never runs the new
-//! build's code, and a broken build bricks nothing.
+//! **Opening.** Relaunching is an act of the `builds` tool set, offered by
+//! the limb of the brain's machine, whose resource is the brain's own
+//! service: an agent whose role holds it calls its `relaunch` tool on a
+//! clone, and the limb builds and installs that clone's commit. The new
+//! build then proves itself before any real session runs on it, and writes
+//! nothing to the domain's database until it has, so a build that fails
+//! goes back having changed nothing, and nothing runs twice. It is proven
+//! in two places, over the [`Pathway`]s each can reach.
+//!
+//! First the rehearsal, beside the running brain, which carries on: the
+//! builds limb, a process of the running build, has the new build run its
+//! gate on a copy of the live database and serve that copy's face
+//! read-only, loads the page in headless Chrome, has two scratch brains of
+//! the new build make a round trip through a limb of each build it will
+//! meet, and compares how both builds read the sign-in. A failure there
+//! costs nobody anything. Then the gate, on the live database: the running
+//! brain drains and stops, and the new build starts as a
+//! [`Start::Candidate`], which checks the gate's pathways on what the brain
+//! before left, while its face shows that state read-only. Only once they
+//! pass does it point the domain's installed link at itself and write its
+//! [`Launched`]: the commit point, after which every session resumes on it.
+//! If one fails, it says which and why and exits, and the unit restarts
+//! the build before, on the bytes it left.
+//!
+//! The builds limb learns the outcome from what any build shows, whatever
+//! shape the new build's records take: the link moved, the unit's process
+//! ended (in the candidate's own words), or a deadline passed (it ends the
+//! candidate). So the judge never reads the new build's records, and the
+//! `relaunch` call settles once, with the outcome. The rehearsal also folds
+//! what the scratch brains wrote with the running build's code: if it skips
+//! any, the relaunch is one-way, and the call says so. Once a build has
+//! opened, going back is a relaunch with `back`, whose candidate is the
+//! older build under the same gate: it folds every record the newer one
+//! wrote, or it refuses. So a way back is lossless or it does not happen.
+//!
+//! **Built so far.** The rehearsal runs part of the gate on a copy
+//! (`harness-brain --check`: the fold, each live session's next request
+//! counted, one short response) and one scripted round trip through a
+//! fresh limb of the new build; it loads no page. The takeover then resumes
+//! every real session at once, on [`Probation`], which the builds limb
+//! judges by folding the live database with the old build's code, going
+//! back on a failure. On 31 Oct that judge could not read the new build's
+//! records and rolled back a healthy build, and the old build then ran a
+//! call a second time. [`Start`] and [`Pathway`] are the model that
+//! replaces it (`docs/todo.md`, S5).
 //!
 //! **Limbs move with the brain, once it is proven.** A [`Launched`] names
 //! the executable it would start for each kind of limb. Once its build is
@@ -53,7 +79,7 @@
 //! watcher follows a filtered replica of the brain's records over its link
 //! instead of reading the database file; and one executable serves every
 //! role, so a build is one digest. None of these changes a type here except
-//! to add one.
+//! to add one; the candidate's gate is the readiness check of the first.
 //!
 //! **Bx.** Shared: an artifact's identity is the digest of its bytes
 //! ([`BuildId`] is Bx's artifact identity for one executable); a build is
@@ -193,6 +219,162 @@ pub struct Launched {
     pub how: Launch,
 }
 
+/// How a brain process comes to decide on its domain's database: at once,
+/// or once it has shown that it works.
+///
+/// **Concept.** `Installed` is the build the domain's installed link names
+/// (`NAME/build` beside the database): the last one to open it. It opens at
+/// once: a restart, a reboot, the unit restarting it after a crash, a test
+/// brain, a new database. `Candidate` is a relaunch's one start of a new
+/// build onto the live database, told by [`Start::FLAG`]. It writes
+/// nothing, not even its [`Launched`], until every pathway of the gate
+/// ([`Pathway::GATE`]) has passed on that database; then it points the
+/// installed link at itself and launches, and the sessions resume. If one
+/// fails, it prints which and why and exits, and the unit's restart runs
+/// the installed link: the build before, on the bytes it left, so nothing
+/// ran on the candidate and nothing runs twice. A flag rather than the
+/// environment, so a build too old to know it refuses to start instead of
+/// opening ungated.
+///
+/// A `back` relaunch is a candidate too, so an older build opens a
+/// database a newer one wrote only if it folds every record: going back is
+/// lossless or it does not happen.
+///
+/// **Vision.** "While we want live editing, we don't want live bricking";
+/// a restart is "just a pause and continue". Max (31 Oct): "the new brain
+/// shouldn't start any agent loops until it's proven out the functionality
+/// is all working, past its health check basically", and "we just
+/// shouldn't resume real sessions until we've at least done a
+/// comprehensive, end to end but not-real health check of some kind".
+///
+/// **Existing harnesses.** Restart into the new code and hope. A
+/// blue-green deploy gates traffic on a readiness probe, but both versions
+/// share a database the new one has already migrated, so going back is not
+/// lossless.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start {
+    Installed,
+    Candidate,
+}
+
+impl Start {
+    /// The word on a brain's command line that makes its start a
+    /// candidate's.
+    pub const FLAG: &str = "--candidate";
+}
+
+/// One way a new build is shown to work before any real session runs on
+/// it. A build passes when every pathway of both places has: the
+/// rehearsal, beside the running brain, then the gate, on the live
+/// database.
+///
+/// **Concept.** The gate's pathways are the candidate's own check, run in
+/// both places: on a copy of the live database in the rehearsal
+/// (`harness-brain --check`), and on the live database itself before the
+/// candidate writes anything ([`Start::Candidate`]). They need nothing but
+/// the database, the provider and a port, and they act on nothing. The
+/// rehearsal's own need a browser, scratch brains or the running build's
+/// code, so they run only there, and the running build judges them by what
+/// any build shows: a page's exceptions, a file a round trip leaves, a
+/// process's exit. A failure names its pathway, as `{pathway}: {why}`, in
+/// the words of the program that failed.
+///
+/// No pathway runs a call or sends a request of anyone's real work: what
+/// only real sessions can show, a logic bug on their own path, is not
+/// proven before they run.
+///
+/// **Vision.** "Why can't we test like many different pathways as part of
+/// our opening health check?" (Max, 31 Oct). Each pathway is a way a build
+/// has broken, or would brick the harness by breaking what an agent needs
+/// to fix it forward: a response, a tool call, a limb, the page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pathway {
+    /// Every record of the database folds, and none is skipped. The
+    /// 31 Oct refusal of 6881 records; on the live database, the records
+    /// written since the copy; and on a `back` relaunch, that the older
+    /// build reads everything the newer one wrote.
+    Fold,
+    /// It decides without acting: what it would write first (its
+    /// [`Launched`], its limbs' definitions), what it would do first
+    /// ([`crate::state::State::todo`]), and the face's view of the whole
+    /// state. A panic in what every launch computes from real state, which
+    /// once open would loop on every restart.
+    Decide,
+    /// Each live session's next request, rendered and accepted by the
+    /// provider's token count, which generates nothing. A refusal the build
+    /// is to blame for ([`blames_build`]) fails it at once; provider
+    /// trouble that is not the build's is retried for a minute. Signed
+    /// out, each is only rendered.
+    Requests,
+    /// One short response streamed from the provider, ending in a tool use
+    /// it is made to make: the wire, the stream and the parse of a tool
+    /// call, which every session needs and an agent needs to relaunch
+    /// again. Signed out, it waits: the build's first real request after
+    /// the sign-in is its first test of them.
+    Response,
+    /// Its port bound with its certificate, and its face served read-only
+    /// over what it folded, so the page Max has open shows the state it
+    /// found while it checks, and what he sends waits in his tab.
+    Serve,
+    /// The rehearsal's: the page, served over the copy, loads in headless
+    /// Chrome and renders its first view with no uncaught exception. A page
+    /// that breaks on real state leaves Max unable to see or steer.
+    Page,
+    /// The rehearsal's: a scratch brain of the new build, on the scripted
+    /// model and a fresh database, makes a full round trip through the
+    /// brain's own limb and a machine's: its root spawns a child, the
+    /// child's `bash` writes a token to a file, and the root's next call
+    /// copies it; the running build checks the copy.
+    RoundTrip(Through),
+    /// The rehearsal's: both builds read the same sign-in from the login.
+    /// A build that cannot read it would hold every session as signed out.
+    SignIn,
+}
+
+/// Which build's machine limb a [`Pathway::RoundTrip`] goes through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Through {
+    /// The running build's: what the new brain meets when it opens, since
+    /// limbs move to its build only after that.
+    Running,
+    /// The new build's own: what its limbs move to once it has opened.
+    Own,
+}
+
+impl Pathway {
+    /// The gate's pathways, in the order a candidate checks them.
+    pub const GATE: [Pathway; 5] = [
+        Pathway::Fold,
+        Pathway::Decide,
+        Pathway::Requests,
+        Pathway::Response,
+        Pathway::Serve,
+    ];
+    /// The rehearsal's own, after the gate on a copy.
+    pub const REHEARSAL: [Pathway; 4] = [
+        Pathway::Page,
+        Pathway::RoundTrip(Through::Running),
+        Pathway::RoundTrip(Through::Own),
+        Pathway::SignIn,
+    ];
+}
+
+impl fmt::Display for Pathway {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Pathway::Fold => "fold",
+            Pathway::Decide => "decide",
+            Pathway::Requests => "requests",
+            Pathway::Response => "response",
+            Pathway::Serve => "serve",
+            Pathway::Page => "page",
+            Pathway::RoundTrip(Through::Running) => "round trip through the running build's limb",
+            Pathway::RoundTrip(Through::Own) => "round trip through its own limb",
+            Pathway::SignIn => "sign-in",
+        })
+    }
+}
+
 /// How a build came to run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Launch {
@@ -210,6 +392,9 @@ pub enum Launch {
 }
 
 /// What a build has shown since it took over: whether it works end to end.
+/// Today's trial on real sessions, which the gate replaces ([`Start`]):
+/// once nothing real runs before a build is proven, there is nothing left
+/// for it to judge.
 ///
 /// **Concept.** The end of a build's trial. Before it took over, on its own
 /// processes, it showed that it folds a copy of the database, renders
