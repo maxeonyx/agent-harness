@@ -170,3 +170,32 @@ fn stop(reason: &str) -> Stop {
         other => Stop::Other(other.into()),
     }
 }
+
+/// One tool use in a response's content, its input exactly as the model
+/// wrote it.
+pub struct ToolUse {
+    pub id: String,
+    pub name: String,
+    pub input: String,
+}
+
+/// The tool uses in `content`, the bytes of a response
+/// ([`crate::Finished::value`]), in order.
+pub fn tool_uses(content: &[u8]) -> Vec<ToolUse> {
+    type Block<'a> = std::collections::BTreeMap<String, &'a serde_json::value::RawValue>;
+    let blocks: Vec<Block> = serde_json::from_slice(content).unwrap_or_default();
+    let field = |b: &Block, key: &str| {
+        b.get(key)
+            .and_then(|v| serde_json::from_str::<String>(v.get()).ok())
+            .unwrap_or_default()
+    };
+    blocks
+        .iter()
+        .filter(|b| field(b, "type") == "tool_use")
+        .map(|b| ToolUse {
+            id: field(b, "id"),
+            name: field(b, "name"),
+            input: b.get("input").map_or("{}", |i| i.get()).to_owned(),
+        })
+        .collect()
+}

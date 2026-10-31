@@ -32,6 +32,8 @@ const GENERATING: [&str; 8] = [
     "service_tier",
 ];
 const USAGE: &str = "/api/oauth/usage";
+/// The one tool [`Client::ping`] offers, and makes the model use.
+pub const PING: &str = "say";
 const MODELS: &str = "/v1/models?limit=1000";
 const UNIFIED: &str = "anthropic-ratelimit-unified-";
 
@@ -196,16 +198,27 @@ impl Client {
         })
     }
 
-    /// Streams the shortest answer `model` gives to a one-word request, on
-    /// the path every request's response takes: whether the provider's
-    /// stream still reads as this build expects.
+    /// Streams the shortest answer `model` gives to a one-word request,
+    /// made to use one tool ([`PING`]), on the path every request's response
+    /// takes: whether the provider's stream, and a tool use in it, still
+    /// read as this build expects.
     pub fn ping(&self, model: &str, cancel: &Cancel) -> Result<Finished, Error> {
         let body = serde_json::json!({
             "model": model,
-            "max_tokens": 8,
+            "max_tokens": 64,
             "stream": true,
             "system": [{"type": "text", "text": request::IDENTITY}],
             "messages": [{"role": "user", "content": "Say ok."}],
+            "tools": [{
+                "name": PING,
+                "description": "Say a word.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"word": {"type": "string"}},
+                    "required": ["word"],
+                },
+            }],
+            "tool_choice": {"type": "tool", "name": PING},
         });
         let body = serde_json::to_vec(&body).expect("JSON serialises");
         self.respond(&body, model == SCRIPTED, cancel, |_| {})

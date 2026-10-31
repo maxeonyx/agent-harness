@@ -32,11 +32,11 @@ use harness_core::task::{
 };
 use harness_core::value::Bytes;
 use harness_face_web::{Feed, Folded, Running};
-use harness_substrate::{Error, Publisher, Up, View, What as Said};
+use harness_substrate::{Error, Folding, Publisher, Schema, Up, View, What as Said};
 
 use crate::link::{self, Conn, Wire};
 use crate::process::Process;
-use harness_provider::{Client, Finished, LoginError, Progress};
+use harness_provider::{Client, Finished, LoginError, Progress, ToolUse};
 use harness_runtime::{Cancel, signals};
 use harness_store::Store;
 
@@ -154,27 +154,23 @@ pub struct Brain {
     reported: bool,
 }
 
-impl Brain {
-    /// Fold what the database holds, define the brain's own limb and the
-    /// limb on its machine (or restate either whose offers changed), start
-    /// reading the role files, and listen for limbs. What the last brain
-    /// left in flight is on the to-do list.
-    pub fn launch(
-        store: Store,
-        face: Sender<Folded>,
-        client: Client,
-        models: roles::Models,
-        roles: Option<&Path>,
-        Inbox { events, inbox }: Inbox,
-        feed: Feed,
-    ) -> Result<Brain, String> {
-        let (decider, divergences) = schema::Brain::open(store.replica(), store)
-            .map_err(|e| format!("the database folds: {e}"))?;
-        for d in &divergences {
-            errln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
-        }
-        let state = decider.state();
-        let at = decider.next();
+/// What a launch says first: its [`Launched`], and the brain's own limb and
+/// the limb on its machine, defined anew where their offers changed.
+/// Computed from the folded state without being said, so a gate can check
+/// it before anything is written.
+pub struct Opening {
+    facts: Vec<Fact>,
+    brain: LimbId,
+    local: LimbId,
+    /// The role files the brain reads.
+    roles: Option<PathBuf>,
+}
+
+impl Opening {
+    /// What a launch on `state` says first, at `at`, its record's time,
+    /// reading the role files in `roles`, or where the last launch read
+    /// them.
+    pub fn of(state: &State, at: Time, roles: Option<&Path>) -> Result<Opening, String> {
         let exe = std::env::current_exe()
             .and_then(std::fs::read)
             .map_err(|e| format!("the brain's own executable: {e}"))?;
@@ -202,6 +198,50 @@ impl Brain {
         let found = state.limbs().find(|l| l.host == Host::Local);
         let limb = local_limb(id(&facts, found), found, roles.as_deref())?;
         let local = define(state, &mut facts, limb);
+        Ok(Opening {
+            facts,
+            brain,
+            local,
+            roles,
+        })
+    }
+
+    /// `state` once this is said at `at`, or why the state refuses it.
+    pub fn said(&self, state: &State, at: Time) -> Result<State, Refusal> {
+        let mut state = state.clone();
+        let batch = Batch {
+            values: Vec::new(),
+            facts: self.facts.clone(),
+        };
+        let folding = Folding {
+            here: at,
+            clock: now(),
+            at,
+            said: &batch,
+        };
+        schema::Harness::fold(&mut state, folding)?;
+        Ok(state)
+    }
+}
+
+impl Brain {
+    /// Launch on what `decider` folded: say `opening`, start reading the
+    /// role files, and listen for limbs. What the last brain left in flight
+    /// is on the to-do list.
+    pub fn launch(
+        decider: schema::Brain<Store>,
+        Opening {
+            facts,
+            brain,
+            local,
+            roles,
+        }: Opening,
+        face: Sender<Folded>,
+        client: Client,
+        models: roles::Models,
+        Inbox { events, inbox }: Inbox,
+        feed: Feed,
+    ) -> Brain {
         let mut brain = Brain {
             decider,
             face,
@@ -231,7 +271,7 @@ impl Brain {
             Some(dir) => brain.watch_roles(dir),
             None => errln!("harness-brain: no role files: a new database needs --roles"),
         }
-        Ok(brain)
+        brain
     }
 
     /// Read the role files on a thread of their own, which hands each new
@@ -975,27 +1015,17 @@ impl Brain {
         let state = self.state();
         let task = state.task(task).expect("the responding task");
         let context = task.context().expect("a responding task has a context");
-        // Each block's fields, with a tool's input kept exactly as written.
-        type Block<'a> = BTreeMap<String, &'a serde_json::value::RawValue>;
-        let blocks: Vec<Block> = serde_json::from_slice(content).unwrap_or_default();
-        let field = |b: &Block, key: &str| {
-            b.get(key)
-                .and_then(|v| serde_json::from_str::<String>(v.get()).ok())
-                .unwrap_or_default()
-        };
-        blocks
-            .iter()
-            .filter(|b| field(b, "type") == "tool_use")
-            .map(|b| {
-                let tool = field(b, "name");
-                let input = Bytes::from(b.get("input").map_or("{}", |i| i.get()));
+        harness_provider::tool_uses(content)
+            .into_iter()
+            .map(|ToolUse { id, name, input }| {
+                let input = Bytes::from(input.as_str());
                 let call = Call {
                     caller: Caller::Agent {
                         task: task.id,
-                        tool_use: ToolUseId(field(b, "id")),
+                        tool_use: ToolUseId(id),
                     },
-                    expects: meta::expects(state, context, context.binding.limb(&tool)),
-                    tool,
+                    expects: meta::expects(state, context, context.binding.limb(&name)),
+                    tool: name,
                     input: input.id(),
                 };
                 (call, input)

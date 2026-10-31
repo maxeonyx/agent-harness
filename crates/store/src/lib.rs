@@ -51,7 +51,7 @@ use harness_core::id::{Digest, ReplicaId, Time, ValueId};
 use harness_core::schema::{Harness, Record};
 use harness_core::value::Bytes;
 use harness_substrate::{Storage, What};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 /// The tables' layout, bumped by any change to them: a file of another
 /// layout is refused rather than misread.
@@ -112,6 +112,37 @@ impl Store {
             .parse()
             .map_err(|_| Error::Corrupt("meta.replica"))?;
         Ok(Store { db, replica })
+    }
+
+    /// Open the store at `path` without writing to it: it must exist, in
+    /// this layout, and nothing it is asked to commit is written until
+    /// [`Store::write`]. What a new build reads before it has shown it
+    /// works, so the build before it finds the file as it left it.
+    pub fn read(path: impl AsRef<Path>) -> Result<Store, Error> {
+        let db = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        db.pragma_update(None, "query_only", true)?;
+        db.busy_timeout(std::time::Duration::from_secs(5))?;
+        let version: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version != VERSION {
+            return Err(Error::Version { found: version });
+        }
+        let replica: String = db.query_row("SELECT replica FROM meta", [], |row| row.get(0))?;
+        let replica = replica
+            .parse()
+            .map_err(|_| Error::Corrupt("meta.replica"))?;
+        Ok(Store { db, replica })
+    }
+
+    /// Let a store opened by [`Store::read`] write, as [`Store::open`]'s
+    /// does.
+    pub fn write(&self) -> Result<(), Error> {
+        self.db.pragma_update(None, "query_only", false)?;
+        self.db.pragma_update(None, "journal_mode", "WAL")?;
+        self.db.pragma_update(None, "synchronous", "FULL")?;
+        Ok(())
     }
 
     /// The replica whose records this is.
