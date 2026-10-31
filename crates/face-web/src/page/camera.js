@@ -5,7 +5,7 @@ import { hideTip } from "./hover.js";
 import { closeNode, go, NEW, openId, saved } from "./card.js";
 
 // ─── The camera ────────────────────────────────────────────────────────────
-const map = $("#map"), world = $("#world");
+const map = $("#map"), world = $("#world"), grid = $("#grid");
 export const nodesLayer = $("#nodes"), edgesLayer = $("#edges");
 export let cam = { x: 0, y: 0, k: 1 };
 export let framed = true;  // follows the map's growth until Max moves it himself
@@ -21,9 +21,9 @@ function applyCamera() {
   map.classList.add("moving");
   clearTimeout(resting);
   resting = setTimeout(() => map.classList.remove("moving"), 150);
-  const g = 24 * cam.k;
-  map.style.backgroundSize = `${g}px ${g}px`;
-  map.style.backgroundPosition = `${x}px ${y}px`;
+  const g = 24 * cam.k, size = `${g}px ${g}px`;
+  if (grid.style.backgroundSize !== size) grid.style.backgroundSize = size;
+  grid.style.transform = `translate(${(x % g + g) % g - g}px, ${(y % g + g) % g - g}px)`;
   placeMarks();
   coverCheck();
   sleepCheck();
@@ -69,15 +69,21 @@ export function fit(fly = true) {
 // Dragging the ground, the wheel and a pinch move the map. Over the open
 // card, the pointer and the wheel are the card's own: its text selects and
 // its log scrolls, while its header drags the map like the ground does.
+// A drag let go while moving coasts on, slowing to a stop; a press stops it
+// where it is, and is only that, not a click on what it pressed.
 const pointers = new Map();
 export let drag = null;
+let caught = false;  // the press stopped a coast
 const cards = (e) => e.target.closest?.("#panel") && !asleep && (!e.target.closest("#panel > .bar") || e.target.closest("button, [contenteditable]"));
 map.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 && e.pointerType === "mouse") return;
+  caught = stop("coast");
   if (cards(e)) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  drag = { moved: false, start: { x: e.clientX, y: e.clientY }, cam: { ...cam }, pinch: pointers.size === 2 ? pinchOf() : null };
+  drag = { moved: caught, start: { x: e.clientX, y: e.clientY }, cam: { ...cam }, pinch: pointers.size === 2 ? pinchOf() : null, trail: [] };
 });
+// A touch's click can come after its drag is forgotten.
+map.addEventListener("click", (e) => { if (caught) { caught = false; e.stopPropagation(); e.preventDefault(); } }, true);
 map.addEventListener("pointermove", (e) => {
   if (!pointers.has(e.pointerId) || !drag) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -90,10 +96,13 @@ map.addEventListener("pointermove", (e) => {
     drag.moved = true;
   } else {
     const dx = e.clientX - drag.start.x, dy = e.clientY - drag.start.y;
-    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
-    if (!drag.moved) {
+    // Back to the last sample from 100 ms ago, for the speed it is let go at.
+    drag.trail.push({ t: e.timeStamp, x: e.clientX, y: e.clientY });
+    while (drag.trail.length > 1 && e.timeStamp - drag.trail[1].t >= 100) drag.trail.shift();
+    if (!drag.panning && Math.hypot(dx, dy) < 5) return;
+    if (!drag.panning) {
       // Only now is it a drag: a press that does not move stays a click on what it pressed.
-      drag.moved = true;
+      drag.moved = drag.panning = true;
       map.classList.add("grabbing");
       map.setPointerCapture?.(e.pointerId);
       settle();
@@ -107,9 +116,15 @@ map.addEventListener("pointermove", (e) => {
   applyCamera();
 });
 const lift = (e) => {
-  pointers.delete(e.pointerId);
-  if (!pointers.size) { map.classList.remove("grabbing"); setTimeout(() => { drag = null; }, 0); }
-  else if (drag) { drag.pinch = null; const p = [...pointers.values()][0]; drag.start = p; drag.cam = { ...cam }; }
+  if (!pointers.delete(e.pointerId)) return;
+  if (!pointers.size) {
+    map.classList.remove("grabbing");
+    // A touch that dragged is not a tap, so no click comes to forget it.
+    if (drag?.panning) caught = false;
+    if (drag?.panning && e.type === "pointerup") coast(drag.trail, e.timeStamp);
+    setTimeout(() => { drag = null; }, 0);
+  }
+  else if (drag) { drag.pinch = null; drag.trail = []; const p = [...pointers.values()][0]; drag.start = p; drag.cam = { ...cam }; }
 };
 map.addEventListener("pointerup", lift);
 map.addEventListener("pointercancel", lift);
@@ -117,6 +132,7 @@ function pinchOf() { const [a, b] = [...pointers.values()]; return { x: (a.x + b
 map.addEventListener("wheel", (e) => {
   if (e.target.closest("#panel") && !e.ctrlKey && !asleep) return;
   e.preventDefault();
+  stop("coast");
   settle();
   hideTip();
   const k = Math.max(.15, Math.min(3, cam.k * Math.exp(-e.deltaY * (e.deltaMode ? .05 : .0015))));
@@ -356,27 +372,49 @@ function sleepCheck() {
 
 // ─── Motion ────────────────────────────────────────────────────────────────
 // One frame loop moves all that moves: the nodes, the card, the camera; the
-// edges and the marks at the screen's edges follow each frame.
+// marks at the screen's edges follow each frame, and the edges do while
+// what moves is more than the camera (`nodes`).
 const anims = new Map();
 let raf = 0;
-function animate(name, T, step) {
+function animate(name, T, step, nodes = true) {
   anims.get(name)?.done();
   if (document.hidden) { anims.delete(name); step(1); drawEdges(); applyCamera(); return Promise.resolve(); }
   return new Promise((done) => {
-    anims.set(name, { t0: performance.now(), T: reduced() ? 0 : T, step, done });
+    anims.set(name, { t0: performance.now(), T: reduced() ? 0 : T, step, done, nodes });
     if (!raf) raf = requestAnimationFrame(frame);
   });
 }
 function frame(now) {
   raf = 0;
+  let nodes = false;
   for (const [name, a] of anims) {
     const u = a.T ? Math.min(1, (now - a.t0) / a.T) : 1;
     a.step(1 - Math.pow(1 - u, 3));
+    nodes ||= a.nodes;
     if (u >= 1) { anims.delete(name); a.done(); }
   }
-  drawEdges();
+  if (nodes) drawEdges();
   applyCamera();
   if (anims.size) raf = requestAnimationFrame(frame);
+}
+// Stops a motion where it is; whether it was moving.
+function stop(name) {
+  const a = anims.get(name);
+  if (!a) return false;
+  anims.delete(name);
+  a.done();
+  return true;
+}
+// A drag let go goes on at the speed it had over its last 100 ms, eased to
+// a stop: in T it travels a third of what that speed would take it, much
+// less far than the browser's own scrolling.
+function coast(trail, t) {
+  const a = trail[0], b = trail.at(-1);
+  if (!a || a === b || reduced()) return;
+  const dt = Math.max(16, t - a.t), vx = (b.x - a.x) / dt, vy = (b.y - a.y) / dt;
+  if (Math.hypot(vx, vy) < .15) return;
+  const T = 750, c0 = { ...cam };
+  animate("coast", T, (e) => { cam = { ...cam, x: c0.x + vx * T / 3 * e, y: c0.y + vy * T / 3 * e }; }, false);
 }
 // Everything that is moving, where it is going, now.
 document.addEventListener("visibilitychange", () => { if (document.hidden) settle(); });
@@ -401,6 +439,7 @@ export async function fly(to, opts) {
 }
 export function glide(to = null, { T = 240, cardFrom, cardTo, box, strong = false } = {}) {
   if (flight && !strong) return flight.then(() => glide(to, { T, cardFrom, cardTo, box }));
+  if (to) stop("coast");
   const r1 = cardTo !== undefined ? cardTo : seam ? cardRect(seam) : null;
   const r0 = cardFrom !== undefined ? cardFrom : cardShown || r1;
   const b = box !== undefined ? box : r1;
