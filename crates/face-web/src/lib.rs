@@ -116,7 +116,7 @@ use tungstenite::{Message, WebSocket};
 pub use dictation::Dictation;
 use dictation::Socket;
 pub use live::{Feed, Running};
-pub use view::describe;
+pub use view::{describe, rows};
 
 /// Where a face reads the values the facts name. A face never writes.
 pub trait Source: Send + Sync + 'static {

@@ -24,6 +24,7 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | relaunch | a session relaunches its own brain (`dev/serve`, a throwaway unit it retires) onto a good commit, which is proven; onto one that panics as it starts, refused by its rehearsal with the old build still serving; and onto one whose brain dies 20 s in, and the harness goes back and tells the session why | scripted (each rehearsal: a token count per live session and one short real response) | a few real requests, 6 min (three incremental release builds) |
 | own-calls | an agent's edits refused only for another's change, and shown that change | scripted | free, 30 s |
 | phone | Max's day at phone size: + in the last directory, dictation, the two-tap send, a reload, and finding a chat with the find button | scripted | free, 40 s |
+| provider-errors | a request the provider rejects (400, or 403 for the account) fails its chat at once in the provider's words; an overload (529) is retried four times, then fails naming it | scripted | free, 40 s |
 | provider | a fork shares its parent's prompt cache on the provider (`examples/fork`) | Haiku | 4 small requests, seconds |
 | scripted | the scripted model: a tool call, a spawned child, a long streamed reply | scripted | free, 20 s |
 | spine | a chat across Ctrl-C and relaunches: a call finishing, a response cut, the chat carrying on (Rust example; it owns its brain process) | scripted (`MODEL=sonnet/low`: the cache reads) | free, 1 min |

@@ -26,8 +26,9 @@
 //! **Checking a build.** [`Client::count`] has the provider count a
 //! request's input tokens (`/v1/messages/count_tokens`), which generates
 //! nothing and costs nothing on the plan but checks the request's shape as
-//! a send would; [`Client::ping`] streams a response a few tokens long. A
-//! new build runs both before it takes over (`harness-brain --check`).
+//! a send would; [`Client::ping`] streams a response a few tokens long,
+//! made to use one tool. A new build runs both in its gate, before it
+//! takes over (`harness-brain --check`, `--candidate`).
 //!
 //! **Usage.** [`Client::usage`] reads the plan's usage windows from the
 //! subscription's own endpoint (`/api/oauth/usage`), for Max's call to the
@@ -45,7 +46,8 @@
 //! unified status is `rejected` is the plan's limit, ending
 //! [`harness_core::model_call::Ending::Limited`] until its reset; any other
 //! refusal is a failure of that request. A request with no login to send it
-//! on is [`LoginError::SignedOut`], which the brain ends as
+//! on, or refused with 401 even after a refresh, which signs the login out,
+//! is [`LoginError::SignedOut`], which the brain ends as
 //! [`harness_core::model_call::Ending::SignedOut`].
 //!
 //! **The login.** [`Login`] is the one owner of the claude.ai credential,
@@ -74,11 +76,13 @@ mod login;
 pub mod request;
 mod response;
 mod scripted;
+mod server_tool;
 
-pub use client::{Client, Counted, Finished, Progress};
+pub use client::{Client, Counted, Finished, PING, Progress};
 pub use http::{Body, Response, TrustError, tls};
 pub use login::{Login, LoginError, Token};
 pub use request::{IDENTITY, RequestError};
+pub use response::{ToolUse, tool_uses};
 pub use scripted::{SCRIPTED, scripted};
 
 use harness_core::role::Effort;
