@@ -53,7 +53,7 @@ export function drawMap() {
         : `node ${l.cls}${q >= 0 ? " needs" : ""}${q === 0 ? " next" : ""}${trouble(t) ? " trouble" : ""}${root ? " root" : ""}${id === openId ? " selected" : ""}${faded}`;
       a.style.setProperty("--d", `${root ? ROOT_DOT : DOT}px`);
       mark($(".g", a), l.cls === "paused" ? "pause" : glyph(t));
-      phases($(".phases", a), t.compactions || 0);
+      phases($(".phases", a), (t.legs || []).filter((l) => l.began === "carry").length);
       $(".name", a).textContent = shortName(t);
       let more = $(".more", a);
       if (fc && fc.tasks.length > 1) {

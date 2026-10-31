@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
+use harness_core::context::{Began, Dep, Legs};
 use harness_core::delivery::Content;
 use harness_core::fact::Fact;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
@@ -344,7 +345,9 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         },
         "mandate": text(value, t.mandate.text).map(|m| plain(&m)),
         "head": t.head().map(|h| h.to_string()),
-        "compactions": t.head().map_or(0, |h| state.compactions_on(t.id, h)),
+        "legs": state.legs(t.id).map_or(Value::Null, |l| legs(t.id, l)),
+        "leg": state.legs(t.id).map(|l| l.head.to_string()),
+        "work": state.legs(t.id).map_or(Value::Null, |l| work(state, l)),
         // When its last request ended: a retry can end where it began.
         "ended": last.map(|e| e.at.seq.n),
         "role": state.role(t.role).map(|r| r.name.clone()),
@@ -383,6 +386,50 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "outcome": outcome,
         "waiting": state.waiting_on(t.id, now).map(|w| waiting(state, value, &w)),
     })
+}
+
+/// How the task's context began, compacted, joined and was edited: the
+/// map's graph.
+fn legs(task: TaskId, legs: &Legs) -> Value {
+    let rows = legs.legs.iter().map(|l| {
+        let on = l.on.iter().map(|d| match d {
+            Dep::Leg { leg, at } => json!({"leg": leg.to_string(), "at": at.to_string()}),
+            Dep::Work(call) => json!({"work": call.to_string()}),
+        });
+        json!({
+            "key": l.id(task).to_string(),
+            "began": match l.began {
+                Began::Start => "start",
+                Began::Carry(_) => "carry",
+                Began::Join(_) => "join",
+                Began::Version(_) => "version",
+            },
+            "first": l.first.map(|e| e.to_string()),
+            "at": l.at.0,
+            "on": on.collect::<Vec<_>>(),
+        })
+    });
+    Value::Array(rows.collect())
+}
+
+/// The task's background calls that are not spawns, on the legs that
+/// started them.
+fn work(state: &State, legs: &Legs) -> Value {
+    let rows = legs.work.iter().map(|w| {
+        let record = state.call(w.call);
+        json!({
+            "call": w.call.to_string(),
+            "name": record.and_then(|r| match &r.call.caller {
+                Caller::Background { name, .. } => Some(name),
+                _ => None,
+            }),
+            "leg": w.leg.to_string(),
+            "at": w.at.to_string(),
+            "running": record.is_some_and(|r| r.settled.is_none()),
+            "handed": record.is_some_and(|r| r.owner == Owner::Max),
+        })
+    });
+    Value::Array(rows.collect())
 }
 
 /// What was delivered to the task that no request has rendered yet: Max's

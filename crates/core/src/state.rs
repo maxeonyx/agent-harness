@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 
 use imbl::{OrdMap, OrdSet};
 
+mod legs;
+
 use crate::attention::{Queued, Ranking};
 use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome, Owner};
-use crate::context::{Entry, EntryId, Note, Rendered, Span};
+use crate::context::{Entry, EntryId, Legs, Note, Rendered, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
@@ -105,6 +107,9 @@ pub struct State {
     /// Every compaction, by its carry's entry.
     compactions: OrdMap<EntryId, Compacted>,
     tasks: OrdMap<TaskId, Task>,
+    /// Each task's legs, kept as the facts that begin them apply
+    /// ([`State::legs`]).
+    legs: OrdMap<TaskId, Legs>,
     calls: OrdMap<CallId, CallRecord>,
     model_calls: OrdMap<ModelCallId, ModelCallRecord>,
     deliveries: OrdMap<DeliveryId, Delivered>,
@@ -1176,6 +1181,7 @@ impl State {
             self.heard.entry(id).or_default().insert(*quote);
         }
         self.open.scopes.entry(task.scope).or_default().push(id);
+        self.leg_start(&task, creator, record.at);
         self.put(task);
         Ok(())
     }
@@ -1399,10 +1405,17 @@ impl State {
         }
         let mut task = task.clone();
         task.apply(record, self)?;
+        match event {
+            TaskEvent::Moved(Move::Root(start)) => self.leg_root(id, start.root.id()),
+            TaskEvent::Moved(Move::Back { to }) => self.leg_back(id, *to),
+            _ => {}
+        }
         if let Some(root) = root {
             self.entries.insert(root.id(), Entry::Root(root.clone()));
         }
         if let Some((carry, kept, report)) = compacted {
+            let last = report.as_ref().unwrap_or(&carry).id();
+            self.leg_carry(id, carry.id(), kept.from, last, record.at);
             self.compactions.insert(carry.id(), kept);
             self.entries.insert(carry.id(), carry);
             if let Some(report) = report {
@@ -1502,16 +1515,6 @@ impl State {
     /// The compaction whose carry is `entry`.
     pub fn compacted(&self, entry: EntryId) -> Option<&Compacted> {
         self.compactions.get(&entry)
-    }
-
-    /// How many of `task`'s own compactions its context at `head` came
-    /// through: the phases before its current one. A fork's copy of its
-    /// parent's context does not count its parent's.
-    pub fn compactions_on(&self, task: TaskId, head: EntryId) -> usize {
-        self.compactions
-            .iter()
-            .filter(|(carry, c)| c.task == task && self.descends(head, **carry))
-            .count()
     }
 
     /// Whether `call` has compacted its task: moving back to the head it
@@ -1692,6 +1695,7 @@ impl State {
                 let mut task = task.clone();
                 task.apply(record, self)?;
                 self.put(task);
+                self.leg_request(call, record.at);
                 for (entry_id, entry) in entries {
                     self.entries.insert(entry_id, entry);
                 }
@@ -1749,6 +1753,7 @@ impl State {
                     _ => {}
                 }
                 let response = response.map(|entry| {
+                    self.leg_response(owner, &entry, record.at);
                     let entry_id = entry.id();
                     self.entries.insert(entry_id, entry);
                     self.open.responses.insert(entry_id, id);
@@ -1979,6 +1984,9 @@ impl State {
         }
         if let Some(task) = reader {
             self.put(task);
+        }
+        if let Caller::Background { task, from, .. } = &call.caller {
+            self.leg_work(*task, id, *from);
         }
         let owner = match &call.caller {
             Caller::Agent { task, .. } | Caller::Background { task, .. } => Owner::Task(*task),
