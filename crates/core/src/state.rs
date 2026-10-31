@@ -11,7 +11,7 @@ use crate::context::{Entry, EntryId, Note, Rendered, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
-use crate::build::{BuildId, Glanced, Glimpsed, Launch, Launched, Probation, Trial, Verdict};
+use crate::build::{BuildId, Launch, Launched};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::fact::{Author, Fact, Refusal, Rejected, Stated};
 use crate::id::{
@@ -98,9 +98,7 @@ use crate::value::Bytes;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
     last: Option<Seq>,
-    launch: Option<(Mark, Option<Launched>)>,
-    /// What the current launch has shown since it began.
-    probation: Probation,
+    launch: Option<(Mark, Launched)>,
     /// When the current launch must have exited, once it is shutting down.
     shutdown: Option<Timestamp>,
     entries: OrdMap<EntryId, Entry>,
@@ -664,29 +662,9 @@ impl State {
             .extend(said.values.iter().map(Bytes::id).filter(|v| v == text));
     }
 
-    /// Fold what this build can read of a record it skips: where a span
-    /// begins, and what its [`Probation`] reads, so a build is judged by the
-    /// one before it even when its records hold words that one does not know. Who
-    /// connected a limb may be in a record it skipped too, so a limb is any
-    /// replica that is neither this brain nor one of Max's faces.
-    pub(crate) fn glimpse(&mut self, here: Time, clock: Timestamp, at: Time, glimpse: &Glimpsed) {
-        let by_limb = at.replica != here.replica && !self.faces.contains(&at.replica);
-        for (i, glanced) in glimpse.facts() {
-            match glanced {
-                Glanced::Launched => {
-                    let seq = Seq { n: here.n, i };
-                    self.launched(Mark { seq, at: clock }, None);
-                }
-                Glanced::Trial(trial) => self.probation.see(by_limb, trial),
-            }
-        }
-    }
-
-    /// A brain began deciding at `mark`, with a build this one reads the
-    /// [`Launched`] of, or not: a span begins either way.
-    fn launched(&mut self, mark: Mark, launched: Option<Launched>) {
+    /// A brain began deciding at `mark`.
+    fn launched(&mut self, mark: Mark, launched: Launched) {
         self.launch = Some((mark, launched));
-        self.probation = Probation::default();
         self.shutdown = None;
         // A connection belongs to the brain that made it.
         self.reach.clear();
@@ -857,10 +835,6 @@ impl State {
             return Err(Rejected::Author);
         }
         let mark = Mark::of(record);
-        if let Some(trial) = Trial::of(record.fact) {
-            self.probation
-                .see(matches!(record.by, Author::Limb(_)), trial);
-        }
         match record.fact {
             Fact::Launched(launched) => {
                 if let Launch::Relaunched { by: Some(call), .. } = launched.how
@@ -868,7 +842,7 @@ impl State {
                 {
                     return Err(Rejected::Unknown);
                 }
-                self.launched(mark, Some(launched.clone()));
+                self.launched(mark, launched.clone());
             }
             Fact::Shutdown { within } => {
                 if self.launch.is_none() {
@@ -2175,32 +2149,21 @@ impl State {
     }
 
     /// The brain process writing now, and where it began.
-    /// Its [`Launched`] is `None` when this build could not read it: a
-    /// newer build's, glimpsed.
-    pub fn launch(&self) -> Option<(Mark, Option<&Launched>)> {
+    pub fn launch(&self) -> Option<(Mark, &Launched)> {
         self.launch
             .as_ref()
-            .map(|(mark, launched)| (*mark, launched.as_ref()))
-    }
-
-    /// What the current launch has shown since it began: whether its build
-    /// is proven ([`Probation::verdict`]).
-    pub fn probation(&self) -> &Probation {
-        &self.probation
+            .map(|(mark, launched)| (*mark, launched))
     }
 
     /// The executable the current launch would start for `limb`, when the
-    /// limb is connected running another and the launch's build is proven:
-    /// it should exit once nothing it holds would die with it, so the next
-    /// attach starts this one. `None` while the build is on probation (a
-    /// build that goes back never moves a limb back), for a limb on the
-    /// launch's own build, one that did not say what it runs, or one the
+    /// limb is connected running another: it should exit once nothing it
+    /// holds would die with it, so the next attach starts this one. A launch
+    /// is written only once its build has passed the gate, so limbs move
+    /// with it at once, and back with a build that goes back. `None` for a
+    /// limb on the launch's own build, one that did not say what it runs, or one the
     /// launch has no executable for. A limb on a machine runs the executable
     /// the launch names `limb`; one from before, that of its plugin kind.
     pub fn superseded(&self, limb: LimbId) -> Option<BuildId> {
-        if !matches!(self.probation.verdict(), Verdict::Proven { .. }) {
-            return None;
-        }
         let Some(Reached {
             reach:
                 Reach::Connected {
@@ -2219,9 +2182,7 @@ impl State {
             },
             None => "limb",
         };
-        let (_, Some(launched)) = self.launch.as_ref()? else {
-            return None;
-        };
+        let (_, launched) = self.launch.as_ref()?;
         let wanted = *launched.limbs.get(executable)?;
         (wanted != *running).then_some(wanted)
     }

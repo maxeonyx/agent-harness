@@ -75,7 +75,7 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | `act` | A command that does what Max does at a tab (start a chat, Done, stop, abandon), for scripts and demos. | `crates/brain/examples/act.rs` |
 | Relaunch | Replacing a running brain with a new build: drain, start the new build on the same database, roll back if it fails. | `crates/limb-builds/src/relaunch.rs` |
 | Rehearsal | Starting the new build on a copy of the database before a relaunch, so a build that won't start changes nothing. | `rehearse` in `relaunch.rs` |
-| Candidate | A relaunch's one start of a new build on the live database: it writes nothing until its gate passes. | Not built: `build::Start` |
+| Candidate | A relaunch's one start of a new build on the live database: it writes nothing until its gate passes. | `build::Start`, `crates/brain/src/gate.rs` |
 | Gate | The pathways a candidate checks on the live database before it opens it; the rehearsal checks them on a copy first. | Not built: `build::Pathway` |
 
 ## The plan
