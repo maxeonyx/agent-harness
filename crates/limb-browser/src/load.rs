@@ -31,6 +31,9 @@ pub fn uncaught(url: &str, profile: &Path, settle: Duration) -> Result<Vec<Strin
             .arg("--remote-debugging-port=0")
             .arg(format!("--user-data-dir={}", profile.display()))
             .args(["--ignore-certificate-errors", "--no-first-run"])
+            // Without it the browser waits on the system keyring, and the
+            // page never loads.
+            .arg("--password-store=basic")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -84,6 +87,8 @@ pub fn uncaught(url: &str, profile: &Path, settle: Duration) -> Result<Vec<Strin
     load.recv_timeout(WITHIN)
         .map_err(|_| format!("{url} did not finish loading within {}s", WITHIN.as_secs()))?;
     thread::sleep(settle);
+    // Closed, it ends its own helper processes; the kill is the fallback.
+    let _ = cdp.call(None, "Browser.close", json!({}), WITHIN);
     drop(cdp);
     drop(browser);
     Ok(std::mem::take(&mut *crate::lock(&thrown)))
