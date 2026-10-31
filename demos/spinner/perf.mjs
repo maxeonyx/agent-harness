@@ -4,15 +4,20 @@
 // --phone is 412x915 at DPR 2.625, else 1280 x --height (900); --throttle slows the CPU N times, as
 // DevTools does. It prints the frame interval (mean, p95), frames, and the
 // main thread's busy time (task, script) per frame. --shot FILE saves a
-// screenshot, scrolled to the stress grid.
+// screenshot, scrolled to the stress grid. --lag instead drags the stress
+// grid up with a scripted touch gesture and prints, from screenshots taken
+// during it (the compositor's frames, as a screencast), how far one node's
+// ball trails the box it is drawn for.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import zlib from "node:zlib";
 
 const args = process.argv.slice(2);
 const flag = (name, d) => { const i = args.indexOf(name); return i < 0 ? d : args.splice(i, 2)[1]; };
 const phone = args.includes("--phone") && args.splice(args.indexOf("--phone"), 1);
+const lag = args.includes("--lag") && args.splice(args.indexOf("--lag"), 1);
 const throttle = +flag("--throttle", 1), secs = +flag("--secs", 5), shot = flag("--shot"), tall = flag("--height");
 const query = args[0] ?? "?n=300";
 const page = "file://" + path.resolve(path.dirname(new URL(import.meta.url).pathname), "metaballs.html") + query;
@@ -36,7 +41,9 @@ const waiting = new Map();
 browser.addEventListener("message", (e) => {
   const m = JSON.parse(e.data);
   if (m.id && waiting.has(m.id)) { waiting.get(m.id)(m); waiting.delete(m.id); }
+  if (m.method) onEvent(m);
 });
+let onEvent = () => {};
 const send = (method, params = {}, sessionId) => new Promise((ok) => {
   waiting.set(++id, ok);
   browser.send(JSON.stringify({ id, method, params, sessionId }));
@@ -49,6 +56,7 @@ await s("Emulation.setDeviceMetricsOverride", { width: size.width, height: size.
 await s("Emulation.setCPUThrottlingRate", { rate: throttle });
 await s("Page.navigate", { url: page });
 await new Promise((ok) => setTimeout(ok, 3000));
+if (lag) await measureLag();
 const metrics = async () => Object.fromEntries((await s("Performance.getMetrics")).metrics.map((m) => [m.name, m.value]));
 const before = await metrics();
 const r = await s("Runtime.evaluate", { awaitPromise: true, returnByValue: true, expression: `new Promise((ok) => {
@@ -65,6 +73,95 @@ if (shot) {
   await new Promise((ok) => setTimeout(ok, 500));
   fs.writeFileSync(shot, Buffer.from((await s("Page.captureScreenshot")).data, "base64"));
 }
-proc.kill();
-fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
-process.exit(0);
+done();
+
+function done() {
+  proc.kill();
+  fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
+  process.exit(0);
+}
+
+// The ball of a finished node (one green ball, still) against a magenta
+// outline on its box: in each screenshot, the ball's centre less the box's,
+// less the same at rest, is how far the ball trails.
+async function measureLag() {
+  await s("Runtime.evaluate", { expression: `(() => {
+    document.getElementById("stress").scrollIntoView();
+    const i = sessions.findIndex((ses, i) => ses.state === "done" && slots[i].closest(".cell")
+      && slots[i].getBoundingClientRect().top > innerHeight * .7
+      && slots[i].getBoundingClientRect().top < innerHeight * .85);
+    slots[i].style.outline = "2px solid #f0f"; sessions[i].pips = 0;
+  })()` });
+  await new Promise((ok) => setTimeout(ok, 1000));
+  const moved = [];
+  const offset = (data) => {
+    const img = png(Buffer.from(data, "base64"));
+    let top = Infinity, bottom = -1, left = Infinity, right = -1;
+    for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) {
+      const [r, g, b] = img.at(x, y);
+      if (r > 220 && g < 60 && b > 220) { top = Math.min(top, y); bottom = y; left = Math.min(left, x); right = Math.max(right, x); }
+    }
+    if (bottom < 0) return null;
+    let sum = 0, n = 0;
+    for (let y = Math.max(0, top - 80); y < Math.min(img.h, bottom + 80); y++) for (let x = left; x <= right; x++) {
+      const [r, g, b] = img.at(x, y);
+      if (Math.abs(r - 79) + Math.abs(g - 138) + Math.abs(b - 85) < 40) { sum += y; n++; }
+    }
+    if (n) moved.push((top + bottom) / 2 / size.dpr);
+    return n ? ((sum / n) - (top + bottom) / 2) / size.dpr : null;
+  };
+  await s("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+  const where = async () => (await s("Runtime.evaluate", { expression: "scrollY" })).result.value;
+  const y0 = await where();
+  const rest = offset((await s("Page.captureScreenshot")).data);
+  if (rest === null) throw new Error("no marked ball on screen");
+  // A finger dragging half the screen up over a second, a move every 16 ms.
+  const touch = (type, y) => s("Input.dispatchTouchEvent", { type, touchPoints: y === undefined ? [] : [{ x: size.width / 2, y }] });
+  const gesture = (async () => {
+    const from = size.height * .8, steps = 60;
+    await touch("touchStart", from);
+    for (let k = 1; k <= steps; k++) {
+      await new Promise((ok) => setTimeout(ok, 16));
+      await touch("touchMove", from - size.height / 2 * k / steps);
+    }
+    await touch("touchEnd");
+  })();
+  const frames = [];
+  onEvent = (m) => {
+    if (m.method !== "Page.screencastFrame") return;
+    frames.push(m.params.data);
+    s("Page.screencastFrameAck", { sessionId: m.params.sessionId });
+  };
+  await s("Page.startScreencast", { format: "png" });
+  await gesture;
+  await s("Page.stopScreencast");
+  console.log(`scrollY ${y0} -> ${await where()}`);
+  const trail = frames.map(offset).filter((o) => o !== null).map((o) => o - rest);
+  const abs = trail.map(Math.abs), mean = abs.reduce((a, b) => a + b, 0) / abs.length;
+  console.log(`${query} ${phone ? "phone" : "desktop"} x${throttle} lag: ball behind its box, css px, over ${trail.length} of ${frames.length} screencast frames `
+    + `during the drag (its box moving from ${moved[1]?.toFixed(0)} to ${moved.at(-1)?.toFixed(0)}): mean ${mean.toFixed(1)}, max ${Math.max(...abs).toFixed(1)}, `
+    + `${abs.filter((a) => a > 1).length} frames off by more than 1 px`);
+  done();
+}
+
+// An 8-bit RGB or RGBA PNG, as Chromium writes its screenshots.
+function png(buf) {
+  let w, h, ch, idat = [];
+  for (let o = 8; o < buf.length;) {
+    const len = buf.readUInt32BE(o), type = buf.toString("ascii", o + 4, o + 8), d = buf.subarray(o + 8, o + 8 + len);
+    if (type === "IHDR") { w = d.readUInt32BE(0); h = d.readUInt32BE(4); ch = d[9] === 6 ? 4 : 3; }
+    if (type === "IDAT") idat.push(d);
+    o += 12 + len;
+  }
+  const raw = zlib.inflateSync(Buffer.concat(idat)), stride = w * ch, px = Buffer.alloc(h * stride);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)], src = y * (stride + 1) + 1, row = y * stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= ch ? px[row + x - ch] : 0, b = y ? px[row - stride + x] : 0, c = x >= ch && y ? px[row - stride + x - ch] : 0;
+      const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+      const pred = [0, a, b, (a + b) >> 1, pa <= pb && pa <= pc ? a : pb <= pc ? b : c][f];
+      px[row + x] = raw[src + x] + pred;
+    }
+  }
+  return { w, h, at: (x, y) => px.subarray(y * stride + x * ch, y * stride + x * ch + 3) };
+}
