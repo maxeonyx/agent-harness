@@ -94,8 +94,8 @@ function entry(s, into, e, index, t, parent, only) {
   if (e.role === "user") {
     const by = e.by || [];
     let run = null; // Max's bubble or the mandate's card a block continues
-    // A compaction's carry keeps his words from what it replaced: his, but
-    // editing them would replace the carry.
+    // A compaction's carry keeps his words from what it replaced: the
+    // harness handing them back, so a note of his words, not a new turn.
     const carry = by.some((w) => w?.by === "compacted");
     blocks.forEach((b, k) => {
       const who = by[k] || { by: "harness" };
@@ -106,7 +106,14 @@ function entry(s, into, e, index, t, parent, only) {
       if (b.type === "image") { const img = el("img"); img.src = `data:${b.source?.media_type};base64,${b.source?.data}`; img.style.maxWidth = "100%"; into.append(img); return; }
       if (b.type !== "text" || who.by === "label") return;
       const text = b.text || "";
-      if (who.by === "max") {
+      if (who.by === "max" && carry) {
+        if (run) { run.text += `\n${text}`; run.el.lastChild.replaceWith(quiet(run.text)); return; }
+        run = { by: "max", text, el: el("div", "note kept") };
+        const w = el("span", "who", "Max wrote");
+        w.title = `Carried from the work it replaced; he wrote it at ${clock(who.at)}`;
+        run.el.append(w, quiet(text));
+        into.append(run.el);
+      } else if (who.by === "max") {
         if (run) { $(".bubble", run.el).textContent += `\n${text}`; return; }
         run = { by: "max", el: said(text, clock(who.at)) };
         // His message: edit it.
