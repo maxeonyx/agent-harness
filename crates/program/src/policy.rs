@@ -25,6 +25,15 @@ pub fn offer_at(window: u64) -> u64 {
 /// Requests that may fail in a row before the task fails.
 pub const GIVE_UP: u32 = 5;
 
+/// Whether a failed request's `status` says the request itself is wrong,
+/// so sending it again fails the same way: invalid (400), naming what does
+/// not exist (404), or too large (413). Anything else may pass on a retry:
+/// a network failure (no status), a rate limit (429), an overload (529) or
+/// another server error.
+pub fn rejected(status: Option<u16>) -> bool {
+    matches!(status, Some(400 | 404 | 413))
+}
+
 /// How long to wait before resending after `failures` failures in a row,
 /// when the provider did not say: 2, 4, 8, 16 seconds.
 pub fn backoff_ms(failures: u32) -> i64 {
