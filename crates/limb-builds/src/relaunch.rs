@@ -9,7 +9,8 @@
 //! database (`--db`), the port and its flags, and a relaunch starts the
 //! same command line in another build's directory. `NAME/build` beside
 //! the database links to the build a restart or a reboot runs: the last
-//! one to open the database.
+//! one to open the database. `NAME/previous` links to the one it took over
+//! from, the target of a `back` relaunch.
 //!
 //! The relaunch from the running build A onto a new build B
 //! ([`relaunch`]), each stage judged by A's code and by what any build
@@ -393,6 +394,7 @@ fn check(dir: &Path, build: &Path, copy: &Path, login: &[&str]) -> Result<String
     let mut child = Command::new(build.join("bin/harness-brain"))
         .arg("--check")
         .arg(copy)
+        .arg("--serve")
         .args(login)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -807,13 +809,19 @@ fn stage(clone: &Path, commit: &str, staging: &Path) -> Result<(), String> {
     run(Command::new("chmod").arg("-R").arg("a-w").arg(staging)).map(|_| ())
 }
 
-/// Delete the builds nothing uses: none a `NAME/build` links to, none a
-/// running process (a brain, or a limb that outlived its brain) runs from,
-/// and not the three newest of the rest.
+/// Delete the builds nothing uses: none a `NAME/build` or `NAME/previous`
+/// links to, none a running process (a brain, or a limb that outlived its
+/// brain) runs from, and not the three newest of the rest.
 fn prune(builds: &Path, say: &dyn Fn(&str)) {
     let mut used: Vec<PathBuf> = Vec::new();
-    let links = std::fs::read_dir(home()).into_iter().flatten().flatten();
-    used.extend(links.filter_map(|e| std::fs::canonicalize(e.path().join("build")).ok()));
+    let domains = std::fs::read_dir(home()).into_iter().flatten().flatten();
+    used.extend(
+        domains
+            .flat_map(|e| {
+                ["build", "previous"].map(|l| std::fs::canonicalize(e.path().join(l)).ok())
+            })
+            .flatten(),
+    );
     let procs = std::fs::read_dir("/proc").into_iter().flatten().flatten();
     used.extend(procs.filter_map(|e| std::fs::read_link(e.path().join("exe")).ok()));
     let mut unused: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(builds)
