@@ -9,7 +9,8 @@
 //! database (`--db`), the port and its flags, and a relaunch starts the
 //! same command line in another build's directory. `NAME/build` beside
 //! the database links to the build a restart or a reboot runs: the last
-//! one to open the database.
+//! one to open the database. `NAME/previous` links to the one it took over
+//! from, the target of a `back` relaunch.
 //!
 //! The relaunch from the running build A onto a new build B
 //! ([`relaunch`]), each stage judged by A's code and by what any build
@@ -25,6 +26,10 @@
 //!   W -->|"B's process ends"| Back["Went back: the link is A again,<br/>and A starts, skipping and logging<br/>what it cannot read"]
 //!   W -->|"B outlives the window"| Opened["Opened"]
 //! ```
+//!
+//! A rehearsal pathway the new build predates, by its `--help`, is skipped
+//! and said so, so that going back to an older build is never refused for
+//! what it never had.
 //!
 //! A relaunch is two-way when A folds everything B's scratch brains wrote:
 //! going back is then lossless. Otherwise it is one-way, and refused unless
@@ -276,7 +281,7 @@ fn prepare(
             Start::FLAG
         ));
     }
-    let skipped = rehearse(&build, &old, say)?;
+    let skipped = rehearse(&build, &help, &old, say)?;
     let one_way = match skipped.split_first() {
         None => String::new(),
         Some((first, rest)) => {
@@ -309,8 +314,15 @@ fn prepare(
 /// new one wrote, or why it failed, as `{pathway}: {why}` in the words of
 /// the program that failed. The directory is deleted once the build
 /// passes; when it fails it is kept, with the logs its words name, until
-/// the next rehearsal.
-fn rehearse(build: &Path, running: &Running, say: &dyn Fn(&str)) -> Result<Vec<String>, String> {
+/// the next rehearsal. A pathway the new build predates, by its `--help`
+/// ([`predates`]), is skipped and said so: going back to an older build is
+/// never refused for what it never had.
+fn rehearse(
+    build: &Path,
+    help: &str,
+    running: &Running,
+    say: &dyn Fn(&str),
+) -> Result<Vec<String>, String> {
     let dir = running.data().join("rehearsal");
     remove(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -319,14 +331,39 @@ fn rehearse(build: &Path, running: &Running, say: &dyn Fn(&str)) -> Result<Vec<S
         name(build),
         running.unit
     ));
-    let done = rehearse_in(&dir, build, running);
+    let commit = name(build);
+    let checks = |pathway: Pathway| {
+        let older = predates(help, pathway);
+        if older {
+            say(&format!("{pathway}: not checked: {commit} predates it"));
+        }
+        !older
+    };
+    let done = rehearse_in(&dir, build, running, &checks);
     if done.is_ok() {
         remove(&dir);
     }
     done
 }
 
-fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<Vec<String>, String> {
+/// Whether `build`, by its `--help`, is older than the rehearsal's
+/// `pathway`: than the flag or the line the rehearsal needs of it for that.
+fn predates(help: &str, pathway: Pathway) -> bool {
+    let needs = match pathway {
+        Pathway::Page => "--serve",
+        Pathway::RoundTrip(_) => "--limbs",
+        Pathway::SignIn => "signed in",
+        _ => return false,
+    };
+    !help.contains(needs)
+}
+
+fn rehearse_in(
+    dir: &Path,
+    build: &Path,
+    running: &Running,
+    checks: &dyn Fn(Pathway) -> bool,
+) -> Result<Vec<String>, String> {
     let commit = name(build);
     let login: Vec<&str> = running
         .login()
@@ -337,31 +374,33 @@ fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<Vec<String
     Store::open(&running.db)
         .and_then(|store| store.copy_to(&copy))
         .map_err(|e| format!("copying {}: {e}", running.db.display()))?;
-    let said = check(dir, build, &copy, &login)?;
+    let said = check(dir, build, &copy, &login, checks(Pathway::Page))?;
     // Both builds read the login alike.
-    let theirs = said.lines().find_map(|l| l.strip_prefix("signed in: "));
-    let ours = match running.login() {
-        Some(db) => Ok(Login::at(PathBuf::from(db))),
-        None => Login::home(),
-    }
-    .and_then(|login| login.signed_in())
-    .map(|signed_in| if signed_in { "yes" } else { "no" })
-    .map_err(|e| {
-        format!(
-            "{}: {} reading the login: {e}",
-            Pathway::SignIn,
-            running.commit
-        )
-    })?;
-    if theirs != Some(ours) {
-        return Err(format!(
-            "{}: {} reads the login as signed in: {ours}, and {commit} as {}",
-            Pathway::SignIn,
-            running.commit,
-            theirs.map_or("nothing: it printed no `signed in:` line".into(), |t| {
-                format!("signed in: {t}")
-            })
-        ));
+    if checks(Pathway::SignIn) {
+        let theirs = said.lines().find_map(|l| l.strip_prefix("signed in: "));
+        let ours = match running.login() {
+            Some(db) => Ok(Login::at(PathBuf::from(db))),
+            None => Login::home(),
+        }
+        .and_then(|login| login.signed_in())
+        .map(|signed_in| if signed_in { "yes" } else { "no" })
+        .map_err(|e| {
+            format!(
+                "{}: {} reading the login: {e}",
+                Pathway::SignIn,
+                running.commit
+            )
+        })?;
+        if theirs != Some(ours) {
+            return Err(format!(
+                "{}: {} reads the login as signed in: {ours}, and {commit} as {}",
+                Pathway::SignIn,
+                running.commit,
+                theirs.map_or("nothing: it printed no `signed in:` line".into(), |t| {
+                    format!("signed in: {t}")
+                })
+            ));
+        }
     }
     // A round trip through each build's limb, and the readback of what
     // each scratch brain wrote.
@@ -371,6 +410,9 @@ fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<Vec<String
         (Through::Own, build.join("bin")),
     ] {
         let pathway = Pathway::RoundTrip(through);
+        if !checks(pathway) {
+            continue;
+        }
         let at = dir.join(match through {
             Through::Running => "through-running",
             Through::Own => "through-own",
@@ -384,15 +426,22 @@ fn rehearse_in(dir: &Path, build: &Path, running: &Running) -> Result<Vec<String
     Ok(skipped)
 }
 
-/// Run the gate of `build` on `copy`, then load the page it serves
-/// read-only in headless Chrome, and stop it: what it printed, or why it
-/// failed. Its stderr is kept in `dir`.
-fn check(dir: &Path, build: &Path, copy: &Path, login: &[&str]) -> Result<String, String> {
+/// Run the gate of `build` on `copy`, then, with `page`, load the page it
+/// serves read-only in headless Chrome, and stop it: what it printed, or
+/// why it failed. Its stderr is kept in `dir`.
+fn check(
+    dir: &Path,
+    build: &Path,
+    copy: &Path,
+    login: &[&str],
+    page: bool,
+) -> Result<String, String> {
     let commit = name(build);
     let errors = dir.join("check.log");
     let mut child = Command::new(build.join("bin/harness-brain"))
         .arg("--check")
         .arg(copy)
+        .args(page.then_some("--serve"))
         .args(login)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -400,17 +449,26 @@ fn check(dir: &Path, build: &Path, copy: &Path, login: &[&str]) -> Result<String
         .spawn()
         .map_err(|e| format!("{commit}'s harness-brain --check: {e}"))?;
     let mut said = String::new();
-    let mut passed = false;
+    // A serving build says this line once it passes, and serves on: one
+    // from before `--serve` serves anyway. Any other exits once its gate
+    // passed or failed.
+    let mut serving = false;
     if let Some(out) = child.stdout.take() {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
             said.push_str(&line);
             said.push('\n');
             if line.starts_with("gate: passed;") {
-                passed = true;
+                serving = true;
                 break;
             }
         }
     }
+    let stop = |child: &mut std::process::Child| {
+        // SIGTERM, which a checking brain ends at.
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        let _ = child.wait();
+    };
+    let passed = serving || (!page && child.wait().is_ok_and(|status| status.success()));
     if !passed {
         let _ = child.wait();
         let why = std::fs::read_to_string(&errors).unwrap_or_default();
@@ -418,6 +476,12 @@ fn check(dir: &Path, build: &Path, copy: &Path, login: &[&str]) -> Result<String
             "{commit} failed its gate on a copy of the database:\n{}",
             why.trim()
         ));
+    }
+    if !page {
+        if serving {
+            stop(&mut child);
+        }
+        return Ok(said);
     }
     // The port is the face's line's last word.
     let port = said
@@ -431,9 +495,7 @@ fn check(dir: &Path, build: &Path, copy: &Path, login: &[&str]) -> Result<String
         &dir.join("chrome"),
         PAGE_SETTLES,
     );
-    // SIGTERM, which a checking brain ends at.
-    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-    let _ = child.wait();
+    stop(&mut child);
     let pathway = Pathway::Page;
     match page {
         Ok(thrown) if thrown.is_empty() => Ok(said),
@@ -807,13 +869,19 @@ fn stage(clone: &Path, commit: &str, staging: &Path) -> Result<(), String> {
     run(Command::new("chmod").arg("-R").arg("a-w").arg(staging)).map(|_| ())
 }
 
-/// Delete the builds nothing uses: none a `NAME/build` links to, none a
-/// running process (a brain, or a limb that outlived its brain) runs from,
-/// and not the three newest of the rest.
+/// Delete the builds nothing uses: none a `NAME/build` or `NAME/previous`
+/// links to, none a running process (a brain, or a limb that outlived its
+/// brain) runs from, and not the three newest of the rest.
 fn prune(builds: &Path, say: &dyn Fn(&str)) {
     let mut used: Vec<PathBuf> = Vec::new();
-    let links = std::fs::read_dir(home()).into_iter().flatten().flatten();
-    used.extend(links.filter_map(|e| std::fs::canonicalize(e.path().join("build")).ok()));
+    let domains = std::fs::read_dir(home()).into_iter().flatten().flatten();
+    used.extend(
+        domains
+            .flat_map(|e| {
+                ["build", "previous"].map(|l| std::fs::canonicalize(e.path().join(l)).ok())
+            })
+            .flatten(),
+    );
     let procs = std::fs::read_dir("/proc").into_iter().flatten().flatten();
     used.extend(procs.filter_map(|e| std::fs::read_link(e.path().join("exe")).ok()));
     let mut unused: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(builds)

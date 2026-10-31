@@ -250,7 +250,7 @@ const SOURCE: &str = env!("HARNESS_SOURCE");
 /// [`harness_provider::SCRIPTED`].
 const USAGE: &str = "\
 usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR] [--sample WAV] [--model MODEL[/EFFORT]] [--page DIR] [--limbs DIR]
-       harness-brain --check DB [--login DB] [--roles DIR] [--port PORT]
+       harness-brain --check DB [--serve] [--login DB] [--roles DIR] [--port PORT]
        harness-brain --version
 
   --db DB          the database; a new one is made if none is there
@@ -281,8 +281,10 @@ usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR
                    using a tool, bind the port (any, unless named) and serve
                    the face read-only; print `signed in: yes` or `no` as it
                    reads the login, each pathway that passed, and fail with a
-                   line for each that did not (a few real tokens); once it
-                   passes, serve read-only until SIGTERM
+                   line for each that did not (a few real tokens); exit 0
+                   once it passes
+  --serve          with --check, once it passes, keep serving read-only
+                   until SIGTERM, saying `gate: passed; serving`
   --version        print the commit it was built from
   --help           print this
 
@@ -337,6 +339,7 @@ fn run() -> Result<(), Failed> {
     let mut args = std::env::args().skip(1);
     let (mut db, mut port, mut roles, mut sample, mut model) = (None, None, None, None, None);
     let (mut page, mut login, mut check, mut start) = (None, None, None, Start::Installed);
+    let mut keep_serving = false;
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
@@ -352,6 +355,7 @@ fn run() -> Result<(), Failed> {
             "--page" => page = Some(PathBuf::from(value()?)),
             "--login" => login = Some(Login::at(PathBuf::from(value()?))),
             "--check" => check = Some(PathBuf::from(value()?)),
+            "--serve" => keep_serving = true,
             "--limbs" => {
                 let _ = process::LIMBS.set(PathBuf::from(value()?));
             }
@@ -455,6 +459,9 @@ fn run() -> Result<(), Failed> {
     };
     if check.is_some() {
         gate::gate(&db, &client, roles.as_deref(), port, passed, serve)?;
+        if !keep_serving {
+            return Ok(());
+        }
         outln!("gate: passed; serving read-only until stopped");
         loop {
             thread::park();
@@ -505,15 +512,26 @@ fn run() -> Result<(), Failed> {
 
 /// Point the domain's installed link, `build` beside the database `db`, at
 /// this build's directory, in one step: a restart of the domain runs this
-/// build from now on.
+/// build from now on. The build it named before, if another, is linked as
+/// `previous`, so that pruning keeps it for a way back.
 fn install(db: &Path) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("the brain's own executable: {e}"))?;
     let build = (exe.parent().and_then(Path::parent))
         .ok_or(format!("{} is in no build's bin/", exe.display()))?;
     let at = db.with_file_name("build");
+    if let Ok(before) = std::fs::read_link(&at)
+        && before != build
+    {
+        link(&db.with_file_name("previous"), &before)?;
+    }
+    link(&at, build)
+}
+
+/// Point `at` to `to`, in one step.
+fn link(at: &Path, to: &Path) -> Result<(), String> {
     let staging = at.with_extension("new");
     let _ = std::fs::remove_file(&staging);
-    std::os::unix::fs::symlink(build, &staging)
-        .and_then(|()| std::fs::rename(&staging, &at))
+    std::os::unix::fs::symlink(to, &staging)
+        .and_then(|()| std::fs::rename(&staging, at))
         .map_err(|e| format!("the installed link {}: {e}", at.display()))
 }
