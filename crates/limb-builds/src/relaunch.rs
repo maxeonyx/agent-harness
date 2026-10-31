@@ -449,21 +449,26 @@ fn check(
         .spawn()
         .map_err(|e| format!("{commit}'s harness-brain --check: {e}"))?;
     let mut said = String::new();
-    let mut passed = false;
+    // A serving build says this line once it passes, and serves on: one
+    // from before `--serve` serves anyway. Any other exits once its gate
+    // passed or failed.
+    let mut serving = false;
     if let Some(out) = child.stdout.take() {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
             said.push_str(&line);
             said.push('\n');
-            if page && line.starts_with("gate: passed;") {
-                passed = true;
+            if line.starts_with("gate: passed;") {
+                serving = true;
                 break;
             }
         }
     }
-    if !page {
-        // It exits once the gate has passed, or failed.
-        passed = child.wait().is_ok_and(|status| status.success());
-    }
+    let stop = |child: &mut std::process::Child| {
+        // SIGTERM, which a checking brain ends at.
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        let _ = child.wait();
+    };
+    let passed = serving || (!page && child.wait().is_ok_and(|status| status.success()));
     if !passed {
         let _ = child.wait();
         let why = std::fs::read_to_string(&errors).unwrap_or_default();
@@ -473,6 +478,9 @@ fn check(
         ));
     }
     if !page {
+        if serving {
+            stop(&mut child);
+        }
         return Ok(said);
     }
     // The port is the face's line's last word.
@@ -487,9 +495,7 @@ fn check(
         &dir.join("chrome"),
         PAGE_SETTLES,
     );
-    // SIGTERM, which a checking brain ends at.
-    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-    let _ = child.wait();
+    stop(&mut child);
     let pathway = Pathway::Page;
     match page {
         Ok(thrown) if thrown.is_empty() => Ok(said),
