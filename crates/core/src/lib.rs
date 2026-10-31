@@ -286,6 +286,27 @@
 //!   Settled["CallEvent::Settled<br/>Completed, Failed, Refused,<br/>Interrupted or Unknown"]
 //! ```
 //!
+//! # Legs: the map's graph
+//!
+//! A task's context is one [leg](context::Leg) until one of four moments begins another; ordinary turns, synchronous tool calls and Max's own messages never do. The fold keeps each task's legs ([`state::State::legs`]) as the facts that begin them apply, so nothing new is stated and a restart rebuilds them. Each arrow below points from the newer leg back to what it depends on ([`context::Dep`]). A background call that is not a spawn is a [`context::Work`], hanging from the leg that started it.
+//!
+//! ```mermaid
+//! ---
+//! title: "Legs: the four ways one begins, and what it depends on"
+//! ---
+//! flowchart BT
+//!   source["the source's leg, or the spawner's<br/>at the spawn's response"]
+//!   start["Began::Start<br/>TaskEvent::Created"] -->|"a fork, resume, aside or member"| source
+//!   before["the leg holding the head"]
+//!   carry["Began::Carry<br/>Move::Compact, at its carry"] -->|"at Compacted::from"| before
+//!   join["Began::Join<br/>the first request rendering their results"] -->|"at the request's base"| before
+//!   join -->|"at each one's head"| members["each member's head leg"]
+//!   join -->|"Dep::Work"| work["a background call"]
+//!   work -->|"at the response that started it"| before
+//!   new["Began::Version, new<br/>the first diverging entry after Move::Back"] -->|"at the split point"| held["the leg holding where Max moved back to"]
+//!   old["Began::Version, old<br/>the stretch it left, split off"] -->|"at the split point"| held
+//! ```
+//!
 //! # Left to the brain
 //!
 //! Policies, not model: turning role files (read by the brain's `roles`

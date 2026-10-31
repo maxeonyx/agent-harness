@@ -9,6 +9,7 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | browser | a chat hands a browser agent an expense claim in real pages; the tab is passed to Max, who stops it | Sonnet low | about 10 requests, under 1 min |
 | cancel | abandoning tasks (with time to tidy, and past a deadline), Ctrl-C once and twice, a worker passed to Max, a systemd restart, and what still runs after each | scripted (`MODEL=sonnet/low`) | free, 3 min |
 | chat-engineer | a chat in a workspace directory starts an engineer `from` the clone there, which commits in its own clone made beside it | Sonnet low | 3 requests, under 1 min |
+| chat-spinner | a scripted chat runs a tool, then streams slowly: the end of its log shows its blob while it works, and the blob goes when it waits on Max; its corner is its name and a status dot; leaves the brain up | scripted | free, 40 s |
 | chat-fresh | a chat in a plain directory hands a fresh `chat` a task: it works in the same directory, no clone; a role it cannot start is refused, naming the roles it can | scripted | free, 20 s |
 | chat-moves | retry, a reply's versions, going back, and a retry that gave the same words; leaves the brain up to try edit and back | scripted | free, 30 s |
 | composer | the composer: stacked dictate and send with the scrollbar at the box's edge, the one model and effort pill with its menus, styled hints; leaves the brain up | scripted | free, 30 s |
@@ -18,6 +19,7 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | face-controls | pause, park, resume, interrupt, rank, focus and abandon on a live run, driven as a tab drives them (Rust example; it owns its brain process) | Sonnet low | a few dozen requests, 1.5 min |
 | home | Max's everyday harness: `dev/serve home 4320`, a long-lived brain on his home database | the roles' own | what he does in it |
 | image-limit | 21 images in one request, one 3600 px wide: refused as stored (a 400), then read through the harness, which shrinks it, and the agent reads its text | Sonnet low (and one Haiku request) | about 22 requests, 1 min |
+| legs | each task's legs in `/view`, the map's graph to be: a spawn's join, a compaction, an edit's two versions, a background call's join and a fork; then a kill -9 and relaunch gives identical legs | scripted | free, 20 s |
 | limbs-per-machine | four chats in three directories, one nested, run by one limb process with a systemd slice per agent: a write in the nested directory is a notice to the other chat, stopping a chat ends its `setsid` children, and a bad branch makes one agent wait with git's words while the others carry on | scripted | free, 30 s |
 | limb-workspace | the workspace limb's tools run as calls, with the demo playing the brain (`cargo run -q -p harness-limb-workspace --example demo`) | none | free, seconds |
 | reboot | `dev/serve` makes a brain a durable, enabled user unit: it comes back from its unit file alone, as at boot, and after a SIGKILL | scripted | free, 30 s (a release build if HEAD has none) |

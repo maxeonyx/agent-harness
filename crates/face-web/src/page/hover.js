@@ -100,7 +100,7 @@ export function fillTip() {
     const place = t.workdir;
     const mode = t.mode === "user-facing" ? "chat" : t.mode === "standing" ? "standing" : null;
     const what = [t.role, mode !== t.role && mode].filter(Boolean).join(" ");
-    const n = t.compactions;
+    const n = (t.legs || []).filter((l) => l.began === "carry").length;
     const facts = [what && what[0].toUpperCase() + what.slice(1), t.origin === "fork" && "Forked", n && `Compacted ${n === 1 ? "once" : `${n} times`}`,
       fc && fc.tasks.length > 1 && `${fc.tasks.length} tasks`, t.tokens && !isDone(t) && `${kTokens(t.tokens.context)} of ${kTokens(t.window)} context`].filter(Boolean);
     if (facts.length) { const f = el("div", "facts"); f.append(...facts.map((x) => el("span", null, x))); lines.push(f); }
