@@ -4,7 +4,7 @@
 # desktop: while it works, its log ends in its blob, big (the gear for
 # the tool, the Claude mark while streaming, a disk for each piece of
 # data), and the running tool's row turns a small gear a tooth at a time.
-# Scroll up: the blob shrinks onto a disc docked above the entry box, and
+# Scroll up: the blob shrinks to hover, shadowed, above the entry box, and
 # a tap on it goes back to the bottom. It goes when the chat waits on you.
 # The chat's top-left corner is its name and a dot in its state's colour.
 # The brain stays up.

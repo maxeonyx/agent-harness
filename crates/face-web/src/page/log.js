@@ -697,9 +697,9 @@ function renderTail(s, t) {
 // While it works, the log ends in its blob (`blobs.js`): what it waits on,
 // and a disk for each piece of data. It sits big below the last entry and
 // scrolls with the log; scrolled past, it stays docked small above the
-// entry box on a disc, standing in for Go to bottom: a tap goes there. The
+// entry box with a shadow, standing in for Go to bottom: a tap goes there. The
 // dock is sticky, so the compositor moves it with the scroll, and the
-// blob's size, place and disc follow how far the end is below.
+// blob's size, place and shadow follow how far the end is below.
 const BIG = 128, SMALL = 56, DOCK = BIG + 24, DOCKED = SMALL, TRAVEL = DOCK - DOCKED, BLOB_STATE = {
   model: (w) => (w.streaming ? "streaming" : "first"), calls: () => "tools", harness: () => "brain",
   starting: () => "starting", listening: () => "listening",
@@ -730,7 +730,7 @@ function fitBlob() {
   if (!blobBox || dock.hidden) return;
   const f = Math.min(1, Math.max(0, below() / TRAVEL)), size = BIG + (SMALL - BIG) * f, y = DOCK / 2 + (DOCKED - DOCK) / 2 * f;
   blobBox.style.transform = `translate(-50%, -50%) translateY(${y}px) scale(${size / BIG})`;
-  blobBox.style.setProperty("--docked", f);
+  dock.style.setProperty("--docked", f);
   blobs.moved();
 }
 const below = () => scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;

@@ -222,7 +222,7 @@
      box the scroll scales (`log.js`); only the blob takes a tap. */
   .dock { position: sticky; margin: 0 auto; pointer-events: none; z-index: 2; }
   .dock .blob { position: absolute; left: 50%; top: 0; border-radius: 50%; pointer-events: auto; cursor: pointer; }
-  .dock .blob::before { content: ""; position: absolute; inset: 15%; border-radius: 50%; background: var(--white); box-shadow: 0 6px 18px rgba(40, 30, 20, .15); opacity: var(--docked); }
+  .dock > div:not(.blob) { filter: drop-shadow(0 3px 5px rgba(40, 30, 20, calc(.35 * var(--docked, 0)))); }
   .exact-entry { margin: 0 0 1em; }
   .exact-entry .who { font: 600 12px var(--sans); color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }
