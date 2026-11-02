@@ -7,7 +7,7 @@
 # Pips compacts seven times.
 # Open the link it prints, on the phone and the desktop, and watch:
 # - Waits's planned join, under it, is a hollow grey blob with a dotted
-#   outline and a 2 in it; the chat's own blob, opened, is purple.
+#   outline and a 3 in it (watch, slow-1, slow-2); the chat's own blob, opened, is purple.
 # - quick, finished, is a dot still joined to the planned join by a dotted line.
 # - both asides are green dots, each joined to the planned join by a dotted line.
 # - watch, running, is a gear on a solid line; nap, finished, a faint small dot on a faint line.
