@@ -1,9 +1,9 @@
 import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
-import { act } from "./tab.js";
+import { act, can } from "./tab.js";
 import { byId, glyph, isDone, look, order, shortName, stateOf, view } from "./map.js";
 import { trouble } from "./draw.js";
 import { go, logState } from "./card.js";
-import { editMessage, modelName, say } from "./compose.js";
+import { dictate, dictation, editMessage, modelName, say } from "./compose.js";
 import { layer, session } from "./blobs.js";
 
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
@@ -24,6 +24,8 @@ const versionsOf = (task) => getJson(`/versions/${task}`, `loading the versions 
 export async function renderLog(t) {
   const s = logState;
   if (!s || s.id !== t.id) return;
+  // A chat just opened: its own blob at once, not the last chat's while its log loads.
+  if (!dock.hidden && blobTask !== t.id) showBlob(t);
   const seen = `${t.head} ${t.ended}`;
   if (s.seen !== seen) {
     s.seen = seen;
@@ -737,7 +739,7 @@ function renderTail(s, t) {
   const parts = [];
   if (t.waiting?.kind === "model") parts.push(followModel(t.waiting.call));
   else stopModel();
-  showBlob(t, AT_WORK.has(t.waiting?.kind) && stateOf(t));
+  showBlob(t);
   // Not read yet: dashed, until the request that reads it.
   for (const p of t.pending || []) {
     const when = `${clock(p.at)}, not read yet`;
@@ -755,34 +757,39 @@ function renderTail(s, t) {
   }
 }
 
-// While it works, the log ends in its blob (`blobs.js`): what it waits on,
-// and a disk for each piece of data. It sits big below the last entry and
-// scrolls with the log; scrolled past, it stays docked small above the
-// entry box with a shadow, standing in for Go to bottom: a tap goes there. The
-// dock is sticky, so the compositor moves it with the scroll, and the
-// blob's size, place and shadow follow how far the end is below.
+// The log ends in its blob (`blobs.js`): what it waits on, and a disk for
+// each piece of data; still once the chat is idle. It sits big below the
+// last entry and scrolls with the log; scrolled past, it stays docked small
+// above the entry box with a shadow, and a tap goes to the bottom. The dock
+// is sticky, so the compositor moves it with the scroll, and the blob's
+// size, place and shadow follow how far the end is below. While the chat
+// waits on Max a tap also starts dictation, and while he dictates it pulses
+// with his voice and a tap stops it.
 const BIG = 128, SMALL = 56, DOCK = BIG + 24, DOCKED = SMALL, TRAVEL = DOCK - DOCKED;
-const AT_WORK = new Set(["model", "calls", "harness", "starting", "listening"]);
 const blobSession = session(), dock = $(".scroll > .dock", panel);
 dock.style.cssText = `width: ${DOCK}px; height: ${DOCK}px; bottom: ${-TRAVEL}px`;
 let blobs, blobBox = null, blobTask = null;
-function showBlob(t, shape) {
-  if (shape && blobs === undefined) blobs = layer(dock);
-  const shown = !!(shape && blobs);
-  dock.hidden = !shown;
-  if (shown) {
-    if (!blobBox) {
-      blobBox = blobs.add(BIG, blobSession);
-      blobBox.title = "Go to bottom";
-      blobBox.onclick = toBottom;
-      dock.append(blobBox);
-    }
-    blobSession.letter = glyph(t);
-    blobSession.set(shape, blobTask !== t.id);
-    blobTask = t.id;
+function showBlob(t) {
+  if (blobs === undefined) blobs = layer(dock);
+  dock.hidden = !blobs;
+  if (!blobs) return;
+  if (!blobBox) {
+    blobBox = blobs.add(BIG, blobSession);
+    blobBox.onclick = () => {
+      toBottom();
+      if (dictation || (blobSession.state === "max" && can.dictation)) dictate(false);
+    };
+    dock.append(blobBox);
   }
+  const shape = stateOf(t);
+  blobBox.title = shape === "max" && can.dictation ? "Go to bottom and dictate" : "Go to bottom";
+  blobSession.letter = glyph(t);
+  blobSession.set(shape, blobTask !== t.id);
+  blobTask = t.id;
   fitBlob();
 }
+// How loud Max is while he dictates, 0 to 1; null when he is not.
+export const hear = (level) => blobSession.hear(level);
 // From big in the middle of the dock (the end in view) to small at its top
 // (the end a dock's travel below), in step with the scroll.
 function fitBlob() {
@@ -824,15 +831,9 @@ function stick(change) {
   const atBottom = following() || logState?.follow;
   change();
   if (atBottom) { scrollEl.scrollTop = scrollEl.scrollHeight; if (logState) logState.follow = false; }
-  jumped();
-}
-// Go to bottom shows while the end is out of view, unless the blob does.
-function jumped() {
-  $(".jump", panel).hidden = below() < 80 || !dock.hidden;
   fitBlob();
 }
-scrollEl.addEventListener("scroll", () => { following(); jumped(); });
-$(".jump", panel).onclick = toBottom;
+scrollEl.addEventListener("scroll", () => { following(); fitBlob(); });
 
 // A request streaming, or a command printing: neither is a fact. Each
 // arrives on the link as live pieces, all of them again after a reconnect.

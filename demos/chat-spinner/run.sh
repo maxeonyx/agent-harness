@@ -5,7 +5,9 @@
 # the tool, the Claude mark while streaming, a disk for each piece of
 # data), and the running tool's row turns a small gear a tooth at a time.
 # Scroll up: the blob shrinks to hover, shadowed, above the entry box, and
-# a tap on it goes back to the bottom. It goes when the chat waits on you.
+# a tap on it goes back to the bottom. When the chat waits on you the blob
+# stays, still, showing the mic: a tap on it also starts dictation, and
+# the blob pulses with your voice; a tap on it or on the box's mic stops it.
 # The chat's top-left corner is its name and a dot in its state's colour.
 # The brain stays up.
 set -euo pipefail

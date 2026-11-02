@@ -61,7 +61,8 @@ const WOB = .025;
 const IDLE = { r: .17, g: 0 }, ACTIVE = { r: .42, g: -.05 };
 
 // A state: which ball is active, the centre's radius, the idle satellites'
-// gap if not IDLE's, and its colours.
+// gap if not IDLE's, and its colours. A `still` state waits on something
+// outside the agent: its blob does not wobble, and settles.
 export const STATES = {
   first:     { active: "model", centre: .3, col: [tint(C.working, .14), C.working, C.working] },
   streaming: { active: "model", centre: .3, col: [tint(C.working, .22), C.working, C.working] },
@@ -69,11 +70,11 @@ export const STATES = {
   tools:     { active: "tools", centre: .3, col: [tint(C.working, .13), C.working, C.working] },
   listening: { active: "tools", centre: .34, size: .32, col: [tint(C.working, .06), C.working, C.working] },
   children:  { active: "tools", centre: .34, size: .32, col: [tint(C.others, .08), C.others, C.others] },
-  max:       { active: "max", centre: .3, col: [C.yours, C.yours, C.paper] },
+  max:       { active: "max", centre: .3, still: true, col: [C.yours, C.yours, C.paper] },
   held:      { active: "model", centre: .32, size: .36, still: true, col: [tint(C.red, .12), C.red, C.red] },
   starting:  { active: null, centre: .4, col: [C.paper, C.working, C.working] },
-  paused:    { active: null, centre: .48, merged: true, col: [[233, 229, 217], C.faint, C.muted] },
-  done:      { active: null, centre: .48, merged: true, col: [C.green, C.green, C.paper] },
+  paused:    { active: null, centre: .48, merged: true, still: true, col: [[233, 229, 217], C.faint, C.muted] },
+  done:      { active: null, centre: .48, merged: true, still: true, col: [C.green, C.green, C.paper] },
 };
 const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
 
@@ -81,18 +82,25 @@ const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
 // role letter, shared by every blob of it. Going from one satellite straight
 // to another, it shows the brain for a moment, so the growth passes through
 // the centre; `jump` goes straight there, for a blob now showing another
-// session.
+// session. In a still state its blob settles and stops moving, and stops
+// the frames once nothing else moves; while Max dictates, its centre pulses
+// with `voice`, his level from 0 to 1 (null when he is not dictating).
 export function session(state = "starting") {
-  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", lastPacket: 0,
+  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", lastPacket: 0, voice: null, stirred: 0,
     shown(now) { return now < this.via ? "brain" : this.state; },
     set(next, jump = false) {
       if (next === this.state && !jump) return;
       const now = performance.now(), a = satOf(this.shown(now)), b = satOf(next);
       this.via = !jump && a && b && a !== b ? now + 260 : 0;
-      this.state = next; this.since = now;
+      this.state = next; this.since = this.stirred = now;
+      wake();
     },
-    packet() { this.lastPacket = performance.now(); } };
+    hear(level) { this.voice = level; this.stirred = performance.now(); wake(); },
+    packet() { this.lastPacket = performance.now(); },
+    // Whether its blob may still be moving.
+    moving(now) { return !STATES[this.state].still || this.voice !== null || now - this.stirred < SETTLE || now - this.lastPacket < DISK_MS; } };
 }
+const SETTLE = 2000;
 
 // Icons, 24x24, as Path2D. The Claude mark is Anthropic's (via Simple Icons);
 // the gear and microphone are Lucide's (ISC).
@@ -380,11 +388,13 @@ function longestLoop(n, lv) {
   return bestN;
 }
 
-// The compaction dots on the track (the outline offset outward): the first at
-// twelve o'clock, then clockwise, each the pitch further along the track and
-// at least the pitch away, in a straight line, from every dot before it, so a
-// neck in the blob doesn't bunch them. Few dots keep the pitch; many shrink it
-// to share the track. Into dotX, dotY; returns how many.
+// The compaction dots on the track (the outline offset outward), at most
+// MAXDOTS of them: the first at three o'clock, clear of the lines that enter
+// a map node from above, then clockwise, each the pitch further along the
+// track and at least the pitch away, in a straight line, from every dot
+// before it, so a neck in the blob doesn't bunch them. When they don't all
+// fit so, they share the whole track evenly instead. Into dotX, dotY;
+// returns how many.
 const MAXDOTS = 64, dotX = new Float32Array(MAXDOTS), dotY = new Float32Array(MAXDOTS);
 const wX = new Float32Array(TE + 1), wY = new Float32Array(TE + 1), wS = new Float32Array(TE + 1);
 let pn = 0, flip = false, seg = 0, qx = 0, qy = 0;
@@ -403,13 +413,13 @@ function placeDots(n, count, pitch) {
   let a = 0;
   for (let k = 0; k < n; k++) { const l = (k + 1) % n; a += L[2 * k] * L[2 * l + 1] - L[2 * l] * L[2 * k + 1]; }
   pn = n; flip = a < 0;
-  // Start where the track crosses the upward vertical through the centre.
-  let start = 0, sf = 0, top = Infinity;
+  // Start where the track crosses the rightward horizontal through the centre.
+  let start = 0, sf = 0, right = -Infinity;
   for (let k = 0; k < n; k++) {
     const ax = L[2 * at(k)], ay = L[2 * at(k) + 1], bx = L[2 * at(k + 1)], by = L[2 * at(k + 1) + 1];
-    if ((ax < 0) !== (bx < 0)) {
-      const f = ax / (ax - bx), y = ay + (by - ay) * f;
-      if (y < top) { top = y; start = k; sf = f; }
+    if ((ay < 0) !== (by < 0)) {
+      const f = ay / (ay - by), x = ax + (bx - ax) * f;
+      if (x > right) { right = x; start = k; sf = f; }
     }
   }
   // Arc length from the start, walking the polyline.
@@ -422,17 +432,20 @@ function placeDots(n, count, pitch) {
     wX[k] = x; wY[k] = y; wS[k] = s;
     px = x; py = y;
   }
-  const p = Math.min(pitch, s / count), want = Math.min(count, MAXDOTS);
+  const drawn = Math.min(count, MAXDOTS);
   let u = 0, out = 0;
   seg = 0;
   along(n + 1, 0); dotX[out] = qx; dotY[out++] = qy;
-  while (out < want) {
-    u += p; along(n + 1, u);
-    while (u < s && near(out, p)) { u += p * .05; along(n + 1, u); }
-    if (u >= s - p * .5) break;
+  while (out < drawn) {
+    u += pitch; along(n + 1, u);
+    while (u < s && near(out, pitch)) { u += pitch * .05; along(n + 1, u); }
+    if (u >= s) break;
     dotX[out] = qx; dotY[out++] = qy;
   }
-  return out;
+  if (out === drawn) return out;
+  seg = 0;
+  for (let d = 0; d < drawn; d++) { along(n + 1, d * s / drawn); dotX[d] = qx; dotY[d] = qy; }
+  return drawn;
 }
 // The track and the dots' pitch, in blob units, laid out as on a 260 px blob
 // whatever the size: a small blob's dots are a scaled copy of a big one's,
@@ -460,7 +473,7 @@ function program(gl, vs, fs) {
 }
 
 // ─── The frame loop, shared by every layer ─────────────────────────────────
-// It runs while some layer shows a blob, and stops when none does.
+// It runs while some layer shows a blob that moves, and stops when none does.
 const layers = [], steps = new Set();
 let running = false, last = 0;
 function wake() {
@@ -469,12 +482,14 @@ function wake() {
   requestAnimationFrame(frame);
 }
 function frame(now) {
-  const dt = Math.min(1 / 30, (now - last) / 1000);
+  // A frame's time can come before the wake that asked for it, by as long as
+  // the task that woke the loop ran: never a step back, which flings the springs.
+  const dt = clamp((now - last) / 1000, 0, 1 / 30);
   last = now;
   for (const s of steps) if (!s(now)) steps.delete(s);
-  let shown = steps.size > 0;
-  for (const l of layers) shown = l.draw(now, dt) || shown;
-  if (shown) requestAnimationFrame(frame);
+  let moving = steps.size > 0;
+  for (const l of layers) moving = l.draw(now, dt) || moving;
+  if (moving) requestAnimationFrame(frame);
   else running = false;
 }
 export function onFrame(step) { steps.add(step); wake(); }
@@ -611,7 +626,7 @@ export function layer(host) {
       if (dirty) measure();
       const dpr = Math.min(3, devicePixelRatio || 1), W = Math.round(host.clientWidth * dpr), H = Math.round(host.clientHeight * dpr);
       if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
-      let drawn = 0, ndots = 0, shown = false;
+      let drawn = 0, ndots = 0, moving = false;
       const kc = 1 - Math.exp(-dt / .18);
       for (let i = 0; i < count; i++) {
         let x, y;
@@ -623,7 +638,7 @@ export function layer(host) {
           if (a.DOCX[i] < -1e8) continue;
           x = a.DOCX[i] * dpr; y = a.DOCY[i] * dpr;
         }
-        shown = true;
+        if (sessions[i].moving(now)) moving = true;
         const px = a.SIZE[i], size = px * dpr;
         if (x + size < 0 || y + size < 0 || x > W || y > H) continue;
         drawn = this.blob(i, drawn, now, dt, kc, x, y, size);
@@ -666,7 +681,7 @@ export function layer(host) {
         gl.bindVertexArray(dotVao);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, ndots);
       }
-      return shown;
+      return moving;
     },
     // Blob i, animated a step and written as instance `o`; returns the next.
     blob(i, o, now, dt, kc, x, y, size) {
@@ -674,7 +689,7 @@ export function layer(host) {
       const s = sessions[i], name = s.shown(now), st = STATES[name], t = (now - s.since) / 1000, px = a.SIZE[i];
 
       // The balls: each radius and gap springs towards the state's.
-      pull(R, RV, 4 * i, st.centre, dt, 17);
+      pull(R, RV, 4 * i, st.centre + (s.voice === null ? 0 : .04 + .2 * s.voice), dt, 17);
       const c0 = R[4 * i];
       for (let k = 0; k < 3; k++) {
         let gr = IDLE.r, gg = st.gap ?? IDLE.g;

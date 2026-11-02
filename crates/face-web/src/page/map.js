@@ -90,13 +90,14 @@ const ancestry = (t) => { const out = []; for (let p = parentOf(t); p && byId[p]
 // What pauses a task: itself, or the nearest paused task above it.
 export const heldBy = (t) => !t.pause ? null : t.pause.by === t.id ? t : ancestry(t).find((a) => a.id === t.pause.by) || null;
 
-// What a live task's blob shows (blobs.js's states).
+// What a task's blob shows (blobs.js's states).
 export function stateOf(t) {
   const w = t.waiting || {};
   switch (w.kind) {
     case "model": return w.streaming ? "streaming" : "first";
     case "calls": return w.calls.some((c) => c.children?.length) ? "children" : "tools";
     case "max": return "max";
+    case "done": return "done";
     case "starting": return "starting";
     case "held": case "parked": return "paused";
     case "limited": case "signedOut": return "held";
