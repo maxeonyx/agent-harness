@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use harness_core::build::{BuildId, Launch, Launched};
+use harness_core::build::{BuildId, Launch, Launched, blames_build};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
@@ -819,7 +819,7 @@ impl Brain {
                 Some(s) => format!("{s}: {message}"),
                 None => message.clone(),
             };
-            if policy::rejected(*status) {
+            if status.is_some_and(blames_build) {
                 return self.fail_task(id, format!("the provider rejected the request, {said}"));
             }
             if failures >= policy::GIVE_UP {
