@@ -31,10 +31,10 @@
   .node .hit { position: absolute; left: -22px; top: -18px; width: 44px; height: 34px; border-radius: 50%; }
   .node .name { position: absolute; left: 26px; top: -9px; white-space: nowrap; font: 600 12.5px/18px var(--serif);
     text-shadow: 0 0 2px var(--ground), 0 0 2px var(--ground), 0 0 3px var(--ground), 0 0 4px var(--ground); }
-  .node.chip .hit { left: -10px; top: -10px; width: 20px; height: 20px; }
-  .node.chip .name { left: 12.5px; font: 12px/18px var(--sans); color: var(--muted); }
-  .node.chip.yours .name { color: var(--ink); }
-  .node.chip .g { position: absolute; left: -7px; top: -9px; width: 14px; text-align: center; font: 700 9px/16px var(--sans); color: rgba(20, 20, 19, .7); pointer-events: none; }
+  .node.work .hit { left: -10px; top: -10px; width: 20px; height: 20px; }
+  .node.work .name { left: 12.5px; font: 12px/18px var(--sans); color: var(--muted); }
+  .node.work.yours .name { color: var(--ink); }
+  .node.work .g { position: absolute; left: -7px; top: -9px; width: 14px; text-align: center; font: 700 9px/16px var(--sans); color: rgba(20, 20, 19, .7); pointer-events: none; }
   .node.unmatched { opacity: .12 !important; }
   .node.selected { visibility: hidden; }
   /* A finished project, folded: a small card on the archive shelf. */

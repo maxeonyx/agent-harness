@@ -52,10 +52,10 @@ export function drawMap() {
     if (!kind) continue;
     let a = nodeEls.get(id);
     if (!a) {
-      a = el(kind === "chip" ? "div" : "a", "node");
+      a = el(kind === "work" ? "div" : "a", "node");
       if (kind === "card") a.append(el("span", "name"));
       else a.append(el("span", "hit"), el("span", "name"));
-      if (kind === "chip") {
+      if (kind === "work") {
         a.append(el("span", "g", "⋯"));
         a.addEventListener("click", () => { if (!drag?.moved) openAt(graph.nodes.get(id)); });
       } else {
@@ -83,10 +83,11 @@ export function drawMap() {
   drawNodes();
   if (tipFor) fillTip();
 }
-// Which element a node has: a card, a big node's or a chip's, or none.
+// Which element a node has: a card, a big node's, a running chip's (`work`:
+// card.css styles `.chip`), or none.
 function elOf(id) {
   const p = positions.get(id), n = graph.nodes.get(id);
-  return p?.card ? "card" : n?.big ? "big" : n?.kind === "chip" && n.running ? "chip" : null;
+  return p?.card ? "card" : n?.big ? "big" : n?.kind === "chip" && n.running ? "work" : null;
 }
 
 // Every node where it is shown now: the elements moved, the blobs placed
