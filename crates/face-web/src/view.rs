@@ -404,20 +404,23 @@ fn legs(task: TaskId, legs: &Legs) -> Value {
 /// The task's background calls that are not spawns, on the legs that
 /// started them.
 fn work(state: &State, legs: &Legs) -> Value {
-    let rows = legs.work.iter().map(|w| {
-        let record = state.call(w.call);
-        json!({
-            "call": w.call.to_string(),
-            "name": record.and_then(|r| match &r.call.caller {
-                Caller::Background { name, .. } => Some(name),
-                _ => None,
-            }),
-            "leg": w.leg.to_string(),
-            "at": w.at.to_string(),
-            "running": record.is_some_and(|r| r.settled.is_none()),
-            "handed": record.is_some_and(|r| r.owner == Owner::Max),
-        })
-    });
+    let work = legs.work.iter();
+    let rows = work
+        .filter(|w| state.members(Scope::Spawn(w.call)).next().is_none())
+        .map(|w| {
+            let record = state.call(w.call);
+            json!({
+                "call": w.call.to_string(),
+                "name": record.and_then(|r| match &r.call.caller {
+                    Caller::Background { name, .. } => Some(name),
+                    _ => None,
+                }),
+                "leg": w.leg.to_string(),
+                "at": w.at.to_string(),
+                "running": record.is_some_and(|r| r.settled.is_none()),
+                "handed": record.is_some_and(|r| r.owner == Owner::Max),
+            })
+        });
     Value::Array(rows.collect())
 }
 
@@ -508,8 +511,12 @@ fn call(state: &State, value: Text, id: CallId) -> Value {
     let Some(record) = state.call(id) else {
         return json!({"id": id.to_string()});
     };
-    let children: Vec<String> = state
-        .members(Scope::Spawn(id))
+    // The agents it waits on: a spawn's own, or a `wait`'s on the spawns it
+    // waits on that still run.
+    let running = state.waited(id).map(|(_, running)| running);
+    let children: Vec<String> = std::iter::once(id)
+        .chain(running.unwrap_or_default())
+        .flat_map(|c| state.members(Scope::Spawn(c)))
         .map(|t| t.id.to_string())
         .collect();
     let status = match (&record.settled, &record.dispatched) {

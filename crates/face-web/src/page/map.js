@@ -14,9 +14,10 @@ import { layered } from "./layout.js";
 //
 // Each live task is big: its planned join while a member of its runs or it
 // waits on its work, so it sits below what it will take in, hollow only
-// while it waits; its current leg otherwise. Everything else is a small dot. A task's own node
-// (big, or its last leg once it is done) has the task's id, so the card,
-// the queue and the URL name it the way they name the task.
+// while it waits; its current leg otherwise. Everything else is a small
+// dot. A task's own node (big, or its last leg once it is done) has the
+// task's id, so the card, the queue and the URL name it the way they name
+// the task.
 export let view = null;
 // The tab's rows, one per object, as the page draws them.
 function assemble(v) {
@@ -109,9 +110,8 @@ export function stateOf(t) {
   }
   return "brain";
 }
-// Waiting on its children: on a spawn, or a `wait` while a member runs.
-const runs = (t) => view.tasks.some((m) => m.owner === t.id && !isDone(m));
-const waitsOnKids = (t) => t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length || (c.tool === "wait" && runs(t)));
+// Waiting on its children: on a spawn, or a `wait` on one.
+const waitsOnKids = (t) => t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length);
 // Waiting on its work: its planned join is big and hollow.
 const waitsOnWork = (t) => t.waiting?.kind === "listening" || waitsOnKids(t);
 
