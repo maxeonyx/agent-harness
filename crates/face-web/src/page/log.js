@@ -63,6 +63,7 @@ async function landAt(s) {
     const after = chunks.find((c) => !found.contains(c) && found.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING);
     const at = want === id ? before.pop() : after || before.pop();
     if (!at) return;
+    pinned = false;
     at.scrollIntoView({ block: "center" });
     at.classList.remove("revealed"); void at.offsetWidth; at.classList.add("revealed");
     at.addEventListener("animationend", () => at.classList.remove("revealed"), { once: true });
