@@ -34,6 +34,7 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | phone | Max's day at phone size: + in the last directory, dictation, the two-tap send, a reload, and finding a chat with the find button | scripted | free, 40 s |
 | provider-errors | a request the provider rejects (400, or 403 for the account) fails its chat at once in the provider's words; an overload (529) is retried four times, then fails naming it | scripted | free, 40 s |
 | provider | a fork shares its parent's prompt cache on the provider (`examples/fork`) | Haiku | 4 small requests, seconds |
+| read-others-work | an engineer spawns two forks at once: `alpha` reports a codeword, and `beta`, not told it, finds alpha's chat with the face's `/find` and reads its report with `/context/<task>`, as the line in every agent's system prompt says; then the demo prints that line and the same two reads; leaves the brain up | Sonnet low | about 6 requests, 1 min |
 | scripted | the scripted model: a tool call, a spawned child, a long streamed reply | scripted | free, 20 s |
 | spine | a chat across Ctrl-C and relaunches: a call finishing, a response cut, the chat carrying on (Rust example; it owns its brain process) | scripted (`MODEL=sonnet/low`: the cache reads) | free, 1 min |
 | store | a brain killed mid-commit, reopened with every record intact | none | free, seconds |

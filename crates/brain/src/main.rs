@@ -494,7 +494,10 @@ fn run() -> Result<(), Failed> {
     let mut brain = Brain::launch(
         decider,
         opening,
-        folds,
+        brain::Face {
+            folds,
+            address: format!("https://localhost:{port}"),
+        },
         client,
         roles::Models {
             offered,
