@@ -389,9 +389,15 @@ pub enum Launch {
     Relaunched { from: BuildId, by: Option<CallId> },
 }
 
-/// Whether a provider's refusal with `status` is the fault of the build
-/// that rendered the request: a client error, other than a timeout or a
-/// limit, which the same request from another build may not get.
+/// Whether a provider's refusal with `status` is the fault of the request,
+/// so sending it again unchanged fails the same way: a client error, other
+/// than a timeout (408) or a rate limit (429). The build that rendered it is
+/// to blame (an invalid 400, a 404 naming what does not exist, a too large
+/// 413), or the account is until Max changes it (billing 402, permission
+/// 403); the same request from another build may not get it. A session's
+/// request refused so fails its task at once, in the provider's words, and
+/// the gate fails the build. A 401 never arrives: the client refreshes the
+/// token and resends once, and signs out if even the fresh token is refused.
 pub fn blames_build(status: u16) -> bool {
     (400..500).contains(&status) && !matches!(status, 408 | 429)
 }
