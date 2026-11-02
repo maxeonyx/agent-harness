@@ -734,7 +734,7 @@ function fitBlob() {
   blobs.moved();
 }
 const below = () => scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
-const toBottom = () => scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" });
+const toBottom = () => { pinned = true; scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" }); };
 function unread(t) {
   const c = mandateCard(`From ${byId[t.owner]?.name || "its owner"}`);
   $(".body", c).append(markdown(t.mandate || ""));
@@ -750,9 +750,19 @@ function mandateCard(title) {
 }
 
 // The log keeps to its bottom while Max is there, so live text scrolls into
-// view; once he scrolls up, it stays where he is.
+// view; once he scrolls up, by however little, it stays where he is, so a
+// finger dragging the log up is never pulled back down. Reaching the bottom
+// again keeps to it.
+let pinned = true, lastTop = 0;
+function following() {
+  const top = scrollEl.scrollTop;
+  if (below() < 4) pinned = true;
+  else if (top < lastTop) pinned = false;
+  lastTop = top;
+  return pinned;
+}
 function stick(change) {
-  const atBottom = below() < 80 || logState?.follow;
+  const atBottom = following() || logState?.follow;
   change();
   if (atBottom) { scrollEl.scrollTop = scrollEl.scrollHeight; if (logState) logState.follow = false; }
   jumped();
@@ -762,7 +772,7 @@ function jumped() {
   $(".jump", panel).hidden = below() < 80 || !dock.hidden;
   fitBlob();
 }
-scrollEl.addEventListener("scroll", jumped);
+scrollEl.addEventListener("scroll", () => { following(); jumped(); });
 $(".jump", panel).onclick = toBottom;
 
 // A request streaming, or a command printing: neither is a fact. Each
