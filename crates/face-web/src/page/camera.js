@@ -81,7 +81,9 @@ export function fit(fly = true, keep = false) {
 // card, the pointer and the wheel are the card's own: its text selects and
 // its log scrolls, while its header drags the map like the ground does.
 // A drag let go while moving coasts on, slowing to a stop; a press stops it
-// where it is, and is only that, not a click on what it pressed.
+// where it is, and is only that, not a click on what it pressed. A drag by
+// the card's header moves the card like a window, and stops where let go:
+// on a phone the card fills the screen, and a coast would throw it off.
 const pointers = new Map();
 export let drag = null;
 let caught = false;  // the press stopped a coast
@@ -91,7 +93,7 @@ map.addEventListener("pointerdown", (e) => {
   caught = stop("coast");
   if (cards(e)) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  drag = { moved: caught, start: { x: e.clientX, y: e.clientY }, cam: { ...cam }, pinch: pointers.size === 2 ? pinchOf() : null, trail: [] };
+  drag = { moved: caught, start: { x: e.clientX, y: e.clientY }, cam: { ...cam }, pinch: pointers.size === 2 ? pinchOf() : null, trail: [], card: !!e.target.closest?.("#panel") };
 });
 // A touch's click can come after its drag is forgotten.
 map.addEventListener("click", (e) => { if (caught) { caught = false; e.stopPropagation(); e.preventDefault(); } }, true);
@@ -132,7 +134,7 @@ const lift = (e) => {
     map.classList.remove("grabbing");
     // A touch that dragged is not a tap, so no click comes to forget it.
     if (drag?.panning) caught = false;
-    if (drag?.panning && e.type === "pointerup") coast(drag.trail, e.timeStamp);
+    if (drag?.panning && !drag.card && e.type === "pointerup") coast(drag.trail, e.timeStamp);
     setTimeout(() => { drag = null; }, 0);
   }
   else if (drag) { drag.pinch = null; drag.trail = []; const p = [...pointers.values()][0]; drag.start = p; drag.cam = { ...cam }; }
