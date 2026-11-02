@@ -392,11 +392,12 @@ function sleepCheck() {
 // layers have.
 const anims = new Map();
 let looping = false;
-function animate(name, T, step, nodes = true) {
+const easeOut = (u) => 1 - Math.pow(1 - u, 3);
+function animate(name, T, step, nodes = true, ease = easeOut) {
   anims.get(name)?.done();
   if (document.hidden) { anims.delete(name); step(1); drawNodes(); drawEdges(); applyCamera(); return Promise.resolve(); }
   return new Promise((done) => {
-    anims.set(name, { t0: performance.now(), T: reduced() ? 0 : T, step, done, nodes });
+    anims.set(name, { t0: performance.now(), T: reduced() ? 0 : T, step, done, nodes, ease });
     if (!looping) { looping = true; onFrame(frame); }
   });
 }
@@ -404,7 +405,7 @@ function frame(now) {
   let nodes = false;
   for (const [name, a] of anims) {
     const u = a.T ? Math.max(0, Math.min(1, (now - a.t0) / a.T)) : 1;
-    a.step(1 - Math.pow(1 - u, 3));
+    a.step(a.ease(u));
     nodes ||= a.nodes;
     if (u >= 1) { anims.delete(name); a.done(); }
   }
@@ -421,16 +422,24 @@ function stop(name) {
   a.done();
   return true;
 }
-// A drag let go goes on at the speed it had over its last 100 ms, eased to
-// a stop: in T it travels a third of what that speed would take it, much
-// less far than the browser's own scrolling.
+// A drag let go goes on at the speed it had over its last 100 ms, slowed by
+// drag (the speed decays by e every TAU) and by friction (a steady FRICTION
+// off it), until it stops. Drag carries a fast flick far and friction stops a
+// slow one soon, as a phone's own scrolling does, going a little less far:
+// a flick at 1, 3 and 6 px/ms goes about 170, 1200 and 3600 px, in 0.35,
+// 0.9 and 1.4 s, where Chromium on Android goes 190, 1300 and 4400.
+const TAU = 1500, FRICTION = .0025;  // ms, px/ms²
 function coast(trail, t) {
   const a = trail[0], b = trail.at(-1);
   if (!a || a === b || reduced()) return;
   const dt = Math.max(16, t - a.t), vx = (b.x - a.x) / dt, vy = (b.y - a.y) / dt;
-  if (Math.hypot(vx, vy) < .15) return;
-  const T = 750, c0 = { ...cam };
-  animate("coast", T, (e) => { cam = { ...cam, x: c0.x + vx * T / 3 * e, y: c0.y + vy * T / 3 * e }; }, false);
+  const v = Math.hypot(vx, vy);
+  if (v < .1) return;
+  // The speed is (v + f) e^(-t/TAU) - f, with f = FRICTION TAU: none at T.
+  const f = FRICTION * TAU, T = TAU * Math.log(1 + v / f);
+  const along = (t) => TAU * (v + f) * (1 - Math.exp(-t / TAU)) - f * t;
+  const D = along(T), c0 = { ...cam };
+  animate("coast", T, (e) => { cam = { ...cam, x: c0.x + vx / v * D * e, y: c0.y + vy / v * D * e }; }, false, (u) => along(u * T) / D);
 }
 // Everything that is moving, where it is going, now.
 document.addEventListener("visibilitychange", () => { if (document.hidden) settle(); });
