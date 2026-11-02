@@ -14,7 +14,6 @@
   #usage { position: relative; display: inline-flex; gap: 1.1em; align-items: center; }
   #usage .gauges { display: inline-flex; gap: 1.1em; align-items: center; padding: .25em .1em; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
   #usage.busy .gauges { cursor: progress; }
-  #usage .alarms { display: inline-flex; gap: 1.1em; }
   /* A pop-up over what floats over the map, while it is hovered or focused:
      a table, and a line under it. */
   .pop {
@@ -34,7 +33,7 @@
   .gauge i { display: inline-block; width: 3.4em; height: .32em; border-radius: 1em; background: var(--line); overflow: hidden; }
   .gauge i b { display: block; height: 100%; background: var(--muted); }
   .gauge.high i b { background: var(--maroon); }
-  .alarm { color: var(--maroon); font-weight: 600; }
+  #usage .limited { color: var(--maroon); font-weight: 600; white-space: nowrap; }
   /* Which build runs: a quiet line, red only when a relaunch went back. */
   #corner .build { position: relative; color: var(--faint); white-space: nowrap; cursor: default; }
   #corner .build > .now { margin-left: .7em; }
@@ -43,7 +42,9 @@
   #corner .build .pop td:first-child { white-space: nowrap; }
   #corner .build .pop td:last-child { color: var(--ink); overflow-wrap: break-word; }
   /* Signing in: the bar's button, and the box the code is pasted into. */
-  .sign-in a.button { margin-left: .4em; padding: .15em .7em; border-radius: 999px; background: var(--maroon); color: var(--white); text-decoration: none; }
+  #usage .sign-in { display: none; padding: .15em .7em; border-radius: 999px; background: var(--maroon); color: var(--white); font-weight: 600; text-decoration: none; white-space: nowrap; }
+  #usage.signed-out .sign-in { display: inline; }
+  #usage.signed-out .gauges, #usage.signed-out > .pop { display: none; }
   .sign-in-box { width: min(26em, 90vw); padding: 1.1em 1.2em; border: 1px solid var(--line); border-radius: 12px; background: var(--white); color: var(--ink); box-shadow: 0 10px 30px rgba(40, 30, 20, .18); }
   .sign-in-box::backdrop { background: rgba(20, 20, 19, .25); }
   .sign-in-box p { margin: .5em 0 .8em; color: var(--muted); }

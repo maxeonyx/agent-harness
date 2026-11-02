@@ -1,4 +1,4 @@
-import { $, clock, el, ICONS, svgEl } from "./base.js";
+import { $, el, ICONS, svgEl, when } from "./base.js";
 import { byId, derive, DOT, glyph, graph, isDone, layout, live, look, positions, ROOT_DOT, routes, SAT_DOT, satLabel, shortName, shown, unfolded, view } from "./map.js";
 import { cam, cardShown, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam, target } from "./camera.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
@@ -137,7 +137,7 @@ export function trouble(t) {
   if (failed.length) return `${failed.map((f) => `Couldn't make ${f.limb}: ${f.why}.`).join(" ")} The harness keeps trying: abandon it, or start again elsewhere.`;
   const x = t.trouble;
   if (!x || isDone(t)) return null;
-  if (x.until != null) return x.until > Date.now() ? `Limited until ${clock(x.until)}` : null;
+  if (x.until != null) return x.until > Date.now() ? `Limited until ${when(x.until)}` : null;
   return t.failures ? `Failed ${t.failures === 1 ? "once" : `${t.failures} times`}: ${x.text}` : null;
 }
 
