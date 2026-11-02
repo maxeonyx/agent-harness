@@ -1,6 +1,6 @@
 import { $, el, kTokens, logEl, panel, scrollEl } from "./base.js";
 import { act, digest } from "./tab.js";
-import { byId, graph, live, look, parentOf, unfolded, view } from "./map.js";
+import { byId, graph, look, parentOf, unfolded, view } from "./map.js";
 import { cam, camFor, cardRect, cardShown, closing, coverCheck, dotRect, fly, framed, framing, heldAt, newPoint, refocus, seam, seamFor, setCardShown, setFramed, setSeam } from "./camera.js";
 import { nodeEls, rebuild, render } from "./draw.js";
 import { hideTip, hoverable } from "./hover.js";
@@ -22,17 +22,18 @@ export const NEW = "new";
 // in this page. Back from one it did not push (the page reloaded on a card)
 // would leave it, so closing that card replaces the entry instead.
 const DOC = Math.random().toString(36).slice(2);
-function show(id) {
-  if (location.hash === `#${id}`) return route();
-  if (history.state?.node) history.replaceState({ node: id, doc: history.state.doc }, "", `#${id}`);
-  else history.pushState({ node: id, doc: DOC }, "", `#${id}`);
+// `#<task>@<entry>` opens a chat at an entry.
+function show(id, at = null) {
+  const hash = at ? `#${id}@${at}` : `#${id}`;
+  if (location.hash === hash) return route();
+  if (history.state?.node) history.replaceState({ node: id, doc: history.state.doc }, "", hash);
+  else history.pushState({ node: id, doc: DOC }, "", hash);
   route();
 }
-export function go(id) {
+export function go(id, at = null) {
   clearTimeout(closing);
-  if (id !== NEW) id = live(id);
-  if (id === openId) return;
-  show(id);
+  if (id === openId && !at) return;
+  show(id, at);
 }
 export function closeNode() {
   if (!openId) return;
@@ -43,8 +44,7 @@ addEventListener("popstate", route);
 addEventListener("hashchange", route);
 
 export function route() {
-  const raw = location.hash.slice(1) || null;
-  const id = raw && raw !== NEW ? live(raw) : raw;
+  const id = location.hash.slice(1).split("@")[0] || null;
   const known = id && (byId[id] || (id === NEW && view));
   moving = moving.then(() => transition(known ? id : id && !view ? id : null));
 }
@@ -141,7 +141,7 @@ mini.onclick = refocus;
 export function renderPanel() {
   const t = byId[openId];
   if (!t) return;
-  const l = look(t), needs = (view.queue || []).some((q) => live(q.task) === t.id);
+  const l = look(t), needs = (view.queue || []).some((q) => q.task === t.id);
   mini.className = `mini ${l.cls}${needs ? " needs" : ""}`;
   if (!title.isContentEditable && title.textContent !== t.name) title.textContent = t.name;
   title.title = "Double-click to rename";

@@ -1,15 +1,19 @@
-import { ago, gist, phone, when } from "./base.js";
-import { openId } from "./card.js";
+import { ago, when } from "./base.js";
+import { layered } from "./layout.js";
 
 // ─── The model: the view as a map ──────────────────────────────────────────
-// A node is a task, under the task that owns it. Background work a task
-// will hear back from hangs off it. Projects are the map's disconnected
-// components.
+// The map is a graph of how contexts began, compacted, forked, spawned,
+// joined and were edited: the view's legs (`legs`, `leg` and `work` on each
+// task). A node is a leg, a stretch of one task's context; an edge points
+// from the newer node back to what it depends on. Background work that is
+// not a spawn is a chip, hung from the leg that started it, and a task
+// with work out has a planned join under it, depending on that work, until
+// the work's results come in. Projects are the graph's connected pieces.
 //
-// Edges: solid, a task and a member of a spawn it waits on (owned, settled
-// together); dashed, a result that will arrive without anyone waiting for
-// it now (background work); dotted, a task continued by a resume; flowing,
-// waited on right now.
+// Each live task is big: its planned join while it waits on its work, its
+// current leg otherwise. Everything else is a small dot. A task's own node
+// (big, or its last leg once it is done) has the task's id, so the card,
+// the queue and the URL name it the way they name the task.
 export let view = null;
 // The tab's rows, one per object, as the page draws them.
 function assemble(v) {
@@ -27,10 +31,6 @@ export function takeView(v) { view = assemble(v); }
 
 export let byId = {};
 export let graph = { nodes: new Map(), edges: [], comps: [] };
-// A chat of Max's he continued after it finished is one node: its newest
-// resume, whose context holds all of it. Each earlier one maps to it.
-let alias = {};
-export const live = (id) => alias[id] || id;
 
 // What a task is doing, as the map shows it: classes for its dot, and the
 // words its hover says.
@@ -47,7 +47,7 @@ export function look(t) {
         return { cls: "children" + stopping, text: `Waiting on ${running} of ${kids.length}${since}` };
       }
       const c = w.calls[0] || {};
-      return { cls: "working tool" + stopping, text: `${c.tool || "Tools"}${c.input ? " " + gist(c.input) : ""}` };
+      return { cls: "working tool" + stopping, text: `${c.tool || "Tools"}` };
     }
     case "max": return { cls: "needs" + stopping, text: "Your turn" + since };
     case "starting": return { cls: "starting", text: w.limbs.length ? `Making ${w.limbs.join(", ")}` : "Starting" };
@@ -74,229 +74,253 @@ export const order = (a, b) => a.created.seq - b.created.seq;
 export const isDone = (t) => t.waiting?.kind === "done";
 // A resume Max made of one of his own chats: the same chat, continued.
 const chained = (t) => t.origin === "resume" && !t.owner && byId[t.from] && !byId[t.from].owner;
-// Who a task belongs to on the map: its scope's owner, or the task a resume
-// in Max's own scope continues.
-export const parentOf = (t) => t.owner ? live(t.owner) : t.from && byId[t.from] && !chained(t) ? live(t.from) : null;
+// Who a task belongs to: its scope's owner, or the task a resume (not one
+// of Max's own chats continued) carries on from.
+export const parentOf = (t) => t.owner ? t.owner : t.from && byId[t.from] && !chained(t) ? t.from : null;
+// Where one of Max's chats went on: the newest resume of it, followed.
+export function successor(id) {
+  for (let seen = 0, next = id; seen < 50; seen++) {
+    const r = view.tasks.filter((t) => t.from === next && chained(t)).sort(order).at(-1);
+    if (!r) return next;
+    next = r.id;
+  }
+  return id;
+}
 const ancestry = (t) => { const out = []; for (let p = parentOf(t); p && byId[p] && out.length < 50; p = parentOf(byId[p])) out.unshift(byId[p]); return out; };
 // What pauses a task: itself, or the nearest paused task above it.
 export const heldBy = (t) => !t.pause ? null : t.pause.by === t.id ? t : ancestry(t).find((a) => a.id === t.pause.by) || null;
-// The calls a task is waiting on right now.
-function awaited(t) {
-  const w = t?.waiting || {};
-  return new Set((w.calls || []).map((c) => c.id));
+
+// What a live task's blob shows (blobs.js's states).
+export function stateOf(t) {
+  const w = t.waiting || {};
+  switch (w.kind) {
+    case "model": return w.streaming ? "streaming" : "first";
+    case "calls": return w.calls.some((c) => c.children?.length) ? "listening" : "tools";
+    case "max": return "max";
+    case "starting": return "starting";
+    case "held": case "parked": return "paused";
+    case "limited": case "signedOut": return "held";
+    case "listening": return "listening";
+  }
+  return "brain";
 }
+// Waiting on its work: its planned join is the one that is big.
+const waitsOnWork = (t) => t.waiting?.kind === "listening" || (t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length));
 
 // A finished project folds to its root once it has been finished a while:
 // a small card on the archive shelf, below everything live.
 const FOLD_AFTER = 30 * 60 * 1000;
 export const unfolded = new Set();
+export const cardStatus = (c) => `Finished ${ago(c.last)} ago`;
 
-export function derive() {
+// Each task's legs into nodes, its work into chips, a planned join for
+// work out, the chains of compactions folded, and the projects.
+export function derive(openId) {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
-  alias = {};
-  for (const t of [...view.tasks].sort(order)) {
-    if (!chained(t)) continue;
-    for (const [k, v] of Object.entries(alias)) if (v === t.from) alias[k] = t.id;
-    alias[t.from] = t.id;
-  }
-  const nodes = new Map(), edges = [];
-  for (const t of view.tasks) if (!alias[t.id]) nodes.set(t.id, { id: t.id, kind: "task", t });
-  for (const t of view.tasks) {
-    if (alias[t.id]) continue;
-    // A spawn's members hang from their owner.
-    if (t.owner && byId[live(t.owner)]) {
-      const flow = awaited(byId[t.owner]).has(t.scope) && !isDone(t);
-      edges.push({ from: live(t.owner), to: t.id, kind: "owns", flow, made: t.created.seq });
+  const tasks = [...view.tasks].sort(order);
+  const nodes = new Map();
+  const add = (n) => { nodes.set(n.id, n); return n; };
+  for (const t of tasks) {
+    const legs = t.legs || [];
+    const mine = new Set(legs.map((l) => l.key));
+    // The path to the head: from its leg, back along its own legs. Any
+    // other leg of it is an old version.
+    const path = new Set();
+    for (let k = t.leg; k && !path.has(k);) {
+      path.add(k);
+      k = legs.find((l) => l.key === k)?.on.find((d) => mine.has(d.leg))?.leg;
     }
-    if (t.origin === "resume" && byId[t.from] && !chained(t)) edges.push({ from: live(t.from), to: t.id, kind: "continues", made: t.created.seq });
-    const waits = awaited(t);
-    for (const b of [...(t.background || []), ...(t.handed || [])]) {
-      if (b.status === "settled" || b.tool === "spawn") continue;
-      const id = `b:${b.id}`;
-      nodes.set(id, { id, kind: "sat", call: b, task: t.id });
-      edges.push({ from: t.id, to: id, kind: "receives", flow: waits.has(b.id) || t.waiting?.kind === "listening" });
+    for (const l of legs) {
+      add({ id: l.key, kind: "leg", t, began: l.began, at: l.at, open: l.first, old: !path.has(l.key),
+        carry: l.began === "carry" && path.has(l.key), deps: l.on.map((d) => d.leg ?? `w:${d.work}`) });
     }
+    for (const w of t.work || []) add({ id: `w:${w.call}`, kind: "chip", t, work: w, running: w.running, open: w.at, deps: [w.leg] });
   }
-  // Components, by the edges between them.
-  const up = new Map([...nodes.keys()].map((k) => [k, k]));
+  // A planned join under each live task with work out: members and calls
+  // whose results it has not taken in yet.
+  const taken = new Map(tasks.map((t) => [t.id, new Set((t.legs || []).flatMap((l) => l.on.map((d) => d.leg ?? `w:${d.work}`)))]));
+  const members = new Map();
+  for (const t of tasks) if (t.owner && byId[t.owner]) (members.get(t.owner) ?? members.set(t.owner, []).get(t.owner)).push(t);
+  for (const t of tasks) {
+    if (isDone(t) || !t.leg) continue;
+    const seen = taken.get(t.id);
+    const open = [];
+    for (const m of members.get(t.id) || []) if (m.leg && !seen.has(m.leg) && !isDone(m)) open.push({ id: m.leg, at: m.legs?.[0]?.on.find((d) => d.leg)?.at });
+    for (const w of t.work || []) if (w.running && !seen.has(`w:${w.call}`)) open.push({ id: `w:${w.call}`, at: w.at });
+    if (open.length) add({ id: `p:${t.id}`, kind: "planned", t, waits: open.length, open: open[0].at, deps: [t.leg, ...open.map((o) => o.id)] });
+  }
+  // Big: each live task's own node. A task's own node, big or not, takes
+  // the task's id.
+  const rename = new Map();
+  for (const t of tasks) {
+    const planned = nodes.get(`p:${t.id}`);
+    const own = !isDone(t) && planned && waitsOnWork(t) ? planned : nodes.get(t.leg);
+    if (!own) continue;
+    if (!isDone(t)) own.big = stateOf(t);
+    rename.set(own.id, t.id);
+  }
+  // Nodes after everything they depend on: depth first, in the order they
+  // began. Then the chains of compactions fold: a carry absorbs the leg
+  // before it when that is its own task's, small, and nothing else hangs
+  // from it.
+  const began = (n) => n.at ?? n.t.created.at ?? 0;
+  const sorted = [], state = new Map();
+  const visit = (n) => {
+    if (state.get(n.id)) return;
+    state.set(n.id, 1);
+    for (const d of n.deps) { const m = nodes.get(d); if (m) visit(m); }
+    sorted.push(n);
+  };
+  for (const n of [...nodes.values()].sort((a, b) => began(a) - began(b))) visit(n);
+  const uses = new Map();
+  for (const n of sorted) for (const d of n.deps) uses.set(d, (uses.get(d) ?? 0) + 1);
+  const kept = new Map();
+  for (const n of sorted) {
+    n.deps = n.deps.filter((d) => nodes.has(d));
+    if (n.kind === "leg" && n.began === "carry") {
+      const pd = n.deps.find((d) => kept.get(d)?.t === n.t);
+      const p = pd && kept.get(pd);
+      if (p && p.kind === "leg" && !p.big && !rename.has(p.id) && uses.get(p.id) === 1) {
+        kept.delete(p.id);
+        n.deps = [...p.deps, ...n.deps.filter((d) => d !== p.id)];
+        n.open = p.open ?? n.open;
+      }
+    }
+    kept.set(n.id, n);
+  }
+  // Renamed, and the pips: the compactions on the path to its head.
+  const out = new Map();
+  for (const n of kept.values()) {
+    n.id = rename.get(n.id) ?? n.id;
+    n.deps = n.deps.map((d) => rename.get(d) ?? d);
+    if (n.big) n.pips = (n.t.legs || []).filter((l) => l.began === "carry" && nodes.get(l.key)?.carry).length;
+    out.set(n.id, n);
+  }
+  const edges = [];
+  for (const n of out.values()) for (const d of n.deps) if (out.has(d)) edges.push({ from: n.id, to: d });
+  // Projects: the connected pieces.
+  const up = new Map([...out.keys()].map((k) => [k, k]));
   const find = (k) => { while (up.get(k) !== k) { up.set(k, up.get(up.get(k))); k = up.get(k); } return k; };
-  for (const e of edges) if (nodes.has(e.from) && nodes.has(e.to)) up.set(find(e.from), find(e.to));
+  for (const e of edges) up.set(find(e.from), find(e.to));
   const comps = new Map();
-  for (const n of nodes.values()) {
+  for (const n of out.values()) {
     const c = find(n.id);
-    if (!comps.has(c)) comps.set(c, { nodes: [], tasks: [] });
+    if (!comps.has(c)) comps.set(c, { nodes: [], tasks: new Set() });
     comps.get(c).nodes.push(n);
-    if (n.kind === "task") comps.get(c).tasks.push(n.t);
+    comps.get(c).tasks.add(n.t);
   }
   const now = Date.now();
-  const list = [...comps.values()].filter((c) => c.tasks.length).map((c) => {
-    const root = c.tasks.find((t) => !parentOf(t)) || c.tasks[0];
-    const running = c.tasks.some((t) => !isDone(t));
-    const last = Math.max(...c.tasks.map((t) => t.waiting?.since || 0));
-    const folded = !running && now - last > FOLD_AFTER && !unfolded.has(root.id) && !c.tasks.some((t) => t.id === openId && t.id !== root.id);
-    return { root, live: running, last, folded, nodes: c.nodes, tasks: c.tasks };
+  const list = [...comps.values()].map((c) => {
+    const ts = [...c.tasks].sort(order);
+    const root = ts[0];
+    const running = ts.some((t) => !isDone(t));
+    const last = Math.max(...ts.map((t) => t.waiting?.since || 0));
+    const folded = !running && now - last > FOLD_AFTER && !unfolded.has(root.id) && !ts.some((t) => t.id === openId && t.id !== root.id);
+    return { root, live: running, last, folded, nodes: c.nodes, tasks: ts };
   });
-  list.sort((a, b) => (b.live - a.live) || order(a.root, b.root));
-  graph = { nodes, edges, comps: list };
+  list.sort((a, b) => order(a.root, b.root));
+  graph = { nodes: out, edges, comps: list };
 }
 
-// ─── Layout: laid out again only when the shape changes ──────────────────
-const measure = (() => { const c = document.createElement("canvas").getContext("2d"); return (text, font) => { c.font = font; return c.measureText(text).width; }; })();
-export const DOT = 30, ROOT_DOT = 38, SAT_DOT = 20;
-export let positions = new Map();   // id -> {x, y, w, h}: laid out
-export let shown = new Map();       // id -> {x, y}: drawn now (tweened)
-export let routes = new Map();      // "from>to" -> the points of its edge's curve, laid out
+// ─── Layout: laid out again only where the shape changes ──────────────────
+// A node's size, from what it is: a big node is a blob (blobs.js) in a
+// BIG px box, reaching 12 px above its centre, 8 below and 21 to each side;
+// its label sits to its right.
+export const BIG = 64, BIG_REACH = { top: 12, foot: 8, side: 21 };
+const SERIF = getComputedStyle(document.documentElement).getPropertyValue("--serif") || "Georgia, serif";
+const SANS = getComputedStyle(document.documentElement).getPropertyValue("--sans") || "sans-serif";
+export const LABEL_FONT = `600 12.5px ${SERIF}`, CHIP_FONT = `12px ${SANS}`;
+export const radius = (n) => (n.kind === "chip" ? (n.running ? 7.5 : 3.4) : n.kind === "planned" ? 4.6 : 3.4);
+export const label = (n) => (n.big ? shortName(n.t) : n.kind === "chip" && n.running ? n.work.name || "background" : "");
+const widths = new Map();
+const ctx2d = document.createElement("canvas").getContext("2d");
+function measure(text, font) {
+  const k = font + "\n" + text;
+  if (!widths.has(k)) {
+    if (ctx2d.font !== font) ctx2d.font = font;
+    widths.set(k, ctx2d.measureText(text).width);
+  }
+  return widths.get(k);
+}
+// How far a node reaches, from its centre: across (its label to the right)
+// and along the flow, and where lines meet it.
+function extent(n) {
+  const r = n.big ? BIG_REACH.side : radius(n), l = label(n);
+  const lw = l ? measure(l, n.big ? LABEL_FONT : CHIP_FONT) + 7 : 0;
+  return { lo: r + 3, hi: r + 3 + lw, along: n.big ? 2 * BIG_REACH.side - 6 : 2 * r + (l ? 4 : 0),
+    top: n.big ? BIG_REACH.top : r + 2, foot: n.big ? BIG_REACH.foot : r + 3,
+    now: (!!n.big && n.kind !== "planned") || (n.kind === "chip" && n.running), planned: n.kind === "planned" };
+}
+
+export let positions = new Map();   // id -> {x, y, w, h, top}: its box laid out; its centre is (x + w / 2, y + top)
+export let shown = new Map();       // id -> {x, y, w, h, top}: drawn now (tweened)
+export let routes = new Map();      // "from>to" -> {pts, dashed, old}: an edge's route, laid out
+export const centre = (p) => ({ x: p.x + p.w / 2, y: p.y + p.top });
 let shape = "";
+const laid = new Map();             // a project's shape -> its layout
+const lastX = new Map();            // a project's root -> each node's x as last laid out
 
-const CARD_H = 34;
-export const cardStatus = (c) => `Finished ${ago(c.last)} ago`;
-function sizeOf(n, comp) {
-  if (comp.folded) return { w: Math.min(240, Math.max(120, measure(shortName(n.t), "500 13px Georgia") + 34 + (comp.tasks.length > 1 ? 14 : 0))), h: CARD_H };
-  if (n.kind === "sat") return { w: Math.min(160, Math.max(90, measure(satLabel(n), "12px sans-serif") + 10)), h: SAT_DOT + 22 };
-  const root = comp.root.id === n.id;
-  const w = Math.min(210, Math.max(110, measure(shortName(n.t), `600 ${root ? 15.5 : 13.5}px Georgia`) + 16));
-  return { w, h: (root ? ROOT_DOT : DOT) + (root ? 26 : 24) };
-}
-export const satLabel = (n) => `${n.call.owner === "max" ? "Yours: " : ""}${n.call.name || `${n.call.tool} ${gist(n.call.input)}`}`.trim();
-
-// Each project is laid out on its own, as the graph it is: every edge, of
-// whatever kind, holds what it ends at below where it starts. No row is
-// wider than the screen, so a task with many children wraps them onto rows
-// below. Then the projects are shelved in reading order, live ones first,
-// in rows as wide as the screen: on a phone they stack, and a project keeps
-// its shape wherever it lands. A project is laid out again only when its
-// own shape, or the screen's width band, changes.
-const NODE_GAP = 26, EDGE_GAP = 12, ROW_GAP = 34, BAND = 50;
-const GAP = 90;
-let laidOut = new Map(), laidRoom = 0;  // a project's shape -> where its nodes go, at one width
+// Each project laid out on its own (layout.js), and again only when its
+// shape changes. Projects sit side by side in the order they began, PROJECT
+// px apart, their present rows on one line, y = 0. Finished projects' cards
+// shelve below.
+const PROJECT = 56, CARD_H = 34;
 export function layout() {
-  // Shelves as wide as the screen at an easy reading zoom, in bands, so a
-  // resize lays out again only when it crosses one.
-  const room = Math.floor((innerWidth - 80) / (phone() ? .75 : 1) / BAND) * BAND;
   const parts = graph.comps.map((c) => {
-    if (c.folded) { const z = sizeOf(graph.nodes.get(c.root.id), c); return { archived: c.last, sig: c.root.id, children: [{ id: c.root.id, width: z.w, height: z.h }] }; }
-    const ns = depthFirst(c);
-    const ids = new Set(ns.map((n) => n.id));
-    const children = ns.map((n) => { const z = sizeOf(n, c); return { id: n.id, width: z.w, height: z.h }; });
-    const edges = graph.edges.filter((e) => ids.has(e.from) && ids.has(e.to));
-    const sig = JSON.stringify([children.map((c) => [c.id, Math.round(c.width), c.height]), edges.map((e) => [e.from, e.to])]);
-    return { children, edges, sig };
+    if (c.folded) {
+      const w = Math.min(240, Math.max(120, measure(shortName(c.root), `500 13px ${SERIF}`) + 34 + (c.tasks.length > 1 ? 14 : 0)));
+      return { c, sig: `card ${c.root.id} ${Math.round(w)}`, w };
+    }
+    const ns = c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), kind: n.kind, old: n.old }));
+    let sig = "";
+    for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}${n.now ? "!" : ""}${n.old ? "~" : ""}${Math.round(n.hi)};`;
+    return { c, sig, ns };
   });
-  const sig = JSON.stringify([parts.map((p) => p.sig), room]);
+  const sig = parts.map((p) => p.sig).join("\n") + (innerWidth > 760);
   if (sig === shape) return false;
   shape = sig;
-  const live = parts.filter((p) => p.archived == null);
-  const archive = parts.filter((p) => p.archived != null).sort((a, b) => b.archived - a.archived);
-  const was = room === laidRoom ? laidOut : new Map();
-  laidOut = new Map();
-  laidRoom = room;
-  const laid = live.map((p) => {
-    const l = was.get(p.sig) || place(p.children, p.edges, room);
-    laidOut.set(p.sig, l);
-    return l;
-  });
-  const cards = archive.map((p) => { const c = p.children[0]; return { w: c.width, h: c.height, nodes: [{ ...c, x: 0, y: 0 }] }; });
-  // The archive's cards, most recently finished first, on shelves of their own below.
-  const row = Math.max(room, ...laid.map((l) => l.w));
-  const shelves = [];
-  const shelve = (items, gap) => {
-    const first = shelves.length;
-    for (const l of items) {
-      const last = shelves.length > first ? shelves[shelves.length - 1] : null;
-      if (last && last.w + gap + l.w <= row) { last.items.push(l); last.w += gap + l.w; last.h = Math.max(last.h, l.h); }
-      else shelves.push({ items: [l], w: l.w, h: l.h, gap });
-    }
-  };
-  shelve(laid, GAP);
-  if (cards.length && laid.length) shelves.push({ items: [], w: 0, h: GAP / 2, gap: 0 });
-  shelve(cards, 14);
-  // Each shelf centred under the widest.
-  const widest = Math.max(0, ...shelves.map((r) => r.w));
+  const was = new Map(laid);
+  laid.clear();
   positions = new Map();
   routes = new Map();
-  let y = 0;
-  for (const r of shelves) {
-    let x = (widest - r.w) / 2;
-    for (const l of r.items) {
-      for (const c of l.nodes) positions.set(c.id, { x: x + c.x, y: y + c.y, w: c.width, h: c.height });
-      for (const [k, pts] of l.curves || []) routes.set(k, pts.map((q) => ({ x: x + q.x, y: y + q.y })));
-      x += l.w + r.gap;
+  let x = 0, y1 = 0;
+  for (const p of parts) {
+    if (p.c.folded) continue;
+    let l = was.get(p.sig);
+    if (!l) {
+      l = layered(p.ns, lastX.get(p.c.root.id));
+      l.x0 = Infinity; l.x1 = -Infinity; l.y1 = 0;
+      for (const n of p.ns) { const q = l.at.get(n.id); l.x0 = Math.min(l.x0, q.x - n.lo); l.x1 = Math.max(l.x1, q.x + n.hi); l.y1 = Math.max(l.y1, q.y + n.along / 2); }
+      lastX.set(p.c.root.id, new Map([...l.at].map(([id, q]) => [id, q.x])));
     }
-    y += r.h + (r.gap === GAP ? GAP : 14);
+    laid.set(p.sig, l);
+    // Its boxes and lines where it sits, kept while it sits there, so
+    // its lines are drawn once.
+    const dx = x - l.x0;
+    if (l.dx !== dx) {
+      l.dx = dx;
+      l.boxes = p.ns.map((n) => { const q = l.at.get(n.id), r = n.lo - 3; return [n.id, { x: q.x + dx - r, y: q.y - n.top, w: 2 * r, h: n.top + n.foot, top: n.top }]; });
+      const by = new Map(p.ns.map((n) => [n.id, n]));
+      const dashy = (id) => by.get(id).kind === "planned" || by.get(id).kind === "chip";
+      l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { pts: e.route.map(([a, b]) => [a + dx, b]), dashed: dashy(e.from) || dashy(e.to), old: by.get(e.from).old }]);
+    }
+    for (const [id, b] of l.boxes) positions.set(id, b);
+    for (const [k, r] of l.lines) routes.set(k, r);
+    y1 = Math.max(y1, l.y1);
+    x = l.x1 + dx + PROJECT;
+  }
+  // The archive: its cards, most recently finished first, on shelves below.
+  const cards = parts.filter((p) => p.c.folded).sort((a, b) => b.c.last - a.c.last);
+  const room = Math.max(360, innerWidth - 40);
+  // Shelved just below the fold of the first framing, which puts the present row two thirds down.
+  let cx = 0, cy = Math.max(y1 + 80, innerHeight / 3 + 40);
+  for (const p of cards) {
+    if (cx && cx + p.w > room) { cx = 0; cy += CARD_H + 14; }
+    positions.set(p.c.root.id, { x: cx, y: cy, w: p.w, h: CARD_H, top: CARD_H / 2, card: true });
+    cx += p.w + 14;
   }
   return true;
 }
-// One project's layout, in rows no wider than `room`. Each node goes on
-// the first row below every node with an edge into it that has room for
-// it, taking them in order, so a task's children fill the rows under it as
-// words fill lines. Each row is ordered by where its edges come from, and
-// sits as near under them as the room allows.
-function place(children, edges, room) {
-  const into = new Map(children.map((c) => [c.id, []]));
-  for (const e of edges) into.get(e.to).push(e.from);
-  const row = new Map(), wide = [];
-  for (let left = children; left.length;) {
-    // The first in order whose sources all have rows (or any, in a cycle).
-    const c = left.find((n) => into.get(n.id).every((s) => row.has(s))) || left[0];
-    left = left.filter((n) => n !== c);
-    let r = Math.max(0, ...into.get(c.id).filter((s) => row.has(s)).map((s) => row.get(s) + 1));
-    while (wide[r] && wide[r] + c.width > room) r++;
-    wide[r] = (wide[r] || 0) + c.width + NODE_GAP;
-    row.set(c.id, r);
-  }
-  const rows = wide.map(() => ({ nodes: [] }));
-  for (const c of children) rows[row.get(c.id)].nodes.push(c);
-  const at = new Map();  // node id -> its box
-  const mid = (n) => n.x + n.width / 2;
-  let top = 0;
-  for (const [k, r] of rows.entries()) {
-    // Each node by the mean x of what its edges come from, in order when none.
-    const key = (c) => { const xs = into.get(c.id).filter((s) => row.get(s) < k).map((s) => mid(at.get(s))); return xs.length ? xs.reduce((a, b) => a + b) / xs.length : Infinity; };
-    const keyed = r.nodes.map((c) => ({ c, k: key(c) })).sort((a, b) => (a.k === b.k ? 0 : a.k < b.k ? -1 : 1));
-    let x = 0;
-    const xs = keyed.map(({ c }) => { const l = x; x += c.width + NODE_GAP; return l; });
-    const w = x - NODE_GAP, wants = keyed.filter((q) => q.k !== Infinity);
-    const centre = wants.length ? wants.reduce((a, q) => a + q.k, 0) / wants.length : w / 2;
-    const left = Math.max(0, Math.min(room - w, centre - w / 2));
-    r.nodes = keyed.map(({ c }, i) => ({ ...c, x: left + xs[i], y: top }));
-    for (const n of r.nodes) at.set(n.id, n);
-    r.top = top;
-    r.h = Math.max(...r.nodes.map((n) => n.height));
-    top += r.h + ROW_GAP;
-  }
-  const nodes = [...at.values()];
-  const x0 = Math.min(...nodes.map((n) => n.x)), x1 = Math.max(...nodes.map((n) => n.x + n.width));
-  // Each edge a chain of curves leaving and arriving straight down: out of
-  // its source's foot, down past each row between, stepping into the gap
-  // beside a node in its way, into its target's head.
-  const clear = (x, r) => {
-    const n = r.nodes.find((n) => x > n.x - EDGE_GAP && x < n.x + n.width + EDGE_GAP);
-    return !n ? x : x < mid(n) ? n.x - NODE_GAP / 2 : n.x + n.width + NODE_GAP / 2;
-  };
-  const curves = edges.map((e) => {
-    const a = at.get(e.from), b = at.get(e.to);
-    const way = [{ x: mid(a), y: a.y + a.height }];
-    for (let k = row.get(e.from) + 1, x = mid(a); k < row.get(e.to); k++) { x = clear(x, rows[k]); way.push({ x, y: rows[k].top }, { x, y: rows[k].top + rows[k].h }); }
-    way.push({ x: mid(b), y: b.y });
-    const pts = [way[0]];
-    for (let i = 1; i < way.length; i++) {
-      const p = way[i - 1], q = way[i], d = Math.max(20, Math.abs(q.y - p.y) / 2);
-      pts.push({ x: p.x, y: p.y + d }, { x: q.x, y: q.y - d }, q);
-    }
-    return [`${e.from}>${e.to}`, pts.map((p) => ({ x: p.x - x0, y: p.y }))];
-  });
-  for (const n of nodes) n.x -= x0;
-  return { w: x1 - x0, h: top - ROW_GAP, nodes, curves };
-}
-// A component's nodes, owners before what they own, in a stable order.
-function depthFirst(c) {
-  const inComp = new Set(c.nodes.map((n) => n.id));
-  const out = [], seen = new Set();
-  const kids = (id) => graph.edges.filter((e) => e.from === id && inComp.has(e.to))
-    .sort((a, b) => (a.made ?? 0) - (b.made ?? 0));
-  const walk = (id) => { if (seen.has(id)) return; seen.add(id); out.push(graph.nodes.get(id)); for (const e of kids(id)) walk(e.to); };
-  walk(c.root.id);
-  for (const n of c.nodes) walk(n.id);
-  return out;
-}
-
+// The fonts the labels are measured in, found while the view is on its way:
+// the first measure of each can take a while.
+setTimeout(() => { for (const f of [LABEL_FONT, CHIP_FONT, `500 13px ${SERIF}`]) measure("Harness", f); });

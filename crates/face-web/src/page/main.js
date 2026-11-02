@@ -18,7 +18,7 @@ export async function viewArrived(fresh) {
   takeView(tab.view());
   settleLocal();
   await refresh();
-  if (!openPending() && !openId && location.hash.length > 1 && (byId[location.hash.slice(1)] || location.hash === `#${NEW}`) && !moving.started) { moving.started = true; route(); }
+  if (!openPending() && !openId && location.hash.length > 1 && (byId[location.hash.slice(1).split("@")[0]] || location.hash === `#${NEW}`) && !moving.started) { moving.started = true; route(); }
 }
 boot().catch((e) => { $("#link").className = "down"; $("#link").title = `this tab could not start: ${e}`; fail("starting this tab", e); });
 // Waits grow between events: the hover's words, and the open card's.
