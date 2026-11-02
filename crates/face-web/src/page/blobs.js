@@ -79,18 +79,25 @@ const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
 // role letter, shared by every blob of it. Going from one satellite straight
 // to another, it shows the brain for a moment, so the growth passes through
 // the centre; `jump` goes straight there, for a blob now showing another
-// session.
+// session. A `still` session's blob settles and stops moving, and stops the
+// frames once nothing else moves; while Max dictates, its centre pulses
+// with `voice`, his level from 0 to 1 (null when he is not dictating).
 export function session(state = "starting") {
-  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", lastPacket: 0,
+  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", lastPacket: 0, still: false, voice: null, stirred: 0,
     shown(now) { return now < this.via ? "brain" : this.state; },
     set(next, jump = false) {
       if (next === this.state && !jump) return;
       const now = performance.now(), a = satOf(this.shown(now)), b = satOf(next);
       this.via = !jump && a && b && a !== b ? now + 260 : 0;
-      this.state = next; this.since = now;
+      this.state = next; this.since = this.stirred = now;
+      wake();
     },
-    packet() { this.lastPacket = performance.now(); } };
+    hear(level) { this.voice = level; this.stirred = performance.now(); wake(); },
+    packet() { this.lastPacket = performance.now(); },
+    // Whether its blob may still be moving.
+    moving(now) { return !this.still || this.voice !== null || now - this.stirred < SETTLE || now - this.lastPacket < DISK_MS; } };
 }
+const SETTLE = 2000;
 
 // Icons, 24x24, as Path2D. The Claude mark is Anthropic's (via Simple Icons);
 // the gear and microphone are Lucide's (ISC).
@@ -458,7 +465,7 @@ function program(gl, vs, fs) {
 }
 
 // ─── The frame loop, shared by every layer ─────────────────────────────────
-// It runs while some layer shows a blob, and stops when none does.
+// It runs while some layer shows a blob that moves, and stops when none does.
 const layers = [], steps = new Set();
 let running = false, last = 0;
 function wake() {
@@ -470,9 +477,9 @@ function frame(now) {
   const dt = Math.min(1 / 30, (now - last) / 1000);
   last = now;
   for (const s of steps) if (!s(now)) steps.delete(s);
-  let shown = steps.size > 0;
-  for (const l of layers) shown = l.draw(now, dt) || shown;
-  if (shown) requestAnimationFrame(frame);
+  let moving = steps.size > 0;
+  for (const l of layers) moving = l.draw(now, dt) || moving;
+  if (moving) requestAnimationFrame(frame);
   else running = false;
 }
 export function onFrame(step) { steps.add(step); wake(); }
@@ -609,7 +616,7 @@ export function layer(host) {
       if (dirty) measure();
       const dpr = Math.min(3, devicePixelRatio || 1), W = Math.round(host.clientWidth * dpr), H = Math.round(host.clientHeight * dpr);
       if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
-      let drawn = 0, ndots = 0, shown = false;
+      let drawn = 0, ndots = 0, moving = false;
       const kc = 1 - Math.exp(-dt / .18);
       for (let i = 0; i < count; i++) {
         let x, y;
@@ -621,7 +628,7 @@ export function layer(host) {
           if (a.DOCX[i] < -1e8) continue;
           x = a.DOCX[i] * dpr; y = a.DOCY[i] * dpr;
         }
-        shown = true;
+        if (sessions[i].moving(now)) moving = true;
         const px = a.SIZE[i], size = px * dpr;
         if (x + size < 0 || y + size < 0 || x > W || y > H) continue;
         drawn = this.blob(i, drawn, now, dt, kc, x, y, size);
@@ -664,7 +671,7 @@ export function layer(host) {
         gl.bindVertexArray(dotVao);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, ndots);
       }
-      return shown;
+      return moving;
     },
     // Blob i, animated a step and written as instance `o`; returns the next.
     blob(i, o, now, dt, kc, x, y, size) {
@@ -672,7 +679,7 @@ export function layer(host) {
       const s = sessions[i], name = s.shown(now), st = STATES[name], t = (now - s.since) / 1000, px = a.SIZE[i];
 
       // The balls: each radius and gap springs towards the state's.
-      pull(R, RV, 4 * i, st.centre, dt, 17);
+      pull(R, RV, 4 * i, st.centre + (s.voice === null ? 0 : .04 + .2 * s.voice), dt, 17);
       const c0 = R[4 * i];
       for (let k = 0; k < 3; k++) {
         let gr = IDLE.r, gg = st.gap ?? IDLE.g;
@@ -686,7 +693,7 @@ export function layer(host) {
         const r = 4 * i + 1 + k, g = 3 * i + k, an = SAT_ANG[k];
         pull(R, RV, r, gr, dt, 17); pull(G, GV, g, gg, dt, 26);
         if (R[r] < 0) R[r] = 0;
-        const d = c0 + R[r] + G[g] + (st.still ? 0 : WOB * Math.sin(now / 700 + an * 3));
+        const d = c0 + R[r] + G[g] + (st.still || s.still ? 0 : WOB * Math.sin(now / 700 + an * 3));
         X[g] = Math.cos(an) * d; Y[g] = Math.sin(an) * d;
       }
       for (let k = 0; k < 9; k++) COL[9 * i + k] += (st.col[k / 3 | 0][k % 3] - COL[9 * i + k]) * kc;
