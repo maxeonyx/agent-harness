@@ -167,7 +167,7 @@ export function syncCompose() {
   if (local.has(keyOf(key))) return;
   const c = draftContent(key), parts = $(".parts", compose);
   if (box.value === c.text && parts?.shown === asText(c.staged)) return;
-  box.value = prev = c.text; autosize(); renderParts();
+  box.value = prev = c.text; renderParts(); autosize();
   // Another device changed the draft: sending waits a moment for Max to
   // see it.
   lockedUntil = Date.now() + 2000;
@@ -185,7 +185,7 @@ export function renderOthers() {
     const gist = (c.text || words(c.staged)).split("\n")[0].slice(0, 160) || `${c.staged.length} staged`;
     card.append(el("span", "said", gist));
     card.append(el("span", "why", d.held ? `Not heard: ${d.held}` : !d.from ? "Another draft" : rowsOf(session).some((o) => o.id === d.from) ? "Typed at the same time as another" : "Typed after another was sent"));
-    if (!d.held) { const use = el("button", "btn", "Edit this"); use.onclick = () => { bound.set(session, d.id); box.value = prev = c.text; autosize(); renderParts(); renderOthers(); renderComposeState(byId[session]); }; card.append(use); }
+    if (!d.held) { const use = el("button", "btn", "Edit this"); use.onclick = () => { bound.set(session, d.id); box.value = prev = c.text; renderParts(); autosize(); renderOthers(); renderComposeState(byId[session]); }; card.append(use); }
     else {
       const use = el("button", "btn", "Use these words");
       use.onclick = async () => { giveBlocks(session, [...c.staged, ...(c.text ? [{ type: "text", text: c.text }] : [])]); leaving.add(d.id); renderOthers(); await act({ Draft: [d.id, "Discarded"] }); renderOthers(); };
@@ -201,7 +201,7 @@ export function renderOthers() {
     const cancel = el("button", "btn", "Cancel edit");
     cancel.onclick = async () => {
       leaving.add(mine); editing.delete(mine); local.delete(mine);
-      box.value = prev = ""; autosize(); renderParts(); renderOthers();
+      box.value = prev = ""; renderParts(); autosize(); renderOthers();
       await act({ Draft: [mine, "Discarded"] });
       renderOthers(); syncCompose();
     };
@@ -227,7 +227,7 @@ export async function editMessage(session, at, text) {
     return [{ Draft: [id, { Opened: { session, at } }] }, { Draft: [id, { Text: digest(value) }] }];
   }, [value]);
   if (why) { local.delete(id); editing.delete(id); bound.delete(session); return say(`Edit: ${why}`, true); }
-  box.value = prev = text; autosize(); renderParts(); renderOthers(); renderComposeState(byId[session]);
+  box.value = prev = text; renderParts(); autosize(); renderOthers(); renderComposeState(byId[session]);
   box.focus();
 }
 
@@ -261,7 +261,7 @@ function stage() {
   const why = change(key, { staged: [...draftContent(key).staged, { type: "text", text }], text: "" });
   if (why) return say(`Not staged: ${why}`, true);
   box.value = prev = "";
-  autosize(); renderParts(); renderComposeState(byId[key]);
+  renderParts(); autosize(); renderComposeState(byId[key]);
 }
 // A staged part out again: words go back into the box, ahead of what is
 // there; anything else is removed.
@@ -271,7 +271,7 @@ function unstage(i) {
   const why = change(key, { staged: c.staged.filter((_, j) => j !== i), text });
   if (why) return say(`Not changed: ${why}`, true);
   box.value = prev = text;
-  autosize(); renderParts(); renderComposeState(byId[key]);
+  renderParts(); autosize(); renderComposeState(byId[key]);
   box.focus();
 }
 function renderParts() {
@@ -314,12 +314,13 @@ export function buildCompose(id) {
   // What is staged and what is typed scroll as one, under the buttons.
   const field = el("div", "field");
   field.append(el("div", "parts"), box);
-  field.addEventListener("scroll", () => fade(field), { passive: true });
+  following = true;
+  field.addEventListener("scroll", () => { following = field.scrollTop + field.clientHeight >= field.scrollHeight - 2; fade(field); }, { passive: true });
   const line = el("div", "line");
   line.append(field, side);
-  // Its height follows its words at the width it is shown at.
-  let width = 0;
-  new ResizeObserver(([e]) => { if (e.contentRect.width !== width) { width = e.contentRect.width; autosize(); } }).observe(field);
+  // Its height follows its words at the width it is shown at, and its end
+  // stays in view when it shrinks, as the phone's keyboard opens.
+  new ResizeObserver(autosize).observe(field);
   const row = el("div", "row2");
   const sample = el("button", "later sample", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
   row.append(el("span", "dock"), el("span", "picks"), el("span", "status"), sample, el("span", "tune"));
@@ -346,8 +347,8 @@ export function buildCompose(id) {
     press();
   });
   box.addEventListener("input", onInput);
-  autosize();
   renderParts();
+  autosize();
   renderOthers();
   renderComposeState(t);
 }
@@ -487,16 +488,17 @@ export const say = (text, bad) => {
   s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`;
   if (bad) unsay = setTimeout(() => say(""), 10000);
 };
+// Whether the field was scrolled to its end when it last scrolled.
+let following = true;
 function autosize() {
   if (!box) return;
   const field = box.parentElement, top = field.scrollTop;
-  const following = top + field.clientHeight >= field.scrollHeight - 2 && box.selectionEnd === box.value.length;
   box.style.height = "auto";
   box.style.height = `${box.scrollHeight}px`;
   // Measuring collapses the box for a moment, which pulls the field's scroll
   // to its top: what Max was reading stays where it was, and words arriving
   // at the end he is watching keep it in view.
-  field.scrollTop = following ? field.scrollHeight : top;
+  field.scrollTop = following && box.selectionEnd === box.value.length ? field.scrollHeight : top;
   fade(field);
 }
 // Words scrolled up out of a full box fade at its top edge.
@@ -559,7 +561,7 @@ export function takeWords(key) {
   bound.delete(key);
   local.delete(`new:${key}`);
   if (unborn(key)) keepHere(key, empty());
-  if (box?.dataset.key === key) { box.value = prev = ""; autosize(); renderParts(); renderOthers(); renderComposeState(byId[key]); }
+  if (box?.dataset.key === key) { box.value = prev = ""; renderParts(); autosize(); renderOthers(); renderComposeState(byId[key]); }
   return draft;
 }
 // Refused, what was staged comes back to its draft, before anything
@@ -572,7 +574,7 @@ export const giveBack = (key, text, files) => giveBlocks(key, [...files.map((a) 
 function giveBlocks(key, blocks) {
   const c = draftContent(key);
   change(key, { staged: [...blocks, ...c.staged], text: c.text });
-  if (box?.dataset.key === key) { box.value = prev = c.text; autosize(); renderParts(); renderOthers(); renderComposeState(byId[key]); }
+  if (box?.dataset.key === key) { box.value = prev = c.text; renderParts(); autosize(); renderOthers(); renderComposeState(byId[key]); }
 }
 
 let prev = "";
