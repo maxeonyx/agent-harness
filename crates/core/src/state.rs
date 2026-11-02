@@ -1876,15 +1876,16 @@ impl State {
                 if made.waits.is_some() {
                     return Err(Rejected::NotForTask);
                 }
-                let Caller::Agent { task, .. } = made.call.caller else {
+                let Caller::Agent { task: task_id, .. } = made.call.caller else {
                     return Err(Rejected::NotForTask);
                 };
-                let mut task = self.tasks.get(&task).ok_or(Rejected::Unknown)?.clone();
+                let mut task = self.tasks.get(&task_id).ok_or(Rejected::Unknown)?.clone();
                 task.apply(record, self)?;
                 self.put(task);
                 if let Some(made) = self.calls.get_mut(&id) {
                     made.backgrounded = Some(mark);
                 }
+                self.leg_work(task_id, id, id);
                 Ok(())
             }
             CallEvent::Settled(outcome) => self.settle(id, outcome, record),
@@ -1919,18 +1920,22 @@ impl State {
     }
 
     /// What the wait `call` has come to: the calls it waits on that have
-    /// settled for its caller, and those still running for it. `None` for a
-    /// call that is not a wait.
+    /// settled for its caller, and those still running for it, as of its own
+    /// settlement once it has one, so the landed are the results it read.
+    /// `None` for a call that is not a wait.
     pub fn waited(&self, call: CallId) -> Option<(Vec<CallId>, Vec<CallId>)> {
         let record = self.calls.get(&call)?;
         let wait = record.waits.as_ref()?;
         let Caller::Agent { task, .. } = record.call.caller else {
             return None;
         };
+        let until = record.settled.as_ref().map(|s| s.at.seq);
         let (landed, running): (Vec<_>, Vec<_>) = (wait.on.iter())
             .filter_map(|c| Some((*c, self.calls.get(c)?)))
             .filter(|(_, r)| r.owner == Owner::Task(task))
-            .partition(|(_, r)| r.settled.is_some());
+            .partition(|(_, r)| {
+                (r.settled.as_ref()).is_some_and(|s| until.is_none_or(|u| s.at.seq < u))
+            });
         let ids = |calls: Vec<(CallId, _)>| calls.into_iter().map(|(c, _)| c).collect();
         Some((ids(landed), ids(running)))
     }

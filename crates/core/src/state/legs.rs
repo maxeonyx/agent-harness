@@ -107,13 +107,19 @@ impl State {
         let Some(legs) = self.legs.get(&task) else {
             return;
         };
-        let joined: Vec<CallId> = (call.renders.iter())
+        let mut joined: Vec<CallId> = Vec::new();
+        let read = (call.renders.iter())
             .filter_map(|span| match span.from {
                 Rendered::Call(c) => Some(c),
                 _ => None,
             })
-            .filter(|c| !legs.taken.contains(c) && self.joins(*c))
-            .collect();
+            .flat_map(|c| self.reads(c));
+        // Two waits in one response may read the same result.
+        for c in read {
+            if !legs.taken.contains(&c) && !joined.contains(&c) && self.joins(c) {
+                joined.push(c);
+            }
+        }
         if !joined.is_empty() {
             let mut on = vec![Dep::Leg {
                 leg: legs.head,
@@ -177,13 +183,19 @@ impl State {
         }
     }
 
-    /// Whether a request taking in `call` begins a join: it is a background
-    /// call, or a spawn with members.
+    /// The calls whose results a context reads in `call`'s settlement: those
+    /// a wait read, or the call itself.
+    fn reads(&self, call: CallId) -> Vec<CallId> {
+        self.waited(call)
+            .map_or_else(|| vec![call], |(landed, _)| landed)
+    }
+
+    /// Whether a request taking in `call` begins a join: it is background
+    /// work, started so or moved there, or a spawn with members.
     fn joins(&self, call: CallId) -> bool {
-        self.calls
-            .get(&call)
-            .is_some_and(|c| matches!(c.call.caller, Caller::Background { .. }))
-            || self.members(Scope::Spawn(call)).next().is_some()
+        self.calls.get(&call).is_some_and(|c| {
+            matches!(c.call.caller, Caller::Background { .. }) || c.backgrounded.is_some()
+        }) || self.members(Scope::Spawn(call)).next().is_some()
     }
 
     /// The leg of `task` holding `entry`: the nearest leg to begin at it or

@@ -392,7 +392,8 @@ pub enum Began {
     /// A compaction, at its carry: what it replaced is the leg before it.
     Carry(EntryId),
     /// The first request, by its head, to take in results not yet taken in:
-    /// a spawn's members', or a background call's.
+    /// a spawn's members', or a background call's, started so or moved there
+    /// by Max's words, whether it wakes the task or a `wait` reads it.
     Join(EntryId),
     /// Max moved the task back and what followed diverged, at the first
     /// diverging entry: the new version, or the old one split off behind it.
@@ -430,9 +431,10 @@ pub enum Dep {
     Work(CallId),
 }
 
-/// A background call that is not a spawn: the one node of the graph that
-/// is not a context. It hangs from the leg that started it, at the response
-/// whose tool use started it, until a [`Began::Join`] takes its result in.
+/// A background call that is not a spawn, started so or moved there by
+/// Max's words: the one node of the graph that is not a context. It hangs
+/// from the leg that started or moved it, at the response whose tool use
+/// started it, until a [`Began::Join`] takes its result in.
 ///
 /// **Vision.** "I actually like that background tool calls showing on the
 /// graph" (Max).
