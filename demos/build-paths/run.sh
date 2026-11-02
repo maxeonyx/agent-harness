@@ -27,6 +27,6 @@ loaded='JSON.stringify({ mark: globalThis.pageMark ?? null, modules: performance
 node dev/drive.mjs page --brain build-paths \
   sleep 4000 eval "$loaded" \
   cdp Page.reload '{}' sleep 4000 eval "$loaded" \
-  sleep 14000 cdp Page.reload '{}' sleep 4000 eval "$loaded" 2>&1 | grep -v '^  warning'
+  sleep 14000 cdp Page.reload '{}' sleep 4000 eval "$loaded" 2>&1 | grep --line-buffered -v '^  warning'
 wait
 echo "end it with: node dev/drive.mjs down --brain build-paths"
