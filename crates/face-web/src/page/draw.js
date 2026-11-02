@@ -1,4 +1,4 @@
-import { $, el, svgEl, when } from "./base.js";
+import { $, el, ICONS, svgEl, when } from "./base.js";
 import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, look, positions, radius, routes, shortName, shown, successor, unfolded, view } from "./map.js";
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
 import { layer, MARK, session } from "./blobs.js";
@@ -23,7 +23,7 @@ const sessions = new Map(), handles = new Map();
 function sessionOf(n) {
   let s = sessions.get(n.t.id);
   if (!s) sessions.set(n.t.id, s = session(n.big));
-  const want = n.kind !== "planned" && trouble(n.t) ? "held" : n.big;
+  const want = n.kind === "planned" ? "planned" : trouble(n.t) ? "held" : n.big;
   if (s.state !== want) s.set(want);
   s.letter = n.kind === "planned" ? String(n.waits) : glyph(n.t);
   s.pips = n.pips ?? 0;
@@ -56,7 +56,9 @@ export function drawMap() {
       if (kind === "card") a.append(el("span", "name"));
       else a.append(el("span", "hit"), el("span", "name"));
       if (kind === "work") {
-        a.append(el("span", "g", "⋯"));
+        const g = el("span", "g");
+        g.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.gear}</svg>`;
+        a.append(g);
         a.addEventListener("click", () => { if (!drag?.moved) openAt(graph.nodes.get(id)); });
       } else {
         a.href = `#${id}`;
@@ -93,7 +95,8 @@ function elOf(id) {
 // Every node where it is shown now: the elements moved, the blobs placed
 // and the marks written for the canvas.
 let marks = new Float32Array(0);
-const INK = [20 / 255, 20 / 255, 19 / 255], PAPER = [250 / 255, 249 / 255, 245 / 255], YOURS = [212 / 255, 105 / 255, 28 / 255];
+const rgb = (r, g, b) => [r / 255, g / 255, b / 255];
+const INK = rgb(20, 20, 19), PAPER = rgb(250, 249, 245), YOURS = rgb(212, 105, 28), GREEN = rgb(79, 138, 85), RED = rgb(179, 53, 44);
 export function drawNodes() {
   if (marks.length < MARK * shown.size) marks = new Float32Array(MARK * shown.size * 2);
   let k = 0;
@@ -107,15 +110,29 @@ export function drawNodes() {
     const m = k++ * MARK;
     marks[m] = c.x; marks[m + 1] = c.y; marks[m + 2] = radius(n);
     if (n.kind === "leg") {
-      marks.set(INK, m + 4); marks[m + 7] = (n.old ? .15 : .42) * dim;
+      // The own node of a finished task Max started (a chat, an aside) in
+      // its outcome's colour, so it stands out from the agents' finished
+      // legs; any other leg ink.
+      const o = id === n.t.id && isDone(n.t) && !n.t.started_by ? n.t.outcome?.kind : null;
+      const fill = o === "failed" ? RED : o && o !== "abandoned" ? GREEN : INK;
+      marks.set(fill, m + 4); marks[m + 7] = (n.old ? .15 : fill === INK ? .42 : .85) * dim;
       marks[m + 11] = 0;
-    } else {
-      // A chip, or a planned join: paper, with a dashed ring.
-      const ring = n.kind === "chip" && n.work.handed ? YOURS : INK;
-      marks[m + 3] = n.kind === "planned" ? 1.3 : n.running ? 1.4 : 1.2;
+    } else if (n.kind === "planned") {
+      // A planned join: paper, with a dotted ring.
+      marks[m + 3] = 1.3;
       marks.set(PAPER, m + 4); marks[m + 7] = dim;
-      marks.set(ring, m + 8); marks[m + 11] = (n.kind === "planned" ? .5 : n.running ? .7 : .4) * dim;
-      marks[m + 12] = Math.round((2 * Math.PI * radius(n)) / (n.running ? 4.2 : 3.2));
+      marks.set(INK, m + 8); marks[m + 11] = .5 * dim;
+      marks[m + 12] = Math.round((2 * Math.PI * radius(n)) / 3.2);
+    } else if (n.running) {
+      // Running background work: paper, ringed, under its gear.
+      marks[m + 3] = 1.4;
+      marks.set(PAPER, m + 4); marks[m + 7] = dim;
+      marks.set(n.work.handed ? YOURS : INK, m + 8); marks[m + 11] = .7 * dim;
+      marks[m + 12] = 0;
+    } else {
+      // Finished background work: a faint small dot.
+      marks.set(INK, m + 4); marks[m + 7] = .25 * dim;
+      marks[m + 11] = 0;
     }
   }
   blobs?.marks(marks, k);
