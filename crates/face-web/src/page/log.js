@@ -24,6 +24,8 @@ const versionsOf = (task) => getJson(`/versions/${task}`, `loading the versions 
 export async function renderLog(t) {
   const s = logState;
   if (!s || s.id !== t.id) return;
+  // A chat just opened: its own blob at once, not the last chat's while its log loads.
+  if (!dock.hidden && blobTask !== t.id) showBlob(t);
   const seen = `${t.head} ${t.ended}`;
   if (s.seen !== seen) {
     s.seen = seen;
@@ -737,7 +739,7 @@ function renderTail(s, t) {
   const parts = [];
   if (t.waiting?.kind === "model") parts.push(followModel(t.waiting.call));
   else stopModel();
-  showBlob(t, BLOB_STATE[t.waiting?.kind]?.(t.waiting));
+  showBlob(t);
   // Not read yet: dashed, until the request that reads it.
   for (const p of t.pending || []) {
     const when = `${clock(p.at)}, not read yet`;
@@ -768,7 +770,8 @@ const BIG = 128, SMALL = 56, DOCK = BIG + 24, DOCKED = SMALL, TRAVEL = DOCK - DO
 const blobSession = session(), dock = $(".scroll > .dock", panel);
 dock.style.cssText = `width: ${DOCK}px; height: ${DOCK}px; bottom: ${-TRAVEL}px`;
 let blobs, blobBox = null, blobTask = null;
-function showBlob(t, shape) {
+function showBlob(t) {
+  const shape = BLOB_STATE[t.waiting?.kind]?.(t.waiting);
   if (shape && blobs === undefined) blobs = layer(dock);
   const shown = !!(shape && blobs);
   dock.hidden = !shown;
