@@ -9,7 +9,11 @@
 //
 // Every blob of a layer is drawn in one pass: one WebGL canvas, and one
 // instanced square per blob whose fragment shader computes the field per
-// pixel. The blobs' state is struct-of-arrays in typed arrays, and nothing is
+// pixel. Everything in a blob but its outline is sized in its own units, so
+// a blob of any size is a scaled copy of every other; below DETAIL css px
+// its icons, letter and dots go, and it is just a blob in its state's
+// colour. The outline keeps its width, so a small stuck blob still shows
+// red. The blobs' state is struct-of-arrays in typed arrays, and nothing is
 // allocated per frame. Only the compaction dots need the CPU: marching
 // squares traces the track, and a second draw puts a dot per quad. A blob
 // off its canvas is neither animated nor drawn, and while a layer shows no
@@ -115,6 +119,12 @@ const SAT_KEYS = Object.keys(SATS), SAT_ANG = SAT_KEYS.map((k) => SATS[k]);
 const K = .22; // the smooth minimum's reach: balls closer than this melt together
 const DISKS = 8, DISK_MS = 1400, DISK_GAP = 200; // at most one disk per 0.2 s
 const INST = 44; // floats per blob instance: 11 vec4
+// The outline's width in css px; in blob units, the letter's size per unit
+// of the centre's radius, and a compaction dot's radius.
+const EDGE = 1.3, LETTER = 1.4, DOT = .05;
+// Below DETAIL css px a blob has no icons, letter or dots: they pop out
+// rather than fade, so none lingers faint.
+const DETAIL = 46;
 // A mark: centre x, y, radius and ring width in world px; fill, then ring,
 // as straight rgba 0-1; and how many dashes its ring has (0: solid).
 export const MARK = 16;
@@ -198,11 +208,11 @@ void main() {
   p = (corner * 2. - 1.) * ${SPAN};
   ${[...Array(11)].map((_, k) => `v${k} = a${k};`).join(" ")}
 }`;
-// v0: device x, y, size, field units per css px. v1: centre radius, active
+// v0: device x, y, size, device px per css px. v1: centre radius, active
 // ball (0 centre, 1-3 a satellite), letter cell, letter size. v2-v4: the
 // satellites' x, y, r and icon alpha. v5-v7: fill, edge and icon colours,
-// with the model's and gear's turns and nothing. v8: letter colour. v9-v10:
-// the disks' ages, 0-1, or -1.
+// with the model's and gear's turns and nothing. v8: letter colour and
+// alpha. v9-v10: the disks' ages, 0-1, or -1.
 const BLOB_FS = `#version 300 es
 precision highp float;
 in vec2 p;
@@ -228,19 +238,17 @@ vec4 disk(vec4 c, vec3 src, float age, float unit) {
   return over(c, v6.rgb, .14 * pow(1. - age, 1.6) * clamp(.5 - d, 0., 1.));
 }
 // An icon, 24 units square, centred on its ball and turned by a; the atlas
-// holds it at 4 px a unit with a 4-unit margin. A stroked icon's distance is
-// from a 2-unit stroke; filled, from its fill.
-vec4 icon(vec4 c, vec4 b, float a, float cell, bool filled, vec3 col, float unit, float css) {
+// holds it at 4 px a unit with a 4-unit margin, as the distance from its
+// fill or its 2-unit stroke.
+vec4 icon(vec4 c, vec4 b, float a, float cell, vec3 col, float unit) {
   if (b.w <= 0.) return c;
   float s = b.z * 1.15 / 24., cs = cos(a), sn = sin(a);
   vec2 q = mat2(cs, -sn, sn, cs) * (p - b.xy) / s + 12.;
-  float d = sdf(cell, (q + 4.) * 4.) / 4., px = 1. / (s * unit);
-  float cov = filled ? clamp(.5 - d / px, 0., 1.)
-                     : clamp((max(2., 1.4 * css / s) * .5 - (d + 1.)) / px + .5, 0., 1.);
-  return over(c, col, b.w * cov);
+  float d = sdf(cell, (q + 4.) * 4.) / 4.;
+  return over(c, col, b.w * clamp(.5 - d * s * unit, 0., 1.));
 }
 void main() {
-  float unit = v0.z / ${2 * SPAN}, css = v0.w, dpr = css * unit;
+  float unit = v0.z / ${2 * SPAN};
   float f = smin(smin(smin(length(p) - v1.x, v2.xyz), v3.xyz), v4.xyz);
   float fpx = f / max(length(vec2(dFdx(f), dFdy(f))), 1e-6); // device px
 
@@ -251,15 +259,15 @@ void main() {
   c = disk(c, src, v10.x, unit); c = disk(c, src, v10.y, unit); c = disk(c, src, v10.z, unit); c = disk(c, src, v10.w, unit);
 
   c = over(c, v5.rgb, clamp(.5 - fpx, 0., 1.));
-  c = over(c, v6.rgb, clamp(.65 * dpr + .5 - abs(fpx), 0., 1.));
+  c = over(c, v6.rgb, clamp(${EDGE / 2} * v0.w + .5 - abs(fpx), 0., 1.));
 
-  c = icon(c, v2, v5.w, 0., true, act == 1 ? v7.rgb : v6.rgb, unit, css);
-  c = icon(c, v3, v6.w, 1., false, act == 2 ? v7.rgb : v6.rgb, unit, css);
-  c = icon(c, v4, 0., 2., false, act == 3 ? v7.rgb : v6.rgb, unit, css);
+  c = icon(c, v2, v5.w, 0., act == 1 ? v7.rgb : v6.rgb, unit);
+  c = icon(c, v3, v6.w, 1., act == 2 ? v7.rgb : v6.rgb, unit);
+  c = icon(c, v4, 0., 2., act == 3 ? v7.rgb : v6.rgb, unit);
 
   float k = v1.w / 80.; // the letter is drawn 80 px high in its cell
   float d = sdf(v1.z, (p - vec2(0., v1.x * .05)) / k + CELL / 2.) * k * unit;
-  o = over(c, v8.rgb, .92 * clamp(.5 - d, 0., 1.));
+  o = over(c, v8.rgb, v8.w * clamp(.5 - d, 0., 1.));
 }`;
 const DOT_VS = `#version 300 es
 layout(location = 0) in vec2 corner;
@@ -719,11 +727,11 @@ export function layer(host) {
         DISK[DISKS * i + DISKAT[i]] = now; DISKAT[i] = (DISKAT[i] + 1) % DISKS;
       }
 
-      const b0 = INST * o, onePx = 2 * SPAN / px, active = SAT_KEYS.indexOf(st.active) + 1;
-      inst[b0] = x; inst[b0 + 1] = y; inst[b0 + 2] = size; inst[b0 + 3] = onePx;
-      inst[b0 + 4] = c0; inst[b0 + 5] = active; inst[b0 + 6] = glyph(s.letter); inst[b0 + 7] = Math.max(c0 * 1.25, 9 * onePx);
+      const b0 = INST * o, active = SAT_KEYS.indexOf(st.active) + 1, show = +(px >= DETAIL);
+      inst[b0] = x; inst[b0 + 1] = y; inst[b0 + 2] = size; inst[b0 + 3] = size / px;
+      inst[b0 + 4] = c0; inst[b0 + 5] = active; inst[b0 + 6] = glyph(s.letter); inst[b0 + 7] = c0 * LETTER;
       for (let k = 0; k < 3; k++) {
-        const r = R[4 * i + 1 + k], show = clamp((r * px / (2 * SPAN) - 5) / 6, 0, 1), b = b0 + 8 + 4 * k;
+        const r = R[4 * i + 1 + k], b = b0 + 8 + 4 * k;
         inst[b] = X[3 * i + k]; inst[b + 1] = Y[3 * i + k]; inst[b + 2] = r;
         inst[b + 3] = show * (active === k + 1 ? (name === "first" ? .55 : 1) : .45);
       }
@@ -731,7 +739,7 @@ export function layer(host) {
       inst[b0 + 23] = SPIN[i]; inst[b0 + 27] = GEAR[i]; inst[b0 + 31] = 0;
       // The role letter: ink on a light blob, paper on a dark one.
       const light = (COL[9 * i] * .3 + COL[9 * i + 1] * .59 + COL[9 * i + 2] * .11) / 255, lc = light > .6 ? C.ink : C.paper;
-      inst[b0 + 32] = lc[0] / 255; inst[b0 + 33] = lc[1] / 255; inst[b0 + 34] = lc[2] / 255; inst[b0 + 35] = 0;
+      inst[b0 + 32] = lc[0] / 255; inst[b0 + 33] = lc[1] / 255; inst[b0 + 34] = lc[2] / 255; inst[b0 + 35] = .92 * show;
       for (let k = 0; k < DISKS; k++) {
         const t1 = DISK[DISKS * i + (DISKAT[i] + k) % DISKS], age = (now - t1) / DISK_MS; // oldest first
         inst[b0 + 36 + k] = t1 > 0 && age < 1 ? age : -1;
@@ -742,8 +750,8 @@ export function layer(host) {
     // from dot `n`; returns the next.
     dots(i, n, x, y, size) {
       const pips = sessions[i].pips;
-      if (!(pips > 0)) return n;
-      const { R, X, Y } = a, onePx = 2 * SPAN / a.SIZE[i];
+      if (!(pips > 0) || a.SIZE[i] < DETAIL) return n;
+      const { R, X, Y } = a;
       ball[0] = 0; ball[1] = 0; ball[2] = R[4 * i];
       for (let k = 0; k < 3; k++) { ball[3 + 3 * k] = X[3 * i + k]; ball[4 + 3 * k] = Y[3 * i + k]; ball[5 + 3 * k] = R[4 * i + 1 + k]; }
       const m = longestLoop(TN, TRACK_LEVEL);
@@ -752,7 +760,7 @@ export function layer(host) {
       for (let d = 0; d < placed; d++) {
         const b = 4 * n++;
         dots[b] = x + size / 2 + dotX[d] * unit; dots[b + 1] = y + size / 2 + dotY[d] * unit;
-        dots[b + 2] = Math.max(1.4 * onePx, .035) * unit; dots[b + 3] = Math.max(.22, .7 - d * .07);
+        dots[b + 2] = DOT * unit; dots[b + 3] = Math.max(.22, .7 - d * .07);
       }
       return n;
     },
