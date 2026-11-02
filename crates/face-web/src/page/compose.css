@@ -4,8 +4,9 @@
      stacked at its right. Its bottom edge is a strip of sections: what went
      wrong, and the model and effort. What he can do to the task itself
      floats on the map, outside the card to the right of the box; on a
-     phone, where the card fills the screen, it floats above the box's right
-     end. */
+     phone, where the card fills the screen, it sits at the right on the
+     line above the box, where the log's blob docks, and grows and shrinks
+     with the blob (`card.css`); the box's buttons start below it. */
   .compose { padding: 0; }
   .compose .box { background: var(--white); border-top: 1px solid var(--line); border-radius: 0 0 calc(var(--r) - 1px) calc(var(--r) - 1px); }
   .compose .box.drop { box-shadow: inset 0 0 0 1.5px var(--ink); }
@@ -39,8 +40,13 @@
   .compose .acts .act svg { width: 18px; height: 18px; }
   @media (max-width: 760px) {
     .compose { position: relative; }
-    .compose .acts { left: auto; right: .9em; bottom: calc(100% + 4px); flex-direction: row; }
+    .compose .acts { left: auto; right: .9em; bottom: 100%; z-index: 3; flex-direction: row; transform-origin: right center; transform: translateY(50%) scale(.6); }
+    .compose .side { padding-top: 22px; }
+    @supports (animation-timeline: view()) {
+      .compose .acts { animation: acts linear both; animation-timeline: --end; animation-range: entry 50% entry 100%; }
+    }
   }
+  @keyframes acts { to { transform: translateY(50%); } }
   .compose .clip, .compose .mic { width: 36px; height: 36px; }
   .compose .send { width: 40px; height: 40px; }
   .compose .clip svg, .compose .mic svg, .compose .send svg { width: 20px; height: 20px; }

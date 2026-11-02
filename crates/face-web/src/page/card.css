@@ -49,6 +49,7 @@
   .mix .btn { font-size: 12.5px; padding: .15em .7em; }
   #panel > .body { flex: 1; display: flex; min-height: 0; }
   #panel.fresh > .body { display: none; }
+  .pane { flex: 1; display: flex; min-width: 0; position: relative; }
   .scroll { flex: 1; overflow: auto; overscroll-behavior: contain; scroll-padding-bottom: 2em; touch-action: pan-y; }
   .log { max-width: 48rem; margin: 0 auto; padding: 1.4em 1.6em 2.5em; }
   .viewer { flex: 1; min-width: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; background: var(--white); }
@@ -217,11 +218,29 @@
   .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid var(--s, var(--ink)); background: var(--s); color: var(--on, inherit); display: grid; place-items: center; font: 600 9px var(--serif); }
   .chip:is(.paused, .cancelled) .d { background: none; }
   .chip.done { color: var(--muted); }
-  /* The log's end: its blob, drawn by the dock's canvas (`blobs.js`) in a
-     box the scroll scales (`log.js`); only the blob takes a tap. */
-  .scroll > .dock { position: sticky; margin: 0 auto; pointer-events: none; z-index: 2; }
-  .scroll > .dock .blob { position: absolute; left: 50%; top: 0; border-radius: 50%; pointer-events: auto; cursor: pointer; }
-  .scroll > .dock > div:not(.blob) { filter: drop-shadow(0 3px 5px rgba(40, 30, 20, calc(.35 * var(--docked, 0)))); }
+  /* The log's end: its blob, big in the room left for it below the last
+     entry. Scrolled past, it is small, with a shadow, centred on the line
+     between the log and the entry box, half over each. The dock holds the
+     blob's canvas (`blobs.js`) outside the scroll, which would clip its
+     lower half, and the scroll itself moves and scales it, on the
+     compositor: docked until the room's middle comes up to the line, then
+     moving with the log and growing, to fill the room once all of it is in
+     view. A blob of 128 px docks at 56. Only the blob takes a tap, and
+     only its part above the line: below it, a tap is for the entry box. */
+  #panel { timeline-scope: --end; }
+  .scroll > .end { height: 152px; view-timeline: --end y; view-timeline-inset: 0; }
+  .pane:has(> .dock[hidden]) > .scroll > .end { display: none; }
+  .pane > .dock {
+    position: absolute; left: 50%; bottom: 0; z-index: 3; display: grid; place-items: center; width: 152px; height: 152px; margin-left: -76px; pointer-events: none;
+    transform: translateY(50%) scale(calc(56 / 128)); filter: drop-shadow(0 7px 11px rgba(40, 30, 20, .35));
+  }
+  @supports (animation-timeline: view()) {
+    .pane > .dock { animation: dock linear both; animation-timeline: --end; animation-range: entry 50% entry 100%; }
+    .pane > .dock .blob { animation: above linear both; animation-timeline: --end; animation-range: entry 50% entry 100%; }
+  }
+  @keyframes dock { to { transform: none; filter: drop-shadow(0 7px 11px transparent); } }
+  @keyframes above { to { clip-path: inset(0); } }
+  .pane > .dock .blob { border-radius: 50%; clip-path: inset(0 0 50%); pointer-events: auto; cursor: pointer; }
   .exact-entry { margin: 0 0 1em; }
   .exact-entry .who { font: 600 12px var(--sans); color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }

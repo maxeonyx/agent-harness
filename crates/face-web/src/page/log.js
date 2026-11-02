@@ -759,22 +759,18 @@ function renderTail(s, t) {
 
 // The log ends in its blob (`blobs.js`): what it waits on, and a disk for
 // each piece of data; still once the chat is idle. It sits big below the
-// last entry and scrolls with the log; scrolled past, it stays docked small
-// above the entry box with a shadow, and a tap goes to the bottom. The dock
-// is sticky, so the compositor moves it with the scroll, and the blob's
-// size, place and shadow follow how far the end is below. While the chat
-// waits on Max a tap also starts dictation, and while he dictates it pulses
-// with his voice and a tap stops it.
-const BIG = 128, SMALL = 56, DOCK = BIG + 24, DOCKED = SMALL, TRAVEL = DOCK - DOCKED;
-const blobSession = session(), dock = $(".scroll > .dock", panel);
-dock.style.cssText = `width: ${DOCK}px; height: ${DOCK}px; bottom: ${-TRAVEL}px`;
+// last entry; scrolled past, it docks small on the line above the entry box,
+// and a tap goes to the bottom. Where it is and how big is the scroll's alone
+// (`card.css`). While the chat waits on Max a tap also starts dictation, and
+// while he dictates it pulses with his voice and a tap stops it.
+const blobSession = session(), dock = $(".pane > .dock", panel);
 let blobs, blobBox = null, blobTask = null;
 function showBlob(t) {
   if (blobs === undefined) blobs = layer(dock);
   dock.hidden = !blobs;
   if (!blobs) return;
   if (!blobBox) {
-    blobBox = blobs.add(BIG, blobSession);
+    blobBox = blobs.add(128, blobSession);
     blobBox.onclick = () => {
       toBottom();
       if (dictation || (blobSession.state === "max" && can.dictation)) dictate(false);
@@ -786,19 +782,9 @@ function showBlob(t) {
   blobSession.letter = glyph(t);
   blobSession.set(shape, blobTask !== t.id);
   blobTask = t.id;
-  fitBlob();
 }
 // How loud Max is while he dictates, 0 to 1; null when he is not.
 export const hear = (level) => blobSession.hear(level);
-// From big in the middle of the dock (the end in view) to small at its top
-// (the end a dock's travel below), in step with the scroll.
-function fitBlob() {
-  if (!blobBox || dock.hidden) return;
-  const f = Math.min(1, Math.max(0, below() / TRAVEL)), size = BIG + (SMALL - BIG) * f, y = DOCK / 2 + (DOCKED - DOCK) / 2 * f;
-  blobBox.style.transform = `translate(-50%, -50%) translateY(${y}px) scale(${size / BIG})`;
-  dock.style.setProperty("--docked", f);
-  blobs.moved();
-}
 const below = () => scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
 const toBottom = () => { pinned = true; scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" }); };
 function unread(t) {
@@ -831,9 +817,8 @@ function stick(change) {
   const atBottom = following() || logState?.follow;
   change();
   if (atBottom) { scrollEl.scrollTop = scrollEl.scrollHeight; if (logState) logState.follow = false; }
-  fitBlob();
 }
-scrollEl.addEventListener("scroll", () => { following(); fitBlob(); });
+scrollEl.addEventListener("scroll", following, { passive: true });
 
 // A request streaming, or a command printing: neither is a fact. Each
 // arrives on the link as live pieces, all of them again after a reconnect.
