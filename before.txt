@@ -1,0 +1,11 @@
+
+before (grid-cut ends): per size, error of each visible dash end vs where it should be, device px
+css px  dpr | mean |err|  max |err| | frame-to-frame |Δerr| mean  p99   max | dash length min..max
+    20    3 |     1.093      1.557 |                          0.033 0.893 1.206 | 4.37..6.41
+    32    3 |     0.856      1.592 |                          0.051 1.410 1.592 | 5.49..8.46
+    48    3 |     0.652      1.637 |                          0.055 1.412 1.693 | 8.16..11.20
+    64    3 |     0.831      2.133 |                          0.072 1.831 2.208 | 10.88..14.83
+   120    3 |     1.559      3.999 |                          0.135 3.434 4.140 | 20.39..27.80
+    64    1 |     0.277      0.711 |                          0.024 0.610 0.736 | 3.63..4.94
+
+retrace: 0.0374 ms

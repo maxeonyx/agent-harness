@@ -1,0 +1,12 @@
+
+after: per size, error of each visible dash end vs where it should be, device px
+css px  dpr | mean |err|  max |err| | frame-to-frame |Δerr| mean  p99   max | dash length min..max
+    20    3 |     0.033      1.152 |                          0.004 0.106 0.682 | 1.87..3.57
+    32    3 |     0.046      1.488 |                          0.006 0.065 0.996 | 4.40..5.65
+    48    3 |     0.056      0.753 |                          0.003 0.040 0.208 | 8.00..9.47
+    64    3 |     0.075      1.008 |                          0.004 0.052 0.208 | 10.67..12.60
+   120    3 |     0.140      1.890 |                          0.008 0.097 0.391 | 20.00..23.63
+    64    1 |     0.025      0.336 |                          0.001 0.017 0.069 | 3.56..4.20
+
+retrace: 0.0357 ms
+lay dashes on the traced outline: 0.0005 ms
