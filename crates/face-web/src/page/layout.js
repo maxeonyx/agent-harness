@@ -10,7 +10,8 @@
 // the right), `along` how tall it is, `top` and `foot` where lines arrive
 // from above and leave below. `now` is a live node, `planned` one that waits
 // on what it depends on; the present row is the lowest any node but these
-// and chips reaches. Nodes come after everything they depend on.
+// and chips reaches. `life`, if known, is [when it began, when it ended or
+// now], in ms. Nodes come after everything they depend on.
 
 // Isotonic regression with minimum gaps: each node of row L as near its
 // target t[i] (weighted w[i]) as it can be, in order, each at least gap[i]
@@ -47,12 +48,13 @@ export function layered(nodes, prev = new Map()) {
   const by = new Map(V.map((v) => [v.id, v]));
   // 1. Rows: one below the lowest dependency. 2. The present: every live
   // node down to the lowest row the past reaches; a planned node one below
-  // what it waits on.
+  // what it waits on. 3. Everything else by its time, within its slack.
   const below = (v) => { let r = -1; for (const d of v.deps) r = Math.max(r, by.get(d).rank); return r + 1; };
   for (const v of V) v.rank = below(v);
   let P = 0;
   for (const v of V) if (!v.n.planned && v.n.kind !== "chip") P = Math.max(P, v.rank);
   for (const v of V) if (v.n.now || v.n.planned) v.rank = Math.max(v.n.now ? P : 0, below(v));
+  byTime(V, by, P);
   const layers = [];
   const put = (v) => (layers[v.rank] ??= []).push(v);
   V.forEach(put);
@@ -72,7 +74,7 @@ export function layered(nodes, prev = new Map()) {
     }
   }
   for (let r = 0; r < layers.length; r++) layers[r] ??= [];
-  // 3. Order within each row: as it was (a new node, or a line, by where
+  // 4. Order within each row: as it was (a new node, or a line, by where
   // what it hangs from was), then the order things began; then a few
   // barycentre sweeps, down and up.
   const seed = (v) => prev.get(v.dummy ? v.dep : v.id) ?? (v.deps?.length ? prev.get(v.deps[0]) : undefined) ?? Infinity;
@@ -92,7 +94,7 @@ export function layered(nodes, prev = new Map()) {
       L.forEach((v, i) => (v.pos = i));
     }
   }
-  // 4. Across: each line a spring pulling its ends together, each row placed
+  // 5. Across: each line a spring pulling its ends together, each row placed
   // as near its neighbours as the gaps allow (dot's objective, squared). A
   // long edge's hidden points are a much stiffer spring, so it keeps one
   // lane; every node is pulled a little to the centre line, so nothing drifts.
@@ -145,7 +147,7 @@ export function layered(nodes, prev = new Map()) {
     const x = Math.min(hi, Math.max(lo, sum / mid.length));
     for (const u of mid) u.x = x;
   }
-  // 5. Down: each row as tall as its tallest node plus 17, the present row
+  // 6. Down: each row as tall as its tallest node plus 17, the present row
   // at y = 0.
   const tall = layers.map((L) => L.reduce((m, v) => Math.max(m, v.along), 0));
   const ys = [0];
@@ -163,6 +165,52 @@ export function layered(nodes, prev = new Map()) {
   const out = new Map();
   for (const v of V) out.set(v.id, { x: v.x, y: v.y });
   return { at: out, edges: edges.map((e) => ({ from: e.from.id, to: e.to.id, route: route(e) })) };
+}
+
+// A node has slack: from one row below what it depends on (as early as it
+// can be) to one row above what depends on it, or the present row if
+// nothing does (as late as it can be). The critical path, which sets how
+// many rows there are, and live and planned nodes have none. Every other
+// node sits as far through the rows between its neighbours as the middle of
+// its life is through the time between what it depends on ending and what
+// depends on it beginning (or now), on the nearest row its slack allows. A
+// node with no `life` began with what it depends on. A few sweeps, as its
+// neighbours move with it.
+function byTime(V, by, P) {
+  const fixed = (v) => v.n.now || v.n.planned;
+  const kids = new Map(V.map((v) => [v.id, []]));
+  for (const v of V) for (const d of v.deps) kids.get(d).push(v);
+  for (let i = V.length - 1; i >= 0; i--) {
+    const v = V[i];
+    let r = fixed(v) ? v.rank : P;
+    for (const k of kids.get(v.id)) r = Math.min(r, k.late - 1);
+    v.late = Math.max(v.rank, r);
+    v.slack = v.late > v.rank && !fixed(v);
+  }
+  let now = -Infinity;
+  for (const v of V) {
+    let t = 0;
+    for (const d of v.deps) t = Math.max(t, by.get(d).t0);
+    [v.t0, v.t1] = v.n.life ?? [t, t];
+    now = Math.max(now, v.t1);
+  }
+  for (let sweep = 0; sweep < 4; sweep++) {
+    for (const v of V) {
+      if (!v.slack) continue;
+      let yA = 0, lo = 0, tA = v.deps.length ? -Infinity : v.t0;
+      for (const d of v.deps) { const u = by.get(d); yA = Math.max(yA, u.rank); lo = Math.max(lo, u.rank + 1); tA = Math.max(tA, u.t1); }
+      tA = Math.min(tA, v.t0);
+      const ks = kids.get(v.id);
+      let yB = ks.length ? Infinity : P, tB = ks.length ? Infinity : now;
+      for (const k of ks) { yB = Math.min(yB, k.rank); tB = Math.min(tB, k.t0); }
+      tB = Math.max(tB, tA);
+      const f = tB > tA ? Math.min(1, Math.max(0, ((v.t0 + v.t1) / 2 - tA) / (tB - tA))) : 0.5;
+      // Off its neighbours' rows when there is room.
+      const g = Math.min(0.5, (yB - yA) / 2);
+      const want = Math.min(yB - g, Math.max(yA + g, yA + f * (yB - yA)));
+      v.rank = Math.min(v.late, Math.max(lo, Math.round(want)));
+    }
+  }
 }
 
 // An edge's route, from the dependent's top up to its dependency's foot:
