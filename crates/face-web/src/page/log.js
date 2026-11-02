@@ -764,7 +764,6 @@ function renderTail(s, t) {
 // waits on Max a tap also starts dictation, and while he dictates it pulses
 // with his voice and a tap stops it.
 const BIG = 128, SMALL = 56, DOCK = BIG + 24, DOCKED = SMALL, TRAVEL = DOCK - DOCKED;
-const IDLE = new Set(["max", "done", "paused", "held"]);
 const blobSession = session(), dock = $(".scroll > .dock", panel);
 dock.style.cssText = `width: ${DOCK}px; height: ${DOCK}px; bottom: ${-TRAVEL}px`;
 let blobs, blobBox = null, blobTask = null;
@@ -783,7 +782,6 @@ function showBlob(t) {
   const shape = stateOf(t);
   blobBox.title = shape === "max" && can.dictation ? "Go to bottom and dictate" : "Go to bottom";
   blobSession.letter = glyph(t);
-  blobSession.still = IDLE.has(shape);
   blobSession.set(shape, blobTask !== t.id);
   blobTask = t.id;
   fitBlob();

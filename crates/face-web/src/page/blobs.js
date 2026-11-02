@@ -60,18 +60,19 @@ const WOB = .025;
 const IDLE = { r: .17, g: 0 }, ACTIVE = { r: .42, g: -.05 };
 
 // A state: which ball is active, the centre's radius, the idle satellites'
-// gap if not IDLE's, and its colours.
+// gap if not IDLE's, and its colours. A `still` state waits on something
+// outside the agent: its blob does not wobble, and settles.
 export const STATES = {
   first:     { active: "model", centre: .3, col: [tint(CLAUDE, .14), CLAUDE, CLAUDE] },
   streaming: { active: "model", centre: .3, col: [tint(CLAUDE, .22), CLAUDE, CLAUDE] },
   brain:     { active: "centre", centre: .54, gap: -.15, col: [tint(C.ink, .1), C.ink, C.ink] },
   tools:     { active: "tools", centre: .3, col: [tint(C.slate, .13), C.slate, C.slate] },
   listening: { active: "tools", centre: .34, size: .32, col: [tint(C.slate, .06), C.faint, C.faint] },
-  max:       { active: "max", centre: .3, col: [C.maroon, C.maroon, C.paper] },
+  max:       { active: "max", centre: .3, still: true, col: [C.maroon, C.maroon, C.paper] },
   held:      { active: "model", centre: .32, size: .36, still: true, col: [tint(C.red, .12), C.red, C.red] },
   starting:  { active: null, centre: .4, col: [C.paper, C.faint, C.ink] },
-  paused:    { active: null, centre: .48, merged: true, col: [[233, 229, 217], C.faint, C.muted] },
-  done:      { active: null, centre: .48, merged: true, col: [C.green, C.green, C.paper] },
+  paused:    { active: null, centre: .48, merged: true, still: true, col: [[233, 229, 217], C.faint, C.muted] },
+  done:      { active: null, centre: .48, merged: true, still: true, col: [C.green, C.green, C.paper] },
 };
 const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
 
@@ -79,11 +80,11 @@ const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
 // role letter, shared by every blob of it. Going from one satellite straight
 // to another, it shows the brain for a moment, so the growth passes through
 // the centre; `jump` goes straight there, for a blob now showing another
-// session. A `still` session's blob settles and stops moving, and stops the
-// frames once nothing else moves; while Max dictates, its centre pulses
+// session. In a still state its blob settles and stops moving, and stops
+// the frames once nothing else moves; while Max dictates, its centre pulses
 // with `voice`, his level from 0 to 1 (null when he is not dictating).
 export function session(state = "starting") {
-  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", lastPacket: 0, still: false, voice: null, stirred: 0,
+  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", lastPacket: 0, voice: null, stirred: 0,
     shown(now) { return now < this.via ? "brain" : this.state; },
     set(next, jump = false) {
       if (next === this.state && !jump) return;
@@ -95,7 +96,7 @@ export function session(state = "starting") {
     hear(level) { this.voice = level; this.stirred = performance.now(); wake(); },
     packet() { this.lastPacket = performance.now(); },
     // Whether its blob may still be moving.
-    moving(now) { return !this.still || this.voice !== null || now - this.stirred < SETTLE || now - this.lastPacket < DISK_MS; } };
+    moving(now) { return !STATES[this.state].still || this.voice !== null || now - this.stirred < SETTLE || now - this.lastPacket < DISK_MS; } };
 }
 const SETTLE = 2000;
 
@@ -693,7 +694,7 @@ export function layer(host) {
         const r = 4 * i + 1 + k, g = 3 * i + k, an = SAT_ANG[k];
         pull(R, RV, r, gr, dt, 17); pull(G, GV, g, gg, dt, 26);
         if (R[r] < 0) R[r] = 0;
-        const d = c0 + R[r] + G[g] + (st.still || s.still ? 0 : WOB * Math.sin(now / 700 + an * 3));
+        const d = c0 + R[r] + G[g] + (st.still ? 0 : WOB * Math.sin(now / 700 + an * 3));
         X[g] = Math.cos(an) * d; Y[g] = Math.sin(an) * d;
       }
       for (let k = 0; k < 9; k++) COL[9 * i + k] += (st.col[k / 3 | 0][k % 3] - COL[9 * i + k]) * kc;
