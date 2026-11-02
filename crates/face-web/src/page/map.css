@@ -47,9 +47,10 @@
   @keyframes halo { 0% { transform: scale(1); opacity: .7; } 70% { transform: scale(1.55); opacity: 0; } 100% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .35; } }
 
-  /* What needs Max but is off screen: a mark at the edge, toward it. */
-  .offscreen { position: fixed; left: 0; top: 0; will-change: transform; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--yours); color: var(--paper); display: grid; place-items: center; box-shadow: 0 3px 10px rgba(122, 60, 20, .35); transition: opacity .2s; }
+  /* What needs Max but is off screen: a pin at the edge, its point toward it. */
+  .offscreen { position: fixed; left: 0; top: 0; will-change: transform; z-index: 25; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; transition: opacity .2s; }
   .offscreen.under { opacity: 0; pointer-events: none; }
-  .offscreen svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  .offscreen svg { position: absolute; left: -6px; top: -6px; width: 36px; height: 36px; overflow: visible; fill: var(--yours); filter: drop-shadow(0 2px 4px rgba(122, 60, 20, .35)); }
+  .offscreen svg circle { fill: var(--paper); }
   .offscreen.next::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--yours); animation: halo 2.2s var(--ease) infinite; }
 
