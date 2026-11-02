@@ -93,7 +93,7 @@ map.addEventListener("pointerdown", (e) => {
   caught = stop("coast");
   if (cards(e)) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  drag = { moved: caught, start: { x: e.clientX, y: e.clientY }, cam: { ...cam }, pinch: pointers.size === 2 ? pinchOf() : null, trail: [], card: !!e.target.closest?.("#panel") };
+  drag = { moved: caught, start: { x: e.clientX, y: e.clientY }, cam: { ...cam }, pinch: pointers.size === 2 ? pinchOf() : null, trail: [], card: !asleep && !!e.target.closest?.("#panel") };
 });
 // A touch's click can come after its drag is forgotten.
 map.addEventListener("click", (e) => { if (caught) { caught = false; e.stopPropagation(); e.preventDefault(); } }, true);
