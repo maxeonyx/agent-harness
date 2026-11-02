@@ -54,10 +54,14 @@ async function landAt(s) {
     if (logState !== s) return;
     if (!found) continue;
     // An entry drawn into the block of an earlier one (a tool call's
-    // result, a turn of only tools) is marked as that block.
+    // result, a turn of only tools) is marked as that block. A chunk holds
+    // the earlier context of a compaction before its own entry, so what
+    // came before an entry precedes it without holding it, and what came
+    // after it follows it and is not in it.
     const chunks = [...logEl.querySelectorAll(".chunk")].filter((c) => c.offsetHeight);
     const before = chunks.filter((c) => c === found || (!c.contains(found) && c.compareDocumentPosition(found) & Node.DOCUMENT_POSITION_FOLLOWING));
-    const at = want === id ? before.pop() : chunks[before.length] || before.pop();
+    const after = chunks.find((c) => !found.contains(c) && found.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const at = want === id ? before.pop() : after || before.pop();
     if (!at) return;
     at.scrollIntoView({ block: "center" });
     at.classList.remove("revealed"); void at.offsetWidth; at.classList.add("revealed");
@@ -65,22 +69,23 @@ async function landAt(s) {
     return;
   }
 }
-// The chunk that draws entry `id`, once the earlier context holding it is
-// drawn; none if no context of the log holds it. One that shows nothing of
-// its own (a request of only results) is drawn with the context that holds
-// the calls they answer.
+// The chunk that draws entry `id`, once the earliest context holding it is
+// drawn (contexts compacted afresh share their first entries, and A's start
+// is the first one's); none if no context of the log holds it. One that
+// shows nothing of its own (a request of only results) is drawn with the
+// context that holds the calls they answer.
 async function drawn(s, id) {
   for (;;) {
-    const all = [...logEl.querySelectorAll(`[data-entry="${id}"]`)];
-    const shown = all.filter((c) => c.offsetHeight).pop();
-    if (shown) return shown;
     let opened = false;
     for (const p of [...logEl.querySelectorAll(".earlier")].reverse()) {
-      const old = await contextOf(p.dataset.from);
+      // compaction() reads the same context first, and sets `holds`.
+      await contextOf(p.dataset.from);
       if (logState !== s) return null;
-      if (p.isConnected && p.draw && old?.some((e) => e.id === id)) { p.draw(); opened = true; break; }
+      if (p.isConnected && p.holds?.has(id)) { p.draw(); opened = true; break; }
     }
-    if (!opened) return all.pop() || null;
+    if (opened) continue;
+    const all = [...logEl.querySelectorAll(`[data-entry="${id}"]`)];
+    return all.filter((c) => c.offsetHeight).pop() || all.pop() || null;
   }
 }
 
@@ -321,6 +326,7 @@ function compaction({ carry, onto }, t) {
     } else line.lastChild.textContent = "Full: the harness started the context again";
     const to = call ? end : end + 1;
     if (start >= to) { earlier.remove(); return; }
+    earlier.holds = new Set(old.slice(start, to).map((e) => e.id));
     onSight(earlier, () => {
       const body = el("div", "replaced");
       drawPast({ rows: new Map(), group: null, past: true }, body, old, start, to, t, only);
