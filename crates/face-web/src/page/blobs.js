@@ -640,8 +640,8 @@ export function layer(host) {
 
   // The blobs, struct-of-arrays: per blob, its box, the session it shows,
   // its box's size and place in `host`, a hollow one's dashes as last traced
-  // (the balls they were traced from, and how many segments), its balls' radii and gaps and their
-  // velocities, its colours, turns and disks.
+  // (the balls they were traced from, and how many segments), its balls'
+  // radii and gaps and their velocities, its colours, turns and disks.
   let cap = 0, count = 0;
   const boxes = [], sessions = [], outlines = [];
   const a = {};
