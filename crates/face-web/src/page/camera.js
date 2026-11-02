@@ -53,15 +53,18 @@ export function framing() {
   const b = bounds(null);
   return b && { k: 1, x: innerWidth / 2 - (b.x0 + b.x1) / 2, y: innerHeight / 2 - (b.y0 + b.y1) / 2 };
 }
-// The big node whose task, or what it started, did something last.
+// The big node of the chat that, itself or through the agents under it, did
+// something last; an agent's only when no chat is live.
 function latest(big) {
   const when = new Map();
+  const chat = (t) => { for (let i = 0; t.owner && byId[t.owner] && i < 50; i++) t = byId[t.owner]; return t; };
   for (const t of view.tasks) {
     const at = Math.max(t.waiting?.since || 0, ...(t.legs || []).map((l) => l.at));
-    for (const k of [t.id, t.owner]) if (k) when.set(k, Math.max(when.get(k) ?? 0, at));
+    for (const k of [t.id, chat(t).id]) when.set(k, Math.max(when.get(k) ?? 0, at));
   }
+  const chats = big.filter((n) => !n.t.owner);
   let best = null;
-  for (const n of big) if (!best || (when.get(n.t.id) ?? 0) > (when.get(best.t.id) ?? 0)) best = n;
+  for (const n of chats.length ? chats : big) if (!best || (when.get(n.t.id) ?? 0) > (when.get(best.t.id) ?? 0)) best = n;
   return best?.id ?? null;
 }
 export function fit(fly = true, keep = false) {
