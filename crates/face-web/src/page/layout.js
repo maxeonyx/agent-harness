@@ -5,11 +5,12 @@
 // below it. Nothing here asks the browser for geometry: sizes come in with
 // the nodes, and curves are Béziers in closed form.
 //
-// A node: { id, deps, lo, hi, along, top, foot, now, planned }. `lo` and
+// A node: { id, deps, kind, lo, hi, along, top, foot, now, planned }. `lo` and
 // `hi` are how far it reaches left and right of its centre (its label is to
 // the right), `along` how tall it is, `top` and `foot` where lines arrive
 // from above and leave below. `now` is a live node, `planned` one that waits
-// on what it depends on. Nodes come after everything they depend on.
+// on what it depends on; the present row is the lowest any node but these
+// and chips reaches. Nodes come after everything they depend on.
 
 // Isotonic regression with minimum gaps: each node of row L as near its
 // target t[i] (weighted w[i]) as it can be, in order, each at least gap[i]
@@ -50,7 +51,7 @@ export function layered(nodes, prev = new Map()) {
   const below = (v) => { let r = -1; for (const d of v.deps) r = Math.max(r, by.get(d).rank); return r + 1; };
   for (const v of V) v.rank = below(v);
   let P = 0;
-  for (const v of V) if (!v.n.now && !v.n.planned) P = Math.max(P, v.rank);
+  for (const v of V) if (!v.n.planned && v.n.kind !== "chip") P = Math.max(P, v.rank);
   for (const v of V) if (v.n.now || v.n.planned) v.rank = Math.max(v.n.now ? P : 0, below(v));
   const layers = [];
   const put = (v) => (layers[v.rank] ??= []).push(v);
