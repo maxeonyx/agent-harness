@@ -2,7 +2,7 @@ import { $, el, fail, icon, ICONS, kTokens, panel, parse } from "./base.js";
 import { act, can, digest, tab } from "./tab.js";
 import { byId, isDone, view } from "./map.js";
 import { aside, NEW, resume } from "./card.js";
-import { hear, unmovable } from "./log.js";
+import { hear, renderLog, unmovable } from "./log.js";
 import { startNew } from "./newchat.js";
 
 // ─── What Max writes ───────────────────────────────────────────────────────
@@ -14,7 +14,10 @@ import { startNew } from "./newchat.js";
 // wrote. With a keyboard, Enter is the press and Shift+Enter a new line; on
 // a phone Enter is a new line. What is staged and what is typed are the
 // draft's, kept by the brain, so they survive a reload and follow Max to
-// his phone; Send waits, with a spinner, until the brain has every word.
+// his phone; while the brain does not yet have every word, a spinner says
+// so. A send is a record of this tab like any other: one the brain has not
+// taken yet (a relaunch's read-only window) waits in the tab, shown as not
+// read yet, and goes once a brain takes it.
 // Dictation streams into the box as edits to a live region, which Max can
 // edit too: an edit inside it pins the text up to the end of his edit, and
 // the words still coming go after it.
@@ -126,6 +129,18 @@ export function restoreLocal() {
       }
     }
   }
+}
+// What this tab sent to the session that the brain has not yet included,
+// as the log shows what the agent has not read: `{at, content}`.
+export function sending(session) {
+  if (!tab) return [];
+  const records = tab.records(), saids = records.flatMap((r) => r.what.Said ? [[r, r.what.Said]] : []);
+  const sessionOf = new Map((view?.drafts || []).map((d) => [d.id, d.session]));
+  for (const [, said] of saids) for (const [id, e] of said.facts.map((f) => f.Draft || [])) if (e?.Opened) sessionOf.set(id, e.Opened.session);
+  return saids.filter(([r]) => tab.status(Number(r.at.split(".")[1])) === "pending").flatMap(([r, said]) => said.facts
+    .map((f) => f.Draft || [])
+    .filter(([id, e]) => e?.Send && sessionOf.get(id) === session)
+    .map(([, e]) => ({ at: r.clock, content: said.values.find((v) => typeof v === "string" && digest(v) === e.Send.text) })));
 }
 // A chat not started yet, and its fields, have no session: theirs are kept
 // in this tab.
@@ -446,7 +461,7 @@ export function newTuning() {
 
 // The one button: with words in the box it stages them; with the box
 // empty it sends what is staged, and says so. While the brain does not yet
-// have every word, it spins, and cannot send.
+// have every word, it spins until there is something to send.
 export function renderComposeState(t) {
   if (!box) return;
   const key = box.dataset.key, send = $(".send", compose);
@@ -456,12 +471,12 @@ export function renderComposeState(t) {
   else if (mine) box.placeholder = isDone(t) ? "Continue this chat" : "Reply";
   const saving = unsaved(key), locked = lockedUntil > Date.now();
   const sends = !typed && staged;
-  send.disabled = !typed && (!staged || saving || locked);
-  send.classList.toggle("armed", sends && !saving);
-  send.classList.toggle("saving", saving);
+  send.disabled = !typed && (!staged || locked);
+  send.classList.toggle("armed", sends);
+  send.classList.toggle("saving", saving && !sends);
   send.classList.toggle("locked", locked);
-  $(".word", send).textContent = sends && !saving ? "Send" : "";
-  const tip = locked ? "Changed on another device a moment ago" : saving ? "Saving the draft" : sends ? "Send what is staged (Enter)" : "Stage (Enter)";
+  $(".word", send).textContent = sends ? "Send" : "";
+  const tip = locked ? "Changed on another device a moment ago" : sends ? "Send what is staged (Enter)" : saving ? "Saving the draft" : "Stage (Enter)";
   send.title = tip; send.setAttribute("aria-label", tip);
   renderTune(t);
 }
@@ -475,7 +490,7 @@ function press() {
     return;
   }
   if (box.value.trim()) return stage();
-  if (!unsaved(box.dataset.key) && lockedUntil <= Date.now()) submit();
+  if (lockedUntil <= Date.now()) submit();
 }
 // Only what went wrong is said; what went right shows as itself. What went
 // wrong clears itself on his next edit, or after a while.
@@ -529,13 +544,16 @@ async function submit() {
   }
   const sent = JSON.stringify(message(blocks)), id = digest(sent);
   let as = null;
-  const why = await act((at) => {
+  const sending = act((at) => {
     as = `${at}.0`;
     const facts = [];
     if (!draft) { draft = as; facts.push({ Draft: [draft, { Opened: { session: t.id } }] }); }
     facts.push({ Draft: [draft, { Send: { text: id } }] }, ...release);
     return facts;
   }, [sent]);
+  // Said, it is in the log until the brain takes it, however long that is.
+  renderLog(t);
+  const why = await sending;
   if (why) { returnWords(key, draft === as ? null : draft, blocks); return say(`Not sent: ${why}`, true); }
   local.delete(draft);
   const rows = view.drafts;

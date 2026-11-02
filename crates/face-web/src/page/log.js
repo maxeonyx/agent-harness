@@ -3,7 +3,7 @@ import { act, can } from "./tab.js";
 import { byId, glyph, graph, isDone, look, order, shortName, stateOf, view } from "./map.js";
 import { trouble } from "./draw.js";
 import { go, logState } from "./card.js";
-import { dictate, dictation, editMessage, modelName, say } from "./compose.js";
+import { dictate, dictation, editMessage, modelName, say, sending } from "./compose.js";
 import { layer, session } from "./blobs.js";
 
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
@@ -745,12 +745,15 @@ function renderTail(s, t) {
     const when = `${clock(p.at)}, not read yet`;
     parts.push(p.prompt ? said(PROMPTS[p.prompt] || p.prompt, when, "queued-words prompt") : said(p.content, when, "queued-words"));
   }
+  // Sent from this tab, and not yet taken by a brain.
+  const unsent = sending(t.id);
+  for (const p of unsent) parts.push(said(p.content, `${clock(p.at)}, not sent yet: waiting for the brain`, "queued-words"));
   if (!t.head && !isDone(t)) parts.push(t.owner ? unread(t) : said(t.mandate || "", "Not read yet", "queued-words"));
   const bad = trouble(t);
   if (bad) parts.push(el("div", "entry card ended", bad));
   const o = t.outcome;
   if (o?.kind === "failed") parts.push(el("div", "entry card ended", `Failed: ${o.reason}`));
-  const key = JSON.stringify([t.waiting?.kind, t.waiting?.call, t.pending, bad, o, t.head]);
+  const key = JSON.stringify([t.waiting?.kind, t.waiting?.call, t.pending, unsent, bad, o, t.head]);
   if (tail.dataset.key !== key || parts.some((p) => p.classList?.contains("live-holder"))) {
     tail.dataset.key = key;
     tail.replaceChildren(...parts);
