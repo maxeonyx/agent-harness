@@ -433,7 +433,7 @@ async function retune(t, now, field, value) {
   if (next.model !== now.role.model) tuning.model = next.model;
   if (next.effort !== now.role.effort) tuning.effort = next.effort;
   const why = await act({ Task: [t.id, { Tuned: tuning }] });
-  if (why) say(`not changed: ${why}`, true);
+  if (why) say(`Not changed: ${why}`, true);
 }
 // What a new chat's Created says it runs at.
 export function newTuning() {
@@ -638,11 +638,23 @@ registerProcessor("pcm", class extends AudioWorkletProcessor {
 });`], { type: "application/javascript" }));
 
 // The mic, the sample and the log's blob share it: each starts it, and
-// each stops it.
+// each stops it. One is live from the press that starts it, while the
+// microphone opens, so a second press stops it; and a press while one
+// finishes starts the next once its last words are in.
 export async function dictate(sample) {
+  if (dictation?.stopping) {
+    dictation.again = dictation.again === undefined ? sample : undefined;
+    return micShows(dictation.again !== undefined);
+  }
   if (dictation) return stopDictation();
   if (!box) return;
-  let rate = 16000, mic = null;
+  // Dictation goes in at the caret, a space from the word before it.
+  let at = box.selectionEnd;
+  if (at > 0 && !/\s/.test(box.value[at - 1])) { box.setRangeText(" ", at, at, "end"); at += 1; prev = box.value; }
+  const l = dictation = { ws: null, mic: null, key: box.dataset.key, T: "", P: 0, start: at };
+  micShows(true);
+  say("Connecting");
+  let rate = 16000;
   try {
     if (!sample) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
@@ -651,23 +663,22 @@ export async function dictate(sample) {
       const node = new AudioWorkletNode(ctx, "pcm");
       ctx.createMediaStreamSource(stream).connect(node);
       rate = ctx.sampleRate;
-      mic = { stream, ctx, node };
+      l.mic = { stream, ctx, node };
     }
-  } catch (e) { fail("opening the microphone", e); return say(`no microphone: ${e.message}`, true); }
-  // Dictation goes in at the caret, a space from the word before it.
-  let at = box.selectionEnd;
-  if (at > 0 && !/\s/.test(box.value[at - 1])) { box.setRangeText(" ", at, at, "end"); at += 1; prev = box.value; }
-  const ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
+  } catch (e) {
+    finishDictation(l);
+    fail("opening the microphone", e);
+    return say(`No microphone: ${e.message}`, true);
+  }
+  if (l.stopping) return finishDictation(l);
+  const ws = l.ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
   ws.binaryType = "arraybuffer";
-  dictation = { ws, mic, key: box.dataset.key, T: "", P: 0, start: at };
-  if (mic) mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); hear(level(new Int16Array(m.data))); };
+  if (l.mic) l.mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); hear(level(new Int16Array(m.data))); };
   hear(0);
-  micShows(true);
-  say("connecting");
-  const l = dictation;
+  ws.onopen = () => { if (l.stopping) ws.send(STOP); };
   ws.onmessage = (m) => {
     const d = JSON.parse(m.data);
-    if (d.listening) say(sample ? "dictating the sample" : "listening");
+    if (d.listening) say(sample ? "Dictating the sample" : "Listening");
     if (d.edits && dictation === l) applyEdits(d.edits);
     if (d.error) { fail("dictating", d.error); say(d.error, true); }
     if (d.final) finishDictation(l);
@@ -697,22 +708,25 @@ function releaseMic(l) {
   l.mic.ctx.close();
   l.mic = null;
 }
+const STOP = JSON.stringify({ type: "stop" });
 export function stopDictation() {
-  if (!dictation) return;
+  if (!dictation || dictation.stopping) return;
   dictation.stopping = true;
   releaseMic(dictation);
   hear(null);
-  if (dictation.ws.readyState === 1) dictation.ws.send(JSON.stringify({ type: "stop" }));
-  say("finishing");
+  micShows(false);
+  if (dictation.ws?.readyState === 1) dictation.ws.send(STOP);
+  say("Finishing");
 }
 function finishDictation(l) {
   if (dictation !== l) return;
   releaseMic(l);
   hear(null);
   dictation = null;
-  l.ws.close();
+  l.ws?.close();
   micShows(false);
   if (!$(".status", compose)?.classList.contains("bad")) say("");
   if (l.then && box?.dataset.key === l.key) l.then();
+  if (l.again !== undefined) dictate(l.again);
 }
 

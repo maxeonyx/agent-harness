@@ -399,6 +399,8 @@ class Browser {
       "--ignore-certificate-errors", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",
       // Without it Chromium waits on the system keyring, and may never start.
       "--password-store=basic",
+      // A microphone that plays a tone, granted without asking, so a page can dictate.
+      "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream",
       `--window-size=${size.width},${size.height}`, "about:blank",
     ], { stdio: "ignore", env: { ...process.env, [brain.mark]: "1" } });
     const b = new Browser(proc, profile, size, log);
