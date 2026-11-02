@@ -170,7 +170,10 @@
   .fold .gist { flex: 1 1 0; font: 12px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .fold .st { flex: none; font-size: 12px; color: var(--faint); white-space: nowrap; }
   .fold .st.bad { color: var(--red); }
-  .fold:has(.st.run) > .head .n::before, .fold .st.run::before { content: ""; display: inline-block; width: .7em; height: .7em; border: 1.5px solid var(--ink); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -.05em; }
+  /* A running call: the blob's gear, turning a tooth at a time (it has six,
+     so each step lands where the last began). */
+  .fold:has(.st.run) > .head .n::before, .fold .st.run::before { content: ""; display: inline-block; width: .95em; height: .95em; background: var(--ink); mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0'/%3E%3C/svg%3E") center / contain no-repeat; animation: tooth .6s infinite; vertical-align: -.15em; }
+  @keyframes tooth { 0% { transform: rotate(0); animation-timing-function: cubic-bezier(.33, 1, .68, 1); } 33%, 100% { transform: rotate(60deg); } }
   .fold:has(.st.run) > .head .n::before { margin-right: .4em; }
   .fold .open-file { align-self: center; width: 1.8em; height: 1.8em; margin: -.3em 0; }
   .fold > .thought { padding: .4em .8em; margin: 0; }
@@ -215,10 +218,11 @@
   .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid var(--s, var(--ink)); background: var(--s); color: var(--on, inherit); display: grid; place-items: center; font: 600 9px var(--serif); }
   .chip:is(.paused, .cancelled) .d { background: none; }
   .chip.done { color: var(--muted); }
-  /* The log's canvas draws the blob in its box (`blobs.js`), its centre
-     ball near the text's edge. */
-  .lane { position: relative; }
-  .tail .blob { margin: .2em 0 0 -22px; }
+  /* The log's end: its blob, drawn by the dock's canvas (`blobs.js`) in a
+     box the scroll scales (`log.js`); only the blob takes a tap. */
+  .dock { position: sticky; margin: 0 auto; pointer-events: none; z-index: 2; }
+  .dock .blob { position: absolute; left: 50%; top: 0; border-radius: 50%; pointer-events: auto; cursor: pointer; }
+  .dock > div:not(.blob) { filter: drop-shadow(0 3px 5px rgba(40, 30, 20, calc(.35 * var(--docked, 0)))); }
   .exact-entry { margin: 0 0 1em; }
   .exact-entry .who { font: 600 12px var(--sans); color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }
