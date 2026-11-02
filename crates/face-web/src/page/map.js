@@ -161,13 +161,19 @@ export function derive(openId) {
   }
   // Big: each live task's own node. A task's own node, big or not, takes
   // the task's id.
-  const rename = new Map();
+  const rename = new Map(), ownOf = new Map();
   for (const t of tasks) {
     const planned = nodes.get(`p:${t.id}`);
     const own = !isDone(t) && planned && waitsOnWork(t) ? planned : nodes.get(t.leg);
     if (!own) continue;
     if (!isDone(t)) own.big = stateOf(t);
     rename.set(own.id, t.id);
+    ownOf.set(t.leg, own.id);
+  }
+  // A planned join waits on each member's own node, so joins chain through
+  // members that wait on their own work.
+  for (const n of nodes.values()) {
+    if (n.kind === "planned") n.deps = n.deps.map((d) => d === n.t.leg ? d : ownOf.get(d) ?? d);
   }
   // Nodes after everything they depend on: depth first, in the order they
   // began. Then the chains of compactions fold: a carry absorbs the leg
