@@ -109,8 +109,10 @@ map.addEventListener("pointermove", (e) => {
     drag.moved = true;
   } else {
     const dx = e.clientX - drag.start.x, dy = e.clientY - drag.start.y;
-    // Back to the last sample from 100 ms ago, for the speed it is let go at.
-    drag.trail.push({ t: e.timeStamp, x: e.clientX, y: e.clientY });
+    // Back to the last sample from 100 ms ago, for the speed it is let go at:
+    // every sample the screen took, not only the one a slow frame was given.
+    const samples = e.getCoalescedEvents?.() ?? [];
+    for (const s of samples.length ? samples : [e]) drag.trail.push({ t: s.timeStamp, x: s.clientX, y: s.clientY });
     while (drag.trail.length > 1 && e.timeStamp - drag.trail[1].t >= 100) drag.trail.shift();
     if (!drag.panning && Math.hypot(dx, dy) < 5) return;
     if (!drag.panning) {
@@ -424,17 +426,19 @@ function stop(name) {
   a.done();
   return true;
 }
-// A drag let go goes on at the speed it had over its last 100 ms, slowed by
-// drag (the speed decays by e every TAU) and by friction (a steady FRICTION
-// off it), until it stops. Drag carries a fast flick far and friction stops a
-// slow one soon, as a phone's own scrolling does, going a little less far:
+// A drag let go goes on at the speed it had over its last 100 ms, unless it
+// held still for the 40 ms before its lift (the rules Chromium's and
+// Android's own flings go by), slowed by drag (the speed decays by e every
+// TAU) and by friction (a steady FRICTION off it), until it stops. Drag
+// carries a fast flick far and friction stops a slow one soon, as a phone's
+// own scrolling does, going a little less far:
 // a flick at 1, 3 and 6 px/ms goes about 170, 1200 and 3600 px, in 0.35,
 // 0.9 and 1.4 s, where Chromium on Android goes 190, 1300 and 4400.
 const TAU = 1500, FRICTION = .0025;  // ms, px/ms²
 function coast(trail, t) {
-  const last = trail.filter((p) => t - p.t < 100), a = last[0], b = last.at(-1);
-  if (!a || a === b || reduced()) return;
-  const dt = Math.max(16, t - a.t), vx = (b.x - a.x) / dt, vy = (b.y - a.y) / dt;
+  const a = trail[0], b = trail.at(-1);
+  if (!a || a === b || t - b.t > 40 || reduced()) return;
+  const dt = Math.max(16, b.t - a.t), vx = (b.x - a.x) / dt, vy = (b.y - a.y) / dt;
   const v = Math.hypot(vx, vy);
   if (v < .1) return;
   // The speed is (v + f) e^(-t/TAU) - f, with f = FRICTION TAU: none at T.
