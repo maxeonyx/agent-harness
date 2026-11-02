@@ -288,9 +288,9 @@ export function placeMarks() {
     s = ((s % P) + P) % P;
     return s < w ? [l + s, t] : s < w + h ? [r, t + s - w] : s < 2 * w + h ? [r - (s - w - h), b] : [l, b - (s - 2 * w - h)];
   };
-  // A mark never covers what Max presses: one under the open card, the
-  // actions beside it, or the bottom bar's buttons fades out.
-  const ui = [...document.querySelectorAll("#panel:not([hidden]), #panel .acts, #bottom > :not(.spacer)")]
+  // A mark never covers what Max presses: one under the open card or the
+  // bottom bar's buttons fades out.
+  const ui = [...document.querySelectorAll("#panel:not([hidden]), #bottom > :not(.spacer)")]
     .map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
   const seen = new Set();
   for (const { id, x, y, s, next } of marks) {

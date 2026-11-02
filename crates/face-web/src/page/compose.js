@@ -1,4 +1,4 @@
-import { $, el, fail, icon, kTokens, panel, parse } from "./base.js";
+import { $, el, fail, icon, ICONS, kTokens, panel, parse } from "./base.js";
 import { act, can, digest, tab } from "./tab.js";
 import { byId, isDone, view } from "./map.js";
 import { aside, NEW, resume } from "./card.js";
@@ -325,8 +325,7 @@ export function buildCompose(id) {
   const sample = el("button", "later sample", "Dictate the sample"); sample.type = "button"; sample.hidden = !can.sample;
   row.append(el("span", "dock"), el("span", "picks"), el("span", "status"), sample, el("span", "tune"));
   wrap.append(el("div", "others"), line, row);
-  // What Max can do to the task itself floats outside the card, beside it.
-  compose.append(wrap, el("div", "acts"));
+  compose.append(wrap);
   // What is chosen, pasted or dropped in is attached.
   clip.onclick = () => file.click();
   file.onchange = () => { attach(id, [...file.files]); file.value = ""; };
@@ -663,7 +662,7 @@ export async function dictate(sample) {
   dictation = { ws, mic, key: box.dataset.key, T: "", P: 0, start: at };
   if (mic) mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); hear(level(new Int16Array(m.data))); };
   hear(0);
-  const b = $(".mic", compose); if (b) { b.classList.add("on"); b.title = "Stop dictating"; }
+  micShows(true);
   say("connecting");
   const l = dictation;
   ws.onmessage = (m) => {
@@ -674,7 +673,17 @@ export async function dictate(sample) {
     if (d.final) finishDictation(l);
   };
   ws.onclose = () => finishDictation(l);
-  box.focus();
+  // The box takes the words without the focus, which on a phone would put
+  // its keyboard up over them.
+  if (!matchMedia("(pointer: coarse)").matches) box.focus();
+}
+function micShows(on) {
+  const b = $(".mic", compose);
+  if (!b) return;
+  b.classList.toggle("on", on);
+  b.title = on ? "Stop dictating" : "Dictate";
+  b.setAttribute("aria-label", b.title);
+  b.firstChild.innerHTML = ICONS[on ? "stop" : "mic"];
 }
 // A chunk's loudness, 0 to 1: its RMS, square-rooted so speech moves it.
 function level(pcm) {
@@ -702,7 +711,7 @@ function finishDictation(l) {
   hear(null);
   dictation = null;
   l.ws.close();
-  const b = $(".mic", compose); if (b) { b.classList.remove("on"); b.title = "Dictate"; }
+  micShows(false);
   if (!$(".status", compose)?.classList.contains("bad")) say("");
   if (l.then && box?.dataset.key === l.key) l.then();
 }

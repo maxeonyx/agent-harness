@@ -6,7 +6,7 @@ import { nodeEls, rebuild, render } from "./draw.js";
 import { hideTip, hoverable } from "./hover.js";
 import { actionButton, actionsKey, actionsOf } from "./actions.js";
 import { blocksOf, contextOf, renderLog, stopFollowing } from "./log.js";
-import { buildCompose, compose, dictation, renderComposeState, say, stopDictation } from "./compose.js";
+import { buildCompose, dictation, renderComposeState, say, stopDictation } from "./compose.js";
 import { buildNew } from "./newchat.js";
 
 // ─── Opening a node ────────────────────────────────────────────────────────
@@ -251,10 +251,9 @@ async function renderMix(t) {
 }
 $(".ctx", panel).onclick = () => { const m = $(".mix", panel); m.hidden = !m.hidden; m.dataset.key = ""; if (!m.hidden && byId[openId]) renderMix(byId[openId]); };
 
-// What Max can do to the task itself, as icons floating beside the card.
+// What Max can do to the task itself, as icons beside the log's blob.
 function renderControls(t) {
-  const row = $(".acts", compose);
-  if (!row) return;
+  const row = $(".pane > .acts", panel);
   const list = actionsOf(t), key = `${t.id}:${actionsKey(list)}`;
   if (row.dataset.key === key) return;
   row.dataset.key = key;
