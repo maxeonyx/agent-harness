@@ -177,6 +177,21 @@ impl Live {
 }
 
 /// Whose move it is in a live task.
+///
+/// **Concept.** Waiting on background work is implied, not a call: a task
+/// whose turn has ended ([`Phase::AwaitingMax`], [`Phase::Listening`]) is
+/// woken by each settlement of work it owns, with its whole result
+/// ([`Input::Background`]). So there is no join: an agent with nothing else
+/// to do ends its turn. How results group is chosen when the work starts:
+/// a spawn's members report together, separate background calls each wake
+/// it on their own, and a deadline is a background `sleep`. A round still
+/// blocks on its own calls, a spawn included, until Max's words move them
+/// to the background.
+///
+/// **Vision.** "then the join is always implied, is that right? So there's
+/// not actually a need for a join tool. Or a watch tool" (Max, answering
+/// the waits and joins design); "the ability to background a tool call"
+/// (2 Nov).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
     /// The task's move: the brain builds and sends its next request, unless
@@ -189,7 +204,10 @@ pub enum Phase {
     /// The calls of one round are outstanding: a response's tool uses, or a
     /// fresh context's attachments. A spawn is one of them.
     Acting(Step),
-    /// Max's move: a user-facing turn ended, or he interrupted.
+    /// Max's move: a user-facing turn ended, or he interrupted. Background
+    /// work it owns runs on and wakes it as his words do, so a chat that
+    /// answered him while its work runs is waiting on both
+    /// ([`crate::state::Waiting::Max`]).
     AwaitingMax,
     /// The turn ended and the task waits for something that wakes it: a
     /// change to what a standing task embodies, or background work.

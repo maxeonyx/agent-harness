@@ -501,9 +501,10 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
             "since": since.0,
             "calls": calls(c),
         }),
-        Waiting::Max { since } => json!({
+        Waiting::Max { background, since } => json!({
             "kind": "max",
             "since": since.0,
+            "calls": calls(background),
         }),
         Waiting::Listening { background, since } => json!({
             "kind": "listening",
