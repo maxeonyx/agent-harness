@@ -11,8 +11,8 @@
     .gauge .pc { display: none; }
     /* The bar fits the screen: the build's commit stands over how it stands,
        which shortens to fit, and the buttons keep their place. */
-    #corner { min-width: 0; }
-    #corner .build { display: inline-flex; flex-direction: column; min-width: 0; line-height: 1.25; }
-    #corner .build > .now { margin-left: 0; overflow: hidden; text-overflow: ellipsis; }
-    #corner .build > .now:empty { display: none; }
+    #bottom #corner { min-width: 0; }
+    #bottom #corner .build { display: inline-flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+    #bottom #corner .build > .now { margin-left: 0; overflow: hidden; text-overflow: ellipsis; }
+    #bottom #corner .build > .now:empty { display: none; }
   }

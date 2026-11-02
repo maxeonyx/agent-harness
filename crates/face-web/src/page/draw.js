@@ -231,8 +231,8 @@ export function render() {
 
 // ─── What needs Max, off screen ────────────────────────────────────────────
 // What waits on Max where the camera does not show it is a mark at the
-// screen's edge, a pin whose point is toward it, the next one haloed; a click brings it to the
-// middle of the screen, where a click on it opens it.
+// screen's edge, a pin whose point is toward it, the next one haloed; a
+// click brings it to the middle of the screen, where a click on it opens it.
 const marksEl = $("#marks"), markEls = new Map();
 export function placeMarks() {
   if (!view) return;
