@@ -222,38 +222,43 @@
      log's bottom padding, big, a little over the entry's end and a little
      over the entry box. As Max scrolls up, the entry's end comes down to
      the line between the log and the entry box and the blob shrinks with
-     the gap, docking small, with a shadow, centred on the line, half over
-     each, as the room leaves the view. The dock holds the blob's canvas
-     (`blobs.js`) outside the scroll, which would clip it, and the scroll
-     itself moves and scales it, on the compositor: a blob of 128 px with
-     its centre 52 px above the line docks at 56 with its centre on it. What
+     the gap, docking small, centred on the line, half over each, as the
+     room leaves the view. The dock holds the blob's canvas (`blobs.js`)
+     outside the scroll, which would clip it, and the scroll itself moves
+     and scales it on the compositor, in step with the log: only a
+     transform, over the scroll's last 72 px, which stay its last as the
+     log grows, so a streaming reply leaves the animation running there.
+     The canvas draws the blob once, at 128 px; a blob of 128 px with its
+     centre 52 px above the line docks at 56 with its centre on it, and a
+     log that does not scroll leaves it big. What
      Max can do to the task itself sits at the blob's right and travels with
      it on the same scroll, its buttons 36 px beside the big blob and 29
      docked. A tap anywhere on the blob is the blob's. */
   #panel { timeline-scope: --end; }
-  .scroll > .end { height: 72px; view-timeline: --end y; view-timeline-inset: 0; }
+  .pane > .scroll { scroll-timeline: --end y; }
+  .scroll > .end { height: 72px; }
   .pane:not(:has(> .dock[hidden])) .log { padding-bottom: 0; }
   .pane:has(> .dock[hidden]) > .scroll > .end { display: none; }
   .pane > .dock {
     position: absolute; left: 50%; bottom: 0; z-index: 3; display: grid; place-items: center; width: 152px; height: 152px; margin-left: -76px; pointer-events: none;
-    transform: translateY(50%) scale(calc(56 / 128)); filter: drop-shadow(0 7px 11px rgba(40, 30, 20, .35));
+    transform: translateY(calc(50% - 52px));
   }
   .pane > .dock .blob { border-radius: 50%; pointer-events: auto; cursor: pointer; }
   .pane > .acts {
     position: absolute; left: calc(50% + 28px); bottom: 0; z-index: 3; max-width: calc(50% - 70px); display: flex; flex-wrap: wrap; gap: 4px;
-    transform-origin: left center; transform: translateY(50%) scale(.8);
+    transform-origin: left center; transform: translate(36px, calc(50% - 52px));
   }
   .pane > .acts:empty { display: none; }
   .pane > .acts .act { height: 36px; border: 1px solid var(--line); box-shadow: 0 2px 10px rgba(40, 30, 20, .12); }
   .pane > .acts .act:not(.armed) { width: 36px; background: var(--white); }
   .pane > .acts .act:not(.armed):hover { background: var(--hover); color: var(--ink); }
   .pane > .acts .act svg { width: 18px; height: 18px; }
-  @supports (animation-timeline: view()) {
-    .pane > .dock { animation: dock linear both; animation-timeline: --end; animation-range: entry; }
-    .pane > .acts { animation: acts linear both; animation-timeline: --end; animation-range: entry; }
+  @supports (animation-timeline: scroll()) {
+    .pane > .dock { animation: dock linear both; animation-timeline: --end; animation-range: calc(100% - 72px) 100%; }
+    .pane > .acts { animation: acts linear both; animation-timeline: --end; animation-range: calc(100% - 72px) 100%; }
   }
-  @keyframes dock { to { transform: translateY(calc(50% - 52px)); filter: drop-shadow(0 7px 11px transparent); } }
-  @keyframes acts { to { transform: translate(36px, calc(50% - 52px)); } }
+  @keyframes dock { from { transform: translateY(50%) scale(calc(56 / 128)); } }
+  @keyframes acts { from { transform: translateY(50%) scale(.8); } }
   .exact-entry { margin: 0 0 1em; }
   .exact-entry .who { font: 600 12px var(--sans); color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }
