@@ -525,22 +525,40 @@ function placeDots(n, count, pitch) {
   for (let d = 0; d < drawn; d++) { along(n + 1, d * s / drawn); dotX[d] = qx; dotY[d] = qy; }
   return drawn;
 }
-// A hollow blob's dashes on its outline, loopB's n points: as segments into
-// dashAt, x0, y0, x1, y1 each and whether it starts a dash (1), ends one
-// (2) or both (3); returns how many.
-const dashAt = new Float32Array(5 * (TE + DASHES));
-function placeDashes(n) {
-  const s = walk(n, -Math.PI / 2, false);
-  let m = 0, x = 0, y = 0;
-  const to = (x1, y1, ends) => { dashAt[m++] = x; dashAt[m++] = y; dashAt[m++] = x = x1; dashAt[m++] = y = y1; dashAt[m++] = ends; };
+// A hollow blob's outline, loopB's n points, walked clockwise from twelve
+// o'clock into `line`: x, y and the length walked to each. Returns how many
+// points (n + 1: the last is the first again).
+const line = new Float32Array(3 * (TE + 1));
+function outline(n) {
+  walk(n, -Math.PI / 2, false);
+  for (let k = 0; k <= n; k++) { line[3 * k] = wX[k]; line[3 * k + 1] = wY[k]; line[3 * k + 2] = wS[k]; }
+  return n + 1;
+}
+// The dashes on outline L of np points, each pulled in at both ends by r
+// along the outline (the round caps the pen draws past them), as segments
+// into dashAt, x0, y0, x1, y1 each; returns how many. A dash too short for
+// its caps is a dot at its middle.
+const dashAt = new Float32Array(4 * (TE + 2 * DASHES));
+function layDashes(L, np, r) {
+  const s = L[3 * np - 1];
+  let m = 0, j = 1;
   for (let d = 0; d < DASHES; d++) {
-    const s1 = (d + DUTY) * s / DASHES;
-    along(n + 1, d * s / DASHES); x = qx; y = qy;
-    let first = 1;
-    for (let j = seg + 1; j <= n && wS[j] < s1; j++) { to(wX[j], wY[j], first); first = 0; }
-    along(n + 1, s1); to(qx, qy, first + 2);
+    let v0 = d * s / DASHES + r, v1 = (d + DUTY) * s / DASHES - r;
+    if (v1 < v0) v0 = v1 = (v0 + v1) / 2;
+    j = pointAt(L, np, j, v0); dashAt[m] = qx; dashAt[m + 1] = qy;
+    // Each point inside the dash ends one segment and starts the next.
+    for (; j < np - 1 && L[3 * j + 2] < v1; j++, m += 4) { dashAt[m + 2] = dashAt[m + 4] = L[3 * j]; dashAt[m + 3] = dashAt[m + 5] = L[3 * j + 1]; }
+    j = pointAt(L, np, j, v1); dashAt[m + 2] = qx; dashAt[m + 3] = qy; m += 4;
   }
-  return m / 5;
+  return m / 4;
+}
+// The point at length v along outline L of np points, into qx, qy, looking
+// from point j on; returns the point its stretch ends at.
+function pointAt(L, np, j, v) {
+  while (j < np - 1 && L[3 * j + 2] < v) j++;
+  const a = 3 * (j - 1), f = (v - L[a + 2]) / (L[a + 5] - L[a + 2] || 1);
+  qx = L[a] + (L[a + 3] - L[a]) * f; qy = L[a + 1] + (L[a + 4] - L[a + 1]) * f;
+  return j;
 }
 
 // The track and the dots' pitch, in blob units, laid out as on a 260 px blob
@@ -640,8 +658,8 @@ export function layer(host) {
   cv.addEventListener("webglcontextrestored", () => { build(); wake(); });
 
   // The blobs, struct-of-arrays: per blob, its box, the session it shows,
-  // its box's size and place in `host`, a hollow one's dashes as last traced
-  // (the balls they were traced from, and how many segments), its balls'
+  // its box's size and place in `host`, a hollow one's outline as last traced
+  // (the balls it was traced from, and how many points), its balls'
   // radii and gaps and their velocities, its colours, turns and disks.
   let cap = 0, count = 0;
   const boxes = [], sessions = [], outlines = [];
@@ -651,7 +669,7 @@ export function layer(host) {
     ["X", Float32Array, 3], ["Y", Float32Array, 3], ["COL", Float32Array, 9], ["SPIN", Float32Array, 1], ["GEAR", Float32Array, 1],
     ["DISK", Float64Array, DISKS], ["DISKAT", Uint8Array, 1], ["LASTDISK", Float64Array, 1], ["SEEN", Float64Array, 1],
     ["BASE", Float32Array, 1], ["WX", Float32Array, 1], ["WY", Float32Array, 1], ["WORLD", Uint8Array, 1],
-    ["MID", Float32Array, 2], ["MIDV", Float32Array, 2], ["TRACED", Float32Array, 12], ["NSEG", Uint16Array, 1]];
+    ["MID", Float32Array, 2], ["MIDV", Float32Array, 2], ["TRACED", Float32Array, 12], ["NPTS", Uint16Array, 1]];
   // The world's camera, and its marks.
   let cam = { x: 0, y: 0, k: 1 }, marks = new Float32Array(0), nmarks = 0, marksVersion = 0;
   let inst = new Float32Array(0), dots = new Float32Array(4 * 64), segs = new Float32Array(8 * 64);
@@ -894,8 +912,9 @@ export function layer(host) {
     },
     // Blob i's dashes, if it is hollow, written from segment `n` in its
     // edge's colour, its quad at x, y, `dpr` device px a css px; traced
-    // again only once its balls have moved. A dash's round ends are inside
-    // its length, so a small blob's gaps stay open. Returns the next.
+    // again only once its balls have moved, and laid on the outline each
+    // frame, its round ends inside its length at any zoom, so a small
+    // blob's gaps stay open. Returns the next.
     dashes(i, n, x, y, size, dpr) {
       if (!sessions[i].hollow) return n;
       balls(i);
@@ -904,20 +923,18 @@ export function layer(host) {
       for (let k = 0; k < 12; k++) if (!(Math.abs(ball[k] - T[t0 + k]) < 1e-4)) moved = true;
       if (moved) {
         T.set(ball, t0);
-        const m = longestLoop(TN, 0), placed = m ? placeDashes(m) : 0;
-        if (outlines[i].length < 5 * placed) outlines[i] = new Float32Array(10 * placed);
-        outlines[i].set(dashAt.subarray(0, 5 * placed));
-        a.NSEG[i] = placed;
+        const m = longestLoop(TN, 0), np = m ? outline(m) : 0;
+        if (outlines[i].length < 3 * np) outlines[i] = new Float32Array(6 * np);
+        outlines[i].set(line.subarray(0, 3 * np));
+        a.NPTS[i] = np;
       }
-      const placed = a.NSEG[i], O = outlines[i], unit = size / (2 * SPAN), cx = x + size / 2, cy = y + size / 2;
-      const w = Math.max(EDGE * unit, dpr), col = a.COL;
+      if (a.NPTS[i] < 2) return n;
+      const unit = size / (2 * SPAN), cx = x + size / 2, cy = y + size / 2, w = Math.max(EDGE * unit, dpr), col = a.COL;
+      const placed = layDashes(outlines[i], a.NPTS[i], w / 2 / unit);
       if (8 * (n + placed) > segs.length) { const g = new Float32Array(segs.length * 2 + 8 * placed); g.set(segs); segs = g; }
       for (let d = 0; d < placed; d++) {
-        const b = 8 * n++, x0 = cx + O[5 * d] * unit, y0 = cy + O[5 * d + 1] * unit, x1 = cx + O[5 * d + 2] * unit, y1 = cy + O[5 * d + 3] * unit;
-        const len = Math.hypot(x1 - x0, y1 - y0), ends = O[5 * d + 4];
-        const cut = Math.min(w / 2, ends === 3 ? len / 2 : len) / (len || 1), c0 = ends & 1 ? cut : 0, c1 = ends & 2 ? cut : 0;
-        segs[b] = x0 + (x1 - x0) * c0; segs[b + 1] = y0 + (y1 - y0) * c0;
-        segs[b + 2] = x1 - (x1 - x0) * c1; segs[b + 3] = y1 - (y1 - y0) * c1;
+        const b = 8 * n++;
+        for (let k = 0; k < 4; k++) segs[b + k] = (k & 1 ? cy : cx) + dashAt[4 * d + k] * unit;
         for (let k = 0; k < 3; k++) segs[b + 4 + k] = col[9 * i + 3 + k] / 255;
         segs[b + 7] = w;
       }
