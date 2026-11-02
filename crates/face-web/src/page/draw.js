@@ -25,8 +25,8 @@ function sessionOf(n) {
   if (!s) sessions.set(n.t.id, s = session(n.big));
   const want = trouble(n.t) ? "held" : n.big;
   if (s.state !== want) s.set(want);
-  s.hollow = n.kind === "planned";
-  s.letter = n.kind === "planned" ? String(n.waits) : glyph(n.t);
+  s.hollow = n.kind === "planned" && !n.solid;
+  s.letter = s.hollow ? String(n.waits) : glyph(n.t);
   s.pips = n.pips ?? 0;
   return s;
 }

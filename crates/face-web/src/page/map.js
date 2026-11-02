@@ -12,10 +12,12 @@ import { layered } from "./layout.js";
 // a finished one or an aside included. Projects are the graph's connected
 // pieces.
 //
-// Each live task is big: its planned join while it waits on its work, its
-// current leg otherwise. Everything else is a small dot. A task's own node
-// (big, or its last leg once it is done) has the task's id, so the card,
-// the queue and the URL name it the way they name the task.
+// Each live task is big: its planned join while a member of its runs or it
+// waits on its work, so it sits below what it will take in, hollow only
+// while it waits; its current leg otherwise. Everything else is a small
+// dot. A task's own node (big, or its last leg once it is done) has the
+// task's id, so the card, the queue and the URL name it the way they name
+// the task.
 export let view = null;
 // The tab's rows, one per object, as the page draws them.
 function assemble(v) {
@@ -98,7 +100,7 @@ export function stateOf(t) {
   const w = t.waiting || {};
   switch (w.kind) {
     case "model": return w.streaming ? "streaming" : "first";
-    case "calls": return !w.calls.some((c) => c.children?.length) ? "tools" : t.pause ? "paused" : "children";
+    case "calls": return !waitsOnKids(t) ? "tools" : t.pause ? "paused" : "children";
     case "max": return "max";
     case "done": return "done";
     case "starting": return "starting";
@@ -108,8 +110,10 @@ export function stateOf(t) {
   }
   return "brain";
 }
-// Waiting on its work: its planned join is the one that is big.
-const waitsOnWork = (t) => t.waiting?.kind === "listening" || (t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length));
+// Waiting on its children: on a spawn, or a `wait` on one.
+const waitsOnKids = (t) => t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length);
+// Waiting on its work: its planned join is big and hollow.
+const waitsOnWork = (t) => t.waiting?.kind === "listening" || waitsOnKids(t);
 
 // A finished project folds to its root once it has been finished a while,
 // or at once if Max abandoned it (his chat as he last left it, so a
@@ -156,17 +160,20 @@ export function derive(openId) {
     for (const m of members.get(t.id) || []) {
       if (m.leg && !seen.has(m.leg) && live.has(m.scope)) (isDone(m) ? done : open).push({ id: m.leg, at: m.legs?.[0]?.on.find((d) => d.leg)?.at });
     }
+    const kids = open.length;
     for (const w of t.work || []) if (w.running && !seen.has(`w:${w.call}`)) open.push({ id: `w:${w.call}`, at: w.at });
-    if (open.length) add({ id: `p:${t.id}`, kind: "planned", t, waits: open.length, open: open[0].at, deps: [t.leg, ...open.map((o) => o.id), ...done.map((o) => o.id)] });
+    if (open.length) add({ id: `p:${t.id}`, kind: "planned", t, kids, waits: open.length, open: open[0].at, deps: [t.leg, ...open.map((o) => o.id), ...done.map((o) => o.id)] });
   }
   // Big: each live task's own node. A task's own node, big or not, takes
-  // the task's id.
+  // the task's id. A planned join big while its task runs on is solid, and
+  // so is its line to that task's leg.
   const rename = new Map(), ownOf = new Map();
   for (const t of tasks) {
     const planned = nodes.get(`p:${t.id}`);
-    const own = !isDone(t) && planned && waitsOnWork(t) ? planned : nodes.get(t.leg);
+    const own = !isDone(t) && planned && (planned.kids || waitsOnWork(t)) ? planned : nodes.get(t.leg);
     if (!own) continue;
     if (!isDone(t)) own.big = stateOf(t);
+    if (own === planned && !waitsOnWork(t)) own.solid = t.leg;
     rename.set(own.id, t.id);
     ownOf.set(t.leg, own.id);
   }
@@ -265,7 +272,7 @@ function extent(n) {
   const lw = l ? measure(l, n.big ? LABEL_FONT : CHIP_FONT) + 7 : 0;
   return { lo: r + 3, hi: r + 3 + lw, along: n.big ? 2 * BIG_REACH.side - 6 : 2 * r + (l ? 4 : 0),
     top: n.big ? BIG_REACH.top : r + 2, foot: n.big ? BIG_REACH.foot : r + 3,
-    now: (!!n.big && n.kind !== "planned") || (n.kind === "chip" && n.running), planned: n.kind === "planned" };
+    now: (!!n.big && (n.kind !== "planned" || !!n.solid)) || (n.kind === "chip" && n.running), planned: n.kind === "planned" && !n.solid };
 }
 
 // A leg's life, in ms: from when it began to when the next leg of its task
@@ -296,9 +303,9 @@ export function layout() {
       const w = Math.min(240, Math.max(120, measure(shortName(c.root), `500 13px ${SERIF}`) + 34 + (c.tasks.length > 1 ? 14 : 0)));
       return { c, sig: `card ${c.root.id} ${Math.round(w)}`, w };
     }
-    const ns = c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), life: life(n), kind: n.kind, old: n.old, spent: n.kind === "chip" && !n.running }));
+    const ns = c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), life: life(n), kind: n.kind, old: n.old, spent: n.kind === "chip" && !n.running, solid: n.solid }));
     let sig = "";
-    for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}${n.now ? "!" : ""}${n.old || n.spent ? "~" : ""}${Math.round(n.hi)};`;
+    for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}${n.now ? "!" : ""}${n.old || n.spent ? "~" : ""}${n.solid ? "=" : ""}${Math.round(n.hi)};`;
     return { c, sig, ns };
   });
   const sig = parts.map((p) => p.sig).join("\n") + (innerWidth > 760);
@@ -326,9 +333,10 @@ export function layout() {
       l.dx = dx;
       l.boxes = p.ns.map((n) => { const q = l.at.get(n.id), r = n.lo - 3; return [n.id, { x: q.x + dx - r, y: q.y - n.top, w: 2 * r, h: n.top + n.foot, top: n.top }]; });
       const by = new Map(p.ns.map((n) => [n.id, n]));
-      // Dotted to what is planned; faint from an old version or finished background work.
+      // Dotted to what is planned, but for a solid one's line to its own leg; faint from an old version or finished background work.
       const planned = (id) => by.get(id).kind === "planned", faint = (id) => by.get(id).old || by.get(id).spent;
-      l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { pts: e.route.map(([a, b]) => [a + dx, b]), dashed: planned(e.from) || planned(e.to), old: faint(e.from) || faint(e.to) }]);
+      const dashed = (e) => (planned(e.from) && by.get(e.from).solid !== e.to) || planned(e.to);
+      l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { pts: e.route.map(([a, b]) => [a + dx, b]), dashed: dashed(e), old: faint(e.from) || faint(e.to) }]);
     }
     for (const [id, b] of l.boxes) positions.set(id, b);
     for (const [k, r] of l.lines) routes.set(k, r);
