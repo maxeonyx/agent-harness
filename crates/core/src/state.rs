@@ -462,9 +462,8 @@ pub enum Waiting {
     /// interrupted, and the move is his. Whatever it wants from him (a
     /// question, a report, a choice to make) is in its last message; there
     /// is no separate question. `background` is the work it owns that is
-    /// still running, which wakes it too ([`Phase::AwaitingMax`]): a face
-    /// shows it beside his move, since a turn that only answered him while
-    /// its work runs on asks less of him than one with nothing running.
+    /// still running, which wakes it too ([`Phase::AwaitingMax`]), so a
+    /// face shows it beside his move.
     Max {
         background: Vec<CallId>,
         since: Timestamp,
@@ -1880,6 +1879,8 @@ impl State {
                 Ok(())
             }
             CallEvent::Settled(outcome) => self.settle(id, outcome, record),
+            // Not folded yet: nobody states it until `wait` is built.
+            CallEvent::Waits(_) => Err(Rejected::NotForTask),
         }
     }
 
