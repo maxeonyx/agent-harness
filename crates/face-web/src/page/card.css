@@ -233,7 +233,9 @@
      log that does not scroll leaves it big. What
      Max can do to the task itself sits at the blob's right and travels with
      it on the same scroll, its buttons 36 px beside the big blob and 29
-     docked. A tap anywhere on the blob is the blob's. */
+     docked. One armed keeps its place, so a second tap at the same spot
+     confirms it, and shows its word above it. A tap anywhere on the blob
+     is the blob's. */
   #panel { timeline-scope: --end; }
   .pane > .scroll { scroll-timeline: --end y; }
   .scroll > .end { height: 72px; }
@@ -249,8 +251,9 @@
     transform-origin: left center; transform: translate(36px, calc(50% - 52px));
   }
   .pane > .acts:empty { display: none; }
-  .pane > .acts .act { height: 36px; border: 1px solid var(--line); box-shadow: 0 2px 10px rgba(40, 30, 20, .12); }
-  .pane > .acts .act:not(.armed) { width: 36px; background: var(--white); }
+  .pane > .acts .act { position: relative; width: 36px; height: 36px; padding: 0; justify-content: center; border: 1px solid var(--line); box-shadow: 0 2px 10px rgba(40, 30, 20, .12); }
+  .pane > .acts .act:not(.armed) { background: var(--white); }
+  .pane > .acts .act .word { position: absolute; right: 0; bottom: calc(100% + 4px); padding: .35em .8em; border-radius: 999px; background: var(--maroon); white-space: nowrap; }
   .pane > .acts .act:not(.armed):hover { background: var(--hover); color: var(--ink); }
   .pane > .acts .act svg { width: 18px; height: 18px; }
   @supports (animation-timeline: scroll()) {
