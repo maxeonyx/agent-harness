@@ -442,7 +442,7 @@ function stop(name) {
 // a flick at 1, 3 and 6 px/ms goes about 170, 1200 and 3600 px, in 0.35,
 // 0.9 and 1.4 s, where Chromium on Android goes 190, 1300 and 4400.
 const TAU = 1500, FRICTION = .0025;  // ms, px/ms²
-// What it did, for glidelog.js.
+// It returns what it made of the trail, for glidelog.js.
 function coast(trail, t) {
   const a = trail[0], b = trail.at(-1);
   if (a === undefined || a === b) return { no: "too few samples" };
