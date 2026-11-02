@@ -12,7 +12,8 @@ import { buildNew } from "./newchat.js";
 // ─── Opening a node ────────────────────────────────────────────────────────
 // The URL names the open node, so back closes it and a middle click opens a
 // node in a tab of its own. Going from one card to another replaces the
-// entry, so back always goes to the map.
+// entry, so back always goes to the map. `#TASK` opens a chat at its end;
+// `#TASK@ENTRY` opens it at that entry of its log (`landAt`, log.js).
 export let openId = null, saved = null, moving = Promise.resolve();
 let stay = false;
 // The card's id for a chat not started yet.
@@ -22,18 +23,22 @@ export const NEW = "new";
 // in this page. Back from one it did not push (the page reloaded on a card)
 // would leave it, so closing that card replaces the entry instead.
 const DOC = Math.random().toString(36).slice(2);
-// `#<task>@<entry>` opens a chat at an entry.
-function show(id, at = null) {
+function show(id, at) {
   const hash = at ? `#${id}@${at}` : `#${id}`;
   if (location.hash === hash) return route();
   if (history.state?.node) history.replaceState({ node: id, doc: history.state.doc }, "", hash);
   else history.pushState({ node: id, doc: DOC }, "", hash);
   route();
 }
-export function go(id, at = null) {
+export function go(id, at) {
   clearTimeout(closing);
   if (id === openId && !at) return;
   show(id, at);
+}
+// The task and the entry a hash names.
+export function hashed() {
+  const [task, at] = location.hash.slice(1).split("@");
+  return { task: task || null, at: at || null };
 }
 export function closeNode() {
   if (!openId) return;
@@ -44,14 +49,14 @@ addEventListener("popstate", route);
 addEventListener("hashchange", route);
 
 export function route() {
-  const id = location.hash.slice(1).split("@")[0] || null;
+  const { task: id, at } = hashed();
   const known = id && (byId[id] || (id === NEW && view));
-  moving = moving.then(() => transition(known ? id : id && !view ? id : null));
+  moving = moving.then(() => transition(known ? id : id && !view ? id : null, at));
 }
 
-async function transition(to) {
-  if (to === openId) return;
-  if (to && (!view || (!byId[to] && to !== NEW))) { pendingOpen = to; return; }
+async function transition(to, entry) {
+  if (to === openId) { if (to && entry && logState) { logState.at = entry; renderPanel(); } return; }
+  if (to && (!view || (!byId[to] && to !== NEW))) { pendingOpen = { id: to, at: entry }; return; }
   const from = openId;
   if (from) leave();
   hideTip();
@@ -76,7 +81,7 @@ async function transition(to) {
   openId = to;
   // Built before it is sized: a new chat's card is as tall as what it holds.
   panel.hidden = false;
-  buildPanel(to);
+  buildPanel(to, entry);
   setSeam(seamFor(to));
   if (!seam) { openId = null; panel.hidden = true; return; }
   const r = cardRect(seam);
@@ -96,10 +101,10 @@ async function transition(to) {
 let pendingOpen = null;
 // Open the node a route asked for before the view knew it, once it does.
 export function openPending() {
-  if (!pendingOpen || !byId[pendingOpen]) return false;
-  const id = pendingOpen;
+  if (!pendingOpen || !byId[pendingOpen.id]) return false;
+  const { id, at } = pendingOpen;
   pendingOpen = null;
-  show(id);
+  show(id, at);
   return true;
 }
 // Go to a task made from the open card, the card keeping its place.
@@ -120,8 +125,8 @@ const up = el("button", "up");
 up.type = "button";
 title.after(up);
 up.onclick = () => { const p = parentOf(byId[openId] || {}); if (p) go(p); };
-function buildPanel(id) {
-  logState = { id, head: undefined, rendered: [], rows: new Map(), group: null, exact: false, follow: true };
+function buildPanel(id, at) {
+  logState = { id, at, head: undefined, rendered: [], rows: new Map(), group: null, exact: false, follow: true };
   logEl.replaceChildren();
   logEl.classList.remove("exact");
   $(".viewer", panel).hidden = true;
@@ -274,7 +279,7 @@ export async function start(h, text, files, after = []) {
     if (words) out.push({ Delivery: { id: next(), to: id, content: { Words: digest(words) } } });
     return [...out, ...after];
   }, words ? [text, words] : [text]);
-  if (!why) { pendingOpen = id; stay = true; }
+  if (!why) { pendingOpen = { id }; stay = true; }
   return why;
 }
 export const aside = (t, text, files, after) => start({ name: `${t.name}-aside`, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } } }, text, files, after);

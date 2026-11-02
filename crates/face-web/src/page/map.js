@@ -183,7 +183,6 @@ export function derive(openId) {
       if (p && p.kind === "leg" && !p.big && !rename.has(p.id) && uses.get(p.id) === 1) {
         kept.delete(p.id);
         n.deps = [...p.deps, ...n.deps.filter((d) => d !== p.id)];
-        n.open = p.open ?? n.open;
       }
     }
     kept.set(n.id, n);

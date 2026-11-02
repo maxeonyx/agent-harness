@@ -1,8 +1,8 @@
-import { $, el, getJson, logEl, panel } from "./base.js";
+import { $, el, getJson, panel } from "./base.js";
 import { byId, graph, view } from "./map.js";
 import { fit } from "./camera.js";
 import { drawMap } from "./draw.js";
-import { closeNode, go, logState, mini, NEW, openId, start, title } from "./card.js";
+import { closeNode, go, mini, NEW, openId, start, title } from "./card.js";
 import { compose, drafts, giveBack, menu, newTuning, renderTune, say, takeWords } from "./compose.js";
 
 // ─── A new chat, in Max's own scope ───────────────────────────────────────
@@ -88,8 +88,6 @@ export async function startNew(text, files) {
 const findEl = $("#find"), foundEl = $("#found");
 export let finding = "", found = new Set();
 let hits = [], chosen = 0, asking = 0;
-// The entry to bring into view once its chat's log has it.
-let reveal = null;
 export function startFind() { findEl.hidden = false; findEl.focus(); findEl.select(); }
 function endFind() {
   findEl.hidden = foundEl.hidden = true; findEl.value = ""; finding = ""; found = new Set(); hits = [];
@@ -151,18 +149,7 @@ function open(i) {
   const h = hits[i];
   endFind();
   if (!h) return;
-  reveal = h.entry || null;
-  go(h.task);
-  if (reveal && logState) revealIn(logState);
-}
-// Once the open log holds the found entry, it scrolls there and glows.
-export function revealIn(s) {
-  const at = reveal && $(`[data-entry="${reveal}"]`, logEl);
-  if (!at || s !== logState) return;
-  reveal = null;
-  s.follow = false;
-  at.scrollIntoView({ block: "center" });
-  at.classList.remove("revealed"); void at.offsetWidth; at.classList.add("revealed");
+  go(h.task, h.entry);
 }
 findEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); open(chosen); }
