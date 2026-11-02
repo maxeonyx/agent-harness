@@ -1,6 +1,6 @@
 import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
 import { act, can } from "./tab.js";
-import { byId, glyph, isDone, look, order, shortName, stateOf, view } from "./map.js";
+import { byId, glyph, graph, isDone, look, order, shortName, stateOf, view } from "./map.js";
 import { trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { dictate, dictation, editMessage, modelName, say } from "./compose.js";
@@ -757,8 +757,8 @@ function renderTail(s, t) {
   }
 }
 
-// The log ends in its blob (`blobs.js`): what it waits on, and a disk for
-// each piece of data; still once the chat is idle. It sits big below the
+// The log ends in its blob (`blobs.js`): what it waits on, its compactions
+// as on its map node, and a disk for each piece of data; still once the chat is idle. It sits big below the
 // last entry; scrolled past, it docks small on the line above the entry box,
 // and a tap goes to the bottom. Where it is and how big is the scroll's alone
 // (`card.css`). While the chat waits on Max a tap also starts dictation, and
@@ -780,6 +780,7 @@ function showBlob(t) {
   const shape = stateOf(t);
   blobBox.title = shape === "max" && can.dictation ? "Go to bottom and dictate" : "Go to bottom";
   blobSession.letter = glyph(t);
+  blobSession.pips = graph.nodes.get(t.id)?.pips ?? 0;
   blobSession.set(shape, blobTask !== t.id);
   blobTask = t.id;
 }
