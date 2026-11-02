@@ -1,9 +1,10 @@
 // ─── The map's layout: a layered graph, and its lines ─────────────────────
 // The standard layered layout Graphviz `dot` uses, centred, flowing down,
 // with no library. The present lines up on one row at y = 0: every live
-// node sits on the lowest row the past reaches, and what it waits on hangs
-// below it. Nothing here asks the browser for geometry: sizes come in with
-// the nodes, and curves are Béziers in closed form.
+// node sits on the lowest row the past reaches, but one that a live node
+// depends on sits just above it, and what waits hangs below. Nothing here
+// asks the browser for geometry: sizes come in with the nodes, and curves
+// are Béziers in closed form.
 //
 // A node: { id, deps, kind, lo, hi, along, top, foot, now, planned }. `lo` and
 // `hi` are how far it reaches left and right of its centre (its label is to
@@ -47,14 +48,22 @@ export function layered(nodes, prev = new Map()) {
   const V = nodes.map((n, i) => ({ n, id: n.id, key: i, deps: n.deps.filter((d) => ids.has(d)), up: [], down: [], lo: n.lo, hi: n.hi, along: n.along }));
   const by = new Map(V.map((v) => [v.id, v]));
   // 1. Rows: one below the lowest dependency. 2. The present: every live
-  // node down to the lowest row the past reaches; a planned node one below
-  // what it waits on. 3. Everything else by its time, within its slack.
+  // node down to the lowest row the past reaches, but for one that a live
+  // node depends on (a running child of a parent that runs on), which sits
+  // just above it; a planned node one below what it waits on. 3. Everything
+  // else by its time, within its slack.
   const below = (v) => { let r = -1; for (const d of v.deps) r = Math.max(r, by.get(d).rank); return r + 1; };
   for (const v of V) v.rank = below(v);
   let P = 0;
   for (const v of V) if (!v.n.planned && v.n.kind !== "chip") P = Math.max(P, v.rank);
-  for (const v of V) if (v.n.now || v.n.planned) v.rank = Math.max(v.n.now ? P : 0, below(v));
-  byTime(V, by, P);
+  const behind = new Set(), kids = new Map(V.map((v) => [v.id, []]));
+  for (const v of V) for (const d of v.deps) { kids.get(d).push(v); if (v.n.now && v.n.kind !== "chip" && by.get(d).n.now) behind.add(d); }
+  for (const v of V) if ((v.n.now && !behind.has(v.id)) || v.n.planned) v.rank = Math.max(v.n.now ? P : 0, below(v));
+  for (let i = V.length - 1; i >= 0; i--) {
+    const v = V[i];
+    if (behind.has(v.id)) v.rank = Math.max(below(v), Math.min(...kids.get(v.id).filter((k) => k.n.now).map((k) => k.rank)) - 1);
+  }
+  byTime(V, by, P, kids);
   const layers = [];
   const put = (v) => (layers[v.rank] ??= []).push(v);
   V.forEach(put);
@@ -176,10 +185,8 @@ export function layered(nodes, prev = new Map()) {
 // depends on it beginning (or now), on the nearest row its slack allows. A
 // node with no `life` began with what it depends on. A few sweeps, as its
 // neighbours move with it.
-function byTime(V, by, P) {
+function byTime(V, by, P, kids) {
   const fixed = (v) => v.n.now || v.n.planned;
-  const kids = new Map(V.map((v) => [v.id, []]));
-  for (const v of V) for (const d of v.deps) kids.get(d).push(v);
   for (let i = V.length - 1; i >= 0; i--) {
     const v = V[i];
     let r = fixed(v) ? v.rank : P;

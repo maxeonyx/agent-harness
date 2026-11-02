@@ -272,7 +272,7 @@ function extent(n) {
   const lw = l ? measure(l, n.big ? LABEL_FONT : CHIP_FONT) + 7 : 0;
   return { lo: r + 3, hi: r + 3 + lw, along: n.big ? 2 * BIG_REACH.side - 6 : 2 * r + (l ? 4 : 0),
     top: n.big ? BIG_REACH.top : r + 2, foot: n.big ? BIG_REACH.foot : r + 3,
-    now: (!!n.big && n.kind !== "planned") || (n.kind === "chip" && n.running), planned: n.kind === "planned" };
+    now: (!!n.big && (n.kind !== "planned" || !!n.solid)) || (n.kind === "chip" && n.running), planned: n.kind === "planned" && !n.solid };
 }
 
 // A leg's life, in ms: from when it began to when the next leg of its task
