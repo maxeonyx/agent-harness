@@ -106,9 +106,8 @@ for (const [name, st] of Object.entries(STATES)) {
 // A session: its state, when its last packet came, its compactions, its
 // role letter and whether it is hollow, shared by every blob of it. Going
 // from one satellite straight to another, it shows the brain for a moment,
-// so the growth passes through
-// the centre; `jump` goes straight there, for a blob now showing another
-// session. In a still state its blob settles and stops moving; while Max
+// so the growth passes through the centre; `jump` goes straight there, for
+// a blob now showing another session. In a still state its blob settles and stops moving; while Max
 // dictates, `voice` is his level from 0 to 1 (null when he is not
 // dictating), since `heard`.
 export function session(state = "starting") {

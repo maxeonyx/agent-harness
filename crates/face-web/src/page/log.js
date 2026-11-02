@@ -758,8 +758,8 @@ function renderTail(s, t) {
 }
 
 // The log ends in its blob (`blobs.js`): what it waits on, its compactions
-// as on its map node, and a disk for each piece of data; still once the chat is idle. It sits big below the
-// last entry; scrolled past, it docks small on the line above the entry box,
+// as on its map node, and a disk for each piece of data; still once the
+// chat is idle. It sits big below the last entry; scrolled past, it docks small on the line above the entry box,
 // and a tap goes to the bottom. Where it is and how big is the scroll's alone
 // (`card.css`). While the chat waits on Max a tap also starts dictation, and
 // while he dictates its microphone swells with his voice and a tap stops it.
