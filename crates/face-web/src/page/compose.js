@@ -470,7 +470,7 @@ export function renderComposeState(t) {
 function press() {
   if (!box) return;
   if (dictation) {
-    if (!dictation.stopping) stopDictation();
+    stopDictation();
     dictation.then = stage;
     return;
   }
@@ -709,12 +709,16 @@ function releaseMic(l) {
   l.mic = null;
 }
 const STOP = JSON.stringify({ type: "stop" });
+// A stop also drops a press that queued the next: leaving the card or
+// sending ends dictation.
 export function stopDictation() {
-  if (!dictation || dictation.stopping) return;
+  if (!dictation) return;
+  dictation.again = undefined;
+  micShows(false);
+  if (dictation.stopping) return;
   dictation.stopping = true;
   releaseMic(dictation);
   hear(null);
-  micShows(false);
   if (dictation.ws?.readyState === 1) dictation.ws.send(STOP);
   say("Finishing");
 }
