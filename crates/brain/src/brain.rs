@@ -366,7 +366,12 @@ impl Brain {
             Todo::Abandon(task) => self.stop_member(task),
             Todo::Tidy(task) => self.prompt(task, Prompt::Tidy),
             Todo::Expire(task) => self.fact(Fact::Task(task, TaskEvent::Expired)),
-            Todo::Settle(call) => self.settle_scope(call),
+            Todo::Settle(call) => {
+                match self.state().call(call).is_some_and(|c| c.waits.is_some()) {
+                    true => self.settle_wait(call),
+                    false => self.settle_scope(call),
+                }
+            }
             Todo::Background(_, calls) => self.append(Batch {
                 values: Vec::new(),
                 facts: (calls.into_iter())
@@ -1081,10 +1086,14 @@ impl Brain {
     /// settles in that batch too.
     fn spawn(&mut self, id: CallId, call: &Call) {
         // The state lets Max call any tool of the brain's, and `meta`
-        // offers him none.
-        let Caller::Agent { task: parent, .. } = call.caller else {
-            let said = format!("The harness offers Max no tool `{}`.", call.tool);
-            return self.fail_call(id, &said);
+        // offers him none. An agent's background work may be a spawn.
+        let parent = match call.caller {
+            Caller::Agent { task, .. } => task,
+            Caller::Background { task, .. } if call.tool == meta::SPAWN => task,
+            _ => {
+                let said = format!("The harness offers Max no tool `{}`.", call.tool);
+                return self.fail_call(id, &said);
+            }
         };
         let parent = self
             .state()
@@ -1122,9 +1131,13 @@ Carry on with your next step, or, if your work is done, call `compact_and_report
         } else if call.tool == meta::BACKGROUND {
             meta::background_call(self.state(), &parent, id, self.brain, &input).map(
                 |(started, input)| {
+                    let name = match &started.caller {
+                        Caller::Background { name, .. } => name.as_str(),
+                        _ => "",
+                    };
                     let said = words(&format!(
-                        "Started `{}` in the background: its result comes to you as a message when it settles, \
-and you cannot finish until it has.",
+                        "Started `{name}` (`{}`) in the background: `wait` for it, or its result comes to you as a \
+message when it settles. You cannot finish until it has.",
                         started.tool
                     ));
                     let made = CallId(self.decider.next().event(batch.facts.len() as u32));
@@ -1133,6 +1146,15 @@ and you cannot finish until it has.",
                     said
                 },
             )
+        } else if call.tool == meta::WAIT {
+            match meta::wait(self.state(), &parent, &input) {
+                // It settles once what it waits for holds ([`Todo::Settle`]).
+                Ok(wait) => {
+                    batch.facts.push(Fact::Call(id, CallEvent::Waits(wait)));
+                    return self.answer(id, batch);
+                }
+                Err(why) => Err(why),
+            }
         } else if call.tool == meta::STOP || call.tool == meta::PASS {
             self.hand(&call.tool, &parent, &input, &mut batch)
                 .map(|said| words(&said))
@@ -1403,6 +1425,30 @@ and you cannot finish until it has.",
                 id,
                 CallEvent::Settled(Outcome::Completed(output)),
             )],
+        });
+    }
+
+    /// A wait is due to settle: with the results of what it waits on that
+    /// has landed, completed if that is what it waits for, or else ended
+    /// early, as interrupted.
+    fn settle_wait(&mut self, id: CallId) {
+        let Some((model, holds)) = meta::waited(self.state(), &|v| self.value(v), id) else {
+            return self.fail_call(id, "The harness lost what this wait was on.");
+        };
+        let output = Output {
+            model: model.id(),
+            full: None,
+            observes: Vec::new(),
+        };
+        let outcome = match holds {
+            true => Outcome::Completed(output),
+            false => Outcome::Interrupted {
+                partial: Some(output),
+            },
+        };
+        self.append(Batch {
+            values: vec![model],
+            facts: vec![Fact::Call(id, CallEvent::Settled(outcome))],
         });
     }
 
