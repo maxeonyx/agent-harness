@@ -1,5 +1,5 @@
 import { $, el, svgEl, when } from "./base.js";
-import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, look, positions, radius, routes, shortName, shown, successor, unfolded, view } from "./map.js";
+import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, look, positions, radius, routes, shortName, shown, stateOf, successor, unfolded, view } from "./map.js";
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
 import { ICON, layer, MARK, session } from "./blobs.js";
 import { curve, stroke, taper } from "./layout.js";
@@ -23,11 +23,17 @@ const sessions = new Map(), handles = new Map();
 function sessionOf(n) {
   let s = sessions.get(n.t.id);
   if (!s) sessions.set(n.t.id, s = session(n.big));
-  const want = trouble(n.t) ? "held" : n.big;
-  if (s.state !== want) s.set(want);
-  s.hollow = n.kind === "planned" && !n.solid;
-  s.letter = s.hollow ? String(n.waits) : glyph(n.t);
-  s.pips = n.pips ?? 0;
+  return dress(s, n.t);
+}
+// What task t's blob shows, on its map node and in its chat's dock alike:
+// its state, hollow with how many it waits on for its letter while its own
+// node is a planned join waiting on its work, and its compactions.
+export function dress(s, t, jump = false) {
+  const n = graph.nodes.get(t.id);
+  s.set(trouble(t) ? "held" : stateOf(t), jump);
+  s.hollow = n?.kind === "planned" && !n.solid;
+  s.letter = s.hollow ? String(n.waits) : glyph(t);
+  s.pips = n?.pips ?? 0;
   return s;
 }
 

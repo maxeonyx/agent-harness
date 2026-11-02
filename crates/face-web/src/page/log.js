@@ -1,7 +1,7 @@
 import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
 import { act, can } from "./tab.js";
-import { byId, glyph, graph, isDone, look, order, shortName, stateOf, view } from "./map.js";
-import { trouble } from "./draw.js";
+import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
+import { dress, trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { dictate, dictation, editMessage, modelName, say, sending } from "./compose.js";
 import { layer, session } from "./blobs.js";
@@ -780,11 +780,8 @@ function showBlob(t) {
     };
     dock.append(blobBox);
   }
-  const shape = stateOf(t);
-  blobBox.title = shape === "max" && can.dictation ? "Go to bottom and dictate" : "Go to bottom";
-  blobSession.letter = glyph(t);
-  blobSession.pips = graph.nodes.get(t.id)?.pips ?? 0;
-  blobSession.set(shape, blobTask !== t.id);
+  dress(blobSession, t, blobTask !== t.id);
+  blobBox.title = blobSession.state === "max" && can.dictation ? "Go to bottom and dictate" : "Go to bottom";
   blobTask = t.id;
 }
 // How loud Max is while he dictates, 0 to 1; null when he is not.
