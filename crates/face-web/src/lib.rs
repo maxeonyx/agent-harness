@@ -82,6 +82,17 @@
 //! built from `harness-face-tab` by this crate's build script; the
 //! sockets are WebSockets (tungstenite, without its TLS).
 //!
+//! **One build per page.** The document (`/`) is never stored by a browser
+//! or a proxy. Everything it runs, the modules `page/*.js` and the tab's
+//! wasm, is served under its build, `/page/<build>/<name>`, and stored
+//! forever: the build is a hash of the page's files and the wasm, so a
+//! change to any of them is a new path, and a module's relative imports all
+//! come from the build the document named. A build that is not the one
+//! served now is not found. Only what the browser itself holds an identity
+//! by keeps a fixed path, unstored: the service worker (`/page/sw.js`), the
+//! web app manifest (`/page/manifest.webmanifest`) and its icon
+//! (`/icon.png`).
+//!
 //! # Dictation
 //!
 //! One press of the microphone. The page streams PCM to the face, which relays it with the login's token, since the page must never hold it. Nothing reaches the brain from the relay: the transcript lands in the box as typed text does, and is saved as the draft like it. Pressing send while dictating stops the dictation and stages the text; a second press sends it once the final text is in (`dictation.then`, `finishDictation`). The send itself is drawn in the brain's "A real turn".
@@ -286,6 +297,40 @@ impl<S: Source> Face<S> {
         }
     }
 
+    /// The build the page's files make now: a hash of every one of them and
+    /// of the tab's wasm, read now from [`Wiring::page`] if it says where,
+    /// otherwise of the ones built in, hashed once.
+    fn build(&self) -> io::Result<String> {
+        static BUILT_IN: OnceLock<String> = OnceLock::new();
+        let Some(dir) = &self.wiring.page else {
+            return Ok(BUILT_IN
+                .get_or_init(|| build(PAGE.iter().map(|(n, t)| (*n, t.as_bytes()))))
+                .clone());
+        };
+        let mut names = std::fs::read_dir(dir)?
+            .map(|e| Ok(e?.file_name().to_string_lossy().into_owned()))
+            .filter(|n| !n.as_ref().is_ok_and(|n: &String| n.starts_with('.')))
+            .collect::<io::Result<Vec<String>>>()?;
+        names.sort();
+        let files = names
+            .iter()
+            .map(|n| Ok((n.as_str(), self.page_file(n)?)))
+            .collect::<io::Result<Vec<_>>>()?;
+        Ok(build(files.iter().map(|(n, t)| (*n, t.as_bytes()))))
+    }
+
+    /// What the page runs, by its name in a build: the tab's wasm, or one of
+    /// the page's files.
+    fn asset(&self, name: &str) -> io::Result<Cow<'static, [u8]>> {
+        if name == "tab.wasm" {
+            return Ok(Cow::Borrowed(TAB));
+        }
+        Ok(match self.page_file(name)? {
+            Cow::Borrowed(text) => Cow::Borrowed(text.as_bytes()),
+            Cow::Owned(text) => Cow::Owned(text.into_bytes()),
+        })
+    }
+
     /// One of the page's files, by its name in `page/`: from disk, read now,
     /// if [`Wiring::page`] says where; otherwise as built in.
     fn page_file(&self, name: &str) -> io::Result<Cow<'static, str>> {
@@ -310,11 +355,13 @@ impl<S: Source> Face<S> {
     fn handle(&self, stream: impl Socket) -> io::Result<()> {
         let (request, mut stream) = http::read_request(stream)?;
         match request.path.as_str() {
-            "/" => match DOCUMENT
-                .iter()
-                .map(|name| self.page_file(name))
-                .collect::<io::Result<String>>()
-            {
+            "/" => match self.build().and_then(|build| {
+                let document = DOCUMENT
+                    .iter()
+                    .map(|name| self.page_file(name))
+                    .collect::<io::Result<String>>()?;
+                Ok(document.replace("{build}", &build))
+            }) {
                 Ok(document) => http::respond(
                     &mut stream,
                     "text/html; charset=utf-8",
@@ -323,7 +370,19 @@ impl<S: Source> Face<S> {
                 ),
                 Err(e) => http::refuse(&mut stream, "500 Internal Server Error", &e.to_string()),
             },
-            "/tab.wasm" => http::respond(&mut stream, "application/wasm", TAB, false),
+            "/page/sw.js" => match self.page_file("sw.js") {
+                Ok(text) => http::respond(&mut stream, JS, text.as_bytes(), false),
+                Err(e) => http::refuse(&mut stream, "500 Internal Server Error", &e.to_string()),
+            },
+            "/page/manifest.webmanifest" => match self.page_file("manifest.webmanifest") {
+                Ok(text) => http::respond(
+                    &mut stream,
+                    "application/manifest+json",
+                    text.as_bytes(),
+                    false,
+                ),
+                Err(e) => http::refuse(&mut stream, "500 Internal Server Error", &e.to_string()),
+            },
             "/icon.png" => http::respond(&mut stream, "image/png", ICON, false),
             "/wiring" => {
                 let dictation = self.wiring.dictation.as_ref();
@@ -387,16 +446,24 @@ impl<S: Source> Face<S> {
                 )
             }
             path => {
-                if let Some(name) = path.strip_prefix("/page/") {
+                if let Some((build, name)) =
+                    path.strip_prefix("/page/").and_then(|p| p.split_once('/'))
+                {
                     let kind = match name.rsplit_once('.') {
-                        Some((_, "js")) => "text/javascript; charset=utf-8",
-                        Some((_, "css")) => "text/css; charset=utf-8",
-                        Some((_, "webmanifest")) => "application/manifest+json",
-                        _ => "text/html; charset=utf-8",
+                        Some((_, "js")) => JS,
+                        Some((_, "wasm")) => "application/wasm",
+                        _ => return http::not_found(&mut stream),
                     };
-                    return match self.page_file(name) {
-                        Ok(text) => http::respond(&mut stream, kind, text.as_bytes(), false),
-                        Err(_) => http::not_found(&mut stream),
+                    let now = match self.build() {
+                        Ok(now) => now,
+                        Err(e) => {
+                            let why = e.to_string();
+                            return http::refuse(&mut stream, "500 Internal Server Error", &why);
+                        }
+                    };
+                    return match self.asset(name) {
+                        Ok(bytes) if build == now => http::respond(&mut stream, kind, &bytes, true),
+                        _ => http::not_found(&mut stream),
                     };
                 }
                 if let Some(head) = path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
@@ -856,9 +923,10 @@ fn now() -> Timestamp {
 /// `build.rs` lists them. [`Wiring::page`] reads them from disk instead.
 const PAGE: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/page.rs"));
 /// The page's document and its style sheet, joined from these files in this
-/// order. Its script is the modules `page/*.js`, served at `/page/<name>`:
-/// `main.js` starts the page, and each module imports what it uses from the
-/// others, so a name lives in one module and says where.
+/// order, with `{build}` in them the build they make. Its script is the
+/// modules `page/*.js`, served at `/page/<build>/<name>`: `main.js` starts
+/// the page, and each module imports what it uses from the others, so a name
+/// lives in one module and says where.
 const DOCUMENT: &[&str] = &[
     "head.html",
     "base.css",
@@ -871,6 +939,21 @@ const DOCUMENT: &[&str] = &[
     "body.html",
     "tail.html",
 ];
+/// What a module is served as.
+const JS: &str = "text/javascript; charset=utf-8";
+
+/// The build a page's files make, by name, with the tab's wasm: 16 hex
+/// digits that change with any of them.
+fn build<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    for (name, bytes) in files {
+        (name, bytes).hash(&mut hasher);
+    }
+    TAB.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 /// The tab, as the page runs it.
 const TAB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tab.wasm"));
 /// The face's icon, for its web app manifest (`page/manifest.webmanifest`).
