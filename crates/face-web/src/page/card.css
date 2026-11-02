@@ -225,7 +225,8 @@
      lower half, and the scroll itself moves and scales it, on the
      compositor: docked until the room's middle comes up to the line, then
      moving with the log and growing, to fill the room once all of it is in
-     view. A blob of 128 px docks at 56. Only the blob takes a tap. */
+     view. A blob of 128 px docks at 56. Only the blob takes a tap, and
+     only its part above the line: below it, a tap is for the entry box. */
   #panel { timeline-scope: --end; }
   .scroll > .end { height: 152px; view-timeline: --end y; view-timeline-inset: 0; }
   .pane:has(> .dock[hidden]) > .scroll > .end { display: none; }
@@ -235,9 +236,11 @@
   }
   @supports (animation-timeline: view()) {
     .pane > .dock { animation: dock linear both; animation-timeline: --end; animation-range: entry 50% entry 100%; }
+    .pane > .dock .blob { animation: above linear both; animation-timeline: --end; animation-range: entry 50% entry 100%; }
   }
   @keyframes dock { to { transform: none; filter: drop-shadow(0 7px 11px transparent); } }
-  .pane > .dock .blob { border-radius: 50%; pointer-events: auto; cursor: pointer; }
+  @keyframes above { to { clip-path: inset(0); } }
+  .pane > .dock .blob { border-radius: 50%; clip-path: inset(0 0 50%); pointer-events: auto; cursor: pointer; }
   .exact-entry { margin: 0 0 1em; }
   .exact-entry .who { font: 600 12px var(--sans); color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }
