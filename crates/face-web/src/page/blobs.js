@@ -15,8 +15,9 @@
 // colour. The outline keeps its width, so a small stuck blob still shows
 // red. While Max dictates, the microphone ball swells with his voice, its
 // icon is a stop square, and a ring pulses out from it. The blobs' state
-// is struct-of-arrays in typed arrays, and nothing is allocated per frame. Only the compaction dots need the CPU: marching
-// squares traces the track, and a second draw puts a dot per quad. A blob
+// is struct-of-arrays in typed arrays, and nothing is allocated per
+// frame. Only the compaction dots need the CPU: marching squares traces
+// the track, and a second draw puts a dot per quad. A blob
 // off its canvas is neither animated nor drawn, and while every blob shown
 // is still and its springs at rest, nothing runs at all.
 //
