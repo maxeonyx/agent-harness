@@ -39,9 +39,9 @@ drive page open "$a" click '.moves .mv[title^="Edit this message"] @last' \
 sleep 7
 drive settle "$a" >/dev/null
 
-work='tool bash {"command": "sleep 600", "summary": "work for ten minutes"}
+work='tool bash {"command": "sleep 600", "timeout_ms": 600000, "summary": "work for ten minutes"}
 say Done.'
-w=$(drive chat chat "$PWD/$at/b" "tool background {\"name\": \"watch\", \"tool\": \"bash\", \"input\": {\"command\": \"sleep 600\"}}
+w=$(drive chat chat "$PWD/$at/b" "tool background {\"name\": \"watch\", \"tool\": \"bash\", \"input\": {\"command\": \"sleep 600\", \"timeout_ms\": 600000}}
 tool spawn {\"tasks\": [{\"name\": \"one\", \"mandate\": $(jq -Rs . <<<"$work")}, {\"name\": \"two\", \"mandate\": $(jq -Rs . <<<"$work")}, {\"name\": \"three\", \"mandate\": $(jq -Rs . <<<"$work")}]}
 say All three are done.")
 sleep 3
