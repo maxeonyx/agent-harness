@@ -54,8 +54,8 @@ export function look(t) {
     case "harness": return { cls: "working" + stopping, text: "In the harness" + since };
     case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `Paused with ${h.name}` : "Paused" }; }
     case "parked": return { cls: "paused", text: "Parked" + since };
-    case "limited": return { cls: "paused", text: `Limited until ${when(w.until)}` };
-    case "signedOut": return { cls: "paused", text: "Waits for a sign-in" };
+    case "limited": return { cls: "stuck", text: `Limited until ${when(w.until)}` };
+    case "signedOut": return { cls: "stuck", text: "Waits for a sign-in" };
     case "listening": return { cls: "listening" + stopping, text: w.calls.length ? `${w.calls.length} in the background` : "Listening" };
     case "done": {
       const o = t.outcome || {};
@@ -95,7 +95,7 @@ export function stateOf(t) {
   const w = t.waiting || {};
   switch (w.kind) {
     case "model": return w.streaming ? "streaming" : "first";
-    case "calls": return w.calls.some((c) => c.children?.length) ? "listening" : "tools";
+    case "calls": return w.calls.some((c) => c.children?.length) ? "children" : "tools";
     case "max": return "max";
     case "starting": return "starting";
     case "held": case "parked": return "paused";

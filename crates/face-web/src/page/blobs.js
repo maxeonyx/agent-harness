@@ -37,8 +37,8 @@
 // same frame.
 
 // Colours: [fill, edge, icon] per state; the whole blob takes the state's,
-// as base.css names them: Max's turn orange, an agent at work blue, waiting
-// on others purple, done green, paused grey, stuck red.
+// as base.css names them: Max's turn orange, an agent at work (or its
+// background work) blue, waiting on other agents purple, done green, paused grey, stuck red.
 const C = { ink: [20, 20, 19], paper: [250, 249, 245], yours: [212, 105, 28], working: [58, 109, 176], others: [139, 90, 166],
   green: [79, 138, 85], red: [179, 53, 44], faint: [161, 159, 150], muted: [107, 106, 100] };
 const tint = (c, k) => C.paper.map((p, i) => p + (c[i] - p) * k);
@@ -67,10 +67,11 @@ export const STATES = {
   streaming: { active: "model", centre: .3, col: [tint(C.working, .22), C.working, C.working] },
   brain:     { active: "centre", centre: .54, gap: -.15, col: [tint(C.working, .1), C.working, C.working] },
   tools:     { active: "tools", centre: .3, col: [tint(C.working, .13), C.working, C.working] },
-  listening: { active: "tools", centre: .34, size: .32, col: [tint(C.others, .08), C.others, C.others] },
+  listening: { active: "tools", centre: .34, size: .32, col: [tint(C.working, .06), C.working, C.working] },
+  children:  { active: "tools", centre: .34, size: .32, col: [tint(C.others, .08), C.others, C.others] },
   max:       { active: "max", centre: .3, col: [C.yours, C.yours, C.paper] },
   held:      { active: "model", centre: .32, size: .36, still: true, col: [tint(C.red, .12), C.red, C.red] },
-  starting:  { active: null, centre: .4, col: [C.paper, C.faint, C.ink] },
+  starting:  { active: null, centre: .4, col: [C.paper, C.working, C.working] },
   paused:    { active: null, centre: .48, merged: true, col: [[233, 229, 217], C.faint, C.muted] },
   done:      { active: null, centre: .48, merged: true, col: [C.green, C.green, C.paper] },
 };
@@ -692,7 +693,7 @@ export function layer(host) {
       }
       for (let k = 0; k < 9; k++) COL[9 * i + k] += (st.col[k / 3 | 0][k % 3] - COL[9 * i + k]) * kc;
       if (name === "streaming") SPIN[i] += dt * 1.4;
-      if (name === "tools" || name === "listening") {
+      if (name === "tools" || name === "listening" || name === "children") {
         const period = name === "tools" ? .6 : 2, n = Math.floor(t / period), f = Math.min(1, (t / period - n) * 3);
         GEAR[i] = (n + 1 - Math.pow(1 - f, 3)) * Math.PI / 3; // a tooth a step: the gear has six
       }

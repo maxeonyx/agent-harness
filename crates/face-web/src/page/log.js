@@ -1,6 +1,6 @@
 import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
 import { act } from "./tab.js";
-import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
+import { byId, glyph, isDone, look, order, shortName, stateOf, view } from "./map.js";
 import { trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { editMessage, modelName, say } from "./compose.js";
@@ -737,7 +737,7 @@ function renderTail(s, t) {
   const parts = [];
   if (t.waiting?.kind === "model") parts.push(followModel(t.waiting.call));
   else stopModel();
-  showBlob(t, BLOB_STATE[t.waiting?.kind]?.(t.waiting));
+  showBlob(t, AT_WORK.has(t.waiting?.kind) && stateOf(t));
   // Not read yet: dashed, until the request that reads it.
   for (const p of t.pending || []) {
     const when = `${clock(p.at)}, not read yet`;
@@ -761,10 +761,8 @@ function renderTail(s, t) {
 // entry box with a shadow, standing in for Go to bottom: a tap goes there. The
 // dock is sticky, so the compositor moves it with the scroll, and the
 // blob's size, place and shadow follow how far the end is below.
-const BIG = 128, SMALL = 56, DOCK = BIG + 24, DOCKED = SMALL, TRAVEL = DOCK - DOCKED, BLOB_STATE = {
-  model: (w) => (w.streaming ? "streaming" : "first"), calls: () => "tools", harness: () => "brain",
-  starting: () => "starting", listening: () => "listening",
-};
+const BIG = 128, SMALL = 56, DOCK = BIG + 24, DOCKED = SMALL, TRAVEL = DOCK - DOCKED;
+const AT_WORK = new Set(["model", "calls", "harness", "starting", "listening"]);
 const blobSession = session(), dock = $(".scroll > .dock", panel);
 dock.style.cssText = `width: ${DOCK}px; height: ${DOCK}px; bottom: ${-TRAVEL}px`;
 let blobs, blobBox = null, blobTask = null;
