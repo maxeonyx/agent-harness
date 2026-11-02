@@ -2830,6 +2830,16 @@ impl State {
             .any(|id| (self.call(*id)).is_some_and(|record| self.owes_dispatch(*id, record)))
     }
 
+    /// Whether none of a round's outstanding calls has started: none is
+    /// dispatched or has a scope of tasks. A paused task's round rests in the
+    /// brain like this until he resumes it.
+    fn unsent(&self, step: &Step) -> bool {
+        step.outstanding.iter().all(|id| {
+            self.call(*id).is_none_or(|r| r.dispatched.is_none())
+                && !self.open.scopes.contains_key(&Scope::Spawn(*id))
+        })
+    }
+
     /// What a task is waiting on now.
     pub fn waiting_on(&self, task: TaskId, now: Timestamp) -> Option<Waiting> {
         let t = self.tasks.get(&task)?;
@@ -2858,6 +2868,7 @@ impl State {
                     streaming: sent.first_byte.is_some(),
                 }
             }
+            Phase::Acting(step) if self.gated(t) && self.unsent(step) => Waiting::Paused { since },
             Phase::Acting(step) if self.dispatching(step) => Waiting::Brain { since },
             Phase::Acting(step) => Waiting::Calls {
                 calls: step.outstanding.clone(),

@@ -75,7 +75,8 @@ const IDLE = { r: .17, g: 0 }, ACTIVE = { r: .42, g: -.05 };
 
 // A state: which ball is active, the centre's radius, the idle satellites'
 // gap if not IDLE's, and its colours. A `still` state waits on something
-// outside the agent: its blob does not wobble, and settles.
+// outside the agent: its blob does not wobble, and settles. Paused, a task
+// rests in the brain: the brain's shape, grey and still.
 export const STATES = {
   first:     { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
   streaming: { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
@@ -86,7 +87,7 @@ export const STATES = {
   max:       { active: "max", centre: .3, still: true, col: [C.yours, C.yours, C.paper] },
   held:      { active: "model", centre: .32, size: .36, still: true, col: [tint(C.red, .12), C.red, C.red] },
   starting:  { active: null, centre: .4, col: [C.working, C.working, C.paper] },
-  paused:    { active: null, centre: .48, merged: true, still: true, col: [[233, 229, 217], C.faint, C.muted] },
+  paused:    { active: "centre", centre: .54, gap: -.15, still: true, col: [[233, 229, 217], C.faint, C.muted] },
   done:      { active: null, centre: .48, merged: true, still: true, col: [C.green, C.green, C.paper] },
 };
 const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
