@@ -16,16 +16,14 @@
 // blob, nothing runs at all.
 //
 //   const s = session();               what one session is doing
-//   const blobs = layer(host, scroller);   null without WebGL2
+//   const blobs = layer(host);         null without WebGL2
 //   const box = blobs.add(56, s);      an empty box the canvas draws a blob in
 //   s.set("streaming"); s.packet();    and the blob follows
 //
-// The canvas lives in `host`, the content `scroller` scrolls natively, so
-// the compositor moves it with the text frame for frame: it is as wide as
-// `host` and a quarter more than the scroller's height, and each frame it
-// moves to an eighth of a viewport above the scroll position and draws
-// there. A scroll of up to an eighth of a viewport between two frames stays
-// drawn; a faster fling clips a ball at the edge.
+// The canvas fills `host`, so whatever moves `host` (a scroll, a sticky
+// position) moves the blobs with it on the compositor. Each blob is drawn
+// in its box as laid out, transforms included: scaling a box scales its
+// blob, and `moved()` says a box changed.
 
 // Colours: [fill, edge, icon] per state; the whole blob takes the state's.
 const CLAUDE = [217, 119, 87];
@@ -391,8 +389,9 @@ function placeDots(n, count, pitch) {
   return out;
 }
 // The track and the dots' pitch, in blob units, laid out as on a 260 px blob
-// whatever the size: a small blob's dots are a scaled copy of a big one's.
-const TRACK_PX = 260, TRACK_LEVEL = .05 + 3 * 2 * SPAN / TRACK_PX, TRACK_PITCH = Math.max(.2, 9 * 2 * SPAN / TRACK_PX);
+// whatever the size: a small blob's dots are a scaled copy of a big one's,
+// and on a 64 px one they clear the outline by about a pixel.
+const TRACK_PX = 260, TRACK_LEVEL = .05 + 8 * 2 * SPAN / TRACK_PX, TRACK_PITCH = Math.max(.2, 9 * 2 * SPAN / TRACK_PX);
 
 // A spring with a little give, so balls overshoot and settle like liquid;
 // critically damped (26), it settles without overshooting.
@@ -435,12 +434,12 @@ function frame(now) {
 // ─── A layer: one canvas, and every blob in it ─────────────────────────────
 // Null without WebGL2: the page then shows no blobs. A lost context draws
 // nothing until the browser restores it, and then everything is rebuilt.
-export function layer(host, scroller) {
+export function layer(host) {
   const clip = document.createElement("div"), cv = document.createElement("canvas");
   const gl = cv.getContext("webgl2", { antialias: false });
   if (!gl) return null;
   clip.style.cssText = "position: absolute; inset: 0; overflow: clip; pointer-events: none; z-index: 1";
-  cv.style.cssText = "position: absolute; left: 0; top: 0";
+  cv.style.cssText = "position: absolute; left: 0; top: 0; width: 100%; height: 100%";
   clip.append(cv);
   host.append(clip);
 
@@ -478,7 +477,7 @@ export function layer(host, scroller) {
   cv.addEventListener("webglcontextrestored", () => { build(); wake(); });
 
   // The blobs, struct-of-arrays: per blob, its box, the session it shows,
-  // where its box is in `host`, its balls' radii and gaps and their
+  // its box's size and place in `host`, its balls' radii and gaps and their
   // velocities, its colours, turns and disks.
   let cap = 0, count = 0;
   const boxes = [], sessions = [];
@@ -495,22 +494,21 @@ export function layer(host, scroller) {
     cap = n;
   };
 
-  // Where each box is in `host`, read only when the layout changes. A box
-  // not in the page is put far off.
-  let dirty = true, hostTop = 0;
+  // Where each box is in `host`, and its size, read only when the layout
+  // changes. A box not in the page is put far off.
+  let dirty = true;
   const resized = new ResizeObserver(() => { dirty = true; wake(); });
   resized.observe(host);
   const measure = () => {
     const h = host.getBoundingClientRect(), k = host.offsetWidth ? h.width / host.offsetWidth : 1;
-    hostTop = (h.top - scroller.getBoundingClientRect().top) / k + scroller.scrollTop;
     for (let i = 0; i < count; i++) {
       const r = boxes[i].getBoundingClientRect();
       a.DOCX[i] = r.width ? (r.left - h.left) / k : -1e9; a.DOCY[i] = (r.top - h.top) / k;
+      if (r.width) a.SIZE[i] = r.width / k;
     }
     dirty = false;
   };
 
-  let cvTop = -1, cvW = 0, cvH = 0;
   const kept = {
     // An empty box of css size px, for the canvas to draw `s`'s blob in.
     add(px, s) {
@@ -540,18 +538,14 @@ export function layer(host, scroller) {
     draw(now, dt) {
       if (gl.isContextLost()) return false;
       if (dirty) measure();
-      const w = host.clientWidth, h = Math.round(1.25 * scroller.clientHeight);
-      if (w !== cvW || h !== cvH) { cvW = w; cvH = h; cv.style.width = w + "px"; cv.style.height = h + "px"; }
-      const top = Math.max(0, Math.round(scroller.scrollTop - hostTop - scroller.clientHeight / 8));
-      if (top !== cvTop) { cvTop = top; cv.style.transform = `translateY(${top}px)`; }
-      const dpr = Math.min(3, devicePixelRatio || 1), W = Math.round(cvW * dpr), H = Math.round(cvH * dpr);
+      const dpr = Math.min(3, devicePixelRatio || 1), W = Math.round(host.clientWidth * dpr), H = Math.round(host.clientHeight * dpr);
       if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
       let drawn = 0, ndots = 0, shown = false;
       const kc = 1 - Math.exp(-dt / .18);
       for (let i = 0; i < count; i++) {
         if (a.DOCX[i] < -1e8) continue;
         shown = true;
-        const px = a.SIZE[i], x = a.DOCX[i] * dpr, y = (a.DOCY[i] - top) * dpr, size = px * dpr;
+        const px = a.SIZE[i], x = a.DOCX[i] * dpr, y = a.DOCY[i] * dpr, size = px * dpr;
         if (x + size < 0 || y + size < 0 || x > W || y > H) continue;
         drawn = this.blob(i, drawn, now, dt, kc, x, y, size);
         ndots = this.dots(i, ndots, x, y, size);
@@ -613,7 +607,7 @@ export function layer(host, scroller) {
       if (name === "streaming") SPIN[i] += dt * 1.4;
       if (name === "tools" || name === "listening") {
         const period = name === "tools" ? .6 : 2, n = Math.floor(t / period), f = Math.min(1, (t / period - n) * 3);
-        GEAR[i] = (n + 1 - Math.pow(1 - f, 3)) * Math.PI / 4;
+        GEAR[i] = (n + 1 - Math.pow(1 - f, 3)) * Math.PI / 3; // a tooth a step: the gear has six
       }
 
       // Liveness: a packet since the last disk starts one, at most every 0.2 s.
