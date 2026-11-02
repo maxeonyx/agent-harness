@@ -13,7 +13,7 @@
 // has each one; the brain's log has it too, so nobody has to open the console.
 (() => {
   const sent = new Set();
-  const origin = `${location.origin}/page/`;
+  const origin = `${location.origin}/page/{build}/`;
   const clip = (s, n) => s.length > n ? `${s.slice(0, n)}…` : s;
   const text = (x) => x?.doing === undefined ? String(x) : x.message;
   const frames = (x) => String(x?.stack ?? "").split("\n").map((l) => l.trim()).filter((l) => l.startsWith("at "))

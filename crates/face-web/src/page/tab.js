@@ -155,7 +155,7 @@ function hold(id) {
 }
 export let tab = null;
 export async function boot() {
-  wasm = (await WebAssembly.instantiateStreaming(fetch("/tab.wasm"))).instance.exports;
+  wasm = (await WebAssembly.instantiateStreaming(fetch(new URL("tab.wasm", import.meta.url)))).instance.exports;
   let id = sessionStorage.getItem("replica");
   if (!id || !(await hold(id))) { do id = mintReplica(); while (!(await hold(id))); }
   sessionStorage.setItem("replica", id);

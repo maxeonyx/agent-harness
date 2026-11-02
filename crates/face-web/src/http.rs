@@ -60,6 +60,9 @@ pub fn read_request<S: Read + Write>(stream: S) -> io::Result<(Request, S)> {
     Ok((request, reader.into_inner().into_inner()))
 }
 
+/// A whole response: stored forever if `immutable`, otherwise never
+/// stored, by the browser or anything between: `no-store`, the strictest
+/// directive, so no cache's own lifetime stands in for it.
 pub fn respond(
     stream: &mut impl Write,
     content_type: &str,
@@ -69,7 +72,7 @@ pub fn respond(
     let cache = if immutable {
         "public, max-age=31536000, immutable"
     } else {
-        "no-cache"
+        "no-store"
     };
     write!(
         stream,
