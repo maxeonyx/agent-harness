@@ -12,7 +12,8 @@
 // pixel. Everything in a blob but its outline is sized in its own units, so
 // a blob of any size is a scaled copy of every other; below DETAIL css px
 // its icons, letter and dots go, and it is just a blob in its state's
-// colour. The outline keeps its width, so a small stuck blob still shows red. The blobs' state is struct-of-arrays in typed arrays, and nothing is
+// colour. The outline keeps its width, so a small stuck blob still shows
+// red. The blobs' state is struct-of-arrays in typed arrays, and nothing is
 // allocated per frame. Only the compaction dots need the CPU: marching
 // squares traces the track, and a second draw puts a dot per quad. A blob
 // off its canvas is neither animated nor drawn, and while a layer shows no
@@ -121,10 +122,9 @@ const INST = 44; // floats per blob instance: 11 vec4
 // The outline's width in css px; in blob units, the letter's size per unit
 // of the centre's radius, and a compaction dot's radius.
 const EDGE = 1.3, LETTER = 1.4, DOT = .05;
-// Below DETAIL css px a blob has no icons, letter or dots; they fade in over
-// the next FADE px, so none lingers faint.
-const DETAIL = 46, FADE = 4;
-const detail = (px) => clamp((px - DETAIL) / FADE, 0, 1);
+// Below DETAIL css px a blob has no icons, letter or dots: they pop out
+// rather than fade, so none lingers faint.
+const DETAIL = 46;
 // A mark: centre x, y, radius and ring width in world px; fill, then ring,
 // as straight rgba 0-1; and how many dashes its ring has (0: solid).
 export const MARK = 16;
@@ -212,8 +212,7 @@ void main() {
 // ball (0 centre, 1-3 a satellite), letter cell, letter size. v2-v4: the
 // satellites' x, y, r and icon alpha. v5-v7: fill, edge and icon colours,
 // with the model's and gear's turns and nothing. v8: letter colour and
-// alpha. v9-v10:
-// the disks' ages, 0-1, or -1.
+// alpha. v9-v10: the disks' ages, 0-1, or -1.
 const BLOB_FS = `#version 300 es
 precision highp float;
 in vec2 p;
@@ -728,7 +727,7 @@ export function layer(host) {
         DISK[DISKS * i + DISKAT[i]] = now; DISKAT[i] = (DISKAT[i] + 1) % DISKS;
       }
 
-      const b0 = INST * o, active = SAT_KEYS.indexOf(st.active) + 1, show = detail(px);
+      const b0 = INST * o, active = SAT_KEYS.indexOf(st.active) + 1, show = +(px >= DETAIL);
       inst[b0] = x; inst[b0 + 1] = y; inst[b0 + 2] = size; inst[b0 + 3] = size / px;
       inst[b0 + 4] = c0; inst[b0 + 5] = active; inst[b0 + 6] = glyph(s.letter); inst[b0 + 7] = c0 * LETTER;
       for (let k = 0; k < 3; k++) {
@@ -750,8 +749,8 @@ export function layer(host) {
     // Blob i's compaction dots, on the longest loop of its track, written
     // from dot `n`; returns the next.
     dots(i, n, x, y, size) {
-      const pips = sessions[i].pips, show = detail(a.SIZE[i]);
-      if (!(pips > 0) || !show) return n;
+      const pips = sessions[i].pips;
+      if (!(pips > 0) || a.SIZE[i] < DETAIL) return n;
       const { R, X, Y } = a;
       ball[0] = 0; ball[1] = 0; ball[2] = R[4 * i];
       for (let k = 0; k < 3; k++) { ball[3 + 3 * k] = X[3 * i + k]; ball[4 + 3 * k] = Y[3 * i + k]; ball[5 + 3 * k] = R[4 * i + 1 + k]; }
@@ -761,7 +760,7 @@ export function layer(host) {
       for (let d = 0; d < placed; d++) {
         const b = 4 * n++;
         dots[b] = x + size / 2 + dotX[d] * unit; dots[b + 1] = y + size / 2 + dotY[d] * unit;
-        dots[b + 2] = DOT * unit; dots[b + 3] = show * Math.max(.22, .7 - d * .07);
+        dots[b + 2] = DOT * unit; dots[b + 3] = Math.max(.22, .7 - d * .07);
       }
       return n;
     },
