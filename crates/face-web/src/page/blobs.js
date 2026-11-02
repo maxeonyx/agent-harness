@@ -75,7 +75,9 @@ const IDLE = { r: .17, g: 0 }, ACTIVE = { r: .42, g: -.05 };
 
 // A state: which ball is active, the centre's radius, the idle satellites'
 // gap if not IDLE's, and its colours. A `still` state waits on something
-// outside the agent: its blob does not wobble, and settles.
+// outside the agent: its blob does not wobble, and settles. A `bare` one
+// shows no idle icons. Paused, a task rests in the brain: the brain's
+// shape, grey, still and bare.
 export const STATES = {
   first:     { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
   streaming: { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
@@ -86,7 +88,7 @@ export const STATES = {
   max:       { active: "max", centre: .3, still: true, col: [C.yours, C.yours, C.paper] },
   held:      { active: "model", centre: .32, size: .36, still: true, col: [tint(C.red, .12), C.red, C.red] },
   starting:  { active: null, centre: .4, col: [C.working, C.working, C.paper] },
-  paused:    { active: null, centre: .48, merged: true, still: true, col: [[233, 229, 217], C.faint, C.muted] },
+  paused:    { active: "centre", centre: .54, gap: -.15, still: true, bare: true, col: [[233, 229, 217], C.faint, C.muted] },
   done:      { active: null, centre: .48, merged: true, still: true, col: [C.green, C.green, C.paper] },
 };
 const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
@@ -875,7 +877,7 @@ export function layer(host) {
       for (let k = 0; k < 3; k++) {
         const r = R[4 * i + 1 + k], b = b0 + 8 + 4 * k;
         inst[b] = X[3 * i + k]; inst[b + 1] = Y[3 * i + k]; inst[b + 2] = r;
-        inst[b + 3] = show * (active === k + 1 ? (name === "first" ? .55 : 1) : .45);
+        inst[b + 3] = show * (active === k + 1 ? (name === "first" ? .55 : 1) : st.bare ? 0 : .45);
       }
       for (let k = 0; k < 9; k++) inst[b0 + 20 + 4 * (k / 3 | 0) + k % 3] = COL[9 * i + k] / 255;
       inst[b0 + 23] = SPIN[i]; inst[b0 + 27] = GEAR[i];
