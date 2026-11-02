@@ -8,6 +8,8 @@ export const el = (tag, cls, text) => {
 };
 export const svgEl = (tag) => document.createElementNS("http://www.w3.org/2000/svg", tag);
 export const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+// A moment hours or days away, always with its day: "Mon 11:00".
+export const when = (ms) => `${new Date(ms).toLocaleDateString([], { weekday: "short" })} ${clock(ms)}`;
 export const ago = (ms) => {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m` : `${Math.floor(s / 86400)}d`;

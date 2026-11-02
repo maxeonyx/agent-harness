@@ -1,4 +1,4 @@
-import { ago, clock, gist, phone } from "./base.js";
+import { ago, gist, phone, when } from "./base.js";
 import { openId } from "./card.js";
 
 // ─── The model: the view as a map ──────────────────────────────────────────
@@ -54,7 +54,7 @@ export function look(t) {
     case "harness": return { cls: "working" + stopping, text: "In the harness" + since };
     case "held": { const h = heldBy(t); return { cls: "paused", text: h && h !== t ? `Paused with ${h.name}` : "Paused" }; }
     case "parked": return { cls: "paused", text: "Parked" + since };
-    case "limited": return { cls: "paused", text: `Limited until ${clock(w.until)}` };
+    case "limited": return { cls: "paused", text: `Limited until ${when(w.until)}` };
     case "signedOut": return { cls: "paused", text: "Waits for a sign-in" };
     case "listening": return { cls: "listening" + stopping, text: w.calls.length ? `${w.calls.length} in the background` : "Listening" };
     case "done": {
