@@ -40,7 +40,7 @@ const resets = (ms) => {
   const d = new Date(ms);
   return d.toDateString() === new Date().toDateString() ? `Resets ${clock(ms)}` : `Resets ${when(ms)}`;
 };
-const windowName = (n) => ({ five_hour: "5-hour", seven_day: "Weekly", seven_day_opus: "Weekly Opus", seven_day_sonnet: "Weekly Sonnet" })[n] ?? n.replaceAll("_", " ");
+const windowName = (n) => ({ five_hour: "5-hour", seven_day: "Weekly", seven_day_opus: "Weekly Opus", seven_day_sonnet: "Weekly Sonnet" })[n] ?? `${n[0].toUpperCase()}${n.slice(1).replaceAll("_", " ")}`;
 // This tab's click until the view shows the call, and why the brain refused it.
 let refreshAsked = false, refreshRefused = null;
 async function refreshUsage() {
