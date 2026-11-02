@@ -259,14 +259,17 @@ impl CallEvent {
 ///
 /// Only the caller's own background work is waited on: a call it started
 /// with `background` (a spawn among them), one moved out of its round, or
-/// one passed to it. A question to Max, once it is a call, is one more.
+/// one passed to it. A question to Max, from an agent whose role lets it
+/// write one, is a call too, so it is one more.
 /// Work it didn't start is read, never waited on, so a circle of waits
 /// cannot form. A deadline is a background `sleep` among the targets.
 ///
 /// **Vision.** "Join any versus join all. Take the first result as it
 /// comes versus wait for all the results. Any background thing. Tool call,
 /// an agent, a question to Max", though "it's not strictly needed for an
-/// agent that can pause and ask me questions"; "for background
+/// agent that can pause and ask me questions"; "Not all agents would be,
+/// but the ones that can, it would be treated as a background task. [...]
+/// be able to write a question"; "for background
 /// sub-agents, if they [...] end their turn with their final response,
 /// how's the harness supposed to know?" (3 Nov). In the records no agent
 /// ever ended its turn to wait: 14 of 25 background jobs were waited on
