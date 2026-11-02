@@ -1,7 +1,7 @@
-import { $, el, ICONS, svgEl, when } from "./base.js";
+import { $, el, svgEl, when } from "./base.js";
 import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, look, positions, radius, routes, shortName, shown, successor, unfolded, view } from "./map.js";
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
-import { layer, MARK, session } from "./blobs.js";
+import { ICON, layer, MARK, session } from "./blobs.js";
 import { curve, stroke, taper } from "./layout.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
@@ -57,7 +57,7 @@ export function drawMap() {
       else a.append(el("span", "hit"), el("span", "name"));
       if (kind === "work") {
         const g = el("span", "g");
-        g.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.gear}</svg>`;
+        g.innerHTML = `<svg viewBox="0 0 24 24"><path d="${ICON.tools.path}"/></svg>`;
         a.append(g);
         a.addEventListener("click", () => { if (!drag?.moved) openAt(graph.nodes.get(id)); });
       } else {
