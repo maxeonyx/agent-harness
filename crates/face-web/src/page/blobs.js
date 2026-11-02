@@ -64,15 +64,15 @@ const IDLE = { r: .17, g: 0 }, ACTIVE = { r: .42, g: -.05 };
 // gap if not IDLE's, and its colours. A `still` state waits on something
 // outside the agent: its blob does not wobble, and settles.
 export const STATES = {
-  first:     { active: "model", centre: .3, col: [tint(C.working, .14), C.working, C.working] },
-  streaming: { active: "model", centre: .3, col: [tint(C.working, .22), C.working, C.working] },
-  brain:     { active: "centre", centre: .54, gap: -.15, col: [tint(C.working, .1), C.working, C.working] },
-  tools:     { active: "tools", centre: .3, col: [tint(C.working, .13), C.working, C.working] },
-  listening: { active: "tools", centre: .34, size: .32, col: [tint(C.working, .06), C.working, C.working] },
-  children:  { active: "tools", centre: .34, size: .32, col: [tint(C.others, .08), C.others, C.others] },
+  first:     { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
+  streaming: { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
+  brain:     { active: "centre", centre: .54, gap: -.15, col: [C.working, C.working, C.paper] },
+  tools:     { active: "tools", centre: .3, col: [C.working, C.working, C.paper] },
+  listening: { active: "tools", centre: .34, size: .32, col: [C.working, C.working, C.paper] },
+  children:  { active: "tools", centre: .34, size: .32, col: [C.others, C.others, C.paper] },
   max:       { active: "max", centre: .3, still: true, col: [C.yours, C.yours, C.paper] },
   held:      { active: "model", centre: .32, size: .36, still: true, col: [tint(C.red, .12), C.red, C.red] },
-  starting:  { active: null, centre: .4, col: [C.paper, C.working, C.working] },
+  starting:  { active: null, centre: .4, col: [C.working, C.working, C.paper] },
   paused:    { active: null, centre: .48, merged: true, still: true, col: [[233, 229, 217], C.faint, C.muted] },
   done:      { active: null, centre: .48, merged: true, still: true, col: [C.green, C.green, C.paper] },
 };
