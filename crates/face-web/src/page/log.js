@@ -348,7 +348,9 @@ function drawPast(s, into, chain, from, to, t, only = () => undefined) {
   }
 }
 // `placeholder` replaced by what `draw` makes, once Max scrolls near it or
-// something calls its `draw`.
+// something calls its `draw`. What he sees stays where it was: what follows
+// it, when it is above the view, as it is when he scrolls up to it; what
+// precedes it, when it is in view, as it is when he lands above it.
 function onSight(placeholder, draw) {
   const seen = new IntersectionObserver((sighted) => {
     if (sighted.some((x) => x.isIntersecting)) placeholder.draw();
@@ -356,7 +358,9 @@ function onSight(placeholder, draw) {
   placeholder.draw = () => {
     seen.disconnect();
     if (!placeholder.isConnected) return;
-    keep(placeholder.nextElementSibling, () => placeholder.replaceWith(draw()));
+    const replace = () => placeholder.replaceWith(draw());
+    if (placeholder.getBoundingClientRect().top < scrollEl.getBoundingClientRect().top) keep(placeholder.nextElementSibling, replace);
+    else replace();
   };
   seen.observe(placeholder);
 }
