@@ -6,7 +6,7 @@ import { refresh } from "./draw.js";
 import { fillTip, tipFor } from "./hover.js";
 import "./chrome.js";
 import "./actions.js";
-import { moving, NEW, openId, openPending, renderPanel, route } from "./card.js";
+import { hashed, moving, NEW, openId, openPending, renderPanel, route } from "./card.js";
 import { liveReset } from "./log.js";
 import { settleLocal } from "./compose.js";
 import "./newchat.js";
@@ -18,7 +18,8 @@ export async function viewArrived(fresh) {
   takeView(tab.view());
   settleLocal();
   await refresh();
-  if (!openPending() && !openId && location.hash.length > 1 && (byId[location.hash.slice(1)] || location.hash === `#${NEW}`) && !moving.started) { moving.started = true; route(); }
+  const { task } = hashed();
+  if (!openPending() && !openId && task && (byId[task] || task === NEW) && !moving.started) { moving.started = true; route(); }
 }
 boot().catch((e) => { $("#link").className = "down"; $("#link").title = `this tab could not start: ${e}`; fail("starting this tab", e); });
 // Waits grow between events: the hover's words, and the open card's.

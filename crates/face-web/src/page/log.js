@@ -4,7 +4,6 @@ import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
 import { trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { editMessage, modelName, say } from "./compose.js";
-import { revealIn } from "./newchat.js";
 import { layer, session } from "./blobs.js";
 
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
@@ -37,7 +36,52 @@ export async function renderLog(t) {
     stick(() => markVersions(s));
   }
   stick(() => renderTail(s, t));
-  revealIn(s);
+  if (s.at && s.head) landAt(s);
+}
+
+// Opened at an entry (`#TASK@ENTRY`, card.js): the log scrolls to it and
+// marks it, drawing the earlier contexts it lies in as scrolling up would.
+// An entry the log does not hold (one of a version Max moved away from)
+// lands just after the latest of its ancestors the log does hold: where
+// the log's own version diverged, its arrows leading to the other.
+async function landAt(s) {
+  const id = s.at;
+  s.at = null;
+  s.follow = false;
+  const chain = await contextOf(id);
+  for (const want of chain ? chain.map((e) => e.id).reverse() : [id]) {
+    const found = await drawn(s, want);
+    if (logState !== s) return;
+    if (!found) continue;
+    // An entry drawn into the block of an earlier one (a tool call's
+    // result, a turn of only tools) is marked as that block.
+    const chunks = [...logEl.querySelectorAll(".chunk")].filter((c) => c.offsetHeight);
+    const before = chunks.filter((c) => c === found || (!c.contains(found) && c.compareDocumentPosition(found) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const at = want === id ? before.pop() : chunks[before.length] || before.pop();
+    if (!at) return;
+    at.scrollIntoView({ block: "center" });
+    at.classList.remove("revealed"); void at.offsetWidth; at.classList.add("revealed");
+    at.addEventListener("animationend", () => at.classList.remove("revealed"), { once: true });
+    return;
+  }
+}
+// The chunk that draws entry `id`, once the earlier context holding it is
+// drawn; none if no context of the log holds it. One that shows nothing of
+// its own (a request of only results) is drawn with the context that holds
+// the calls they answer.
+async function drawn(s, id) {
+  for (;;) {
+    const all = [...logEl.querySelectorAll(`[data-entry="${id}"]`)];
+    const shown = all.filter((c) => c.offsetHeight).pop();
+    if (shown) return shown;
+    let opened = false;
+    for (const p of [...logEl.querySelectorAll(".earlier")].reverse()) {
+      const old = await contextOf(p.dataset.from);
+      if (logState !== s) return null;
+      if (p.isConnected && p.draw && old?.some((e) => e.id === id)) { p.draw(); opened = true; break; }
+    }
+    if (!opened) return all.pop() || null;
+  }
 }
 
 // New entries append; entries no longer in the chain (Max moved it back, to
@@ -255,6 +299,7 @@ function compaction({ carry, onto }, t) {
   const from = carry.by.find((w) => w?.by === "compacted").from;
   const box = el("div", "compaction");
   const earlier = el("div", "earlier", "Earlier context"), last = el("div"), line = el("div", "divider");
+  earlier.dataset.from = from;
   line.append(el("span", null, onto ? "Compacted back to a checkpoint" : "Compacted into a new context"));
   box.append(earlier, last, line);
   contextOf(from).then((old) => {
@@ -288,19 +333,24 @@ function compaction({ carry, onto }, t) {
 function drawPast(s, into, chain, from, to, t, only = () => undefined) {
   for (let i = from; i < to; i++) {
     const chunk = el("div", "chunk");
+    chunk.dataset.entry = chain[i].id;
     const carry = carryBefore(chain, i);
     if (carry) chunk.append(compaction(carry, t));
     entry(s, chunk, chain[i], i, t, chain[i - 1]?.id, only(i));
     into.append(chunk);
   }
 }
-// `placeholder` replaced by what `draw` makes, once Max scrolls near it.
+// `placeholder` replaced by what `draw` makes, once Max scrolls near it or
+// something calls its `draw`.
 function onSight(placeholder, draw) {
   const seen = new IntersectionObserver((sighted) => {
-    if (!sighted.some((x) => x.isIntersecting)) return;
-    seen.disconnect();
-    keep(placeholder.nextElementSibling, () => placeholder.replaceWith(draw()));
+    if (sighted.some((x) => x.isIntersecting)) placeholder.draw();
   }, { root: scrollEl, rootMargin: "200px 0px 0px 0px" });
+  placeholder.draw = () => {
+    seen.disconnect();
+    if (!placeholder.isConnected) return;
+    keep(placeholder.nextElementSibling, () => placeholder.replaceWith(draw()));
+  };
   seen.observe(placeholder);
 }
 // A change above `anchor` that leaves what Max sees where it was.
