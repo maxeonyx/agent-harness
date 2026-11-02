@@ -762,7 +762,7 @@ function renderTail(s, t) {
 // last entry; scrolled past, it docks small on the line above the entry box,
 // and a tap goes to the bottom. Where it is and how big is the scroll's alone
 // (`card.css`). While the chat waits on Max a tap also starts dictation, and
-// while he dictates it pulses with his voice and a tap stops it.
+// while he dictates its microphone swells with his voice and a tap stops it.
 const blobSession = session(), dock = $(".pane > .dock", panel);
 let blobs, blobBox = null, blobTask = null;
 function showBlob(t) {
