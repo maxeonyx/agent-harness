@@ -9,4 +9,10 @@
     .viewer { position: absolute; inset: 0; z-index: 2; border: 0; }
     #panel > .body { position: relative; }
     .gauge .pc { display: none; }
+    /* The bar fits the screen: the build's commit stands over how it stands,
+       which shortens to fit, and the buttons keep their place. */
+    #bottom #corner { min-width: 0; }
+    #bottom #corner .build { display: inline-flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+    #bottom #corner .build > .now { margin-left: 0; overflow: hidden; text-overflow: ellipsis; }
+    #bottom #corner .build > .now:empty { display: none; }
   }

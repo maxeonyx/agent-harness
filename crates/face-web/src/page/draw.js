@@ -1,4 +1,4 @@
-import { $, el, ICONS, svgEl, when } from "./base.js";
+import { $, el, svgEl, when } from "./base.js";
 import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, look, positions, radius, routes, shortName, shown, successor, unfolded, view } from "./map.js";
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
 import { layer, MARK, session } from "./blobs.js";
@@ -231,8 +231,8 @@ export function render() {
 
 // ─── What needs Max, off screen ────────────────────────────────────────────
 // What waits on Max where the camera does not show it is a mark at the
-// screen's edge, toward it, the next one haloed; a click brings it to the
-// middle of the screen, where a click on it opens it.
+// screen's edge, a pin whose point is toward it, the next one haloed; a
+// click brings it to the middle of the screen, where a click on it opens it.
 const marksEl = $("#marks"), markEls = new Map();
 export function placeMarks() {
   if (!view) return;
@@ -282,7 +282,9 @@ export function placeMarks() {
     if (!a) {
       a = el("button", "offscreen");
       a.type = "button";
-      a.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.toward}</svg>`;
+      // The button's circle, r 12, and a point 6 beyond it on the right,
+      // meeting the circle where a line from the point touches it.
+      a.innerHTML = '<svg viewBox="-18 -18 36 36"><path d="M18 0 8-8.944A12 12 0 1 0 8 8.944z"/><circle r="3.5"/></svg>';
       a.onclick = () => centreOn(id);
       marksEl.append(a);
       markEls.set(id, a);

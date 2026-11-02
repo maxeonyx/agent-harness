@@ -42,7 +42,6 @@ export const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   find: '<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
-  toward: '<path d="M9 5l7 7-7 7"/>',
   down: '<path d="M12 5v14M5.5 12.5 12 19l6.5-6.5"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   open: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/>',

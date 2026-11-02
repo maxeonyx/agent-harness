@@ -36,10 +36,11 @@
 // layer draws, while it returns true: a camera moved there is drawn in the
 // same frame.
 
-// Colours: [fill, edge, icon] per state; the whole blob takes the state's.
-const CLAUDE = [217, 119, 87];
-const C = { ink: [20, 20, 19], paper: [250, 249, 245], maroon: [122, 31, 34], green: [79, 138, 85], red: [179, 53, 44],
-  faint: [161, 159, 150], muted: [107, 106, 100], slate: [52, 66, 84] };
+// Colours: [fill, edge, icon] per state; the whole blob takes the state's,
+// as base.css names them: Max's turn orange, an agent at work (or its
+// background work) blue, waiting on other agents purple, done green, paused grey, stuck red.
+const C = { ink: [20, 20, 19], paper: [250, 249, 245], yours: [212, 105, 28], working: [58, 109, 176], others: [139, 90, 166],
+  green: [79, 138, 85], red: [179, 53, 44], faint: [161, 159, 150], muted: [107, 106, 100] };
 const tint = (c, k) => C.paper.map((p, i) => p + (c[i] - p) * k);
 
 // The balls, in field units (a blob's box spans -SPAN..SPAN). Satellites sit
@@ -63,14 +64,15 @@ const IDLE = { r: .17, g: 0 }, ACTIVE = { r: .42, g: -.05 };
 // gap if not IDLE's, and its colours. A `still` state waits on something
 // outside the agent: its blob does not wobble, and settles.
 export const STATES = {
-  first:     { active: "model", centre: .3, col: [tint(CLAUDE, .14), CLAUDE, CLAUDE] },
-  streaming: { active: "model", centre: .3, col: [tint(CLAUDE, .22), CLAUDE, CLAUDE] },
-  brain:     { active: "centre", centre: .54, gap: -.15, col: [tint(C.ink, .1), C.ink, C.ink] },
-  tools:     { active: "tools", centre: .3, col: [tint(C.slate, .13), C.slate, C.slate] },
-  listening: { active: "tools", centre: .34, size: .32, col: [tint(C.slate, .06), C.faint, C.faint] },
-  max:       { active: "max", centre: .3, still: true, col: [C.maroon, C.maroon, C.paper] },
+  first:     { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
+  streaming: { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
+  brain:     { active: "centre", centre: .54, gap: -.15, col: [C.working, C.working, C.paper] },
+  tools:     { active: "tools", centre: .3, col: [C.working, C.working, C.paper] },
+  listening: { active: "tools", centre: .34, size: .32, col: [C.working, C.working, C.paper] },
+  children:  { active: "tools", centre: .34, size: .32, col: [C.others, C.others, C.paper] },
+  max:       { active: "max", centre: .3, still: true, col: [C.yours, C.yours, C.paper] },
   held:      { active: "model", centre: .32, size: .36, still: true, col: [tint(C.red, .12), C.red, C.red] },
-  starting:  { active: null, centre: .4, col: [C.paper, C.faint, C.ink] },
+  starting:  { active: null, centre: .4, col: [C.working, C.working, C.paper] },
   paused:    { active: null, centre: .48, merged: true, still: true, col: [[233, 229, 217], C.faint, C.muted] },
   done:      { active: null, centre: .48, merged: true, still: true, col: [C.green, C.green, C.paper] },
 };
@@ -706,7 +708,7 @@ export function layer(host) {
       }
       for (let k = 0; k < 9; k++) COL[9 * i + k] += (st.col[k / 3 | 0][k % 3] - COL[9 * i + k]) * kc;
       if (name === "streaming") SPIN[i] += dt * 1.4;
-      if (name === "tools" || name === "listening") {
+      if (name === "tools" || name === "listening" || name === "children") {
         const period = name === "tools" ? .6 : 2, n = Math.floor(t / period), f = Math.min(1, (t / period - n) * 3);
         GEAR[i] = (n + 1 - Math.pow(1 - f, 3)) * Math.PI / 3; // a tooth a step: the gear has six
       }
