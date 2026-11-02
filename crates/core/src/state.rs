@@ -552,8 +552,8 @@ pub enum Todo {
     /// A call the brain runs, which ends on something else, is due to
     /// settle: a spawn every member of whose scope is done, with their
     /// outcomes; or a wait ([`CallEvent::Waits`]) whose calls have settled
-    /// as it asks, or that Max's words, one of his acts, or its task's
-    /// stopping end first, as interrupted, with what still runs.
+    /// as it asks, or that Max's words or one of his acts end first, saying
+    /// what still runs, or its task's stopping ends, as interrupted.
     Settle(CallId),
     /// Move these calls of the task's round to the background, in one
     /// batch ([`CallEvent::Backgrounded`]): every call still outstanding

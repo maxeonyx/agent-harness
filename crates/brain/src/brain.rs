@@ -1147,7 +1147,18 @@ message when it settles. You cannot finish until it has.",
                 },
             )
         } else if call.tool == meta::WAIT {
+            // Max's words moved it out of its round before it was
+            // dispatched, while its task was paused.
+            let moved = self
+                .state()
+                .call(id)
+                .is_some_and(|c| c.backgrounded.is_some());
             match meta::wait(self.state(), &parent, &input) {
+                Ok(_) if moved => Err(
+                    "Max wrote before this wait began, so it moved out of your round and \
+waited on nothing: answer him, then `wait` again"
+                        .to_string(),
+                ),
                 // It settles once what it waits for holds ([`Todo::Settle`]).
                 Ok(wait) => {
                     batch.facts.push(Fact::Call(id, CallEvent::Waits(wait)));
@@ -1429,10 +1440,9 @@ message when it settles. You cannot finish until it has.",
     }
 
     /// A wait is due to settle: with the results of what it waits on that
-    /// has landed, completed if that is what it waits for, or else ended
-    /// early, as interrupted.
+    /// has landed, completed, or, if its task is stopping, interrupted.
     fn settle_wait(&mut self, id: CallId) {
-        let Some((model, holds)) = meta::waited(self.state(), &|v| self.value(v), id) else {
+        let Some((model, completed)) = meta::waited(self.state(), &|v| self.value(v), id) else {
             return self.fail_call(id, "The harness lost what this wait was on.");
         };
         let output = Output {
@@ -1440,7 +1450,7 @@ message when it settles. You cannot finish until it has.",
             full: None,
             observes: Vec::new(),
         };
-        let outcome = match holds {
+        let outcome = match completed {
             true => Outcome::Completed(output),
             false => Outcome::Interrupted {
                 partial: Some(output),

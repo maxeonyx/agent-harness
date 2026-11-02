@@ -529,23 +529,22 @@ pub fn wait(state: &State, owner: &Task, input: &[u8]) -> Result<Wait, String> {
     Ok(Wait { on, until })
 }
 
-/// A wait's output, and whether what it waits for holds: the whole result
-/// of each call it waits on that has settled, then what still runs, and,
-/// for one ended early, why.
+/// A wait's output, and whether it completed: the whole result of each
+/// call it waits on that has settled, then what still runs, and, for one
+/// ended early, why. Only one its task's stopping ended is interrupted;
+/// one Max's words ended is an ordinary result.
 pub fn waited(state: &State, values: Values, call: CallId) -> Option<(Bytes, bool)> {
     let wait = state.call(call)?.waits.as_ref()?;
     let (landed, running) = state.waited(call)?;
     let holds = wait.until.holds(landed.len(), running.len());
+    let stopping = (state.call_owner(call))
+        .and_then(|t| state.task(t))
+        .is_some_and(|t| t.drain().is_some());
     let mut said = Vec::new();
     if !holds {
-        let stopping = (state.call_owner(call))
-            .and_then(|t| state.task(t))
-            .is_some_and(|t| t.drain().is_some());
         said.push(text(match stopping {
             true => "[harness] You are being stopped, so this wait ended.",
-            false => {
-                "[harness] Max wrote to you, so this wait ended: answer him, then `wait` again."
-            }
+            false => "[harness] Max wrote to you: answer him, then `wait` again.",
         }));
     }
     said.extend((landed.iter()).map(|c| crate::render::activity(state, values, *c)));
@@ -566,7 +565,7 @@ pub fn waited(state: &State, values: Values, call: CallId) -> Option<(Bytes, boo
             "[harness] Nothing this wait was on is yours any more.",
         ));
     }
-    Some((blocks(&said), holds))
+    Some((blocks(&said), holds || !stopping))
 }
 
 /// A spawn or add_sibling call's input.

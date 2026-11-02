@@ -254,11 +254,11 @@ impl CallEvent {
 /// ([`crate::task::Input::Background`]). A chat's ended turn waits on its
 /// work as well as on Max, so a chat need not call it; one that has only
 /// answered him waits here instead, so it is not shown as his move. Max's
-/// words settle a wait rather than moving it to the background, at once and
-/// as interrupted, as its task's stopping does: it says what still runs, and
-/// the agent waits again once it has answered
-/// ([`crate::state::Todo::Settle`]). A wait is never moved to the
-/// background, since waiting in the background is not waiting.
+/// words settle a wait rather than moving it to the background, at once:
+/// an ordinary result saying he wrote and what still runs, and the agent
+/// waits again once it has answered him. Its task's stopping settles it as
+/// interrupted ([`crate::state::Todo::Settle`]). A wait is never moved to
+/// the background, since waiting in the background is not waiting.
 ///
 /// Only the caller's own background work is waited on: a call it started
 /// with `background` (a spawn among them), one moved out of its round, or
