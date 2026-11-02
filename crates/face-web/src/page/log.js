@@ -24,6 +24,8 @@ const versionsOf = (task) => getJson(`/versions/${task}`, `loading the versions 
 export async function renderLog(t) {
   const s = logState;
   if (!s || s.id !== t.id) return;
+  // A chat just opened: its own blob at once, not the last chat's while its log loads.
+  if (!dock.hidden && blobTask !== t.id) showBlob(t);
   const seen = `${t.head} ${t.ended}`;
   if (s.seen !== seen) {
     s.seen = seen;

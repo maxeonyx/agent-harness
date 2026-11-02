@@ -386,11 +386,13 @@ function longestLoop(n, lv) {
   return bestN;
 }
 
-// The compaction dots on the track (the outline offset outward): the first at
-// twelve o'clock, then clockwise, each the pitch further along the track and
-// at least the pitch away, in a straight line, from every dot before it, so a
-// neck in the blob doesn't bunch them. Few dots keep the pitch; many shrink it
-// to share the track. Into dotX, dotY; returns how many.
+// The compaction dots on the track (the outline offset outward), at most
+// MAXDOTS of them: the first at three o'clock, clear of the lines that enter
+// a map node from above, then clockwise, each the pitch further along the
+// track and at least the pitch away, in a straight line, from every dot
+// before it, so a neck in the blob doesn't bunch them. When they don't all
+// fit so, they share the whole track evenly instead. Into dotX, dotY;
+// returns how many.
 const MAXDOTS = 64, dotX = new Float32Array(MAXDOTS), dotY = new Float32Array(MAXDOTS);
 const wX = new Float32Array(TE + 1), wY = new Float32Array(TE + 1), wS = new Float32Array(TE + 1);
 let pn = 0, flip = false, seg = 0, qx = 0, qy = 0;
@@ -409,13 +411,13 @@ function placeDots(n, count, pitch) {
   let a = 0;
   for (let k = 0; k < n; k++) { const l = (k + 1) % n; a += L[2 * k] * L[2 * l + 1] - L[2 * l] * L[2 * k + 1]; }
   pn = n; flip = a < 0;
-  // Start where the track crosses the upward vertical through the centre.
-  let start = 0, sf = 0, top = Infinity;
+  // Start where the track crosses the rightward horizontal through the centre.
+  let start = 0, sf = 0, right = -Infinity;
   for (let k = 0; k < n; k++) {
     const ax = L[2 * at(k)], ay = L[2 * at(k) + 1], bx = L[2 * at(k + 1)], by = L[2 * at(k + 1) + 1];
-    if ((ax < 0) !== (bx < 0)) {
-      const f = ax / (ax - bx), y = ay + (by - ay) * f;
-      if (y < top) { top = y; start = k; sf = f; }
+    if ((ay < 0) !== (by < 0)) {
+      const f = ay / (ay - by), x = ax + (bx - ax) * f;
+      if (x > right) { right = x; start = k; sf = f; }
     }
   }
   // Arc length from the start, walking the polyline.
@@ -428,17 +430,20 @@ function placeDots(n, count, pitch) {
     wX[k] = x; wY[k] = y; wS[k] = s;
     px = x; py = y;
   }
-  const p = Math.min(pitch, s / count), want = Math.min(count, MAXDOTS);
+  const drawn = Math.min(count, MAXDOTS);
   let u = 0, out = 0;
   seg = 0;
   along(n + 1, 0); dotX[out] = qx; dotY[out++] = qy;
-  while (out < want) {
-    u += p; along(n + 1, u);
-    while (u < s && near(out, p)) { u += p * .05; along(n + 1, u); }
-    if (u >= s - p * .5) break;
+  while (out < drawn) {
+    u += pitch; along(n + 1, u);
+    while (u < s && near(out, pitch)) { u += pitch * .05; along(n + 1, u); }
+    if (u >= s) break;
     dotX[out] = qx; dotY[out++] = qy;
   }
-  return out;
+  if (out === drawn) return out;
+  seg = 0;
+  for (let d = 0; d < drawn; d++) { along(n + 1, d * s / drawn); dotX[d] = qx; dotY[d] = qy; }
+  return drawn;
 }
 // The track and the dots' pitch, in blob units, laid out as on a 260 px blob
 // whatever the size: a small blob's dots are a scaled copy of a big one's,
@@ -475,7 +480,9 @@ function wake() {
   requestAnimationFrame(frame);
 }
 function frame(now) {
-  const dt = Math.min(1 / 30, (now - last) / 1000);
+  // A frame's time can come before the wake that asked for it, by as long as
+  // the task that woke the loop ran: never a step back, which flings the springs.
+  const dt = clamp((now - last) / 1000, 0, 1 / 30);
   last = now;
   for (const s of steps) if (!s(now)) steps.delete(s);
   let moving = steps.size > 0;
