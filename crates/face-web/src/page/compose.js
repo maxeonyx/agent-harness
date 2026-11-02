@@ -2,7 +2,7 @@ import { $, el, fail, icon, kTokens, panel, parse } from "./base.js";
 import { act, can, digest, tab } from "./tab.js";
 import { byId, isDone, view } from "./map.js";
 import { aside, NEW, resume } from "./card.js";
-import { unmovable } from "./log.js";
+import { hear, unmovable } from "./log.js";
 import { startNew } from "./newchat.js";
 
 // ─── What Max writes ───────────────────────────────────────────────────────
@@ -638,7 +638,9 @@ registerProcessor("pcm", class extends AudioWorkletProcessor {
   }
 });`], { type: "application/javascript" }));
 
-async function dictate(sample) {
+// The mic, the sample and the log's blob share it: each starts it, and
+// each stops it.
+export async function dictate(sample) {
   if (dictation) return stopDictation();
   if (!box) return;
   let rate = 16000, mic = null;
@@ -659,7 +661,8 @@ async function dictate(sample) {
   const ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
   ws.binaryType = "arraybuffer";
   dictation = { ws, mic, key: box.dataset.key, T: "", P: 0, start: at };
-  if (mic) mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); };
+  if (mic) mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); hear(level(new Int16Array(m.data))); };
+  hear(0);
   const b = $(".mic", compose); if (b) { b.classList.add("on"); b.title = "Stop dictating"; }
   say("connecting");
   const l = dictation;
@@ -673,6 +676,12 @@ async function dictate(sample) {
   ws.onclose = () => finishDictation(l);
   box.focus();
 }
+// A chunk's loudness, 0 to 1: its RMS, square-rooted so speech moves it.
+function level(pcm) {
+  let sum = 0;
+  for (const v of pcm) sum += v * v;
+  return Math.min(1, 1.5 * Math.sqrt(Math.sqrt(sum / (pcm.length || 1)) / 0x8000));
+}
 function releaseMic(l) {
   if (!l.mic) return;
   l.mic.stream.getTracks().forEach((t) => t.stop());
@@ -683,12 +692,14 @@ export function stopDictation() {
   if (!dictation) return;
   dictation.stopping = true;
   releaseMic(dictation);
+  hear(null);
   if (dictation.ws.readyState === 1) dictation.ws.send(JSON.stringify({ type: "stop" }));
   say("finishing");
 }
 function finishDictation(l) {
   if (dictation !== l) return;
   releaseMic(l);
+  hear(null);
   dictation = null;
   l.ws.close();
   const b = $(".mic", compose); if (b) { b.classList.remove("on"); b.title = "Dictate"; }
