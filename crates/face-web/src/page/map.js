@@ -111,7 +111,8 @@ export function stateOf(t) {
 const waitsOnWork = (t) => t.waiting?.kind === "listening" || (t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length));
 
 // A finished project folds to its root once it has been finished a while,
-// or at once if Max abandoned it: a small card on the archive shelf, below
+// or at once if Max abandoned it (his chat as he last left it, so a
+// reply to it, which carries it on, brings it back): a small card on the archive shelf, below
 // everything live.
 const FOLD_AFTER = 30 * 60 * 1000;
 export const unfolded = new Set();
@@ -222,7 +223,7 @@ export function derive(openId) {
     const root = ts[0];
     const running = ts.some((t) => !isDone(t));
     const last = Math.max(...ts.map((t) => t.waiting?.since || 0));
-    const over = root.outcome?.kind === "abandoned" || now - last > FOLD_AFTER;
+    const over = byId[successor(root.id)].outcome?.kind === "abandoned" || now - last > FOLD_AFTER;
     const folded = !running && over && !unfolded.has(root.id) && !ts.some((t) => t.id === openId && t.id !== root.id);
     return { root, live: running, last, folded, nodes: c.nodes, tasks: ts };
   });
