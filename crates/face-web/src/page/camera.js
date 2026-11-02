@@ -1,11 +1,12 @@
 import { $, el, lerp, panel, phone, reduced } from "./base.js";
-import { byId, DOT, graph, look, positions, ROOT_DOT, shown } from "./map.js";
-import { drawEdges, nodeEls, placeMarks, refresh } from "./draw.js";
+import { byId, centre, graph, look, positions, shown, view } from "./map.js";
+import { blobs, drawEdges, drawNodes, hitAt, openAt, placeMarks, refresh } from "./draw.js";
+import { onFrame } from "./blobs.js";
 import { hideTip } from "./hover.js";
 import { closeNode, go, NEW, openId, saved } from "./card.js";
 
 // ─── The camera ────────────────────────────────────────────────────────────
-const map = $("#map"), world = $("#world"), grid = $("#grid");
+const map = $("#map"), world = $("#world"), under = $("#under"), grid = $("#grid");
 export const nodesLayer = $("#nodes"), edgesLayer = $("#edges");
 export let cam = { x: 0, y: 0, k: 1 };
 export let framed = true;  // follows the map's growth until Max moves it himself
@@ -17,7 +18,8 @@ let resting = 0;
 function applyCamera() {
   // Whole pixels, so the open card's text stays sharp.
   const x = Math.round(cam.x), y = Math.round(cam.y);
-  world.style.transform = `translate(${x}px, ${y}px) scale(${cam.k})`;
+  world.style.transform = under.style.transform = `translate(${x}px, ${y}px) scale(${cam.k})`;
+  blobs?.camera(x, y, cam.k);
   map.classList.add("moving");
   clearTimeout(resting);
   resting = setTimeout(() => map.classList.remove("moving"), 150);
@@ -39,25 +41,31 @@ function bounds(ids) {
   }
   return x0 === Infinity ? null : { x0, y0, x1, y1 };
 }
-// The camera that shows every live project at a size that reads.
+// The camera the map opens with: at its own size, the present row a third
+// of the way up from the bottom of the screen, and the most recently active
+// chat in the middle. While it follows the map, it keeps to that chat.
+let focus = null;
 export function framing() {
-  const running = new Set(graph.comps.filter((c) => !c.folded).flatMap((c) => c.nodes.map((n) => n.id)));
-  const b = bounds(running.size ? running : null);
-  if (!b) return null;
-  const top = 48, bottom = 64, side = 40;
-  const w = innerWidth - side * 2, h = innerHeight - top - bottom;
-  const least = phone() ? .7 : .45;
-  const k = Math.max(least, Math.min(1.25, w / (b.x1 - b.x0), h / (b.y1 - b.y0)));
-  const c = { k, x: side + (w - (b.x1 - b.x0) * k) / 2 - b.x0 * k, y: top + (h - (b.y1 - b.y0) * k) / 2 - b.y0 * k };
-  // Too big to fit at a size that reads: start at the top, the first project centred.
-  if ((b.y1 - b.y0) * k > h) c.y = top - b.y0 * k;
-  if ((b.x1 - b.x0) * k > w) {
-    const first = graph.comps[0] && positions.get(graph.comps[0].root.id);
-    c.x = first ? innerWidth / 2 - (first.x + first.w / 2) * k : side - b.x0 * k;
-  }
-  return c;
+  const big = [...graph.nodes.values()].filter((n) => n.big && positions.has(n.id));
+  if (!big.some((n) => n.id === focus)) focus = latest(big);
+  const p = focus && positions.get(focus);
+  if (p) return { k: 1, x: innerWidth / 2 - centre(p).x, y: Math.round(innerHeight * 2 / 3) };
+  const b = bounds(null);
+  return b && { k: 1, x: innerWidth / 2 - (b.x0 + b.x1) / 2, y: innerHeight / 2 - (b.y0 + b.y1) / 2 };
 }
-export function fit(fly = true) {
+// The big node whose task, or what it started, did something last.
+function latest(big) {
+  const when = new Map();
+  for (const t of view.tasks) {
+    const at = Math.max(t.waiting?.since || 0, ...(t.legs || []).map((l) => l.at));
+    for (const k of [t.id, t.owner]) if (k) when.set(k, Math.max(when.get(k) ?? 0, at));
+  }
+  let best = null;
+  for (const n of big) if (!best || (when.get(n.t.id) ?? 0) > (when.get(best.t.id) ?? 0)) best = n;
+  return best?.id ?? null;
+}
+export function fit(fly = true, keep = false) {
+  if (!keep) focus = null;
   if (openId) { if (saved) saved.framed = true; closeNode(); return; }
   const c = framing();
   if (!c) return;
@@ -150,13 +158,16 @@ let tapped = null;
 // is no longer in the card when the click reaches the map.
 const ground = (e) => !drag?.moved && !e.composedPath().some((n) => n.matches?.(".node, #panel, .offscreen"));
 map.addEventListener("click", (e) => {
-  if (!ground(e) || e.detail > 1 || !openId) return;
+  if (!ground(e) || e.detail > 1) return;
+  const hit = hitAt(e.clientX, e.clientY);
+  if (hit) { clearTimeout(closing); openAt(hit); return; }
+  if (!openId) return;
   clearTimeout(closing);
   closing = setTimeout(closeNode, 220);
 });
-map.addEventListener("dblclick", (e) => { if (ground(e)) newHere(e.clientX, e.clientY); });
+map.addEventListener("dblclick", (e) => { if (ground(e) && !hitAt(e.clientX, e.clientY)) newHere(e.clientX, e.clientY); });
 map.addEventListener("pointerup", (e) => {
-  if (e.pointerType !== "touch" || !ground(e)) return;
+  if (e.pointerType !== "touch" || !ground(e) || hitAt(e.clientX, e.clientY)) return;
   const now = performance.now();
   if (tapped && now - tapped.at < 320 && Math.hypot(e.clientX - tapped.x, e.clientY - tapped.y) < 30) { tapped = null; newHere(e.clientX, e.clientY); }
   else tapped = { at: now, x: e.clientX, y: e.clientY };
@@ -252,9 +263,9 @@ export function dotRect(id) {
   if (id === NEW) { const p = newPoint || centrePoint(); return { x: p.x - 10, y: p.y - 14, w: 20, h: 20 }; }
   const p = shown.get(id) || positions.get(id);
   if (!p) return null;
-  if (graph.comps.some((c) => c.folded && c.root.id === id)) return { x: p.x, y: p.y, w: p.w, h: p.h };
-  const d = graph.comps.some((c) => c.root.id === id) ? ROOT_DOT : DOT;
-  return { x: p.x + p.w / 2 - d / 2, y: p.y, w: d, h: d };
+  if (p.card) return { x: p.x, y: p.y, w: p.w, h: p.h };
+  const c = centre(p);
+  return { x: c.x - 10, y: c.y - 10, w: 20, h: 20 };
 }
 // The camera that shows a card at its own size, moved as little as it takes
 // for all of it to show; `at` is a point of the world held where it is on
@@ -372,30 +383,32 @@ function sleepCheck() {
 
 // ─── Motion ────────────────────────────────────────────────────────────────
 // One frame loop moves all that moves: the nodes, the card, the camera; the
-// marks at the screen's edges follow each frame, and the edges do while
-// what moves is more than the camera (`nodes`).
+// marks at the screen's edges follow each frame, and the nodes and lines do
+// while what moves is more than the camera (`nodes`). It runs at the start
+// of the canvas's frame (blobs.js), so the canvas draws the camera the
+// layers have.
 const anims = new Map();
-let raf = 0;
+let looping = false;
 function animate(name, T, step, nodes = true) {
   anims.get(name)?.done();
-  if (document.hidden) { anims.delete(name); step(1); drawEdges(); applyCamera(); return Promise.resolve(); }
+  if (document.hidden) { anims.delete(name); step(1); drawNodes(); drawEdges(); applyCamera(); return Promise.resolve(); }
   return new Promise((done) => {
     anims.set(name, { t0: performance.now(), T: reduced() ? 0 : T, step, done, nodes });
-    if (!raf) raf = requestAnimationFrame(frame);
+    if (!looping) { looping = true; onFrame(frame); }
   });
 }
 function frame(now) {
-  raf = 0;
   let nodes = false;
   for (const [name, a] of anims) {
-    const u = a.T ? Math.min(1, (now - a.t0) / a.T) : 1;
+    const u = a.T ? Math.max(0, Math.min(1, (now - a.t0) / a.T)) : 1;
     a.step(1 - Math.pow(1 - u, 3));
     nodes ||= a.nodes;
     if (u >= 1) { anims.delete(name); a.done(); }
   }
-  if (nodes) drawEdges();
+  if (nodes) { drawNodes(); drawEdges(); }
   applyCamera();
-  if (anims.size) raf = requestAnimationFrame(frame);
+  looping = anims.size > 0;
+  return looping;
 }
 // Stops a motion where it is; whether it was moving.
 function stop(name) {
@@ -421,6 +434,7 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) settl
 function settle() {
   for (const a of anims.values()) { a.step(1); a.done(); }
   anims.clear();
+  drawNodes();
   drawEdges();
   applyCamera();
 }
@@ -454,10 +468,7 @@ export function glide(to = null, { T = 240, cardFrom, cardTo, box, strong = fals
   return animate("glide", T, (e) => {
     for (const [id, p] of goal) {
       const f = from.get(id) || p;
-      const s = { x: lerp(f.x, p.x, e), y: lerp(f.y, p.y, e), w: p.w, h: p.h };
-      shown.set(id, s);
-      const a = nodeEls.get(id);
-      if (a) a.style.transform = `translate(${s.x}px, ${s.y}px)`;
+      shown.set(id, { ...p, x: lerp(f.x, p.x, e), y: lerp(f.y, p.y, e) });
     }
     if (to) cam = { k: lerp(c0.k, to.k, e), x: lerp(c0.x, to.x, e), y: lerp(c0.y, to.y, e) };
     if (r0 && r1 && b) { cardShown = lerpRect(r0, r1, e); clipCard(cardShown, b); }

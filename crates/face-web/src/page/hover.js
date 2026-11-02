@@ -83,11 +83,12 @@ export function fillTip() {
   const id = typeof tipFor.id === "function" ? tipFor.id() : tipFor.id;
   const lines = [];
   let t = null;
-  if (id?.startsWith("b:")) {
+  let call = null;
+  if (id?.startsWith("w:")) {
     const n = graph.nodes.get(id);
     if (!n) return hideTip();
-    const c = n.call;
-    lines.push(el("b", null, c.name ? `${c.name}: ${c.tool}` : c.tool), el("div", "now", `Started ${ago(c.made)} ago`));
+    const c = call = callOf(n);
+    lines.push(el("b", null, c.name ? `${c.name}: ${c.tool}` : c.tool), el("div", "now", c.made ? `Started ${ago(c.made)} ago` : c.status === "running" ? "Running" : "Finished"));
     if (c.owner === "max" && c.passed) lines.push(el("div", null, `Passed to you by ${byId[c.passed.by]?.name || "an agent"}: ${c.passed.why}`));
     const input = gist(c.input);
     if (input) lines.push(el("div", "m", input));
@@ -106,6 +107,12 @@ export function fillTip() {
     if (facts.length) { const f = el("div", "facts"); f.append(...facts.map((x) => el("span", null, x))); lines.push(f); }
     if (place) { const d = el("div", "place"); d.append(el("code", null, homePath(place))); lines.push(d); }
     if (t.mandate && !fc) lines.push(el("div", "m", t.mandate.slice(0, 240)));
+    // How its context went: each stretch, how it began and when.
+    if (!fc && t.legs?.length > 1) {
+      const legs = el("div", "legs");
+      legs.append(...t.legs.map((l) => el("div", null, `${BEGAN[l.began] || l.began} ${ago(l.at)} ago`)));
+      lines.push(legs);
+    }
   }
   const words = tip.querySelector(".words") || tip.appendChild(el("div", "words"));
   lines.forEach((line, i) => {
@@ -115,8 +122,15 @@ export function fillTip() {
   });
   while (words.children.length > lines.length) words.lastChild.remove();
   if (t) fillTipActions(t);
-  else fillCallActions(graph.nodes.get(id).call);
+  else fillCallActions(call);
   tip.hidden = false;
+}
+const BEGAN = { start: "Started", carry: "Compacted", join: "Took in results", version: "Edited" };
+// A chip's call, as the task's background calls have it.
+function callOf(n) {
+  const w = n.work;
+  return [...(n.t.background || []), ...(n.t.handed || [])].find((c) => c.id === w.call)
+    || { id: w.call, name: w.name, tool: "background", status: w.running ? "running" : "settled", owner: w.handed ? "max" : n.t.id };
 }
 // The task it belongs to, its actions, and Open: drawn again only when
 // they change, so an armed action stays armed.

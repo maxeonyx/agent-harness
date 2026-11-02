@@ -1,6 +1,8 @@
 import { $, clock, el, ICONS, svgEl } from "./base.js";
-import { byId, derive, DOT, glyph, graph, isDone, layout, live, look, positions, ROOT_DOT, routes, SAT_DOT, satLabel, shortName, shown, unfolded, view } from "./map.js";
-import { cam, cardShown, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam, target } from "./camera.js";
+import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, look, positions, radius, routes, shortName, shown, successor, unfolded, view } from "./map.js";
+import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
+import { layer, MARK, session } from "./blobs.js";
+import { curve, stroke, taper } from "./layout.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
 import { renderBuilds } from "./builds.js";
@@ -9,125 +11,162 @@ import { renderOthers, syncCompose } from "./compose.js";
 import { finding, found } from "./newchat.js";
 
 // ─── Drawing the map ───────────────────────────────────────────────────────
+// Three layers, moved by the camera together: the lines, in one SVG under
+// everything (#under); the nodes, on one canvas (blobs.js: a blob for each
+// big node, a mark for every other); and, over them in the world, each big
+// node's and running chip's name and the place it is pressed, and the open
+// card. A small dot has no element: a press on the ground finds it (`hitAt`).
 export const nodeEls = new Map();
+export const blobs = layer($("#map"));
+const sessions = new Map(), handles = new Map();
+// A node's blob session: one per task, kept while it shows.
+function sessionOf(n) {
+  let s = sessions.get(n.t.id);
+  if (!s) sessions.set(n.t.id, s = session(n.big));
+  const want = n.kind !== "planned" && trouble(n.t) ? "held" : n.big;
+  if (s.state !== want) s.set(want);
+  s.letter = n.kind === "planned" ? String(n.waits) : glyph(n.t);
+  s.pips = n.pips ?? 0;
+  return s;
+}
 
 export function drawMap() {
-  const visible = new Set(positions.keys());
-  for (const [id, elx] of nodeEls) if (!visible.has(id)) { elx.remove(); nodeEls.delete(id); shown.delete(id); }
-  const roots = new Set(graph.comps.map((c) => c.root.id));
+  for (const [id, a] of nodeEls) if (!positions.has(id) || !elOf(id)) { a.remove(); nodeEls.delete(id); }
+  for (const [id, h] of handles) if (!positions.has(id) || !graph.nodes.get(id)?.big || positions.get(id).card) { h.remove(); handles.delete(id); }
+  for (const id of shown.keys()) if (!positions.has(id)) shown.delete(id);
   const folded = new Map(graph.comps.filter((c) => c.folded).map((c) => [c.root.id, c]));
-  const queue = (view.queue || []).map((q) => live(q.task));
-  for (const id of visible) {
+  for (const [id, p] of positions) {
     const n = graph.nodes.get(id);
-    if (!n) continue;
+    // A new node grows out of what it hangs from.
+    if (!shown.has(id)) {
+      const from = n?.deps.map((d) => shown.get(d)).find(Boolean);
+      shown.set(id, from && !p.card ? { ...p, x: from.x + from.w / 2 - p.w / 2, y: from.y + from.top - p.top } : { ...p });
+    }
+    const faded = finding && !found.has(n?.t.id ?? id) ? " unmatched" : "";
+    if (n?.big && !p.card) {
+      const s = sessionOf(n);
+      if (!handles.has(id) && blobs) handles.set(id, blobs.put(BIG, s));
+      handles.get(id)?.set(s);
+    }
+    const kind = elOf(id);
+    if (!kind) continue;
     let a = nodeEls.get(id);
     if (!a) {
-      a = el(n.kind === "task" ? "a" : "div", "node");
-      a.append(el("span", "dot"), el("span", "name"));
-      $(".dot", a).append(el("span", "g"), el("span", "ring"), el("span", "phases"));
-      if (n.kind === "task") {
+      a = el(kind === "chip" ? "div" : "a", "node");
+      if (kind === "card") a.append(el("span", "name"));
+      else a.append(el("span", "hit"), el("span", "name"));
+      if (kind === "chip") {
+        a.append(el("span", "g", "⋯"));
+        a.addEventListener("click", () => { if (!drag?.moved) openAt(graph.nodes.get(id)); });
+      } else {
         a.href = `#${id}`;
         a.addEventListener("click", (e) => { if (e.button || e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); if (!drag?.moved) go(id); });
-        hoverable(a, id);
-      } else if (n.kind === "sat") {
-        a.addEventListener("click", () => { if (!drag?.moved) go(n.task); });
-        a.style.cursor = "pointer";
-        hoverable(a, id);
       }
+      hoverable(a, id);
       nodesLayer.append(a);
       nodeEls.set(id, a);
-      // A new node grows out of where its owner is.
-      const from = graph.edges.find((e) => e.to === id)?.from;
-      const pf = from && shown.get(from);
-      const p = target(id);
-      shown.set(id, pf ? { x: pf.x + (pf.w || 0) / 2 - p.w / 2, y: pf.y, w: p.w, h: p.h } : { ...p });
-      a.style.transform = `translate(${shown.get(id).x}px, ${shown.get(id).y}px)`;
-      if (shown.size > 1) a.classList.add("enter");
     }
-    const p = positions.get(id);
-    a.style.width = `${p.w}px`;
-    const faded = finding && !found.has(id) ? " unmatched" : "";
-    if (n.kind === "task") {
-      const t = n.t, l = look(t), root = roots.has(id), fc = folded.get(id), q = queue.indexOf(id);
-      a.className = fc ? `node archived${l.cls.includes("failed") ? " failed" : ""}${faded}`
-        : `node ${l.cls}${q >= 0 ? " needs" : ""}${q === 0 ? " next" : ""}${trouble(t) ? " trouble" : ""}${root ? " root" : ""}${id === openId ? " selected" : ""}${faded}`;
-      a.style.setProperty("--d", `${root ? ROOT_DOT : DOT}px`);
-      mark($(".g", a), l.cls === "paused" ? "pause" : glyph(t));
-      phases($(".phases", a), (t.legs || []).filter((l) => l.began === "carry").length);
+    if (kind === "card") {
+      const fc = folded.get(id), t = byId[id];
+      a.className = `node archived${look(t).cls.includes("failed") ? " failed" : ""}${faded}`;
+      a.style.width = `${p.w}px`;
       $(".name", a).textContent = shortName(t);
       let more = $(".more", a);
-      if (fc && fc.tasks.length > 1) {
+      if (fc.tasks.length > 1) {
         if (!more) { a.append(more = el("button", "more", "⌄")); more.title = "Unfold the project"; more.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); unfolded.add(id); refresh(); }); }
       } else more?.remove();
     } else {
-      a.className = `node sat working${n.call.owner === "max" ? " yours" : ""}${faded}`;
-      a.style.setProperty("--d", `${SAT_DOT}px`);
-      mark($(".g", a), "⋯");
-      $(".name", a).textContent = satLabel(n);
+      a.className = `node ${kind}${n.work?.handed ? " yours" : ""}${id === openId ? " selected" : ""}${faded}`;
+      $(".name", a).textContent = label(n);
     }
   }
+  drawNodes();
   if (tipFor) fillTip();
 }
-// The phases a context compacted away, as a trail of fading pips beside its
-// dot, the latest nearest: the same agent, earlier. A few say "several".
-function phases(p, n) {
-  n = Math.min(n, 4);
-  if (p.childElementCount === n) return;
-  p.replaceChildren(...Array.from({ length: n }, () => el("i")));
-}
-// What a dot shows: a letter, or one of the icons by its name.
-function mark(g, what) {
-  if (g.dataset.what === what) return;
-  g.dataset.what = what;
-  if (ICONS[what]) g.innerHTML = `<svg viewBox="0 0 24 24">${ICONS[what]}</svg>`;
-  else g.textContent = what;
+// Which element a node has: a card, a big node's or a chip's, or none.
+function elOf(id) {
+  const p = positions.get(id), n = graph.nodes.get(id);
+  return p?.card ? "card" : n?.big ? "big" : n?.kind === "chip" && n.running ? "chip" : null;
 }
 
-function anchor(id, end) {
-  const p = shown.get(id);
-  const n = graph.nodes.get(id);
-  if (!p || !n) return null;
-  const cx = p.x + p.w / 2;
-  const d = n.kind === "sat" ? SAT_DOT : graph.comps.some((c) => c.root.id === id) ? ROOT_DOT : DOT;
-  return end === "out" ? { x: cx, y: p.y + d + 2 } : { x: cx, y: p.y - 2 };
-}
-// An edge along the curve the layout gave it, bent to follow its two ends
-// wherever they have moved since: each point moves as the end nearer it does.
-// An open chat's card is its node: what it leads to leaves from the card's foot.
-function laidCurve(e) {
-  const pts = routes.get(`${e.from}>${e.to}`);
-  if (!pts) return null;
-  const move = (id) => {
-    const p = positions.get(id), s = shown.get(id), c = id === openId && e.from === id && cardShown;
-    return c ? { x: c.x + c.w / 2 - p.x - p.w / 2, y: c.y + c.h - p.y - p.h } : { x: s.x - p.x, y: s.y - p.y };
-  };
-  const m0 = move(e.from), m1 = move(e.to), y0 = pts[0].y, y1 = pts[pts.length - 1].y;
-  const q = pts.map((p) => { const u = y1 === y0 ? 0 : Math.max(0, Math.min(1, (p.y - y0) / (y1 - y0))); return `${p.x + m0.x + (m1.x - m0.x) * u},${p.y + m0.y + (m1.y - m0.y) * u}`; });
-  return (q.length - 1) % 3 ? `M${q.join(" L")}` : `M${q[0]} C${q.slice(1).join(" ")}`;
-}
-// Out of the bottom of the source's dot, below its name, into the top of the target's.
-function straight(e, a, b) {
-  const sx = a.x, sy = shown.get(e.from).y + shown.get(e.from).h - 4;
-  const dy = Math.max(18, (b.y - sy) / 2);
-  return b.y > sy ? `M${sx},${sy} C${sx},${sy + dy} ${b.x},${b.y - dy} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x + 60},${a.y} ${b.x + 60},${b.y} ${b.x},${b.y}`;
-}
-export function drawEdges() {
-  const paths = [];
-  for (const e of graph.edges) {
-    const a = anchor(e.from, "out"), b = anchor(e.to, "in");
-    if (!a || !b) continue;
-    const d = laidCurve(e) || straight(e, a, b);
-    const cls = `edge ${e.kind}${e.flow ? " flow" : ""}`;
-    // A fork's edge is hollow: its owner's context, carried down into it.
-    // A fresh agent's is a line: it starts from its mandate alone.
-    for (const part of graph.nodes.get(e.to)?.t?.origin === "fork" ? [" tube", " core"] : [""]) {
-      const path = svgEl("path");
-      path.setAttribute("d", d);
-      path.setAttribute("class", cls + part);
-      paths.push(path);
+// Every node where it is shown now: the elements moved, the blobs placed
+// and the marks written for the canvas.
+let marks = new Float32Array(0);
+const INK = [20 / 255, 20 / 255, 19 / 255], PAPER = [250 / 255, 249 / 255, 245 / 255], YOURS = [212 / 255, 105 / 255, 28 / 255];
+export function drawNodes() {
+  if (marks.length < MARK * shown.size) marks = new Float32Array(MARK * shown.size * 2);
+  let k = 0;
+  for (const [id, s] of shown) {
+    const n = graph.nodes.get(id), c = centre(s), a = nodeEls.get(id);
+    if (a) a.style.transform = s.card ? `translate(${s.x}px, ${s.y}px)` : `translate(${c.x}px, ${c.y}px)`;
+    const h = handles.get(id);
+    if (h) { h.at(c.x, c.y); h.hide(id === openId); }
+    if (!n || n.big || s.card) continue;
+    const dim = finding && !found.has(n.t.id) ? .12 : 1;
+    const m = k++ * MARK;
+    marks[m] = c.x; marks[m + 1] = c.y; marks[m + 2] = radius(n);
+    if (n.kind === "leg") {
+      marks.set(INK, m + 4); marks[m + 7] = (n.old ? .15 : .42) * dim;
+      marks[m + 11] = 0;
+    } else {
+      // A chip, or a planned join: paper, with a dashed ring.
+      const ring = n.kind === "chip" && n.work.handed ? YOURS : INK;
+      marks[m + 3] = n.kind === "planned" ? 1.3 : n.running ? 1.4 : 1.2;
+      marks.set(PAPER, m + 4); marks[m + 7] = dim;
+      marks.set(ring, m + 8); marks[m + 11] = (n.kind === "planned" ? .5 : n.running ? .7 : .4) * dim;
+      marks[m + 12] = Math.round((2 * Math.PI * radius(n)) / (n.running ? 4.2 : 3.2));
     }
   }
-  edgesLayer.replaceChildren(...paths);
+  blobs?.marks(marks, k);
+}
+
+// The small node at a point on the screen, if any: within 12 px of it.
+export function hitAt(sx, sy) {
+  const x = (sx - cam.x) / cam.k, y = (sy - cam.y) / cam.k, r = 12 / cam.k;
+  let best = null, bd = r;
+  for (const [id, s] of shown) {
+    const n = graph.nodes.get(id);
+    if (!n || n.big || s.card || nodeEls.has(id)) continue;
+    const c = centre(s), d = Math.hypot(c.x - x, c.y - y);
+    if (d < bd) { bd = d; best = n; }
+  }
+  return best;
+}
+// A small node opens its task's chat where its stretch begins: a leg at its
+// first entry, a chip or planned join at the call that started its work.
+export function openAt(n) {
+  if (!n) return;
+  go(n.t.id, n.open || null);
+}
+
+// The lines: an edge's route as laid out, bent to follow its two ends
+// wherever they are shown, each point moving as the end nearer it does.
+// Each kind of line is one path of all of them: the tapers filled solid in
+// one fill (each wound the same way, so where they overlap they add up and
+// don't darken), old versions' in another, and the dashed ones stroked.
+function line(key, r) {
+  const [from, to] = key.split(">");
+  const move = (id) => { const p = positions.get(id), s = shown.get(id); return s && p ? [s.x - p.x, s.y - p.y] : [0, 0]; };
+  const m0 = move(from), m1 = move(to), still = !m0[0] && !m0[1] && !m1[0] && !m1[1];
+  if (still && r.d) return r.d;
+  const y0 = r.pts[0][1], y1 = r.pts[r.pts.length - 1][1];
+  const pts = still ? r.pts : r.pts.map(([x, y]) => {
+    const u = y1 === y0 ? 0 : Math.max(0, Math.min(1, (y - y0) / (y1 - y0)));
+    return [x + m0[0] + (m1[0] - m0[0]) * u, y + m0[1] + (m1[1] - m0[1]) * u];
+  });
+  const segs = curve(pts), d = r.dashed ? stroke(segs) : taper(segs, 2.2, .5);
+  if (still) r.d = d;
+  return d;
+}
+const paths = {};
+export function drawEdges() {
+  if (!paths.live) for (const k of ["old", "live", "dash"]) { paths[k] = svgEl("path"); paths[k].setAttribute("class", k); paths[k].d = ""; edgesLayer.append(paths[k]); }
+  const ds = { old: [], live: [], dash: [] };
+  for (const [key, r] of routes) ds[r.dashed ? "dash" : r.old ? "old" : "live"].push(line(key, r));
+  for (const k in ds) {
+    const d = ds[k].join("");
+    if (paths[k].d !== d) { paths[k].d = d; paths[k].setAttribute("d", d); }
+  }
 }
 
 // Why a task is stuck, while it matters: a place it starts in that could
@@ -145,8 +184,8 @@ export function trouble(t) {
 let shownBefore = false;
 // The view folded into the map: what it is, where everything goes.
 export async function rebuild() {
-  derive();
-  const changed = await layout();
+  derive(openId);
+  const changed = layout();
   if (openId) setSeam(seamFor(openId) || seam);
   drawMap();
   return changed;
@@ -182,7 +221,7 @@ export function render() {
   const q = view.queue || [];
   document.title = q.length ? `(${q.length}) Harness` : "Harness";
   notify(q);
-  if (openId && openId !== NEW && live(openId) !== openId) goStaying(live(openId));
+  if (openId && openId !== NEW && successor(openId) !== openId) goStaying(successor(openId));
   else if (openId) renderPanel();
   syncCompose();
   renderOthers();
@@ -203,9 +242,9 @@ export function placeMarks() {
   const w = r - l, h = b - t, P = 2 * (w + h), ox = innerWidth / 2, oy = (t + b) / 2;
   const marks = [];
   (view.queue || []).forEach((q, i) => {
-    const id = live(q.task), p = shown.get(id);
+    const id = q.task, p = shown.get(id);
     if (!p || id === openId) return;
-    const x = cam.x + (p.x + p.w / 2) * cam.k, y = cam.y + (p.y + DOT / 2) * cam.k;
+    const c = centre(p), x = cam.x + c.x * cam.k, y = cam.y + c.y * cam.k;
     if (x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight) return;
     const dx = x - ox, dy = y - oy, f = Math.min(Math.abs(w / 2 / dx), Math.abs(h / 2 / dy));
     const ex = ox + dx * f, ey = oy + dy * f;
@@ -243,7 +282,7 @@ export function placeMarks() {
       a = el("button", "offscreen");
       a.type = "button";
       a.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.toward}</svg>`;
-      a.onclick = () => centre(id);
+      a.onclick = () => centreOn(id);
       marksEl.append(a);
       markEls.set(id, a);
     }
@@ -257,9 +296,10 @@ export function placeMarks() {
   for (const [id, a] of markEls) if (!seen.has(id)) { a.remove(); markEls.delete(id); }
 }
 // The camera, at the zoom it has, moved to put a node in the middle.
-function centre(id) {
+function centreOn(id) {
   const p = shown.get(id);
   if (!p) return;
   setFramed(false);
-  glide({ k: cam.k, x: innerWidth / 2 - (p.x + p.w / 2) * cam.k, y: innerHeight / 2 - (p.y + p.h / 2) * cam.k }, { T: 420 });
+  const c = centre(p);
+  glide({ k: cam.k, x: innerWidth / 2 - c.x * cam.k, y: innerHeight / 2 - c.y * cam.k }, { T: 420 });
 }

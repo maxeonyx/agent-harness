@@ -24,6 +24,17 @@
 // position) moves the blobs with it on the compositor. Each blob is drawn
 // in its box as laid out, transforms included: scaling a box scales its
 // blob, and `moved()` says a box changed.
+//
+// A map draws in the world instead, through a camera, and reads no boxes:
+//
+//   blobs.camera(x, y, k);             screen = (x, y) + world * k
+//   const b = blobs.put(64, s);        a blob in a 64 px box, at k = 1,
+//   b.at(wx, wy); b.hide(true);        centred on a point of the world
+//   blobs.marks(m, n);                 n plain marks under the blobs (MARK)
+//
+// `onFrame(step)` runs `step(now)` at the start of each frame, before any
+// layer draws, while it returns true: a camera moved there is drawn in the
+// same frame.
 
 // Colours: [fill, edge, icon] per state; the whole blob takes the state's.
 const CLAUDE = [217, 119, 87];
@@ -94,6 +105,9 @@ const SAT_KEYS = Object.keys(SATS), SAT_ANG = SAT_KEYS.map((k) => SATS[k]);
 const K = .22; // the smooth minimum's reach: balls closer than this melt together
 const DISKS = 8, DISK_MS = 1400, DISK_GAP = 200; // at most one disk per 0.2 s
 const INST = 44; // floats per blob instance: 11 vec4
+// A mark: centre x, y, radius and ring width in world px; fill, then ring,
+// as straight rgba 0-1; and how many dashes its ring has (0: solid).
+export const MARK = 16;
 
 // ─── The atlas, shared by every layer ──────────────────────────────────────
 // Signed distance fields of the icons and the role letters, in 128 px cells,
@@ -254,6 +268,36 @@ in vec2 q;
 flat in vec4 d;
 out vec4 o;
 void main() { float a = d.w * clamp(d.z + .5 - length(q - d.xy), 0., 1.); o = vec4(${C.ink.map((x) => (x / 255).toFixed(4))} , 1.) * a; }`;
+const MARK_VS = `#version 300 es
+layout(location = 0) in vec2 corner;
+layout(location = 1) in vec4 m0; // world x, y, radius, ring width
+layout(location = 2) in vec4 m1; // fill
+layout(location = 3) in vec4 m2; // ring
+layout(location = 4) in vec4 m3; // dashes
+uniform vec2 view;
+uniform vec4 cam; // x, y, k, device px per css px
+out vec2 q;
+flat out vec4 c, f, r, d;
+void main() {
+  float s = cam.z * cam.w;
+  c = vec4((cam.xy + m0.xy * cam.z) * cam.w, m0.z * s, max(m0.w * s, 1.));
+  q = c.xy + (corner * 2. - 1.) * (c.z + c.w + 1.);
+  gl_Position = vec4(q.x / view.x * 2. - 1., 1. - q.y / view.y * 2., 0., 1.);
+  f = m1; r = m2; d = m3;
+}`;
+const MARK_FS = `#version 300 es
+precision highp float;
+in vec2 q;
+flat in vec4 c, f, r, d;
+out vec4 o;
+void main() {
+  vec2 v = q - c.xy;
+  float l = length(v), fill = f.a * clamp(c.z + .5 - l, 0., 1.);
+  float ring = r.a * clamp(c.w * .5 + .5 - abs(l - c.z), 0., 1.);
+  if (d.x > 0. && fract(atan(v.y, v.x) / 6.2831853 * d.x) > .55) ring = 0.;
+  o = vec4(f.rgb * fill, fill);
+  o = vec4(r.rgb * ring, ring) + o * (1. - ring);
+}`;
 
 // ─── The compaction track ──────────────────────────────────────────────────
 // Marching squares over an n x n grid of the field at one level, keeping only
@@ -415,7 +459,7 @@ function program(gl, vs, fs) {
 
 // ─── The frame loop, shared by every layer ─────────────────────────────────
 // It runs while some layer shows a blob, and stops when none does.
-const layers = [];
+const layers = [], steps = new Set();
 let running = false, last = 0;
 function wake() {
   if (running) return;
@@ -425,11 +469,13 @@ function wake() {
 function frame(now) {
   const dt = Math.min(1 / 30, (now - last) / 1000);
   last = now;
-  let shown = false;
+  for (const s of steps) if (!s(now)) steps.delete(s);
+  let shown = steps.size > 0;
   for (const l of layers) shown = l.draw(now, dt) || shown;
   if (shown) requestAnimationFrame(frame);
   else running = false;
 }
+export function onFrame(step) { steps.add(step); wake(); }
 
 // ─── A layer: one canvas, and every blob in it ─────────────────────────────
 // Null without WebGL2: the page then shows no blobs. A lost context draws
@@ -443,10 +489,11 @@ export function layer(host) {
   clip.append(cv);
   host.append(clip);
 
-  let blobProg, dotProg, blobView, blobAtlas, dotView, instBuf, dotBuf, blobVao, dotVao, atlasTex, uploaded;
+  let blobProg, dotProg, markProg, blobView, blobAtlas, dotView, markView, markCam, instBuf, dotBuf, markBuf, blobVao, dotVao, markVao, atlasTex, uploaded, markSent;
   const build = () => {
-    blobProg = program(gl, BLOB_VS, BLOB_FS); dotProg = program(gl, DOT_VS, DOT_FS);
+    blobProg = program(gl, BLOB_VS, BLOB_FS); dotProg = program(gl, DOT_VS, DOT_FS); markProg = program(gl, MARK_VS, MARK_FS);
     blobView = gl.getUniformLocation(blobProg, "view"); blobAtlas = gl.getUniformLocation(blobProg, "atlasSize"); dotView = gl.getUniformLocation(dotProg, "view");
+    markView = gl.getUniformLocation(markProg, "view"); markCam = gl.getUniformLocation(markProg, "cam");
     const quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
@@ -465,8 +512,9 @@ export function layer(host) {
       }
       return v;
     };
-    instBuf = gl.createBuffer(); dotBuf = gl.createBuffer();
-    blobVao = vao(instBuf, INST / 4); dotVao = vao(dotBuf, 1);
+    instBuf = gl.createBuffer(); dotBuf = gl.createBuffer(); markBuf = gl.createBuffer();
+    blobVao = vao(instBuf, INST / 4); dotVao = vao(dotBuf, 1); markVao = vao(markBuf, MARK / 4);
+    markSent = -1;
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     atlasTex = gl.createTexture();
@@ -485,7 +533,10 @@ export function layer(host) {
   const FIELDS = [["SIZE", Float32Array, 1], ["DOCX", Float32Array, 1], ["DOCY", Float32Array, 1],
     ["R", Float32Array, 4], ["RV", Float32Array, 4], ["G", Float32Array, 3], ["GV", Float32Array, 3],
     ["X", Float32Array, 3], ["Y", Float32Array, 3], ["COL", Float32Array, 9], ["SPIN", Float32Array, 1], ["GEAR", Float32Array, 1],
-    ["DISK", Float64Array, DISKS], ["DISKAT", Uint8Array, 1], ["LASTDISK", Float64Array, 1], ["SEEN", Float64Array, 1]];
+    ["DISK", Float64Array, DISKS], ["DISKAT", Uint8Array, 1], ["LASTDISK", Float64Array, 1], ["SEEN", Float64Array, 1],
+    ["BASE", Float32Array, 1], ["WX", Float32Array, 1], ["WY", Float32Array, 1], ["WORLD", Uint8Array, 1]];
+  // The world's camera, and its marks.
+  let cam = { x: 0, y: 0, k: 1 }, marks = new Float32Array(0), nmarks = 0, marksVersion = 0;
   let inst = new Float32Array(0), dots = new Float32Array(4 * 64);
   const grow = () => {
     const n = Math.max(8, cap * 2);
@@ -502,6 +553,7 @@ export function layer(host) {
   const measure = () => {
     const h = host.getBoundingClientRect(), k = host.offsetWidth ? h.width / host.offsetWidth : 1;
     for (let i = 0; i < count; i++) {
+      if (a.WORLD[i]) continue;
       const r = boxes[i].getBoundingClientRect();
       a.DOCX[i] = r.width ? (r.left - h.left) / k : -1e9; a.DOCY[i] = (r.top - h.top) / k;
       if (r.width) a.SIZE[i] = r.width / k;
@@ -518,7 +570,7 @@ export function layer(host) {
       if (count === cap) grow();
       const i = count++;
       boxes[i] = box; sessions[i] = s;
-      a.SIZE[i] = px; a.LASTDISK[i] = -1e9; a.SEEN[i] = s.lastPacket; a.R[4 * i] = .4;
+      a.SIZE[i] = px; a.LASTDISK[i] = -1e9; a.SEEN[i] = s.lastPacket; a.R[4 * i] = .4; a.WORLD[i] = 0;
       for (let k = 0; k < 3; k++) { a.R[4 * i + 1 + k] = IDLE.r; a.G[3 * i + k] = IDLE.g; }
       a.COL.set(STATES[s.state].col.flat(), 9 * i);
       kept.moved();
@@ -535,6 +587,23 @@ export function layer(host) {
     },
     // Boxes moved without `host` changing size.
     moved() { dirty = true; wake(); },
+    // A blob in the world, in a box of px at zoom 1, centred where `at` says.
+    put(px, s) {
+      const h = { at(x, y) { const i = boxes.indexOf(h); a.WX[i] = x; a.WY[i] = y; wake(); },
+        hide(on) { const i = boxes.indexOf(h); a.WORLD[i] = on ? 2 : 1; wake(); },
+        set(s2) { sessions[boxes.indexOf(h)] = s2; }, remove() { kept.remove(h); } };
+      if (count === cap) grow();
+      const i = count++;
+      boxes[i] = h; sessions[i] = s;
+      a.BASE[i] = px; a.SIZE[i] = px; a.WORLD[i] = 1; a.LASTDISK[i] = -1e9; a.SEEN[i] = s.lastPacket; a.R[4 * i] = .4;
+      for (let k = 0; k < 3; k++) { a.R[4 * i + 1 + k] = IDLE.r; a.G[3 * i + k] = IDLE.g; }
+      a.COL.set(STATES[s.state].col.flat(), 9 * i);
+      wake();
+      return h;
+    },
+    camera(x, y, k) { cam = { x, y, k }; wake(); },
+    // The marks, MARK floats each, as they are now.
+    marks(m, n) { marks = m; nmarks = n; marksVersion++; wake(); },
     draw(now, dt) {
       if (gl.isContextLost()) return false;
       if (dirty) measure();
@@ -543,9 +612,17 @@ export function layer(host) {
       let drawn = 0, ndots = 0, shown = false;
       const kc = 1 - Math.exp(-dt / .18);
       for (let i = 0; i < count; i++) {
-        if (a.DOCX[i] < -1e8) continue;
+        let x, y;
+        if (a.WORLD[i]) {
+          if (a.WORLD[i] === 2) continue;
+          a.SIZE[i] = a.BASE[i] * cam.k;
+          x = (cam.x + a.WX[i] * cam.k - a.SIZE[i] / 2) * dpr; y = (cam.y + a.WY[i] * cam.k - a.SIZE[i] / 2) * dpr;
+        } else {
+          if (a.DOCX[i] < -1e8) continue;
+          x = a.DOCX[i] * dpr; y = a.DOCY[i] * dpr;
+        }
         shown = true;
-        const px = a.SIZE[i], x = a.DOCX[i] * dpr, y = a.DOCY[i] * dpr, size = px * dpr;
+        const px = a.SIZE[i], size = px * dpr;
         if (x + size < 0 || y + size < 0 || x > W || y > H) continue;
         drawn = this.blob(i, drawn, now, dt, kc, x, y, size);
         ndots = this.dots(i, ndots, x, y, size);
@@ -560,6 +637,15 @@ export function layer(host) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         uploaded = atlasVersion;
+      }
+      if (nmarks) {
+        gl.useProgram(markProg);
+        gl.uniform2f(markView, W, H);
+        gl.uniform4f(markCam, cam.x, cam.y, cam.k, dpr);
+        gl.bindBuffer(gl.ARRAY_BUFFER, markBuf);
+        if (markSent !== marksVersion) { gl.bufferData(gl.ARRAY_BUFFER, marks.subarray(0, MARK * nmarks), gl.DYNAMIC_DRAW); markSent = marksVersion; }
+        gl.bindVertexArray(markVao);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nmarks);
       }
       if (drawn) {
         gl.useProgram(blobProg);
@@ -655,5 +741,5 @@ export function layer(host) {
     },
   };
   layers.push(kept);
-  return { add: kept.add, remove: kept.remove, moved: kept.moved };
+  return { add: kept.add, remove: kept.remove, moved: kept.moved, put: kept.put, camera: kept.camera, marks: kept.marks };
 }
