@@ -5,8 +5,9 @@
 // the centre and merges with it; going from one to another, the growth
 // passes through the centre. Each piece of data sends a soft disk out from
 // behind the active ball, at most one each 0.2 s; compactions are dots on a
-// track round the blob's edge. A planned blob, what a task will be once
-// the work it waits on is in, is hollow, its outline dotted.
+// track round the blob's edge. A hollow blob, what a task will be once
+// the work it waits on is in, has no fill and its outline dotted, in its
+// state's colour.
 //
 // Every blob of a layer is drawn in one pass: one WebGL canvas, and one
 // instanced square per blob whose fragment shader computes the field per
@@ -30,7 +31,8 @@
 // The canvas fills `host`, so whatever moves `host` (a scroll, a sticky
 // position) moves the blobs with it on the compositor. Each blob is drawn
 // in its box as laid out, transforms included: scaling a box scales its
-// blob, and `moved()` says a box changed.
+// blob, and `moved()` says a box changed. The blob is centred in its box:
+// the box of its balls as its state sets them, wherever its big ball is.
 //
 // A map draws in the world instead, through a camera, and reads no boxes:
 //
@@ -45,8 +47,7 @@
 
 // Colours: [fill, edge, icon] per state; the whole blob takes the state's,
 // as base.css names them: Max's turn orange, an agent at work (or its
-// background work) blue, waiting on other agents purple, done green, paused grey, stuck red;
-// planned grey.
+// background work) blue, waiting on other agents purple, done green, paused grey, stuck red.
 const C = { ink: [20, 20, 19], paper: [250, 249, 245], yours: [212, 105, 28], working: [58, 109, 176], others: [139, 90, 166],
   green: [79, 138, 85], red: [179, 53, 44], faint: [161, 159, 150], muted: [107, 106, 100] };
 const tint = (c, k) => C.paper.map((p, i) => p + (c[i] - p) * k);
@@ -54,6 +55,7 @@ const tint = (c, k) => C.paper.map((p, i) => p + (c[i] - p) * k);
 // The balls, in field units (a blob's box spans -SPAN..SPAN). Satellites sit
 // at fixed angles: the model at twelve o'clock, tools at four, Max at eight.
 const SATS = { model: -Math.PI / 2, tools: Math.PI / 6, max: 5 * Math.PI / 6 };
+const SAT_KEYS = Object.keys(SATS), SAT_ANG = SAT_KEYS.map((k) => SATS[k]);
 const SPAN = 1.45;
 
 // Joined or apart. A satellite sits at the centre's radius plus its own plus
@@ -70,8 +72,7 @@ const IDLE = { r: .17, g: 0 }, ACTIVE = { r: .42, g: -.05 };
 
 // A state: which ball is active, the centre's radius, the idle satellites'
 // gap if not IDLE's, and its colours. A `still` state waits on something
-// outside the agent: its blob does not wobble, and settles. A `hollow` one
-// has no fill, a dotted outline, and its letter in its icons' colour.
+// outside the agent: its blob does not wobble, and settles.
 export const STATES = {
   first:     { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
   streaming: { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
@@ -84,19 +85,33 @@ export const STATES = {
   starting:  { active: null, centre: .4, col: [C.working, C.working, C.paper] },
   paused:    { active: null, centre: .48, merged: true, still: true, col: [[233, 229, 217], C.faint, C.muted] },
   done:      { active: null, centre: .48, merged: true, still: true, col: [C.green, C.green, C.paper] },
-  planned:   { active: "tools", centre: .34, size: .32, still: true, hollow: true, col: [C.paper, C.muted, C.muted] },
 };
 const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
+// Satellite k's radius and gap as state st sets them.
+const satR = (st, k) => (st.active === SAT_KEYS[k] ? st.size || ACTIVE.r : st.merged ? .12 : IDLE.r);
+const satG = (st, k) => (st.active === SAT_KEYS[k] ? ACTIVE.g : st.merged ? -.45 : st.gap ?? IDLE.g);
+// Each state's hollow colours: no fill, and its icons and letter its edge's.
+// And where its balls' box is centred, in blob units: a starting blob's
+// satellites bud and fade, so only its centre counts.
+for (const [name, st] of Object.entries(STATES)) {
+  st.hollowCol = [C.paper, st.col[1], st.col[1]];
+  let x0 = -st.centre, x1 = st.centre, y0 = -st.centre, y1 = st.centre;
+  if (name !== "starting") for (let k = 0; k < 3; k++) {
+    const r = satR(st, k), d = st.centre + r + satG(st, k), x = Math.cos(SAT_ANG[k]) * d, y = Math.sin(SAT_ANG[k]) * d;
+    x0 = Math.min(x0, x - r); x1 = Math.max(x1, x + r); y0 = Math.min(y0, y - r); y1 = Math.max(y1, y + r);
+  }
+  st.mid = [(x0 + x1) / 2, (y0 + y1) / 2];
+}
 
-// A session: its state, when its last packet came, its compactions and its
-// role letter, shared by every blob of it. Going from one satellite straight
-// to another, it shows the brain for a moment, so the growth passes through
-// the centre; `jump` goes straight there, for a blob now showing another
-// session. In a still state its blob settles and stops moving; while Max
+// A session: its state, when its last packet came, its compactions, its
+// role letter and whether it is hollow, shared by every blob of it. Going
+// from one satellite straight to another, it shows the brain for a moment,
+// so the growth passes through the centre; `jump` goes straight there, for
+// a blob now showing another session. In a still state its blob settles and stops moving; while Max
 // dictates, `voice` is his level from 0 to 1 (null when he is not
 // dictating), since `heard`.
 export function session(state = "starting") {
-  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", lastPacket: 0, voice: null, heard: 0,
+  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", hollow: false, lastPacket: 0, voice: null, heard: 0,
     shown(now) { return now < this.via ? "brain" : this.state; },
     set(next, jump = false) {
       if (next === this.state && !jump) return;
@@ -124,7 +139,6 @@ export const ICON = {
 };
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
-const SAT_KEYS = Object.keys(SATS), SAT_ANG = SAT_KEYS.map((k) => SATS[k]);
 const K = .22; // the smooth minimum's reach: balls closer than this melt together
 const DISKS = 8, DISK_MS = 1400, DISK_GAP = 200; // at most one disk per 0.2 s
 const INST = 48; // floats per blob instance: 12 vec4
@@ -590,7 +604,8 @@ export function layer(host) {
     ["R", Float32Array, 4], ["RV", Float32Array, 4], ["G", Float32Array, 3], ["GV", Float32Array, 3],
     ["X", Float32Array, 3], ["Y", Float32Array, 3], ["COL", Float32Array, 9], ["SPIN", Float32Array, 1], ["GEAR", Float32Array, 1],
     ["DISK", Float64Array, DISKS], ["DISKAT", Uint8Array, 1], ["LASTDISK", Float64Array, 1], ["SEEN", Float64Array, 1],
-    ["BASE", Float32Array, 1], ["WX", Float32Array, 1], ["WY", Float32Array, 1], ["WORLD", Uint8Array, 1]];
+    ["BASE", Float32Array, 1], ["WX", Float32Array, 1], ["WY", Float32Array, 1], ["WORLD", Uint8Array, 1],
+    ["MID", Float32Array, 2], ["MIDV", Float32Array, 2]];
   // The world's camera, and its marks.
   let cam = { x: 0, y: 0, k: 1 }, marks = new Float32Array(0), nmarks = 0, marksVersion = 0;
   let inst = new Float32Array(0), dots = new Float32Array(4 * 64);
@@ -617,6 +632,14 @@ export function layer(host) {
     dirty = false;
   };
 
+  // A new blob: its balls idle, in its state's colours and place.
+  const start = (i, s) => {
+    const st = STATES[s.state];
+    a.LASTDISK[i] = -1e9; a.SEEN[i] = s.lastPacket; a.R[4 * i] = .4;
+    for (let k = 0; k < 3; k++) { a.R[4 * i + 1 + k] = IDLE.r; a.G[3 * i + k] = IDLE.g; }
+    a.COL.set((s.hollow ? st.hollowCol : st.col).flat(), 9 * i);
+    a.MID.set(st.mid, 2 * i);
+  };
   const kept = {
     // An empty box of css size px, for the canvas to draw `s`'s blob in.
     add(px, s) {
@@ -626,9 +649,8 @@ export function layer(host) {
       if (count === cap) grow();
       const i = count++;
       boxes[i] = box; sessions[i] = s;
-      a.SIZE[i] = px; a.LASTDISK[i] = -1e9; a.SEEN[i] = s.lastPacket; a.R[4 * i] = .4; a.WORLD[i] = 0;
-      for (let k = 0; k < 3; k++) { a.R[4 * i + 1 + k] = IDLE.r; a.G[3 * i + k] = IDLE.g; }
-      a.COL.set(STATES[s.state].col.flat(), 9 * i);
+      a.SIZE[i] = px; a.WORLD[i] = 0;
+      start(i, s);
       kept.moved();
       return box;
     },
@@ -651,9 +673,8 @@ export function layer(host) {
       if (count === cap) grow();
       const i = count++;
       boxes[i] = h; sessions[i] = s;
-      a.BASE[i] = px; a.SIZE[i] = px; a.WORLD[i] = 1; a.LASTDISK[i] = -1e9; a.SEEN[i] = s.lastPacket; a.R[4 * i] = .4;
-      for (let k = 0; k < 3; k++) { a.R[4 * i + 1 + k] = IDLE.r; a.G[3 * i + k] = IDLE.g; }
-      a.COL.set(STATES[s.state].col.flat(), 9 * i);
+      a.BASE[i] = px; a.SIZE[i] = px; a.WORLD[i] = 1;
+      start(i, s);
       wake();
       return h;
     },
@@ -680,8 +701,9 @@ export function layer(host) {
         if (sessions[i].moving(now)) moving = true;
         const px = a.SIZE[i], size = px * dpr;
         if (x + size < 0 || y + size < 0 || x > W || y > H) continue;
-        if (this.blob(i, drawn++, now, dt, kc, x, y, size)) moving = true;
-        ndots = this.dots(i, ndots, x, y, size);
+        const o = drawn++;
+        if (this.blob(i, o, now, dt, kc, x, y, size)) moving = true;
+        ndots = this.dots(i, ndots, inst[INST * o], inst[INST * o + 1], size);
       }
       gl.viewport(0, 0, W, H);
       gl.clearColor(0, 0, 0, 0);
@@ -722,20 +744,21 @@ export function layer(host) {
       }
       return moving;
     },
-    // Blob i, animated a step and written as instance `o`; returns whether
-    // its springs or colours are still moving.
+    // Blob i, animated a step and written as instance `o`, its box at x, y:
+    // centred in it, unless it is in the world; returns whether its springs
+    // or colours are still moving.
     blob(i, o, now, dt, kc, x, y, size) {
-      const { R, RV, G, GV, X, Y, COL, SPIN, GEAR, DISK, DISKAT, LASTDISK, SEEN } = a;
+      const { R, RV, G, GV, X, Y, COL, SPIN, GEAR, DISK, DISKAT, LASTDISK, SEEN, MID, MIDV } = a;
       const s = sessions[i], name = s.shown(now), st = STATES[name], t = (now - s.since) / 1000, px = a.SIZE[i];
+      const col = s.hollow ? st.hollowCol : st.col;
 
       // The balls: each radius and gap springs towards the state's; Max's
       // voice swells the microphone, on a stiffer spring that keeps up with it.
       let stirring = pull(R, RV, 4 * i, st.centre, dt, 17);
       const c0 = R[4 * i];
+      for (let k = 0; k < 2; k++) if (pull(MID, MIDV, 2 * i + k, st.mid[k], dt, 26)) stirring = true;
       for (let k = 0; k < 3; k++) {
-        let gr = IDLE.r, gg = st.gap ?? IDLE.g;
-        if (st.merged) { gr = .12; gg = -.45; }
-        if (st.active === SAT_KEYS[k]) { gr = st.size || ACTIVE.r; gg = ACTIVE.g; }
+        let gr = satR(st, k), gg = satG(st, k);
         if (name === "first" && k === 0) gr = .36 + .06 * Math.sin(t * 5); // swelling, in time
         if (name === "starting") { // budding out of the centre in turn, and off it
           const ph = (t * .9 - k / 3) % 1;
@@ -750,7 +773,7 @@ export function layer(host) {
         X[g] = Math.cos(an) * d; Y[g] = Math.sin(an) * d;
       }
       for (let k = 0; k < 9; k++) {
-        const off = st.col[k / 3 | 0][k % 3] - COL[9 * i + k];
+        const off = col[k / 3 | 0][k % 3] - COL[9 * i + k];
         COL[9 * i + k] += off * kc;
         if (Math.abs(off) > .5) stirring = true;
       }
@@ -767,7 +790,8 @@ export function layer(host) {
       }
 
       const b0 = INST * o, active = SAT_KEYS.indexOf(st.active) + 1, show = +(px >= DETAIL);
-      inst[b0] = x; inst[b0 + 1] = y; inst[b0 + 2] = size; inst[b0 + 3] = size / px;
+      const unit = a.WORLD[i] ? 0 : size / (2 * SPAN);
+      inst[b0] = x - MID[2 * i] * unit; inst[b0 + 1] = y - MID[2 * i + 1] * unit; inst[b0 + 2] = size; inst[b0 + 3] = size / px;
       inst[b0 + 4] = c0; inst[b0 + 5] = active; inst[b0 + 6] = glyph(s.letter); inst[b0 + 7] = c0 * LETTER;
       for (let k = 0; k < 3; k++) {
         const r = R[4 * i + 1 + k], b = b0 + 8 + 4 * k;
@@ -781,17 +805,17 @@ export function layer(host) {
       // hollow one its icons' colour.
       const light = (COL[9 * i] * .3 + COL[9 * i + 1] * .59 + COL[9 * i + 2] * .11) / 255;
       const lc = light > .6 ? C.ink : C.paper;
-      for (let k = 0; k < 3; k++) inst[b0 + 32 + k] = (st.hollow ? COL[9 * i + 6 + k] : lc[k]) / 255;
+      for (let k = 0; k < 3; k++) inst[b0 + 32 + k] = (s.hollow ? COL[9 * i + 6 + k] : lc[k]) / 255;
       inst[b0 + 35] = .92 * show;
       for (let k = 0; k < DISKS; k++) {
         const t1 = DISK[DISKS * i + (DISKAT[i] + k) % DISKS], age = (now - t1) / DISK_MS; // oldest first
         inst[b0 + 36 + k] = t1 > 0 && age < 1 ? age : -1;
       }
-      inst[b0 + 44] = st.hollow ? 0 : 1; inst[b0 + 45] = st.hollow ? DASHES : 0;
+      inst[b0 + 44] = s.hollow ? 0 : 1; inst[b0 + 45] = s.hollow ? DASHES : 0;
       return stirring;
     },
     // Blob i's compaction dots, on the longest loop of its track, written
-    // from dot `n`; returns the next.
+    // from dot `n`, its quad at x, y; returns the next.
     dots(i, n, x, y, size) {
       const pips = sessions[i].pips;
       if (!(pips > 0) || a.SIZE[i] < DETAIL) return n;
