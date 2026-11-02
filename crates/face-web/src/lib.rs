@@ -41,7 +41,7 @@
 //! bytes each entry names from the [`Source`], and when each response was
 //! sent and ended and the context it was sent with, which never change; so
 //! the browser caches it forever and refetches only when the task's head
-//! moves.
+//! moves. A task's context as it is now is `/context/<task>`, never stored.
 //!
 //! **The map** is each task's legs, drawn from the rows the tab already has
 //! (`page/map.js`): every live task is a big node in the present row, its
@@ -466,8 +466,18 @@ impl<S: Source> Face<S> {
                         _ => http::not_found(&mut stream),
                     };
                 }
-                if let Some(head) = path.strip_prefix("/context/").and_then(|h| h.parse().ok()) {
-                    return self.context(&mut stream, head);
+                if let Some(at) = path.strip_prefix("/context/") {
+                    if let Ok(head) = at.parse() {
+                        return self.context(&mut stream, head, true);
+                    }
+                    let task = at
+                        .parse()
+                        .ok()
+                        .and_then(|t| self.read().task(t).and_then(|t| t.head()));
+                    return match task {
+                        Some(head) => self.context(&mut stream, head, false),
+                        None => http::not_found(&mut stream),
+                    };
                 }
                 match path.strip_prefix("/versions/").and_then(|t| t.parse().ok()) {
                     Some(task) => {
@@ -582,8 +592,8 @@ impl<S: Source> Face<S> {
     }
 
     /// The context ending at `head`, root first, with the bytes its entries
-    /// name as text.
-    fn context(&self, stream: &mut impl Write, head: EntryId) -> io::Result<()> {
+    /// name as text; stored by the browser forever if `forever`.
+    fn context(&self, stream: &mut impl Write, head: EntryId, forever: bool) -> io::Result<()> {
         let text = |id: ValueId| {
             self.source
                 .value(id)
@@ -631,7 +641,7 @@ impl<S: Source> Face<S> {
             return http::not_found(stream);
         }
         let body = serde_json::to_vec(&chain).expect("a JSON value serialises");
-        http::respond(stream, "application/json", &body, true)
+        http::respond(stream, "application/json", &body, forever)
     }
 }
 

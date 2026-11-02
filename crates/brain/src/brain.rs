@@ -112,11 +112,19 @@ struct Link {
     unsaid: Option<Reach>,
 }
 
+/// The face a brain serves.
+pub struct Face {
+    /// Handed the state after each change.
+    pub folds: Sender<Folded>,
+    /// Where it is served, as this machine reaches it: what agents read
+    /// others' work through.
+    pub address: String,
+}
+
 /// One brain: the decider of everything its replicas say.
 pub struct Brain {
     decider: schema::Brain<Store>,
-    /// The face, handed the state after each change.
-    face: Sender<Folded>,
+    face: Face,
     client: Arc<Client>,
     events: Sender<Event>,
     inbox: Receiver<Event>,
@@ -236,7 +244,7 @@ impl Brain {
             local,
             roles,
         }: Opening,
-        face: Sender<Folded>,
+        face: Face,
         client: Client,
         models: roles::Models,
         Inbox { events, inbox }: Inbox,
@@ -666,6 +674,7 @@ impl Brain {
                 harness_provider::IDENTITY,
                 task.tuning.model(role),
                 &prompt,
+                &self.face.address,
                 &refs,
                 &workdir,
             )
@@ -1613,7 +1622,7 @@ and you cannot finish until it has.",
     fn publish(&mut self) {
         let state = self.state().clone();
         let as_of = self.decider.head();
-        let _ = self.face.send(Folded {
+        let _ = self.face.folds.send(Folded {
             state: state.clone(),
             as_of,
             standing: self.decider.standings().clone(),
