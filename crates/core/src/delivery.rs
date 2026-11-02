@@ -15,9 +15,10 @@ use crate::id::{DeliveryId, TaskId, ValueId};
 /// depend on text that arrived after it began. So Max's words typed while a
 /// designer streams its last response are read before its result goes
 /// anywhere, and words typed during a long tool round arrive straight after
-/// the results. To be heard sooner he interrupts; to talk to a task waiting
-/// on its children he opens an aside, and words it had not read when it
-/// began to wait go to one ([`crate::task::Origin::Aside`]).
+/// the results. A round still running a few seconds after his words arrive
+/// moves to the background, so he is heard while its work goes on
+/// ([`crate::call::CallEvent::Backgrounded`]); to be heard at once he
+/// interrupts.
 ///
 /// What the world does between turns is not a delivery. A watcher's
 /// result, a page event, a change to Max's queue: each is a new version of a

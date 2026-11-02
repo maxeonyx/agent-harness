@@ -258,6 +258,8 @@ pub struct CallRecord {
     pub passed: Vec<Handed>,
     /// Its owner no longer wants it ([`CallEvent::Abandon`]).
     pub abandoned: bool,
+    /// When its round stopped waiting on it ([`CallEvent::Backgrounded`]).
+    pub backgrounded: Option<Mark>,
     pub dispatched: Option<Dispatch>,
     /// When its limb was last asked to stop it, and by when.
     pub stopping: Option<CallStop>,
@@ -450,8 +452,8 @@ pub enum Waiting {
     },
     /// On its round's calls: tools, its children (a spawn), attachments. A
     /// face shows a call whose limb is unreached as waiting on reconnect,
-    /// and a round that waits on running children ([`State::scoped`]) as one
-    /// Max reaches through an aside.
+    /// and Max's words to it move what it waits on to the background
+    /// ([`Todo::Background`]).
     Calls {
         calls: Vec<CallId>,
         since: Timestamp,
@@ -473,12 +475,17 @@ pub enum Waiting {
     },
 }
 
+/// How long, in milliseconds, Max's words wait for a task's round to end
+/// by itself before what it waits on moves to the background
+/// ([`Todo::Background`]): a quick call answers them in its own time.
+pub const HEARD_AFTER: u64 = 3_000;
+
 /// One thing the brain should do now. The whole of its loop: act on each,
 /// commit what happened, repeat. Each item stays in the list until the fact
 /// that does it is committed, so a restart needs nothing else, and an item
 /// an earlier one made moot is refused by the brain rather than checked
 /// again.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Todo {
     /// Connect to this limb, starting its process if need be: it hosts a
     /// live task's tool sets or working directory, or a call to it is
@@ -540,10 +547,11 @@ pub enum Todo {
     /// Every member of this spawn's scope is done: settle it with their
     /// outcomes.
     Settle(CallId),
-    /// The task waits on a scope and has unread words from Max: open an
-    /// aside with them ([`State::unread_words`]), as he would have had he
-    /// sent them once it waited.
-    Aside(TaskId),
+    /// Move these calls of the task's round to the background, in one
+    /// batch ([`CallEvent::Backgrounded`]): every call still outstanding
+    /// [`HEARD_AFTER`] Max's words or one of his acts reached the task, or
+    /// the spawns of a round he interrupted.
+    Background(TaskId, Vec<CallId>),
     /// Every member of an aside's scope but the asides is done, and it has
     /// not been told: deliver [`Prompt::Unblocked`].
     Unblock(TaskId),
@@ -984,8 +992,9 @@ impl State {
     ///
     /// The brain states what it decides and observes, but never Max's words,
     /// his marking a task done, his stop, what his face shows, a task no
-    /// agent's call created (but the aside his unread words open once their
-    /// task waits on a scope, [`Todo::Aside`]), a limb's description or what it found in a
+    /// agent's call created (but, in records from before his words reached
+    /// a waiting task, the aside his unread words opened), a limb's
+    /// description or what it found in a
     /// directory, how a call a limb was sent ended, or a change to a
     /// resource it does not own (its own resources, such as the role files
     /// its `roles` set reads, are its to state). A limb states only its own
@@ -1091,7 +1100,7 @@ impl State {
                 Fact::Call(_, CallEvent::Made(call)) => {
                     matches!(call.caller, Caller::Max { .. })
                 }
-                Fact::Call(_, CallEvent::Abandon) => true,
+                Fact::Call(_, CallEvent::Abandon | CallEvent::Backgrounded) => true,
                 Fact::Focus(_) | Fact::Seen(_) | Fact::Draft(..) => true,
                 Fact::Role(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
                 Fact::Launched(_)
@@ -1148,8 +1157,9 @@ impl State {
         }
         let mark = Mark::of(record);
         let mut task = Task::new(id, created, mark, self)?;
-        // The aside his unread words open takes them all with it: the talk
-        // they were for goes on there. Words the same as its mandate are its
+        // The aside his unread words opened, in records from before they
+        // reached a waiting task, took them all with it: the talk they were
+        // for went on there. Words the same as its mandate are its
         // mandate. Any other aside leaves them to its source, which reads
         // them once its scope closes.
         if let Origin::Aside { from } = created.origin
@@ -1380,9 +1390,6 @@ impl State {
                 if ended {
                     return Err(Rejected::Finished);
                 }
-                if self.scoped(task) {
-                    return Err(Rejected::Scoped);
-                }
             }
             TaskEvent::Drain(Drain::Abandon {
                 by: Abandoner::Owner,
@@ -1398,6 +1405,10 @@ impl State {
                         }
                     }
                     Some(Draining::Failing(_)) => {}
+                    // Its owner stopped the spawn it is a member of.
+                    Some(Draining::ToMax) | None
+                        if matches!(task.scope, Scope::Spawn(spawn)
+                            if self.calls.get(&spawn).is_some_and(|c| c.abandoned)) => {}
                     Some(Draining::ToMax) | None => return Err(Rejected::NotForTask),
                 }
             }
@@ -1848,6 +1859,22 @@ impl State {
                 made.abandoned = true;
                 Ok(())
             }
+            CallEvent::Backgrounded => {
+                let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
+                if made.settled.is_some() {
+                    return Err(Rejected::Finished);
+                }
+                let Caller::Agent { task, .. } = made.call.caller else {
+                    return Err(Rejected::NotForTask);
+                };
+                let mut task = self.tasks.get(&task).ok_or(Rejected::Unknown)?.clone();
+                task.apply(record, self)?;
+                self.put(task);
+                if let Some(made) = self.calls.get_mut(&id) {
+                    made.backgrounded = Some(mark);
+                }
+                Ok(())
+            }
             CallEvent::Settled(outcome) => self.settle(id, outcome, record),
         }
     }
@@ -2007,6 +2034,7 @@ impl State {
                 stopping: None,
                 settled: None,
                 late: None,
+                backgrounded: None,
             },
         );
         Ok(())
@@ -2734,25 +2762,54 @@ impl State {
         }
     }
 
-    /// Whether the task's round waits on a scope with members still running,
-    /// so the move cannot become Max's until it closes: a face offers an
-    /// aside instead of an interrupt.
-    pub fn scoped(&self, task: &Task) -> bool {
-        self.waits_on(task).is_some()
-    }
-
-    /// The spawn whose scope the task's round waits on while members of
-    /// it still run: where an aside of it goes.
-    pub fn waits_on(&self, task: &Task) -> Option<CallId> {
+    /// Whether the task's round waits on a scope with members still running:
+    /// that wait is theirs, not its own loop, so parking it asks for no turn.
+    fn scoped(&self, task: &Task) -> bool {
         match task.phase() {
-            Some(Phase::Acting(step)) => (step.outstanding.iter().copied())
-                .find(|c| self.members(Scope::Spawn(*c)).any(|m| !m.is_done())),
-            _ => None,
+            Some(Phase::Acting(step)) => (step.outstanding.iter())
+                .any(|c| self.members(Scope::Spawn(*c)).any(|m| !m.is_done())),
+            _ => false,
         }
     }
 
-    /// Max's words to the task that no request has read yet, oldest first.
-    pub fn unread_words(&self, task: &Task) -> Vec<(DeliveryId, ValueId)> {
+    /// The calls of the task's round the brain moves to the background now
+    /// ([`Todo::Background`]): all of them once Max's words, or a turn one
+    /// of his acts asks for, have waited [`HEARD_AFTER`] for the round to
+    /// end by itself; while he interrupts it, its spawns, whose scopes his
+    /// interrupt never stops. Never a fresh context's attachments.
+    fn backgrounds(&self, task: &Task, now: Timestamp) -> Vec<CallId> {
+        let Some(Phase::Acting(step)) = task.phase() else {
+            return Vec::new();
+        };
+        if step.response.is_none() {
+            return Vec::new();
+        }
+        match task.drain() {
+            None => {
+                let heard = (task.pending.iter()).any(|p| match p {
+                    Input::Delivery(d) => self.deliveries.get(d).is_some_and(|d| {
+                        matches!(d.by, Author::Max)
+                            && now >= crate::cancel::deadline(d.at.at, HEARD_AFTER)
+                    }),
+                    _ => false,
+                });
+                match heard {
+                    true => step.outstanding.clone(),
+                    false => Vec::new(),
+                }
+            }
+            Some(Draining::ToMax) => (step.outstanding.iter())
+                .filter(|c| self.open.scopes.contains_key(&Scope::Spawn(**c)))
+                .copied()
+                .collect(),
+            Some(_) => Vec::new(),
+        }
+    }
+
+    /// Max's words to the task that no request has read yet, oldest first:
+    /// what an aside the brain opened for them took with it, in records
+    /// from before his words reached a waiting task directly.
+    fn unread_words(&self, task: &Task) -> Vec<(DeliveryId, ValueId)> {
         (task.pending.iter())
             .filter_map(|p| match p {
                 Input::Delivery(id) => self.deliveries.get(id),
@@ -2765,9 +2822,10 @@ impl State {
             .collect()
     }
 
-    /// Whether `created` is the aside Max's unread words to a task open
-    /// once it waits on a scope: his, with the first of them as its
-    /// mandate, which the brain states for him ([`Todo::Aside`]).
+    /// Whether `created` is the aside Max's unread words to a task opened
+    /// once it waited on a scope: his, with the first of them as its
+    /// mandate, which the brain stated for him in records from before his
+    /// words reached a waiting task directly ([`Todo::Background`]).
     fn carries_words(&self, created: &Created) -> bool {
         let Origin::Aside { from } = created.origin else {
             return false;
@@ -2797,8 +2855,10 @@ impl State {
     /// task is acting on it.
     fn acting_on(&self, id: CallId, call: &Call) -> bool {
         match call.caller {
+            // Its round's, or moved out of it to the background.
             Caller::Agent { task, .. } => self.tasks.get(&task).is_some_and(|t| {
-                matches!(t.phase(), Some(Phase::Acting(step)) if step.outstanding.contains(&id))
+                t.background.contains(&id)
+                    || matches!(t.phase(), Some(Phase::Acting(step)) if step.outstanding.contains(&id))
             }),
             _ => true,
         }
@@ -2982,8 +3042,9 @@ impl State {
                 }
                 _ => {}
             }
-            if task.drain().is_none() && self.scoped(task) && !self.unread_words(task).is_empty() {
-                todo.push(Todo::Aside(task.id));
+            let backgrounds = self.backgrounds(task, now);
+            if !backgrounds.is_empty() {
+                todo.push(Todo::Background(task.id, backgrounds));
             }
             if let Some(Draining::Abandoning(s)) = task.drain()
                 && !s.hard
@@ -3016,7 +3077,8 @@ impl State {
                     .call_owner(*id)
                     .and_then(|o| self.tasks.get(&o))
                     .and_then(Task::drain);
-                let stopping = ends(owner);
+                // Its owner is stopping, or stopped it ([`CallEvent::Abandon`]).
+                let stopping = ends(owner) || record.abandoned;
                 let live: Vec<&Task> = self
                     .members(Scope::Spawn(*id))
                     .filter(|m| !m.is_done())

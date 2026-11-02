@@ -60,9 +60,7 @@
 //!   between phases of its work without losing itself and nothing is
 //!   deleted; a resume starts on a finished task's last entry; Max moving it
 //!   back puts it at an entry it has been at and restores what the context
-//!   embodied there; an aside is Max's fork of a task waiting on
-//!   its children, a member of the scope it waits on, so its result reaches
-//!   the task with theirs. A request's head is computed from its base
+//!   embodied there. A request's head is computed from its base
 //!   and its messages, so it cannot claim a context its task does not have.
 //!   Nothing is re-rendered, so nothing drifts when the harness changes its
 //!   own code, and the entry id is the cache key.
@@ -70,7 +68,8 @@
 //!   children is acting on one outstanding call; the scope closes when the
 //!   call settles, which it can only do once every member is done;
 //!   background work is a call its owner watches and cannot finish while it
-//!   runs. Every call has one owner ([`call::Owner`]); an agent hands a
+//!   runs, and a call of a round, a spawn included, becomes background work
+//!   when Max's words or his interrupt reach the waiting agent. Every call has one owner ([`call::Owner`]); an agent hands a
 //!   running background call up a level only by saying so, and what reaches
 //!   Max is his to stop. Stopping is one protocol at every level, from a task down to a
 //!   command's processes and the brain itself ([`cancel`]): a stop carries a
@@ -280,6 +279,7 @@
 //!   Dispatched -->|"a call on a machine's limb is stopped:<br/>Todo::Interrupt, Brain::interrupt"| Stopping
 //!   Dispatched -->|"a call on a machine's limb is stopped, its limb not connected:<br/>Todo::Interrupt, Unknown"| Settled
 //!   Dispatched -->|"it ran: a limb, Voice::settle,<br/>or the brain, spawn, read, settle_scope"| Settled
+//!   Dispatched -.->|"Max wrote while its round waited:<br/>Todo::Background, CallEvent::Backgrounded;<br/>its tool use is answered, it runs on"| Dispatched
 //!   Dispatched -.->|"Max's read of the brain an earlier brain was running:<br/>run again, Todo::Dispatch"| Dispatched
 //!   Stopping -->|"the limb settles it:<br/>Voice::settle, Interrupted or the outcome it reached"| Settled
 //!   Settled -.->|"a second Settled, only after Unknown"| Late["the real outcome"]
@@ -380,14 +380,14 @@
 //! - A limb may state only its own description, what it found in its own
 //!   directories, how its own dispatched calls ended and how its own
 //!   resources changed.
-//! - Talking to a parent waiting on its children: an aside
-//!   ([`task::Origin::Aside`]), the user-facing member of the scope it
-//!   waits on, with background scopes as the other path. An interrupt
-//!   meanwhile is refused ([`fact::Rejected::Scoped`],
-//!   [`state::State::scoped`]) so the face can offer the aside; under
-//!   background scopes it would not arise. Max wants background spawns
-//!   beside blocking ones (`docs/vision.md`, structured concurrency);
-//!   whether this stays for blocking ones is open.
+//! - Talking to a parent waiting on its children: Max's words reach it.
+//!   A grace after they arrive, what its round still waits on moves to the
+//!   background ([`call::CallEvent::Backgrounded`]): its tool uses are
+//!   answered with each call's label, the work runs on, and each result
+//!   comes later as a message that wakes it. His interrupt moves a spawn
+//!   to the background the same way, so it never stops a scope. Whether
+//!   the agent needs a `join` tool to wait on that work again, or a way
+//!   to watch work it does not own, is open.
 //! - An agent needing Max faces him: a user-facing task ends its turn
 //!   with what it needs in its message ([`state::Waiting::Max`]); an
 //!   autonomous one tells its owner, which faces him or carries it up.

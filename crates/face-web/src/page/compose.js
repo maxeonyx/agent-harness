@@ -1,7 +1,7 @@
 import { $, el, fail, icon, ICONS, kTokens, panel, parse } from "./base.js";
 import { act, can, digest, tab } from "./tab.js";
 import { byId, isDone, view } from "./map.js";
-import { aside, NEW, resume } from "./card.js";
+import { NEW, resume } from "./card.js";
 import { hear, renderLog, unmovable } from "./log.js";
 import { startNew } from "./newchat.js";
 
@@ -519,8 +519,8 @@ function autosize() {
 const fade = (field) => field.classList.toggle("scrolled", field.scrollTop > 0);
 
 // Sending what is staged: to a task working or between turns, the draft's
-// Send; to a task waiting on agents it started, an aside that talks now;
-// to a finished chat, the chat continued.
+// Send, which reaches a task waiting on its calls by moving them to the
+// background; to a finished chat, the chat continued.
 async function submit() {
   if (!box) return;
   const key = box.dataset.key, t = byId[key];
@@ -529,7 +529,7 @@ async function submit() {
   const { text, files } = split(blocks);
   if (!t) return startNew(text, files);
   say("");
-  const continues = isDone(t) || t.scoped;
+  const continues = isDone(t);
   if (continues && !text.trim()) return say("Write something to go with what is attached", true);
   let draft = takeWords(key);
   // Words to a task Max paused carry it on.
@@ -537,7 +537,7 @@ async function submit() {
   const discard = [...(draft ? [{ Draft: [draft, "Discarded"] }] : []), ...release];
   // A new task whose mandate is these words; the draft goes with them.
   if (continues) {
-    const why = isDone(t) ? await resume(t, text, files, discard) : await aside(t, text, files, discard);
+    const why = await resume(t, text, files, discard);
     if (why) { returnWords(key, draft, blocks); return say(`Not sent: ${why}`, true); }
     local.delete(draft);
     return;

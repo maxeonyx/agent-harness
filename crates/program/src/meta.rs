@@ -215,7 +215,7 @@ and returns at once: the agent that started you gets its result with yours.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "call": { "type": "string", "description": "The background call's name." }
+                "call": { "type": "string", "description": "The background call's name, or its label (`call-…`)." }
             },
             "required": ["call"]
         }
@@ -226,7 +226,7 @@ and returns at once: the agent that started you gets its result with yours.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "call": { "type": "string", "description": "The background call's name." },
+                "call": { "type": "string", "description": "The background call's name, or its label (`call-…`)." },
                 "why": { "type": "string", "description": "What it is for, and what its new owner should do with it." }
             },
             "required": ["call", "why"]
@@ -470,12 +470,15 @@ pub fn owned(state: &State, owner: &Task, input: &[u8]) -> Result<(CallId, Strin
     }
 }
 
-/// The newest of `owner`'s running background calls named `name`.
+/// The newest of `owner`'s running background calls named `name`, or the
+/// one whose label it is (`call-…`, as a call moved to the background is
+/// named).
 fn named(state: &State, owner: &Task, name: &str) -> Option<CallId> {
     owner.background.iter().rev().copied().find(|c| {
-        state.call(*c).is_some_and(
-            |r| matches!(&r.call.caller, Caller::Background { name: n, .. } if n == name),
-        )
+        crate::render::call_label(*c) == name
+            || state.call(*c).is_some_and(
+                |r| matches!(&r.call.caller, Caller::Background { name: n, .. } if n == name),
+            )
     })
 }
 

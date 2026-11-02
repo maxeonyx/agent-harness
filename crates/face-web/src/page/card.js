@@ -261,9 +261,8 @@ function renderControls(t) {
 }
 
 // A task Max starts from what he wrote: its mandate his words, what he
-// attached delivered with them. A new chat, a finished chat continued, or
-// an aside: a fork of a task waiting on agents it started, to talk with
-// while they work, as one more of them. What the record creates is named
+// attached delivered with them: a new chat, or a finished chat continued.
+// What the record creates is named
 // by its time and the fact that creates it; `after` rides along.
 export async function start(h, text, files, after = []) {
   const mandate = digest(text), words = files.length ? JSON.stringify(files.map((a) => a.block)) : null;
@@ -281,6 +280,5 @@ export async function start(h, text, files, after = []) {
   if (!why) { pendingOpen = { id }; stay = true; }
   return why;
 }
-export const aside = (t, text, files, after) => start({ name: `${t.name}-aside`, scope: { Spawn: t.scoped }, origin: { Aside: { from: t.id } } }, text, files, after);
 export const resume = (t, text, files, after) => start({ name: t.name, scope: "Max", origin: { Resume: { from: t.id } } }, text, files, after);
 
