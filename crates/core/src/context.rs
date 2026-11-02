@@ -313,6 +313,10 @@ pub enum Note {
     /// ([`crate::task::Input::Passed`]): whose it was, why, and that it is
     /// the task's to stop or pass on now.
     Passed { call: CallId },
+    /// The answer to a tool use whose call moved to the background
+    /// ([`crate::call::CallEvent::Backgrounded`]): its label, and that its
+    /// result comes as a message ([`Rendered::Call`]) when it settles.
+    Backgrounded { call: CallId },
     /// Things this context embodies have changed since. `told` were only
     /// announced ("changed after you read it"), so the context still embodies
     /// the old versions and the next request announces only what moves

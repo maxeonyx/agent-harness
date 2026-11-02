@@ -117,7 +117,9 @@ pub enum Caller {
     Agent { task: TaskId, tool_use: ToolUseId },
     /// Background work a task started with its own call `from` to a meta
     /// tool, under `name`: whoever owns it ([`Owner`]) cannot finish while
-    /// it runs, and its settlement wakes them.
+    /// it runs, and its settlement wakes them. A call of a round becomes
+    /// background work without changing its caller
+    /// ([`CallEvent::Backgrounded`]).
     Background {
         task: TaskId,
         from: CallId,
@@ -191,6 +193,28 @@ pub enum CallEvent {
     /// the brain's grace for a call. Stated for an agent that stops its own
     /// background work, or by Max, for any call.
     Abandon,
+    /// Its round no longer waits on it: it runs on as its owner's background
+    /// work ([`crate::task::Task::background`]), and its tool use is
+    /// answered now with the call's label, so the agent can stop or pass
+    /// it. Its whole result comes later, as background work's does: a
+    /// message that wakes the agent.
+    ///
+    /// Stated by the brain for every call of a task's round still
+    /// outstanding a grace after Max's words, or a turn one of his acts asks
+    /// for, reach it ([`crate::state::Todo::Background`]), so he is heard
+    /// while the work goes on; and for a spawn of a round he interrupts, so
+    /// his interrupt never stops a scope. Or by Max, for one call he moves
+    /// to the background himself. Never for a fresh context's attachments.
+    ///
+    /// **Concept.** A blocking call blocks the agent, never Max. The
+    /// provider needs every tool use answered before anything new is said,
+    /// so this is the one way his words reach a model that is waiting:
+    /// answer what it waits on now, and keep the work.
+    ///
+    /// **Vision.** "I desperately need the ability to move stuff to the
+    /// background"; "if I send a message, I think it should auto background
+    /// anything the agent is waiting on" (2 Nov).
+    Backgrounded,
     /// How it ended, stated by the limb that ran it (or by the brain, for a
     /// call that never reached one). A second settlement is accepted only
     /// after [`Outcome::Unknown`]: the real outcome of a remote command that
@@ -206,7 +230,8 @@ impl CallEvent {
             CallEvent::Dispatched
             | CallEvent::Stopping { .. }
             | CallEvent::Passed { .. }
-            | CallEvent::Abandon => {}
+            | CallEvent::Abandon
+            | CallEvent::Backgrounded => {}
             CallEvent::Settled(outcome) => outcome.values(out),
         }
     }

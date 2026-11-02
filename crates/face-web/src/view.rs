@@ -15,7 +15,7 @@ use harness_core::model_call::{Ending, ModelCallEvent, Window};
 use harness_core::role::{Effort, Role};
 use harness_core::state::{Ended, Hold, State, Waiting};
 use harness_core::task::{
-    Drain, Draining, Input, Mode, Move, Onto, Origin, Outcome, Pause, Phase, Scope, Task, TaskEvent,
+    Drain, Draining, Input, Mode, Move, Onto, Origin, Outcome, Pause, Scope, Task, TaskEvent,
 };
 use harness_face_tab::{DraftRow, FaceKey, FaceRow};
 use harness_provider::Model;
@@ -316,16 +316,6 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         }
         None => Value::Null,
     };
-    // The spawn whose scope Max can open an aside in: the one its round
-    // waits on while members of it run.
-    let scoped = match t.phase() {
-        Some(Phase::Acting(step)) if state.scoped(t) => step
-            .outstanding
-            .iter()
-            .find(|c| state.members(Scope::Spawn(**c)).any(|m| !m.is_done()))
-            .map(|c| c.to_string()),
-        _ => None,
-    };
     json!({
         "id": t.id.to_string(),
         "name": t.name,
@@ -363,7 +353,6 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
             },
             "by": by.to_string(),
         })),
-        "scoped": scoped,
         // Whether its abandon is past its deadline, or had none: stopped hard.
         "stop": match t.drain() {
             Some(Draining::Abandoning(s)) => json!({"hard": s.hard}),
@@ -682,6 +671,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                     format!("{} passed to {to}: {why}", call_name(*id))
                 }
                 E::Abandon => format!("{} abandoned", call_name(*id)),
+                E::Backgrounded => format!("{} moved to the background", call_name(*id)),
                 E::Settled(o) => format!("{} {}", call_name(*id), outcome(o)),
             }
         }

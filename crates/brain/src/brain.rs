@@ -367,7 +367,12 @@ impl Brain {
             Todo::Tidy(task) => self.prompt(task, Prompt::Tidy),
             Todo::Expire(task) => self.fact(Fact::Task(task, TaskEvent::Expired)),
             Todo::Settle(call) => self.settle_scope(call),
-            Todo::Aside(task) => self.aside(task),
+            Todo::Background(_, calls) => self.append(Batch {
+                values: Vec::new(),
+                facts: (calls.into_iter())
+                    .map(|call| Fact::Call(call, CallEvent::Backgrounded))
+                    .collect(),
+            }),
             Todo::Linger(task) => self.prompt(task, Prompt::Lingering),
             Todo::Park(task) => self.prompt(task, Prompt::Park),
             Todo::Resume(task) => self.prompt(task, Prompt::Resume),
@@ -378,34 +383,6 @@ impl Brain {
                 }
             }
         }
-    }
-
-    /// Open Max's aside for his unread words to a task that waits on a
-    /// scope: the first is its mandate, the rest go with it.
-    fn aside(&mut self, from: TaskId) {
-        let state = self.state();
-        let task = state.task(from).expect("a task due an aside");
-        let (Some(call), Some((_, text))) = (
-            state.waits_on(task),
-            state.unread_words(task).first().copied(),
-        ) else {
-            return;
-        };
-        let created = Created {
-            name: format!("{}-aside", task.name),
-            by: None,
-            scope: Scope::Spawn(call),
-            origin: Origin::Aside { from },
-            mode: Mode::UserFacing,
-            mandate: Mandate {
-                text,
-                brief: None,
-                quotes: Vec::new(),
-            },
-            tuning: Default::default(),
-        };
-        let id = TaskId(self.decider.next().event(0));
-        self.fact(Fact::Task(id, TaskEvent::Created(Box::new(created))));
     }
 
     /// Ask a task for a turn.
@@ -1480,7 +1457,7 @@ and you cannot finish until it has.",
     fn cancelled(&self, by: Abandoner, report: Option<EntryId>) -> String {
         let by = match by {
             Abandoner::Max => "Abandoned by Max",
-            Abandoner::Owner => "Abandoned, because you are being abandoned",
+            Abandoner::Owner => "Abandoned, because you stopped it or are being abandoned",
         };
         match report {
             Some(entry) => format!("{by}. Its report:\n\n{}", self.visible(entry)),

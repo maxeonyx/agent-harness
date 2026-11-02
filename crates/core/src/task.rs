@@ -109,8 +109,10 @@ pub struct Task {
     /// that [wakes](Input::wakes). They are for the task, not its context, so
     /// they survive a new root and ride into a resume.
     pub pending: Vec<Input>,
-    /// Calls it started in the background that have not settled. It cannot
-    /// finish while one runs, and each one's settlement wakes it.
+    /// Calls it owns that no round waits on and that have not settled:
+    /// started with `background`, moved out of its round
+    /// ([`CallEvent::Backgrounded`]), or passed to it. It cannot finish
+    /// while one runs, and each one's settlement wakes it.
     pub background: Vec<CallId>,
     /// Max's actions in its chat that have not settled. Each settlement
     /// rides into its next request without waking it.
@@ -476,11 +478,10 @@ pub enum Origin {
     /// the task waits on, as the one member Max talks to: it is told when
     /// every other member is done ([`Prompt::Unblocked`]), it is done when
     /// he marks it done, and its result reaches the task with theirs, so the
-    /// task carries on with everything, the talk included. Max's words the
-    /// task had not read when it began to wait open one, with the first as
-    /// its mandate, as he sent it, and go to it
-    /// ([`State::unread_words`], stated by the brain for him); an aside he
-    /// opens himself leaves them to the task.
+    /// task carries on with everything, the talk included. Nothing opens
+    /// one now: Max's words reach a waiting task itself
+    /// ([`CallEvent::Backgrounded`]). Records from before hold asides, some
+    /// opened by the brain with his unread words.
     Aside { from: TaskId },
 }
 
@@ -581,7 +582,9 @@ pub enum Input {
     /// A settled call of the last round. The next request must render every
     /// one, since each tool use needs its result first.
     Result(CallId),
-    /// A background call the task started has settled. Wakes it.
+    /// A call the task owns that no round waits on has settled: background
+    /// work, or a call moved out of its round ([`CallEvent::Backgrounded`]).
+    /// Wakes it.
     Background(CallId),
     /// The real outcome of a call first settled as unknown. Wakes it.
     Late(CallId),
@@ -612,6 +615,7 @@ impl Input {
             ) => a == b,
             (Input::Delivery(a), Rendered::Delivery(b)) => a == b,
             (Input::Passed(a), Rendered::Note(Note::Passed { call: b })) => a == b,
+            (Input::Result(a), Rendered::Note(Note::Backgrounded { call: b })) => a == b,
             _ => false,
         }
     }
@@ -631,11 +635,9 @@ pub struct Step {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Drain {
     /// Max interrupted: the move becomes his, whatever the mode. Its round's
-    /// calls are stopped; its background work runs on. It never passes
-    /// through a spawn call (that would stop the scope), so it is refused
-    /// while the task's round waits on a scope with members still running
-    /// ([`Rejected::Scoped`], and [`State::scoped`] beforehand); to talk to
-    /// it then, Max opens an aside.
+    /// calls are stopped, except a spawn, which moves to the background
+    /// ([`CallEvent::Backgrounded`]) so its scope runs on; its background
+    /// work runs on.
     ///
     /// It names the turn he interrupts by one of its requests, the one he
     /// was watching: an interrupt arriving once that turn has ended is
@@ -1157,7 +1159,7 @@ impl Task {
     /// Whether it is in the middle of its own loop, so parking it costs a
     /// turn: a request in flight, a round of calls running, or results to
     /// answer. A round waiting only on running members is not its own work
-    /// ([`State::scoped`] says so; the caller checks it).
+    /// (the state checks that).
     pub(crate) fn mid_loop(&self) -> bool {
         match self.phase() {
             Some(Phase::Thinking(_) | Phase::Acting(_)) => true,
@@ -1589,6 +1591,29 @@ impl Task {
                     self.pending.push(Input::Passed(id));
                 } else {
                     return Err(Rejected::NotForTask);
+                }
+                Ok(())
+            }
+            CallEvent::Backgrounded => {
+                let live = self.live_mut()?;
+                if matches!(
+                    live.drain,
+                    Some(Draining::Abandoning(_) | Draining::Failing(_))
+                ) {
+                    return Err(Rejected::Draining);
+                }
+                let Phase::Acting(step) = &mut live.phase else {
+                    return Err(Rejected::NotForTask);
+                };
+                let i = (step.outstanding.iter().position(|c| *c == id))
+                    .filter(|_| step.response.is_some())
+                    .ok_or(Rejected::NotForTask)?;
+                step.outstanding.remove(i);
+                let done = step.outstanding.is_empty();
+                self.background.push(id);
+                self.pending.push(Input::Result(id));
+                if done {
+                    self.drained(at);
                 }
                 Ok(())
             }

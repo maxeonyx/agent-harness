@@ -11,6 +11,9 @@
 //!                         brain's machine (`-` for a role with none), with
 //!                         TEXT as its mandate
 //! act PORT say CHAT TEXT  Send TEXT to the chat CHAT, as its next words
+//! act PORT interrupt CHAT TURN
+//!                         Interrupt the chat CHAT in the turn of request
+//!                         TURN (a task's `turn` in the brain's `/view`)
 //! act PORT back CHAT ENTRY
 //!                         Move the chat CHAT back to ENTRY, where it has been
 //! ```
@@ -31,7 +34,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: act PORT done CHAT | act PORT abandon CHAT MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT | act PORT say CHAT TEXT | act PORT back CHAT ENTRY"
+            "usage: act PORT done CHAT | act PORT abandon CHAT MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT | act PORT say CHAT TEXT | act PORT interrupt CHAT TURN | act PORT back CHAT ENTRY"
         );
         exit(2)
     };
@@ -74,6 +77,20 @@ fn main() {
                 Duration::from_millis(ms.parse().unwrap_or_else(|_| usage())),
             ),
             [stop, call] if stop == "stop" => tab.stop(call.parse().unwrap_or_else(|_| usage())),
+            [interrupt, chat, turn] if interrupt == "interrupt" => {
+                let (Ok(chat), Ok(turn)) = (chat.parse(), turn.parse()) else {
+                    usage()
+                };
+                tab.say(harness_core::fact::Batch {
+                    values: Vec::new(),
+                    facts: vec![harness_core::fact::Fact::Task(
+                        chat,
+                        harness_core::task::TaskEvent::Drain(harness_core::task::Drain::ToMax {
+                            turn,
+                        }),
+                    )],
+                })
+            }
             _ => usage(),
         }
     };

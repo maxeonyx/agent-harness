@@ -332,10 +332,6 @@ pub enum Rejected {
     /// would never move again: mark it done ([`crate::delivery::Prompt::Done`]),
     /// or say something with the change.
     Idle,
-    /// An interrupt to a task whose round waits on a scope with members
-    /// still running: the move cannot be Max's until the scope closes, so
-    /// his face offers an aside instead ([`crate::state::State::scoped`] says so first).
-    Scoped,
 }
 
 impl std::fmt::Display for Rejected {
@@ -388,7 +384,6 @@ impl std::fmt::Display for Rejected {
             Rejected::Unheard => "quotes words Max did not say to the quoting task",
             Rejected::Author => "its author may not state it",
             Rejected::Minted => "creates something under an id its event did not mint",
-            Rejected::Scoped => "the task is waiting on its children; talk to it through an aside",
             Rejected::Idle => {
                 "the task would wait on nothing; mark it done, or say something with the change"
             }

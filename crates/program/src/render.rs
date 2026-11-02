@@ -258,6 +258,12 @@ pub fn turn(
     }
     for pending in &task.pending {
         match *pending {
+            Input::Result(call) if state.call(call).is_some_and(|c| c.backgrounded.is_some()) => {
+                turn.push(
+                    Rendered::Note(Note::Backgrounded { call }),
+                    vec![backgrounded(state, call)],
+                );
+            }
             Input::Result(call) => {
                 turn.push(
                     Rendered::Call(call),
@@ -462,7 +468,8 @@ goes back to the context you were forked from with their results. He wrote (`{}`
     };
     match framing {
         // An aside's mandate may be one of his messages as he sent it, with
-        // what he attached ([`State::unread_words`]).
+        // what he attached, in records from before his words reached a
+        // waiting task.
         Some(framing) if matches!(task.origin, Origin::Aside { .. }) => {
             let mut said = vec![text(&framing)];
             said.extend(words_of(values, task.mandate.text));
@@ -530,10 +537,10 @@ carrying on."
     let running: Vec<String> = task
         .background
         .iter()
-        .filter_map(|c| state.call(*c))
-        .map(|c| match &c.call.caller {
+        .filter_map(|c| Some((*c, state.call(*c)?)))
+        .map(|(id, c)| match &c.call.caller {
             Caller::Background { name, .. } => format!("`{name}` (`{}`)", c.call.tool),
-            _ => format!("`{}`", c.call.tool),
+            _ => format!("`{}` (`{}`)", call_label(id), c.call.tool),
         })
         .collect();
     if !running.is_empty() {
@@ -793,6 +800,28 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
     .to_string()
 }
 
+/// The answer to a tool use whose call Max's words moved to the
+/// background: it runs on, and its result comes later as a message.
+fn backgrounded(state: &State, call: CallId) -> String {
+    let record = state
+        .call(call)
+        .expect("a backgrounded call is a known call");
+    let Caller::Agent { tool_use, .. } = &record.call.caller else {
+        unreachable!("only a round's call is backgrounded")
+    };
+    let said = format!(
+        "[harness] Max wrote while this ran. It keeps running in the background as `{}`. \
+Its result comes to you as a message when it settles.",
+        call_label(call)
+    );
+    json!({
+        "type": "tool_result",
+        "tool_use_id": tool_use.0,
+        "content": [{ "type": "text", "text": said }],
+    })
+    .to_string()
+}
+
 /// A tool result's content, and whether it is an error.
 fn outcome_content(values: Values, outcome: &Outcome) -> (Value, bool) {
     let blocks = |id: ValueId| serde_json::from_slice::<Value>(&values(id)).unwrap_or(json!([]));
@@ -834,7 +863,8 @@ fn outcome_content(values: Values, outcome: &Outcome) -> (Value, bool) {
     }
 }
 
-/// A call outside the round that has settled: the late outcome of a call
+/// A call outside the round that has settled: background work, a call
+/// moved out of its round when Max wrote, the late outcome of a call
 /// earlier said to be unknown, or something Max did in the chat.
 fn activity(state: &State, values: Values, call: CallId) -> String {
     let Some(record) = state.call(call) else {
@@ -857,6 +887,11 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
             record.call.tool,
             call_label(call)
         ),
+        Caller::Agent { .. } if record.backgrounded.is_some() && record.late.is_none() => format!(
+            "Your `{}` call (`{}`), which moved to the background when Max wrote, has settled",
+            record.call.tool,
+            call_label(call)
+        ),
         _ => format!(
             "Your earlier `{}` call, whose outcome was unknown, did finish",
             record.call.tool
@@ -872,8 +907,8 @@ fn passed(state: &State, task: &Task, call: CallId) -> String {
         return text("[harness] Background work was passed to you.");
     };
     let name = match &record.call.caller {
-        Caller::Background { name, .. } => name.as_str(),
-        _ => "",
+        Caller::Background { name, .. } => name.clone(),
+        _ => call_label(call),
     };
     let handed = record
         .passed
@@ -934,7 +969,7 @@ after you finish. If there is nothing else to do meanwhile, end your turn to wai
             let by = match by {
                 Abandoner::Max => "Max has abandoned this task: the work is no longer needed",
                 Abandoner::Owner => {
-                    "The agent that started you has been abandoned, so this task is too: the work is no longer needed"
+                    "The agent that started you has stopped this work, or has been abandoned: the work is no longer needed"
                 }
             };
             format!(
