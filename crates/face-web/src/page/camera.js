@@ -4,6 +4,7 @@ import { blobs, drawEdges, drawNodes, hitAt, openAt, placeMarks, refresh } from 
 import { onFrame } from "./blobs.js";
 import { hideTip } from "./hover.js";
 import { closeNode, go, NEW, openId, saved } from "./card.js";
+import { glideCut, glideNote } from "./glidelog.js";
 
 // ─── The camera ────────────────────────────────────────────────────────────
 const map = $("#map"), world = $("#world"), under = $("#under"), grid = $("#grid");
@@ -136,7 +137,10 @@ const lift = (e) => {
     map.classList.remove("grabbing");
     // A touch that dragged is not a tap, so no click comes to forget it.
     if (drag?.panning) caught = false;
-    if (drag?.panning && !drag.card && e.type === "pointerup") coast(drag.trail, e.timeStamp);
+    if (drag?.panning) {
+      const c = drag.card ? { no: "dragged the card" } : e.type === "pointerup" ? coast(drag.trail, e.timeStamp) : { no: "the browser took the touch" };
+      glideNote(e, drag.trail, c);
+    }
     setTimeout(() => { drag = null; }, 0);
   }
   else if (drag) { drag.pinch = null; drag.trail = []; const p = [...pointers.values()][0]; drag.start = p; drag.cam = { ...cam }; }
@@ -401,7 +405,7 @@ function animate(name, T, step, nodes = true, ease = easeOut) {
   anims.get(name)?.done();
   if (document.hidden) { anims.delete(name); step(1); drawNodes(); drawEdges(); applyCamera(); return Promise.resolve(); }
   return new Promise((done) => {
-    anims.set(name, { t0: performance.now(), T: reduced() ? 0 : T, step, done, nodes, ease });
+    anims.set(name, { t0: performance.now(), T, step, done, nodes, ease });
     if (!looping) { looping = true; onFrame(frame); }
   });
 }
@@ -422,34 +426,43 @@ function frame(now) {
 function stop(name) {
   const a = anims.get(name);
   if (!a) return false;
+  if (name === "coast") glideCut();
   anims.delete(name);
   a.done();
   return true;
 }
 // A drag let go goes on at the speed it had over its last 100 ms, unless it
-// held still for the 40 ms before its lift (the rules Chromium's and
-// Android's own flings go by), slowed by drag (the speed decays by e every
-// TAU) and by friction (a steady FRICTION off it), until it stops. Drag
+// held still for the 80 ms before its lift (the rules Chromium's own fling
+// goes by: a touch screen can be that slow to tell of a lift), slowed by
+// drag (the speed decays by e every TAU) and by friction (a steady FRICTION
+// off it), until it stops. It carries on the drag Max made, as the phone's
+// own scrolling does, so it coasts with reduced motion too. Drag
 // carries a fast flick far and friction stops a slow one soon, as a phone's
 // own scrolling does, going a little less far:
 // a flick at 1, 3 and 6 px/ms goes about 170, 1200 and 3600 px, in 0.35,
 // 0.9 and 1.4 s, where Chromium on Android goes 190, 1300 and 4400.
 const TAU = 1500, FRICTION = .0025;  // ms, px/ms²
+// It returns what it made of the trail, for glidelog.js.
 function coast(trail, t) {
   const a = trail[0], b = trail.at(-1);
-  if (!a || a === b || t - b.t > 40 || reduced()) return;
+  if (a === undefined || a === b) return { no: "too few samples" };
+  if (t - b.t > 80) return { no: "held still before the lift" };
   const dt = Math.max(16, b.t - a.t), vx = (b.x - a.x) / dt, vy = (b.y - a.y) / dt;
   const v = Math.hypot(vx, vy);
-  if (v < .1) return;
+  if (v < .1) return { no: "too slow", v };
   // The speed is (v + f) e^(-t/TAU) - f, with f = FRICTION TAU: none at T.
   const f = FRICTION * TAU, T = TAU * Math.log(1 + v / f);
   const along = (t) => TAU * (v + f) * (1 - Math.exp(-t / TAU)) - f * t;
-  const D = along(T), c0 = { ...cam };
-  animate("coast", T, (e) => { cam = { ...cam, x: c0.x + vx / v * D * e, y: c0.y + vy / v * D * e }; }, false, (u) => along(u * T) / D);
+  const D = along(T), c0 = { ...cam }, t0 = performance.now();
+  let frames = 0;
+  const ran = animate("coast", T, (e) => { frames++; cam = { ...cam, x: c0.x + vx / v * D * e, y: c0.y + vy / v * D * e }; }, false, (u) => along(u * T) / D)
+    .then(() => ({ frames, took: performance.now() - t0 }));
+  return { v, D, T, ran };
 }
 // Everything that is moving, where it is going, now.
 document.addEventListener("visibilitychange", () => { if (document.hidden) settle(); });
 function settle() {
+  if (anims.has("coast")) glideCut();
   for (const a of anims.values()) { a.step(1); a.done(); }
   anims.clear();
   drawNodes();
@@ -483,7 +496,7 @@ export function glide(to = null, { T = 240, cardFrom, cardTo, box, strong = fals
     && (!r0 && !r1 || r0 && r1 && Math.abs(r0.w - r1.w) < .5 && Math.abs(r0.h - r1.h) < .5 && Math.abs(r0.x - r1.x) < .5 && Math.abs(r0.y - r1.y) < .5);
   if (still) return Promise.resolve();
   if (b) placeCard(b);
-  return animate("glide", T, (e) => {
+  return animate("glide", reduced() ? 0 : T, (e) => {
     for (const [id, p] of goal) {
       const f = from.get(id) || p;
       shown.set(id, { ...p, x: lerp(f.x, p.x, e), y: lerp(f.y, p.y, e) });
