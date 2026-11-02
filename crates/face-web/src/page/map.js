@@ -312,7 +312,8 @@ export function layout() {
   // The archive: its cards, most recently finished first, on shelves below.
   const cards = parts.filter((p) => p.c.folded).sort((a, b) => b.c.last - a.c.last);
   const room = Math.max(360, innerWidth - 40);
-  let cx = 0, cy = y1 + 80;
+  // Shelved just below the fold of the first framing, which puts the present row two thirds down.
+  let cx = 0, cy = Math.max(y1 + 80, innerHeight / 3 + 40);
   for (const p of cards) {
     if (cx && cx + p.w > room) { cx = 0; cy += CARD_H + 14; }
     positions.set(p.c.root.id, { x: cx, y: cy, w: p.w, h: CARD_H, top: CARD_H / 2, card: true });

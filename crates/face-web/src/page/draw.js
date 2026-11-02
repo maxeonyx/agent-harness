@@ -203,7 +203,7 @@ export function refresh() {
       await moving;
       const changed = await rebuild();
       glide(null, { T: shownBefore ? 420 : 0 });
-      if (changed && framed && !openId) fit(shownBefore);
+      if (changed && framed && !openId) fit(shownBefore, true);
       shownBefore = true;
       render();
     } finally {
