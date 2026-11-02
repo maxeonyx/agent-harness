@@ -50,7 +50,6 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 - **Mandate reminder after a tool round.** The fork-framing spike measured it cheap and effective: a depth-1 fork's uncached input fell from about 600-1,800 tokens to 2-4. Ready to build (listed in `core/src/context.rs`). Forking at the parent's request (`rewind`) measured the smallest prefix at depth 2-3, if deep forks get expensive.
 - **A cache breakpoint for message undo:** "everything up to n-2 messages ago (or something like that)". `program/src/policy.rs::breakpoints` marks root, checkpoint, shared brief and tail only.
 - **Tell the model which model it is:** "I think we do want to tell the model which model it is."
-- **Cache keep-alive** for a context waiting on Max inside the 1-hour window.
 - **Agents search Max's words.** Carrying his words verbatim through compactions stays ("Keep it as it is for now"). Copying them into notes files as well "is kind of redundant a little bit": "potentially allowing agents to search my words in the harness would make more sense" (see "Session data is his" in the [vision](vision.md)). Parked.
 - **Compaction warning wording** compared with his OpenCode fork's ([opencode-fork.md](opencode-fork.md)); check it doesn't warn a context that a compaction started already over the threshold.
 - **`Note::Stale.shown` is always empty** (`program/src/render.rs:307`).
@@ -119,6 +118,7 @@ Where `main` went a way the vision doesn't, as opposed to something not built ye
 
 - **Empty `tool_use` id** becomes an empty string (`brain/src/brain.rs:1033-1037`); the text-block helper is duplicated.
 - **Unmeasured provider questions:** whether a cancelled request is still charged (Max thinks so; each response's 5-hour utilisation can show it); whether the previous assistant turn is charged as a write; TTL behaviour and whether expiry is observable; which tool-array changes keep the prefix ("is it ever possible to change anything about tools _without_ involving the cached prefix"); late system-section changes; whether a smaller model reads a larger model's prefix.
+- **Is the 1-hour cache TTL worth it?** It cost about 19M input-token equivalents extra last week (0.75x on 25.4M long writes); Max's replies alone save ~3.9M of that. Measure the gaps before agents' wakes that aren't Max's replies (spawns, long tool calls) before changing it. A keep-alive was measured and isn't worth building (2 Nov: +$1.72/week at best).
 - **Dictation recognition hints.** The speech endpoint takes `x-config-keyterms` (comma-separated, at most 1024 characters), which could carry project words like "limb" and "brain". Only `linear16` audio returned text.
 - **An image the harness can't decode is sent as is:** a `read` of a `.png` that is a PNG header and random bytes was refused, `400: messages.1.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels`, failing the task (`provider/src/image.rs`).
 - **An image over 10 MB of base64 is still sent as is,** and the API refuses it: `provider/src/image.rs` shrinks by dimensions only.
