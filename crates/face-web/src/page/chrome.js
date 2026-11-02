@@ -1,4 +1,4 @@
-import { $, clock, el, fail, icon } from "./base.js";
+import { $, clock, el, fail, icon, when } from "./base.js";
 import { act, digest } from "./tab.js";
 import { byId, view } from "./map.js";
 import { fit, setNewPoint } from "./camera.js";
@@ -31,12 +31,14 @@ export async function notify(queue) {
 // ─── Usage ─────────────────────────────────────────────────────────────────
 // The gauges are one button: a click asks the provider for a reading, a call
 // Max makes like any other, settled in band. Hovering or focusing them shows
-// each window and how fresh the numbers are.
+// each window and how fresh the numbers are. While the account is limited
+// they read only when it lifts; while the harness is signed out, a link to
+// sign in stands in their place.
 const pct = (f) => f == null ? "?" : `${Math.round(f * 100)}%`;
 const resets = (ms) => {
   if (ms == null) return "";
   const d = new Date(ms);
-  return d.toDateString() === new Date().toDateString() ? `Resets ${clock(ms)}` : `Resets ${d.toLocaleDateString([], { weekday: "short" })} ${clock(ms)}`;
+  return d.toDateString() === new Date().toDateString() ? `Resets ${clock(ms)}` : `Resets ${when(ms)}`;
 };
 const windowName = (n) => ({ five_hour: "5-hour", seven_day: "Weekly", seven_day_opus: "Weekly Opus", seven_day_sonnet: "Weekly Sonnet" })[n] ?? n.replaceAll("_", " ");
 // This tab's click until the view shows the call, and why the brain refused it.
@@ -53,14 +55,15 @@ async function refreshUsage() {
 }
 // Made once, so a focused button keeps its focus, and its card stays open,
 // as the view moves on.
-const gauges = el("button", "gauges"), usageCard = el("div", "pop"), usageAlarms = el("span", "alarms");
+const gauges = el("button", "gauges"), usageCard = el("div", "pop");
 gauges.onclick = refreshUsage;
-$("#usage").append(gauges, usageCard, usageAlarms);
+$("#usage").append(gauges, usageCard);
 export function renderUsage() {
   const u = view.usage, span = $("#usage"), w = u?.windows || {};
   const busy = refreshAsked || u?.refreshing, failed = refreshRefused || u?.failed;
   gauges.replaceChildren();
-  for (const [label, name] of [["5h", "five_hour"], ["7d", "seven_day"]]) {
+  if (view.limited) gauges.append(el("span", "limited", `100% until ${when(view.limited)}`));
+  else for (const [label, name] of [["5h", "five_hour"], ["7d", "seven_day"]]) {
     const f = w[name]?.used;
     const g = el("span", `gauge${f > .8 ? " high" : ""}`);
     const bar = el("i"); const fill = el("b"); fill.style.width = `${Math.round((f || 0) * 100)}%`; bar.append(fill);
@@ -78,20 +81,18 @@ export function renderUsage() {
   usageCard.replaceChildren(table, foot);
   if (failed && !busy) usageCard.append(el("div", "failed", failed));
   span.classList.toggle("busy", !!busy);
-  usageAlarms.replaceChildren();
-  if (view.limited) usageAlarms.append(el("span", "alarm", `Limited until ${clock(view.limited)}, then carries on by itself`));
-  if (view.signedOut) usageAlarms.append(signIn);
+  span.classList.toggle("signed-out", !!view.signedOut);
 }
 // Signing the harness in to claude.ai, when it is not: every task waits
 // until it is. One click on Sign in opens `/login` in a new tab, which
 // begins a sign-in and goes on to claude.ai, and at the same time shows a
 // box here for the code claude.ai shows; pasting it finishes the sign-in.
-const signIn = el("span", "alarm sign-in", "Not signed in to claude.ai, so work waits ");
-const signInLink = el("a", "button", "Sign in");
+const signInLink = el("a", "sign-in", "Signed out · Sign in");
 signInLink.href = "/login";
 signInLink.target = "_blank";
 signInLink.rel = "noopener";
-signIn.append(signInLink);
+signInLink.title = "Not signed in to claude.ai, so work waits";
+$("#usage").append(signInLink);
 const codeBox = el("dialog", "sign-in-box");
 const codeForm = el("form");
 const codeInput = el("input");

@@ -220,9 +220,9 @@
   .chip.done { color: var(--muted); }
   /* The log's end: its blob, drawn by the dock's canvas (`blobs.js`) in a
      box the scroll scales (`log.js`); only the blob takes a tap. */
-  .dock { position: sticky; margin: 0 auto; pointer-events: none; z-index: 2; }
-  .dock .blob { position: absolute; left: 50%; top: 0; border-radius: 50%; pointer-events: auto; cursor: pointer; }
-  .dock > div:not(.blob) { filter: drop-shadow(0 3px 5px rgba(40, 30, 20, calc(.35 * var(--docked, 0)))); }
+  .scroll > .dock { position: sticky; margin: 0 auto; pointer-events: none; z-index: 2; }
+  .scroll > .dock .blob { position: absolute; left: 50%; top: 0; border-radius: 50%; pointer-events: auto; cursor: pointer; }
+  .scroll > .dock > div:not(.blob) { filter: drop-shadow(0 3px 5px rgba(40, 30, 20, calc(.35 * var(--docked, 0)))); }
   .exact-entry { margin: 0 0 1em; }
   .exact-entry .who { font: 600 12px var(--sans); color: var(--muted); }
   .exact-entry.assistant .who { color: var(--maroon); }
