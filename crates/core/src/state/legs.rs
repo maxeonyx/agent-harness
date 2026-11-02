@@ -107,14 +107,19 @@ impl State {
         let Some(legs) = self.legs.get(&task) else {
             return;
         };
-        let joined: Vec<CallId> = (call.renders.iter())
+        let mut joined: Vec<CallId> = Vec::new();
+        let read = (call.renders.iter())
             .filter_map(|span| match span.from {
                 Rendered::Call(c) => Some(c),
                 _ => None,
             })
-            .flat_map(|c| self.reads(c))
-            .filter(|c| !legs.taken.contains(c) && self.joins(*c))
-            .collect();
+            .flat_map(|c| self.reads(c));
+        // Two waits in one response may read the same result.
+        for c in read {
+            if !legs.taken.contains(&c) && !joined.contains(&c) && self.joins(c) {
+                joined.push(c);
+            }
+        }
         if !joined.is_empty() {
             let mut on = vec![Dep::Leg {
                 leg: legs.head,
