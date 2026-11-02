@@ -13,11 +13,13 @@
 // a blob of any size is a scaled copy of every other; below DETAIL css px
 // its icons, letter and dots go, and it is just a blob in its state's
 // colour. The outline keeps its width, so a small stuck blob still shows
-// red. The blobs' state is struct-of-arrays in typed arrays, and nothing is
-// allocated per frame. Only the compaction dots need the CPU: marching
-// squares traces the track, and a second draw puts a dot per quad. A blob
-// off its canvas is neither animated nor drawn, and while a layer shows no
-// blob, nothing runs at all.
+// red. While Max dictates, the microphone ball swells with his voice, its
+// icon is a stop square, and a ring pulses out from it. The blobs' state
+// is struct-of-arrays in typed arrays, and nothing is allocated per
+// frame. Only the compaction dots need the CPU: marching squares traces
+// the track, and a second draw puts a dot per quad. A blob
+// off its canvas is neither animated nor drawn, and while every blob shown
+// is still and its springs at rest, nothing runs at all.
 //
 //   const s = session();               what one session is doing
 //   const blobs = layer(host);         null without WebGL2
@@ -86,25 +88,27 @@ const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
 // role letter, shared by every blob of it. Going from one satellite straight
 // to another, it shows the brain for a moment, so the growth passes through
 // the centre; `jump` goes straight there, for a blob now showing another
-// session. In a still state its blob settles and stops moving, and stops
-// the frames once nothing else moves; while Max dictates, its centre pulses
-// with `voice`, his level from 0 to 1 (null when he is not dictating).
+// session. In a still state its blob settles and stops moving; while Max
+// dictates, `voice` is his level from 0 to 1 (null when he is not
+// dictating), since `heard`.
 export function session(state = "starting") {
-  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", lastPacket: 0, voice: null, stirred: 0,
+  return { state, since: performance.now(), via: 0, pips: 0, letter: "?", lastPacket: 0, voice: null, heard: 0,
     shown(now) { return now < this.via ? "brain" : this.state; },
     set(next, jump = false) {
       if (next === this.state && !jump) return;
       const now = performance.now(), a = satOf(this.shown(now)), b = satOf(next);
       this.via = !jump && a && b && a !== b ? now + 260 : 0;
-      this.state = next; this.since = this.stirred = now;
+      this.state = next; this.since = now;
       wake();
     },
-    hear(level) { this.voice = level; this.stirred = performance.now(); wake(); },
+    hear(level) {
+      if (this.voice === null) this.heard = performance.now();
+      this.voice = level; wake();
+    },
     packet() { this.lastPacket = performance.now(); },
-    // Whether its blob may still be moving.
-    moving(now) { return !STATES[this.state].still || this.voice !== null || now - this.stirred < SETTLE || now - this.lastPacket < DISK_MS; } };
+    // Whether its blob moves even once its springs are at rest.
+    moving(now) { return !STATES[this.state].still || this.voice !== null || now - this.lastPacket < DISK_MS; } };
 }
-const SETTLE = 2000;
 
 // Icons, 24x24, as Path2D. The Claude mark is Anthropic's (via Simple Icons);
 // the gear and microphone are Lucide's (ISC).
@@ -112,6 +116,7 @@ const ICON = {
   model: { fill: true, path: "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z" },
   tools: { fill: false, path: "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0" },
   max: { fill: false, path: "M12 19v3M19 10v2a7 7 0 0 1-14 0v-2M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0z" },
+  stop: { fill: true, path: "M8.5 6.5h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z" },
 };
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -124,7 +129,10 @@ const INST = 44; // floats per blob instance: 11 vec4
 const EDGE = 1.3, LETTER = 1.4, DOT = .05;
 // Below DETAIL css px a blob has no icons, letter or dots: they pop out
 // rather than fade, so none lingers faint.
-const DETAIL = 46;
+const DETAIL = 32;
+// While Max dictates: how much his loudest voice adds to the microphone
+// ball's radius, and how often a ring pulses out from it, in ms.
+const VOICE = .12, RING_MS = 1400;
 // A mark: centre x, y, radius and ring width in world px; fill, then ring,
 // as straight rgba 0-1; and how many dashes its ring has (0: solid).
 export const MARK = 16;
@@ -181,7 +189,7 @@ function edt(grid) {
 }
 // The icons take the first cells; a letter gets its cell when first shown.
 function glyph(ch) {
-  if (!glyphs.size) for (const k of SAT_KEYS) glyphs.set("icon " + k, addCell((g) => {
+  if (!glyphs.size) for (const k of Object.keys(ICON)) glyphs.set("icon " + k, addCell((g) => {
     const ic = ICON[k], path = new Path2D(ic.path);
     g.setTransform(4, 0, 0, 4, 16, 16);
     if (ic.fill) g.fill(path);
@@ -211,8 +219,9 @@ void main() {
 // v0: device x, y, size, device px per css px. v1: centre radius, active
 // ball (0 centre, 1-3 a satellite), letter cell, letter size. v2-v4: the
 // satellites' x, y, r and icon alpha. v5-v7: fill, edge and icon colours,
-// with the model's and gear's turns and nothing. v8: letter colour and
-// alpha. v9-v10: the disks' ages, 0-1, or -1.
+// with the model's and gear's turns and the ring's age, 0-1 (0: no ring,
+// and the microphone, not the stop square). v8: letter colour and alpha.
+// v9-v10: the disks' ages, 0-1, or -1.
 const BLOB_FS = `#version 300 es
 precision highp float;
 in vec2 p;
@@ -237,6 +246,11 @@ vec4 disk(vec4 c, vec3 src, float age, float unit) {
   float e = 1. - pow(1. - age, 3.), d = (length(p - src.xy) - src.z - .34 * e) * unit;
   return over(c, v6.rgb, .14 * pow(1. - age, 1.6) * clamp(.5 - d, 0., 1.));
 }
+vec4 ring(vec4 c, vec3 b, float age, float unit) {
+  if (age <= 0.) return c;
+  float d = (length(p - b.xy) - b.z - .18 * (1. - pow(1. - age, 2.))) * unit;
+  return over(c, v6.rgb, .7 * (1. - age) * clamp(${EDGE} * v0.w + .5 - abs(d), 0., 1.));
+}
 // An icon, 24 units square, centred on its ball and turned by a; the atlas
 // holds it at 4 px a unit with a 4-unit margin, as the distance from its
 // fill or its 2-unit stroke.
@@ -257,13 +271,14 @@ void main() {
   vec4 c = vec4(0.);
   c = disk(c, src, v9.x, unit); c = disk(c, src, v9.y, unit); c = disk(c, src, v9.z, unit); c = disk(c, src, v9.w, unit);
   c = disk(c, src, v10.x, unit); c = disk(c, src, v10.y, unit); c = disk(c, src, v10.z, unit); c = disk(c, src, v10.w, unit);
+  c = ring(c, v4.xyz, v7.w, unit);
 
   c = over(c, v5.rgb, clamp(.5 - fpx, 0., 1.));
   c = over(c, v6.rgb, clamp(${EDGE / 2} * v0.w + .5 - abs(fpx), 0., 1.));
 
   c = icon(c, v2, v5.w, 0., act == 1 ? v7.rgb : v6.rgb, unit);
   c = icon(c, v3, v6.w, 1., act == 2 ? v7.rgb : v6.rgb, unit);
-  c = icon(c, v4, 0., 2., act == 3 ? v7.rgb : v6.rgb, unit);
+  c = icon(c, v4, 0., v7.w > 0. ? 3. : 2., act == 3 ? v7.rgb : v6.rgb, unit);
 
   float k = v1.w / 80.; // the letter is drawn 80 px high in its cell
   float d = sdf(v1.z, (p - vec2(0., v1.x * .05)) / k + CELL / 2.) * k * unit;
@@ -461,10 +476,12 @@ function placeDots(n, count, pitch) {
 const TRACK_PX = 260, TRACK_LEVEL = .05 + 8 * 2 * SPAN / TRACK_PX, TRACK_PITCH = Math.max(.2, 9 * 2 * SPAN / TRACK_PX);
 
 // A spring with a little give, so balls overshoot and settle like liquid;
-// critically damped (26), it settles without overshooting.
-function pull(v, vel, i, goal, dt, damp) {
-  vel[i] += ((goal - v[i]) * 170 - vel[i] * damp) * dt;
+// critically damped (26), it settles without overshooting. Returns whether
+// it is still moving.
+function pull(v, vel, i, goal, dt, damp, stiff = 170) {
+  vel[i] += ((goal - v[i]) * stiff - vel[i] * damp) * dt;
   v[i] += vel[i] * dt;
+  return Math.abs(goal - v[i]) > 1e-3 || Math.abs(vel[i]) > 1e-2;
 }
 
 function program(gl, vs, fs) {
@@ -649,7 +666,7 @@ export function layer(host) {
         if (sessions[i].moving(now)) moving = true;
         const px = a.SIZE[i], size = px * dpr;
         if (x + size < 0 || y + size < 0 || x > W || y > H) continue;
-        drawn = this.blob(i, drawn, now, dt, kc, x, y, size);
+        if (this.blob(i, drawn++, now, dt, kc, x, y, size)) moving = true;
         ndots = this.dots(i, ndots, x, y, size);
       }
       gl.viewport(0, 0, W, H);
@@ -691,13 +708,15 @@ export function layer(host) {
       }
       return moving;
     },
-    // Blob i, animated a step and written as instance `o`; returns the next.
+    // Blob i, animated a step and written as instance `o`; returns whether
+    // its springs or colours are still moving.
     blob(i, o, now, dt, kc, x, y, size) {
       const { R, RV, G, GV, X, Y, COL, SPIN, GEAR, DISK, DISKAT, LASTDISK, SEEN } = a;
       const s = sessions[i], name = s.shown(now), st = STATES[name], t = (now - s.since) / 1000, px = a.SIZE[i];
 
-      // The balls: each radius and gap springs towards the state's.
-      pull(R, RV, 4 * i, st.centre + (s.voice === null ? 0 : .04 + .2 * s.voice), dt, 17);
+      // The balls: each radius and gap springs towards the state's; Max's
+      // voice swells the microphone, on a stiffer spring that keeps up with it.
+      let stirring = pull(R, RV, 4 * i, st.centre, dt, 17);
       const c0 = R[4 * i];
       for (let k = 0; k < 3; k++) {
         let gr = IDLE.r, gg = st.gap ?? IDLE.g;
@@ -708,13 +727,19 @@ export function layer(host) {
           const ph = (t * .9 - k / 3) % 1;
           gr = .2 * Math.sin(Math.PI * ph); gg = .25 + .5 * ph - st.centre - gr;
         }
-        const r = 4 * i + 1 + k, g = 3 * i + k, an = SAT_ANG[k];
-        pull(R, RV, r, gr, dt, 17); pull(G, GV, g, gg, dt, 26);
+        const r = 4 * i + 1 + k, g = 3 * i + k, an = SAT_ANG[k], heard = SAT_KEYS[k] === "max" && s.voice !== null;
+        if (heard) gr += VOICE * s.voice;
+        if (heard ? pull(R, RV, r, gr, dt, 28, 400) : pull(R, RV, r, gr, dt, 17)) stirring = true;
+        if (pull(G, GV, g, gg, dt, 26)) stirring = true;
         if (R[r] < 0) R[r] = 0;
         const d = c0 + R[r] + G[g] + (st.still ? 0 : WOB * Math.sin(now / 700 + an * 3));
         X[g] = Math.cos(an) * d; Y[g] = Math.sin(an) * d;
       }
-      for (let k = 0; k < 9; k++) COL[9 * i + k] += (st.col[k / 3 | 0][k % 3] - COL[9 * i + k]) * kc;
+      for (let k = 0; k < 9; k++) {
+        const off = st.col[k / 3 | 0][k % 3] - COL[9 * i + k];
+        COL[9 * i + k] += off * kc;
+        if (Math.abs(off) > .5) stirring = true;
+      }
       if (name === "streaming") SPIN[i] += dt * 1.4;
       if (name === "tools" || name === "listening" || name === "children") {
         const period = name === "tools" ? .6 : 2, n = Math.floor(t / period), f = Math.min(1, (t / period - n) * 3);
@@ -736,7 +761,8 @@ export function layer(host) {
         inst[b + 3] = show * (active === k + 1 ? (name === "first" ? .55 : 1) : .45);
       }
       for (let k = 0; k < 9; k++) inst[b0 + 20 + 4 * (k / 3 | 0) + k % 3] = COL[9 * i + k] / 255;
-      inst[b0 + 23] = SPIN[i]; inst[b0 + 27] = GEAR[i]; inst[b0 + 31] = 0;
+      inst[b0 + 23] = SPIN[i]; inst[b0 + 27] = GEAR[i];
+      inst[b0 + 31] = s.voice === null ? 0 : Math.max(1e-3, ((now - s.heard) / RING_MS) % 1);
       // The role letter: ink on a light blob, paper on a dark one.
       const light = (COL[9 * i] * .3 + COL[9 * i + 1] * .59 + COL[9 * i + 2] * .11) / 255, lc = light > .6 ? C.ink : C.paper;
       inst[b0 + 32] = lc[0] / 255; inst[b0 + 33] = lc[1] / 255; inst[b0 + 34] = lc[2] / 255; inst[b0 + 35] = .92 * show;
@@ -744,7 +770,7 @@ export function layer(host) {
         const t1 = DISK[DISKS * i + (DISKAT[i] + k) % DISKS], age = (now - t1) / DISK_MS; // oldest first
         inst[b0 + 36 + k] = t1 > 0 && age < 1 ? age : -1;
       }
-      return o + 1;
+      return stirring;
     },
     // Blob i's compaction dots, on the longest loop of its track, written
     // from dot `n`; returns the next.
