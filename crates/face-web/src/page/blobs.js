@@ -472,7 +472,9 @@ function wake() {
   requestAnimationFrame(frame);
 }
 function frame(now) {
-  const dt = Math.min(1 / 30, (now - last) / 1000);
+  // A frame's time can come before the wake that asked for it, by as long as
+  // the task that woke the loop ran: never a step back, which flings the springs.
+  const dt = clamp((now - last) / 1000, 0, 1 / 30);
   last = now;
   for (const s of steps) if (!s(now)) steps.delete(s);
   let shown = steps.size > 0;
