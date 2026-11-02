@@ -461,8 +461,12 @@ pub enum Waiting {
     /// Facing Max, since `since`: its user-facing turn ended or he
     /// interrupted, and the move is his. Whatever it wants from him (a
     /// question, a report, a choice to make) is in its last message; there
-    /// is no separate question.
+    /// is no separate question. `background` is the work it owns that is
+    /// still running, which wakes it too ([`Phase::AwaitingMax`]): a face
+    /// shows it beside his move, since a turn that only answered him while
+    /// its work runs on asks less of him than one with nothing running.
     Max {
+        background: Vec<CallId>,
         since: Timestamp,
     },
     /// On a change to what it embodies, or the background work it started.
@@ -2935,6 +2939,7 @@ impl State {
                 since,
             },
             Phase::AwaitingMax => Waiting::Max {
+                background: t.background.clone(),
                 since: live.owed_since.unwrap_or(since),
             },
             Phase::Listening => Waiting::Listening {
