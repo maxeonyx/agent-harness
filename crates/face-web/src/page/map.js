@@ -262,6 +262,15 @@ function extent(n) {
     now: (!!n.big && n.kind !== "planned") || (n.kind === "chip" && n.running), planned: n.kind === "planned" };
 }
 
+// A leg's life, in ms: from when it began to when the next leg of its task
+// began, or its task finished, or now.
+function life(n) {
+  if (n.kind !== "leg" || typeof n.at !== "number") return undefined;
+  const next = (n.t.legs || []).map((l) => l.at).filter((a) => typeof a === "number" && a > n.at);
+  const end = next.length ? Math.min(...next) : isDone(n.t) ? n.t.waiting.since : Date.now();
+  return [n.at, Math.max(n.at, end)];
+}
+
 export let positions = new Map();   // id -> {x, y, w, h, top}: its box laid out; its centre is (x + w / 2, y + top)
 export let shown = new Map();       // id -> {x, y, w, h, top}: drawn now (tweened)
 export let routes = new Map();      // "from>to" -> {pts, dashed, old}: an edge's route, laid out
@@ -281,7 +290,7 @@ export function layout() {
       const w = Math.min(240, Math.max(120, measure(shortName(c.root), `500 13px ${SERIF}`) + 34 + (c.tasks.length > 1 ? 14 : 0)));
       return { c, sig: `card ${c.root.id} ${Math.round(w)}`, w };
     }
-    const ns = c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), kind: n.kind, old: n.old, spent: n.kind === "chip" && !n.running }));
+    const ns = c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), life: life(n), kind: n.kind, old: n.old, spent: n.kind === "chip" && !n.running }));
     let sig = "";
     for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}${n.now ? "!" : ""}${n.old || n.spent ? "~" : ""}${Math.round(n.hi)};`;
     return { c, sig, ns };
