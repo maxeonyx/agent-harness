@@ -430,7 +430,7 @@ function stop(name) {
 // 0.9 and 1.4 s, where Chromium on Android goes 190, 1300 and 4400.
 const TAU = 1500, FRICTION = .0025;  // ms, px/ms²
 function coast(trail, t) {
-  const a = trail[0], b = trail.at(-1);
+  const last = trail.filter((p) => t - p.t < 100), a = last[0], b = last.at(-1);
   if (!a || a === b || reduced()) return;
   const dt = Math.max(16, t - a.t), vx = (b.x - a.x) / dt, vy = (b.y - a.y) / dt;
   const v = Math.hypot(vx, vy);
