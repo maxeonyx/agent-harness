@@ -41,3 +41,4 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | substrate | two devices and one brain on one data flow | none | free, seconds |
 | ui | the face after Max's 29 Oct feedback: a tool block folded to its calls' summaries, two parts staged and sent as one message, a compaction, a busy map that opens apart around a card, and edge arrows to the chats waiting on him; leaves the brain up | scripted | free, 25 s |
 | unread | a brain opens a database holding a later build's record, skips it and keeps it byte for byte | none | free, 10 s |
+| wait | a scripted orchestrator starts three background spawns (forks sleeping 3, 14 and 22 s) and `wait`s on them: each wait returns the next one's whole result and it reviews that one; Max writes during a wait, which ends at once listing what still runs, and he is answered; the rest wake it as they land; leaves the brain up | scripted | free, 40 s |

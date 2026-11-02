@@ -215,6 +215,10 @@ pub enum CallEvent {
     /// background"; "if I send a message, I think it should auto background
     /// anything the agent is waiting on" (2 Nov).
     Backgrounded,
+    /// What this call, to the `wait` tool, waits on: stated by the brain as
+    /// it dispatches the call, so the fold knows which settlements are read
+    /// through it ([`Wait`]).
+    Waits(Wait),
     /// How it ended, stated by the limb that ran it (or by the brain, for a
     /// call that never reached one). A second settlement is accepted only
     /// after [`Outcome::Unknown`]: the real outcome of a remote command that
@@ -231,8 +235,74 @@ impl CallEvent {
             | CallEvent::Stopping { .. }
             | CallEvent::Passed { .. }
             | CallEvent::Abandon
-            | CallEvent::Backgrounded => {}
+            | CallEvent::Backgrounded
+            | CallEvent::Waits(_) => {}
             CallEvent::Settled(outcome) => outcome.values(out),
+        }
+    }
+}
+
+/// A wait: a call of a round that settles once some of its owner's
+/// background work has, as `until` says.
+///
+/// **Concept.** Waiting on background work is a call, so that ending a
+/// turn keeps one meaning: an autonomous agent's turn end is its result,
+/// and a chat's is Max's move. An agent with nothing to do until its work
+/// lands calls `wait` and stays in its round. The results come whole in
+/// the wait's output and are not delivered again; one that settles while
+/// nothing waits on it reaches the agent as a message at its next request
+/// ([`crate::task::Input::Background`]). A chat's ended turn waits on its
+/// work as well as on Max, so a chat need not call it; one that has only
+/// answered him waits here instead, so it is not shown as his move. Max's
+/// words settle a wait rather than moving it to the background, at once:
+/// an ordinary result saying he wrote and what still runs, and the agent
+/// waits again once it has answered him. Its task's stopping settles it as
+/// interrupted ([`crate::state::Todo::Settle`]). A wait is never moved to
+/// the background, since waiting in the background is not waiting.
+///
+/// Only the caller's own background work is waited on: a call it started
+/// with `background` (a spawn among them), one moved out of its round, or
+/// one passed to it. A question to Max, from an agent whose role lets it
+/// write one, is a call too, so it is one more.
+/// Work it didn't start is read, never waited on, so a circle of waits
+/// cannot form. A deadline is a background `sleep` among the targets.
+///
+/// **Vision.** "Join any versus join all. Take the first result as it
+/// comes versus wait for all the results. Any background thing. Tool call,
+/// an agent, a question to Max", though "it's not strictly needed for an
+/// agent that can pause and ask me questions"; "Not all agents would be,
+/// but the ones that can, it would be treated as a background task. [...]
+/// be able to write a question"; "for background
+/// sub-agents, if they [...] end their turn with their final response,
+/// how's the harness supposed to know?" (3 Nov). In the records no agent
+/// ever ended its turn to wait: 14 of 25 background jobs were waited on
+/// with a foreground `sleep`, and every one of those agents worked on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Wait {
+    /// The calls it waits on, never empty, each running background work of
+    /// the caller's when it is stated. The tool's default is all of it. One
+    /// passed on since is no longer waited on.
+    pub on: Vec<CallId>,
+    pub until: Until,
+}
+
+/// When a wait settles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Until {
+    /// One of its calls has settled: the first result as it comes. The rest
+    /// run on. The tool's default, since a server never settles.
+    Any,
+    /// Every one of its calls has settled.
+    All,
+}
+
+impl Until {
+    /// Whether a wait holds, with `landed` of its calls settled and `running`
+    /// still running for its caller.
+    pub fn holds(self, landed: usize, running: usize) -> bool {
+        match self {
+            Until::Any => landed > 0 || running == 0,
+            Until::All => running == 0,
         }
     }
 }

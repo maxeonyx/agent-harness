@@ -385,9 +385,10 @@
 //!   background ([`call::CallEvent::Backgrounded`]): its tool uses are
 //!   answered with each call's label, the work runs on, and each result
 //!   comes later as a message that wakes it. His interrupt moves a spawn
-//!   to the background the same way, so it never stops a scope. Whether
-//!   the agent needs a `join` tool to wait on that work again, or a way
-//!   to watch work it does not own, is open.
+//!   to the background the same way, so it never stops a scope. The agent
+//!   waits on its own background work again with a `wait` call
+//!   ([`call::Wait`]), which his words end at once rather than move to the
+//!   background. Work it does not own it reads; it never waits on it.
 //! - An agent needing Max faces him: a user-facing task ends its turn
 //!   with what it needs in its message ([`state::Waiting::Max`]); an
 //!   autonomous one tells its owner, which faces him or carries it up.
@@ -395,8 +396,8 @@
 //!   interrupts him mid-turn.
 //! - An autonomous turn that ends with background work running: it
 //!   lingers, told once
-//!   ([`delivery::Prompt::Lingering`]), and decides whether to wait for the
-//!   work, stop it, or pass it up ([`call::CallEvent::Passed`]).
+//!   ([`delivery::Prompt::Lingering`]), and decides whether to `wait` for
+//!   the work, stop it, or pass it up ([`call::CallEvent::Passed`]).
 //! - Where role files live (shared with Claude Code's `.claude/agents/`
 //!   during the transition, or the harness's own), and whether the
 //!   orchestrator becomes a meta role, holding only the brain's tool sets

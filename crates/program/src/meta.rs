@@ -10,15 +10,17 @@
 //! `compact_and_report` does too and ends its turn with its report. `attach`
 //! gives back the recorded outputs of calls the caller names, so a
 //! compaction carries them and a report is followed by them. `background` makes a named call
-//! to one of the caller's other tools that no round waits on: its result
-//! arrives as a message, and its owner cannot finish until it has. `stop`
+//! to one of the caller's other tools, or a `spawn`, that no round waits on:
+//! its result arrives as a message, and its owner cannot finish until it
+//! has. `wait` waits in a round on some of that work, and its output is
+//! their results ([`harness_core::call::Wait`]). `stop`
 //! abandons one of those calls, and `pass` hands one up the tree
 //! ([`harness_core::call::Owner`]). Their effects (the members' `Created`
 //! facts) are appended in the same batch as the
 //! `Dispatched`, so a crash leaves both or neither, and a restart never
 //! spawns twice.
 
-use harness_core::call::{Call, Caller};
+use harness_core::call::{Call, Caller, Until, Wait};
 use harness_core::context::Rendered;
 use harness_core::delivery::Content;
 use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
@@ -41,6 +43,7 @@ pub fn compacts(tool: &str) -> bool {
 }
 
 pub const BACKGROUND: &str = "background";
+pub const WAIT: &str = "wait";
 pub const STOP: &str = "stop";
 pub const PASS: &str = "pass";
 pub const ATTACH: &str = "attach";
@@ -75,8 +78,8 @@ and it shares your cache, so it is cheap. It works in your directory with you. \
 A resume continues that agent's own context with a new mandate, so a follow-up question keeps everything it learned. \
 A fresh agent starts from nothing but its role, the shared `brief`, the `quotes` and its mandate, so say everything it needs. \
 Each of Max's messages, mandates and answers is labelled `max-…`: name it in `quotes` to give his words to every fresh agent verbatim, rather than retelling them.\n\n\
-A fork can itself spawn, and start the roles you can. `spawn` cannot run under `background`: you always wait for \
-your scope.",
+A fork can itself spawn, and start the roles you can. A spawn reports once, when its last task has finished, so \
+start separately, each as its own background spawn, the pieces of work you will act on separately.",
     );
     if roles.is_empty() {
         said.push_str("\n\nYou cannot start fresh agents, only forks of yourself.");
@@ -118,11 +121,15 @@ alongside `compact_and_continue` to keep them in your compacted context. You can
 results.",
     );
     said.push_str(
-        "\n\n`background` runs one of your other tools without waiting for it, under a `name` you give it: it returns \
-at once, and the tool's result reaches you as a message when it settles. You cannot finish while background work you \
-own still runs. `stop` it when you no longer need it, or `pass` it to the agent that started you (to Max, if he \
-started you), who owns it from then on: do that only for what someone will still use after you finish, such as a \
-dev server or a browser tab, and say why.",
+        "\n\n`background` runs one of your other tools, or a `spawn`, without waiting for it, under a `name` you give \
+it: it returns at once. Say what you are starting. When you have nothing to do until it lands, call `wait`: it returns \
+the first of your background work to land (`until: any`, the default) or all of it (`until: all`), each result whole \
+and given you only there. Never `sleep` on your own work. A result that lands while you are not waiting reaches you \
+as a message. Max's words end a wait, saying what still runs: answer him, then wait again.\n\n\
+End your turn only with your result, or, in a chat with Max, when you need him; otherwise `wait`. You cannot finish \
+while background work you own still runs. `stop` it when you no longer need it, or `pass` it to the agent that \
+started you (to Max, if he started you), who owns it from then on: do that only for what someone will still use \
+after you finish, such as a dev server or a browser tab, and say why.",
     );
     if member {
         said.push_str(
@@ -198,7 +205,7 @@ and returns at once: the agent that started you gets its result with yours.",
     });
     let background = json!({
         "name": BACKGROUND,
-        "description": "Run one of your other tools without waiting for its result, which comes to you as a message.",
+        "description": "Run one of your other tools, or a `spawn`, without waiting for its result: `wait` for it, or it comes to you as a message.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -207,6 +214,17 @@ and returns at once: the agent that started you gets its result with yours.",
                 "input": { "type": "object", "description": "The tool's input, as you would give it directly." }
             },
             "required": ["name", "tool", "input"]
+        }
+    });
+    let wait = json!({
+        "name": WAIT,
+        "description": "Wait for your own background work: until the first of it lands (`until: any`, the default) or all of it (`until: all`). The results come whole in this call's output. Max's words end it early, saying what still runs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "on": { "type": "array", "items": { "type": "string" }, "description": "The background calls' names, or their labels (`call-…`). Default: all your running background work." },
+                "until": { "type": "string", "enum": ["any", "all"], "description": "Return when any of them has landed, or all. Default `any`." }
+            }
         }
     });
     let stop = json!({
@@ -238,6 +256,7 @@ and returns at once: the agent that started you gets its result with yours.",
         tool(COMPACT_AND_REPORT, compact_and_report),
         tool(ATTACH, attach),
         tool(BACKGROUND, background),
+        tool(WAIT, wait),
         tool(STOP, stop),
         tool(PASS, pass),
     ];
@@ -482,6 +501,73 @@ fn named(state: &State, owner: &Task, name: &str) -> Option<CallId> {
     })
 }
 
+/// What a `wait` by `owner` waits on: the running background calls its
+/// input names, or all of them.
+pub fn wait(state: &State, owner: &Task, input: &[u8]) -> Result<Wait, String> {
+    let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
+    let until = match value["until"].as_str() {
+        None | Some("any") => Until::Any,
+        Some("all") => Until::All,
+        Some(other) => return Err(format!("`until` is `any` or `all`, not `{other}`")),
+    };
+    let mut on = match &value["on"] {
+        Value::Null => owner.background.clone(),
+        Value::Array(names) => names
+            .iter()
+            .map(|n| {
+                let n = n.as_str().ok_or("`on` must be a list of names")?;
+                named(state, owner, n)
+                    .ok_or(format!("you have no running background call named `{n}`"))
+            })
+            .collect::<Result<_, String>>()?,
+        _ => return Err("`on` must be a list of names".into()),
+    };
+    on.dedup();
+    if on.is_empty() {
+        return Err("you have no background work running, so there is nothing to wait on".into());
+    }
+    Ok(Wait { on, until })
+}
+
+/// A wait's output, and whether it completed: the whole result of each
+/// call it waits on that has settled, then what still runs, and, for one
+/// ended early, why. Only one its task's stopping ended is interrupted;
+/// one Max's words ended is an ordinary result.
+pub fn waited(state: &State, values: Values, call: CallId) -> Option<(Bytes, bool)> {
+    let wait = state.call(call)?.waits.as_ref()?;
+    let (landed, running) = state.waited(call)?;
+    let holds = wait.until.holds(landed.len(), running.len());
+    let stopping = (state.call_owner(call))
+        .and_then(|t| state.task(t))
+        .is_some_and(|t| t.drain().is_some());
+    let mut said = Vec::new();
+    if !holds {
+        said.push(text(match stopping {
+            true => "[harness] You are being stopped, so this wait ended.",
+            false => "[harness] Max wrote to you: answer him, then `wait` again.",
+        }));
+    }
+    said.extend((landed.iter()).map(|c| crate::render::activity(state, values, *c)));
+    if !running.is_empty() {
+        let names: Vec<String> = (running.iter())
+            .map(|c| match state.call(*c).map(|r| &r.call.caller) {
+                Some(Caller::Background { name, .. }) => format!("`{name}` (`{}`)", call_label(*c)),
+                _ => format!("`{}`", call_label(*c)),
+            })
+            .collect();
+        said.push(text(&format!(
+            "[harness] Still running: {}.",
+            names.join(", ")
+        )));
+    }
+    if said.is_empty() {
+        said.push(text(
+            "[harness] Nothing this wait was on is yours any more.",
+        ));
+    }
+    Some((blocks(&said), holds || !stopping))
+}
+
 /// A spawn or add_sibling call's input.
 pub struct Spawn {
     pub members: Vec<Member>,
@@ -617,7 +703,7 @@ pub fn background_call(
         .binding
         .limb(&tool)
         .ok_or(format!("you have no tool `{tool}`"))?;
-    if state.resolve(limb) == Some(brain) {
+    if state.resolve(limb) == Some(brain) && tool != SPAWN {
         return Err(format!("`{tool}` cannot run in the background"));
     }
     let call = Call {

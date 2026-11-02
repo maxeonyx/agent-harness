@@ -179,6 +179,15 @@ impl Live {
 }
 
 /// Whose move it is in a live task.
+///
+/// **Concept.** Ending a turn has one meaning per kind of task: an
+/// autonomous task's is its result, and a chat's is Max's move. Waiting is
+/// a call of a round: a round blocks on its own calls, a spawn included,
+/// until Max's words move them to the background, and an agent waits on
+/// its background work with a `wait` ([`crate::call::Wait`]). A chat whose
+/// turn has ended is woken by its background work as well as by Max
+/// ([`Phase::AwaitingMax`]). An autonomous turn that ends while its work
+/// runs is not its result: it lingers, told once ([`Prompt::Lingering`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
     /// The task's move: the brain builds and sends its next request, unless
@@ -191,7 +200,10 @@ pub enum Phase {
     /// The calls of one round are outstanding: a response's tool uses, or a
     /// fresh context's attachments. A spawn is one of them.
     Acting(Step),
-    /// Max's move: a user-facing turn ended, or he interrupted.
+    /// Max's move: a user-facing turn ended, or he interrupted. Background
+    /// work it owns runs on and wakes it as his words do, so a chat that
+    /// answered him while its work runs is waiting on both
+    /// ([`crate::state::Waiting::Max`]).
     AwaitingMax,
     /// The turn ended and the task waits for something that wakes it: a
     /// change to what a standing task embodies, or background work.
@@ -1385,7 +1397,7 @@ impl Task {
                 .settled
                 .is_some()
             {
-                self.settled(*call, at)?;
+                self.settled(*call, at, world)?;
             }
         }
         Ok(())
@@ -1572,6 +1584,8 @@ impl Task {
                 }
                 _ => Err(Rejected::NotForTask),
             },
+            // Folded by the state alone: the task reads it off the call.
+            CallEvent::Waits(_) => Err(Rejected::NotForTask),
             CallEvent::Settled(_) if world.call(id).is_some_and(|c| c.settled.is_some()) => {
                 self.pending.push(Input::Late(id));
                 if self.drain().is_none() {
@@ -1579,7 +1593,7 @@ impl Task {
                 }
                 Ok(())
             }
-            CallEvent::Settled(_) => self.settled(id, at),
+            CallEvent::Settled(_) => self.settled(id, at, world),
             CallEvent::Passed { to, .. } => {
                 if let Some(i) = self.background.iter().position(|c| *c == id) {
                     self.background.remove(i);
@@ -1625,7 +1639,7 @@ impl Task {
 
     /// A call this task waits on has settled: one of its round, its
     /// background work, or one of Max's actions in its chat.
-    fn settled(&mut self, call: CallId, at: Timestamp) -> Result<(), Rejected> {
+    fn settled(&mut self, call: CallId, at: Timestamp, world: &State) -> Result<(), Rejected> {
         if let Life::Live(live) = &mut self.life
             && let Phase::Acting(step) = &mut live.phase
             && let Some(i) = step.outstanding.iter().position(|c| *c == call)
@@ -1640,6 +1654,15 @@ impl Task {
         }
         if let Some(i) = self.background.iter().position(|c| *c == call) {
             self.background.remove(i);
+            // A wait of its round reads it, in its output.
+            let waited = matches!(self.phase(), Some(Phase::Acting(step)) if step
+                .outstanding
+                .iter()
+                .filter_map(|w| world.call(*w)?.waits.as_ref())
+                .any(|w| w.on.contains(&call)));
+            if waited {
+                return Ok(());
+            }
             self.pending.push(Input::Background(call));
             if self.drain().is_some() {
                 // Abandoning: the last background call to settle lets it finish.

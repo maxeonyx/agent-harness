@@ -884,7 +884,7 @@ fn outcome_content(values: Values, outcome: &Outcome) -> (Value, bool) {
 /// A call outside the round that has settled: background work, a call
 /// moved out of its round when Max wrote, the late outcome of a call
 /// earlier said to be unknown, or something Max did in the chat.
-fn activity(state: &State, values: Values, call: CallId) -> String {
+pub(crate) fn activity(state: &State, values: Values, call: CallId) -> String {
     let Some(record) = state.call(call) else {
         return text("[harness] A call you made has settled.");
     };
@@ -900,8 +900,8 @@ fn activity(state: &State, values: Values, call: CallId) -> String {
         .collect();
     let what = match record.call.caller {
         Caller::Max { .. } => format!("Max ran `{}` here", record.call.tool),
-        Caller::Background { .. } => format!(
-            "Your background `{}` call (`{}`) has settled",
+        Caller::Background { ref name, .. } => format!(
+            "Your background call `{name}` (`{}`, `{}`) has settled",
             record.call.tool,
             call_label(call)
         ),
@@ -974,9 +974,9 @@ left undone. This is your last message here."
                 .to_owned()
         }
         Content::Prompt(Prompt::Lingering) => {
-            "Your turn ended, but background work you own is still running. Its result wakes you when it \
-settles, and you cannot finish before then. `stop` what you no longer need; `pass` up what someone will still use \
-after you finish. If there is nothing else to do meanwhile, end your turn to wait."
+            "Your turn ended, but background work you own is still running, so this is not your result: you \
+cannot finish before it settles. End your turn only with your result. `wait` for what you still need, `stop` what \
+you no longer need, and `pass` up what someone will still use after you finish."
                 .to_owned()
         }
         Content::Prompt(Prompt::Tidy) => {
