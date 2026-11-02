@@ -765,7 +765,7 @@ const BIG = 128, SMALL = 56, DOCK = BIG + 24, DOCKED = SMALL, TRAVEL = DOCK - DO
   model: (w) => (w.streaming ? "streaming" : "first"), calls: () => "tools", harness: () => "brain",
   starting: () => "starting", listening: () => "listening",
 };
-const blobSession = session(), dock = $(".dock", panel);
+const blobSession = session(), dock = $(".scroll > .dock", panel);
 dock.style.cssText = `width: ${DOCK}px; height: ${DOCK}px; bottom: ${-TRAVEL}px`;
 let blobs, blobBox = null, blobTask = null;
 function showBlob(t, shape) {

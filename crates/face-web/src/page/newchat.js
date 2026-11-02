@@ -1,5 +1,5 @@
 import { $, el, getJson, panel } from "./base.js";
-import { byId, graph, live, view } from "./map.js";
+import { byId, graph, view } from "./map.js";
 import { fit } from "./camera.js";
 import { drawMap } from "./draw.js";
 import { closeNode, go, mini, NEW, openId, start, title } from "./card.js";
@@ -116,7 +116,7 @@ function showFound() {
   const seq = (h) => byId[h.task]?.created.seq ?? -1;
   hits = hits.filter((h) => byId[h.task]).sort((a, b) => seq(b) - seq(a));
   chosen = 0;
-  found = new Set(hits.map((h) => live(h.task)));
+  found = new Set(hits.map((h) => h.task));
   // A folded project matches through what it folds.
   for (const c of graph.comps) if (c.folded && c.tasks.some((t) => found.has(t.id))) found.add(c.root.id);
   foundEl.replaceChildren(...hits.map((h, i) => {

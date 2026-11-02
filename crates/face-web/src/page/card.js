@@ -1,6 +1,6 @@
 import { $, el, kTokens, logEl, panel, scrollEl } from "./base.js";
 import { act, digest } from "./tab.js";
-import { byId, graph, live, look, parentOf, unfolded, view } from "./map.js";
+import { byId, graph, look, parentOf, unfolded, view } from "./map.js";
 import { cam, camFor, cardRect, cardShown, closing, coverCheck, dotRect, fly, framed, framing, heldAt, newPoint, refocus, seam, seamFor, setCardShown, setFramed, setSeam } from "./camera.js";
 import { nodeEls, rebuild, render } from "./draw.js";
 import { hideTip, hoverable } from "./hover.js";
@@ -32,7 +32,6 @@ function show(id, at) {
 }
 export function go(id, at) {
   clearTimeout(closing);
-  if (id !== NEW) id = live(id);
   if (id === openId && !at) return;
   show(id, at);
 }
@@ -50,8 +49,7 @@ addEventListener("popstate", route);
 addEventListener("hashchange", route);
 
 export function route() {
-  const { task: raw, at } = hashed();
-  const id = raw && raw !== NEW ? live(raw) : raw;
+  const { task: id, at } = hashed();
   const known = id && (byId[id] || (id === NEW && view));
   moving = moving.then(() => transition(known ? id : id && !view ? id : null, at));
 }
@@ -148,7 +146,7 @@ mini.onclick = refocus;
 export function renderPanel() {
   const t = byId[openId];
   if (!t) return;
-  const l = look(t), needs = (view.queue || []).some((q) => live(q.task) === t.id);
+  const l = look(t), needs = (view.queue || []).some((q) => q.task === t.id);
   mini.className = `mini ${l.cls}${needs ? " needs" : ""}`;
   if (!title.isContentEditable && title.textContent !== t.name) title.textContent = t.name;
   title.title = "Double-click to rename";

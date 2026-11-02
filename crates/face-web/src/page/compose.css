@@ -17,7 +17,10 @@
   .compose .other.held { border-style: solid; }
   .compose .line { display: grid; }
   .compose .line > * { grid-area: 1 / 1; }
-  .compose .field { max-height: 45vh; overflow-y: auto; overscroll-behavior: contain; padding: .5em 52px .35em .9em; }
+  /* Its scrollbar's room is kept even when nothing scrolls: measuring the
+     box collapses it for a moment, and a scrollbar coming and going would
+     measure the words at a width they aren't shown at. */
+  .compose .field { max-height: 45vh; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; padding: .5em 52px .35em .9em; }
   .compose .field.scrolled { mask-image: linear-gradient(transparent, #000 2.2em); }
   .compose .parts:empty { display: none; }
   .compose .part { display: flex; align-items: flex-start; gap: .4em; padding: .15em 0 .4em; margin-bottom: .4em; border-bottom: 1px solid var(--line); font: 15px/1.5 var(--sans); color: var(--ink); }
