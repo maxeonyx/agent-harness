@@ -683,6 +683,18 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                     format!("{} passed to {to}: {why}", call_name(*id))
                 }
                 E::Abandon => format!("{} abandoned", call_name(*id)),
+                E::Waits(wait) => format!(
+                    "{} waits on {} of {}",
+                    call_name(*id),
+                    match wait.until {
+                        harness_core::call::Until::Any => "any",
+                        harness_core::call::Until::All => "all",
+                    },
+                    (wait.on.iter())
+                        .map(|c| call_name(*c))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 E::Settled(o) => format!("{} {}", call_name(*id), outcome(o)),
             }
         }
