@@ -8,7 +8,7 @@ use imbl::{OrdMap, OrdSet};
 mod legs;
 
 use crate::attention::{Queued, Ranking};
-use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome, Owner};
+use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome, Owner, Wait};
 use crate::context::{Entry, EntryId, Legs, Note, Rendered, Span};
 use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
@@ -260,6 +260,8 @@ pub struct CallRecord {
     pub abandoned: bool,
     /// When its round stopped waiting on it ([`CallEvent::Backgrounded`]).
     pub backgrounded: Option<Mark>,
+    /// What it waits on, for a call to `wait` ([`CallEvent::Waits`]).
+    pub waits: Option<Wait>,
     pub dispatched: Option<Dispatch>,
     /// When its limb was last asked to stop it, and by when.
     pub stopping: Option<CallStop>,
@@ -547,8 +549,11 @@ pub enum Todo {
     /// The task parked, or was asked to, and Max has resumed it: deliver
     /// [`Prompt::Resume`].
     Resume(TaskId),
-    /// Every member of this spawn's scope is done: settle it with their
-    /// outcomes.
+    /// A call the brain runs, which ends on something else, is due to
+    /// settle: a spawn every member of whose scope is done, with their
+    /// outcomes; or a wait ([`CallEvent::Waits`]) whose calls have settled
+    /// as it asks, or that Max's words, one of his acts, or its task's
+    /// stopping end first, as interrupted, with what still runs.
     Settle(CallId),
     /// Move these calls of the task's round to the background, in one
     /// batch ([`CallEvent::Backgrounded`]): every call still outstanding
@@ -1867,6 +1872,10 @@ impl State {
                 if made.settled.is_some() {
                     return Err(Rejected::Finished);
                 }
+                // Waiting in the background is not waiting.
+                if made.waits.is_some() {
+                    return Err(Rejected::NotForTask);
+                }
                 let Caller::Agent { task, .. } = made.call.caller else {
                     return Err(Rejected::NotForTask);
                 };
@@ -1879,9 +1888,65 @@ impl State {
                 Ok(())
             }
             CallEvent::Settled(outcome) => self.settle(id, outcome, record),
-            // Not folded yet: nobody states it until `wait` is built.
-            CallEvent::Waits(_) => Err(Rejected::NotForTask),
+            CallEvent::Waits(wait) => self.waits(id, wait),
         }
+    }
+
+    /// A call of an agent's round, dispatched to the brain and still
+    /// running, waits on some of the agent's running background work.
+    fn waits(&mut self, id: CallId, wait: &Wait) -> Result<(), Rejected> {
+        let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
+        if made.settled.is_some() {
+            return Err(Rejected::Finished);
+        }
+        if made.dispatched.is_none() || made.waits.is_some() {
+            return Err(Rejected::Busy);
+        }
+        let Caller::Agent { task, .. } = made.call.caller else {
+            return Err(Rejected::NotForTask);
+        };
+        let task = self.tasks.get(&task).ok_or(Rejected::Unknown)?;
+        let own = |c: &CallId| task.background.contains(c);
+        let in_round =
+            matches!(task.phase(), Some(Phase::Acting(step)) if step.outstanding.contains(&id));
+        if !in_round || wait.on.is_empty() || !wait.on.iter().all(own) {
+            return Err(Rejected::NotForTask);
+        }
+        if let Some(made) = self.calls.get_mut(&id) {
+            made.waits = Some(wait.clone());
+        }
+        Ok(())
+    }
+
+    /// What the wait `call` has come to: the calls it waits on that have
+    /// settled for its caller, and those still running for it. `None` for a
+    /// call that is not a wait.
+    pub fn waited(&self, call: CallId) -> Option<(Vec<CallId>, Vec<CallId>)> {
+        let record = self.calls.get(&call)?;
+        let wait = record.waits.as_ref()?;
+        let Caller::Agent { task, .. } = record.call.caller else {
+            return None;
+        };
+        let (landed, running): (Vec<_>, Vec<_>) = (wait.on.iter())
+            .filter_map(|c| Some((*c, self.calls.get(c)?)))
+            .filter(|(_, r)| r.owner == Owner::Task(task))
+            .partition(|(_, r)| r.settled.is_some());
+        let ids = |calls: Vec<(CallId, _)>| calls.into_iter().map(|(c, _)| c).collect();
+        Some((ids(landed), ids(running)))
+    }
+
+    /// Whether the brain settles the wait `call` now: what it waits for
+    /// holds, Max's words or one of his acts have reached its task, or its
+    /// task is stopping ([`Todo::Settle`]).
+    fn wait_due(&self, call: CallId, wait: &Wait) -> bool {
+        let task = self.call_owner(call).and_then(|t| self.tasks.get(&t));
+        let Some(task) = task else {
+            return true;
+        };
+        let (landed, running) = self.waited(call).unwrap_or_default();
+        wait.until.holds(landed.len(), running.len())
+            || task.drain().is_some()
+            || self.spoken_to(task, None)
     }
 
     /// A background call moves one level up the tree, from the task that
@@ -2040,6 +2105,7 @@ impl State {
                 settled: None,
                 late: None,
                 backgrounded: None,
+                waits: None,
             },
         );
         Ok(())
@@ -2771,17 +2837,34 @@ impl State {
     /// that wait is theirs, not its own loop, so parking it asks for no turn.
     fn scoped(&self, task: &Task) -> bool {
         match task.phase() {
-            Some(Phase::Acting(step)) => (step.outstanding.iter())
-                .any(|c| self.members(Scope::Spawn(*c)).any(|m| !m.is_done())),
+            Some(Phase::Acting(step)) => step.outstanding.iter().any(|c| {
+                self.members(Scope::Spawn(*c)).any(|m| !m.is_done())
+                    || self.calls.get(c).is_some_and(|r| r.waits.is_some())
+            }),
             _ => false,
         }
+    }
+
+    /// Whether Max's words, or a turn one of his acts asks for, have reached
+    /// the task and wait for its next request: at least `grace`
+    /// milliseconds ago, if given.
+    fn spoken_to(&self, task: &Task, grace: Option<(u64, Timestamp)>) -> bool {
+        (task.pending.iter()).any(|p| match p {
+            Input::Delivery(d) => self.deliveries.get(d).is_some_and(|d| {
+                matches!(d.by, Author::Max)
+                    && grace
+                        .is_none_or(|(after, now)| now >= crate::cancel::deadline(d.at.at, after))
+            }),
+            _ => false,
+        })
     }
 
     /// The calls of the task's round the brain moves to the background now
     /// ([`Todo::Background`]): all of them once Max's words, or a turn one
     /// of his acts asks for, have waited [`HEARD_AFTER`] for the round to
     /// end by itself; while he interrupts it, its spawns, whose scopes his
-    /// interrupt never stops. Never a fresh context's attachments.
+    /// interrupt never stops. Never a fresh context's attachments, and never
+    /// a wait, which his words settle instead ([`Todo::Settle`]).
     fn backgrounds(&self, task: &Task, now: Timestamp) -> Vec<CallId> {
         let Some(Phase::Acting(step)) = task.phase() else {
             return Vec::new();
@@ -2790,19 +2873,11 @@ impl State {
             return Vec::new();
         }
         match task.drain() {
-            None => {
-                let heard = (task.pending.iter()).any(|p| match p {
-                    Input::Delivery(d) => self.deliveries.get(d).is_some_and(|d| {
-                        matches!(d.by, Author::Max)
-                            && now >= crate::cancel::deadline(d.at.at, HEARD_AFTER)
-                    }),
-                    _ => false,
-                });
-                match heard {
-                    true => step.outstanding.clone(),
-                    false => Vec::new(),
-                }
-            }
+            None if self.spoken_to(task, Some((HEARD_AFTER, now))) => (step.outstanding.iter())
+                .filter(|c| self.calls.get(c).is_none_or(|r| r.waits.is_none()))
+                .copied()
+                .collect(),
+            None => Vec::new(),
             Some(Draining::ToMax) => (step.outstanding.iter())
                 .filter(|c| self.open.scopes.contains_key(&Scope::Spawn(**c)))
                 .copied()
@@ -3078,6 +3153,12 @@ impl State {
             .collect();
         open.sort_by_key(|(_, record)| record.made.seq);
         for (id, record) in open {
+            if let Some(wait) = &record.waits {
+                if self.wait_due(*id, wait) {
+                    todo.push(Todo::Settle(*id));
+                }
+                continue;
+            }
             if self.open.scopes.contains_key(&Scope::Spawn(*id)) {
                 let owner = self
                     .call_owner(*id)

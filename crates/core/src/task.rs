@@ -1397,7 +1397,7 @@ impl Task {
                 .settled
                 .is_some()
             {
-                self.settled(*call, at)?;
+                self.settled(*call, at, world)?;
             }
         }
         Ok(())
@@ -1584,7 +1584,7 @@ impl Task {
                 }
                 _ => Err(Rejected::NotForTask),
             },
-            // Not folded yet: nobody states it until `wait` is built.
+            // Folded by the state alone: the task reads it off the call.
             CallEvent::Waits(_) => Err(Rejected::NotForTask),
             CallEvent::Settled(_) if world.call(id).is_some_and(|c| c.settled.is_some()) => {
                 self.pending.push(Input::Late(id));
@@ -1593,7 +1593,7 @@ impl Task {
                 }
                 Ok(())
             }
-            CallEvent::Settled(_) => self.settled(id, at),
+            CallEvent::Settled(_) => self.settled(id, at, world),
             CallEvent::Passed { to, .. } => {
                 if let Some(i) = self.background.iter().position(|c| *c == id) {
                     self.background.remove(i);
@@ -1639,7 +1639,7 @@ impl Task {
 
     /// A call this task waits on has settled: one of its round, its
     /// background work, or one of Max's actions in its chat.
-    fn settled(&mut self, call: CallId, at: Timestamp) -> Result<(), Rejected> {
+    fn settled(&mut self, call: CallId, at: Timestamp, world: &State) -> Result<(), Rejected> {
         if let Life::Live(live) = &mut self.life
             && let Phase::Acting(step) = &mut live.phase
             && let Some(i) = step.outstanding.iter().position(|c| *c == call)
@@ -1654,6 +1654,15 @@ impl Task {
         }
         if let Some(i) = self.background.iter().position(|c| *c == call) {
             self.background.remove(i);
+            // A wait of its round reads it, in its output.
+            let waited = matches!(self.phase(), Some(Phase::Acting(step)) if step
+                .outstanding
+                .iter()
+                .filter_map(|w| world.call(*w)?.waits.as_ref())
+                .any(|w| w.on.contains(&call)));
+            if waited {
+                return Ok(());
+            }
             self.pending.push(Input::Background(call));
             if self.drain().is_some() {
                 // Abandoning: the last background call to settle lets it finish.

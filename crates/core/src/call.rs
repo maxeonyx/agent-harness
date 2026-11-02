@@ -254,8 +254,11 @@ impl CallEvent {
 /// ([`crate::task::Input::Background`]). A chat's ended turn waits on its
 /// work as well as on Max, so a chat need not call it; one that has only
 /// answered him waits here instead, so it is not shown as his move. Max's
-/// words settle a wait rather than moving it to the background: it says
-/// what still runs, and the agent waits again once it has answered.
+/// words settle a wait rather than moving it to the background, at once and
+/// as interrupted, as its task's stopping does: it says what still runs, and
+/// the agent waits again once it has answered
+/// ([`crate::state::Todo::Settle`]). A wait is never moved to the
+/// background, since waiting in the background is not waiting.
 ///
 /// Only the caller's own background work is waited on: a call it started
 /// with `background` (a spawn among them), one moved out of its round, or
@@ -276,8 +279,9 @@ impl CallEvent {
 /// with a foreground `sleep`, and every one of those agents worked on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wait {
-    /// The calls it waits on, never empty. The tool's default is all of the
-    /// caller's running background work.
+    /// The calls it waits on, never empty, each running background work of
+    /// the caller's when it is stated. The tool's default is all of it. One
+    /// passed on since is no longer waited on.
     pub on: Vec<CallId>,
     pub until: Until,
 }
@@ -290,6 +294,17 @@ pub enum Until {
     Any,
     /// Every one of its calls has settled.
     All,
+}
+
+impl Until {
+    /// Whether a wait holds, with `landed` of its calls settled and `running`
+    /// still running for its caller.
+    pub fn holds(self, landed: usize, running: usize) -> bool {
+        match self {
+            Until::Any => landed > 0 || running == 0,
+            Until::All => running == 0,
+        }
+    }
 }
 
 /// How a call ended.
