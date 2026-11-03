@@ -12,7 +12,7 @@ import { layered } from "./layout.js";
 // a finished one or an aside included. Projects are the graph's connected
 // pieces.
 //
-// Each live task is big: its planned join while any of its work runs, so it
+// Each live task is big: its planned join while it has work out, so it
 // sits below what it will take in, hollow only while it waits on it; its
 // current leg otherwise. Everything else is a small
 // dot. A task's own node (big, or its last leg once it is done) has the
@@ -147,7 +147,8 @@ export function derive(openId) {
     for (const w of t.work || []) add({ id: `w:${w.call}`, kind: "chip", t, work: w, running: w.running, open: w.at, deps: [w.leg] });
   }
   // A planned join under each live task with work out: members and calls
-  // whose results it has not taken in yet, while any of them runs. A
+  // whose results it has not taken in yet, while any of them runs or a
+  // finished call's result waits to be read (not one handed to Max). A
   // finished member waits in it with the rest of its scope.
   const taken = new Map(tasks.map((t) => [t.id, new Set((t.legs || []).flatMap((l) => l.on.map((d) => d.leg ?? `w:${d.work}`)))]));
   const members = new Map();
@@ -161,7 +162,7 @@ export function derive(openId) {
       if (m.leg && !seen.has(m.leg) && live.has(m.scope)) (isDone(m) ? done : open).push({ id: m.leg, at: m.legs?.[0]?.on.find((d) => d.leg)?.at });
     }
     const kids = open.length;
-    for (const w of t.work || []) if (w.running && !seen.has(`w:${w.call}`)) open.push({ id: `w:${w.call}`, at: w.at });
+    for (const w of t.work || []) if ((w.running || !w.handed) && !seen.has(`w:${w.call}`)) open.push({ id: `w:${w.call}`, at: w.at });
     if (open.length) add({ id: `p:${t.id}`, kind: "planned", t, kids, waits: open.length, open: open[0].at, deps: [t.leg, ...open.map((o) => o.id), ...done.map((o) => o.id)] });
   }
   // Big: each live task's own node. A task's own node, big or not, takes
