@@ -12,9 +12,9 @@ import { layered } from "./layout.js";
 // a finished one or an aside included. Projects are the graph's connected
 // pieces.
 //
-// Each live task is big: its planned join while a member of its runs or it
-// waits on its work, so it sits below what it will take in, hollow only
-// while it waits; its current leg otherwise. Everything else is a small
+// Each live task is big: its planned join while any of its work runs, so it
+// sits below what it will take in, hollow only while it waits on it; its
+// current leg otherwise. Everything else is a small
 // dot. A task's own node (big, or its last leg once it is done) has the
 // task's id, so the card, the queue and the URL name it the way they name
 // the task.
@@ -170,7 +170,7 @@ export function derive(openId) {
   const rename = new Map(), ownOf = new Map();
   for (const t of tasks) {
     const planned = nodes.get(`p:${t.id}`);
-    const own = !isDone(t) && planned && (planned.kids || waitsOnWork(t)) ? planned : nodes.get(t.leg);
+    const own = !isDone(t) && planned ? planned : nodes.get(t.leg);
     if (!own) continue;
     if (!isDone(t)) own.big = stateOf(t);
     if (own === planned && !waitsOnWork(t)) own.solid = t.leg;
@@ -333,9 +333,9 @@ export function layout() {
       l.dx = dx;
       l.boxes = p.ns.map((n) => { const q = l.at.get(n.id), r = n.lo - 3; return [n.id, { x: q.x + dx - r, y: q.y - n.top, w: 2 * r, h: n.top + n.foot, top: n.top }]; });
       const by = new Map(p.ns.map((n) => [n.id, n]));
-      // Dotted to what is planned, but for a solid one's line to its own leg; faint from an old version or finished background work.
+      // Dotted to what is planned, but for a solid one's line to its own leg and any line to background work; faint from an old version or finished background work.
       const planned = (id) => by.get(id).kind === "planned", faint = (id) => by.get(id).old || by.get(id).spent;
-      const dashed = (e) => (planned(e.from) && by.get(e.from).solid !== e.to) || planned(e.to);
+      const dashed = (e) => by.get(e.to).kind !== "chip" && ((planned(e.from) && by.get(e.from).solid !== e.to) || planned(e.to));
       l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { pts: e.route.map(([a, b]) => [a + dx, b]), dashed: dashed(e), old: faint(e.from) || faint(e.to) }]);
     }
     for (const [id, b] of l.boxes) positions.set(id, b);
