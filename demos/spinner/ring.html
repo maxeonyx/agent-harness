@@ -1,0 +1,296 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spinner: one glyph</title>
+<!--
+  A spike: the node is one closed shape, and what the session waits on is
+  the shape's form and motion. Every state is a point in one small space of
+  shape parameters (radius, a flowing wave, gear teeth, a drawn arc, a fill),
+  and the glyph eases between points, so a change of state is a morph.
+
+  ?state=NAME shows one state still running (no auto-play); &pips=N sets the
+  compactions. Open the file in a browser: no build, no brain.
+-->
+<style>
+  :root {
+    --ground: #f0eee6; --paper: #faf9f5; --line: #e3dfd3; --ink: #141413;
+    --muted: #6b6a64; --faint: #a19f96; --maroon: #7a1f22; --green: #4f8a55;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans);
+    background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); background-size: 22px 22px; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font: 600 20px var(--serif); margin: 0 0 4px; }
+  h2 { font: 600 15px var(--serif); margin: 28px 0 10px; }
+  p { margin: 0 0 8px; color: var(--muted); }
+  button { font: inherit; color: inherit; cursor: pointer; padding: .3em .75em; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--paper); }
+  button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+  /* The stage: one node on the map and the same chat's header. */
+  .stage { display: flex; flex-wrap: wrap; gap: 28px; align-items: center; padding: 22px 18px; margin: 14px 0;
+    background: rgba(250, 249, 245, .6); border: 1px solid var(--line); border-radius: 14px; }
+  .node { display: flex; flex-direction: column; align-items: center; width: 92px; }
+  .node .name { margin-top: 2px; font: 600 13.5px/1.2 var(--serif); }
+  .header { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; flex: 1; min-width: 220px;
+    background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+  .header .title { font: 600 14.5px var(--serif); }
+  .now { font: 13px var(--sans); color: var(--muted); }
+
+  /* The glyph: an SVG 1.5 times the node's diameter, so its pips fit around it. */
+  svg.glyph { display: block; overflow: visible; }
+  svg.glyph text { font-family: var(--serif); font-weight: 600; text-anchor: middle; dominant-baseline: central; }
+
+  /* Every state at once, at both sizes. */
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 4px;
+    background: rgba(250, 249, 245, .6); border: 1px solid var(--line); border-radius: 12px; }
+  .cell .sizes { display: flex; align-items: center; gap: 10px; }
+  .cell .label { font-size: 12.5px; text-align: center; }
+  .cell .label small { display: block; color: var(--muted); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+  dt { font-weight: 600; } dd { margin: 0; color: var(--muted); }
+</style>
+<main>
+  <h1>Spinner: one glyph</h1>
+  <p>The node is one shape. What it waits on is its form, how it moves says it is alive, and a change of state is a morph from one form to the next.</p>
+
+  <div class="stage">
+    <div class="node"><span id="big"></span><span class="name">fixes</span></div>
+    <div class="header"><span id="small"></span><span class="title">fixes</span></div>
+    <span class="now" id="now"></span>
+  </div>
+
+  <div class="row" id="states"></div>
+  <div class="row" style="margin-top: 8px">
+    <button id="play">Auto-play</button>
+    <button id="data">Data</button>
+    <button id="keep">Keepalive</button>
+    <button id="link" class="on">Link up</button>
+    <button id="pips">Compactions: 2</button>
+  </div>
+
+  <h2>Every state</h2>
+  <div class="gallery" id="gallery"></div>
+
+  <h2>The language</h2>
+  <dl>
+    <dt>Model</dt><dd>An orbit. Sent and waiting for the first byte: a short arc circling, its orbit tightening and quickening the longer it waits. Streaming: the ring closes and a wave flows round it, swelling with each chunk.</dd>
+    <dt>Tools</dt><dd>A gear, turning in ticks: mechanical, not fluid. Background work it listens on is the same gear, faint and slower.</dd>
+    <dt>Brain</dt><dd>The shape pulls in to a small solid core: the harness thinking to itself. It lasts as long as the brain works, so it is usually a brief morph between the others.</dd>
+    <dt>Max</dt><dd>A full maroon disc that breathes once for each keepalive from the brain, about every 4 s when the link is idle. If the breathing stops, the link has.</dd>
+    <dt>Starting</dt><dd>A dotted ring, slowly turning: the session is still being put together.</dd>
+    <dt>Paused, done</dt><dd>Still: grey for paused, parked or held on the account; green for done.</dd>
+    <dt>Data</dt><dd>Any message in or out thickens the rim for a moment, at most every 0.3 s.</dd>
+    <dt>Compactions</dt><dd>Pips around the circle from twelve o'clock, the latest brightest, so a chat that collects more of them grows a halo.</dd>
+  </dl>
+</main>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const C = { ink: [20, 20, 19], paper: [250, 249, 245], maroon: [122, 31, 34], green: [79, 138, 85], faint: [161, 159, 150], muted: [107, 106, 100] };
+
+// A state is a target in shape space, possibly moving with time since it
+// began (t, seconds). r: radius; wave: amplitude of a wave flowing round it;
+// teeth: amplitude of gear teeth; arc: how much of the outline is drawn;
+// fill: how solid it is; ink and body: rim and fill colours.
+const STATES = {
+  first:     { label: "Model", sub: "waiting for first byte", core: "Model { streaming: false }",
+               at: (t) => ({ r: .78 + .2 * Math.exp(-t / 4), arc: .28, ink: C.ink, body: C.paper, fill: 0 }) },
+  streaming: { label: "Model", sub: "streaming", core: "Model { streaming: true }",
+               at: () => ({ r: .9, wave: .045, arc: 1, ink: C.ink, body: C.paper, fill: 0 }) },
+  brain:     { label: "Brain", sub: "between calls", core: "Brain",
+               at: () => ({ r: .56, arc: 1, ink: C.ink, body: C.ink, fill: 1 }) },
+  tools:     { label: "Tools", sub: "calls running", core: "Calls",
+               at: () => ({ r: .84, teeth: .085, arc: 1, ink: C.ink, body: C.paper, fill: 0 }) },
+  listening: { label: "Listening", sub: "background work", core: "Listening",
+               at: () => ({ r: .84, teeth: .06, arc: 1, ink: C.faint, body: C.paper, fill: 0 }) },
+  max:       { label: "Max", sub: "your move", core: "Max",
+               at: () => ({ r: .9, arc: 1, ink: C.maroon, body: C.maroon, fill: 1 }) },
+  starting:  { label: "Starting", sub: "limbs connecting", core: "Starting",
+               at: () => ({ r: .8, arc: 1, ink: C.muted, body: C.paper, fill: 0 }) },
+  paused:    { label: "Paused", sub: "or parked, or held", core: "Paused, Parked, Held",
+               at: () => ({ r: .8, arc: 1, ink: C.faint, body: [233, 229, 217], fill: 1 }) },
+  done:      { label: "Done", sub: "", core: "Done",
+               at: () => ({ r: .8, arc: 1, ink: C.green, body: C.green, fill: 1 }) },
+};
+const ZERO = { r: .9, wave: 0, teeth: 0, arc: 1, fill: 0, ink: C.ink, body: C.paper };
+
+const mix = (a, b, k) => a + (b - a) * k;
+const mixc = (a, b, k) => a.map((x, i) => mix(x, b[i], k));
+const rgb = (c) => `rgb(${c.map(Math.round).join()})`;
+const sq = (x) => Math.tanh(5 * Math.sin(x)) / Math.tanh(5); // a soft square wave: teeth
+
+// One glyph of diameter d px. Its session (state, pulses, compactions) is
+// shared, so the map's node and the header's glyph show the same thing.
+function glyph(d, session, letter) {
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("class", "glyph");
+  svg.setAttribute("viewBox", "-1.5 -1.5 3 3");
+  svg.setAttribute("width", d * 1.5);
+  svg.setAttribute("height", d * 1.5);
+  const pips = document.createElementNS(NS, "g");
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("pathLength", "1");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  const text = document.createElementNS(NS, "text");
+  text.textContent = letter;
+  svg.append(pips, path, text);
+  const px = 2 / d; // one pixel, in the glyph's units
+  const cur = { ...ZERO, ...session.target(0) };
+  let rot = 0, wavePhase = 0, last = performance.now(), shownPips = -1;
+
+  function frame(now) {
+    const dt = Math.min(.1, (now - last) / 1000);
+    last = now;
+    const s = session.state, t = (now - session.since) / 1000;
+    const goal = { ...ZERO, ...session.target(t) };
+    const k = 1 - Math.exp(-dt / .11); // ease toward the state: the morph
+    for (const key of ["r", "wave", "teeth", "arc", "fill"]) cur[key] = mix(cur[key], goal[key], k);
+    cur.ink = mixc(cur.ink, goal.ink, k);
+    cur.body = mixc(cur.body, goal.body, k);
+
+    // Motion per state: the orbit quickens as the first byte keeps it waiting,
+    // the wave flows, the gear ticks.
+    const teeth = 8;
+    if (s === "first") rot += dt * (1.1 + 1.4 * (1 - Math.exp(-t / 4)));
+    if (s === "starting") rot += dt * .35;
+    wavePhase += dt * 7;
+    let gear = 0;
+    if (s === "tools" || s === "listening") {
+      const period = s === "tools" ? .55 : 1.8, n = Math.floor(t / period), f = Math.min(1, (t / period - n) * 3.5);
+      gear = (n + 1 - Math.pow(1 - f, 3)) * Math.PI / teeth;
+    }
+
+    // A frame's time can trail performance.now(), when a pulse was stamped.
+    const since = (at) => Math.max(0, now - at);
+    const breath = s === "max" ? Math.sin(Math.PI * Math.min(1, since(session.keepalive) / 2400)) : 0;
+    const flash = Math.max(0, 1 - since(session.data) / 300);
+    const wave = cur.wave * (1 + 1.6 * (s === "streaming" ? flash : 0));
+    const R = cur.r * (1 + .09 * breath);
+
+    let dPath = "";
+    const N = 120;
+    for (let i = 0; i <= N; i++) {
+      const a = (i / N) * 2 * Math.PI - Math.PI / 2;
+      const r = R + wave * Math.sin(6 * a - wavePhase) + cur.teeth * sq(teeth * (a - gear));
+      dPath += (i ? "L" : "M") + (r * Math.cos(a)).toFixed(4) + " " + (r * Math.sin(a)).toFixed(4);
+    }
+    path.setAttribute("d", dPath + "Z");
+    path.setAttribute("stroke", rgb(cur.ink));
+    path.setAttribute("stroke-width", (1.6 + 1.4 * flash) * px);
+    path.setAttribute("fill", rgb(mixc(C.paper, cur.body, cur.fill)));
+    path.setAttribute("stroke-dasharray", s === "starting" ? ".004 .036" : cur.arc > .995 ? "none" : `${cur.arc} ${1 - cur.arc}`);
+    path.setAttribute("stroke-dashoffset", (-rot / (2 * Math.PI)).toFixed(4));
+    path.setAttribute("fill-opacity", (cur.arc > .995 ? 1 : cur.fill).toFixed(3));
+    text.setAttribute("font-size", (.88 * cur.r / .9).toFixed(3));
+    const dark = 1 - (cur.body[0] * .3 + cur.body[1] * .59 + cur.body[2] * .11) / 255;
+    text.setAttribute("fill", rgb(mixc(C.ink, C.paper, cur.fill * Math.min(1, dark * 2.5))));
+    text.setAttribute("opacity", s === "brain" ? (1 - cur.fill * .6).toFixed(2) : 1);
+
+    if (shownPips !== session.pips) {
+      shownPips = session.pips;
+      pips.replaceChildren();
+      for (let i = 0; i < session.pips; i++) {
+        const a = -Math.PI / 2 + (i + 1) * (Math.PI / 7.5), c = document.createElementNS(NS, "circle");
+        c.setAttribute("cx", (1.22 * Math.cos(a)).toFixed(3));
+        c.setAttribute("cy", (1.22 * Math.sin(a)).toFixed(3));
+        c.setAttribute("r", 2.6 * px);
+        c.setAttribute("fill", rgb(C.ink));
+        c.setAttribute("opacity", Math.max(.18, .55 - i * .07));
+        pips.append(c);
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  return svg;
+}
+
+function session(state, pips = 2) {
+  const now = performance.now();
+  return { state, since: now, pips, keepalive: -1e9, data: -1e9, lastData: now,
+    target(t) { return STATES[this.state].at(t); },
+    set(state) { this.state = state; this.since = performance.now(); },
+    pulse() { const now = performance.now(); this.lastData = now; if (now - this.data > 300) this.data = now; },
+    beat() { this.keepalive = performance.now(); this.pulse(); } };
+}
+
+// The stage: one session, two glyphs.
+const params = new URLSearchParams(location.search);
+const one = session(params.get("state") || "first", +(params.get("pips") ?? 2));
+document.getElementById("big").append(glyph(30, one, "C"));
+document.getElementById("small").append(glyph(20, one, "C"));
+const now = document.getElementById("now");
+const show = () => {
+  const s = STATES[one.state];
+  now.textContent = `${s.label}${s.sub ? `: ${s.sub}` : ""}`;
+  for (const b of document.querySelectorAll("#states button")) b.classList.toggle("on", b.dataset.state === one.state);
+};
+for (const [name, s] of Object.entries(STATES)) {
+  const b = document.createElement("button");
+  b.dataset.state = name;
+  b.textContent = s.sub && name !== "listening" && name !== "paused" ? `${s.label}, ${s.sub}` : s.label;
+  b.onclick = () => { stopPlay(); one.set(name); show(); };
+  document.getElementById("states").append(b);
+}
+show();
+
+// The link: the brain sends a keepalive when it has been 4 s quiet, and any
+// message is data. While it is down nothing arrives, so Max's disc stops breathing.
+let up = true;
+const all = [one];
+setInterval(() => {
+  if (!up) return;
+  for (const s of all) if (performance.now() - s.lastData >= 4000) s.beat();
+}, 250);
+document.getElementById("data").onclick = () => up && one.pulse();
+document.getElementById("keep").onclick = () => up && one.beat();
+document.getElementById("link").onclick = (e) => { up = !up; e.target.classList.toggle("on", up); e.target.textContent = up ? "Link up" : "Link down"; };
+document.getElementById("pips").onclick = (e) => { one.pips = (one.pips + 1) % 9; e.target.textContent = `Compactions: ${one.pips}`; };
+
+// Auto-play: a realistic session. [state, seconds, data every ms, event]
+const SCRIPT = [
+  ["first", 1.6], ["streaming", 2.4, 110], ["brain", .3], ["tools", 3, 900], ["brain", .25],
+  ["first", .9], ["streaming", 1.6, 110], ["brain", .3], ["tools", 2.6, 700], ["brain", .25],
+  ["first", 1.2], ["streaming", 3, 110], ["brain", .35, 0, "compact"], ["max", 13], ["brain", .3],
+];
+let playing = null;
+function stopPlay() { clearTimeout(playing?.step); clearInterval(playing?.data); playing = null; document.getElementById("play").classList.remove("on"); }
+function play(i = 0) {
+  const [state, secs, every, event] = SCRIPT[i % SCRIPT.length];
+  one.set(state);
+  if (event === "compact") one.pips = (one.pips + 1) % 9;
+  show();
+  clearInterval(playing.data);
+  if (every) playing.data = setInterval(() => up && one.pulse(), every * (.6 + Math.random() * .8));
+  playing.step = setTimeout(() => play(i + 1), secs * 1000);
+}
+document.getElementById("play").onclick = (e) => {
+  if (playing) return stopPlay();
+  playing = {}; e.target.classList.add("on"); play();
+};
+if (!params.has("state")) { playing = {}; document.getElementById("play").classList.add("on"); play(); }
+
+// Every state at once, at both sizes, each its own session; streaming gets
+// data so its wave swells, the others only keepalives.
+for (const [name, s] of Object.entries(STATES)) {
+  const ses = session(name, 3);
+  all.push(ses);
+  if (name === "streaming") setInterval(() => up && ses.pulse(), 140);
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.title = `Core: Waiting::${s.core}`;
+  const sizes = document.createElement("div");
+  sizes.className = "sizes";
+  sizes.append(glyph(30, ses, "C"), glyph(20, ses, "C"));
+  const label = document.createElement("div");
+  label.className = "label";
+  label.innerHTML = `${s.label}<small>${s.sub || "&nbsp;"}</small>`;
+  cell.append(sizes, label);
+  document.getElementById("gallery").append(cell);
+}
+</script>
