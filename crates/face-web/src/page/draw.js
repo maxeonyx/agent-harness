@@ -1,7 +1,7 @@
 import { $, el, svgEl, when } from "./base.js";
-import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, look, positions, radius, routes, shortName, shown, stateOf, successor, unfolded, view } from "./map.js";
+import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, look, positions, radius, routes, shortName, shown, stateOf, successor, unfolded, view, waitingOn } from "./map.js";
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
-import { ICON, layer, MARK, session } from "./blobs.js";
+import { ICON, layer, MARK, session, STATES } from "./blobs.js";
 import { curve, stroke, taper } from "./layout.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
@@ -32,7 +32,7 @@ export function dress(s, t, jump = false) {
   const n = graph.nodes.get(t.id);
   s.set(trouble(t) ? "held" : stateOf(t), jump);
   s.hollow = n?.kind === "planned" && !n.solid;
-  s.letter = s.hollow ? String(n.waits) : glyph(t);
+  s.letter = s.hollow ? String(waitingOn(t).n) : glyph(t);
   s.pips = n?.pips ?? 0;
   return s;
 }
@@ -103,7 +103,7 @@ function elOf(id) {
 // and the marks written for the canvas.
 let marks = new Float32Array(0);
 const rgb = (r, g, b) => [r / 255, g / 255, b / 255];
-const INK = rgb(20, 20, 19), PAPER = rgb(250, 249, 245), YOURS = rgb(212, 105, 28), GREEN = rgb(79, 138, 85), RED = rgb(179, 53, 44);
+const INK = rgb(20, 20, 19), PAPER = rgb(250, 249, 245), YOURS = rgb(212, 105, 28);
 export function drawNodes() {
   if (marks.length < MARK * shown.size) marks = new Float32Array(MARK * shown.size * 2);
   let k = 0;
@@ -117,12 +117,10 @@ export function drawNodes() {
     const m = k++ * MARK;
     marks[m] = c.x; marks[m + 1] = c.y; marks[m + 2] = radius(n);
     if (n.kind === "leg") {
-      // The own node of a finished task Max started (a chat, an aside) in
-      // its outcome's colour, so it stands out from the agents' finished
-      // legs; any other leg ink.
-      const o = id === n.t.id && isDone(n.t) && !n.t.started_by ? n.t.outcome?.kind : null;
-      const fill = o === "failed" ? RED : o && o !== "abandoned" ? GREEN : INK;
-      marks.set(fill, m + 4); marks[m + 7] = (n.old ? .15 : fill === INK ? .42 : .85) * dim;
+      // A finished task's own node in its blob's colour (stateOf), as its
+      // chat's dock shows it; any other leg ink.
+      const st = id === n.t.id && isDone(n.t) ? STATES[stateOf(n.t)].col[0] : null;
+      marks.set(st ? rgb(...st) : INK, m + 4); marks[m + 7] = (n.old ? .15 : st ? .85 : .42) * dim;
       marks[m + 11] = 0;
     } else if (n.kind === "planned") {
       // A planned join: paper, with a dotted ring.
@@ -157,11 +155,12 @@ export function hitAt(sx, sy) {
   }
   return best;
 }
-// A small node opens its task's chat where its stretch begins: a leg at its
-// first entry, a chip or planned join at the call that started its work.
+// A node opens its task's chat: its own node at the end, any other where
+// its stretch begins: a leg at its first entry, a chip at the call that
+// started its work.
 export function openAt(n) {
   if (!n) return;
-  go(n.t.id, n.open || null);
+  go(n.t.id, n.id === n.t.id ? null : n.open || null);
 }
 
 // The lines: an edge's route as laid out, bent to follow its two ends

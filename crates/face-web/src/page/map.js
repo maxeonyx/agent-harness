@@ -8,9 +8,9 @@ import { layered } from "./layout.js";
 // from the newer node back to what it depends on. Background work that is
 // not a spawn is a chip, hung from the leg that started it, and a task
 // with work out has a planned join under it, depending on that work, until
-// the work's results come in: on every member of a scope that still runs,
-// a finished one or an aside included. Projects are the graph's connected
-// pieces.
+// the work's results come in: on every member, a finished one or an aside
+// included, until it has read their results. Work handed to Max is a side
+// branch, never joined. Projects are the graph's connected pieces.
 //
 // Each live task is big: its planned join while it has work out, so it
 // sits below what it will take in, hollow only while it waits on it; its
@@ -45,11 +45,7 @@ export function look(t) {
   switch (w.kind) {
     case "model": return { cls: (w.streaming ? "working streaming" : "working") + stopping, text: (stopping ? "Abandoning: " : "") + (w.streaming ? "Writing" : "Thinking") + since };
     case "calls": {
-      const kids = w.calls.flatMap((c) => c.children);
-      if (kids.length) {
-        const running = kids.filter((k) => byId[k] && byId[k].waiting?.kind !== "done").length;
-        return { cls: "children" + stopping, text: `Waiting on ${running} of ${kids.length}${since}` };
-      }
+      if (waitsOnKids(t)) return { cls: "children" + stopping, text: waitingOn(t).text + since };
       const c = w.calls[0] || {};
       return { cls: "working tool" + stopping, text: `${c.tool || "Tools"}` };
     }
@@ -60,7 +56,7 @@ export function look(t) {
     case "parked": return { cls: "paused", text: "Parked" + since };
     case "limited": return { cls: "stuck", text: `Limited until ${when(w.until)}` };
     case "signedOut": return { cls: "stuck", text: "Waits for a sign-in" };
-    case "listening": return { cls: "listening" + stopping, text: w.calls.length ? `${w.calls.length} in the background` : "Listening" };
+    case "listening": return { cls: "listening" + stopping, text: (waitingOn(t).text || "Listening") + since };
     case "done": {
       const o = t.outcome || {};
       if (o.kind === "failed") return { cls: "done failed", text: `Failed ${ago(w.since)} ago` };
@@ -102,7 +98,7 @@ export function stateOf(t) {
     case "model": return w.streaming ? "streaming" : "first";
     case "calls": return !waitsOnKids(t) ? "tools" : t.pause ? "paused" : "children";
     case "max": return "max";
-    case "done": return "done";
+    case "done": return ended(t);
     case "starting": return "starting";
     case "held": case "parked": return "paused";
     case "limited": case "signedOut": return "held";
@@ -110,8 +106,24 @@ export function stateOf(t) {
   }
   return "brain";
 }
+// What a task waits on that still runs, as its hollow node's number and in
+// words: its agents, its background tasks (not those handed to Max) and
+// its other tool calls.
+export function waitingOn(t) {
+  const w = t.waiting || {};
+  const agents = view.tasks.filter((m) => m.owner === t.id && !isDone(m)).length;
+  const background = (t.work || []).filter((b) => b.running && !b.handed).length;
+  const tools = w.kind === "calls" ? w.calls.filter((c) => !c.children?.length && c.status !== "settled" && c.tool !== "wait").length : 0;
+  const n = agents + background + tools;
+  const parts = [[agents, "agent"], [background, "background task"], [tools, "tool call"]]
+    .filter(([k]) => k).map(([k, what]) => `${k} ${what}${k === 1 ? "" : "s"}`);
+  return { n, text: !n ? "" : parts.length === 1 ? `Waiting on ${parts[0]}` : `Waiting on ${n}: ${parts.join(", ")}` };
+}
 // Waiting on its children: on a spawn, or a `wait` on one.
 const waitsOnKids = (t) => t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length);
+// How a finished task shows: one Max started in its outcome's colour, so it
+// stands out from the agents' finished work; anything else faint.
+const ended = (t) => (!t.started_by && { failed: "failed", result: "done" }[t.outcome?.kind]) || "ended";
 // Waiting on its work: its planned join is big and hollow.
 const waitsOnWork = (t) => t.waiting?.kind === "listening" || waitsOnKids(t);
 
@@ -124,7 +136,8 @@ export const unfolded = new Set();
 export const cardStatus = (c) => `Finished ${ago(c.last)} ago`;
 
 // Each task's legs into nodes, its work into chips, a planned join for
-// work out, the chains of compactions folded, and the projects.
+// work out, the chains of compactions folded, and the projects. Work handed
+// to Max is his: a side branch off the leg that started it, never joined.
 export function derive(openId) {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
   const tasks = [...view.tasks].sort(order);
@@ -147,23 +160,17 @@ export function derive(openId) {
     for (const w of t.work || []) add({ id: `w:${w.call}`, kind: "chip", t, work: w, running: w.running, open: w.at, deps: [w.leg] });
   }
   // A planned join under each live task with work out: members and calls
-  // whose results it has not taken in yet, while any of them runs or a
-  // finished call's result waits to be read (not one handed to Max). A
-  // finished member waits in it with the rest of its scope.
+  // whose results it has not taken in yet, running or finished and unread
+  // (not work handed to Max).
   const taken = new Map(tasks.map((t) => [t.id, new Set((t.legs || []).flatMap((l) => l.on.map((d) => d.leg ?? `w:${d.work}`)))]));
   const members = new Map();
   for (const t of tasks) if (t.owner && byId[t.owner]) (members.get(t.owner) ?? members.set(t.owner, []).get(t.owner)).push(t);
-  const live = new Set(tasks.filter((t) => !isDone(t)).map((t) => t.scope));
   for (const t of tasks) {
     if (isDone(t) || !t.leg) continue;
     const seen = taken.get(t.id);
-    const open = [], done = [];
-    for (const m of members.get(t.id) || []) {
-      if (m.leg && !seen.has(m.leg) && live.has(m.scope)) (isDone(m) ? done : open).push({ id: m.leg, at: m.legs?.[0]?.on.find((d) => d.leg)?.at });
-    }
-    const kids = open.length;
-    for (const w of t.work || []) if ((w.running || !w.handed) && !seen.has(`w:${w.call}`)) open.push({ id: `w:${w.call}`, at: w.at });
-    if (open.length) add({ id: `p:${t.id}`, kind: "planned", t, kids, waits: open.length, open: open[0].at, deps: [t.leg, ...open.map((o) => o.id), ...done.map((o) => o.id)] });
+    const out = (members.get(t.id) || []).map((m) => m.leg).filter((l) => l && !seen.has(l));
+    for (const w of t.work || []) if (!w.handed && !seen.has(`w:${w.call}`)) out.push(`w:${w.call}`);
+    if (out.length) add({ id: `p:${t.id}`, kind: "planned", t, deps: [t.leg, ...out] });
   }
   // Big: each live task's own node. A task's own node, big or not, takes
   // the task's id. A planned join big while its task runs on is solid, and
@@ -273,7 +280,8 @@ function extent(n) {
   const lw = l ? measure(l, n.big ? LABEL_FONT : CHIP_FONT) + 7 : 0;
   return { lo: r + 3, hi: r + 3 + lw, along: n.big ? 2 * BIG_REACH.side - 6 : 2 * r + (l ? 4 : 0),
     top: n.big ? BIG_REACH.top : r + 2, foot: n.big ? BIG_REACH.foot : r + 3,
-    now: (!!n.big && (n.kind !== "planned" || !!n.solid)) || (n.kind === "chip" && n.running), planned: n.kind === "planned" && !n.solid };
+    now: (!!n.big && (n.kind !== "planned" || !!n.solid)) || (n.kind === "chip" && n.running && !n.work.handed),
+    planned: n.kind === "planned" && !n.solid, side: n.kind === "chip" && n.work.handed };
 }
 
 // A leg's life, in ms: from when it began to when the next leg of its task
@@ -306,7 +314,7 @@ export function layout() {
     }
     const ns = c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), life: life(n), kind: n.kind, old: n.old, spent: n.kind === "chip" && !n.running, solid: n.solid }));
     let sig = "";
-    for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}${n.now ? "!" : ""}${n.old || n.spent ? "~" : ""}${n.solid ? "=" : ""}${Math.round(n.hi)};`;
+    for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}${n.now ? "!" : ""}${n.side ? "^" : ""}${n.old || n.spent ? "~" : ""}${n.solid ? "=" : ""}${Math.round(n.hi)};`;
     return { c, sig, ns };
   });
   const sig = parts.map((p) => p.sig).join("\n") + (innerWidth > 760);
