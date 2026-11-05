@@ -50,7 +50,8 @@
 
 // Colours: [fill, edge, icon] per state; the whole blob takes the state's,
 // as base.css names them: Max's turn orange, an agent at work (or its
-// background work) blue, waiting on other agents purple, done green, paused grey, stuck red.
+// background work) blue, waiting on other agents purple, done green (failed red, an
+// agent's or an abandoned one faint), paused grey, stuck red.
 const C = { ink: [20, 20, 19], paper: [250, 249, 245], yours: [212, 105, 28], working: [58, 109, 176], others: [139, 90, 166],
   green: [79, 138, 85], red: [179, 53, 44], faint: [161, 159, 150], muted: [107, 106, 100] };
 const tint = (c, k) => C.paper.map((p, i) => p + (c[i] - p) * k);
@@ -90,6 +91,8 @@ export const STATES = {
   starting:  { active: null, centre: .4, col: [C.working, C.working, C.paper] },
   paused:    { active: "centre", centre: .54, gap: -.15, still: true, bare: true, col: [[233, 229, 217], C.faint, C.muted] },
   done:      { active: null, centre: .48, merged: true, still: true, col: [C.green, C.green, C.paper] },
+  failed:    { active: null, centre: .48, merged: true, still: true, col: [C.red, C.red, C.paper] },
+  ended:     { active: null, centre: .48, merged: true, still: true, col: [C.faint, C.faint, C.paper] },
 };
 const satOf = (s) => (STATES[s].active in SATS ? STATES[s].active : null);
 // Satellite k's radius and gap as state st sets them.

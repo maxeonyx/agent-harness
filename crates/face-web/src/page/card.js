@@ -32,7 +32,6 @@ function show(id, at) {
 }
 export function go(id, at) {
   clearTimeout(closing);
-  if (id === openId && !at) return;
   show(id, at);
 }
 // The task and the entry a hash names.
@@ -55,7 +54,8 @@ export function route() {
 }
 
 async function transition(to, entry) {
-  if (to === openId) { if (to && entry && logState) { logState.at = entry; renderPanel(); } return; }
+  // Already open: to that entry, or to its end.
+  if (to === openId) { if (to && logState) { if (entry) logState.at = entry; else logState.follow = true; renderPanel(); } return; }
   if (to && (!view || (!byId[to] && to !== NEW))) { pendingOpen = { id: to, at: entry }; return; }
   const from = openId;
   if (from) leave();

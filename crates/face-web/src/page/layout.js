@@ -6,13 +6,14 @@
 // asks the browser for geometry: sizes come in with the nodes, and curves
 // are Béziers in closed form.
 //
-// A node: { id, deps, kind, lo, hi, along, top, foot, now, planned }. `lo` and
+// A node: { id, deps, kind, lo, hi, along, top, foot, now, planned, side }. `lo` and
 // `hi` are how far it reaches left and right of its centre (its label is to
 // the right), `along` how tall it is, `top` and `foot` where lines arrive
 // from above and leave below. `now` is a live node, `planned` one that waits
 // on what it depends on; the present row is the lowest any node but these
-// and chips reaches. `life`, if known, is [when it began, when it ended or
-// now], in ms. Nodes come after everything they depend on.
+// and chips reaches. A `side` node is a branch off the side of what it
+// depends on, on its row. `life`, if known, is [when it began, when it
+// ended or now], in ms. Nodes come after everything they depend on.
 
 // Isotonic regression with minimum gaps: each node of row L as near its
 // target t[i] (weighted w[i]) as it can be, in order, each at least gap[i]
@@ -52,7 +53,7 @@ export function layered(nodes, prev = new Map()) {
   // node depends on (a running child of a parent that runs on), which sits
   // just above it; a planned node one below what it waits on. 3. Everything
   // else by its time, within its slack.
-  const below = (v) => { let r = -1; for (const d of v.deps) r = Math.max(r, by.get(d).rank); return r + 1; };
+  const below = (v) => { let r = -1; for (const d of v.deps) r = Math.max(r, by.get(d).rank); return v.n.side ? Math.max(0, r) : r + 1; };
   for (const v of V) v.rank = below(v);
   let P = 0;
   for (const v of V) if (!v.n.planned && v.n.kind !== "chip") P = Math.max(P, v.rank);
@@ -64,6 +65,7 @@ export function layered(nodes, prev = new Map()) {
     if (behind.has(v.id)) v.rank = Math.max(below(v), Math.min(...kids.get(v.id).filter((k) => k.n.now).map((k) => k.rank)) - 1);
   }
   byTime(V, by, P, kids);
+  for (const v of V) if (v.n.side) v.rank = below(v);
   const layers = [];
   const put = (v) => (layers[v.rank] ??= []).push(v);
   V.forEach(put);
@@ -102,6 +104,14 @@ export function layered(nodes, prev = new Map()) {
       L.sort((a, b) => a.bary - b.bary || a.pos - b.pos);
       L.forEach((v, i) => (v.pos = i));
     }
+  }
+  // A side node just left of what it hangs from, its line running across.
+  for (const L of layers) {
+    for (const v of L.filter((u) => u.n?.side)) {
+      L.splice(L.indexOf(v), 1);
+      L.splice(L.indexOf(by.get(v.deps[0])), 0, v);
+    }
+    L.forEach((v, i) => (v.pos = i));
   }
   // 5. Across: each line a spring pulling its ends together, each row placed
   // as near its neighbours as the gaps allow (dot's objective, squared). A
@@ -186,7 +196,7 @@ export function layered(nodes, prev = new Map()) {
 // node with no `life` began with what it depends on. A few sweeps, as its
 // neighbours move with it.
 function byTime(V, by, P, kids) {
-  const fixed = (v) => v.n.now || v.n.planned;
+  const fixed = (v) => v.n.now || v.n.planned || v.n.side;
   for (let i = V.length - 1; i >= 0; i--) {
     const v = V[i];
     let r = fixed(v) ? v.rank : P;
@@ -220,12 +230,14 @@ function byTime(V, by, P, kids) {
   }
 }
 
-// An edge's route, from the dependent's top up to its dependency's foot:
+// An edge's route, from the dependent's top up to its dependency's foot
+// (a side node's across, from its right to its dependency's left):
 // the shortest line through the gaps its hidden points leave in the rows it
 // crosses (a funnel, as in string pulling). So a long edge runs at one
 // steady slope, and turns only at the edge of a gap, round a node in its way.
 function route(e) {
   const v = e.from, t = e.to;
+  if (v.n.side) return [[v.x + v.hi - 4, v.y], [t.x - t.lo + 2, t.y]];
   const end = [t.x, t.y + t.n.foot];
   const gaps = e.chain.slice(1, -1).map((u) => [u.gap[0], u.gap[1], u.y]);
   gaps.push([end[0], end[0], end[1]]);
