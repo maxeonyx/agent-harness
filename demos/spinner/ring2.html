@@ -1,0 +1,361 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spinner: the ring, second take</title>
+<!--
+  A spike: the node's border alone carries what the session waits on. Every
+  state is a point in one small space of border parameters (radius, gear
+  teeth, brain lobes, a flowing wave, a drawn arc, a dash gap, colours), and
+  each parameter springs toward its state's value, so a change of state is a
+  morph, never a cut. Behind the node, each packet in or out drops a soft
+  disk that spreads and fades; disks overlap and are never debounced.
+  Compaction dots sit on a track just outside the border.
+
+  ?state=NAME shows one state still running (no auto-cycle); &pips=N sets the
+  compactions. Open the file in a browser: no build, no brain.
+-->
+<style>
+  :root {
+    --ground: #f0eee6; --paper: #faf9f5; --line: #e3dfd3; --ink: #141413;
+    --muted: #6b6a64; --faint: #a19f96;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans);
+    background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); background-size: 22px 22px; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font: 600 20px var(--serif); margin: 0 0 4px; }
+  h2 { font: 600 15px var(--serif); margin: 28px 0 10px; }
+  p { margin: 0 0 8px; color: var(--muted); }
+  button { font: inherit; color: inherit; cursor: pointer; padding: .3em .75em; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--paper); touch-action: manipulation; }
+  button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .stage { display: flex; flex-wrap: wrap; gap: 20px 28px; align-items: center; padding: 18px; margin: 14px 0;
+    background: rgba(250, 249, 245, .6); border: 1px solid var(--line); border-radius: 14px; }
+  .node { display: flex; flex-direction: column; align-items: center; }
+  .node .name { font: 600 13.5px/1.2 var(--serif); }
+  .node small { color: var(--muted); font-size: 12px; }
+  .now { font: 13px var(--sans); color: var(--muted); min-width: 12em; }
+  canvas.glyph { display: block; margin: calc(var(--d) * -.4); } /* the canvas overhangs the node for disks and dots */
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 4px 10px;
+    background: rgba(250, 249, 245, .6); border: 1px solid var(--line); border-radius: 12px; }
+  .cell .sizes { display: flex; align-items: center; gap: 26px; height: 74px; }
+  .cell .label { font-size: 12.5px; text-align: center; }
+  .cell .label small { display: block; color: var(--muted); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+  dt { font-weight: 600; } dd { margin: 0; color: var(--muted); }
+</style>
+<main>
+  <h1>Spinner: the ring, second take</h1>
+  <p>The border alone says what the session waits on. Every change is a morph; every packet is a soft disk behind the node.</p>
+
+  <div class="stage">
+    <div class="node"><span id="map"></span><span class="name">fixes</span><small>map size</small></div>
+    <div class="node"><span id="large"></span><small>larger</small></div>
+    <span class="now" id="now"></span>
+  </div>
+
+  <div class="row" id="states"></div>
+  <div class="row" style="margin-top: 8px">
+    <button id="play">Auto-cycle</button>
+    <button id="packet">Packet</button>
+    <button id="burst">Burst</button>
+    <button id="compact">Compaction</button>
+    <button id="link" class="on">Link up</button>
+  </div>
+
+  <h2>Every state</h2>
+  <div class="gallery" id="gallery"></div>
+
+  <h2>The language</h2>
+  <dl>
+    <dt>Waiting for first byte</dt><dd>The rim goes faint and a bold arc orbits it, quickening and pulling in the longer the first byte keeps it waiting. When the stream starts the arc grows round until it closes the ring.</dd>
+    <dt>Streaming</dt><dd>Water running round the rim. It reads as flowing, not sliding, for three reasons: the crests are trochoids (sharp crests, flat troughs, as on water, by moving each point along the rim as well as out); the crests ride in groups whose envelope travels at half the crests' speed, so each crest is born at the back of a group, swells, and dies at its front, as deep-water waves do; and a smaller second wave of another length and speed means the pattern never repeats.</dd>
+    <dt>Tools</dt><dd>A gear with square teeth that turns in ratchet ticks, with a small mechanical settle after each.</dd>
+    <dt>Brain</dt><dd>The gear idea, organic: a smaller cog of five rounded lobes that turns smoothly and slowly. Thinking, not machining. Usually a short morph between the others.</dd>
+    <dt>Listening</dt><dd>The tools gear, faint and turning slowly: background work it listens on.</dd>
+    <dt>Max</dt><dd>A thick maroon rim on a blush fill that swells once with each keepalive from the brain, about every 4 s when the link is idle. If it stops, the link has.</dd>
+    <dt>Starting</dt><dd>The rim breaks into dashes, slowly turning: the session is still being put together.</dd>
+    <dt>Paused, done</dt><dd>Still: grey for paused, parked or held on the account; green for done.</dd>
+    <dt>Liveness</dt><dd>Each message in or out, keepalives included, drops a disk of the rim's colour behind the node that spreads and fades over about a second. A burst stacks them, darker where they overlap: never debounced.</dd>
+    <dt>Compactions</dt><dd>Dots clockwise from twelve o'clock on a track just outside the border, following its shape; the latest is darkest, and a new one pops in.</dd>
+  </dl>
+</main>
+<script>
+const C = { ink: [20, 20, 19], paper: [250, 249, 245], maroon: [122, 31, 34], blush: [244, 228, 225],
+  green: [79, 138, 85], mint: [228, 238, 226], faint: [161, 159, 150], muted: [107, 106, 100], stone: [233, 229, 217] };
+const TAU = 2 * Math.PI;
+
+// A state is a target in border space, possibly moving with t, the seconds
+// since it began. Unset parameters take REST's values.
+const REST = { r: .84, teeth: 0, lobes: 0, wave: 0, arc: 1, gap: 0, weight: 1, ink: C.ink, body: C.paper };
+const STATES = {
+  first:     { label: "Model", sub: "waiting for first byte", core: "Model { streaming: false }",
+               at: (t) => ({ r: .74 + .1 * Math.exp(-t / 4), arc: .24, weight: 1.5 }) },
+  streaming: { label: "Model", sub: "streaming", core: "Model { streaming: true }",
+               at: () => ({ r: .82, wave: .045 }) },
+  brain:     { label: "Brain", sub: "between calls", core: "Brain",
+               at: () => ({ r: .72, lobes: .075, weight: 1.2 }) },
+  tools:     { label: "Tools", sub: "calls running", core: "Calls",
+               at: () => ({ r: .8, teeth: .085, weight: 1.2 }) },
+  listening: { label: "Listening", sub: "background work", core: "Listening",
+               at: () => ({ r: .8, teeth: .06, ink: C.faint }) },
+  max:       { label: "Max", sub: "your move", core: "Max",
+               at: () => ({ r: .86, weight: 1.9, ink: C.maroon, body: C.blush }) },
+  starting:  { label: "Starting", sub: "limbs connecting", core: "Starting",
+               at: () => ({ r: .8, gap: .62, ink: C.muted }) },
+  paused:    { label: "Paused", sub: "or parked, or held", core: "Paused, Parked, Held",
+               at: () => ({ r: .8, ink: C.faint, body: C.stone }) },
+  done:      { label: "Done", sub: "", core: "Done",
+               at: () => ({ r: .8, ink: C.green, body: C.mint }) },
+};
+const SCALARS = ["r", "teeth", "lobes", "wave", "arc", "gap", "weight"];
+const COLOURS = ["ink", "body"];
+
+const rgb = (c, a = 1) => `rgba(${c.map(Math.round).join()},${a})`;
+const sq = (x) => Math.tanh(4 * Math.sin(x)) / Math.tanh(4); // a soft square wave: gear teeth
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
+// A spring per parameter: critically damped, so a morph eases in and out
+// without overshoot. Returns the new [value, velocity].
+function spring(x, v, goal, dt, w = 13, zeta = 1) {
+  v += (w * w * (goal - x) - 2 * zeta * w * v) * dt;
+  return [x + v * dt, v];
+}
+
+// The session a glyph shows: its state, when each packet arrived, its
+// compactions. The map's node and the larger one share one session.
+function session(state, pips = 0) {
+  return { state, since: performance.now(), packets: [], keepalive: -1e9, lastData: performance.now(),
+    pips: Array.from({ length: pips }, () => -1e9),
+    set(state) { if (state !== this.state) { this.state = state; this.since = performance.now(); } },
+    packet() { const now = performance.now(); this.lastData = now; this.packets.push(now); if (this.packets.length > 48) this.packets.shift(); },
+    beat() { this.keepalive = performance.now(); this.packet(); },
+    compact() { this.pips.push(performance.now()); if (this.pips.length > 12) this.pips = []; } };
+}
+
+const N = 180; // points round the border
+const DISK_MS = 1100, BREATH_MS = 2400;
+const glyphs = [];
+
+// One glyph of diameter d CSS px, drawn on a canvas 1.8 d wide so the disks
+// and dots can overhang the node.
+function glyph(d, ses, letter) {
+  const canvas = document.createElement("canvas");
+  canvas.className = "glyph";
+  canvas.style.setProperty("--d", d + "px");
+  const side = d * 1.8, dpr = Math.min(3, devicePixelRatio || 1);
+  canvas.style.width = canvas.style.height = side + "px";
+  canvas.width = canvas.height = Math.round(side * dpr);
+  const ctx = canvas.getContext("2d");
+  const unit = d / 2; // px per glyph unit: radius 1 is the node's radius
+
+  const cur = {}, vel = {};
+  const start = { ...REST, ...STATES[ses.state].at(0) };
+  for (const k of SCALARS) { cur[k] = start[k]; vel[k] = 0; }
+  for (const k of COLOURS) { cur[k] = [...start[k]]; vel[k] = [0, 0, 0]; }
+  const xs = new Float32Array(N), ys = new Float32Array(N), rs = new Float32Array(N);
+  const dotR = [], dotV = [];
+  let gearA = 0, gearV = 0, gearGoal = 0, tick = -1, brainA = 0, waveT = 0, head = 0, spin = 0, visible = true;
+
+  new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(canvas);
+
+  function draw(now, dt) {
+    const s = ses.state, t = (now - ses.since) / 1000;
+    const goal = { ...REST, ...STATES[s].at(t) };
+    for (const k of SCALARS) [cur[k], vel[k]] = spring(cur[k], vel[k], goal[k], dt);
+    for (const k of COLOURS) for (let i = 0; i < 3; i++) [cur[k][i], vel[k][i]] = spring(cur[k][i], vel[k][i], goal[k][i], dt);
+
+    // Each state's own motion. The gear ratchets half a tooth per tick and
+    // settles on an underdamped spring; the brain's cog turns smoothly; the
+    // orbit quickens as the first byte keeps it waiting.
+    const period = s === "tools" ? .5 : s === "listening" ? 1.8 : 0;
+    if (period) { const n = Math.floor(t / period); if (n !== tick) { tick = n; gearGoal += Math.PI / 8; } } else tick = -1;
+    [gearA, gearV] = spring(gearA, gearV, gearGoal, dt, 34, .45);
+    brainA += dt * .7;
+    waveT += dt;
+    head += dt * (s === "first" ? 3.2 + 3 * (1 - Math.exp(-t / 4)) : 2.4);
+    if (s === "starting") spin += dt * .25;
+    if (!visible) return;
+
+    const since = (at) => Math.max(0, now - at);
+    const breath = Math.sin(Math.PI * clamp01(since(ses.keepalive) / BREATH_MS)) * (s === "max" ? 1 : 0);
+    const R = cur.r * (1 + .07 * breath);
+
+    // The border. The wave is a trochoid (Gerstner): each point also moves
+    // along the rim, bunching at the crests, so crests are sharp and troughs
+    // flat. Its envelope travels at half the crests' speed.
+    const K = 9, W = 1.7 * K, K2 = 13, W2 = 1.15 * K2;
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * TAU - Math.PI / 2;
+      let r = R + cur.teeth * sq(8 * (a - gearA)) + cur.lobes * Math.cos(5 * (a - brainA)), along = 0;
+      if (cur.wave > 1e-4) {
+        const env = .2 + .8 * (.5 + .5 * Math.cos(2 * a - (W / K) * waveT));
+        const A = cur.wave * env, A2 = cur.wave * .22, p = K * a - W * waveT, p2 = K2 * a - W2 * waveT + 1.3;
+        const q = .5 * R / (K * Math.max(cur.wave, .045)); // steepness at full height: sharp crests, never looping
+        r += A * Math.cos(p) + A2 * Math.cos(p2);
+        along = -(q * A * Math.sin(p) + .6 * A2 * Math.sin(p2)) / R;
+      }
+      xs[i] = r * Math.cos(a + along); ys[i] = r * Math.sin(a + along); rs[i] = r;
+    }
+
+    ctx.setTransform(dpr * unit, 0, 0, dpr * unit, canvas.width / 2, canvas.height / 2);
+    ctx.clearRect(-2, -2, 4, 4);
+    const px = 1 / unit;
+
+    // Liveness: a disk per packet, spreading and fading, stacked.
+    while (ses.packets.length && since(ses.packets[0]) > DISK_MS) ses.packets.shift();
+    for (const at of ses.packets) {
+      const p = since(at) / DISK_MS, e = 1 - Math.pow(1 - p, 3);
+      ctx.beginPath();
+      ctx.arc(0, 0, R * (1 + .6 * e), 0, TAU);
+      ctx.fillStyle = rgb(cur.ink, .065 * Math.pow(1 - p, 2));
+      ctx.fill();
+    }
+
+    const path = (from, count, close) => {
+      ctx.beginPath();
+      for (let j = 0; j < count; j++) { const i = (from + j + N) % N; j ? ctx.lineTo(xs[i], ys[i]) : ctx.moveTo(xs[i], ys[i]); }
+      if (close) ctx.closePath();
+    };
+    path(0, N, true);
+    ctx.fillStyle = rgb(cur.body);
+    ctx.fill();
+
+    // The rim: faint underneath while the arc is open, the arc bold over it;
+    // closing the arc is the morph from waiting to streaming. Starting's
+    // dashes grow from a solid rim by widening their gaps.
+    const width = (1.5 + d * .012) * cur.weight * px;
+    ctx.lineWidth = width; ctx.lineJoin = ctx.lineCap = "round";
+    ctx.strokeStyle = rgb(cur.ink);
+    const seg = TAU * R / 18;
+    ctx.setLineDash(cur.gap > .02 ? [seg * (1 - cur.gap), seg * cur.gap] : []);
+    ctx.lineDashOffset = -spin * R;
+    if (cur.arc > .995) ctx.stroke();
+    else {
+      ctx.strokeStyle = rgb(cur.ink, .2 * clamp01((1 - cur.arc) * 6));
+      ctx.lineWidth = width * .7;
+      ctx.stroke();
+      const count = Math.max(2, Math.round(cur.arc * N)), h = Math.round((head / TAU) * N);
+      path(h - count, count + 1, false);
+      ctx.lineWidth = width; ctx.strokeStyle = rgb(cur.ink);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Compaction dots, on a track just outside the border: each sits past the
+    // outermost point near its angle, and springs there so it rides the
+    // gear's ticks and the wave's crests softly.
+    const dr = (1.1 + d * .022) * px;
+    ses.pips.forEach((at, i) => {
+      const a = -Math.PI / 2 + (i + 1) * (TAU / 15);
+      const c = Math.round(((a + Math.PI / 2) / TAU) * N), win = 6;
+      let out = 0;
+      for (let j = -win; j <= win; j++) out = Math.max(out, rs[(c + j + N) % N]);
+      const g = out + width / 2 + dr + 4 * px;
+      if (dotR[i] === undefined) { dotR[i] = g; dotV[i] = 0; }
+      [dotR[i], dotV[i]] = spring(dotR[i], dotV[i], g, dt, 10);
+      const pop = clamp01(since(at) / 450), grow = pop < 1 ? 1 + 1.7 * Math.sin(Math.PI * pop) * (1 - pop) : 1;
+      ctx.beginPath();
+      ctx.arc(dotR[i] * Math.cos(a), dotR[i] * Math.sin(a), dr * pop * grow, 0, TAU);
+      ctx.fillStyle = rgb(cur.ink, Math.max(.2, .62 - (ses.pips.length - 1 - i) * .08));
+      ctx.fill();
+    });
+    dotR.length = dotV.length = ses.pips.length;
+
+    // The role letter, in the rim's colour.
+    ctx.setTransform(dpr, 0, 0, dpr, canvas.width / 2, canvas.height / 2);
+    ctx.font = `600 ${(R * unit * 1.02).toFixed(2)}px "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = rgb(cur.ink);
+    ctx.fillText(letter, 0, R * unit * .06);
+  }
+  glyphs.push(draw);
+  return canvas;
+}
+
+let last = performance.now();
+requestAnimationFrame(function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000);
+  last = now;
+  for (const draw of glyphs) draw(now, dt);
+  requestAnimationFrame(frame);
+});
+
+// The stage: one session at map size and larger.
+const params = new URLSearchParams(location.search);
+const one = session(params.get("state") || "first", +(params.get("pips") ?? 2));
+document.getElementById("map").append(glyph(30, one, "C"));
+document.getElementById("large").append(glyph(96, one, "C"));
+const nowLabel = document.getElementById("now");
+const show = () => {
+  const s = STATES[one.state];
+  nowLabel.textContent = `${s.label}${s.sub ? `: ${s.sub}` : ""}`;
+  for (const b of document.querySelectorAll("#states button")) b.classList.toggle("on", b.dataset.state === one.state);
+};
+for (const [name, s] of Object.entries(STATES)) {
+  const b = document.createElement("button");
+  b.dataset.state = name;
+  b.textContent = name === "first" ? "First byte" : name === "streaming" ? "Streaming" : s.label;
+  b.onclick = () => { stopPlay(); one.set(name); show(); };
+  document.getElementById("states").append(b);
+}
+show();
+
+// The link: the brain sends a keepalive when it has been 4 s quiet, and any
+// message is a packet. While it is down nothing arrives.
+let up = true;
+const all = [one];
+setInterval(() => { if (up) for (const s of all) if (performance.now() - s.lastData >= 4000) s.beat(); }, 250);
+const burst = (s, n = 12) => { for (let i = 0, at = 0; i < n; i++, at += 15 + Math.random() * 60) setTimeout(() => up && s.packet(), at); };
+document.getElementById("packet").onclick = () => up && one.packet();
+document.getElementById("burst").onclick = () => burst(one);
+document.getElementById("compact").onclick = () => one.compact();
+document.getElementById("link").onclick = (e) => { up = !up; e.target.classList.toggle("on", up); e.target.textContent = up ? "Link up" : "Link down"; };
+
+// Auto-cycle: a realistic session. [state, seconds, ms between packets, event]
+const SCRIPT = [
+  ["starting", 1.6], ["first", 1.8], ["streaming", 2.6, 90], ["brain", .6], ["tools", 3, 700], ["brain", .5],
+  ["first", 1.1], ["streaming", 2, 70], ["brain", .5], ["listening", 2.4, 1500], ["tools", 2, 500], ["brain", .5],
+  ["first", 1.4], ["streaming", 2.6, 90], ["brain", .8, 0, "compact"], ["max", 9], ["paused", 2], ["done", 2.4],
+];
+let playing = null;
+function stopPlay() { clearTimeout(playing?.step); clearTimeout(playing?.data); playing = null; document.getElementById("play").classList.remove("on"); }
+function play(i = 0) {
+  const [state, secs, every, event] = SCRIPT[i % SCRIPT.length];
+  one.set(state);
+  if (event === "compact") one.compact();
+  show();
+  clearTimeout(playing.data);
+  const drip = () => { if (up) one.packet(); playing.data = setTimeout(drip, every * (.3 + Math.random() * 1.4)); };
+  if (every) drip();
+  playing.step = setTimeout(() => play(i + 1), secs * 1000);
+}
+document.getElementById("play").onclick = (e) => {
+  if (playing) return stopPlay();
+  playing = {}; e.target.classList.add("on"); play();
+};
+if (!params.has("state")) { playing = {}; document.getElementById("play").classList.add("on"); play(); }
+
+// Every state at once, at both sizes; streaming and tools get packets.
+for (const [name, s] of Object.entries(STATES)) {
+  const ses = session(name, 3);
+  all.push(ses);
+  const every = { streaming: 120, tools: 800 }[name];
+  if (every) setInterval(() => up && ses.packet(), every);
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.title = `Core: Waiting::${s.core}`;
+  const sizes = document.createElement("div");
+  sizes.className = "sizes";
+  sizes.append(glyph(30, ses, "C"), glyph(56, ses, "C"));
+  const label = document.createElement("div");
+  label.className = "label";
+  label.innerHTML = `${s.label}<small>${s.sub || "&nbsp;"}</small>`;
+  cell.append(sizes, label);
+  document.getElementById("gallery").append(cell);
+}
+</script>
