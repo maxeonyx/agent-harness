@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spinner: the track</title>
+<style>
+  :root {
+    --ground: #f0eee6; --paper: #faf9f5; --line: #e3dfd3; --ink: #141413; --muted: #6b6a64; --faint: #a19f96; --hover: #e9e5d9;
+    --green: #4f8a55; --red: #b3352c; --blue: #3a6ea5; --orange: #c8641e;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
+    --ease: cubic-bezier(.2, .8, .2, 1);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); }
+  main { max-width: 980px; margin: 0 auto; padding: 1.2em 1em 3em; }
+  h1 { font: 600 22px/1.2 var(--serif); margin: 0 0 .3em; }
+  p.lede { margin: 0 0 1em; color: var(--muted); max-width: 46em; }
+  .controls { display: flex; flex-wrap: wrap; gap: .4em; margin-bottom: 1em; }
+  .controls button { font: inherit; font-size: 13px; padding: .3em .8em; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; }
+  .controls button:hover { background: var(--hover); }
+  .controls button.on { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .controls .gap { width: 1em; }
+  #readout { font: 15px/1.4 var(--serif); min-height: 1.4em; margin-bottom: 1em; }
+  #readout span { color: var(--muted); font-family: var(--sans); font-size: 13px; margin-left: .5em; }
+  .stage { display: grid; grid-template-columns: 1.3fr 1fr; gap: 1em; }
+  .card { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 1em; }
+  .card h2 { font: 600 13px/1.2 var(--sans); color: var(--muted); margin: 0 0 .8em; }
+  .big { display: grid; place-items: center; }
+  .big svg { width: 100%; max-width: 360px; height: auto; }
+  .side { display: grid; gap: 1em; align-content: start; }
+  .ground { background-color: var(--ground); background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); background-size: 22px 22px; border-radius: 8px; height: 150px; display: grid; place-items: center; }
+  .node { display: flex; flex-direction: column; align-items: center; }
+  .node .name { margin-top: 3px; font: 600 13.5px/1.2 var(--serif); }
+  .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em .8em; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+  .bar .title { flex: 1; font: 600 16.5px/1.3 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar .x { color: var(--muted); font-size: 18px; padding: 0 .3em; }
+  .key { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: auto 1fr; gap: .35em .8em; font-size: 13px; color: var(--muted); }
+  .key b { font-weight: 600; color: var(--ink); }
+  @media (max-width: 700px) { .stage { grid-template-columns: minmax(0, 1fr); } }
+
+  /* The spinner. Three stations sit on a track around the node: the model
+     (a diamond, top), tools (a square, lower right) and Max (a circle,
+     lower left). The node itself is the brain, at the centre. One bead
+     rides the track: it rests at the station the session waits on, and
+     passes through the centre on its way between stations. */
+  svg.track { display: block; overflow: visible; }
+  .track .rail { fill: none; stroke: rgba(20, 20, 19, .14); stroke-width: 1.5; transition: stroke .3s; }
+  .track .spoke { stroke: rgba(20, 20, 19, .14); stroke-width: 1.5; }
+  .track .core { fill: var(--paper); stroke: var(--ink); stroke-width: 2.5; transition: fill .3s, stroke .3s, stroke-width .2s; }
+  .track .role { font: 600 22px/1 var(--serif); fill: var(--ink); text-anchor: middle; dominant-baseline: central; transition: fill .3s; }
+  .track .station { transition: transform .35s var(--ease); }
+  .track .station .mark { fill: rgba(20, 20, 19, .28); stroke: transparent; stroke-width: 1.2; transition: stroke .3s, fill .3s; }
+  .track .station.here { transform: scale(2); }
+  .track .station.here .mark { fill: transparent; stroke: var(--c); }
+  .track .bead { transition: transform .26s var(--ease), opacity .2s; }
+  .track .bead circle { fill: var(--c); transition: fill .3s, r .3s; }
+  .track .flash { fill: var(--c); opacity: 0; }
+  .track .station .ripple { fill: none; stroke: var(--c); stroke-width: 1.5; opacity: 0; }
+  .track .trail { stroke: var(--c); stroke-width: 2; stroke-linecap: round; opacity: 0; }
+  .track .tokens { stroke: var(--c); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 1 5; opacity: 0; }
+  .track .labels text { font: 9px var(--sans); fill: var(--muted); text-anchor: middle; dominant-baseline: central; transition: fill .3s; }
+  .track .labels text.here { fill: var(--ink); font-weight: 600; }
+
+  /* Model, waiting for its first byte: the call goes out and nothing comes
+     back yet, so rings leave the diamond. */
+  .track.first .station.model .ripple-src { animation: out 1.3s ease-out infinite; }
+  /* Model, streaming: the diamond is full, and tokens run down its spoke
+     into the brain. */
+  .track.streaming .station.model .mark { fill: var(--c); }
+  .track.streaming .tokens { opacity: .9; animation: pour .45s linear infinite; }
+  /* The brain: the bead goes into the node, which takes the weight. */
+  .track.brain .core { stroke-width: 4.5; }
+  .track.brain .bead { opacity: 0; }
+  /* Tools: the square turns over in quarter steps while the calls run. */
+  .track.tools .station.tools .mark { animation: crank 2.4s steps(1, end) infinite; transform-box: fill-box; transform-origin: center; }
+  /* On its background work: the square is open, and still. */
+  .track.listening .station.tools .mark { stroke-dasharray: 2 2; }
+  /* Max: still, except a slow swell on every keepalive from the brain (the
+     JS restarts it), so it stops when the link does. */
+  .track.max.beat .bead circle { animation: swell 1.6s ease-in-out; }
+  .track.max.beat .station.max .ripple-src { animation: out 1.6s ease-out; }
+  .track.stale .bead circle { fill: var(--paper); stroke: var(--faint); stroke-width: 1.5; }
+  .track.stale .rail { stroke-dasharray: 3 4; }
+  /* Any data on the link: a quick glint on the bead, at most every 0.3 s. */
+  .track.data .flash { animation: glint .3s ease-out; }
+  /* Starting: no bead yet; the rail turns, dotted. */
+  .track.starting .rail { stroke-dasharray: 1.5 5; stroke: rgba(20, 20, 19, .4); animation: turn 6s linear infinite; transform-origin: center; }
+  .track.starting .bead { opacity: 0; }
+  .track.starting .core { stroke-dasharray: 4 3; stroke: var(--faint); }
+  /* Paused: everything grey and still where it stopped. */
+  .track.paused { --c: var(--faint) !important; }
+  .track.paused .core { stroke: var(--faint); }
+  .track.paused .role { fill: var(--muted); }
+  /* Done: the bead is home, and the node is green. */
+  .track.done .bead, .track.done .station, .track.done .spoke { opacity: 0; transition: opacity .4s; }
+  .track.done .rail { stroke: transparent; }
+  .track.done .labels { opacity: 0; }
+  .track.done .core { fill: var(--green); stroke: var(--green); }
+  .track.done .role { fill: var(--paper); }
+
+  @keyframes out { 0% { transform: scale(1); opacity: .8; } 100% { transform: scale(2.4); opacity: 0; } }
+  @keyframes pour { to { stroke-dashoffset: -6; } }
+  @keyframes crank { 0% { transform: rotate(0); } 25% { transform: rotate(22deg); } 50% { transform: rotate(45deg); } 75% { transform: rotate(67deg); } }
+  @keyframes swell { 0%, 100% { r: 6.5px; } 40% { r: 9px; } }
+  @keyframes glint { 0% { opacity: .55; r: 6.5px; } 100% { opacity: 0; r: 11px; } }
+  @keyframes turn { to { transform: rotate(360deg); } }
+  .track .ripple-src { transform-box: fill-box; transform-origin: center; opacity: 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Spinner: the track</h1>
+  <p class="lede">The node is the brain. Around it sit three stations: the model (diamond), tools (square) and Max (circle). One bead rests at the station the session waits on, and dives through the node between stations, leaving a short trail, so you see where it came from as well as where it is.</p>
+  <div class="controls" id="states"></div>
+  <div class="controls">
+    <button id="auto">Auto-play</button>
+    <button id="data">Data pulse</button>
+    <button id="cut">Drop the link</button>
+  </div>
+  <div id="readout"></div>
+  <div class="stage">
+    <div class="card big"><div id="big"></div></div>
+    <div class="side">
+      <div class="card"><h2>Map node</h2><div class="ground"><div class="node"><div id="node"></div><div class="name">spinner-track</div></div></div></div>
+      <div class="card"><h2>Chat header</h2><div class="bar"><div id="head"></div><div class="title">Divergent spinner takes</div><span class="x">×</span></div></div>
+      <div class="card"><ul class="key">
+        <li><b>Model</b></li><li>Rings leave the diamond until the first byte; then it fills and tokens pour into the node.</li>
+        <li><b>Brain</b></li><li>The bead dives into the node, whose rim thickens; usually a blink.</li>
+        <li><b>Tools</b></li><li>The square turns in steps while calls run; dashed and still while only background work runs.</li>
+        <li><b>Max</b></li><li>Still and orange, with one slow swell per keepalive. Hollow once keepalives stop.</li>
+      </ul></div>
+    </div>
+  </div>
+</main>
+<script>
+// Each state of core's `Waiting` the spinner shows, with where the bead
+// rests and how it reads. `Calls` with running children reads as tools;
+// `Held` (the account) as the model, still.
+const STATES = {
+  starting:  { at: "brain", label: "Starting", say: "Starting: its limbs are connecting" },
+  first:     { at: "model", label: "Model, first byte", say: "Waiting on the model for its first byte" },
+  streaming: { at: "model", label: "Model, streaming", say: "The model is streaming its reply" },
+  brain:     { at: "brain", label: "Brain", say: "The brain is working" },
+  tools:     { at: "tools", label: "Tools", say: "Waiting on its tool calls" },
+  listening: { at: "tools", label: "Background", say: "Listening for its background work" },
+  max:       { at: "max", label: "Max", say: "Waiting on you" },
+  paused:    { at: null, label: "Paused", say: "Paused" },
+  done:      { at: "brain", label: "Done", say: "Done" },
+};
+const COLOUR = { model: "var(--blue)", tools: "var(--blue)", max: "var(--orange)", brain: "var(--ink)" };
+const R = 42, CORE = 26;
+const SPOT = { model: -90, tools: 30, max: 150 };
+const xy = (deg, r = R) => [r * Math.cos(deg * Math.PI / 180), r * Math.sin(deg * Math.PI / 180)];
+const PLACE = { brain: [0, 0], ...Object.fromEntries(Object.entries(SPOT).map(([k, d]) => [k, xy(d)])) };
+const MARK = {
+  model: '<path class="mark" d="M0 -5.5 L5.5 0 L0 5.5 L-5.5 0Z"/>',
+  tools: '<rect class="mark" x="-4.5" y="-4.5" width="9" height="9" rx="1"/>',
+  max: '<circle class="mark" r="5"/>',
+};
+const NS = "http://www.w3.org/2000/svg";
+
+function spinner(host, px, labels) {
+  const pad = labels ? 30 : 0, half = 50 + pad;
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("class", "track");
+  svg.setAttribute("viewBox", `${-half} ${-half} ${half * 2} ${half * 2}`);
+  svg.setAttribute("width", px);
+  svg.setAttribute("height", px);
+  const station = (k) => {
+    const [x, y] = PLACE[k];
+    const mark = MARK[k].replace('class="mark"', 'class="mark ripple-src ripple"');
+    return `<g transform="translate(${x} ${y})"><g class="station ${k}">${mark}${MARK[k]}</g></g>`;
+  };
+  const spoke = (k) => {
+    const [a, b] = xy(SPOT[k], CORE), [c, d] = xy(SPOT[k], R - 7);
+    return `<line class="spoke" x1="${a}" y1="${b}" x2="${c}" y2="${d}"/>`;
+  };
+  const [mx, my] = xy(SPOT.model, R - 7), [cx, cy] = xy(SPOT.model, CORE);
+  const text = labels ? `<g class="labels">${["model", "tools", "max"].map((k) => {
+    const [x, y] = xy(SPOT[k], R + 24);
+    return `<text data-k="${k}" x="${x}" y="${y}">${k === "max" ? "Max" : k[0].toUpperCase() + k.slice(1)}</text>`;
+  }).join("")}</g>` : "";
+  svg.innerHTML = `
+    <circle class="rail" r="${R}"/>
+    ${Object.keys(SPOT).map(spoke).join("")}
+    <line class="tokens" x1="${mx}" y1="${my}" x2="${cx}" y2="${cy}"/>
+    <line class="trail" x1="0" y1="0" x2="0" y2="0"/>
+    <g class="bead"><circle class="flash" r="6.5"/><circle r="6.5"/></g>
+    <circle class="core" r="${CORE}"/><text class="role" y="1">C</text>
+    ${Object.keys(SPOT).map(station).join("")}
+    ${text}`;
+  host.replaceChildren(svg);
+  return svg;
+}
+
+const $ = (id) => document.getElementById(id);
+const readout = $("readout");
+const views = [spinner($("big"), 360, true), spinner($("node"), 50, false), spinner($("head"), 34, false)];
+let state = null, at = "brain", travel = 0;
+
+// Move every view to a state. Between two stations the bead goes through
+// the brain, as the real session does.
+function show(name) {
+  const s = STATES[name];
+  const to = s.at ?? at;
+  clearTimeout(travel);
+  if (to !== at && at !== "brain" && to !== "brain") {
+    place("brain", name);
+    travel = setTimeout(() => place(to, name), 200);
+  } else place(to, name);
+  state = name;
+  for (const b of document.querySelectorAll("#states button")) b.classList.toggle("on", b.dataset.s === name);
+  since = performance.now();
+  lastBeat = performance.now();
+}
+
+function place(to, name) {
+  const from = PLACE[at], [x, y] = PLACE[to];
+  const colour = name === "paused" ? "var(--faint)" : COLOUR[to];
+  for (const svg of views) {
+    svg.setAttribute("class", `track ${name}`);
+    svg.style.setProperty("--c", colour);
+    svg.querySelector(".bead").style.transform = `translate(${x}px, ${y}px)`;
+    for (const st of svg.querySelectorAll(".station")) st.classList.toggle("here", st.classList.contains(to) && name !== "done");
+    for (const t of svg.querySelectorAll(".labels text")) t.classList.toggle("here", t.dataset.k === to);
+    if (to !== at) {
+      const trail = svg.querySelector(".trail");
+      trail.setAttribute("x1", from[0]); trail.setAttribute("y1", from[1]);
+      trail.setAttribute("x2", x); trail.setAttribute("y2", y);
+      trail.animate([{ opacity: .45 }, { opacity: 0 }], { duration: 900, easing: "ease-out" });
+    }
+  }
+  at = to;
+}
+
+// Restart a one-shot class on every view.
+function once(cls) {
+  for (const svg of views) { svg.classList.remove(cls); void svg.getBBox(); svg.classList.add(cls); }
+}
+
+// Data on the link: a glint, at most every 0.3 s.
+let lastData = 0;
+function data() {
+  const now = performance.now();
+  if (now - lastData < 300 || state === "done" || state === "paused") return;
+  lastData = now;
+  once("data");
+}
+
+// The brain's keepalive, every 4 s while the link is otherwise idle. Only
+// Max's station shows it: everywhere else something is already moving.
+let linked = true, lastBeat = performance.now(), since = performance.now();
+setInterval(() => {
+  if (!linked) return;
+  lastBeat = performance.now();
+  if (state === "max") once("beat");
+}, 4000);
+
+setInterval(() => {
+  const stale = state === "max" && performance.now() - lastBeat > 9000;
+  for (const svg of views) svg.classList.toggle("stale", stale);
+  const secs = ((performance.now() - since) / 1000).toFixed(1);
+  readout.innerHTML = state ? `${STATES[state].say}<span>${stale ? "No keepalive for 9 s" : `${secs} s`}</span>` : "";
+}, 100);
+
+// A realistic session: two rounds of tools, then a reply to Max, who
+// takes a while; data flows while the model streams and as he types.
+const SCRIPT = [
+  ["brain", 300], ["first", 1400], ["streaming", 2200], ["brain", 250], ["tools", 2600],
+  ["brain", 200], ["first", 900], ["streaming", 1500], ["brain", 250], ["tools", 1200],
+  ["brain", 200], ["first", 1100], ["streaming", 3000], ["brain", 300], ["max", 13000],
+];
+let auto = 0, step = 0;
+function play() {
+  const [name, ms] = SCRIPT[step++ % SCRIPT.length];
+  show(name);
+  auto = setTimeout(play, ms);
+}
+setInterval(() => {
+  if (!auto) return;
+  if (state === "streaming" || state === "tools") data();
+  if (state === "max" && Math.random() < .03) data();
+}, 100);
+function stopAuto() { clearTimeout(auto); auto = 0; $("auto").classList.remove("on"); }
+
+for (const [k, s] of Object.entries(STATES)) {
+  const b = document.createElement("button");
+  b.textContent = s.label; b.dataset.s = k;
+  b.onclick = () => { stopAuto(); show(k); };
+  $("states").append(b);
+}
+$("auto").onclick = (e) => {
+  if (auto) return stopAuto();
+  e.target.classList.add("on"); step = 0; play();
+};
+$("data").onclick = data;
+$("cut").onclick = (e) => {
+  linked = !linked;
+  e.target.classList.toggle("on", !linked);
+  e.target.textContent = linked ? "Drop the link" : "Restore the link";
+};
+
+// `?state=NAME` shows one state and holds it (for screenshots); otherwise
+// it plays.
+const asked = new URLSearchParams(location.search).get("state");
+if (asked in STATES) show(asked);
+else { $("auto").classList.add("on"); play(); }
+</script>
+</body>
+</html>
