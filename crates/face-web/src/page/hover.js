@@ -107,12 +107,9 @@ export function fillTip() {
     if (facts.length) { const f = el("div", "facts"); f.append(...facts.map((x) => el("span", null, x))); lines.push(f); }
     if (place) { const d = el("div", "place"); d.append(el("code", null, homePath(place))); lines.push(d); }
     if (t.mandate && !fc) lines.push(el("div", "m", t.mandate.slice(0, 240)));
-    // How its context went: each stretch, how it began and when.
-    if (!fc && t.legs?.length > 1) {
-      const legs = el("div", "legs");
-      legs.append(...t.legs.map((l) => el("div", null, `${BEGAN[l.began] || l.began} ${ago(l.at)} ago`)));
-      lines.push(legs);
-    }
+    // How its present context began, and when.
+    const leg = t.legs?.length > 1 && !fc && t.legs.at(-1);
+    if (leg) lines.push(el("div", "leg", `${BEGAN[leg.began] || leg.began} ${ago(leg.at)} ago`));
   }
   const words = tip.querySelector(".words") || tip.appendChild(el("div", "words"));
   lines.forEach((line, i) => {
