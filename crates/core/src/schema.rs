@@ -78,6 +78,10 @@ impl Schema for Harness {
         state.fold(folding)
     }
 
+    fn admit(state: &State, folding: Folding<'_, Harness>) -> Result<(), Refusal> {
+        state.admit(folding)
+    }
+
     fn refused(state: &mut State, folding: Folding<'_, Harness>, why: &Refusal) {
         state.refused(folding, why)
     }
