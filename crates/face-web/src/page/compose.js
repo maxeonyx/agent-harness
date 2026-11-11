@@ -1,6 +1,6 @@
 import { $, el, fail, icon, ICONS, kTokens, panel, parse } from "./base.js";
 import { act, can, digest, tab } from "./tab.js";
-import { byId, isDone, view } from "./map.js";
+import { byId, isDone, shortName, view } from "./map.js";
 import { NEW, resume } from "./card.js";
 import { hear, renderLog, unmovable } from "./log.js";
 import { startNew } from "./newchat.js";
@@ -373,7 +373,7 @@ export function buildCompose(id) {
 export const readOnly = (t) => isDone(t) && t.mode === "autonomous";
 function finishedLine(t) {
   const line = el("div", "finished", "Finished. Its result went to ");
-  const owner = byId[t.owner], a = el("a", null, owner?.name || "its owner");
+  const owner = byId[t.owner], a = el("a", null, owner ? shortName(owner) : "its owner");
   if (owner) a.href = `#${owner.id}`;
   line.append(a, ".");
   return line;
