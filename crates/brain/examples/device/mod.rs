@@ -303,6 +303,34 @@ impl Device {
         (n, task)
     }
 
+    /// Max continues the finished task `from` with `text`, as the page does
+    /// a finished chat: a resume of it in his scope.
+    pub fn resume(&mut self, from: TaskId, text: &str) -> (u64, TaskId) {
+        let task = TaskId(self.tab.next().event(0));
+        let mandate = Bytes::from(text.to_string());
+        println!("  {}: Max continues {from}: {text:?}", self.name);
+        let n = self.say(Batch {
+            values: vec![mandate.clone()],
+            facts: vec![Fact::Task(
+                task,
+                TaskEvent::Created(Box::new(Created {
+                    name: name_from(text),
+                    by: None,
+                    scope: Scope::Max,
+                    origin: Origin::Resume { from },
+                    mode: Mode::UserFacing,
+                    mandate: Mandate {
+                        text: mandate.id(),
+                        brief: None,
+                        quotes: Vec::new(),
+                    },
+                    tuning: Default::default(),
+                })),
+            )],
+        });
+        (n, task)
+    }
+
     /// Max abandons `task`, giving it `within` to finish.
     pub fn abandon(&mut self, task: TaskId, within: Duration) -> u64 {
         println!(
