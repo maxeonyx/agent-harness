@@ -370,7 +370,7 @@ export function buildCompose(id) {
 }
 // An agent's finished work is its owner's: Max reads it, and the owner
 // alone continues it. What faced him, he can always continue.
-const readOnly = (t) => isDone(t) && t.mode === "autonomous";
+export const readOnly = (t) => isDone(t) && t.mode === "autonomous";
 function finishedLine(t) {
   const line = el("div", "finished", "Finished. Its result went to ");
   const owner = byId[t.owner], a = el("a", null, owner?.name || "its owner");
