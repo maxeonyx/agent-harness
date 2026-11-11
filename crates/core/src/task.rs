@@ -163,6 +163,9 @@ pub struct Live {
     /// until the turn that reads it ends. Cleared when it is resumed or
     /// interrupted.
     pub parking: Option<DeliveryId>,
+    /// Max marked it done ([`crate::delivery::Prompt::Done`]): the end of a
+    /// turn completes it as if it were autonomous ([`Task::closes`]).
+    pub closing: bool,
 }
 
 impl Live {
@@ -174,6 +177,7 @@ impl Live {
             owed_since: None,
             failures: 0,
             parking: None,
+            closing: false,
         }
     }
 }
@@ -536,10 +540,14 @@ impl Start {
 /// What the end of a model turn means for this task.
 ///
 /// The one difference between an autonomous subagent, a chat with Max, and
-/// a standing agent such as the attention scheduler. Max marking a
-/// user-facing task done makes it autonomous for one last turn, which writes
-/// the result (with [`crate::delivery::Prompt::Done`], so the model has
-/// seen it before it does).
+/// a standing agent such as the attention scheduler. Only Max makes a task
+/// user-facing: his chats and asides are; what an agent starts, a fork
+/// included, is autonomous. Marking a task done does not change its mode:
+/// it asks for one last turn ([`Live::closing`]), which writes the result
+/// (with [`crate::delivery::Prompt::Done`], so the model has seen it before
+/// it does). So the mode of a finished task says who may continue it: Max
+/// one that faced him, and only its owner an autonomous one, whose result
+/// went there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     /// The end of a turn completes the task, once nothing it started is
@@ -1714,11 +1722,11 @@ impl Task {
         self.pending.push(Input::Delivery(delivery.id));
         // Marking a task done hands it its last turn: it finishes when that
         // turn ends.
-        if delivery.content == Content::Prompt(Prompt::Done) {
-            self.mode = Mode::Autonomous;
-            if let Life::Live(live) = &mut self.life {
-                live.owed_since = None;
-            }
+        if delivery.content == Content::Prompt(Prompt::Done)
+            && let Life::Live(live) = &mut self.life
+        {
+            live.closing = true;
+            live.owed_since = None;
         }
         if matches!(delivery.content, Content::Words(_))
             && matches!(by, Author::Max)
@@ -1797,10 +1805,16 @@ impl Task {
             // Max's words, a prompt, or news arrived during the turn.
             return self.enter(Phase::Ready, at);
         }
-        if self.mode == Mode::Autonomous && self.background.is_empty() {
+        if self.closes() && self.background.is_empty() {
             return self.finish(Outcome::Result { entry }, at);
         }
         self.wait(at, world);
+    }
+
+    /// Whether the end of a turn completes it, once nothing it started
+    /// runs: it is autonomous, or Max marked it done.
+    pub fn closes(&self) -> bool {
+        self.mode == Mode::Autonomous || self.live().is_some_and(|l| l.closing)
     }
 
     /// Enter the wait the mode asks for, unless something already ends it.
@@ -1808,7 +1822,7 @@ impl Task {
         if self.news(world) {
             return self.enter(Phase::Ready, at);
         }
-        if self.mode == Mode::UserFacing {
+        if self.mode == Mode::UserFacing && !self.closes() {
             return self.await_max(at);
         }
         let phase = if self.wakes() {

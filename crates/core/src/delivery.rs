@@ -67,8 +67,8 @@ pub enum Content {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Prompt {
     /// Max marked a task done: write the result for the owner (for an
-    /// aside, what came of the talk since it was opened). It makes the task
-    /// autonomous, so the turn it asks for is its last.
+    /// aside, what came of the talk since it was opened). The turn it asks
+    /// for is its last ([`crate::task::Live::closing`]); its mode stays.
     Done,
     /// An autonomous turn ended with background work still running: it will
     /// wake the task when it ends, and the task cannot finish before; stop

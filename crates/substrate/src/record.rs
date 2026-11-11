@@ -224,7 +224,9 @@ pub struct Live<L> {
 /// it, deterministically from the state and the record, and is the only
 /// replica rules live. It runs where the decider includes a record, and
 /// again only when a decider reopens, following the verdicts it recorded,
-/// so the past is never judged again by a newer build.
+/// so the past is never judged again by a newer build. [`Schema::admit`]
+/// holds the rules that judge only a follower's new record, when it is
+/// included.
 pub trait Schema: Clone + fmt::Debug + PartialEq + 'static {
     /// What a replica says in one record.
     type Said: Clone + fmt::Debug + PartialEq + Serialize + DeserializeOwned;
@@ -243,6 +245,16 @@ pub trait Schema: Clone + fmt::Debug + PartialEq + 'static {
     /// Fold one record into `state`, or refuse it. On a refusal `state` may
     /// be part way through the record; the decider discards it.
     fn fold(state: &mut Self::State, folding: Folding<'_, Self>) -> Result<(), Self::Refusal>;
+
+    /// Admit a follower's new record before it folds, or refuse it: a rule
+    /// that holds when the record is decided, not on every later fold. Its
+    /// refusal is recorded like the fold's, and the recorded verdict
+    /// stands, so a record admitted under older rules folds as it did. By
+    /// default every record is admitted.
+    fn admit(state: &Self::State, folding: Folding<'_, Self>) -> Result<(), Self::Refusal> {
+        let _ = (state, folding);
+        Ok(())
+    }
 
     /// Fold a record the rules refused, as refused: an invalid act is still
     /// a fact, and the state may say so (a draft edit that raced another

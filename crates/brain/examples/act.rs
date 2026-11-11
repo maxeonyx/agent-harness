@@ -11,6 +11,9 @@
 //!                         brain's machine (`-` for a role with none), with
 //!                         TEXT as its mandate
 //! act PORT say CHAT TEXT  Send TEXT to the chat CHAT, as its next words
+//! act PORT continue TASK TEXT
+//!                         Continue the finished task TASK with TEXT, as
+//!                         the page continues a finished chat
 //! act PORT interrupt CHAT TURN
 //!                         Interrupt the chat CHAT in the turn of request
 //!                         TURN (a task's `turn` in the brain's `/view`)
@@ -34,7 +37,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: act PORT done CHAT | act PORT abandon CHAT MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT | act PORT say CHAT TEXT | act PORT interrupt CHAT TURN | act PORT back CHAT ENTRY"
+            "usage: act PORT done CHAT | act PORT abandon CHAT MS | act PORT stop CALL | act PORT chat ROLE DIR TEXT | act PORT say CHAT TEXT | act PORT continue TASK TEXT | act PORT interrupt CHAT TURN | act PORT back CHAT ENTRY"
         );
         exit(2)
     };
@@ -60,6 +63,14 @@ fn main() {
         let Ok(chat) = chat.parse() else { usage() };
         tab.pump_until(|d| d.tab.view().is_some());
         tab.message(chat, text)
+    } else if let [_, resume, from, text] = &args[..]
+        && resume == "continue"
+    {
+        let Ok(from) = from.parse() else { usage() };
+        tab.pump_until(|d| d.tab.view().is_some());
+        let (n, task) = tab.resume(from, text);
+        started = Some(task);
+        n
     } else if let [_, back, chat, entry] = &args[..]
         && back == "back"
     {

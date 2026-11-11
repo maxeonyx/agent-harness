@@ -653,6 +653,28 @@ impl State {
         Ok(())
     }
 
+    /// Admit a face's new record, or refuse it, before it folds: the rules
+    /// that hold when Max asks, not on every later fold, so a record
+    /// accepted under older rules folds as it did. Max continues what
+    /// faced him; an autonomous task's result went to its owner, which
+    /// alone continues it.
+    pub(crate) fn admit(&self, folding: Folding<'_, Harness>) -> Result<(), Refusal> {
+        for (i, fact) in folding.said.facts.iter().enumerate() {
+            let Fact::Task(_, TaskEvent::Created(created)) = fact else {
+                continue;
+            };
+            if let (None, Origin::Resume { from }) = (created.by, &created.origin)
+                && (self.tasks.get(from)).is_some_and(|t| t.is_done() && t.mode == Mode::Autonomous)
+            {
+                return Err(Refusal {
+                    fact: i as u32,
+                    why: Rejected::NotMax,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Fold a record the brain refused, as refused: a draft edit that raced
     /// another face's becomes a draft of its own, named by its event, with
     /// its words, beside the one it raced.
@@ -3101,7 +3123,7 @@ impl State {
                 starting.push(Todo::Root(task.id));
             }
             needed.extend(self.hosts(task));
-            let lingering = task.mode == Mode::Autonomous
+            let lingering = task.closes()
                 && !task.background.is_empty()
                 && !self.open.lingered.contains(&task.id);
             match (task.phase(), task.drain()) {

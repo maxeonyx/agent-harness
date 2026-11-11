@@ -378,7 +378,7 @@ impl<S: Schema, St: Storage<S>> Decider<S, St> {
                     at: record.at,
                     said,
                 };
-                match S::fold(&mut state, folding) {
+                match S::admit(&self.state, folding).and_then(|()| S::fold(&mut state, folding)) {
                     Ok(()) => (None, Some(S::durability(record.at, said))),
                     Err(why) => {
                         state = self.state.clone();

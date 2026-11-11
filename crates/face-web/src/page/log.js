@@ -3,7 +3,7 @@ import { act, can } from "./tab.js";
 import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
 import { dress, trouble } from "./draw.js";
 import { go, logState } from "./card.js";
-import { dictate, dictation, editMessage, modelName, say, sending } from "./compose.js";
+import { dictate, dictation, editMessage, modelName, readOnly, say, sending } from "./compose.js";
 import { layer, session } from "./blobs.js";
 
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
@@ -169,8 +169,8 @@ function entry(s, into, e, index, t, parent, only) {
       } else if (who.by === "max") {
         if (run) { $(".bubble", run.el).textContent += `\n${text}`; return; }
         run = { by: "max", el: said(text, clock(who.at)) };
-        // His message: edit it.
-        if (!carry && !s.past && !$(".moves", into)) {
+        // His message: edit it, unless the agent finished and is read-only.
+        if (!carry && !s.past && !readOnly(t) && !$(".moves", into)) {
           const bubble = $(".bubble", run.el);
           run.el.append(moves([
             ["edit", "Edit", "Edit this message: the box holds it, and sending replaces it and what followed", () => editMessage(t.id, parent, bubble.textContent)],
