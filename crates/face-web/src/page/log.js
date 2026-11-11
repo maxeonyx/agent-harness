@@ -201,7 +201,9 @@ function entry(s, into, e, index, t, parent, only) {
   for (const b of joined(blocks)) {
     if (b.type === "thinking") {
       if (!b.thinking) continue;
-      const d = el("details", "thought"); d.append(el("summary", null, "Thinking"), el("div", "plain", b.thinking));
+      // Its thinking, read at a glance: the first line of it, opened to the rest.
+      const d = el("details", "thought"); d.append(el("summary", null, b.thinking.trim()));
+      d.title = "Its thinking";
       (s.group ? s.group.el : into).append(d);
     } else if (b.type === "text") {
       closeGroup(s);
