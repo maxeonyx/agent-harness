@@ -1152,6 +1152,15 @@ impl State {
                 places,
             } => self.check_workdir(*role, workdir.as_ref(), places)?,
             Origin::Aside { from } => self.check_aside(*from, created)?,
+            // Max continues what faced him; an autonomous task's result
+            // went to its owner, which alone continues it.
+            Origin::Resume { from }
+                if creator.is_none()
+                    && (self.tasks.get(from))
+                        .is_some_and(|t| t.is_done() && t.mode == Mode::Autonomous) =>
+            {
+                return Err(Rejected::NotMax);
+            }
             Origin::Fork { .. } | Origin::Resume { .. } => {}
         }
         for quote in &created.mandate.quotes {
@@ -3101,7 +3110,7 @@ impl State {
                 starting.push(Todo::Root(task.id));
             }
             needed.extend(self.hosts(task));
-            let lingering = task.mode == Mode::Autonomous
+            let lingering = task.closes()
                 && !task.background.is_empty()
                 && !self.open.lingered.contains(&task.id);
             match (task.phase(), task.drain()) {

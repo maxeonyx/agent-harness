@@ -261,6 +261,9 @@ pub enum Rejected {
     Finished,
     /// Resumes a task that has not finished.
     NotFinished,
+    /// Max continuing an autonomous task that has finished: its result went
+    /// to its owner, which alone continues it.
+    NotMax,
     /// The task has no context yet: its limbs are still connecting.
     Starting,
     /// Not at a point that accepts this: the task is thinking or acting and
@@ -357,6 +360,9 @@ impl std::fmt::Display for Rejected {
             Rejected::Exists => "creates something that already exists",
             Rejected::Finished => "addresses something already finished",
             Rejected::NotFinished => "resumes a task that has not finished",
+            Rejected::NotMax => {
+                "it has finished, and its result went to the agent that started it: only that agent can continue it"
+            }
             Rejected::Starting => "the task has not started: its limbs are still connecting",
             Rejected::Busy => {
                 "not now: the task is thinking or acting, or the call is not at that point"
