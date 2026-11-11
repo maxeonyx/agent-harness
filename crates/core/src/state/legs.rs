@@ -5,7 +5,7 @@ use imbl::{OrdSet, Vector};
 
 use super::State;
 use crate::call::Caller;
-use crate::context::{Began, Dep, Entry, EntryId, Leg, LegId, Legs, Rendered, Work};
+use crate::context::{Began, Dep, Entry, EntryId, Leg, LegId, Legs, Rendered, Span, Work};
 use crate::id::{CallId, TaskId, Timestamp};
 use crate::model_call::ModelCall;
 use crate::task::{Origin, Scope, Task};
@@ -58,27 +58,27 @@ impl State {
         }
     }
 
-    /// A compaction from `from`, whose carry is `carry`, ending at `last`.
+    /// A compaction from `from`, whose carry is `carry`, rendered from
+    /// `renders`, ending at `last`. Results its carry takes in that no
+    /// request has are joined at it.
     pub(super) fn leg_carry(
         &mut self,
         task: TaskId,
         carry: EntryId,
         from: EntryId,
+        renders: &[Span],
         last: EntryId,
         at: Timestamp,
     ) {
         let Some(head) = self.diverged(task, from) else {
             return;
         };
-        self.push_leg(
-            task,
-            Began::Carry(carry),
-            at,
-            vec![Dep::Leg {
-                leg: head,
-                at: from,
-            }],
-        );
+        let mut on = vec![Dep::Leg {
+            leg: head,
+            at: from,
+        }];
+        on.extend(self.take_in(task, renders));
+        self.push_leg(task, Began::Carry(carry), at, on);
         self.grow(task, last);
     }
 
@@ -104,40 +104,16 @@ impl State {
                 None => self.rehead(task, call.head()),
             }
         }
-        let Some(legs) = self.legs.get(&task) else {
+        let Some(head) = self.legs.get(&task).map(|l| l.head) else {
             return;
         };
-        let mut joined: Vec<CallId> = Vec::new();
-        let read = (call.renders.iter())
-            .filter_map(|span| match span.from {
-                Rendered::Call(c) => Some(c),
-                _ => None,
-            })
-            .flat_map(|c| self.reads(c));
-        // Two waits in one response may read the same result.
-        for c in read {
-            if !legs.taken.contains(&c) && !joined.contains(&c) && self.joins(c) {
-                joined.push(c);
-            }
-        }
+        let joined = self.take_in(task, &call.renders);
         if !joined.is_empty() {
             let mut on = vec![Dep::Leg {
-                leg: legs.head,
+                leg: head,
                 at: call.base,
             }];
-            for c in &joined {
-                if self.members(Scope::Spawn(*c)).next().is_none() {
-                    on.push(Dep::Work(*c));
-                }
-                for member in self.members(Scope::Spawn(*c)) {
-                    if let (Some(l), Some(at)) = (self.legs(member.id), member.head()) {
-                        on.push(Dep::Leg { leg: l.head, at });
-                    }
-                }
-            }
-            if let Some(legs) = self.legs.get_mut(&task) {
-                legs.taken.extend(joined);
-            }
+            on.extend(joined);
             self.push_leg(task, Began::Join(call.head()), at, on);
         } else if let Some((e, leg, at_entry)) = diverged {
             let on = vec![Dep::Leg { leg, at: at_entry }];
@@ -181,6 +157,43 @@ impl State {
             let leg = legs.head;
             legs.work.push_back(Work { call, leg, at });
         }
+    }
+
+    /// What `task` depends on by rendering `renders`: the work and members
+    /// of each result it reads that joins and no earlier request or carry
+    /// took in, now taken in.
+    fn take_in(&mut self, task: TaskId, renders: &[Span]) -> Vec<Dep> {
+        let Some(legs) = self.legs.get(&task) else {
+            return Vec::new();
+        };
+        let mut joined: Vec<CallId> = Vec::new();
+        let read = (renders.iter())
+            .filter_map(|span| match span.from {
+                Rendered::Call(c) => Some(c),
+                _ => None,
+            })
+            .flat_map(|c| self.reads(c));
+        // Two waits in one response may read the same result.
+        for c in read {
+            if !legs.taken.contains(&c) && !joined.contains(&c) && self.joins(c) {
+                joined.push(c);
+            }
+        }
+        let mut on = Vec::new();
+        for c in &joined {
+            if self.members(Scope::Spawn(*c)).next().is_none() {
+                on.push(Dep::Work(*c));
+            }
+            for member in self.members(Scope::Spawn(*c)) {
+                if let (Some(l), Some(at)) = (self.legs(member.id), member.head()) {
+                    on.push(Dep::Leg { leg: l.head, at });
+                }
+            }
+        }
+        if let Some(legs) = self.legs.get_mut(&task) {
+            legs.taken.extend(joined);
+        }
+        on
     }
 
     /// The calls whose results a context reads in `call`'s settlement: those

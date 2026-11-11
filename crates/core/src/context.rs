@@ -389,7 +389,9 @@ pub enum Began {
     /// The task was created: fresh, a fork, resume or aside, or a spawned
     /// member.
     Start,
-    /// A compaction, at its carry: what it replaced is the leg before it.
+    /// A compaction, at its carry: what it replaced is the leg before it,
+    /// and it joins the results its carry takes in that were not taken in
+    /// yet, as [`Began::Join`] does.
     Carry(EntryId),
     /// The first request, by its head, to take in results not yet taken in:
     /// a spawn's members', or a background call's, started so or moved there
@@ -434,7 +436,8 @@ pub enum Dep {
 /// A background call that is not a spawn, started so or moved there by
 /// Max's words: the one node of the graph that is not a context. It hangs
 /// from the leg that started or moved it, at the response whose tool use
-/// started it, until a [`Began::Join`] takes its result in.
+/// started it, until a [`Began::Join`] or [`Began::Carry`] takes its
+/// result in.
 ///
 /// **Vision.** "I actually like that background tool calls showing on the
 /// graph" (Max).
@@ -457,8 +460,8 @@ pub struct Legs {
     pub work: imbl::Vector<Work>,
     /// Max moved it back, and nothing has diverged since.
     pub(crate) back: bool,
-    /// The calls whose results a request has taken in, so a retried
-    /// request begins no second join.
+    /// The calls whose results a request or a carry has taken in, so a
+    /// retried request begins no second join.
     pub(crate) taken: imbl::OrdSet<CallId>,
 }
 
