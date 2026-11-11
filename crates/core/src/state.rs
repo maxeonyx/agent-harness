@@ -1434,7 +1434,7 @@ impl State {
         }
         if let Some((carry, kept, report)) = compacted {
             let last = report.as_ref().unwrap_or(&carry).id();
-            self.leg_carry(id, carry.id(), kept.from, last, record.at);
+            self.leg_carry(id, carry.id(), kept.from, &kept.renders, last, record.at);
             self.compactions.insert(carry.id(), kept);
             self.entries.insert(carry.id(), carry);
             if let Some(report) = report {

@@ -302,6 +302,7 @@
 //!   join["Began::Join<br/>the first request rendering their results"] -->|"at the request's base"| before
 //!   join -->|"at each one's head"| members["each member's head leg"]
 //!   join -->|"Dep::Work"| work["a background call"]
+//!   carry -->|"what its carry takes in first, as a join does"| members
 //!   work -->|"at the response that started it"| before
 //!   new["Began::Version, new<br/>the first diverging entry after Move::Back"] -->|"at the split point"| held["the leg holding where Max moved back to"]
 //!   old["Began::Version, old<br/>the stretch it left, split off"] -->|"at the split point"| held
