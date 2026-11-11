@@ -326,6 +326,8 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
             Mode::UserFacing => "user-facing",
             Mode::Standing => "standing",
         },
+        // Max marked it done, and it is writing its result.
+        "closing": t.live().is_some_and(|l| l.closing),
         "origin": origin,
         "from": from.map(|t| t.to_string()),
         "owner": state.owner(t.id).map(|t| t.to_string()),

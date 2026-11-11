@@ -311,7 +311,9 @@ export function buildCompose(id) {
   compose.replaceChildren();
   box = null;
   const t = byId[id];
+  compose.dataset.key = id;
   if (id !== NEW && !t) return;
+  if (t && readOnly(t)) return compose.append(finishedLine(t));
   const wrap = el("div", "box");
   box = el("textarea");
   box.rows = id === NEW ? 2 : 1;
@@ -365,6 +367,16 @@ export function buildCompose(id) {
   autosize();
   renderOthers();
   renderComposeState(t);
+}
+// An agent's finished work is its owner's: Max reads it, and the owner
+// alone continues it. What faced him, he can always continue.
+const readOnly = (t) => isDone(t) && t.mode === "autonomous";
+function finishedLine(t) {
+  const line = el("div", "finished", "Finished. Its result went to ");
+  const owner = byId[t.owner], a = el("a", null, owner?.name || "its owner");
+  if (owner) a.href = `#${owner.id}`;
+  line.append(a, ".");
+  return line;
 }
 // ─── Model and effort ──────────────────────────────────────────────────────
 // The bottom edge of the box, at its right: the model and effort the chat's
@@ -463,6 +475,8 @@ export function newTuning() {
 // empty it sends what is staged, and says so. While the brain does not yet
 // have every word, it spins until there is something to send.
 export function renderComposeState(t) {
+  // One of its agents that finishes while open loses its box.
+  if (t && compose.dataset.key === t.id && !box !== readOnly(t)) buildCompose(t.id);
   if (!box) return;
   const key = box.dataset.key, send = $(".send", compose);
   const typed = !!box.value.trim(), staged = draftContent(key).staged.length > 0;
