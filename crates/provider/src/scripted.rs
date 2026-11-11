@@ -26,9 +26,11 @@
 //! drop                  the stream starts, then ends early
 //! ```
 //!
-//! A verb may follow `slow MS` (MS before each streamed piece) and
+//! A verb may follow `slow MS` (MS before each streamed piece),
 //! `flaky STATUS` (the first time this client sees the request, it is
-//! refused with STATUS; a retry gets the step): `flaky 529 slow 200 say hi`.
+//! refused with STATUS; a retry gets the step) and `think "TEXT"` (the
+//! response opens with a thinking block of TEXT, a JSON string):
+//! `flaky 529 slow 200 think "Greeting." say hi`.
 //! Text without a verb is echoed. Once the script is used up, the reply
 //! quotes the tool results it was sent, and the turn ends.
 
@@ -91,6 +93,9 @@ pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashMap<u64, u3
     let (verb, rest) = step.act.split_once(' ').unwrap_or((&step.act, ""));
     let rest = rest.trim();
     let mut events = Events::new(body.len());
+    if let Some(thought) = &step.thought {
+        events.thinking_block(thought);
+    }
     if let Some(last) = messages.last() {
         let notices = notices(last);
         if !notices.is_empty() {
@@ -167,6 +172,8 @@ pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashMap<u64, u3
 struct Step {
     slow: Duration,
     flaky: Option<u16>,
+    /// The thinking the response opens with.
+    thought: Option<String>,
     /// The verb and what follows it; for a reply with no verb, its text.
     act: String,
 }
@@ -201,6 +208,7 @@ fn step(messages: &[Value]) -> Step {
     let plain = |act: String| Step {
         slow: Duration::ZERO,
         flaky: None,
+        thought: None,
         act,
     };
     let script = messages.iter().enumerate().rev().find_map(|(i, m)| {
@@ -251,6 +259,7 @@ fn parse(line: &str) -> Option<Step> {
     let mut step = Step {
         slow: Duration::ZERO,
         flaky: None,
+        thought: None,
         act: String::new(),
     };
     let mut rest = line.trim();
@@ -264,6 +273,12 @@ fn parse(line: &str) -> Option<Step> {
                     _ => step.flaky = Some(n.parse().ok()?),
                 }
                 rest = after.trim();
+            }
+            "think" => {
+                let after = after.trim_start();
+                let mut values = serde_json::Deserializer::from_str(after).into_iter::<String>();
+                step.thought = Some(values.next()?.ok()?);
+                rest = after[values.byte_offset()..].trim();
             }
             verb if VERBS.contains(&verb) => {
                 step.act = rest.to_owned();
@@ -420,6 +435,16 @@ impl Events {
             .split_inclusive(split)
             .map(|piece| json!({"type": "text_delta", "text": piece}));
         self.block(json!({"type": "text", "text": ""}), pieces);
+    }
+
+    /// A thinking block streamed a sentence at a time, then signed.
+    fn thinking_block(&mut self, text: &str) {
+        self.output += text.len();
+        let pieces = text
+            .split_inclusive(". ")
+            .map(|piece| json!({"type": "thinking_delta", "thinking": piece}))
+            .chain([json!({"type": "signature_delta", "signature": "scripted"})]);
+        self.block(json!({"type": "thinking", "thinking": ""}), pieces);
     }
 
     /// A whole reply ending in a text block.
