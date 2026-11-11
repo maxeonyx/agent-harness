@@ -149,9 +149,10 @@
   .meta { display: flex; flex-wrap: wrap; gap: 0 1.1em; font-size: 11.5px; color: var(--faint); margin: -.5em 0 1.1em; opacity: 0; transition: opacity .15s; font-variant-numeric: tabular-nums; }
   .chunk:hover .meta, .row.expanded > .meta { opacity: 1; }
   .thought { font-size: 13px; color: var(--muted); margin: 0 0 .7em; }
-  .thought > summary { cursor: pointer; list-style: none; }
-  .thought > summary::before { content: "◌ "; }
-  .thought .plain { font-style: italic; margin: .3em 0 0 1.1em; }
+  /* A thought is one faint line, cut short; opened, all of it. */
+  .thought > summary { display: block; cursor: pointer; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thought[open] > summary { white-space: pre-wrap; }
+  .thought > summary::before { content: "◌ "; font-style: normal; }
   /* A folded block: a round of tool calls, or the root. One line until
      opened, then a row to each call, each opened to all of it. Nothing in
      it scrolls: it grows. */
