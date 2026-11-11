@@ -248,7 +248,7 @@ pub fn batch(
         let effort = models.effort.unwrap_or(f.effort);
         let params = serde_json::json!({
             "max_tokens": 64000,
-            "thinking": {"type": "adaptive"},
+            "thinking": {"type": "adaptive", "display": "summarized"},
             "output_config": {"effort": effort},
         });
         let params = Bytes::from(params.to_string());
