@@ -1,10 +1,10 @@
 //! What an agent needs from Max: questions and actions.
 //!
 //! **Concept.** An ask is a question or an action for Max with an identity
-//! of its own ([`crate::id::AskId`]): made by an agent's `ask` call, drawn
-//! on pages, ranked in his queue, and settled by his answer, by the harness
-//! seeing it done, or by the agent withdrawing it. A page says why; the ask
-//! is what he acts on. Not yet folded: see [`crate::page`].
+//! of its own ([`crate::id::AskId`]). It is made by an agent's `ask` call,
+//! drawn on pages, ranked in his queue, and settled by his answer, by the
+//! harness seeing it done, or by the agent withdrawing it. Not yet folded:
+//! see [`crate::page`].
 
 use serde::{Deserialize, Serialize};
 
@@ -14,24 +14,30 @@ use crate::source::Whose;
 
 /// One thing an agent needs from Max.
 ///
-/// **Concept.** The structured half of a page: what Max acts on, as data
-/// the harness can rank, route and settle, rather than prose he has to find.
-/// An ask is live from the agent's `ask` call, so the agent can ask in the
-/// background and keep working; blocking on it is just ending its turn. A
-/// page draws an ask where its body places it, after the paragraph that
-/// says why, never in the lead; one of its task's open asks that the body
-/// does not place is drawn at the page's end. An orchestrator's page can
-/// place a child's. An ask asked mid-work, before a page places it, opens on
-/// its own from the map: its title, its why and its answers. `ask` is
-/// declared only to a task that has Max, so no call is refused for not
-/// having him: an agent that does not have him puts what it needs in its
-/// result, to an ancestor that does, since only an agent that has Max can
-/// hand to Max.
+/// **Concept.** The structured part of a page: what Max acts on, as data
+/// the harness can rank, route and settle, rather than prose he has to
+/// find. An ask stands on its own. It is drawn the same wherever it
+/// appears: on its asker's page, on the page of each user-facing task above
+/// it, in his queue, and from its own node on the map. So it carries its
+/// own frame: the question, where it ends, where it is now, and why this
+/// step gets from one to the other. If he doesn't agree with the end or the
+/// reasoning, he rejects the ask rather than answering it
+/// ([`Verdict::Reject`]). That is expected, and it is as useful to the agent
+/// as a yes.
 ///
-/// Serves: questions and user actions as nodes, one per wait (vision); "the
-/// agent shouldn't have to worry about those kind of things"; an action
-/// arrives ready to do, with the why before the button; maintain, cancel or
-/// reissue a question.
+/// An ask is live from the agent's `ask` call, so the agent can ask in the
+/// background and keep working; blocking on it is just ending its turn.
+/// Pages draw it after where we are; no agent places it or retells it.
+/// `ask` is declared only to a task that has Max, through the user plugin.
+/// An agent without him puts what it needs in its result, to an ancestor
+/// that has him, since only an agent that has Max can hand to Max.
+///
+/// Serves: "even an individual ask needs to have eventual state, current
+/// state, and then why is this ask important for getting from current
+/// state to eventual state"; questions and user actions as nodes, one per
+/// wait (vision); "the agent shouldn't have to worry about those kind of
+/// things"; an action arrives ready to do, with the why before the button;
+/// maintain, cancel or reissue a question.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ask {
     pub asker: TaskId,
@@ -39,11 +45,21 @@ pub struct Ask {
     /// with the same key revises it, keeping its identity and whatever Max
     /// has drafted for it.
     pub key: String,
-    /// What it changes in the world: "Merge #231: page tools".
-    pub title: String,
-    /// Why it exists, in body markdown, read before the buttons: the chain
-    /// from what Max wants to this ask.
-    pub why: ValueId,
+    /// What Max is asked, in words he can answer by talking: "Can I send
+    /// #231 to Sam for review?" Set in the theme's display face in bold,
+    /// which in the design language means only this.
+    pub question: String,
+    /// Where this step ends: what is true once it is done. "#231 merged,
+    /// with Sam's review." Often narrower than its page's end: the ask's own
+    /// destination, not the whole work's. Drawn in italic, as every end is.
+    pub end: String,
+    /// Where it is now: "#231 is finished and green, and only I have seen
+    /// it." Inline markdown, naming live things ([`Ref`]).
+    pub now: String,
+    /// Why this ask is what gets from now to the end, and why it is his:
+    /// "Nothing merges without a review, and asking Sam puts work on him, so
+    /// that's yours to say yes to." Inline markdown.
+    pub why: String,
     pub want: Want,
     /// What it is about. An item's reading decides whose move the ask is
     /// and when it is done: a PR whose review was requested is the
@@ -54,8 +70,8 @@ pub struct Ask {
     pub expires: Option<Timestamp>,
 }
 
-/// What kind of answer an ask wants. Every kind also takes no, "the
-/// question is wrong", and his words.
+/// What kind of answer an ask wants. Every kind also takes no, a rejection,
+/// and his words.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Want {
     /// A question: his words are the answer.
@@ -82,8 +98,8 @@ pub enum Want {
 pub struct Choice {
     pub key: String,
     pub label: String,
-    /// What choosing it means, in body markdown.
-    pub detail: Option<ValueId>,
+    /// What choosing it means, in inline markdown.
+    pub detail: Option<String>,
 }
 
 /// A call ready to make: the tool, on the asker's binding, and its exact
@@ -108,7 +124,7 @@ pub enum AskEvent {
 
 /// Max's answer to an ask: a delivery to the asker, as his words are.
 ///
-/// **Concept.** Answering is talking. He presses a choice, dictates, or
+/// **Concept.** Answering is talking. He presses an answer, dictates, or
 /// both, into the ask's own draft ([`crate::draft::Draft`]); sending
 /// delivers it to the asker as `Content::Answer`, waking it as his words
 /// do. So drafts, two faces racing, and what the agent has heard need
@@ -121,31 +137,45 @@ pub struct Answer {
     pub words: Option<ValueId>,
 }
 
-/// The button he pressed, if any.
+/// The answer he pressed, if any.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verdict {
     /// Done, for [`Want::Do`]; yes, for [`Want::Approve`].
     Yes,
+    /// He agrees with the frame, and the answer is no.
     No,
     /// The key of the option chosen, for [`Want::Choose`].
     Chose(String),
-    /// The question is wrong; his words say why.
-    Wrong,
+    /// He won't answer, because a part of the frame is wrong; his words say
+    /// how. The agent revises that part, or withdraws the ask.
+    Reject(Part),
+}
+
+/// A part of an ask's frame that Max can reject. In his face, he rejects a
+/// part by pressing on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Part {
+    /// That's not where this should end.
+    End,
+    /// That's not where things stand.
+    Now,
+    /// This step doesn't get from now to the end, or isn't his.
+    Why,
 }
 
 /// Where an ask stands: derived, never stored.
 ///
-/// **Concept.** Whose move, checked rather than guessed. An open ask with no
-/// `about` is Max's move. One about an item is whoever its newest reading
-/// says: off his plate, drawn quietly with that party's mark, while Sam
-/// reviews or CI runs, and back in his queue when the source says it is his
-/// again, so an action reaches him only when it is ready to do.
+/// **Concept.** Whose move, checked rather than guessed. An open ask with
+/// no `about` is Max's move. One about an item is whoever its newest
+/// reading says. It is off his plate, drawn quietly with that party's mark,
+/// while Sam reviews or CI runs, and back in his queue when the source says
+/// it is his again, so an action reaches him only when it is ready to do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AskState {
     Open {
         whose: Whose,
     },
-    /// His answer was delivered.
+    /// His answer was delivered: a verdict, a rejection, or words.
     Answered {
         delivery: DeliveryId,
     },
@@ -160,9 +190,9 @@ pub enum AskState {
 /// One thing Max owes, as his queue lists it.
 ///
 /// **Concept.** The queue's unit, which `attention::Ranked` names. A task
-/// waiting on him with open asks is listed by its asks, one per thing to do,
-/// so an ask the agent made in the background reaches him while it works.
-/// A task waiting with none is listed by itself: it wants a reply.
+/// waiting on him with open asks is listed by its asks, one per thing to
+/// do, so an ask the agent made in the background reaches him while it
+/// works. A task waiting with none is listed by itself: it wants a reply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Owed {
     Ask(AskId),

@@ -1,86 +1,110 @@
-//! The shared design system pages are written in, and the themes they wear.
+//! The shared design system pages are drawn in, the themes they wear, and
+//! the agent that keeps them.
 //!
 //! Not yet folded: see [`crate::page`].
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::ValueId;
+use crate::id::{DeliveryId, RoleId, TaskId, ValueId};
 use crate::resource::Observation;
 
-/// The shared design system: themes, components, and how to write with them.
+/// The shared design system: one design language, the themes, the
+/// components, and the agent that keeps them.
 ///
-/// **Concept.** What every page has in common, owned in one place (the
-/// Harness UI work), read from files in the repo and versioned as a role
-/// is. The system provides the look: the themes, spacing, and how each
-/// component draws. The agent provides content, in the order Max needs it:
-/// the lead, then prose, tables and figures one at a time. So every page is
-/// calm and readable on the phone without each agent learning CSS, and a
-/// design change reaches every page, old versions included.
+/// **Concept.** Everything about how a page looks, owned in one place and
+/// by one agent ([`Design::keeper`]), read from files in the repo and
+/// versioned as a role is. Agents never style: they give typed parts and
+/// short markdown ([`crate::page::Sheet`], [`crate::ask::Ask`]), and the
+/// face draws them in the language, dressed in the task's theme. A change
+/// here reaches every page, old versions included.
 ///
-/// Serves: "use nice stylings that are unique and different in a structured
-/// way compared to all other agents"; "encourages the agent to do really
-/// high quality stuff, diagrams, tables, visual hierarchies and colors";
-/// the vision's area colour with an agent variant.
+/// **The language is the same on every page.** It is what Max learns once:
+/// - The order: where this ends, where we are, the asks, then the detail,
+///   folded.
+/// - Slant and weight carry meaning, not decoration. Italic is where this
+///   ends, and nothing else. Bold is a question for Max, and nothing else.
+///   Everything else is regular. Agents' markdown has no bold or headings.
+/// - Four sizes on one scale: the cover, a heading, reading, a label.
+/// - One reading face and one measure, so body text reads the same
+///   everywhere.
+/// - No cards, and no boxes around prose. An ask is set off by space and a
+///   hairline, and its frame by small labels: end, now, why.
+/// - A pill is something Max can press: only answers are pills. A live
+///   thing's state is a dot in its state's tone, never a pill.
+/// - The state tones ([`Tone`]): orange is always his move.
+///
+/// **A theme varies only what makes an agent its own:** the ground, the
+/// palette and the display face ([`Theme`]).
+///
+/// Serves: "we should have a design language for the text", "the use of
+/// plain font versus bold versus italics, sizing of fonts, cards or not,
+/// pills or not. These kind of things need to be consistent across things";
+/// "the agent shouldn't be in charge of the styling"; the vision's area
+/// colour with an agent variant.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Design {
+    /// The language: the stylesheet every theme shares, written against the
+    /// tokens a theme's style sets, and nothing else.
+    pub language: ValueId,
     pub themes: Vec<Theme>,
     pub components: Vec<Component>,
-    /// The stylesheet every theme shares: layout, spacing, how components
-    /// draw, written against the tokens each theme's style sets.
-    pub css: ValueId,
-    /// What an agent holding the `page` tool set is told: describe yourself
-    /// first, a title for the work and a theme from the free ones; the lead
-    /// is a point (the question, or the point) and a scene of a few lines,
-    /// and nothing else is seen before Max scrolls; then one thing at a
-    /// time, in the order he needs it, each ask after its why; name live
-    /// things where the prose mentions them instead of retyping their
-    /// state; write no colours or typefaces, since figures take the theme's
-    /// palette tokens; no dashboard, no repeating the title, the state or
-    /// the chat; detail last, folded. With the components and an example
-    /// page.
+    /// What a task holding the user plugin is told: choose your theme first,
+    /// from the free ones; the end is the world when the work is done, a
+    /// state and not a plan; the point is the update in one sentence; then
+    /// show it, a figure first; ask with `ask`, each ask with its own end,
+    /// now and why, and never retell it on the page; name live things
+    /// instead of retyping their state; write no colours, typefaces, bold or
+    /// headings; detail goes in `more`; Max's words about how your page
+    /// looks go to the keeper with `pass_on_style`. With the components and
+    /// an example page.
     pub guide: ValueId,
+    /// The role of the standing agent that owns the look: the art, the
+    /// themes, the language and the guide. It makes new themes on request,
+    /// as high-effort programmatic art, and Max's words about the look reach
+    /// it from any page ([`Feedback`]).
+    pub keeper: RoleId,
     /// The files this version was read from.
     pub source: Option<Observation>,
 }
 
-/// A look an agent takes: everything about how its page and chat window
-/// look.
+/// A look an agent wears: what makes its page and chat window its own.
 ///
 /// **Concept.** A finished piece of design, made with care in the design
-/// system's files and reviewed there, never by an agent at run time. It has
+/// system's files by its keeper, and never by an agent at run time. It has
 /// three parts:
-/// - a ground: the background artwork, drawn for each task from its id, so
-///   no two agents share one even in the same theme;
+/// - a ground: background artwork, drawn for each task from its id, so no
+///   two agents share one, even in the same theme;
 /// - a palette: paper, ink, an accent and the figure colours;
-/// - two typefaces, self-hosted: one for the lead, one for reading.
+/// - a display face, for the end, where we are and the questions. It must
+///   have a true italic and a true bold, since the language needs both.
 ///
-/// It dresses the whole chat window: the ground behind the lead, the paper
-/// the body and the chat sit on, the header and the composer. The page's
-/// content stays sparse; the beauty is the theme's. An agent's figures use
-/// the palette's tokens, never colours, so a figure redraws in any theme.
+/// The ground fills the cover around the end, then gives way to the
+/// theme's paper, so text always sits on calm ground. An agent's figures
+/// use the palette's tokens, never colours, so a figure redraws in any
+/// theme. The state tones ([`Tone`]) are never a theme's.
 ///
-/// Themes come in families. A family is an area's art direction (sea mist
-/// and depth contours; tree rings; a night sky), and each agent in the area
-/// takes a variant of it (dawn, deep, moss), so where Max is shows at a
-/// glance and each agent is still its own. An agent picks its theme from
-/// the free ones when it starts ([`crate::page::Description::theme`]). The
-/// state tones ([`Tone`]) are never a theme's.
+/// Themes come in families. A family is an area's art direction (the
+/// harbour's depth contours, the kauri forest, tussock country), and each
+/// agent in the area wears a variant of it, so where Max is shows at a
+/// glance and each agent is still its own. Each family differs from the
+/// others in its technique, its light and its hue, not only its colour. An
+/// agent chooses its theme once, from the free ones, and keeps it
+/// ([`crate::page::Description`]).
 ///
 /// Serves: Max's "really elegant and artistic [...] beautiful backgrounds,
 /// UI themes, design systems, etc. that can be swapped between to make an
-/// agent and its page unique"; themes "only from a list that's provided by
-/// the design system"; the vision's area colour or pattern, with a variant
-/// per agent.
+/// agent and its page unique"; "agents don't design their own themes";
+/// themes "only from a list that's provided by the design system".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Theme {
     /// `harbour-dawn`.
     pub name: String,
     /// `harbour`.
     pub family: String,
-    /// What an agent picks it by, in `describe`'s list: "Sea mist and depth
-    /// contours, set in Newsreader. Calm, for careful technical work."
+    /// What an agent chooses it by, in `choose_theme`'s list: "Depth
+    /// contours on sea mist, at first light."
     pub about: String,
-    /// Its palette and typefaces: a stylesheet setting the design system's
+    /// Its palette and display face: a stylesheet setting the language's
     /// tokens, with the font files it names.
     pub style: ValueId,
     /// Its ground: a drawing program the face runs for each task, seeded by
@@ -93,17 +117,46 @@ pub struct Theme {
 ///
 /// **Concept.** The vocabulary, as data: the brain's check and the agent's
 /// guide both read it, so a new component is a design system change, not a
-/// parser change. It is small on purpose: live names and asks bind to a
+/// parser change. It is small on purpose: live names bind to a
 /// [`crate::page::Ref`]; figures draw (mermaid, inline SVG, images from
-/// values) in the theme's palette; a fold holds detail at the end. There are
-/// no cards, grids or stat tiles, since a page is read one thing at a time
-/// and the map is the overview.
+/// values) in the theme's palette; a fold holds detail. There are no cards,
+/// grids or stat tiles, since a page is read one thing at a time and the
+/// map is the overview.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component {
     pub tag: String,
     pub attributes: Vec<String>,
     /// One line on when to use it, for the guide.
     pub about: String,
+}
+
+/// What Max said about how a page looks, passed on to the agent that owns
+/// the look.
+///
+/// **Concept.** Max gives his feedback to whichever agent he is reading,
+/// and that agent can't act on it, since it has no say over its look. Its
+/// `pass_on_style` call delivers this to the keeper's standing task, as
+/// `Content::Feedback`, waking it: his own words, exactly what he was
+/// looking at, and the agent's note. The keeper changes the design system,
+/// and every page shows the change. The tool is declared only while a
+/// keeper task is live, and the map draws the delivery as a line from the
+/// page's agent to the keeper.
+///
+/// Serves: "if I give feedback on the styling, I'm going to give it to that
+/// agent, so it needs to be able to pass it on, even though it's not able
+/// to action it itself".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Feedback {
+    /// The task whose page he was reading.
+    pub page: TaskId,
+    /// The version he was reading, if it had been published.
+    pub version: Option<u32>,
+    /// The theme it wore.
+    pub theme: String,
+    /// His words, as delivered to the agent: quoted, never retold.
+    pub words: DeliveryId,
+    /// The agent's note: which part of the page he meant.
+    pub note: String,
 }
 
 /// The state colours: the same hues on every page and on the map, never a
