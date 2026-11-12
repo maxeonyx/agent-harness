@@ -23,14 +23,20 @@ const PITCH = 20, CLEAR = 8;
 // taper runs from that width down to TIP, then narrows to a point over its
 // last POINT, which stops NGAP short of the dot it starts from or rejoins.
 // A crossing's gap is GAP each side of the line over it.
-export const LIFE = 2.2, GAP = 1.5;
+export const LIFE = 2.2;
+const GAP = 1.5;
 const TIP = .5, POINT = 4, NGAP = 1.5, TUCK = -.6;
 // Ports: a line leaves a node's bottom, or lands on its top, this far round
 // from upright on the side facing its other end, nearest innermost; the
 // centre is the lifeline's. At its port a line points LEAN of the way from
-// straight down (or up) to straight out from the middle.
-const SLOTS = [36, 66, 82].map((d) => (d * Math.PI) / 180), LEAN = .5;
-const slotsFor = (n) => (n <= SLOTS.length ? SLOTS : Array.from({ length: n }, (_, i) => SLOTS[0] + ((SLOTS[2] - SLOTS[0]) * i) / (n - 1)));
+// straight down (or up) to straight out from the middle. Where a side has
+// more lines than SLOTS, the three outermost take the slots and the rest
+// leave from TAP apart straight on down (or up) from the innermost slot,
+// beside the lifeline, nearest lowest, pointing as that slot does: every
+// line starts from its own place, and each is TAP below the one outside
+// it, so bent over one height they lie TAP apart all the way across.
+const SLOTS = [36, 66, 82].map((d) => (d * Math.PI) / 180), LEAN = .5, TAP = 4;
+const taps = (n) => Math.max(0, n - SLOTS.length);
 // A bend is at most BEND times as tall as it goes across, and at most REACH
 // times that over its port's slope, past which it would bulge.
 const BEND = 1.3, REACH = 3;
@@ -53,15 +59,28 @@ export function lanes(nodes) {
   const tall = [];
   for (const v of V) tall[v.rank] = Math.max(tall[v.rank] ?? 0, v.n.along);
   const ys = [0];
-  for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17;
   const xs = across(L, slot, tall.length);
-  for (const v of V) { v.x = xs.get(v.lane.slot); v.y = ys[v.rank] - ys[P]; }
-  ports(edges);
-  heights(edges, V);
+  for (const v of V) v.x = xs.get(v.lane.slot);
+  const groups = ports(edges);
+  // A row further down by the taps that hang into the room above it, and
+  // by what a bend above it still lacks to pass the dots on its own row.
+  const down = [], up = [], more = [];
+  for (const g of groups) {
+    const { v, side } = g[0], [at, r] = side > 0 ? [down, v.rank] : [up, v.rank - 1];
+    at[r] = Math.max(at[r] ?? 0, taps(g.length) * TAP);
+  }
+  for (let pass = 0; pass < 3; pass++) {
+    for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17 + (down[r - 1] ?? 0) + (up[r - 1] ?? 0) + (more[r - 1] ?? 0);
+    for (const v of V) v.y = ys[v.rank] - ys[P];
+    place(groups);
+    const short = heights(edges, V);
+    if (short.size === 0) break;
+    for (const [r, d] of short) more[r] = (more[r] ?? 0) + d;
+  }
   for (const e of edges) route(e);
   const cuts = crossings(edges);
   const at = new Map(V.map((v) => [v.id, { x: v.x, y: v.y }]));
-  return { at, cuts, edges: edges.map((e) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W })) };
+  return { at, cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, parts: cut(e, cuts.filter((c) => c.under === i)) })) };
 }
 
 // ─── Rows ──────────────────────────────────────────────────────────────────
@@ -148,9 +167,10 @@ function lanesOf(V, edges) {
   for (const l of L.values()) { l.last = l.nodes.reduce((a, b) => (b.rank >= a.rank ? b : a)); l.r1 = l.last.rank; }
   for (const e of edges) {
     const { v, d } = e;
+    if (v.lane !== d.lane) { v.fan = (v.fan ?? 0) + 1; d.fan = (d.fan ?? 0) + 1; }
     if (v.lane === d.lane) e.kind = "life";
     else if (v.lane.nodes[0] === v && !v.lane.from) { e.kind = v.n.old ? "branch" : "grow"; v.lane.from = d; }
-    else if (d === d.lane.last) { e.kind = "fade"; d.lane.r1 = Math.max(d.lane.r1, v.rank); }
+    else if (d === d.lane.last) { e.kind = "fade"; d.lane.r1 = Math.max(d.lane.r1, v.rank); d.lane.reader = v.lane; }
     else e.kind = "port";
   }
   for (const l of L.values()) l.r0 = l.from ? l.from.rank : l.nodes[0].rank;
@@ -159,17 +179,24 @@ function lanesOf(V, edges) {
 
 // Each lane's column, in the order they start. A column holds one life at
 // a time and never moves. A life with no maker takes the first free column
-// from the middle rightward; a child takes the first free one on its
-// maker's outer side, the maker's first children alternately right and left
-// when it is in the middle.
+// from the middle rightward; a child takes the first free one on the side
+// of its maker where its lines cross fewer, at the rows they bend on: a
+// lane held there, and every line its dot there starts or reads; but
+// never where its maker's own result would pass over its start. Even, it
+// goes on its maker's outer side, or, for a maker in the middle,
+// alternately right and left.
 function columns(L) {
   const held = new Map();
   const free = (s, l) => !(held.get(s) || []).some((h) => h.r0 <= l.r1 && l.r0 <= h.r1);
   const next = (s, side, l) => { while (!free(s, l)) s += side; return s; };
-  // The lanes a line from `m` to slot `s` would cross on row `r`.
-  const crossed = (m, s, r) => {
+  // The lines a line of `l` from `m` to slot `s` would cross on row `r`,
+  // below it for a start (`down`), above it for a result: not a lane that
+  // only ends (or only starts) on that row, which is on the other side of
+  // it, nor its siblings' from the same dot, which it nests with.
+  const crossed = (l, m, s, r, down) => {
     let n = 0;
-    for (let i = Math.min(m, s) + 1; i < Math.max(m, s); i++) n += (held.get(i) || []).filter((h) => h.r0 <= r && r <= h.r1).length;
+    for (let i = Math.min(m, s) + 1; i < Math.max(m, s); i++)
+      for (const h of held.get(i) || []) if ((down ? h.r0 <= r && r < h.r1 : h.r0 < r && r <= h.r1) && h.from !== l.from) n += 1 + (h.nodes.find((v) => v.rank === r)?.fan ?? 0);
     return n;
   };
   for (const l of L) {
@@ -177,16 +204,11 @@ function columns(L) {
     if (!l.from) { s = next(0, 1, l); side = 0; }
     else {
       const m = l.from.lane;
-      side = m.side;
-      if (!side) {
-        // A maker in the middle alternates its children right and left,
-        // unless the other side is free of lanes to cross.
-        side = m.kids++ % 2 ? -1 : 1;
-        const a = next(m.slot + side, side, l), b = next(m.slot - side, -side, l);
-        const cost = (s) => crossed(m.slot, s, l.r0) + crossed(m.slot, s, l.r1);
-        if (cost(b) < cost(a)) side = -side;
-      }
-      s = next(m.slot + side, side, l);
+      side = m.side || (m.kids++ % 2 ? -1 : 1);
+      const a = next(m.slot + side, side, l), b = next(m.slot - side, -side, l);
+      const over = (s) => (l.from === m.last && m.reader?.slot !== undefined && (s - m.slot) * (m.reader.slot - s) > 0 ? 1 : 0);
+      const cost = (s) => crossed(l, m.slot, s, l.r0, true) + crossed(l, m.slot, s, l.r1, false);
+      s = over(a) > over(b) || (over(a) === over(b) && cost(b) < cost(a)) ? (side = -side, b) : a;
     }
     l.slot = s; l.side = side;
     (held.get(s) ?? held.set(s, []).get(s)).push(l);
@@ -239,7 +261,8 @@ function edge(v, u, gap) {
   const t = n.big ? 1 / Math.hypot(u[0] / BIG_HALF, u[1] / (u[1] < 0 ? n.top : n.foot)) : n.r;
   return [v.x + u[0] * (t + gap), v.y + u[1] * (t + gap)];
 }
-// Each line's port, out on its source's bottom or in on its reader's top.
+// Each line's port, out on its source's bottom or in on its reader's top,
+// in groups by node and side; `place` puts them once nodes are placed.
 function ports(edges) {
   const at = new Map();
   const slot = (v, side, far, gap) => {
@@ -252,11 +275,16 @@ function ports(edges) {
     if (e.kind === "grow" || e.kind === "branch" || e.kind === "port") e.a = slot(e.d, 1, e.v, e.kind === "branch" ? TUCK : NGAP);
     if (e.kind === "fade" || e.kind === "port") e.b = slot(e.v, -1, e.d, NGAP);
   }
-  for (const here of at.values()) {
-    const slots = slotsFor(here.length);
-    here.sort((a, b) => Math.abs(a.far.x - a.v.x) - Math.abs(b.far.x - b.v.x)).forEach((p, i) => {
-      const g = slots[i];
-      p.p = edge(p.v, [p.s * Math.sin(g), p.side * Math.cos(g)], p.gap);
+  for (const here of at.values()) here.sort((a, b) => Math.abs(a.far.x - a.v.x) - Math.abs(b.far.x - b.v.x));
+  return [...at.values()];
+}
+function place(groups) {
+  for (const here of groups) {
+    here.forEach((p, i) => {
+      p.here = here; p.i = i;
+      const t = taps(here.length), g = SLOTS[Math.max(0, i - t)];
+      const [x, y] = edge(p.v, [p.s * Math.sin(g), p.side * Math.cos(g)], p.gap);
+      p.p = [x, y + p.side * TAP * Math.max(0, t - i)];
       p.k = p.s * Math.tan(g * LEAN) * p.side;
     });
   }
@@ -276,16 +304,27 @@ function heights(edges, V) {
     else { e.P0 = e.a.p; e.P1 = edge(v, [0, -1], TUCK); e.k = e.a.k; e.group = e.a.group; }
     (groups.get(e.group) ?? groups.set(e.group, []).get(e.group)).push(e);
   }
+  // Each line of a side ends its bend TAP further from the node than the
+  // one outside it: `o` past the outermost's height.
   for (const G of groups.values()) {
     const dy = (e) => e.P1[1] - e.P0[1];
-    const H = Math.min(...G.map(dy), Math.max(...G.map((e) => span(e.P1[0] - e.P0[0], dy(e), e.k))));
-    for (const e of G) e.h = H;
+    for (const e of G) {
+      const p = e.kind === "fade" ? e.b : e.a, out = p.here.at(-1);
+      e.o = (p.here.length - 1 - p.i) * TAP - Math.abs(p.p[1] - out.p[1]);
+    }
+    const H = Math.min(...G.map((e) => dy(e) - e.o), Math.max(...G.map((e) => span(e.P1[0] - e.P0[0], dy(e), e.k))));
+    for (const e of G) e.h = H + e.o;
   }
   clear([...groups.values()].flat(), V);
+  // How much more room each row's bends lack, by the row above it.
+  const short = new Map();
   for (const G of groups.values()) {
-    const H = Math.min(...G.map((e) => e.most), Math.max(...G.map((e) => e.least), Math.min(...G.map((e) => e.h))));
-    for (const e of G) e.h = H;
+    const room = Math.min(...G.map((e) => e.most - e.o)), need = Math.max(...G.map((e) => e.least - e.o));
+    if (need > room + .5) { const r = G[0].kind === "fade" ? G[0].v.rank - 1 : G[0].d.rank; short.set(r, Math.max(short.get(r) ?? 0, need - room)); }
+    const H = Math.min(room, Math.max(need, Math.min(...G.map((e) => e.h - e.o))));
+    for (const e of G) e.h = H + e.o;
   }
+  return short;
 }
 
 // Bends kept clear of nodes and of each other. A bend hangs down from its
@@ -294,12 +333,13 @@ function heights(edges, V) {
 // passes a node on its port's own row reaches far enough to pass it on the
 // far side. Two of different lives that would overlap share the room
 // between them: a start and a result in proportion to how tall each wants
-// to be, two starts (or two results) the nearer its port the shorter.
+// to be, two starts (or two results) the nearer its port the shorter, and
+// of two on one row, the one whose dot the other passes the shorter.
 const ROOM = 3;
 function clear(B, V) {
   const band = (e) => {
     const down = e.kind !== "fade", [y, x0, x1] = down ? [e.P0[1], e.P0[0], e.P1[0]] : [e.P1[1], e.P1[0], e.P0[0]];
-    return { e, down, y, at: down ? e.d.y : e.v.y, from: x0, x0: Math.min(x0, x1), x1: Math.max(x0, x1), dx: x1 - x0, most: Math.abs(e.P1[1] - e.P0[1]), least: 0 };
+    return { e, down, y, at: down ? e.d.y : e.v.y, node: down ? e.d : e.v, from: x0, x0: Math.min(x0, x1), x1: Math.max(x0, x1), dx: x1 - x0, most: Math.abs(e.P1[1] - e.P0[1]), least: 0 };
   };
   const bs = B.map(band);
   for (const b of bs) {
@@ -334,6 +374,16 @@ function clear(B, V) {
         const [hi, lo] = a.at < b.at ? [a, b] : [b, a];
         if (a.down) hi.e.h = Math.min(hi.e.h, lo.y - hi.y - ROOM);
         else lo.e.h = Math.min(lo.e.h, lo.y - hi.y - ROOM);
+      } else if (a.node !== b.node) {
+        // On one row from two dots, where one passes the other's dot: the
+        // other's bend keeps nearer its row, so the one passing stays
+        // clear of it, or crosses its lane, never the bend.
+        const inside = (u, w) => w.x0 < u.node.x && u.node.x < w.x1;
+        const [i, o] = inside(a, b) ? [a, b] : inside(b, a) ? [b, a] : [];
+        if (i) {
+          i.e.h = Math.max(i.least, 2, Math.min(i.e.h, o.e.h - ROOM));
+          o.least = Math.max(o.least, i.e.h + ROOM);
+        }
       }
     }
   }
@@ -401,9 +451,11 @@ function route(e) {
 // end at: the more upright one stays whole, the other is cut GAP each side
 // of it. Each as { over, under, at, dir, forced }: `over` and `under` the
 // indices of the edges, `dir` the over one's direction there, and forced
-// when the over one is upright and the other a bend across its lane, which
-// no routing could avoid. Segments are bucketed in a grid, so this is near
-// linear.
+// when no routing could avoid it: as many of two lives' crossings as the
+// times their order across changes from one of their dots' rows to the
+// next, where the dots pin them. A line out of a dot into another life's
+// counts as a life of its own. Segments are bucketed in a grid, so this is
+// near linear.
 export function crossings(edges) {
   const CELL = 24, grid = new Map(), out = [];
   const segs = [];
@@ -422,7 +474,7 @@ export function crossings(edges) {
   for (const cell of grid.values()) {
     for (let x = 0; x < cell.length; x++) for (let y = x + 1; y < cell.length; y++) {
       const A = segs[cell[x]], B = segs[cell[y]], ea = edges[A.i], eb = edges[B.i];
-      if (A.i === B.i || lifeOf(ea) === lifeOf(eb)) continue;
+      if (A.i === B.i || own(ea) === own(eb)) continue;
       const p = meet(A.a, A.b, B.a, B.b);
       if (!p) continue;
       const shared = [ea.v, ea.d].filter((n) => n === eb.v || n === eb.d);
@@ -431,15 +483,53 @@ export function crossings(edges) {
       if (seen.has(key)) continue;
       seen.add(key);
       const [o, u] = slope(A) <= slope(B) ? [A, B] : [B, A];
-      const ue = edges[u.i], lx = o.a[0];
       const m = Math.hypot(o.b[0] - o.a[0], o.b[1] - o.a[1]) || 1;
-      out.push({ over: o.i, under: u.i, at: p, dir: [(o.b[0] - o.a[0]) / m, (o.b[1] - o.a[1]) / m], forced: o.up && ue.kind !== "life" && Math.min(ue.P[0][0], ue.P.at(-1)[0]) < lx && lx < Math.max(ue.P[0][0], ue.P.at(-1)[0]) });
+      out.push({ over: o.i, under: u.i, at: p, dir: [(o.b[0] - o.a[0]) / m, (o.b[1] - o.a[1]) / m], forced: false });
     }
+  }
+  const lives = chains(edges), left = new Map();
+  for (const x of out) {
+    const [a, b] = [own(edges[x.over]), own(edges[x.under])], key = [a, b].sort().join(" ");
+    if (!left.has(key)) left.set(key, swaps(lives.get(a), lives.get(b)));
+    if (left.get(key) > 0) { x.forced = true; left.set(key, left.get(key) - 1); }
   }
   return out;
 }
-// Whose line it is: a result's is the life that finished.
-const lifeOf = (e) => (e.kind === "fade" || e.kind === "port" ? e.d.lane : e.v.lane);
+// Each life's line from top to bottom, through the middles of its dots,
+// and the heights of its dots.
+function chains(edges) {
+  const out = new Map();
+  for (const e of [...edges].sort((a, b) => a.d.y - b.d.y)) {
+    const k = own(e);
+    const c = out.get(k) ?? out.set(k, { P: [], pins: [] }).get(k);
+    c.P.push([e.d.x, e.d.y], ...e.P, [e.v.x, e.v.y]);
+    c.pins.push(e.d.y, e.v.y);
+  }
+  return out;
+}
+const xAt = (c, y) => {
+  for (let i = 1; i < c.P.length; i++) {
+    const [a, b] = [c.P[i - 1], c.P[i]];
+    if ((a[1] <= y && y <= b[1]) || (b[1] <= y && y <= a[1])) return b[1] === a[1] ? a[0] : a[0] + ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]);
+  }
+  return null;
+};
+// How often two lives' order across changes from one pinned height to the
+// next, over the heights both span.
+function swaps(A, B) {
+  const lo = Math.max(A.P[0][1], B.P[0][1]), hi = Math.min(A.P.at(-1)[1], B.P.at(-1)[1]);
+  let n = 0, was = 0;
+  for (const y of [...new Set([...A.pins, ...B.pins])].filter((y) => lo <= y && y <= hi).sort((a, b) => a - b)) {
+    const a = xAt(A, y), b = xAt(B, y);
+    if (a === null || b === null || Math.abs(a - b) < .5) continue;
+    if (was && Math.sign(a - b) !== was) n++;
+    was = Math.sign(a - b);
+  }
+  return n;
+}
+// Whose line it is, by a name: a result's is the life that finished; a
+// line out of a dot into another life's is its own.
+const own = (e) => (e.kind === "port" ? `${e.d.id}>${e.v.id}` : (e.kind === "fade" ? e.d : e.v).n.lane);
 const slope = (s) => Math.abs((s.b[0] - s.a[0]) / (s.b[1] - s.a[1] || 1e-9));
 function meet(p, q, r, s) {
   const d = (q[0] - p[0]) * (s[1] - r[1]) - (q[1] - p[1]) * (s[0] - r[0]);
@@ -447,6 +537,46 @@ function meet(p, q, r, s) {
   const t = ((r[0] - p[0]) * (s[1] - r[1]) - (r[1] - p[1]) * (s[0] - r[0])) / d;
   const u = ((r[0] - p[0]) * (q[1] - p[1]) - (r[1] - p[1]) * (q[0] - p[0])) / d;
   return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? [p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])] : null;
+}
+
+// A line in parts, cut where it passes under another: a gap GAP clear of
+// the over line each side, measured across it, so nothing else is covered.
+// Each part { P, W }.
+function cut(e, under) {
+  const len = [0];
+  for (let i = 1; i < e.P.length; i++) len[i] = len[i - 1] + Math.hypot(e.P[i][0] - e.P[i - 1][0], e.P[i][1] - e.P[i - 1][1]);
+  const gaps = under.map(({ at, dir }) => {
+    let best = 0, d = Infinity, u = [0, 1];
+    for (let i = 1; i < e.P.length; i++) {
+      const [a, b] = [e.P[i - 1], e.P[i]], vx = b[0] - a[0], vy = b[1] - a[1], L = vx * vx + vy * vy || 1;
+      const t = Math.max(0, Math.min(1, ((at[0] - a[0]) * vx + (at[1] - a[1]) * vy) / L));
+      const q = Math.hypot(a[0] + t * vx - at[0], a[1] + t * vy - at[1]);
+      if (q < d) { d = q; best = len[i - 1] + t * (len[i] - len[i - 1]); u = [vx / Math.sqrt(L), vy / Math.sqrt(L)]; }
+    }
+    const g = (LIFE + GAP) / Math.max(.3, Math.abs(u[0] * dir[1] - u[1] * dir[0]));
+    return [best - g, best + g];
+  }).sort((a, b) => a[0] - b[0]);
+  const parts = [];
+  let from = 0;
+  for (const [g0, g1] of [...gaps, [Infinity, Infinity]]) {
+    if (g0 > from) parts.push(piece(e, len, from, Math.min(g0, len.at(-1))));
+    from = Math.max(from, g1);
+    if (from >= len.at(-1)) break;
+  }
+  return parts;
+}
+// The part of a line from length s0 along it to s1.
+function piece(e, len, s0, s1) {
+  const P = [], W = e.W && [];
+  const point = (s) => {
+    const i = Math.max(1, len.findIndex((l) => l >= s)), t = (s - len[i - 1]) / (len[i] - len[i - 1] || 1);
+    P.push([e.P[i - 1][0] + t * (e.P[i][0] - e.P[i - 1][0]), e.P[i - 1][1] + t * (e.P[i][1] - e.P[i - 1][1])]);
+    if (W) W.push(e.W[i - 1] + t * (e.W[i] - e.W[i - 1]));
+  };
+  point(s0);
+  for (let i = 0; i < e.P.length; i++) if (len[i] > s0 && len[i] < s1) { P.push(e.P[i]); if (W) W.push(e.W[i]); }
+  point(s1);
+  return { P, W };
 }
 
 // ─── Drawing a line ────────────────────────────────────────────────────────

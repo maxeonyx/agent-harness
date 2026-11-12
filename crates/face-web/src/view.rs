@@ -429,7 +429,6 @@ fn work(state: &State, legs: &Legs) -> Value {
                 // When it settled, and whether it failed.
                 "ended": record.and_then(|r| r.settled.as_ref()).map(|s| s.at.at.0),
                 "failed": record.and_then(|r| r.outcome()).is_some_and(|o| !matches!(o, CallOutcome::Completed(_))),
-                "handed": record.is_some_and(|r| r.owner == Owner::Max),
                 // Who holds it now, a task's id or `max`, and each time it
                 // was passed up: to whom, and when.
                 "holder": record.map(|r| owner(r.owner)),
