@@ -1175,6 +1175,12 @@ impl Task {
         ends(self.drain())
     }
 
+    /// Whether its tidy-up turn is under way: it is being stopped, and
+    /// what it does now is its last turn, which its report ends.
+    pub fn tidying(&self) -> bool {
+        matches!(self.drain(), Some(Draining::Abandoning(s)) if s.tidying && !s.hard)
+    }
+
     /// Since when Max has owed it a word, if he does.
     /// Whether it is in the middle of its own loop, so parking it costs a
     /// turn: a request in flight, a round of calls running, or results to
@@ -1414,9 +1420,9 @@ impl Task {
     /// Replace what the task did since `compaction.onto` with its carry.
     /// The agent compacts once the round of its compaction call is over,
     /// carrying every other result of that round; the harness compacts a
-    /// task between turns. Neither while it is stopping: its tidy-up turn
-    /// is its last, with no next context. The task carries on, or keeps
-    /// waiting.
+    /// task between turns. Neither while it is stopping, except to end its
+    /// tidy-up turn with a report: that turn is its last, with no next
+    /// context. The task carries on, or keeps waiting.
     fn compact(
         &mut self,
         compaction: &Compaction,
@@ -1427,7 +1433,9 @@ impl Task {
         let Life::Live(live) = life else {
             return Err(Rejected::Starting);
         };
-        if live.drain.is_some() {
+        let reports = compaction.report.is_some()
+            && matches!(&live.drain, Some(Draining::Abandoning(s)) if s.tidying && !s.hard);
+        if live.drain.is_some() && !reports {
             return Err(Rejected::Draining);
         }
         match compaction.by {

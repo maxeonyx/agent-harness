@@ -132,9 +132,6 @@ pub struct Brain {
     feed: Feed,
     /// The limb the brain is, which runs the calls of its own tool sets.
     brain: LimbId,
-    /// The limb on the brain's machine: where a fresh task's directory is
-    /// when its parent has none.
-    local: LimbId,
     /// What its roles' models resolve against.
     models: roles::Models,
     /// The links to limbs this brain is making or has, by id, until their
@@ -169,7 +166,6 @@ pub struct Brain {
 pub struct Opening {
     facts: Vec<Fact>,
     brain: LimbId,
-    local: LimbId,
     /// The role files the brain reads.
     roles: Option<PathBuf>,
 }
@@ -205,11 +201,10 @@ impl Opening {
         let brain = define(state, &mut facts, limb);
         let found = state.limbs().find(|l| l.host == Host::Local);
         let limb = local_limb(id(&facts, found), found, roles.as_deref())?;
-        let local = define(state, &mut facts, limb);
+        define(state, &mut facts, limb);
         Ok(Opening {
             facts,
             brain,
-            local,
             roles,
         })
     }
@@ -241,7 +236,6 @@ impl Brain {
         Opening {
             facts,
             brain,
-            local,
             roles,
         }: Opening,
         face: Face,
@@ -258,7 +252,6 @@ impl Brain {
             inbox,
             feed,
             brain,
-            local,
             models,
             limbs: HashMap::new(),
             failed: HashMap::new(),
@@ -609,9 +602,8 @@ impl Brain {
         Some(match name {
             meta::SET => {
                 let role = state.role(task.role)?;
-                let roles: Vec<(&str, &str)> = (role.starts.iter())
+                let roles: Vec<&harness_core::role::Role> = (role.starts.iter())
                     .filter_map(|r| state.role(*r))
-                    .map(|r| (r.name.as_str(), r.description.as_str()))
                     .collect();
                 let member = matches!(task.scope, Scope::Spawn(_));
                 meta::set(self.brain, &roles, member)
@@ -734,6 +726,11 @@ impl Brain {
         let Some((call, ask)) = asked else {
             return false;
         };
+        // A stopping task's tidy-up turn is its last: its report ends it,
+        // and there is nothing to carry on into.
+        if task.ends() && !(ask.report.is_some() && task.tidying()) {
+            return false;
+        }
         let checkpoint = self.state().checkpoint(task).filter(|_| !ask.fresh);
         let (onto, values, why) = match checkpoint {
             Some(at) => (Onto::Checkpoint(at), Vec::new(), render::Why::Checkpoint),
@@ -792,9 +789,8 @@ impl Brain {
 
     fn send(&mut self, id: TaskId, now: Timestamp) {
         let task = self.state().task(id).expect("a task to send for").clone();
-        // A stopping task's tidy-up turn is its last: it does not compact.
         let ending = task.ends();
-        if !ending && self.compact(&task) {
+        if self.compact(&task) {
             return;
         }
         let head = task.head().expect("a ready task has a context");
@@ -1114,8 +1110,10 @@ impl Brain {
             facts: vec![Fact::Call(id, CallEvent::Dispatched)],
         };
         let input = self.value(call.input);
-        let said = if parent.ends() {
-            // Only a stopping task's tidy-up turn makes calls while it ends.
+        // Only a stopping task's tidy-up turn makes calls while it ends: it
+        // can attach and report, but nothing new can start.
+        let reports = call.tool == meta::COMPACT_AND_REPORT || call.tool == meta::ATTACH;
+        let said = if parent.ends() && !(reports && parent.tidying()) {
             Err(
                 "You are being stopped: nothing new can start, and there is no next context. \
 Finish tidying up and end your turn with your report."
@@ -1175,8 +1173,9 @@ waited on nothing: answer him, then {}",
                         false => "end your turn",
                     }
                 )),
+                Ok(meta::Waiting::Holds(said)) => Ok(words(&said)),
                 // It settles once what it waits for holds ([`Todo::Settle`]).
-                Ok(wait) => {
+                Ok(meta::Waiting::On(wait)) => {
                     batch.facts.push(Fact::Call(id, CallEvent::Waits(wait)));
                     return self.answer(id, batch);
                 }
@@ -1311,7 +1310,7 @@ waited on nothing: answer him, then {}",
                     role,
                     branch,
                     base,
-                    from,
+                    repo,
                 } => {
                     let own = state.role(parent.role).ok_or("your role is not defined")?;
                     let starts: Vec<_> = state
@@ -1330,7 +1329,7 @@ waited on nothing: answer him, then {}",
                         )
                     })?;
                     let workdir = match role.works_in_a_directory() {
-                        true => Some(self.workdir(parent, from, branch, base)?),
+                        true => Some(self.workdir(parent, repo, branch, base)?),
                         false => None,
                     };
                     Origin::Fresh {
@@ -1366,26 +1365,32 @@ waited on nothing: answer him, then {}",
         Ok(names)
     }
 
-    /// A fresh member's working directory: its parent's, the directory
-    /// `from` names under it (or on the brain's machine, for a parent with
-    /// none), or with a `branch`, a clone of its own of that repository,
-    /// beside it, on that branch, made from `base`.
+    /// A fresh member's working directory: its parent's, or the repository
+    /// `repo` names under it, or with a `branch`, a clone of its own of
+    /// that repository, beside it, on that branch, made from `base`.
     fn workdir(
         &self,
         parent: &Task,
-        from: Option<String>,
+        repo: Option<String>,
         branch: Option<String>,
         base: String,
     ) -> Result<Workdir, String> {
-        let (limb, dir) = match (self.state().workdir(parent), from) {
-            (Some(own), Some(from)) => (own.limb, own.dir.join(from)),
-            (Some(own), None) => (own.limb, own.dir),
-            (None, Some(from)) => (self.local, PathBuf::from(from)),
-            (None, None) => {
-                return Err("you have no working directory to share or clone from".into());
+        let own = (self.state().workdir(parent))
+            .ok_or("you have no working directory to share or clone from")?;
+        let dir = match repo {
+            None => own.dir,
+            Some(repo) => {
+                let dir = normal(&own.dir.join(&repo));
+                if !dir.starts_with(&own.dir) {
+                    return Err(format!(
+                        "`repo` names a directory under yours, and `{repo}` is not under `{}`",
+                        own.dir.display()
+                    ));
+                }
+                dir
             }
         };
-        let dir = normal(&dir);
+        let limb = own.limb;
         // Without a branch it works where it is pointed, as a fork does.
         let Some(name) = branch else {
             return Ok(Workdir {
@@ -2016,7 +2021,7 @@ pub fn clone_of(dir: &Path, branch: &str) -> Result<(String, PathBuf), String> {
     if git(&["rev-parse", "--git-dir"]).is_none() {
         return Err(format!(
             "`{}` is not in a git repository, so there is nothing to clone branch `{branch}` from: \
-name a repository in `from`, or omit `branch` to work in that directory",
+name a repository in `repo`, or omit `branch` to work in that directory",
             dir.display()
         ));
     }
