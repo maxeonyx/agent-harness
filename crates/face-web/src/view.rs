@@ -331,6 +331,12 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "origin": origin,
         "from": from.map(|t| t.to_string()),
         "owner": state.owner(t.id).map(|t| t.to_string()),
+        // Its result is still to reach its owner: it runs, or it is done
+        // and the owner has not read it yet.
+        "due": match t.scope {
+            Scope::Max => false,
+            Scope::Spawn(call) => state.due(call),
+        },
         "scope": match t.scope {
             Scope::Max => None,
             Scope::Spawn(call) => Some(call.to_string()),
@@ -421,6 +427,9 @@ fn work(state: &State, legs: &Legs) -> Value {
                 "at": w.at.to_string(),
                 "running": record.is_some_and(|r| r.settled.is_none()),
                 "handed": record.is_some_and(|r| r.owner == Owner::Max),
+                // Its result is still to reach the task: running, or
+                // settled and not read yet.
+                "due": state.due(w.call),
             })
         });
     Value::Array(rows.collect())

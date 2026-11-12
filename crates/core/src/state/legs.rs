@@ -17,6 +17,17 @@ impl State {
         self.legs.get(&task)
     }
 
+    /// Whether `call`'s result is still due to the task that owns it: the
+    /// task runs on and no request or carry of it has taken the result in
+    /// yet, whether the call still runs or has settled. Never for what was
+    /// passed to Max.
+    pub fn due(&self, call: CallId) -> bool {
+        self.call_owner(call)
+            .filter(|t| self.task(*t).is_some_and(|t| t.outcome().is_none()))
+            .and_then(|t| self.legs(t))
+            .is_some_and(|l| !l.taken.contains(&call))
+    }
+
     /// A new task's first leg, on what it continues or was spawned from.
     pub(super) fn leg_start(&mut self, task: &Task, creator: Option<TaskId>, at: Timestamp) {
         let on = match task.origin {
