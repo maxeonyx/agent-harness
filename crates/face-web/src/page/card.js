@@ -139,12 +139,15 @@ function buildPanel(id, at) {
   if (id === NEW) buildNew();
   else renderPanel();
 }
-// Closed when a touch lifts on it, not at its click: a tap that stops the
-// log's fling gets no click. A mouse or a key closes it with its click.
+// Closed when a touch that is a tap lifts, not at its click: a tap that
+// stops the log's fling gets no click. A touch that moved is no tap. A
+// mouse or a key closes it with its click.
 const x = $(".x", panel);
-let lifted = -Infinity;
+let down = null, lifted = -Infinity;
+x.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
+x.addEventListener("pointermove", (e) => { if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 10) down = null; });
 x.addEventListener("pointerup", (e) => {
-  if (e.pointerType === "mouse" || !x.contains(document.elementFromPoint(e.clientX, e.clientY))) return;
+  if (e.pointerType === "mouse" || !down) return;
   lifted = e.timeStamp;
   closeNode();
 });
