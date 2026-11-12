@@ -189,12 +189,14 @@ function columns(L) {
   const held = new Map();
   const free = (s, l) => !(held.get(s) || []).some((h) => h.r0 <= l.r1 && l.r0 <= h.r1);
   const next = (s, side, l) => { while (!free(s, l)) s += side; return s; };
-  // The lines a line of `l` from `m` to slot `s` would cross on row `r`:
-  // not its siblings' from the same dot, which it nests with.
-  const crossed = (l, m, s, r) => {
+  // The lines a line of `l` from `m` to slot `s` would cross on row `r`,
+  // below it for a start (`down`), above it for a result: not a lane that
+  // only ends (or only starts) on that row, which is on the other side of
+  // it, nor its siblings' from the same dot, which it nests with.
+  const crossed = (l, m, s, r, down) => {
     let n = 0;
     for (let i = Math.min(m, s) + 1; i < Math.max(m, s); i++)
-      for (const h of held.get(i) || []) if (h.r0 <= r && r <= h.r1 && h.from !== l.from) n += 1 + (h.nodes.find((v) => v.rank === r)?.fan ?? 0);
+      for (const h of held.get(i) || []) if ((down ? h.r0 <= r && r < h.r1 : h.r0 < r && r <= h.r1) && h.from !== l.from) n += 1 + (h.nodes.find((v) => v.rank === r)?.fan ?? 0);
     return n;
   };
   for (const l of L) {
@@ -205,7 +207,7 @@ function columns(L) {
       side = m.side || (m.kids++ % 2 ? -1 : 1);
       const a = next(m.slot + side, side, l), b = next(m.slot - side, -side, l);
       const over = (s) => (l.from === m.last && m.reader?.slot !== undefined && (s - m.slot) * (m.reader.slot - s) > 0 ? 1 : 0);
-      const cost = (s) => crossed(l, m.slot, s, l.r0) + crossed(l, m.slot, s, l.r1);
+      const cost = (s) => crossed(l, m.slot, s, l.r0, true) + crossed(l, m.slot, s, l.r1, false);
       s = over(a) > over(b) || (over(a) === over(b) && cost(b) < cost(a)) ? (side = -side, b) : a;
     }
     l.slot = s; l.side = side;
