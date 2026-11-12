@@ -60,10 +60,23 @@ export function lanes(nodes) {
   for (const v of V) tall[v.rank] = Math.max(tall[v.rank] ?? 0, v.n.along);
   for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17;
   for (const v of V) { v.y = ys[v.rank] - ys[P]; v.x = v.lane.spin ? v.lane.from.lane.x + v.lane.off : v.lane.x; }
-  ports(edges);
+  const sides = ports(edges);
   const at = [];
   for (const v of V) (at[v.rank] ??= []).push(v);
-  for (const e of edges) route(e, at);
+  const drawn = new Map();
+  for (const e of edges) route(e, at, drawn);
+  // Then each side's ports in the order its lines, as drawn, reach the
+  // height where the shortest of them ends, and those lines drawn again.
+  for (const { h, step } of sides) {
+    if (h.length < 2) continue;
+    const y = h[0].v.y + h[0].side * Math.min(...h.map((p) => Math.abs(p.far.y - p.v.y)));
+    const out = (p) => Math.abs((xAt(p.e, y) ?? p.far.x) - p.v.x);
+    const was = [...h];
+    h.sort((a, b) => out(a) - out(b));
+    if (h.every((p, i) => p === was[i])) continue;
+    place(h, step);
+    for (const p of h) { drawn.delete(p.e); route(p.e, at, drawn); }
+  }
   const cuts = crossings(edges);
   return { at: new Map(V.map((v) => [v.id, { x: v.x, y: v.y }])), cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, parts: cut(e, cuts.filter((c) => c.under === i)) })) };
 }
@@ -290,30 +303,40 @@ function edge(v, u, gap) {
   const t = n.big ? 1 / Math.hypot(u[0] / BIG_HALF, u[1] / (u[1] < 0 ? n.top : n.foot)) : n.r;
   return [v.x + u[0] * (t + gap), v.y + u[1] * (t + gap)];
 }
-// Each line's port, out on its source's bottom or in on its reader's top:
-// the ports of one side of one node, the left ones and the right, each
-// WIDE / n further round from upright, n the more of the two.
+// Each line's port, out on its source's bottom or in on its reader's top.
+// The 2 WIDE about upright is cut into 2n + 1 even parts, n the more of
+// the lines going left or right: the node's own lifeline (or the line it
+// would have) holds the middle one, and the lines each side the next ones
+// out.
 function ports(edges) {
   const at = new Map();
-  const port = (v, side, far, gap) => {
+  const port = (e, v, side, far, gap) => {
     const s = Math.sign(far.x - v.x) || 1, key = `${v.id}:${side}`;
-    const p = { v, far, gap, s, side };
+    const p = { e, v, far, gap, s, side };
     (at.get(key) ?? at.set(key, []).get(key)).push(p);
     return p;
   };
   for (const e of edges) {
-    if (e.kind === "grow" || e.kind === "branch" || e.kind === "port") e.a = port(e.d, 1, e.v, e.kind === "branch" ? TUCK : NGAP);
-    if (e.kind === "fade" || e.kind === "port") e.b = port(e.v, -1, e.d, NGAP);
+    if (e.kind === "grow" || e.kind === "branch" || e.kind === "port") e.a = port(e, e.d, 1, e.v, e.kind === "branch" ? TUCK : NGAP);
+    if (e.kind === "fade" || e.kind === "port") e.b = port(e, e.v, -1, e.d, NGAP);
   }
+  // Inner first: nearest across, then nearest down. Returns each side's
+  // ports, as { h, step }.
+  const across = (p) => Math.abs(p.far.x - p.v.x), down = (p) => Math.abs(p.far.y - p.v.y), sides = [];
   for (const here of at.values()) {
-    const halves = [-1, 1].map((s) => here.filter((p) => p.s === s).sort((a, b) => Math.abs(a.far.x - a.v.x) - Math.abs(b.far.x - b.v.x) || Math.abs(a.far.y - a.v.y) - Math.abs(b.far.y - b.v.y)));
-    const step = WIDE / Math.max(...halves.map((h) => h.length));
-    for (const h of halves) h.forEach((p, i) => {
-      const g = step * (i + 1);
-      p.p = edge(p.v, [p.s * Math.sin(g), p.side * Math.cos(g)], p.gap);
-      p.k = p.s * Math.tan(g * LEAN) * p.side;
-    });
+    const halves = [-1, 1].map((s) => here.filter((p) => p.s === s).sort((a, b) => across(a) - across(b) || down(a) - down(b)));
+    const step = 2 * WIDE / (2 * Math.max(...halves.map((h) => h.length)) + 1);
+    for (const h of halves) { place(h, step); sides.push({ h, step }); }
   }
+  return sides;
+}
+// Ports in order out from upright, `step` apart.
+function place(h, step) {
+  h.forEach((p, i) => {
+    const g = step * (i + 1);
+    p.p = edge(p.v, [p.s * Math.sin(g), p.side * Math.cos(g)], p.gap);
+    p.k = p.s * Math.tan(g * LEAN) * p.side;
+  });
 }
 
 const smooth = (s) => s * s * s * (10 + s * (6 * s - 15));
@@ -350,19 +373,28 @@ function taper(s, L, w) {
 // A life's own line runs upright between its dots; a spawn bends from its
 // port all the way into its first dot, and a result from its last dot all
 // the way into its reader's port: turning in the middle, or, where that
-// would pass over a node, as much later as clears it.
-function route(e, onRow) {
+// would pass over a node or cross a line already drawn, as much nearer its
+// slant end as clears the most.
+function route(e, onRow, drawn) {
   const { v, d } = e;
   const P0 = e.a ? e.a.p : edge(d, [0, 1], TUCK), P1 = e.b ? e.b.p : edge(v, [0, -1], TUCK);
   let P = [P0, P1];
   if (e.kind !== "life") {
+    const x0 = Math.min(P0[0], P1[0]), x1 = Math.max(P0[0], P1[0]);
     const between = [];
-    for (let r = d.rank + 1; r < v.rank; r++) for (const u of onRow[r] ?? []) if (u.x > Math.min(P0[0], P1[0]) - 12 && u.x < Math.max(P0[0], P1[0]) + 12) between.push(u);
-    for (const late of [1, 2, 4]) {
-      P = bend([], P0[0], P0[1], e.a?.k ?? 0, P1[0], P1[1], e.b?.k ?? 0, late);
-      if (!between.some((u) => over(P, u))) break;
+    for (let r = d.rank; r <= v.rank; r++) for (const u of onRow[r] ?? []) if (u !== v && u !== d && u.x > x0 - 12 && u.x < x1 + 12) between.push(u);
+    const near = [...drawn.values()].filter((o) => o.x0 <= x1 && x0 <= o.x1 && o.P[0][1] <= P1[1] && P0[1] <= o.P.at(-1)[1]);
+    let fewest = Infinity;
+    for (const late of [1, 2, 4, .5, .25]) {
+      const Q = bend([], P0[0], P0[1], e.a?.k ?? 0, P1[0], P1[1], e.b?.k ?? 0, late);
+      let n = 0;
+      for (const u of between) if (over(Q, u)) n += 100;
+      for (const o of near) n += meets(Q, o.P);
+      if (n < fewest) { fewest = n; P = Q; }
+      if (!n) break;
     }
   }
+  drawn.set(e, { P, x0: Math.min(P0[0], P1[0]), x1: Math.max(P0[0], P1[0]) });
   e.P = P;
   const w = (e.kind === "fade" ? d : v).lane.light ? TOOL : LIFE;
   if (e.kind === "branch" || (e.kind === "life" && w === LIFE)) { e.W = null; return; }
@@ -373,6 +405,16 @@ function route(e, onRow) {
   e.W = len.map((s) => (e.kind === "grow" ? taper(s, Lt, w) : taper(Lt - s, Lt, w)));
 }
 
+// How many times two lines, both running down, cross.
+function meets(A, B) {
+  let n = 0, j0 = 1;
+  for (let i = 1; i < A.length; i++) {
+    const [a, b] = [A[i - 1], A[i]];
+    while (j0 < B.length && B[j0][1] < a[1]) j0++;
+    for (let j = j0; j < B.length && B[j - 1][1] <= b[1]; j++) if (meet(a, b, B[j - 1], B[j])) n++;
+  }
+  return n;
+}
 // Whether a line passes over node u, or within half its width of it.
 function over(P, u) {
   const reach = (u.n.big ? BIG_HALF : u.n.r) + LIFE;
