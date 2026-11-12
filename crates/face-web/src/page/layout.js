@@ -11,9 +11,10 @@
 // browser for geometry: sizes come in with the nodes, and lines are points.
 //
 // A node: { id, deps, lane, light, old, big, r, lo, hi, along, top, foot,
-// now, planned }. `lane` names its life, `light` a tool's, `old` an old
-// version's; `r` is a dot's radius, and a big node reaches `top`
-// above its centre and `foot` below. `lo` and `hi` are how far it reaches
+// now, planned, fork }. `lane` names its life, `light` a tool's, `old` an
+// old version's, `fork` a fork's (a copy of its maker's context); `r` is a
+// dot's radius, and a big node reaches `top` above its centre and `foot`
+// below. `lo` and `hi` are how far it reaches
 // left and right of its centre (its label is to the right), `along` how
 // tall it is. `now` is a live node, `planned` one that waits on what it
 // depends on. `time`, if known, is [when it began, when it ended or now], in
@@ -310,7 +311,8 @@ function edge(v, u, gap) {
 // The 2 WIDE about upright is cut into 2n + 1 even parts, n the more of
 // the lines going left or right: the node's own lifeline (or the line it
 // would have) holds the middle one, and the lines each side the next ones
-// out.
+// out. A fork is its maker carrying on, so like an old version's line
+// its line starts under its maker's dot, the full width of a lifeline.
 function ports(edges) {
   const at = new Map();
   const port = (e, v, side, far, gap) => {
@@ -320,7 +322,7 @@ function ports(edges) {
     return p;
   };
   for (const e of edges) {
-    if (e.kind === "grow" || e.kind === "branch" || e.kind === "port") e.a = port(e, e.d, 1, e.v, e.kind === "branch" ? TUCK : NGAP);
+    if (e.kind === "grow" || e.kind === "branch" || e.kind === "port") e.a = port(e, e.d, 1, e.v, e.kind === "branch" || (e.kind === "grow" && e.v.n.fork) ? TUCK : NGAP);
     if (e.kind === "fade" || e.kind === "port") e.b = port(e, e.v, -1, e.d, NGAP);
   }
   // Inner first: nearest across, then nearest down. Returns each side's
@@ -400,7 +402,7 @@ function route(e, onRow, drawn) {
   drawn.set(e, { P, x0: Math.min(P0[0], P1[0]), x1: Math.max(P0[0], P1[0]) });
   e.P = P;
   const w = (e.kind === "fade" ? d : v).lane.light ? TOOL : LIFE;
-  if (e.kind === "branch" || (e.kind === "life" && w === LIFE)) { e.W = null; return; }
+  if (e.kind === "branch" || ((e.kind === "life" || (e.kind === "grow" && v.n.fork)) && w === LIFE)) { e.W = null; return; }
   if (e.kind === "life") { e.W = [w, w]; return; }
   const len = [0];
   for (let i = 1; i < P.length; i++) len[i] = len[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
