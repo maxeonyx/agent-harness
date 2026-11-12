@@ -186,7 +186,7 @@ function entry(s, into, e, index, t, parent, only) {
         if (!carried) { into.append(note(text)); return; }
         const detail = el("div", "detail");
         detail.append(markdown(carried[1]));
-        const card = el("div", "fold one carried");
+        const card = el("div", "fold one");
         card.append(foldRow("Carried", firstLine(carried[1]), "", detail));
         into.append(card);
       } else if (who.by === "brief" || who.by === "mandate") {
