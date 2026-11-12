@@ -62,16 +62,21 @@ export function lanes(nodes) {
   const xs = across(L, slot, tall.length);
   for (const v of V) v.x = xs.get(v.lane.slot);
   const groups = ports(edges);
-  // A row further down by the taps that hang into the room above it.
-  const down = [], up = [];
+  // A row further down by the taps that hang into the room above it, and
+  // by what a bend above it still lacks to pass the dots on its own row.
+  const down = [], up = [], more = [];
   for (const g of groups) {
     const { v, side } = g[0], [at, r] = side > 0 ? [down, v.rank] : [up, v.rank - 1];
     at[r] = Math.max(at[r] ?? 0, taps(g.length) * TAP);
   }
-  for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17 + (down[r - 1] ?? 0) + (up[r - 1] ?? 0);
-  for (const v of V) v.y = ys[v.rank] - ys[P];
-  place(groups);
-  heights(edges, V);
+  for (let pass = 0; pass < 3; pass++) {
+    for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17 + (down[r - 1] ?? 0) + (up[r - 1] ?? 0) + (more[r - 1] ?? 0);
+    for (const v of V) v.y = ys[v.rank] - ys[P];
+    place(groups);
+    const short = heights(edges, V);
+    if (short.size === 0) break;
+    for (const [r, d] of short) more[r] = (more[r] ?? 0) + d;
+  }
   for (const e of edges) route(e);
   const cuts = crossings(edges);
   const at = new Map(V.map((v) => [v.id, { x: v.x, y: v.y }]));
@@ -309,10 +314,15 @@ function heights(edges, V) {
     for (const e of G) e.h = H + e.o;
   }
   clear([...groups.values()].flat(), V);
+  // How much more room each row's bends lack, by the row above it.
+  const short = new Map();
   for (const G of groups.values()) {
-    const H = Math.min(...G.map((e) => e.most - e.o), Math.max(...G.map((e) => e.least - e.o), Math.min(...G.map((e) => e.h - e.o))));
+    const room = Math.min(...G.map((e) => e.most - e.o)), need = Math.max(...G.map((e) => e.least - e.o));
+    if (need > room + .5) { const r = G[0].kind === "fade" ? G[0].v.rank - 1 : G[0].d.rank; short.set(r, Math.max(short.get(r) ?? 0, need - room)); }
+    const H = Math.min(room, Math.max(need, Math.min(...G.map((e) => e.h - e.o))));
     for (const e of G) e.h = H + e.o;
   }
+  return short;
 }
 
 // Bends kept clear of nodes and of each other. A bend hangs down from its
@@ -321,12 +331,13 @@ function heights(edges, V) {
 // passes a node on its port's own row reaches far enough to pass it on the
 // far side. Two of different lives that would overlap share the room
 // between them: a start and a result in proportion to how tall each wants
-// to be, two starts (or two results) the nearer its port the shorter.
+// to be, two starts (or two results) the nearer its port the shorter, and
+// of two on one row, the one whose dot the other passes the shorter.
 const ROOM = 3;
 function clear(B, V) {
   const band = (e) => {
     const down = e.kind !== "fade", [y, x0, x1] = down ? [e.P0[1], e.P0[0], e.P1[0]] : [e.P1[1], e.P1[0], e.P0[0]];
-    return { e, down, y, at: down ? e.d.y : e.v.y, from: x0, x0: Math.min(x0, x1), x1: Math.max(x0, x1), dx: x1 - x0, most: Math.abs(e.P1[1] - e.P0[1]), least: 0 };
+    return { e, down, y, at: down ? e.d.y : e.v.y, node: down ? e.d : e.v, from: x0, x0: Math.min(x0, x1), x1: Math.max(x0, x1), dx: x1 - x0, most: Math.abs(e.P1[1] - e.P0[1]), least: 0 };
   };
   const bs = B.map(band);
   for (const b of bs) {
@@ -361,6 +372,16 @@ function clear(B, V) {
         const [hi, lo] = a.at < b.at ? [a, b] : [b, a];
         if (a.down) hi.e.h = Math.min(hi.e.h, lo.y - hi.y - ROOM);
         else lo.e.h = Math.min(lo.e.h, lo.y - hi.y - ROOM);
+      } else if (a.node !== b.node) {
+        // On one row from two dots, where one passes the other's dot: the
+        // other's bend keeps nearer its row, so the one passing stays
+        // clear of it, or crosses its lane, never the bend.
+        const inside = (u, w) => w.x0 < u.node.x && u.node.x < w.x1;
+        const [i, o] = inside(a, b) ? [a, b] : inside(b, a) ? [b, a] : [];
+        if (i) {
+          i.e.h = Math.max(i.least, 2, Math.min(i.e.h, o.e.h - ROOM));
+          o.least = Math.max(o.least, i.e.h + ROOM);
+        }
       }
     }
   }
