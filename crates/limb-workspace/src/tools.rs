@@ -59,7 +59,7 @@ pub fn tools() -> Vec<Tool> {
             json!({
                 "command": { "type": "string", "description": "The command, run with `bash -c`." },
                 "grep": { "type": "string", "description": "A regular expression for the lines worth seeing from the middle of long output, besides its head and tail: errors, a test's name." },
-                "timeout_ms": { "type": "integer", "maximum": 600000, "description": "Stop the command after this long. Default 120000. A command run in `background` has no time limit unless it sets one, and may set more." }
+                "timeout_ms": { "type": "integer", "description": "Stop the command after this long. Default 120000, at most 600000. A command run in `background` has no time limit unless it sets one, and may set any." }
             }),
             &["command"],
         ),
