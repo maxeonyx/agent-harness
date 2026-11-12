@@ -10,6 +10,7 @@ personal-details
 tools
 writing
 explaining
+information-architecture
 evidence
 maxs-voice
 notes-files
@@ -37,7 +38,9 @@ writing-agent-instructions
 github
 github-pr-wip
 github-pr-descs
+github-pr-ready
 github-merge
+pr-stacking
 git-merge
 no-worktrees
 

@@ -112,7 +112,7 @@ impl ToolSet for User {
         limb::ToolSet {
             name: SET.into(),
             instructions,
-            tools: vec![tool()],
+            tools: self.tool().into_iter().collect(),
         }
     }
 
@@ -232,9 +232,9 @@ impl User {
         self.root().join("skills").join(name).join("SKILL.md")
     }
 
-    /// The skills index: each skill's name and when to load it, from its
-    /// `SKILL.md` frontmatter; only those offered.
-    fn index(&self) -> String {
+    /// The skills offered that exist, by name, with when to load each,
+    /// from its `SKILL.md` frontmatter.
+    fn skills(&self) -> Vec<(String, String)> {
         let only = self.offered();
         let mut skills: Vec<(String, String)> = fs::read_dir(self.root().join("skills"))
             .into_iter()
@@ -249,12 +249,19 @@ impl User {
                         .find_map(|l| l.strip_prefix(k)?.strip_prefix(':'))
                         .map(|v| v.trim().trim_matches('"').to_string())
                 };
-                Some((field("name")?, field("description").unwrap_or_default()))
+                let name = e.file_name().into_string().ok()?;
+                (field("name")? == name).then_some((name, field("description").unwrap_or_default()))
             })
             .filter(|(name, _)| only.as_ref().is_none_or(|only| only.contains(name)))
             .collect();
         skills.sort();
-        let lines: Vec<String> = skills
+        skills
+    }
+
+    /// The skills index: each skill offered and when to load it.
+    fn index(&self) -> String {
+        let lines: Vec<String> = self
+            .skills()
             .iter()
             .map(|(name, when)| format!("- {name}: {when}"))
             .collect();
@@ -262,6 +269,29 @@ impl User {
             "Max's skills: load one with `skill` when its description says to, before doing what it covers.\n\n{}",
             lines.join("\n")
         )
+    }
+
+    /// The `skill` tool, its `name` one of the skills offered; none when
+    /// none is.
+    fn tool(&self) -> Option<Tool> {
+        let names: Vec<String> = self.skills().into_iter().map(|(name, _)| name).collect();
+        if names.is_empty() {
+            return None;
+        }
+        let definition = json!({
+            "name": "skill",
+            "description": "Load one of Max's skills by name: its full instructions.",
+            "input_schema": {
+                "type": "object",
+                "properties": { "name": { "enum": names, "description": "The skill's name, as the index lists it." } },
+                "required": ["name"]
+            }
+        });
+        Some(Tool {
+            name: "skill".into(),
+            definition: definition.to_string(),
+            audience: Audience::Both,
+        })
     }
 
     fn skill(&self, input: &[u8], report: &mut Report) -> Outcome {
@@ -272,16 +302,11 @@ impl User {
         let loaded = serde_json::from_slice::<Skill>(input)
             .map_err(|e| format!("invalid input: {e}"))
             .and_then(|Skill { name }| {
-                let missing = || format!("no skill `{name}`; the index lists them all");
-                if name.contains('/') || name.starts_with('.') {
-                    return Err(missing());
+                if !self.skills().iter().any(|(offered, _)| *offered == name) {
+                    return Err(format!("no skill `{name}`; the index lists them all"));
                 }
-                let bytes = fs::read(self.skill_file(&name)).map_err(|_| missing())?;
-                if self.offered().is_some_and(|s| !s.contains(&name)) {
-                    return Err(format!(
-                        "skill `{name}` exists but is not offered to harness agents; the skills file lists those offered"
-                    ));
-                }
+                let bytes = fs::read(self.skill_file(&name))
+                    .map_err(|e| format!("cannot read skill `{name}`: {e}"))?;
                 let version = Version::Is(Digest::of(&bytes));
                 Ok((String::from_utf8_lossy(&bytes).into_owned(), name, version))
             });
@@ -307,21 +332,4 @@ fn change(resource: ResourceKey, version: Version) -> Fact {
         content: None,
         wakes: false,
     })
-}
-
-fn tool() -> Tool {
-    let definition = json!({
-        "name": "skill",
-        "description": "Load one of Max's skills by name: its full instructions.",
-        "input_schema": {
-            "type": "object",
-            "properties": { "name": { "type": "string", "description": "The skill's name, as the index lists it." } },
-            "required": ["name"]
-        }
-    });
-    Tool {
-        name: "skill".into(),
-        definition: definition.to_string(),
-        audience: Audience::Both,
-    }
 }
