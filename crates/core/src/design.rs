@@ -114,17 +114,23 @@ pub struct Design {
 /// **Concept.** A finished piece of design, made with care in the design
 /// system's files by the keeper's art agent ([`Design::keeper`]), and never
 /// by an agent at run time. It has three parts:
-/// - a ground: a generative painting, drawn for each task from its id;
+/// - a ground: a generative painting, drawn for each task from its id and
+///   its [`Identity`];
 /// - a palette: paper, ink, an accent and the figure colours, with the inks
 ///   for text set on the ground where they differ;
 /// - a display face, for the end, where we are and the questions. It must
 ///   have a true italic and a true bold, since the language needs both.
 ///
-/// **The theme says where Max is; the seed says who.** A theme is one art
-/// direction, and each agent wearing it gets its own painting of it: the
-/// same kind of harbour chart with a different coast, the same high
-/// country under a different sun. So a theme has no variants, and any
-/// number of agents may wear one at once, each still its own. Themes
+/// **The theme says where Max is; the identity says who.** A theme is one
+/// art direction, and each agent wearing it gets its own painting of it.
+/// Two of them must be told apart at a glance, which a different coast or
+/// sun alone does not do, so an agent's painting takes its colour from its
+/// [`Identity`], which the harness plans, and its composition from its
+/// seed: the same high country, one at a rose dusk and one in silver
+/// morning light. A ground whose picture nests shows identity by place
+/// instead: a Harbour child's chart is a closer look at its parent's. So a
+/// theme has no variants, and any number of agents may wear one at once,
+/// each still its own. Themes
 /// differ from each other in what they look at and how they are made, not
 /// only in colour: Tussock looks across a landscape, Harbour down on a
 /// chart, Kauri up through a forest.
@@ -154,9 +160,11 @@ pub struct Theme {
     /// tokens, with the font files it names.
     pub style: ValueId,
     /// Its ground: an ES module whose `paint(ctx, scene)` paints into a 2D
-    /// canvas, given the canvas's size, the task's id as its seed, and the
-    /// box the page's lead sits in, which it keeps calm. It is deterministic
-    /// in its seed and size, so the same agent looks the same in every face,
+    /// canvas, given the canvas's size, the task's id as its seed, its
+    /// [`Identity`], and the box the page's lead sits in, which it keeps
+    /// calm. It also names the colour each identity paints in, which the
+    /// map draws the agent in. It is deterministic in its seed, identity and
+    /// size, so the same agent looks the same in every face,
     /// no other agent looks quite like it, and the keeper can paint again
     /// exactly what Max saw ([`Screen`]). The face paints it once when the
     /// window opens, at up to twice the CSS pixels ([`Design::paint_ms`]),
@@ -174,7 +182,9 @@ pub struct Theme {
     /// paintings Max loved, and holds it to its bars: the lead's ink against
     /// the ground in the lead's box at 7:1 for 95% of it and never under
     /// 4.5:1, since he reads it every day; a thumbnail that reads as its
-    /// theme, since that is how he finds where he is; the same pixels when
+    /// theme, since that is how he finds where he is; thumbnails of
+    /// identities planned one after another told apart at a glance, since
+    /// that is how he tells its agents apart; the same pixels when
     /// painted twice. It reports the time to a finished canvas on a phone at
     /// a quarter of desktop speed, rastered on the CPU, as the slow case: a
     /// ground slower than its peers there is the one to make cheaper.
@@ -184,6 +194,44 @@ pub struct Theme {
     /// lock in one he then rejects. One he rejects is deleted, and his words
     /// go in the design system's files.
     pub proposed: bool,
+}
+
+/// Who an agent is among the agents wearing its theme, as its painting
+/// shows it.
+///
+/// **Concept.** Planned by the harness, not left to the seed: with six
+/// colours and four agents, a random pick gives two of them the same colour
+/// 72% of the time. When a task chooses its theme, `at` is set to the
+/// middle of the widest gap left by the unfinished tasks already wearing
+/// it, so the agents on the map at once sit as far apart in the theme's
+/// range of colour as they can; with none, it comes from the task's id.
+/// It is then fixed with the theme, since an agent's look is how Max finds
+/// it again. A resume carries its source on, so it carries its source's
+/// theme and identity, seed included.
+///
+/// `root` and `line` place the task among its ancestors wearing the same
+/// theme, for a ground whose picture nests: Harbour paints the whole chain
+/// from `root`'s chart, each child a closer look at a region of its
+/// parent's, so who started whom shows in the paintings.
+///
+/// Serves: "inner variation in colour and identity, not just layout, so
+/// that individual agents within an area are distinguishable at a
+/// glance"; "the harness needs to plan those identities to separate
+/// them"; "making successive subagents zoom in on ever more detailed
+/// regions".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identity {
+    /// Where in the theme's range of colour, in 65536ths of the way round.
+    pub at: u16,
+    /// Whose id seeds the painting: the task's own, or for a resume its
+    /// source's.
+    pub seed: TaskId,
+    /// The furthest ancestor reached through parents wearing the same
+    /// theme: the task itself when its parent wears another or it has none.
+    pub root: TaskId,
+    /// The child numbers from `root` down to the task, each its place among
+    /// its siblings by creation; empty for `root` itself.
+    pub line: Vec<u32>,
 }
 
 /// An element a body may use beyond markdown.
@@ -283,6 +331,8 @@ pub struct Screen {
     pub language: ValueId,
     pub style: ValueId,
     pub ground: ValueId,
+    /// Who the ground was painted for.
+    pub identity: Identity,
     pub viewport: Viewport,
     /// The lead's box, which the ground keeps calm.
     pub lead: Option<Rect>,

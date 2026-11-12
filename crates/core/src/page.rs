@@ -69,8 +69,8 @@
 //! them are the build's to wire: `Fact::Page(TaskId, PageEvent)`,
 //! `Fact::Ask(AskId, AskEvent)`, `Fact::Kind(SourceKind)`,
 //! `Fact::Design(Design)`, `TaskEvent::Described(Description)`,
-//! `TaskEvent::Themed(String)` (locked: folded only for a task with no
-//! theme), `Phase::AwaitingMax` carrying an `Option<Presented>`,
+//! `TaskEvent::Themed(String, Identity)` (locked: folded only for a task
+//! with no theme; its [`crate::design::Identity`] planned as it chooses), `Phase::AwaitingMax` carrying an `Option<Presented>`,
 //! `Prompt::Present`, `Content::Answer(Answer)`,
 //! `Fact::Feedback(FeedbackId, FeedbackEvent)`, Max's words carrying the
 //! [`crate::design::Screen`] he was looking at, its [`Spot`] included, a
@@ -293,7 +293,9 @@ pub enum Spot {
 /// harness.
 ///
 /// The theme is not here either. It is chosen once, with `choose_theme`
-/// from the offered ones, folded as `TaskEvent::Themed`, and locked: the tool
+/// from the offered ones, folded as `TaskEvent::Themed` with the identity
+/// the harness plans for it then ([`crate::design::Identity`]), and locked:
+/// the tool
 /// is declared only while the task has no theme, and a second choice in the
 /// same context leaves the first, as its result says. An agent's look is
 /// how Max finds it again, so it never changes under him.
