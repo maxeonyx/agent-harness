@@ -45,10 +45,13 @@
 //!
 //! **The map** is each task's legs, drawn from the rows the tab already has
 //! (`page/map.js`): every live task is a big node in the present row, its
-//! past rises above it as small dots, and what it waits on hangs below. The
-//! layout is `dot`'s layered layout, done in the page (`page/layout.js`);
-//! the nodes are drawn on one WebGL canvas (`page/blobs.js`) under the
-//! camera that moves the rest (`page/camera.js`). A tap on a small dot opens
+//! past rises above it as small dots, and what it waits on hangs below.
+//! Each life (a chat, an agent, a background call) keeps its own column, a
+//! lane, its line running straight down it: a start grows out of its maker
+//! in a taper, and a result thins into its reader (`page/layout.js`, which
+//! `dev/lanes-check.mjs` checks for crossings no routing forced). The
+//! nodes are drawn on one WebGL canvas (`page/blobs.js`) under the camera
+//! that moves the rest (`page/camera.js`). A tap on a small dot opens
 //! that chat at that leg, `#<task>@<entry>`.
 //!
 //! ```mermaid
@@ -57,7 +60,7 @@
 //! ---
 //! flowchart LR
 //!   view["/view rows<br/>legs, leg, work"] --> derive["map.js derive<br/>nodes, edges, projects"]
-//!   derive --> layout["layout.js layered<br/>rows, order, x"]
+//!   derive --> layout["layout.js lanes<br/>rows, columns, lines"]
 //!   layout --> draw["draw.js<br/>labels, tapered lines"]
 //!   layout --> blobs["blobs.js<br/>blobs and dots, one canvas"]
 //!   camera["camera.js<br/>one camera per frame"] --> draw
