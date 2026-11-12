@@ -17,9 +17,12 @@ use crate::source::Whose;
 /// **Concept.** The structured half of a page: what Max acts on, as data
 /// the harness can rank, route and settle, rather than prose he has to find.
 /// An ask is live from the agent's `ask` call, so the agent can ask in the
-/// background and keep working; blocking on it is just ending its turn. Its
-/// own page draws its open asks at the top, and wherever its body places
-/// them; an orchestrator's page can place a child's. Only a task that has
+/// background and keep working; blocking on it is just ending its turn. A
+/// page draws an ask where its body places it, after the paragraph that
+/// says why, never in the lead; a version that leaves one of its task's
+/// open asks unplaced is refused. An orchestrator's page can place a
+/// child's. An ask asked mid-work, before a page places it, opens on its own
+/// from the map: its title, its why and its answers. Only a task that has
 /// Max asks him. An autonomous task is refused and told to put it in its
 /// result, since only an agent that has Max can hand to Max.
 ///

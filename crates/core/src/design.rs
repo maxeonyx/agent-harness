@@ -11,10 +11,10 @@ use crate::resource::Observation;
 ///
 /// **Concept.** What every page has in common, owned in one place (the
 /// Harness UI work), read from files in the repo and versioned as a role
-/// is. The system provides the look: type, spacing, the page frame, the
-/// components and how each draws, and the themes. The agent provides
-/// content: prose, tables, diagrams, and which components hold them. So
-/// every page is beautiful and readable on the phone without each agent
+/// is. The system provides the look: type, spacing, how each component
+/// draws, and the themes. The agent provides content, in the order Max
+/// needs it: the lead, then prose, tables and figures one at a time. So
+/// every page is calm and readable on the phone without each agent
 /// learning CSS, and a design change reaches every page, old versions
 /// included.
 ///
@@ -28,8 +28,13 @@ pub struct Design {
     pub components: Vec<Component>,
     /// The stylesheet the face draws pages with.
     pub css: ValueId,
-    /// What an agent holding the `page` tool set is told: the components,
-    /// with an example of each, and how a good page reads.
+    /// What an agent holding the `page` tool set is told: open on the
+    /// lead (the question, or the point, and the scene) and nothing else;
+    /// then one thing at a time, in the order he needs it, each ask after
+    /// its why; name live things where the prose mentions them instead of
+    /// retyping their state; no dashboard, no repeating the title, the state
+    /// or the chat; detail last, folded. With the components and an example
+    /// page.
     pub guide: ValueId,
     /// The files this version was read from.
     pub source: Option<Observation>,
@@ -40,7 +45,9 @@ pub struct Design {
 /// **Concept.** An area's colour and an agent's variant of it. An agent
 /// picks its theme when it starts ([`crate::page::Description::theme`]); a
 /// task Max starts picks a family, and what it starts picks variants within
-/// that family, so where Max is shows at a glance. The state tones
+/// that family, so where Max is shows at a glance. It is an accent, not a
+/// frame: the chat's top edge, the mark above the lead, a figure's colours.
+/// The state tones
 /// ([`Tone`]) are never a theme's, so "your move" looks the same on every
 /// page.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,10 +62,11 @@ pub struct Theme {
 ///
 /// **Concept.** The vocabulary, as data: the brain's check and the agent's
 /// guide both read it, so a new component is a design system change, not a
-/// parser change. Live ones bind to a [`crate::page::Ref`] (`h-ref`,
-/// `h-task`, `h-ask`); layout ones arrange content (`h-grid`, `h-card`,
-/// `h-callout`, `h-stat`, `h-steps`); figures draw (mermaid, inline SVG,
-/// images from values).
+/// parser change. It is small on purpose: live names and asks bind to a
+/// [`crate::page::Ref`]; figures draw (mermaid, inline SVG, images from
+/// values); a fold holds detail at the end. There are no cards, grids or
+/// stat tiles, since a page is read one thing at a time and the map is the
+/// overview.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component {
     pub tag: String,

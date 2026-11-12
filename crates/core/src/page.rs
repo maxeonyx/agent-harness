@@ -7,14 +7,21 @@
 //! vision's "an agent answers with a page", and "a question is a page plus a
 //! node, answered by talking".
 //!
+//! **One thing at a time.** A page opens on its [`Lead`] alone: the question
+//! Max is asked, or the point, and the few lines that set the scene. That is
+//! all he sees until he scrolls; everything else comes in the order he needs
+//! it, each ask after the paragraph that says why. Nothing sits above the
+//! lead: the map beside the chat is the overview, and the chat's header
+//! already names the task and its state.
+//!
 //! **What is typed and what is written.** What the harness acts on is
 //! structured: what the agent needs from Max ([`crate::ask::Ask`]), what a
-//! page points at ([`Ref`]), the task's name, theme and standing
-//! ([`Description`]), and whose move anything is
-//! ([`crate::source::Whose`]). What only Max reads is the body: GFM
-//! markdown, the language agents already write in, with the design system's
-//! components ([`crate::design::Design`]) for layout, figures and live
-//! references. A body carries no CSS and no script, so the look is the
+//! page points at ([`Ref`]), the task's name and theme ([`Description`]),
+//! the page's lead, and whose move anything is ([`crate::source::Whose`]).
+//! What only Max reads is the body: GFM markdown, the language agents
+//! already write in, with the design system's few components
+//! ([`crate::design::Design`]) for figures, live references and asks. A
+//! body carries no CSS and no script, so the look is the
 //! design system's and the task's theme, it reads on the phone, and no agent
 //! can draw a control that is not bound to an ask. One parser, in Rust,
 //! reads a body: the brain checks every edit with it, and the tab draws with
@@ -54,6 +61,13 @@ use crate::source::ItemKey;
 /// page with the parent's whole context. Not a file: the stage and every
 /// version are facts, in every face's view like the rest of the brain's
 /// state, the same at work and at home, versioned without git.
+///
+/// **Where it sits.** In the task's chat, at the point each version was
+/// published, so scrolling up from a page shows the chat that led to it.
+/// When the task waits on Max, its chat opens at the newest version's top,
+/// not at the bottom. While it works, its chat opens at its progress, below
+/// the newest version, which is drawn out of date. A version a newer one
+/// replaced shrinks to one line.
 ///
 /// Serves: the deliverable is a page, never markdown in a chat; "the agent
 /// should get tools to edit, stage, test, iterate on these pages before it
@@ -95,6 +109,8 @@ pub struct Stage {
 pub struct Version {
     pub n: u32,
     pub source: ValueId,
+    pub lead: Lead,
+    /// When it was published: where it sits among the chat's entries.
     pub at: Timestamp,
     /// The `page_publish` call that made it, or `None` when the brain
     /// published the stage as the turn ended.
@@ -111,14 +127,40 @@ pub enum PageEvent {
     Edited { base: Option<u32>, source: ValueId },
     /// The stage became a version: by `page_publish` mid-turn (so Max can
     /// answer an ask while the agent works on), or by the brain as a turn
-    /// ends with the stage edited after the turn's other calls. Refused
-    /// while the body has problems, or before the task has a title and a
-    /// theme ([`Description`]).
-    Published,
+    /// ends with the stage edited after the turn's other calls. The brain
+    /// parses the body and states its lead here. Refused while the body has
+    /// problems: no lead, a lead that is more than words, or an open ask of
+    /// the task that the body does not place. Refused too before the task
+    /// has a title and a theme ([`Description`]).
+    Published { lead: Lead },
     /// The agent read the newest version and says it still holds: the
     /// gate's cheapest pass, for a turn that changed nothing Max needs to
     /// read. The face can say "checked current at 10:42".
     Kept,
+}
+
+/// What a page opens on, and all Max sees before he scrolls.
+///
+/// **Concept.** The core framing: the body's first heading and the
+/// paragraph under it, in plain words, with nothing else on screen. When
+/// the agent needs something from him, the point is that question, so he
+/// can answer it by talking, since dictation is already running; when it
+/// does not, the point is what happened. The scene is what he needs to be on
+/// the same page: the problem, why he is reading, what changes. The parser
+/// limits both to a few lines and refuses refs, figures and asks in them.
+/// Recorded with each version, so his queue and the map can show what a
+/// waiting task asks without reading its body.
+///
+/// Serves: Max's "I need the question. I need the problem. Whatever hooks
+/// me [...] and then I don't need any of the other crap yet"; reports are
+/// read from the top.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lead {
+    /// "Can I send PR #231 to Sam for review?"
+    pub point: String,
+    /// "Ingest batches that hit GitHub's rate limit now back off and retry
+    /// [...] so it waits for your yes."
+    pub scene: String,
 }
 
 /// Whether the page Max is about to read is current: carried by a turn that
@@ -156,9 +198,11 @@ pub enum Presented {
 /// Something a page or an ask points at, whose state the harness knows
 /// without the agent.
 ///
-/// **Concept.** One pointer for every live thing: a page's chip or card, an
-/// ask's subject, an item node on the map, and what wakes an agent when it
-/// changes. In a body: `task:<id>`; `ask:<key>` for the page's own ask, or
+/// **Concept.** One pointer for every live thing: a name in a page's prose
+/// drawn with its state now, an ask's subject, an item node on the map, and
+/// what wakes an agent when it changes. In a body, as a link's target where
+/// the prose names the thing: `task:<id>`; `ask:<key>` for the page's own
+/// ask (which places it), or
 /// `ask:<id>` for another task's; and `<kind>:<name>` for an item, such as
 /// `github.pr:maxeonyx/agent-harness#231`. The brain resolves each when the
 /// stage is edited, and refuses an unknown kind naming the kinds there are.
@@ -168,8 +212,8 @@ pub enum Presented {
 /// says" and "check before ask".
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Ref {
-    /// A task: its phase, whose move it is, its title and headline. An
-    /// orchestrator's page shows its children by these.
+    /// A task: its title, its phase and whose move it is. An orchestrator's
+    /// page names its children by these.
     Task(TaskId),
     /// An ask, its own or another task's: placed on an orchestrator's page,
     /// Max answers a child's ask there, and the answer goes to the child.
@@ -178,21 +222,22 @@ pub enum Ref {
     Item(ItemKey),
 }
 
-/// What a task says about itself: its name, its look and where it stands.
+/// What a task says about itself: its name, its look and what it produces.
 ///
 /// **Concept.** The task's metadata, chosen by its own agent (Max: "the
 /// metadata of a chat and a stream and stuff should be chosen by the
 /// agent"). Stated by the agent's `describe` call at any time, each field
 /// replacing only itself (`None` leaves it as it was), and folded as
 /// `TaskEvent::Described`. A name Max gives
-/// ([`crate::task::TaskEvent::Renamed`]) stays over the agent's. The page's
-/// frame (its head band) and the map node are drawn from it, so the body
-/// never repeats it, and a task without a page still has a face on the map.
+/// ([`crate::task::TaskEvent::Renamed`]) stays over the agent's. The map
+/// node and the chat's header are drawn from it, so the body never repeats
+/// it, and a task without a page still has a face on the map. Where the
+/// work stands is not a field: for Max it is the page's [`Lead`], and what
+/// a machine knows (its progress, its PRs' states) comes from the harness.
 ///
 /// Serves: chats that start alike no longer look alike; "easy for me to see
-/// whereabouts I'm at"; the agent records its status in one line, while
-/// what a machine knows (its progress, its PRs' states) comes from the
-/// harness.
+/// whereabouts I'm at"; the agent records its status, and the harness gets
+/// what can be got automatically.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Description {
     /// What the work does: "Pages and asks for agents".
@@ -202,9 +247,6 @@ pub struct Description {
     /// same area holds it while one is free; the refusal lists the free
     /// ones.
     pub theme: Option<String>,
-    /// Where it stands, in one line: the map node's subtitle, and the
-    /// status the agent records ("PR up, waiting on Sam's review").
-    pub headline: Option<String>,
     /// What it produces, which the map draws as its nodes. Replaced whole.
     pub work: Option<Vec<Work>>,
 }

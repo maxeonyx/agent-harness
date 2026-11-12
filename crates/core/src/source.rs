@@ -49,11 +49,12 @@ pub struct Says {
     pub done: bool,
     /// The date that matters: due, or not startable before.
     pub when: Option<Timestamp>,
-    /// What else a chip shows: "checks 14/14", "Sam: approved".
+    /// What else Max sees when he looks closer at the item: "checks
+    /// 14/14", "Sam: approved".
     pub details: Vec<Detail>,
 }
 
-/// One labelled fact on an item's chip.
+/// One labelled fact about an item.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Detail {
     pub label: String,
