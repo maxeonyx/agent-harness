@@ -420,12 +420,14 @@
 //! - A face holds the brain's derived rows, not its facts: it shows its
 //!   own pending acts as pending rather than predicting the brain's verdict.
 
+pub mod ask;
 pub mod attention;
 pub mod build;
 pub mod call;
 pub mod cancel;
 pub mod context;
 pub mod delivery;
+pub mod design;
 pub mod draft;
 pub mod fact;
 pub mod id;
@@ -433,9 +435,11 @@ pub mod legacy;
 pub mod limb;
 pub mod live;
 pub mod model_call;
+pub mod page;
 pub mod resource;
 pub mod role;
 pub mod schema;
+pub mod source;
 pub mod state;
 pub mod task;
 pub mod value;

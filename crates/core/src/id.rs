@@ -76,6 +76,10 @@ id!(
     RoleId
 );
 id!(
+    /// A [`crate::ask::Ask`]: the event that first asked it.
+    AskId
+);
+id!(
     /// A [`crate::limb::Limb`]: the event of its first version. One per
     /// brain, machine and user.
     LimbId
