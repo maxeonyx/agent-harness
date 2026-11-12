@@ -46,9 +46,11 @@
 //! **The map** is each task's legs, drawn from the rows the tab already has
 //! (`page/map.js`): every live task is a big node in the present row, its
 //! past rises above it as small dots, and what it waits on hangs below.
-//! Each life (a chat, an agent, a background call) keeps its own column, a
-//! lane, its line running straight down it: a start grows out of its maker
-//! in a taper, and a result thins into its reader (`page/layout.js`, which
+//! Each life (a chat, an agent, a background call) keeps one x, a lane, its
+//! line running straight down it between its dots, and lanes pack close; a
+//! life of one dot that its maker reads next hangs beside its maker. A start
+//! grows out of its maker in a taper, and a result thins into its reader,
+//! each bending all the way into its dot (`page/layout.js`, which
 //! `dev/lanes-check.mjs` checks for crossings no routing forced). The
 //! nodes are drawn on one WebGL canvas (`page/blobs.js`) under the camera
 //! that moves the rest (`page/camera.js`). A tap on a small dot opens
