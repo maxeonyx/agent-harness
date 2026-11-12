@@ -4,14 +4,15 @@
 // lanes pack as close as the rows they share allow. A life of one dot that
 // its maker's next dot reads hangs beside its maker instead, a spindle. A
 // spawn bends from its maker all the way into the child's first dot; a
-// result bends from the last dot all the way into its reader. Rows are a layered graph's,
-// flowing down, with the present on one row at y = 0: every live node sits
-// on the lowest row the past reaches, but one that a live node depends on
-// sits just above it, and what waits hangs below. Nothing here asks the
+// result bends from the last dot all the way into its reader. Rows are a
+// layered graph's, flowing down, with the present on one row at y = 0:
+// every live node sits on the lowest row the past reaches, but one that a
+// live node depends on sits just above it, and what waits hangs below. Nothing here asks the
 // browser for geometry: sizes come in with the nodes, and lines are points.
 //
-// A node: { id, deps, lane, big, r, lo, hi, along, top, foot, now, planned }.
-// `lane` names its life; `r` is a dot's radius, and a big node reaches `top`
+// A node: { id, deps, lane, light, old, big, r, lo, hi, along, top, foot,
+// now, planned }. `lane` names its life, `light` a tool's, `old` an old
+// version's; `r` is a dot's radius, and a big node reaches `top`
 // above its centre and `foot` below. `lo` and `hi` are how far it reaches
 // left and right of its centre (its label is to the right), `along` how
 // tall it is. `now` is a live node, `planned` one that waits on what it
@@ -417,7 +418,7 @@ function meets(A, B) {
   }
   return n;
 }
-// Whether a line passes over node u, or within half its width of it.
+// Whether a line passes over node u, or within LIFE of its edge.
 function over(P, u) {
   const reach = (u.n.big ? BIG_HALF : u.n.r) + LIFE;
   for (let i = 1; i < P.length; i++) {
