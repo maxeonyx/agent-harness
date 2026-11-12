@@ -25,6 +25,12 @@ use crate::value::Bytes;
 /// directory. A role that holds it gives each of its agents a [`Workdir`].
 pub const WORKSPACE: &str = "workspace";
 
+/// The tool set of a task facing Max: the tools that reach him (its page,
+/// `ask`, `open_chat`) and the instructions for talking with him. The
+/// brain hosts it. No role names it: a task holds it because of its
+/// [`crate::task::Mode`], on top of its role's sets.
+pub const MAX: &str = "max";
+
 /// A limb: a process the harness runs on one machine as one user, so that
 /// agents can do things there; or the brain, which hosts the harness's own
 /// tool sets.
