@@ -101,14 +101,15 @@ impl ToolSet for User {
                 text: format!("Max's own instructions, for every agent:\n\n{own}"),
             });
         }
-        let index = self.index();
-        instructions.push(Instruction {
-            observes: Observation {
-                resource: self.key(INDEX),
-                version: Version::Is(Digest::of(index.as_bytes())),
-            },
-            text: index,
-        });
+        if let Some(index) = self.index() {
+            instructions.push(Instruction {
+                observes: Observation {
+                    resource: self.key(INDEX),
+                    version: Version::Is(Digest::of(index.as_bytes())),
+                },
+                text: index,
+            });
+        }
         limb::ToolSet {
             name: SET.into(),
             instructions,
@@ -166,7 +167,10 @@ impl User {
         };
         match (resource.kind.as_str(), resource.name.as_str()) {
             ("instructions", INSTRUCTIONS) => Some(text(&self.root().join(INSTRUCTIONS))),
-            ("instructions", INDEX) => Some(Version::Is(Digest::of(self.index().as_bytes()))),
+            ("instructions", INDEX) => Some(
+                self.index()
+                    .map_or(Version::Gone, |i| Version::Is(Digest::of(i.as_bytes()))),
+            ),
             (SKILL, name) => Some(text(&self.skill_file(name))),
             _ => None,
         }
@@ -258,17 +262,21 @@ impl User {
         skills
     }
 
-    /// The skills index: each skill offered and when to load it.
-    fn index(&self) -> String {
+    /// The skills index: each skill offered and when to load it; none when
+    /// none is.
+    fn index(&self) -> Option<String> {
         let lines: Vec<String> = self
             .skills()
             .iter()
             .map(|(name, when)| format!("- {name}: {when}"))
             .collect();
-        format!(
+        if lines.is_empty() {
+            return None;
+        }
+        Some(format!(
             "Max's skills: load one with `skill` when its description says to, before doing what it covers.\n\n{}",
             lines.join("\n")
-        )
+        ))
     }
 
     /// The `skill` tool, its `name` one of the skills offered; none when
