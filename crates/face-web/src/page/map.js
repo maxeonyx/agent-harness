@@ -112,12 +112,21 @@ export function stateOf(t) {
 export function waitingOn(t) {
   const w = t.waiting || {};
   const agents = view.tasks.filter((m) => m.owner === t.id && m.due && !isDone(m)).length;
-  const background = (t.work || []).filter((b) => b.running && b.due).length;
+  const background = held(t).filter((b) => b.running && b.due).length;
   const tools = w.kind === "calls" ? w.calls.filter((c) => !c.children?.length && c.status !== "settled" && c.tool !== "wait").length : 0;
   const n = agents + background + tools;
   const parts = [[agents, "agent"], [background, "background task"], [tools, "tool call"]]
     .filter(([k]) => k).map(([k, what]) => `${k} ${what}${k === 1 ? "" : "s"}`);
   return { n, text: !n ? "" : parts.length === 1 ? `Waiting on ${parts[0]}` : `Waiting on ${n}: ${parts.join(", ")}` };
+}
+// The background work a task holds now: its own, and what was passed to it.
+let holding = { of: null, by: new Map() };
+function held(t) {
+  if (holding.of !== view) {
+    holding = { of: view, by: new Map() };
+    for (const m of view.tasks) for (const w of m.work || []) (holding.by.get(w.holder) ?? holding.by.set(w.holder, []).get(w.holder)).push(w);
+  }
+  return holding.by.get(t.id) ?? [];
 }
 // Waiting on its children: on a spawn, or a `wait` on one.
 const waitsOnKids = (t) => t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length);
@@ -170,7 +179,7 @@ export function derive(openId) {
   for (const t of tasks) {
     if (isDone(t) || !t.leg) continue;
     const out = (members.get(t.id) || []).filter((m) => m.due && m.leg).map((m) => m.leg);
-    for (const w of t.work || []) if (w.due) out.push(`w:${w.call}`);
+    for (const w of held(t)) if (w.due) out.push(`w:${w.call}`);
     if (out.length) add({ id: `p:${t.id}`, kind: "planned", t, deps: [t.leg, ...out] });
   }
   // Big: each live task's own node. A task's own node, big or not, takes
@@ -244,7 +253,8 @@ export function derive(openId) {
   const list = [...comps.values()].map((c) => {
     const ts = [...c.tasks].sort(order);
     const root = ts[0];
-    const running = ts.some((t) => !isDone(t));
+    // Open while anything in it runs, a server handed to Max included.
+    const running = ts.some((t) => !isDone(t) || (t.work || []).some((w) => w.running));
     const last = Math.max(...ts.map((t) => t.waiting?.since || 0));
     const over = byId[successor(root.id)].outcome?.kind === "abandoned" || now - last > FOLD_AFTER;
     const folded = !running && over && !unfolded.has(root.id) && !ts.some((t) => t.id === openId && t.id !== root.id);
