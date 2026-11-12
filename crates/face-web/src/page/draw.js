@@ -108,7 +108,7 @@ export function drawMap() {
         if (!more) { a.append(more = el("button", "more", "⌄")); more.title = "Unfold the project"; more.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); unfolded.add(id); refresh(); }); }
       } else more?.remove();
     } else {
-      a.className = `node ${kind}${n.work?.handed ? " yours" : ""}${id === openId ? " selected" : ""}${faded}`;
+      a.className = `node ${kind}${n.work?.holder === "max" ? " yours" : ""}${id === openId ? " selected" : ""}${faded}`;
       $(".name", a).textContent = label(n);
     }
   }
@@ -138,7 +138,7 @@ export function drawNodes() {
     const h = handles.get(id);
     if (h) { h.at(c.x, c.y); h.hide(id === openId); }
     // A finished call is a gear (drawEdges), and Max's running one a card.
-    if (!n || n.big || s.card || (n.kind === "chip" && (!n.running || n.work.handed))) continue;
+    if (!n || n.big || s.card || (n.kind === "chip" && (!n.running || n.work.holder === "max"))) continue;
     const dim = finding && !found.has(n.t.id) ? .12 : 1;
     const m = k++ * MARK;
     marks[m] = c.x; marks[m + 1] = c.y; marks[m + 2] = radius(n);

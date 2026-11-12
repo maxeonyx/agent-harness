@@ -195,7 +195,7 @@ export function derive(openId) {
         add({ id, kind: "ring", t, lane, line: i && w.passed[i - 1].to === "max" ? "max" : "tool", time: [p.at, p.at], open: w.at, deps: [before] });
         before = id;
       });
-      add({ id: lane, kind: "chip", t, lane, line: w.handed ? "max" : "tool", end: w.running ? null : w.failed ? "red" : "green",
+      add({ id: lane, kind: "chip", t, lane, line: w.holder === "max" ? "max" : "tool", end: w.running ? null : w.failed ? "red" : "green",
         work: w, running: w.running, open: w.at, deps: [before] });
     }
   }
