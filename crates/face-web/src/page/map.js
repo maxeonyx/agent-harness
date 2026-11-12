@@ -7,10 +7,10 @@ import { layered } from "./layout.js";
 // task). A node is a leg, a stretch of one task's context; an edge points
 // from the newer node back to what it depends on. Background work that is
 // not a spawn is a chip, hung from the leg that started it, and a task
-// with work out has a planned join under it, depending on that work, until
-// the work's results come in: on every member, a finished one or an aside
-// included, until it has read their results. Work handed to Max is a side
-// branch, never joined. Projects are the graph's connected pieces.
+// with work out has a planned join under it, depending on the work whose
+// results are still due to it (the view's `due`): running, or finished and
+// not read yet. Work handed to Max is a side branch, never joined.
+// Projects are the graph's connected pieces.
 //
 // Each live task is big: its planned join while it has work out, so it
 // sits below what it will take in, hollow only while it waits on it; its
@@ -107,12 +107,12 @@ export function stateOf(t) {
   return "brain";
 }
 // What a task waits on that still runs, as its hollow node's number and in
-// words: its agents, its background tasks (not those handed to Max) and
+// words: its agents, its background tasks (not those passed on) and
 // its other tool calls.
 export function waitingOn(t) {
   const w = t.waiting || {};
-  const agents = view.tasks.filter((m) => m.owner === t.id && !isDone(m)).length;
-  const background = (t.work || []).filter((b) => b.running && !b.handed).length;
+  const agents = view.tasks.filter((m) => m.owner === t.id && m.due && !isDone(m)).length;
+  const background = (t.work || []).filter((b) => b.running && b.due).length;
   const tools = w.kind === "calls" ? w.calls.filter((c) => !c.children?.length && c.status !== "settled" && c.tool !== "wait").length : 0;
   const n = agents + background + tools;
   const parts = [[agents, "agent"], [background, "background task"], [tools, "tool call"]]
@@ -164,16 +164,13 @@ export function derive(openId) {
     for (const w of t.work || []) add({ id: `w:${w.call}`, kind: "chip", t, work: w, running: w.running, open: w.at, deps: [w.leg] });
   }
   // A planned join under each live task with work out: members and calls
-  // whose results it has not taken in yet, running or finished and unread
-  // (not work handed to Max).
-  const taken = new Map(tasks.map((t) => [t.id, new Set((t.legs || []).flatMap((l) => l.on.map((d) => d.leg ?? `w:${d.work}`)))]));
+  // whose results are still due to it.
   const members = new Map();
   for (const t of tasks) if (t.owner && byId[t.owner]) (members.get(t.owner) ?? members.set(t.owner, []).get(t.owner)).push(t);
   for (const t of tasks) {
     if (isDone(t) || !t.leg) continue;
-    const seen = taken.get(t.id);
-    const out = (members.get(t.id) || []).map((m) => m.leg).filter((l) => l && !seen.has(l));
-    for (const w of t.work || []) if (!w.handed && !seen.has(`w:${w.call}`)) out.push(`w:${w.call}`);
+    const out = (members.get(t.id) || []).filter((m) => m.due && m.leg).map((m) => m.leg);
+    for (const w of t.work || []) if (w.due) out.push(`w:${w.call}`);
     if (out.length) add({ id: `p:${t.id}`, kind: "planned", t, deps: [t.leg, ...out] });
   }
   // Big: each live task's own node. A task's own node, big or not, takes
