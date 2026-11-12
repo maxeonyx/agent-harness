@@ -153,7 +153,11 @@ export function derive(openId) {
       path.add(k);
       k = legs.find((l) => l.key === k)?.on.find((d) => mine.has(d.leg))?.leg;
     }
+    // A leg is named by the entry that began it, so two fresh contexts
+    // that open with the same words (a carry said twice) name one leg: it
+    // is one node, the first.
     for (const l of legs) {
+      if (nodes.has(l.key)) continue;
       add({ id: l.key, kind: "leg", t, began: l.began, at: l.at, open: l.first, old: !path.has(l.key),
         carry: l.began === "carry" && path.has(l.key), deps: l.on.map((d) => d.leg ?? `w:${d.work}`) });
     }
