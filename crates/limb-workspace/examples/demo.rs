@@ -682,7 +682,7 @@ fn show(
             }
             shown
         }
-        Outcome::Unknown => None,
+        Outcome::Unknown | Outcome::Denied(_) => None,
     };
     if let Some(output) = &output {
         let content: Value = serde_json::from_slice(&values[&output.model]).unwrap();
@@ -720,6 +720,7 @@ fn kind(outcome: &Outcome) -> &'static str {
         Outcome::Refused { .. } => "Refused (no effect)",
         Outcome::Interrupted { .. } => "Interrupted",
         Outcome::Unknown => "Unknown",
+        Outcome::Denied(_) => "Denied",
     }
 }
 

@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use harness_core::call::{Outcome, Output};
+use harness_core::engine::Effects;
 use harness_core::id::Timestamp;
 use harness_core::limb::{Audience, Tool, ToolSet};
 use harness_core::model_call::Window;
@@ -48,6 +49,7 @@ pub fn set() -> ToolSet {
             tool("web_fetch", "web_fetch_20250910"),
             usage,
         ],
+        effects: Effects::World,
     }
 }
 

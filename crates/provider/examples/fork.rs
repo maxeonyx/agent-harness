@@ -97,6 +97,7 @@ fn main() {
             renders: vec![],
             params,
             breakpoints,
+            mirrored: None,
         }
     };
 

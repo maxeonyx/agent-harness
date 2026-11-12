@@ -446,6 +446,7 @@ impl Instance {
                 text,
             }],
             tools: Vec::new(),
+            effects: harness_core::engine::Effects::World,
         }
     }
 

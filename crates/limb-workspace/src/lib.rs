@@ -205,6 +205,7 @@ impl ToolSet for Workspace {
                 text,
             }],
             tools: tools::tools(),
+            effects: harness_core::engine::Effects::World,
         }
     }
 
@@ -713,7 +714,9 @@ impl Inner {
         command: &str,
     ) -> harness_limb::scope::Scope {
         let task = match caller {
-            Caller::Agent { task, .. } | Caller::Background { task, .. } => Some(*task),
+            Caller::Agent { task, .. }
+            | Caller::Background { task, .. }
+            | Caller::Engine { task } => Some(*task),
             Caller::Max { chat, .. } => *chat,
             Caller::Meta { .. } => None,
         };

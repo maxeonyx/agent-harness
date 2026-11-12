@@ -622,6 +622,7 @@ impl Brain {
                 name: name.to_owned(),
                 instructions: Vec::new(),
                 tools: Vec::new(),
+                effects: harness_core::engine::Effects::Harness,
             },
         })
     }
@@ -1924,6 +1925,7 @@ pub fn next(
         renders,
         params,
         breakpoints: Vec::new(),
+        mirrored: None,
     };
     let appended: Vec<EntryId> = call.entries().into_iter().map(|(e, _)| e).collect();
     let shared: Vec<EntryId> = [head]

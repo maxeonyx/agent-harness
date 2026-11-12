@@ -113,6 +113,7 @@ impl ToolSet for User {
             name: SET.into(),
             instructions,
             tools: vec![tool()],
+            effects: harness_core::engine::Effects::World,
         }
     }
 

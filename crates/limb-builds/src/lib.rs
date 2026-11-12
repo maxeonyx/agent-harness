@@ -126,6 +126,7 @@ moment no other agent's work would be lost.\n",
                 text,
             }],
             tools: vec![tool()],
+            effects: harness_core::engine::Effects::World,
         }
     }
 

@@ -454,7 +454,7 @@ fn tool_use(state: &State, call: CallId) -> Option<&ToolUseId> {
     match &state.call(call)?.call.caller {
         Caller::Agent { tool_use, .. } => Some(tool_use),
         Caller::Background { from, .. } => tool_use(state, *from),
-        Caller::Max { .. } | Caller::Meta { .. } => None,
+        Caller::Max { .. } | Caller::Meta { .. } | Caller::Engine { .. } => None,
     }
 }
 
@@ -560,6 +560,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             |c| {
                 let by = match c.call.caller {
                     Caller::Agent { task, .. } | Caller::Background { task, .. } => name(task),
+                    Caller::Engine { task } => format!("the engine of {}", name(task)),
                     Caller::Max { .. } => "Max".into(),
                     Caller::Meta { call, .. } => match state.call_owner(call) {
                         Some(task) => format!("the harness for {}", name(task)),
@@ -618,6 +619,9 @@ pub fn describe(state: &State, fact: &Fact) -> String {
                 format!("{} compacted {onto}{by}", name(*id))
             }
             TaskEvent::Moved(Move::Back { to }) => format!("{} moved back to {to}", name(*id)),
+            TaskEvent::Moved(Move::Compacted { .. }) => {
+                format!("{} compacted by its engine", name(*id))
+            }
             TaskEvent::Drain(Drain::ToMax { .. }) => format!("{} interrupted", name(*id)),
             TaskEvent::Drain(Drain::Abandon { by, within: 0 }) => {
                 format!("{} abandoned by {by:?}, now", name(*id))
@@ -752,6 +756,9 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         }
         Fact::Ranking(r) => format!("queue ranked: {} placed", r.order.len()),
         Fact::Focus(_) => "a face changed focus".into(),
+        Fact::Grant(g) => format!("Max granted {:?} {:?} for `{}`", g.uses, g.answer, g.rule),
+        Fact::Revoke(id) => format!("Max revoked grant {id}"),
+        Fact::Domain(d) => format!("this brain's domain is {}", d.name),
         Fact::Face(replica) => format!("tab {replica} is Max's"),
         Fact::Seen(at) => format!("as seen at {at}"),
         Fact::Draft(id, event) => {
@@ -782,6 +789,7 @@ fn outcome(o: &CallOutcome) -> &'static str {
         CallOutcome::Refused { .. } => "refused",
         CallOutcome::Interrupted { .. } => "interrupted",
         CallOutcome::Unknown => "ended unknown",
+        CallOutcome::Denied(_) => "denied",
     }
 }
 

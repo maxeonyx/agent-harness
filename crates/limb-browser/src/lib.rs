@@ -427,6 +427,7 @@ impl Inner {
                 text,
             }],
             tools: tools::tools(),
+            effects: harness_core::engine::Effects::World,
         }
     }
 
@@ -446,7 +447,9 @@ impl Inner {
         let who = match call.caller {
             Caller::Agent { task, .. } | Caller::Background { task, .. } => Who::Task(task),
             Caller::Max { .. } => Who::Max,
-            Caller::Meta { .. } => return report.failed("the browser runs no meta call"),
+            Caller::Meta { .. } | Caller::Engine { .. } => {
+                return report.failed("the browser runs no meta call and no engine");
+            }
         };
         let mut touched = Vec::new();
         let done = match call.tool.as_str() {

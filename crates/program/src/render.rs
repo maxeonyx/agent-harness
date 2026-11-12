@@ -6,6 +6,7 @@ use harness_core::call::{Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::fact::Author;
+use harness_core::grant::RuleSource;
 use harness_core::id::{CallId, Digest, LimbId, Timestamp, ValueId};
 use harness_core::limb::{Instruction, Tool, ToolSet};
 use harness_core::model_call::{Ending, Stop};
@@ -878,6 +879,27 @@ fn outcome_content(values: Values, outcome: &Outcome) -> (Value, bool) {
             ),
             true,
         ),
+        Outcome::Denied(ask) => {
+            let whose = match ask.source {
+                RuleSource::Policy => "your organisation's managed policy",
+                RuleSource::Settings => "Claude Code's settings",
+                RuleSource::Mode => "the permission mode",
+                RuleSource::Classifier => "Claude Code's classifier",
+            };
+            let rule = ask
+                .rule
+                .as_deref()
+                .map_or(String::new(), |r| format!(" (rule `{r}`)"));
+            (
+                said(&format!(
+                    "Not run: {whose} asks a person before this{rule}: {} Max has been shown it, and you will be \
+told if he allows it. Do not wait for it or retry it until then: carry on with the rest of your work, or end your \
+turn saying what you need.",
+                    ask.reason
+                )),
+                true,
+            )
+        }
     }
 }
 
@@ -1012,6 +1034,16 @@ resumes you; this is not the end of your task."
         Content::Prompt(Prompt::Unblocked) => {
             "Every other agent the context you were forked from started is done, and its results wait on this \
 aside. Tell Max; he decides when this aside is done."
+                .to_owned()
+        }
+        Content::Prompt(Prompt::Granted(_)) => {
+            "Max has answered a tool use you were denied. If he allowed it, try it again if you still need it; if \
+he refused it, do what he said instead."
+                .to_owned()
+        }
+        Content::Prompt(Prompt::Restarted) => {
+            "Your process was lost mid-turn, and this session has been resumed. Calls you had running may or may \
+not have run, and each result says so: check before relying on them, then carry on."
                 .to_owned()
         }
     };
