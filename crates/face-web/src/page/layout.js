@@ -314,6 +314,7 @@ function clear(B, V) {
       else if (!b.down && u.y < b.y) b.e.h = Math.min(b.e.h, b.y - u.y - below - ROOM);
     }
   }
+  for (const b of bs) b.want = b.e.h;
   const life = (e) => (e.kind === "fade" ? e.d.lane : e.v.lane);
   for (let pass = 0; pass < 3; pass++) {
     for (let i = 0; i < bs.length; i++) for (let j = i + 1; j < bs.length; j++) {
@@ -325,10 +326,12 @@ function clear(B, V) {
         const [g, f] = a.down ? [a, b] : [b, a];
         const room = f.y - g.y - ROOM;
         if (room <= 0) continue;
-        const s = room / (g.e.h + f.e.h);
-        g.e.h *= s; f.e.h *= s;
-      } else if (a.y !== b.y) {
-        const [hi, lo] = a.y < b.y ? [a, b] : [b, a];
+        const s = room / (g.want + f.want);
+        g.e.h = Math.min(g.e.h, g.want * s); f.e.h = Math.min(f.e.h, f.want * s);
+      } else if (a.at !== b.at) {
+        // On different rows; on one row, a node's ports differ in height
+        // but its lines are nested already.
+        const [hi, lo] = a.at < b.at ? [a, b] : [b, a];
         if (a.down) hi.e.h = Math.min(hi.e.h, lo.y - hi.y - ROOM);
         else lo.e.h = Math.min(lo.e.h, lo.y - hi.y - ROOM);
       }
@@ -396,8 +399,9 @@ function route(e) {
 // ─── Crossings ─────────────────────────────────────────────────────────────
 // Every place two lines of different lives cross, away from a node both
 // end at: the more upright one stays whole, the other is cut GAP each side
-// of it. Each as { over, at, dir, forced }: `over` the index of the edge
-// drawn over, `dir` its direction there, and forced when the other is a bend across that one's lane, which
+// of it. Each as { over, under, at, dir, forced }: `over` and `under` the
+// indices of the edges, `dir` the over one's direction there, and forced
+// when the over one is upright and the other a bend across its lane, which
 // no routing could avoid. Segments are bucketed in a grid, so this is near
 // linear.
 export function crossings(edges) {
