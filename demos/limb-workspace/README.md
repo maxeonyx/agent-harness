@@ -10,8 +10,9 @@ Run it from the repo root. It works in `demo-scratch.ignore/` there, and shows, 
 
 - the tool definitions exactly as a context's root carries them, and the instructions beside them, which name the directory;
 - every write arriving as one record: the settlement, its output's bytes, and a `Change` naming the call that wrote the file;
-- agent B editing a file agent A had read, so A's edit is refused with no effect until A reads again;
-- a `sed` run through `bash` changing a file the watch row names, reported in the command's settlement record as changed by it, so B's next edit is refused too, while A, whose command made the change, edits on without being told of it;
+- agent B editing a file agent A had read, and A's edit of a line B didn't touch landing all the same, because the text it names is still there;
+- B's `write` of the file on its old view refused with no effect, showing the file as A left it, and its retry landing;
+- a `sed` run through `bash` changing a file the watch row names, reported in the command's settlement record as changed by it, so B's next write is refused too, while A, whose command made the change, writes on without being told of it;
 - `read` returning whole numbered lines: a 300-character line in full, a range asked for, a 20 000-line file stopped at the 64 KiB budget with the offset to read on from, and a PNG returned as an image block;
 - 2000 lines of test output cut to head, tail and the one line matching the agent's `grep` term `FAILED`, with the whole output as a value in the same record and as a file the view names;
 - a command that started a tree of `sleep`s, stopped by giving its call row a `stopping` deadline, with every process in the tree gone afterwards;

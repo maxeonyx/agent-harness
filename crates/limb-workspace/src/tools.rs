@@ -40,11 +40,10 @@ When anything is cut, the view ends by naming a file that holds the whole output
 
 This directory is shared: forks of your context and other agents may work in it too. \
 When a file you have read changes, you are told at your next turn. \
-A `write` or `edit` is refused, with no effect, if the file has changed since you last saw it through `read`, `write` or `edit`, or exists and you have never seen it so. \
-The refusal shows the file as it is now, as `read` would, and that counts as reading it: check your change still applies, then retry. \
-Your own calls never cause a refusal: the earlier calls of the same response, and files your commands changed. Seeing a file in a command's output does not count as seeing it. \
-Changes made by commands are not checked in advance. \
-To change several places in a file, give one `edit` several replacements rather than scripting it in `bash`: they land together or not at all, and the file stays checked.
+An `edit` lands whenever each `old` matches, since that is the text it changes. \
+A `write` is refused, with no effect, if the file has changed since you last saw it through `read`, `write` or `edit`, unless your own calls changed it; \
+the refusal shows the file as it is now, which counts as reading it. \
+To change several places in a file, give one `edit` several replacements rather than scripting it in `bash`: they land together or not at all.
 
 `AGENTS.md` files below this directory apply to the work inside their own directory: read one before working there.";
 
@@ -77,7 +76,8 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "write",
-            "Write a whole file, creating it and its directories if needed. Refused if the file has changed since you last saw it.",
+            "Write a whole file, creating it and its directories if needed. Refused if the file has changed since you last saw it; \
+             over a file you never saw, it says what it replaced.",
             json!({
                 "path": { "type": "string" },
                 "content": { "type": "string" }
@@ -88,8 +88,7 @@ pub fn tools() -> Vec<Tool> {
             "edit",
             "Replace exact text in a file: one or more replacements, applied in order, each to the text the ones before it left, \
              and written all at once or not at all. Each `old` must occur exactly once (or at least once with `all`); \
-             if one does not, nothing is written, and the result names it and shows the file. \
-             Refused if the file has changed since you last saw it.",
+             if one does not, nothing is written, and the result names it and shows the file.",
             json!({
                 "path": { "type": "string" },
                 "edits": {

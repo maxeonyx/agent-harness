@@ -9,12 +9,12 @@
 //! directory (the row's `dir`), and its files are resources of kind `file`,
 //! named by absolute canonical path, so two directories that nest see each
 //! other's writes: a read's result observes the version it returned, a
-//! write's the version it produced, and a write or edit whose caller has
-//! not seen the current version is [refused](Outcome::Refused) before it
-//! touches anything. A caller who has never seen an existing file is
-//! treated as having seen it absent, so nothing is overwritten blind. The
-//! refusal shows the file as a read would, which counts as seeing it, so a
-//! retry written after it goes through. Forks and siblings share a
+//! write's the version it produced, and a write whose caller saw the file
+//! before it changed is [refused](Outcome::Refused) before it touches
+//! anything. Over a file its caller never saw, a write goes ahead and says
+//! what it replaced. The refusal shows the file as a read would, which
+//! counts as seeing it, so a retry written after it goes through. An edit
+//! is checked by its text alone: each `old` must match. Forks and siblings share a
 //! directory; the notices and refusals are how they coordinate in it.
 //!
 //! Each directory the brain asks for ([`LimbRow::Workdir`]) is made ready on
@@ -616,8 +616,8 @@ impl Inner {
     /// `call` as its caller wrote it: one response's tool uses run in the
     /// order written, so each was written knowing what the earlier ones
     /// would leave. It expects what its context knew when the response was
-    /// made, updated by what those calls observed: an agent's second
-    /// `edit` of a file in one response is not refused for its first.
+    /// made, updated by what those calls observed: an agent's `write` of a
+    /// file after its `edit` of it in one response is not refused for it.
     fn as_written(&self, id: CallId, mut call: Call) -> Call {
         let Caller::Agent { task, .. } = &call.caller else {
             return call;

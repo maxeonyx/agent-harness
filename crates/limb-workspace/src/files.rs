@@ -69,7 +69,7 @@ struct Grep {
 /// next would pass it. The tool's description states it.
 pub(crate) const READ_BUDGET: usize = 64 * 1024;
 
-/// Lines a refused edit's look starts before its `old`, in a file too
+/// Lines a failed edit's look starts before its `old`, in a file too
 /// large to show whole.
 const LEAD: usize = 20;
 
@@ -98,7 +98,7 @@ impl Inner {
             "bash" => parse(input).and_then(|i| self.bash(root, running, i, report)),
             "read" => parse(input).and_then(|i| self.read(root, i, report)),
             "write" => parse(input).and_then(|i| self.write(root, id, i, call, report)),
-            "edit" => parse(input).and_then(|i| self.edit(root, id, i, call, report)),
+            "edit" => parse(input).and_then(|i| self.edit(root, i, report)),
             "grep" => parse(input).and_then(|i| self.grep(root, id, i, running.cancel, report)),
             other => Err(format!("the workspace has no tool `{other}`")),
         };
@@ -232,18 +232,27 @@ impl Inner {
         report: &mut Report,
     ) -> Result<Outcome, String> {
         let place = place(root, &input.path);
+        let path = &input.path;
         let _files = lock(&self.files);
-        let current =
-            version(&place.path).map_err(|e| format!("cannot read {}: {e}", input.path))?;
+        let before = match fs::read(&place.path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("cannot read {path}: {e}")),
+        };
+        let current = before
+            .as_deref()
+            .map_or(Version::Gone, |b| Version::Is(Digest::of(b)));
         let target = Version::Is(Digest::of(input.content.as_bytes()));
         if current == target {
             // Writing what is already there changes nothing, so a rerun of a
             // write that landed completes rather than being refused.
-            let said = format!("{} already has this content.", input.path);
+            let said = format!("{path} already has this content.");
             return Ok(report.completed(&said, self.observations(&place.name, target)));
         }
-        if let Some(refused) = self.refuse(root, id, &place, current, call, None, report) {
-            return Ok(refused);
+        let seen = self.seen(&place, call);
+        let mine = self.made_by(&call.caller, &place.path);
+        if seen.is_some_and(|seen| seen != current) && !mine {
+            return Ok(self.refuse(root, id, &place, current, call, report));
         }
         if let Some(parent) = place.path.parent() {
             fs::create_dir_all(parent)
@@ -252,38 +261,36 @@ impl Inner {
         replace(&place.path, input.content.as_bytes())
             .map_err(|e| format!("cannot write {}: {e}", input.path))?;
         self.changed(report, &place.name, target);
-        let said = format!(
-            "Wrote {} ({} lines).",
-            input.path,
-            input.content.lines().count()
-        );
+        let lines = input.content.lines().count();
+        // Over a file the caller never saw, a collision shows at once.
+        let said = match before {
+            Some(before) if seen.is_none() && !mine => {
+                let old = String::from_utf8_lossy(&before).lines().count();
+                let s = if old == 1 { "" } else { "s" };
+                format!(
+                    "Wrote {path} ({lines} lines), replacing a file of {old} line{s} you had not seen."
+                )
+            }
+            _ => format!("Wrote {path} ({lines} lines)."),
+        };
         Ok(report.completed(&said, self.observations(&place.name, target)))
     }
 
     /// Apply the replacements in order, each to the text the ones before it
-    /// left, and write the result once: all of them or nothing. One that
-    /// does not match exactly once (or at all, with `all`) fails the edit,
-    /// naming it and showing the file, which the caller has then seen.
-    fn edit(
-        &self,
-        root: &Path,
-        id: CallId,
-        input: Edit,
-        call: &Call,
-        report: &mut Report,
-    ) -> Result<Outcome, String> {
+    /// left, and write the result once: all of them or nothing. Each `old`
+    /// is the check that the text it replaces is as the caller expects, so
+    /// what the caller has seen of the file does not matter. One that does
+    /// not match exactly once (or at all, with `all`) fails the edit, naming
+    /// it and showing the file, which the caller has then seen.
+    fn edit(&self, root: &Path, input: Edit, report: &mut Report) -> Result<Outcome, String> {
         let place = place(root, &input.path);
         let path = &input.path;
-        let first = input.edits.first().map(|r| r.old.as_str());
         let _files = lock(&self.files);
-        let current = version(&place.path).map_err(|e| format!("cannot read {path}: {e}"))?;
-        if let Some(refused) = self.refuse(root, id, &place, current, call, first, report) {
-            return Ok(refused);
-        }
         if input.edits.is_empty() {
             return Err("`edits` is empty: give at least one replacement".into());
         }
         let bytes = fs::read(&place.path).map_err(|e| format!("cannot read {path}: {e}"))?;
+        let current = Version::Is(Digest::of(&bytes));
         let content = String::from_utf8(bytes).map_err(|_| format!("{path} is not UTF-8 text"))?;
         let mut edited = content.clone();
         let mut count = 0;
@@ -308,7 +315,7 @@ impl Inner {
                         n + 1
                     ),
                 };
-                let from = start(&content, Some(&r.old)).unwrap_or(1);
+                let from = start(&content, &r.old).unwrap_or(1);
                 let shown = budgeted(content.lines().skip(from - 1), from, true);
                 let said = format!(
                     "Nothing written to {path}: {wrong}. It is as it was, which counts as having read it:\n{shown}"
@@ -418,26 +425,12 @@ impl Inner {
         (output.text + &said, Some(report.value(whole)))
     }
 
-    /// The refusal of a write or edit whose caller has not seen `current`,
-    /// unless its own command made it. It shows the file as `read` would,
-    /// from a little before `near` (an edit's `old`) when the whole would
-    /// not fit, so the caller has seen it once the refusal reaches it.
-    #[allow(clippy::too_many_arguments)]
-    fn refuse(
-        &self,
-        root: &Path,
-        id: CallId,
-        place: &Place,
-        current: Version,
-        call: &Call,
-        near: Option<&str>,
-        report: &mut Report,
-    ) -> Option<Outcome> {
+    /// The version of the file at `place` that `call`'s caller last saw, if
+    /// it has seen it: named as its context saw it, which may have been by
+    /// another path to the same file.
+    fn seen(&self, place: &Place, call: &Call) -> Option<Version> {
         let key = self.key(crate::FILE, &place.name);
-        // Named as the caller's context saw it, which may have been by
-        // another path to the same file.
-        let expected = call
-            .expects
+        call.expects
             .iter()
             .find(|o| {
                 o.resource.kind == key.kind
@@ -445,16 +438,27 @@ impl Inner {
                     && o.resource.name.starts_with('/')
                     && canonical(Path::new(&o.resource.name)) == place.path
             })
-            .map_or(Version::Gone, |o| o.version);
-        if expected == current || self.made_by(&call.caller, &place.path) {
-            return None;
-        }
+            .map(|o| o.version)
+    }
+
+    /// The refusal of a write whose caller saw the file before it changed
+    /// to `current`. It shows the file as `read` would, so the caller has
+    /// seen it once the refusal reaches it.
+    fn refuse(
+        &self,
+        root: &Path,
+        id: CallId,
+        place: &Place,
+        current: Version,
+        call: &Call,
+        report: &mut Report,
+    ) -> Outcome {
         let shown = match current {
             Version::Gone => Some(report.output(
                 "(it does not exist now)",
                 self.observations(&place.name, Version::Gone),
             )),
-            Version::Is(_) => self.look(root, place, near, report),
+            Version::Is(_) => self.look(root, place, report),
         };
         let shown = shown.map(
             |shown| match self.shown_before(id, &call.caller, &shown.observes) {
@@ -465,30 +469,20 @@ impl Inner {
                 false => shown,
             },
         );
-        Some(Outcome::Refused {
+        Outcome::Refused {
             current: vec![Observation {
-                resource: key,
+                resource: self.key(crate::FILE, &place.name),
                 version: current,
             }],
             shown,
-        })
+        }
     }
 
-    /// What `read` returns of a file, from a little before the first line
-    /// holding `near` when the file is over the budget.
-    fn look(
-        &self,
-        root: &Path,
-        place: &Place,
-        near: Option<&str>,
-        report: &mut Report,
-    ) -> Option<Output> {
-        let offset = fs::read(&place.path)
-            .ok()
-            .and_then(|bytes| start(&String::from_utf8_lossy(&bytes), near));
+    /// What `read` returns of a file.
+    fn look(&self, root: &Path, place: &Place, report: &mut Report) -> Option<Output> {
         let read = Read {
             path: place.path.to_string_lossy().into_owned(),
-            offset,
+            offset: None,
             limit: None,
         };
         match self.read(root, read, report) {
@@ -547,11 +541,10 @@ fn pattern(grep: Option<&str>) -> Result<Option<Regex>, String> {
 /// The line to show `content` from so that `near`, or failing that its
 /// first line, is in view: from a little before it, when the whole of
 /// `content` would not fit in [`READ_BUDGET`].
-fn start(content: &str, near: Option<&str>) -> Option<usize> {
+fn start(content: &str, near: &str) -> Option<usize> {
     if content.len() <= READ_BUDGET {
         return None;
     }
-    let near = near?;
     let at = content
         .find(near)
         .or_else(|| content.find(near.lines().find(|l| !l.trim().is_empty())?.trim()))?;
