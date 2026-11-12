@@ -334,7 +334,7 @@ function time(n) {
 
 export let positions = new Map();   // id -> {x, y, w, h, top}: its box laid out; its centre is (x + w / 2, y + top)
 export let shown = new Map();       // id -> {x, y, w, h, top}: drawn now (tweened)
-export let routes = new Map();      // "from>to" -> {P, W, colour, dashed, cuts}: an edge's line, laid out
+export let routes = new Map();      // "from>to" -> {parts: [{P, W}], colour, dashed}: an edge's line, laid out, in parts where it passes under others
 export const centre = (p) => ({ x: p.x + p.w / 2, y: p.y + p.top });
 let shape = "";
 const laid = new Map();             // a project's shape -> its layout
@@ -391,10 +391,7 @@ export function layout() {
       const planned = (id) => by.get(id).kind === "planned";
       const dashed = (e) => (planned(e.from) && by.get(e.from).solid !== e.to) || planned(e.to);
       const colour = (e) => LINE[e.kind === "branch" ? "faint" : e.kind === "life" || e.kind === "grow" ? by.get(e.from).line : by.get(e.to).end ?? by.get(e.to).line];
-      const lines = l.edges.map((e) => ({ P: e.P.map(([a, b]) => [a + dx, b]), W: e.W, dashed: dashed(e), colour: colour(e), cuts: [] }));
-      // Where a line crosses another, 5 px of it each way.
-      for (const { over, at: [x, y], dir: [u, w] } of l.cuts) lines[over].cuts.push([[x + dx - 5 * u, y - 5 * w], [x + dx + 5 * u, y + 5 * w]]);
-      l.lines = l.edges.map((e, i) => [`${e.from}>${e.to}`, lines[i]]);
+      l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { parts: e.parts.map(({ P, W }) => ({ P: P.map(([a, b]) => [a + dx, b]), W })), tapered: !!e.W, dashed: dashed(e), colour: colour(e) }]);
     }
     for (const [id, b] of l.boxes) positions.set(id, b);
     for (const [k, r] of l.lines) routes.set(k, r);
