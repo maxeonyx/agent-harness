@@ -1,8 +1,9 @@
 #!/bin/sh
-# An agent is not refused for its own calls; when it is refused for someone
-# else's change, the refusal shows the file as it is now, so its retry goes
-# through. Runs on the scripted model: no model call, no cost. Prints the
-# chat's transcript, each tool call with its whole result.
+# A write is refused only for someone else's change, never for the agent's
+# own; the refusal shows the file as it is now, so its retry goes through. An
+# edit is checked by its text alone. Runs on the scripted model: no model
+# call, no cost. Prints the chat's transcript, each tool call with its whole
+# result.
 set -eu
 cd "$(dirname "$0")/../.."
 dir=$PWD/target/own-calls
@@ -10,6 +11,7 @@ rm -rf "$dir"
 mkdir -p "$dir"
 printf 'one\ntwo\n' > "$dir/f.txt"
 echo theirs > "$dir/other.txt"
+echo "not yours" > "$dir/unseen.txt"
 echo draft > "$dir/shared.txt"
 node dev/drive.mjs up --brain own-calls
 chat=$(node dev/drive.mjs chat --brain own-calls engineer "$dir" "$(cat demos/own-calls/mandate.md)")

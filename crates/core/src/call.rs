@@ -69,12 +69,12 @@ pub struct Call {
     pub input: ValueId,
     /// The versions the caller's view was based on: its context's latest
     /// observation of each resource the limb owns (for Max, what his face
-    /// last showed him). A limb checks those its call names, which covers
-    /// the tools whose effects it can know in advance (an edit, a write),
-    /// and refuses the call when they have moved. A resource the call names
-    /// that is absent here is one the caller has never seen, so a write to
-    /// it that would replace something is refused too ("read it first").
-    /// A command whose effects the limb cannot know (`bash`, `git`) is not
+    /// last showed him). A limb checks those its call names, where it can
+    /// know the call's effects in advance (a write), and refuses the call
+    /// when they have moved. A resource the call names that is absent here
+    /// is one the caller has never seen: nothing it saw can be lost, so the
+    /// call goes ahead and says what it replaced. An edit names the text it
+    /// replaces, which is its own check. A command whose effects the limb cannot know (`bash`, `git`) is not
     /// checked; its writes reach other contexts afterwards, as notices
     /// naming the call.
     ///

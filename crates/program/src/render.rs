@@ -850,7 +850,7 @@ fn outcome_content(values: Values, outcome: &Outcome) -> (Value, bool) {
         Outcome::Refused { current, shown } => {
             let names: Vec<_> = current.iter().map(|o| o.resource.name.as_str()).collect();
             let why = format!(
-                "Refused, with no effect: {} changed since you last saw it, or you had not seen it through `read`, `write` or `edit` (a command's output does not count).",
+                "Refused, with no effect: {} changed since you last saw it.",
                 names.join(", ")
             );
             let Some(shown) = shown else {

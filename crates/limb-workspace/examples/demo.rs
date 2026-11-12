@@ -89,12 +89,7 @@ fn main() {
     );
     brain.call(&mut b, "grep", json!({ "pattern": "fn \\w+" }));
 
-    title("A edits on its old view: refused, untouched, shown the file as it is; it retries");
-    brain.call(
-        &mut a,
-        "edit",
-        json!({ "path": "src/lib.rs", "edits": [{ "old": "-> i32", "new": "-> i64" }] }),
-    );
+    title("A edits on its old view: the text it names is still there, so it lands");
     brain.call(
         &mut a,
         "edit",
@@ -102,7 +97,18 @@ fn main() {
     );
 
     title(
-        "A command changes a watched file: reported in its settlement, and B's next edit is refused",
+        "A writes on the view it had before that edit: refused, since its edit showed it nothing of B's change",
+    );
+    let stale = json!({ "path": "src/lib.rs", "content": "pub fn add(a: i32, b: i32) -> i64 {\n    a + b\n}\n" });
+    brain.call(&mut a, "write", stale);
+
+    title("B writes on its old view: refused, untouched, shown the file as it is; it retries");
+    let whole = json!({ "path": "src/lib.rs", "content": "pub fn add(a: i64, b: i64) -> i64 {\n    b + a\n}\n" });
+    brain.call(&mut b, "write", whole.clone());
+    brain.call(&mut b, "write", whole);
+
+    title(
+        "A command changes a watched file: reported in its settlement, and B's next write is refused",
     );
     let key = ResourceKey {
         limb: LIMB,
@@ -126,21 +132,12 @@ fn main() {
     brain.call(
         &mut a,
         "bash",
-        json!({ "command": "sed -i 's/a + b/b + a/' src/lib.rs && cat src/lib.rs" }),
+        json!({ "command": "sed -i 's/b + a/a + b/' src/lib.rs && cat src/lib.rs" }),
     );
-    brain.call(
-        &mut b,
-        "edit",
-        json!({ "path": "src/lib.rs", "edits": [{ "old": "b + a", "new": "a + b" }] }),
-    );
-    println!(
-        "\n  A made that change itself, so A's context knows it, and A's own edit goes through:"
-    );
-    brain.call(
-        &mut a,
-        "edit",
-        json!({ "path": "src/lib.rs", "edits": [{ "old": "b + a", "new": "a + b" }] }),
-    );
+    let swapped = json!({ "path": "src/lib.rs", "content": "pub fn add(a: i64, b: i64) -> i64 {\n    b + a\n}\n" });
+    brain.call(&mut b, "write", swapped.clone());
+    println!("\n  A made that change itself, so A's own write goes through:");
+    brain.call(&mut a, "write", swapped);
 
     title(
         "read: whole numbered lines up to 64 KiB, a long line never cut in its middle, an image as an image",
