@@ -191,10 +191,9 @@ pub struct Sheet {
     /// Why Max is reading this now, in one plain sentence: what changed
     /// since the version he last saw, and what it needs from him, in his
     /// name for the work. Bad news first. If his last words asked
-    /// something, it answers them. "Since 31 Oct, 29 deploys went through
-    /// the gate and none went back; your answer tonight keeps `one_way` as
-    /// the agent's flag." Also what his queue and the map say about the
-    /// task. Never a label, a count of what is below, or "nothing needs
+    /// something, it answers them. "Since 31 Oct, 29 deploys to home have
+    /// gone through the gate and none went back." Also what his queue and
+    /// the map say about the task. Never a label, a count of what is below, or "nothing needs
     /// you": the harness says that, from the asks.
     pub lead: String,
     pub end: End,
