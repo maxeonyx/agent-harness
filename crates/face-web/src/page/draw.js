@@ -203,7 +203,7 @@ function line(key, r) {
     return [x + m0[0] + (m1[0] - m0[0]) * u, y + m0[1] + (m1[1] - m0[1]) * u];
   };
   const P = still ? r.P : r.P.map(at);
-  const out = { d: r.W ? outline(P, r.W) : polyline(P), cut: r.cuts.map((c) => polyline(still ? c : c.map(at))).join("") };
+  const out = { d: r.W ? outline(P, r.W) : polyline(P), mid: r.dashed ? polyline(P) : "", cut: r.cuts.map((c) => polyline(still ? c : c.map(at))).join("") };
   if (still) Object.assign(r, out);
   return out;
 }
@@ -234,11 +234,11 @@ export function drawEdges() {
   const ds = new Map(), add = (k, d) => { if (d) (ds.get(k) ?? ds.set(k, []).get(k)).push(d); };
   let mask = "";
   for (const [key, r] of routes) {
-    const { d, cut } = line(key, r);
+    const { d, mid, cut } = line(key, r);
     if (r.dashed) {
       // A dashed line: whole under the mask, its centre in the mask's dashes.
       pathFor(`d${r.W ? "f" : "s"}${r.colour}`, r.W ? { fill: r.colour } : { fill: "none", stroke: r.colour, "stroke-width": LIFE }, dashes.g);
-      mask += polyline(r.P);
+      mask += mid;
     }
     add(`${r.dashed ? "d" : ""}${r.W ? "f" : "s"}${r.colour}`, d);
     if (cut) { add("gap", cut); add(`o${r.colour}`, cut); }
