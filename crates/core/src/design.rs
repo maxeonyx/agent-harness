@@ -48,9 +48,8 @@ pub struct Design {
     pub language: ValueId,
     pub themes: Vec<Theme>,
     pub components: Vec<Component>,
-    /// What a task holding the user plugin is told: choose your theme first,
-    /// from the free ones; the end is the world when the work is done, a
-    /// state and not a plan; the point is the update in one sentence; then
+    /// What a task holding the user plugin is told: choose your theme first;
+    /// the end is the world when the work is done, a state and not a plan; the point is the update in one sentence; then
     /// show it, a figure first; ask with `ask`, each ask with its own end,
     /// now and why, and never retell it on the page; name live things
     /// instead of retyping their state; write no colours, typefaces, bold or
@@ -58,10 +57,15 @@ pub struct Design {
     /// looks go to the keeper with `pass_on_style`. With the components and
     /// an example page.
     pub guide: ValueId,
-    /// The role of the standing agent that owns the look: the art, the
-    /// themes, the language and the guide. It makes new themes on request,
-    /// as high-effort programmatic art, and Max's words about the look reach
-    /// it from any page ([`Feedback`]).
+    /// The role of the standing agent that owns the look, and the one place
+    /// Max's words about it arrive, from any page ([`Feedback`]). It keeps
+    /// the language and the guide itself, and hands everything about the art
+    /// (grounds, palettes, new themes) to a standing art agent of its own.
+    /// The art agent keeps one artist per theme and resumes that artist when
+    /// its theme is spoken about, so the agent that knows a ground's code is
+    /// the one that changes it; a new theme gets a new artist. A change
+    /// reaches Max on the keeper's own page, before and after on the page he
+    /// spoke from, as an ask he can reject.
     pub keeper: RoleId,
     /// The files this version was read from.
     pub source: Option<Observation>,
@@ -70,46 +74,59 @@ pub struct Design {
 /// A look an agent wears: what makes its page and chat window its own.
 ///
 /// **Concept.** A finished piece of design, made with care in the design
-/// system's files by its keeper, and never by an agent at run time. It has
-/// three parts:
-/// - a ground: background artwork, drawn for each task from its id, so no
-///   two agents share one, even in the same theme;
-/// - a palette: paper, ink, an accent and the figure colours;
+/// system's files by the art agent ([`Design::keeper`]), and never by an
+/// agent at run time. It has three parts:
+/// - a ground: a generative painting, drawn for each task from its id;
+/// - a palette: paper, ink, an accent and the figure colours, with the inks
+///   for text set on the ground where they differ;
 /// - a display face, for the end, where we are and the questions. It must
 ///   have a true italic and a true bold, since the language needs both.
 ///
-/// The ground fills the cover around the end, then gives way to the
-/// theme's paper, so text always sits on calm ground. An agent's figures
-/// use the palette's tokens, never colours, so a figure redraws in any
-/// theme. The state tones ([`Tone`]) are never a theme's.
+/// **The theme says where Max is; the seed says who.** A theme is one art
+/// direction, and each agent wearing it gets its own painting of it: the
+/// same kind of harbour chart with a different coast, the same high
+/// country under a different sun. So a theme has no variants, and any
+/// number of agents may wear one at once, each still its own. Themes
+/// differ from each other in what they look at and how they are made, not
+/// only in colour: Tussock looks across a landscape, Harbour down on a
+/// chart, Kauri up through a forest.
 ///
-/// Themes come in families. A family is an area's art direction (the
-/// harbour's depth contours, the kauri forest, tussock country), and each
-/// agent in the area wears a variant of it, so where Max is shows at a
-/// glance and each agent is still its own. Each family differs from the
-/// others in its technique, its light and its hue, not only its colour. An
-/// agent chooses its theme once, from the free ones, and keeps it
+/// The ground fills the cover behind the lead, composed around the lead's
+/// box so text sits on calm ground, then fades into the theme's paper as
+/// Max scrolls. An agent's figures use the palette's tokens, never colours,
+/// so a figure redraws in any theme. The state tones ([`Tone`]) are never a
+/// theme's. An agent chooses its theme once and keeps it
 /// ([`crate::page::Description`]).
 ///
 /// Serves: Max's "really elegant and artistic [...] beautiful backgrounds,
 /// UI themes, design systems, etc. that can be swapped between to make an
-/// agent and its page unique"; "agents don't design their own themes";
-/// themes "only from a list that's provided by the design system".
+/// agent and its page unique"; "easy for me to see whereabouts I'm at";
+/// "agents don't design their own themes"; Harbour and Kauri "need to be a
+/// little bit visually more distinguished"; backgrounds "5 times better",
+/// not "10% better".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Theme {
-    /// `harbour-dawn`.
-    pub name: String,
     /// `harbour`.
-    pub family: String,
-    /// What an agent chooses it by, in `choose_theme`'s list: "Depth
-    /// contours on sea mist, at first light."
+    pub name: String,
+    /// What an agent chooses it by, in `choose_theme`'s list: "A hand-engraved
+    /// chart of a harbour: soundings, depth contours, shallows tinted blue."
     pub about: String,
     /// Its palette and display face: a stylesheet setting the language's
     /// tokens, with the font files it names.
     pub style: ValueId,
-    /// Its ground: a drawing program the face runs for each task, seeded by
-    /// the task's id, so the same agent looks the same in every face and no
-    /// other agent looks quite like it.
+    /// Its ground: an ES module whose `paint(ctx, scene)` paints into a 2D
+    /// canvas, given the canvas's size, the task's id as its seed, and the
+    /// box the page's lead sits in, which it keeps calm. The same agent looks
+    /// the same in every face, and no other agent looks quite like it. The
+    /// face paints it once when the window opens, at up to twice the CSS
+    /// pixels, and never animates it; scrolling slides and fades it into the
+    /// paper. Before a design version is published, the art agent's check
+    /// paints every ground at phone, desktop and thumbnail sizes for a set of
+    /// seeds and holds it to its bars: the lead's ink against the ground in
+    /// the lead's box at 7:1 for 95% of it and never under 4.5:1; a phone
+    /// paint within 150 ms at a quarter of desktop speed; a thumbnail that
+    /// reads as its theme. A ground that throws leaves plain paper, and its
+    /// error reaches the keeper.
     pub ground: ValueId,
 }
 
@@ -157,6 +174,17 @@ pub struct Feedback {
     pub words: DeliveryId,
     /// The agent's note: which part of the page he meant.
     pub note: String,
+    /// The window he was reading in, so the art agent paints exactly what he
+    /// saw: a ground composes itself around the lead, which sits differently
+    /// on a phone. `None` when he spoke without the page open.
+    pub seen: Option<Viewport>,
+}
+
+/// A window's size, in CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Viewport {
+    pub width: u32,
+    pub height: u32,
 }
 
 /// The state colours: the same hues on every page and on the map, never a
