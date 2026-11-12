@@ -28,14 +28,18 @@
   .bar .ctx i { display: block; height: .3em; border-radius: 1em; background: var(--line); overflow: hidden; }
   .bar .ctx b { display: block; height: 100%; background: var(--muted); }
   .bar .ctx.high b { background: var(--maroon); }
-  /* Close, wherever it is: its × two strokes centred in it, not a glyph,
-     which no font centres. The card's is inset .5em from its corner, so its
-     radius is the card's less that. */
-  .x { display: inline-grid; place-items: center; flex: none; font-size: 0; width: 30px; height: 30px; border-radius: 8px; color: var(--muted); }
-  .x::before, .x::after { content: ""; grid-area: 1 / 1; width: var(--x, 14px); height: 1.75px; border-radius: 1px; background: currentColor; transform: rotate(45deg); }
-  .x::after { transform: rotate(-45deg); }
-  .x:hover { background: var(--hover); color: var(--ink); }
-  .bar .x { margin-right: -.1em; border-radius: calc(18px - .5em); }
+  /* Close, wherever it is: its × two strokes centred in it, drawn, not a
+     glyph, which no font centres; the plate under them shows on hover. The
+     card's plate is inset .5em from its corner, so its radius is the
+     card's less that. Round it, the card's button is a target 44px wide,
+     reaching over the log's top edge: a touch near the bottom of a target
+     that ends where the log starts goes to the log's first row. */
+  .x { display: inline-grid; place-items: center; flex: none; font-size: 0; width: 30px; height: 30px; color: var(--muted); }
+  .x::before { content: ""; grid-area: 1 / 1; width: 100%; height: 100%; border-radius: var(--plate, 8px); }
+  .x::after { content: ""; grid-area: 1 / 1; width: var(--x, 14px); height: var(--x, 14px); background: currentColor; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M0 0 10 10M10 0 0 10' stroke='%23000' stroke-width='1.75' stroke-linecap='round' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E") center / contain no-repeat; }
+  .x:hover { color: var(--ink); }
+  .x:hover::before { background: var(--hover); }
+  .bar .x { --plate: calc(18px - .5em); position: relative; z-index: 1; width: 44px; height: 56px; padding: 7px 7px 19px; margin: -7px calc(-7px - .1em) -19px -7px; }
   #panel > .mix { border-bottom: 1px solid var(--line); padding: .7em 1.1em .8em; font-size: 12.5px; color: var(--muted); }
   .mix .sum { display: flex; flex-wrap: wrap; gap: .2em 1.6em; }
   .mix .sum b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }

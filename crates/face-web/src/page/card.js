@@ -139,7 +139,16 @@ function buildPanel(id, at) {
   if (id === NEW) buildNew();
   else renderPanel();
 }
-$(".x", panel).onclick = closeNode;
+// Closed when a touch lifts on it, not at its click: a tap that stops the
+// log's fling gets no click. A mouse or a key closes it with its click.
+const x = $(".x", panel);
+let lifted = -Infinity;
+x.addEventListener("pointerup", (e) => {
+  if (e.pointerType === "mouse" || !x.contains(document.elementFromPoint(e.clientX, e.clientY))) return;
+  lifted = e.timeStamp;
+  closeNode();
+});
+x.onclick = (e) => { if (e.timeStamp - lifted > 1000) closeNode(); };
 hoverable(mini, () => openId);
 mini.onclick = refocus;
 
