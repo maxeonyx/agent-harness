@@ -117,16 +117,27 @@ pub enum Inline {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Figure {
     /// A fenced ```` ```mermaid ```` block: graphs, sequences, charts. Its
-    /// nodes take the grammar's classes (`will`, `gone`, `yours`, `failing`,
-    /// `building`, `f1`..`f4`) with `:::`.
+    /// nodes take the grammar's classes (`planned`, `gone`, `yours`,
+    /// `failed`, `working`, `f1`..`f4`: the plan's and the tones' own
+    /// words) with `:::`.
     Mermaid { source: String },
     /// A fenced ```` ```svg ```` block, for what mermaid can't lay out,
     /// using the same classes.
     Svg { source: String },
-    /// `![alt](value:<id>)` alone in a paragraph: a screenshot or a
-    /// rendered image. The alt is required, since it is what a reader
-    /// hears and what an old face shows.
-    Image { value: ValueId, alt: String },
+    /// Images alone in a paragraph (`![alt](value:<id>)`): screenshots or
+    /// rendered images. One is drawn at its size with no caption, like any
+    /// figure. Two or more sit side by side at one height, each with its
+    /// alt under it in small type, since there the alt is what tells them
+    /// apart: two screens to choose between, a phone beside a desktop.
+    Images(Vec<Image>),
+}
+
+/// One image in a figure. The alt is required, since it is what a reader
+/// hears, what an old face shows, and what names it beside another.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Image {
+    pub value: ValueId,
+    pub alt: String,
 }
 
 /// A table: a GFM pipe table, drawn in the language's one table style.
