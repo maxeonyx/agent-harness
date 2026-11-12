@@ -602,18 +602,20 @@ pub enum Mode {
 /// it on ([`State::heard`]). Who gave any other mandate is the caller of the
 /// meta call that created the task ([`Task::by`]).
 ///
-/// Every new member's mandate also carries what every member of its spawn
-/// shares, rendered before its own text and identical for each of them, so
-/// N fresh siblings are one cache prefix: the parent's brief, and Max's
+/// A fresh task's mandate also carries what every fresh member of its
+/// spawn shares, rendered before its own text and identical for each of
+/// them, so N siblings are one cache prefix: the parent's brief, and Max's
 /// words the parent quotes. A quote is the value of his words itself, so a
 /// brief carries them verbatim by construction, the same words have the
 /// same label wherever they are quoted, and the child can tell them from
-/// its parent's paraphrase. A resume and a fork take them too: a resumed
-/// designer is given Max's reaction to its page by its label, not retold,
-/// and a fork is given his words its parent's compactions have replaced.
+/// its parent's paraphrase. A resume takes quotes of its own, since its
+/// context has not heard what its parent has since: a resumed designer is
+/// given Max's reaction to its page by its label, not retold. A fork takes
+/// neither: its context holds every word of Max's its parent's does, which
+/// compactions carry verbatim.
 ///
-/// **Not built yet.** Today only a fresh member takes a brief or quotes,
-/// and a call that starts none says them back.
+/// **Not built yet.** Today a resume cannot be given quotes, so a parent
+/// retells Max's words in its mandate.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mandate {
     pub text: ValueId,
@@ -621,7 +623,8 @@ pub struct Mandate {
     pub brief: Option<ValueId>,
     /// Max's words, each one the creating task has heard: words he sent it,
     /// the mandate he gave it, his answer to its question, a quote in its
-    /// own mandate, or words a call of its read back from his chats.
+    /// own mandate, or his words a call's output showed it verbatim, such as
+    /// a search of his chats.
     pub quotes: Vec<ValueId>,
 }
 
