@@ -299,7 +299,7 @@ export const BIG = 64, BIG_REACH = { top: 12, foot: 8, side: 21 };
 const SERIF = getComputedStyle(document.documentElement).getPropertyValue("--serif") || "Georgia, serif";
 const SANS = getComputedStyle(document.documentElement).getPropertyValue("--sans") || "sans-serif";
 export const LABEL_FONT = `600 12.5px ${SERIF}`, CHIP_FONT = `12px ${SANS}`;
-export const radius = (n) => (n.kind === "chip" ? (n.running ? 7.5 : 4.5) : n.kind === "planned" ? 4.6 : 3.4);
+export const radius = (n) => (n.kind === "chip" ? (n.running ? 7.5 : 3) : n.kind === "planned" ? 4.6 : 3.4);
 export const label = (n) => (n.big ? shortName(n.t) : n.kind === "chip" && n.running ? n.work.name || "background" : "");
 const widths = new Map();
 const ctx2d = document.createElement("canvas").getContext("2d");
@@ -342,7 +342,7 @@ const laid = new Map();             // a project's shape -> its layout
 // a result done or not. Solid, so nothing shows through anything.
 export const LINE = { ink: "#a3a19a", faint: "#d5d3cb", tool: "#87a0b4", max: "#e0975c", green: "#86ad87", red: "#cc7d74" };
 // A project's nodes, as layout.js takes them.
-export const nodesOf = (c) => c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), time: time(n), kind: n.kind, lane: n.lane, line: n.line, end: n.end, old: n.old, solid: n.solid }));
+export const nodesOf = (c) => c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), time: time(n), kind: n.kind, light: n.kind === "chip" || n.kind === "ring", lane: n.lane, line: n.line, end: n.end, old: n.old, solid: n.solid }));
 
 // Each project laid out on its own (layout.js), and again only when its
 // shape changes. Projects sit side by side in the order they began, PROJECT
