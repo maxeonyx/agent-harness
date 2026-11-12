@@ -1,7 +1,7 @@
 import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
 import { act, can } from "./tab.js";
 import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
-import { dress, trouble } from "./draw.js";
+import { dress, paint, trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { dictate, dictation, editMessage, modelName, readOnly, say, sending } from "./compose.js";
 import { layer, session } from "./blobs.js";
@@ -604,7 +604,7 @@ function chip(m) {
   const a = el("a", `chip ${l.cls}`);
   a.href = `#${m.id}`;
   a.onclick = (e) => { if (e.button || e.ctrlKey || e.metaKey) return; e.preventDefault(); go(m.id); };
-  a.append(el("span", "d", glyph(m)), shortName(m));
+  a.append(paint(el("span", "d", glyph(m)), m), shortName(m));
   a.title = l.text;
   return a;
 }
