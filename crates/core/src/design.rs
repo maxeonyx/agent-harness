@@ -19,8 +19,9 @@ use crate::resource::Observation;
 /// here reaches every page, old versions included.
 ///
 /// **The language is the same on every page.** It is what Max learns once:
-/// - The order: where this ends, where we are, the asks, then the detail,
-///   folded.
+/// - The order: the lead, where this ends, where we are, the plan, then
+///   the asks ([`crate::page`]). No part is labelled: order and type say
+///   which part is which.
 /// - Slant and weight carry meaning, not decoration. Italic is where this
 ///   ends, and nothing else. Bold is a question for Max, and nothing else.
 ///   Everything else is regular. Agents' markdown has no bold or headings.
@@ -28,7 +29,7 @@ use crate::resource::Observation;
 /// - One reading face and one measure, so body text reads the same
 ///   everywhere.
 /// - No cards, and no boxes around prose. An ask is set off by space and a
-///   hairline, and its frame by small labels: end, now, why.
+///   hairline, and its frame reads as sentences, with no labels.
 /// - A pill is something Max can press: only answers are pills. A live
 ///   thing's state is a dot in its state's tone, never a pill.
 /// - The state tones ([`Tone`]): orange is always his move.
@@ -48,15 +49,12 @@ pub struct Design {
     pub language: ValueId,
     pub themes: Vec<Theme>,
     pub components: Vec<Component>,
-    /// What a task holding the user plugin is told: choose your theme first,
-    /// from the free ones; the end is the world when the work is done, a
-    /// state and not a plan; the point is the update in one sentence; then
-    /// show it, a figure first; ask with `ask`, each ask with its own end,
-    /// now and why, and never retell it on the page; name live things
-    /// instead of retyping their state; write no colours, typefaces, bold or
-    /// headings; detail goes in `more`; Max's words about how your page
-    /// looks go to the keeper with `pass_on_style`. With the components and
-    /// an example page.
+    /// What a task holding the user plugin is told about the look: choose
+    /// your theme first, from the free ones; the components, each with when
+    /// to use it; figures use the palette's tokens; write no colours,
+    /// typefaces, bold, headings or labels; Max's words about how your page
+    /// looks go to the keeper with `pass_on_style`. What a report says, part
+    /// by part, is not the look's: it is the user plugin's report guide.
     pub guide: ValueId,
     /// The role of the standing agent that owns the look: the art, the
     /// themes, the language and the guide. It makes new themes on request,

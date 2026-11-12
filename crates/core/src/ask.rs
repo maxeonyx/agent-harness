@@ -20,14 +20,16 @@ use crate::source::Whose;
 /// appears: on its asker's page, on the page of each user-facing task above
 /// it, in his queue, and from its own node on the map. So it carries its
 /// own frame: the question, where it ends, where it is now, and why this
-/// step gets from one to the other. If he doesn't agree with the end or the
-/// reasoning, he rejects the ask rather than answering it
+/// step gets from one to the other. The frame is drawn as a few sentences
+/// read in that order, never as labelled rows. If he doesn't agree with the
+/// end or the reasoning, he rejects the ask rather than answering it
 /// ([`Verdict::Reject`]). That is expected, and it is as useful to the agent
 /// as a yes.
 ///
 /// An ask is live from the agent's `ask` call, so the agent can ask in the
 /// background and keep working; blocking on it is just ending its turn.
-/// Pages draw it after where we are; no agent places it or retells it.
+/// Pages mark it on the step it gates and draw it whole after the plan; no
+/// agent places it or retells it.
 /// `ask` is declared only to a task that has Max, through the user plugin.
 /// An agent without him puts what it needs in its result, to an ancestor
 /// that has him, since only an agent that has Max can hand to Max.
@@ -45,29 +47,51 @@ pub struct Ask {
     /// with the same key revises it, keeping its identity and whatever Max
     /// has drafted for it.
     pub key: String,
-    /// What Max is asked, in words he can answer by talking: "Can I send
-    /// #231 to Sam for review?" Set in the theme's display face in bold,
-    /// which in the design language means only this.
+    /// What Max is asked, in words he can answer by talking, in his nouns:
+    /// "Delete `add_sibling`?", never "Q3". The language marks it as a
+    /// question for him, the same on every page.
     pub question: String,
-    /// Where this step ends: what is true once it is done. "#231 merged,
-    /// with Sam's review." Often narrower than its page's end: the ask's own
-    /// destination, not the whole work's. Drawn in italic, as every end is.
+    /// Where this step ends: what is true once it is done. "Agents start
+    /// sub-agents with one tool, spawn." Often narrower than its page's end:
+    /// the ask's own destination, never a copy of the page's.
     pub end: String,
-    /// Where it is now: "#231 is finished and green, and only I have seen
-    /// it." Inline markdown, naming live things ([`Ref`]).
-    pub now: String,
-    /// Why this ask is what gets from now to the end, and why it is his:
-    /// "Nothing merges without a review, and asking Sam puts work on him, so
-    /// that's yours to say yes to." Inline markdown.
+    /// Where it is now, with the claim it is about quoted, so it jogs his
+    /// memory: "Your process says 'a task may add siblings to its own
+    /// scope', and in 15,513 calls no agent has called `add_sibling`." Body
+    /// markdown, naming live things ([`Ref`]), with a figure where one shows
+    /// it better.
+    pub now: ValueId,
+    /// Why this ask is what gets from now to the end, as a chain of
+    /// consequences he can point at the broken link of, ending in why it is
+    /// his: his judgement, his access, an obligation on someone else, or
+    /// something that can't be undone. "Every agent reads about a tool none
+    /// uses; deleting it changes a line of your process, which is yours to
+    /// change." Inline markdown.
     pub why: String,
     pub want: Want,
+    /// The step of the asker's plan ([`crate::page::Step`]) that waits on
+    /// the answer. What the answer unblocks is that step and every step
+    /// after it, which ranks the ask, and an ask on a step after another
+    /// ask's step waits on that ask. `None`: no step waits on it.
+    pub step: Option<String>,
     /// What it is about. An item's reading decides whose move the ask is
     /// and when it is done: a PR whose review was requested is the
     /// reviewer's move until the review comes back.
     pub about: Option<Ref>,
-    /// When it stops being worth answering, and the agent goes on without
-    /// him.
-    pub expires: Option<Timestamp>,
+    /// When it stops being worth answering, and what the agent does then.
+    /// `None`: it waits as long as he does.
+    pub lapses: Option<Lapse>,
+}
+
+/// When an ask stops being worth answering, and what happens then.
+///
+/// **Concept.** What the agent does without him, said before the time, so
+/// letting an ask lapse is an answer he can give on purpose.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lapse {
+    pub at: Timestamp,
+    /// "I build it with the history set reading only the harness's chats."
+    pub then: String,
 }
 
 /// What kind of answer an ask wants. Every kind also takes no, a rejection,
@@ -76,14 +100,17 @@ pub struct Ask {
 pub enum Want {
     /// A question: his words are the answer.
     Answer,
-    /// Pick one; `recommended` names the option the agent would take.
+    /// Pick one; `recommended` names the option the agent would take. A
+    /// recommendation is optional; the ask's why is not.
     Choose {
         options: Vec<Choice>,
         recommended: Option<String>,
     },
-    /// Something only he can do outside the harness: review the PR, go to
-    /// the website and do this. His "done" settles it, or its `about`
-    /// finishing does.
+    /// Something only he can do outside the harness, such as approving a
+    /// request in a console only he can sign in to. The ask's words say
+    /// exactly what to do and where it can be done. `link` goes straight to
+    /// the place only when what to do there will be obvious once he is
+    /// there. His "done" settles it, or its `about` finishing does.
     Do { link: Option<String> },
     /// A call the agent prepared and must not make on its own say-so, shown
     /// exactly as it will run: send the draft email, request Sam's review,
@@ -98,8 +125,12 @@ pub enum Want {
 pub struct Choice {
     pub key: String,
     pub label: String,
-    /// What choosing it means, in inline markdown.
-    pub detail: Option<String>,
+    /// What follows from choosing it: what happens next, what it costs,
+    /// what it rules out. Inline markdown.
+    pub means: Option<String>,
+    /// What it will look like, when the options differ in what he will see:
+    /// the options' figures are drawn side by side. Body markdown.
+    pub figure: Option<ValueId>,
 }
 
 /// A call ready to make: the tool, on the asker's binding, and its exact
@@ -146,21 +177,11 @@ pub enum Verdict {
     No,
     /// The key of the option chosen, for [`Want::Choose`].
     Chose(String),
-    /// He won't answer, because a part of the frame is wrong; his words say
-    /// how. The agent revises that part, or withdraws the ask.
-    Reject(Part),
-}
-
-/// A part of an ask's frame that Max can reject. In his face, he rejects a
-/// part by pressing on it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Part {
-    /// That's not where this should end.
-    End,
-    /// That's not where things stand.
-    Now,
-    /// This step doesn't get from now to the end, or isn't his.
-    Why,
+    /// He won't answer as asked: the end, where things stand or the
+    /// reasoning is wrong, and his words say which. One press, never a form:
+    /// the agent gets the ask with his words, and revises it or withdraws
+    /// it.
+    Reject,
 }
 
 /// Where an ask stands: derived, never stored.

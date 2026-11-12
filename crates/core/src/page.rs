@@ -8,26 +8,42 @@
 //! vision's "an agent answers with a page", and "a question is a page plus a
 //! node, answered by talking".
 //!
-//! **Always the same order.** A page says three things, in the order Max
-//! needs them, and the harness sets them out, not the agent:
-//! 1. Where this ends ([`Sheet::end`]): the eventual state, for him to agree
-//!    with before anything else. If he doesn't, nothing below matters.
-//! 2. Where we are ([`Sheet::now`]).
-//! 3. What it needs from him: every open ask of the task and of the
-//!    user-facing tasks under it ([`crate::ask::Ask`]), each standing on its
-//!    own. Derived, never written, so the list is always current, and an
-//!    orchestrator never retells a child's question.
+//! **Always the same order.** A page is a report that brings Max's picture
+//! of the work level with the agent's. Three things can differ, and each
+//! has its own authority: where the work is going (his), where it stands
+//! (the agent's, and his to believe or not), and how it gets from one to
+//! the other (the agent's to propose and his to redirect). So a page says,
+//! in the order he needs it, and the harness sets it out, not the agent:
+//! 1. The lead ([`Sheet::lead`]): why he is reading this now, in one
+//!    sentence. The same sentence his queue and the map show, so a click
+//!    opens on what he clicked.
+//! 2. Where this ends ([`Sheet::end`]): the eventual state, shown concretely
+//!    enough that he can point at a sentence and say "no". If he doesn't
+//!    agree with it, nothing below matters.
+//! 3. Where we are ([`Sheet::now`]): facts, the concrete thing first.
+//! 4. The plan: the task's steps ([`Step`]), drawn by the harness as a route
+//!    with his asks on the steps they gate, then the agent's argument for
+//!    it ([`Sheet::plan`]). Most of a page is here, and it means nothing
+//!    without 2 and 3.
+//! 5. What it needs from him: every open ask of the task and of the
+//!    user-facing tasks under it ([`crate::ask::Ask`]), in the plan's order,
+//!    each standing on its own. Derived, never written, so the list is
+//!    always current, and an orchestrator never retells a child's question.
 //!
-//! Then, folded, [`Sheet::more`]: detail he opens if he wants it. The first
-//! screen holds the end alone. An end he has seen before (`Fact::Seen`
-//! names the version he last saw) shrinks to one line above where we are,
-//! and comes back whole when the agent changes it.
+//! The first screen holds the lead and the end. An end he has seen before
+//! (`Fact::Seen` names the version he last saw) shrinks to its point, and
+//! comes back whole when the agent changes it. Detail sits in a fold beside
+//! the claim it backs, never in a section of its own, so the why behind
+//! anything he reads is one step from it. How to fill each part is the user
+//! plugin's report guide, which a task reads with its page tools.
 //!
 //! **The agent writes content; the design system draws it.** The agent
 //! gives typed parts, and short markdown inside them. It never sets type,
-//! colour or layout. The design system ([`crate::design::Design`]) draws
-//! every page in one design language: italic is where this ends, bold is a
-//! question for Max, and regular type is everything else. Its task's theme
+//! colour or layout, and writes no labels: which part is which is said by
+//! the order and the design language, never by an "Where we are" heading.
+//! The design system ([`crate::design::Design`]) draws every page in one
+//! design language, so what marks a question for Max, an end or a live
+//! name is the same for every agent. Its task's theme
 //! ([`crate::design::Theme`]) gives the page its own ground, palette and
 //! display face. So Max learns one way of reading that holds for every
 //! agent, while each agent still looks like no other. What he says about
@@ -35,8 +51,9 @@
 //!
 //! **What is typed and what is written.** What the harness acts on is
 //! structured: what the agent needs from Max, what a page points at
-//! ([`Ref`]), the task's name ([`Description`]), the page's end and where
-//! we are, and whose move anything is ([`crate::source::Whose`]). A body is
+//! ([`Ref`]), the task's name and plan ([`Description`]), the page's lead
+//! and the end's point, and whose move anything is
+//! ([`crate::source::Whose`]). A body is
 //! GFM markdown with the design system's few components (live names,
 //! figures, a fold). It has no headings and no bold, since those are the
 //! language's, and no CSS, colours or script. So a body reads on the phone,
@@ -59,8 +76,8 @@
 //! **A shape, not a refusal.** A page tool says no only when the world did:
 //! a write over a part another task changed since this one saw it, or an
 //! edit whose text is not in the body. Everything else is made impossible
-//! to get wrong. Every `page_write` states the end and where we are, so a
-//! page can't lack them. A theme is chosen from a list of the free ones. A
+//! to get wrong. Every `page_write` states the lead, the end's point and
+//! where we are, so a page can't lack them. A theme is chosen from a list of the free ones. A
 //! heading, bold, or a link to a kind that does not exist is drawn as plain
 //! text and listed as a problem. A task with no title or theme yet is drawn
 //! with its role's name, in its area's first free theme.
@@ -118,11 +135,11 @@ pub struct Page {
 
 /// The page the agent is working on.
 ///
-/// **Concept.** The page's working copy. `page_write` states the end and
-/// where we are every time, and replaces the body or the detail when it is
-/// given them. `page_edit` applies each change to the body or the detail
-/// where its old text occurs once, as file edits do, so two forks building
-/// one page merge by text. A write says no only over a part another task
+/// **Concept.** The page's working copy. `page_write` states the lead, the
+/// end's point and where we are every time, and replaces a body when it is
+/// given one. `page_edit` applies each change to the body its old text
+/// occurs in once, as file edits do, so two forks building one page merge
+/// by text. A write says no only over a part another task
 /// changed after this one last saw it, since that work would be lost. A
 /// body with problems is still taken: the call's result lists them, each
 /// saying how to fix it, so the agent iterates rather than retries.
@@ -152,45 +169,77 @@ pub struct Version {
     pub by: Option<CallId>,
 }
 
-/// What the agent writes on its page: where this ends, where we are, and
-/// the detail.
+/// What the agent writes on its page: the lead, where this ends, where we
+/// are, and the argument for its plan.
 ///
-/// **Concept.** The written half of a page, in parts the harness sets out
+/// **Concept.** The written half of a report, in parts the harness sets out
 /// in a fixed order, so every page reads the same way and the agent spends
-/// its words on content, never on arrangement or emphasis.
+/// its words on content, never on arrangement, labels or emphasis. The
+/// other half is live and never written here: the plan's steps, the asks,
+/// and the state of everything a [`Ref`] names.
 ///
 /// Serves: "I want to see that we agree on the eventual state. Then I want
 /// to see where we are. And then finally, I'm ready for my asks"; "the
-/// agent should be given quite a structured way to put its information in".
+/// agent can communicate to me its idea of the eventual state, can
+/// communicate to me the, in fact, current state, and then the plan [...]
+/// most of the pages should be about the third part, the plan, but the plan
+/// is meaningless without the first two"; "I need the question. I need the
+/// problem. Whatever hooks me"; "the agent should be given quite a
+/// structured way to put its information in".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sheet {
-    /// Where this ends: the world as it will be when the work is done, in a
-    /// sentence or two Max can agree with or reject. "Ingest never loses a
-    /// row to GitHub's rate limit, and the nightly run still finishes by 7
-    /// am." A state, not a task list: it says what will be true, not what
-    /// the agent will do. Plain text, set in the theme's display face in
-    /// italic, which in the design language means only this.
-    pub end: String,
-    pub now: Now,
-    /// Detail, drawn folded after the asks: files, runs, the long version.
-    /// Body markdown. `None`: there is none.
-    pub more: Option<ValueId>,
+    /// Why Max is reading this now, in one plain sentence: what changed
+    /// since the version he last saw, and what it needs from him, in his
+    /// name for the work. Bad news first. If his last words asked
+    /// something, it answers them. "Since 31 Oct, 29 deploys went through
+    /// the gate and none went back; your answer tonight keeps `one_way` as
+    /// the agent's flag." Also what his queue and the map say about the
+    /// task. Never a label, a count of what is below, or "nothing needs
+    /// you": the harness says that, from the asks.
+    pub lead: String,
+    pub end: End,
+    /// Where we are: facts, visual first. The concrete thing comes before
+    /// the conclusion it supports: the real log line, the count and where it
+    /// was counted, the refusal as the agent saw it. What a machine knows is
+    /// named ([`Ref`]), never retyped. What the agent couldn't find out is
+    /// said as a fact. When the work is done, this is the end reached, and
+    /// it shows the proof. Body markdown.
+    pub now: ValueId,
+    /// The plan's argument, drawn after the harness draws the task's steps
+    /// ([`Description::plan`]): why this route over the ones Max would think
+    /// of, each killed in a sentence with its reason; the decisions the
+    /// agent took for him, each with the question it answers, so he can
+    /// overturn one by saying so; and where the plan stops short of the end,
+    /// and what that costs. Body markdown. `None`: the steps say it all.
+    pub plan: Option<ValueId>,
 }
 
-/// Where we are.
+/// Where this ends: the eventual state, for Max to agree with before
+/// anything else.
 ///
-/// **Concept.** The page's update: one sentence Max reads first, and a body
-/// that shows it, visual first. When the work is done, it is the end
-/// reached, and the face draws it so.
+/// **Concept.** The agent's picture of the world when the work is done,
+/// shown so that a wrong picture is easy to catch. The body demonstrates it
+/// the first time and whenever it changes; the point is what he sees once
+/// he has seen it. A state, never a task list or a slogan: each sentence
+/// says what will be true, concretely enough that he could point at it and
+/// say "no, that's wrong".
+///
+/// Serves: "I want like agreement on the eventual state. That's like one of
+/// the first and most important things"; "demonstrate through detailed and
+/// concrete diagrams, text, blah, blah, blah, that it is on the same page as
+/// me in terms of [...] the eventual state".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Now {
-    /// The update in one plain sentence: "The fix is written and tested; it
-    /// needs a reviewer." Set in the theme's display face, upright and
-    /// regular. Also what the map and the queue say about the task.
+pub struct End {
+    /// One or two plain sentences: "A deploy never interrupts a session: a
+    /// new build proves itself on a copy of home before it takes over."
+    /// What the end shrinks to once seen, so it stands without the body.
     pub point: String,
-    /// What shows it: a figure first where one can replace a paragraph, then
-    /// a few sentences that name live things ([`Ref`]) instead of retyping
-    /// their state. Body markdown. `None`: the point says it all.
+    /// What shows it: the world when done, often in the same picture as
+    /// [`Sheet::now`], drawn as it will be; what Max will see or do, in his
+    /// nouns; his words where they set the destination, and the agent's own
+    /// additions marked as its own, since invented requirements hide there;
+    /// what is deliberately left out. Body markdown. `None`: the point says
+    /// it all, as for a small fix.
     pub body: Option<ValueId>,
 }
 
@@ -276,8 +325,8 @@ pub enum Ref {
 pub enum Spot {
     End,
     Now,
+    Plan,
     Ask(AskId),
-    More,
 }
 
 /// What a task says about itself: its name and what it produces.
@@ -288,7 +337,7 @@ pub enum Spot {
 /// replacing only itself (`None` leaves it as it was), and folded as
 /// `TaskEvent::Described`. Every task has one, with or without a page, so
 /// every node on the map has a face. Where the work stands is not here: it
-/// is the page's [`Now::point`], and what a machine knows comes from the
+/// is the page's [`Sheet::lead`], and what a machine knows comes from the
 /// harness.
 ///
 /// The theme is not here either. It is chosen once, with `choose_theme`
@@ -306,19 +355,56 @@ pub struct Description {
     /// gave ([`crate::task::TaskEvent::Renamed`]) is shown over it, and
     /// `describe`'s result says so.
     pub title: Option<String>,
-    /// What it produces, which the map draws as its nodes. Replaced whole.
-    pub work: Option<Vec<Work>>,
+    /// Its plan: the steps from where it started to its end, done ones
+    /// included, so the route reads whole. The map draws them as the task's
+    /// nodes, and its page draws them as the route. Replaced whole.
+    pub plan: Option<Vec<Step>>,
 }
 
-/// One thing a task produces, or plans to.
+/// One step of a task's plan: a piece of work Max would recognise.
 ///
-/// **Concept.** Underview's stream without a separate stream: a PR, a
-/// child, a step not started yet. A planned one is drawn dotted (the
-/// vision's plans as provisional nodes), and becomes its PR when the agent
-/// gives it an `of`.
+/// **Concept.** The vision's plans as provisional nodes, and the one list
+/// the map, the page and the attention scheduler read, so they can't
+/// disagree. A step is the size of a PR, a child task, or a piece of the
+/// agent's own work that changes something he would notice. Its state is
+/// bound where it can be: a step that has become a PR or a child shows that
+/// thing's state now, so the route stays current when the agent's words go
+/// stale. An ask names the step it gates ([`crate::ask::Ask::step`]), so
+/// what an answer unblocks is that step and every step after it: how the
+/// queue ranks an ask, how one ask says it waits on another, and how an
+/// orchestrator's page shows a child's ask on the child's step without
+/// retelling it.
+///
+/// Serves: "Plans show as provisional nodes [...] planned pull requests,
+/// planned design agents, planned user questions" (vision); "dependency
+/// diagrams, essentially, on actions for me, on chats, on agents to each
+/// other"; "some unblock hours of agent work and others unblock nothing"
+/// (Underview's stories).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Work {
+pub struct Step {
+    /// The agent's name for it, unique in the plan, for `after` and for
+    /// asks. Never drawn: Max sees the title, and a code is not a name.
+    pub key: String,
+    /// What it makes true, in Max's nouns, short enough for a node: "The
+    /// advocate can search your words", not "T6" or "Implement history
+    /// set".
     pub title: String,
-    /// What it is, once it exists. `None`: planned, not started.
-    pub of: Option<Ref>,
+    /// The steps that must be done before it starts. A planned step whose
+    /// `after` are all done is next.
+    pub after: Vec<String>,
+    pub state: StepState,
+}
+
+/// Where a step stands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StepState {
+    /// Not started: drawn dotted.
+    Planned,
+    /// Under way in the agent's own work.
+    Doing,
+    /// Done in the agent's own work.
+    Done,
+    /// It is this PR or task now, and that thing's state is the step's: a
+    /// merged PR or a finished child is a done step, whoever finished it.
+    Is(Ref),
 }
