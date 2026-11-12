@@ -2,7 +2,8 @@
 # Lanes on the map, on the scripted test brain `lanes`. Root runs a quick
 # `bash`, spawns `build` and `check`, and `build` backgrounds a server `srv`
 # and passes it up to Root; Root backgrounds `preview` and hands it to Max.
-# Open the link it prints and watch the map: each life keeps its own column;
+# Open the link it prints and watch the map: `check`, one dot that Root
+# reads next, hangs beside Root; `build` goes on, so it keeps its own lane;
 # a spawn's line grows out of Root and each result thins into its reader,
 # stopping just short of the dot; `srv` changes hands at a ring and its line
 # bends into Root; `preview` is Max's orange card with a gear, on an orange

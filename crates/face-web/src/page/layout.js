@@ -1,8 +1,10 @@
 // ─── The map's layout: lanes, and their lines ──────────────────────────────
 // Each life (a chat, an agent, a background call, an old version) keeps one
-// column, its lane, and its own line runs straight down it through its dots.
-// A spawn grows out of its maker into the child's lane; a result runs down
-// the finished lane and thins into its reader. Rows are a layered graph's,
+// x, its lane, and its own line runs straight down it between its dots;
+// lanes pack as close as the rows they share allow. A life of one dot that
+// its maker's next dot reads hangs beside its maker instead, a spindle. A
+// spawn bends from its maker all the way into the child's first dot; a
+// result bends from the last dot all the way into its reader. Rows are a layered graph's,
 // flowing down, with the present on one row at y = 0: every live node sits
 // on the lowest row the past reaches, but one that a live node depends on
 // sits just above it, and what waits hangs below. Nothing here asks the
@@ -31,9 +33,9 @@ const GAP = 1.5;
 const TIP = .5, POINT = 4, NGAP = 1.5, TUCK = -.6, TAPER = 48;
 // Ports: the lines out of a node's bottom, and into its top, spread evenly
 // over the WIDE either side of upright, its own lifeline upright in the
-// middle and each other line on the side facing its other end, nearest
-// innermost; both sides one step apart. At its port a line points LEAN of
-// the way from upright to straight out from the middle.
+// middle and each other line on the side facing its other end, in the
+// order the lines arrive; both sides one step apart. At its port a line
+// points LEAN of the way from upright to straight out from the middle.
 const WIDE = Math.PI / 3, LEAN = .5;
 // A line leaving or reaching a port at a slant bulges at most REACH times
 // as far across as it goes.
