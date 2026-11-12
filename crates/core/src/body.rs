@@ -109,8 +109,8 @@ pub enum Inline {
 /// colours. There is no box, caption, number or title: the sentence after
 /// the figure says what it shows. One that is too wide for its column
 /// breaks out to the wide measure on a desktop, takes its narrow form on a
-/// phone (left to right becomes top to bottom), then shrinks to a floor,
-/// then scrolls in its own frame, and pressing it shows it whole.
+/// phone (left to right becomes top to bottom), then shrinks until its
+/// labels are 12px, then scrolls in its own frame, and pressing it shows it whole.
 ///
 /// Serves: "diagrams, tables, visual hierarchies and colors"; "concrete
 /// diagrams"; "visual first".
@@ -161,8 +161,9 @@ pub type Cell = Vec<Inline>;
 /// is a thin chevron and the summary in small UI type, with no box, rule or
 /// label; open, the body hangs from a hairline under it. One component in
 /// two places: each of [`crate::page::Sheet::more`] after the plan, and
-/// inline (`<details><summary>`) beside the sentence it backs. Every visit
-/// starts with every fold closed. Folds do not nest.
+/// inline (`<details><summary>`) beside the sentence it backs. Every new
+/// version of a page starts with every fold closed; within one version a
+/// fold he opened stays open. Folds do not nest.
 ///
 /// Serves: "I can scroll to see more"; "stuff should only come once it's
 /// relevant"; "if I want, I can expand".

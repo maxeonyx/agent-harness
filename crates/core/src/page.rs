@@ -190,9 +190,10 @@ pub struct Sheet {
 /// header already shows: the question it now turns on ("Where should the
 /// work brain live?"), the problem ("Stopping a session takes 8 seconds"),
 /// or the news ("Every session at work now runs under the harness"). Drawn
-/// in bold display type at the lead size, on the theme's ground, alone on
-/// his first screen when it is new to him, and as a short band over the
-/// end when he has seen it. A lead over 70 characters, or equal to the
+/// in display type at the lead size, on the theme's ground, alone on his
+/// first screen when it is new to him, and as a short band over the end
+/// when he has seen it. Bold while something on the page is his move;
+/// regular once nothing is, as on a finished task's page. A lead over 70 characters, or equal to the
 /// title, is drawn and listed as a problem.
 ///
 /// Serves: "I need the core framing, the core navigational aid. I need the

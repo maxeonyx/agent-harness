@@ -25,11 +25,12 @@ use crate::source::Whose;
 /// **How it is drawn.** The bold question, then the frame, then the
 /// answers. The frame has no labels: the end line hangs from a small hollow
 /// ring (will be), the now line from a small dot (is), and the why is
-/// unmarked, in ink, right above the answers. Standing alone (in his queue,
-/// from its node on the map, on an orchestrator's page) it is drawn whole,
-/// with who asked and when in a small line. On its asker's own page it sits
-/// inside its plan step, whose page above already says the end and the
-/// now, so there it draws the question, the why and the answers. Once it
+/// unmarked, in ink, right above what shows it and the answers. It is
+/// drawn whole wherever it is: inside its plan step on its asker's page,
+/// in his queue, from its node on the map, on an orchestrator's page. Its
+/// end and now are its own, often narrower than the page's, so they are
+/// never left to the page around it. Away from its asker's page a small
+/// line says who asked and when. Once it
 /// is not his move (someone else's, answered, done, withdrawn, expired) the
 /// question loses its bold and the answers give way to one small line
 /// saying what happened.
@@ -67,6 +68,11 @@ pub struct Ask {
     /// "Limbs on the laptop and on EC2 both need to reach it, and where it
     /// lives decides what IT has to approve." Inline markdown.
     pub why: String,
+    /// What shows the choice, drawn between the why and the answers: the
+    /// screens to choose between, a table of the options, a figure. Body
+    /// markdown ([`crate::body::Body`]). An approval's prepared call is
+    /// drawn there too, from [`Want::Approve`].
+    pub shows: Option<ValueId>,
     pub want: Want,
     /// The plan step it unblocks, by its key ([`crate::page::Step::key`]).
     /// A child task's ask sits in the step bound to that child on every

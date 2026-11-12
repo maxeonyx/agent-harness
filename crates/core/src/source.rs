@@ -101,8 +101,9 @@ pub struct Detail {
 ///
 /// **Concept.** What the face needs to draw a [`crate::page::Ref`] honestly
 /// on a page written at another time: the reading now, and what it said
-/// when the page was published, so prose written against the old state
-/// carries a small note of the new one ("now approved").
+/// when the page was published. Prose written against the old state keeps
+/// its words; the mark beside it shows the state now, and pointing at it
+/// says what the state was when the page was written.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Drawn {
     /// The newest reading. `None` while the first is on its way: drawn
