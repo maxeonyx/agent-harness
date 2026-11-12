@@ -86,8 +86,8 @@ pub enum Whose {
 /// **Concept.** The extension point for status. A versioned definition, as
 /// a role is: from a file, or defined by an agent's `source_define` call,
 /// so a new kind (a ticket, an ops request, an email thread) is data in the
-/// harness, not code in it. A kind with a reader refuses readings from
-/// anyone else.
+/// harness, not code in it. `source_put` offers only the claimed
+/// kinds, so no agent writes what a reader owns.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceKind {
     /// How refs name it: `github.pr`, `jira.ticket`.

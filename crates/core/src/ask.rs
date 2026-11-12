@@ -19,12 +19,14 @@ use crate::source::Whose;
 /// An ask is live from the agent's `ask` call, so the agent can ask in the
 /// background and keep working; blocking on it is just ending its turn. A
 /// page draws an ask where its body places it, after the paragraph that
-/// says why, never in the lead; a version that leaves one of its task's
-/// open asks unplaced is refused. An orchestrator's page can place a
-/// child's. An ask asked mid-work, before a page places it, opens on its own
-/// from the map: its title, its why and its answers. Only a task that has
-/// Max asks him. An autonomous task is refused and told to put it in its
-/// result, since only an agent that has Max can hand to Max.
+/// says why, never in the lead; one of its task's open asks that the body
+/// does not place is drawn at the page's end. An orchestrator's page can
+/// place a child's. An ask asked mid-work, before a page places it, opens on
+/// its own from the map: its title, its why and its answers. `ask` is
+/// declared only to a task that has Max, so no call is refused for not
+/// having him: an agent that does not have him puts what it needs in its
+/// result, to an ancestor that does, since only an agent that has Max can
+/// hand to Max.
 ///
 /// Serves: questions and user actions as nodes, one per wait (vision); "the
 /// agent shouldn't have to worry about those kind of things"; an action
@@ -96,8 +98,7 @@ pub struct Prepared {
 /// Its identity is the event that first asked it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AskEvent {
-    /// Asked, or revised by its key while open. Refused from a task that
-    /// does not have Max, with how to fix it.
+    /// Asked, or revised by its key while open.
     Asked(Box<Ask>),
     /// The asker took it back: no longer needed, or overtaken. Max sees why
     /// where it was, and words he had drafted for it go to the asker as

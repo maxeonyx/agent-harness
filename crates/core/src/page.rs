@@ -14,6 +14,13 @@
 //! lead: the map beside the chat is the overview, and the chat's header
 //! already names the task and its state.
 //!
+//! **The beauty is the theme's.** How a page looks is its task's theme
+//! ([`crate::design::Theme`]): a ground drawn for that task, a palette and
+//! two typefaces. The lead sits on the ground like a cover, and the body
+//! reads on the theme's paper below it. So a page can say one thing at a
+//! time and still be unmistakably its agent's, and an agent spends its
+//! words on content, never on decoration.
+//!
 //! **What is typed and what is written.** What the harness acts on is
 //! structured: what the agent needs from Max ([`crate::ask::Ask`]), what a
 //! page points at ([`Ref`]), the task's name and theme ([`Description`]),
@@ -21,11 +28,11 @@
 //! What only Max reads is the body: GFM markdown, the language agents
 //! already write in, with the design system's few components
 //! ([`crate::design::Design`]) for figures, live references and asks. A
-//! body carries no CSS and no script, so the look is the
-//! design system's and the task's theme, it reads on the phone, and no agent
-//! can draw a control that is not bound to an ask. One parser, in Rust,
-//! reads a body: the brain checks every edit with it, and the tab draws with
-//! it, compiled to wasm, so what was checked is what is drawn.
+//! body carries no CSS, no colours and no script, so it reads on the phone,
+//! redraws in any theme, and no agent can draw a control that is not bound
+//! to an ask. One parser, in Rust, reads a body: the brain checks every edit
+//! with it, and the tab draws with it, compiled to wasm, so what was checked
+//! is what is drawn.
 //!
 //! **Current by construction.** Three rules make the page Max reads current:
 //! - What a machine can know is bound, never written: a [`Ref`] draws its
@@ -39,14 +46,26 @@
 //!   progress (the summaries of its calls, which the harness already holds)
 //!   comes first.
 //!
+//! **A shape, not a refusal.** A page tool says no only when the world did:
+//! a whole write over a stage another task changed since this one saw it,
+//! or an edit whose text is not in the body. Everything else is made
+//! impossible to get wrong. The lead is its own two fields, so a page can't
+//! lack one. A theme is picked from a list of the free ones. An ask the body
+//! does not place is drawn at the page's end. A link to a kind that does not
+//! exist is drawn as plain text and listed as a problem. A task with no title
+//! or theme yet is drawn with its role's name, in its area's first theme.
+//!
 //! **Not yet folded.** These types are the model. The facts that carry
 //! them are the build's to wire: `Fact::Page(TaskId, PageEvent)`,
 //! `Fact::Ask(AskId, AskEvent)`, `Fact::Kind(SourceKind)`,
 //! `Fact::Design(Design)`, `TaskEvent::Described(Description)`,
 //! `Phase::AwaitingMax` carrying an `Option<Presented>`, `Prompt::Present`,
-//! `Content::Answer(Answer)`, a `says` on `resource::Change`, a `facing`
-//! member of a spawn, and `attention::Ranked` naming an
-//! [`crate::ask::Owed`].
+//! `Content::Answer(Answer)`, a `says` on `resource::Change`, and
+//! `attention::Ranked` naming an [`crate::ask::Owed`]. The tools that make
+//! them: `page_read`, `page_write`, `page_edit`, `page_publish` and
+//! `describe`, for a role that holds the `page` tool set; and `ask`, with
+//! `open_chat` (the tool review's task A2), declared only to a task that
+//! has Max, so no call is refused for not having him.
 
 use serde::{Deserialize, Serialize};
 
@@ -76,7 +95,7 @@ use crate::source::ItemKey;
 pub struct Page {
     pub task: TaskId,
     /// What the agent is editing, unseen by Max. `None` before its first
-    /// edit.
+    /// write.
     pub stage: Option<Stage>,
     /// What Max was shown, oldest first, kept for the task's life: "since you
     /// last looked" compares the version his [`crate::fact::Fact::Seen`]
@@ -84,32 +103,36 @@ pub struct Page {
     pub versions: Vec<Version>,
 }
 
-/// The body the agent is working on.
+/// The page the agent is working on.
 ///
-/// **Concept.** The page's working copy. Every edit names the revision it
-/// was made against, and one against an older revision is refused in band,
-/// naming who edited since, as a stale file write is: two forks building one
-/// page never silently lose each other's work.
+/// **Concept.** The page's working copy. `page_edit` changes the lead's
+/// fields it is given, and applies each body change where its old text
+/// occurs once, as file edits do, so two forks building one page merge by
+/// text. `page_write` replaces the stage whole, and says no only when another
+/// task changed it after this one last saw it, since that work would be
+/// lost. A body with problems is still taken: the call's result lists them,
+/// each saying how to fix it, so the agent iterates rather than retries.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stage {
-    /// The whole body after the newest edit: markdown with components.
-    pub source: ValueId,
-    pub rev: u32,
-    /// The call that made the newest edit: who a refusal names, and where
-    /// the edit falls among the turn's calls, for the gate ([`Presented`]).
+    pub lead: Lead,
+    /// Everything below the lead: markdown with components.
+    pub body: ValueId,
+    /// The call that made the newest edit: whose work a write would replace,
+    /// and where the edit falls among the turn's calls, for the gate
+    /// ([`Presented`]).
     pub by: CallId,
 }
 
-/// A body Max was shown.
+/// A page Max was shown.
 ///
-/// **Concept.** Immutable once published. Its components name design system
-/// elements, never CSS, so an old version still draws after the design
-/// system changes.
+/// **Concept.** Immutable once published. Its body names design system
+/// components and palette tokens, never CSS or colours, so an old version
+/// still draws after the design system or the task's theme changes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Version {
     pub n: u32,
-    pub source: ValueId,
     pub lead: Lead,
+    pub body: ValueId,
     /// When it was published: where it sits among the chat's entries.
     pub at: Timestamp,
     /// The `page_publish` call that made it, or `None` when the brain
@@ -120,36 +143,31 @@ pub struct Version {
 /// What happens to a page.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PageEvent {
-    /// The agent wrote or edited the stage (`page_write`, `page_edit`).
-    /// Refused when `base` is not the stage's revision. A body with problems
-    /// is still taken, and the call's result lists them, each saying how to
-    /// fix it, so the agent can iterate.
-    Edited { base: Option<u32>, source: ValueId },
-    /// The stage became a version: by `page_publish` mid-turn (so Max can
-    /// answer an ask while the agent works on), or by the brain as a turn
-    /// ends with the stage edited after the turn's other calls. The brain
-    /// parses the body and states its lead here. Refused while the body has
-    /// problems: no lead, a lead that is more than words, or an open ask of
-    /// the task that the body does not place. Refused too before the task
-    /// has a title and a theme ([`Description`]).
-    Published { lead: Lead },
-    /// The agent read the newest version and says it still holds: the
-    /// gate's cheapest pass, for a turn that changed nothing Max needs to
-    /// read. The face can say "checked current at 10:42".
-    Kept,
+    /// The stage after a `page_write` or `page_edit`.
+    Edited { lead: Lead, body: ValueId },
+    /// Max is shown the stage: by `page_publish` mid-turn (so he can read on
+    /// while the agent works), or by the brain as a turn ends with the page
+    /// touched after the turn's other calls. A stage equal to the newest
+    /// version makes no new version: it says that version still holds, the
+    /// gate's cheapest pass, and the face can say "checked current at
+    /// 10:42". Never refused: an open ask of the task that the body does not
+    /// place is drawn at the page's end.
+    Published,
 }
 
 /// What a page opens on, and all Max sees before he scrolls.
 ///
-/// **Concept.** The core framing: the body's first heading and the
-/// paragraph under it, in plain words, with nothing else on screen. When
-/// the agent needs something from him, the point is that question, so he
-/// can answer it by talking, since dictation is already running; when it
-/// does not, the point is what happened. The scene is what he needs to be on
-/// the same page: the problem, why he is reading, what changes. The parser
-/// limits both to a few lines and refuses refs, figures and asks in them.
-/// Recorded with each version, so his queue and the map can show what a
-/// waiting task asks without reading its body.
+/// **Concept.** The core framing, given as two fields of `page_write`, not
+/// a heading the parser has to find, so a page cannot lack one. The point
+/// is the question Max is asked, in words he can answer by talking, since
+/// dictation is already running; or, when nothing is asked, the point. The
+/// scene is what puts him on the same page: the problem, why he is reading,
+/// what changes. Both are plain text, drawn as such: the point in the
+/// theme's display face, the scene in its reading face, on the theme's
+/// ground, as a cover. Length is advice, not a limit: a scene longer than a
+/// first screen holds is listed as a problem. Recorded with each version,
+/// so his queue and the map can say what a waiting task asks without
+/// reading its body.
 ///
 /// Serves: Max's "I need the question. I need the problem. Whatever hooks
 /// me [...] and then I don't need any of the other crap yet"; reports are
@@ -168,17 +186,16 @@ pub struct Lead {
 ///
 /// **Concept.** The gate that makes "current by construction" a state, not
 /// a hope. When a turn of a task that owes Max a page ends, the brain looks
-/// at the page. Touched (edited, published or kept) after the turn's last
-/// other call: it publishes the stage if it differs from the newest version,
-/// and the task waits on Max, [`Presented::Current`]. Not touched: the task
-/// gets one more turn (`Prompt::Present`: "your page is version 4, from
-/// before Max's message at 10:02; update it, or keep it if it still holds,
-/// then end your turn"). A second turn that ends without touching it waits
-/// on Max, [`Presented::Stale`], drawn as such beside the turn's last
-/// message: never a loop, and never a stale page shown as current. The same
-/// rule serves a Claude Code session, whose extra turn is a user message on
-/// its stream-json input, so it needs no hook an enterprise policy could
-/// block.
+/// at the page. Touched (edited or published) after the turn's last other
+/// call: it publishes the stage, and the task waits on Max,
+/// [`Presented::Current`]. Not touched: the task gets one more turn
+/// (`Prompt::Present`: "your page is version 4, from before Max's message
+/// at 10:02; update it, or publish it as it is if it still holds, then end
+/// your turn"). A second turn that ends without touching it waits on Max,
+/// [`Presented::Stale`], drawn as such beside the turn's last message:
+/// never a loop, and never a stale page shown as current. The same rule
+/// serves a Claude Code session, whose extra turn is a user message on its
+/// stream-json input, so it needs no hook an enterprise policy could block.
 ///
 /// A task owes Max a page when it has him and its role holds the `page`
 /// tool set. A chat whose role does not is a plain chat, and its turns end
@@ -202,10 +219,11 @@ pub enum Presented {
 /// drawn with its state now, an ask's subject, an item node on the map, and
 /// what wakes an agent when it changes. In a body, as a link's target where
 /// the prose names the thing: `task:<id>`; `ask:<key>` for the page's own
-/// ask (which places it), or
-/// `ask:<id>` for another task's; and `<kind>:<name>` for an item, such as
+/// ask (which places it), or `ask:<id>` for another task's; and
+/// `<kind>:<name>` for an item, such as
 /// `github.pr:maxeonyx/agent-harness#231`. The brain resolves each when the
-/// stage is edited, and refuses an unknown kind naming the kinds there are.
+/// stage is edited. One it cannot resolve is drawn as the link's plain text
+/// and listed as a problem, naming the kinds there are.
 ///
 /// Serves: "the harness should be in charge of getting anything that can be
 /// gotten automatically"; Underview's "what the source knows, the source
@@ -228,24 +246,29 @@ pub enum Ref {
 /// metadata of a chat and a stream and stuff should be chosen by the
 /// agent"). Stated by the agent's `describe` call at any time, each field
 /// replacing only itself (`None` leaves it as it was), and folded as
-/// `TaskEvent::Described`. A name Max gives
-/// ([`crate::task::TaskEvent::Renamed`]) stays over the agent's. The map
-/// node and the chat's header are drawn from it, so the body never repeats
-/// it, and a task without a page still has a face on the map. Where the
-/// work stands is not a field: for Max it is the page's [`Lead`], and what
-/// a machine knows (its progress, its PRs' states) comes from the harness.
+/// `TaskEvent::Described`. The map node and the chat's header are drawn
+/// from it, so the body never repeats it, and a task without a page still
+/// has a face on the map. Where the work stands is not a field: for Max it
+/// is the page's [`Lead`], and what a machine knows (its progress, its PRs'
+/// states) comes from the harness.
 ///
 /// Serves: chats that start alike no longer look alike; "easy for me to see
 /// whereabouts I'm at"; the agent records its status, and the harness gets
 /// what can be got automatically.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Description {
-    /// What the work does: "Pages and asks for agents".
+    /// What the work does: "Pages and asks for agents". A name Max gave
+    /// ([`crate::task::TaskEvent::Renamed`]) is shown over it, and
+    /// `describe`'s result says so.
     pub title: Option<String>,
-    /// A theme from the design system's list ([`crate::design::Theme`]).
-    /// Refused if it is not in the list, or if another live task in the
-    /// same area holds it while one is free; the refusal lists the free
-    /// ones.
+    /// The task's theme ([`crate::design::Theme`]), picked from the list
+    /// `describe` offers, made when its context starts: the themes of the
+    /// family of the nearest ancestor that has one which no live task in
+    /// that area holds, or the whole family when none is free; for a task
+    /// with no themed ancestor, the themes of the families no live area
+    /// holds. Siblings that pick at once can land on the same theme, and
+    /// nothing breaks: each task's ground is drawn from its own id. Until
+    /// the agent picks, the task is drawn in its area's first theme.
     pub theme: Option<String>,
     /// What it produces, which the map draws as its nodes. Replaced whole.
     pub work: Option<Vec<Work>>,
