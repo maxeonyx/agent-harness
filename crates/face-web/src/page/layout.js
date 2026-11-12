@@ -28,9 +28,14 @@ const TIP = .5, POINT = 4, NGAP = 1.5, TUCK = -.6;
 // Ports: a line leaves a node's bottom, or lands on its top, this far round
 // from upright on the side facing its other end, nearest innermost; the
 // centre is the lifeline's. At its port a line points LEAN of the way from
-// straight down (or up) to straight out from the middle.
-const SLOTS = [36, 66, 82].map((d) => (d * Math.PI) / 180), LEAN = .5;
-const slotsFor = (n) => (n <= SLOTS.length ? SLOTS : Array.from({ length: n }, (_, i) => SLOTS[0] + ((SLOTS[2] - SLOTS[0]) * i) / (n - 1)));
+// straight down (or up) to straight out from the middle. Where a side has
+// more lines than SLOTS, the three outermost take the slots and the rest
+// leave from TAP apart straight on down (or up) from the innermost slot,
+// beside the lifeline, nearest lowest, pointing as that slot does: every
+// line starts from its own place, and each is TAP below the one outside
+// it, so bent over one height they lie TAP apart all the way across.
+const SLOTS = [36, 66, 82].map((d) => (d * Math.PI) / 180), LEAN = .5, TAP = 4;
+const taps = (n) => Math.max(0, n - SLOTS.length);
 // A bend is at most BEND times as tall as it goes across, and at most REACH
 // times that over its port's slope, past which it would bulge.
 const BEND = 1.3, REACH = 3;
@@ -53,10 +58,18 @@ export function lanes(nodes) {
   const tall = [];
   for (const v of V) tall[v.rank] = Math.max(tall[v.rank] ?? 0, v.n.along);
   const ys = [0];
-  for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17;
   const xs = across(L, slot, tall.length);
-  for (const v of V) { v.x = xs.get(v.lane.slot); v.y = ys[v.rank] - ys[P]; }
-  ports(edges);
+  for (const v of V) v.x = xs.get(v.lane.slot);
+  const groups = ports(edges);
+  // A row further down by the taps that hang into the room above it.
+  const down = [], up = [];
+  for (const g of groups) {
+    const { v, side } = g[0], [at, r] = side > 0 ? [down, v.rank] : [up, v.rank - 1];
+    at[r] = Math.max(at[r] ?? 0, taps(g.length) * TAP);
+  }
+  for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17 + (down[r - 1] ?? 0) + (up[r - 1] ?? 0);
+  for (const v of V) v.y = ys[v.rank] - ys[P];
+  place(groups);
   heights(edges, V);
   for (const e of edges) route(e);
   const cuts = crossings(edges);
@@ -239,7 +252,8 @@ function edge(v, u, gap) {
   const t = n.big ? 1 / Math.hypot(u[0] / BIG_HALF, u[1] / (u[1] < 0 ? n.top : n.foot)) : n.r;
   return [v.x + u[0] * (t + gap), v.y + u[1] * (t + gap)];
 }
-// Each line's port, out on its source's bottom or in on its reader's top.
+// Each line's port, out on its source's bottom or in on its reader's top,
+// in groups by node and side; `place` puts them once nodes are placed.
 function ports(edges) {
   const at = new Map();
   const slot = (v, side, far, gap) => {
@@ -252,11 +266,16 @@ function ports(edges) {
     if (e.kind === "grow" || e.kind === "branch" || e.kind === "port") e.a = slot(e.d, 1, e.v, e.kind === "branch" ? TUCK : NGAP);
     if (e.kind === "fade" || e.kind === "port") e.b = slot(e.v, -1, e.d, NGAP);
   }
-  for (const here of at.values()) {
-    const slots = slotsFor(here.length);
-    here.sort((a, b) => Math.abs(a.far.x - a.v.x) - Math.abs(b.far.x - b.v.x)).forEach((p, i) => {
-      const g = slots[i];
-      p.p = edge(p.v, [p.s * Math.sin(g), p.side * Math.cos(g)], p.gap);
+  for (const here of at.values()) here.sort((a, b) => Math.abs(a.far.x - a.v.x) - Math.abs(b.far.x - b.v.x));
+  return [...at.values()];
+}
+function place(groups) {
+  for (const here of groups) {
+    here.forEach((p, i) => {
+      p.here = here; p.i = i;
+      const t = taps(here.length), g = SLOTS[Math.max(0, i - t)];
+      const [x, y] = edge(p.v, [p.s * Math.sin(g), p.side * Math.cos(g)], p.gap);
+      p.p = [x, y + p.side * TAP * Math.max(0, t - i)];
       p.k = p.s * Math.tan(g * LEAN) * p.side;
     });
   }
@@ -276,15 +295,21 @@ function heights(edges, V) {
     else { e.P0 = e.a.p; e.P1 = edge(v, [0, -1], TUCK); e.k = e.a.k; e.group = e.a.group; }
     (groups.get(e.group) ?? groups.set(e.group, []).get(e.group)).push(e);
   }
+  // Each line of a side ends its bend TAP further from the node than the
+  // one outside it: `o` past the outermost's height.
   for (const G of groups.values()) {
     const dy = (e) => e.P1[1] - e.P0[1];
-    const H = Math.min(...G.map(dy), Math.max(...G.map((e) => span(e.P1[0] - e.P0[0], dy(e), e.k))));
-    for (const e of G) e.h = H;
+    for (const e of G) {
+      const p = e.kind === "fade" ? e.b : e.a, out = p.here.at(-1);
+      e.o = (p.here.length - 1 - p.i) * TAP - Math.abs(p.p[1] - out.p[1]);
+    }
+    const H = Math.min(...G.map((e) => dy(e) - e.o), Math.max(...G.map((e) => span(e.P1[0] - e.P0[0], dy(e), e.k))));
+    for (const e of G) e.h = H + e.o;
   }
   clear([...groups.values()].flat(), V);
   for (const G of groups.values()) {
-    const H = Math.min(...G.map((e) => e.most), Math.max(...G.map((e) => e.least), Math.min(...G.map((e) => e.h))));
-    for (const e of G) e.h = H;
+    const H = Math.min(...G.map((e) => e.most - e.o), Math.max(...G.map((e) => e.least - e.o), Math.min(...G.map((e) => e.h - e.o))));
+    for (const e of G) e.h = H + e.o;
   }
 }
 
