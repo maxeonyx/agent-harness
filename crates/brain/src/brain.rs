@@ -2021,7 +2021,7 @@ pub fn clone_of(dir: &Path, branch: &str) -> Result<(String, PathBuf), String> {
     if git(&["rev-parse", "--git-dir"]).is_none() {
         return Err(format!(
             "`{}` is not in a git repository, so there is nothing to clone branch `{branch}` from: \
-name a repository in `from`, or omit `branch` to work in that directory",
+name a repository in `repo`, or omit `branch` to work in that directory",
             dir.display()
         ));
     }
