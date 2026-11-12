@@ -1,6 +1,6 @@
 import { $, el, lerp, panel, phone, reduced } from "./base.js";
 import { byId, centre, graph, look, positions, shown, view } from "./map.js";
-import { blobs, drawEdges, drawNodes, hitAt, openAt, placeMarks, refresh } from "./draw.js";
+import { blobs, dot, drawEdges, drawNodes, hitAt, openAt, placeMarks, refresh } from "./draw.js";
 import { onFrame } from "./blobs.js";
 import { hideTip } from "./hover.js";
 import { closeNode, go, NEW, openId, saved } from "./card.js";
@@ -384,7 +384,7 @@ function sleepCheck() {
     const t = byId[openId], key = t ? `${look(t).cls}\n${t.name}` : "";
     if (wakeLabel.dataset.key !== key) {
       wakeLabel.dataset.key = key;
-      wakeLabel.replaceChildren(el("i", `mini ${t ? look(t).cls : "starting"}`), t ? t.name : "New chat");
+      wakeLabel.replaceChildren(dot(el("i"), t), t ? t.name : "New chat");
     }
   }
   if (sleep === asleep) return;

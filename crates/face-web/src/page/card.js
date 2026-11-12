@@ -1,11 +1,11 @@
-import { $, el, kTokens, logEl, panel, scrollEl } from "./base.js";
+import { $, el, kTokens, logEl, panel } from "./base.js";
 import { act, digest } from "./tab.js";
-import { byId, graph, look, parentOf, unfolded, view } from "./map.js";
+import { byId, graph, parentOf, unfolded, view } from "./map.js";
 import { cam, camFor, cardRect, cardShown, closing, coverCheck, dotRect, fly, framed, framing, heldAt, newPoint, refocus, seam, seamFor, setCardShown, setFramed, setSeam } from "./camera.js";
-import { nodeEls, rebuild, render } from "./draw.js";
+import { dot, nodeEls, rebuild, render } from "./draw.js";
 import { hideTip, hoverable } from "./hover.js";
 import { actionButton, actionsKey, actionsOf } from "./actions.js";
-import { blocksOf, contextOf, renderLog, stopFollowing } from "./log.js";
+import { blocksOf, contextOf, renderLog, scrollTo, stopFollowing } from "./log.js";
 import { buildCompose, dictation, renderComposeState, say, stopDictation } from "./compose.js";
 import { buildNew } from "./newchat.js";
 
@@ -131,7 +131,7 @@ function buildPanel(id, at) {
   logEl.classList.remove("exact");
   $(".viewer", panel).hidden = true;
   $(".mix", panel).hidden = true;
-  scrollEl.scrollTop = 0;
+  scrollTo(0);
   panel.classList.toggle("fresh", id === NEW);
   up.hidden = true;
   buildCompose(id);
@@ -139,15 +139,26 @@ function buildPanel(id, at) {
   if (id === NEW) buildNew();
   else renderPanel();
 }
-$(".x", panel).onclick = closeNode;
+// Closed when a touch that is a tap lifts, not at its click: a tap that
+// stops the log's fling gets no click. A touch that moved is no tap. A
+// mouse or a key closes it with its click.
+const x = $(".x", panel);
+let down = null, lifted = -Infinity;
+x.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
+x.addEventListener("pointermove", (e) => { if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 10) down = null; });
+x.addEventListener("pointerup", (e) => {
+  if (e.pointerType === "mouse" || !down) return;
+  lifted = e.timeStamp;
+  closeNode();
+});
+x.onclick = (e) => { if (e.timeStamp - lifted > 1000) closeNode(); };
 hoverable(mini, () => openId);
 mini.onclick = refocus;
 
 export function renderPanel() {
   const t = byId[openId];
   if (!t) return;
-  const l = look(t), needs = (view.queue || []).some((q) => q.task === t.id);
-  mini.className = `mini ${l.cls}${needs ? " needs" : ""}`;
+  dot(mini, t);
   if (!title.isContentEditable && title.textContent !== t.name) title.textContent = t.name;
   title.title = "Double-click to rename";
   const parent = byId[parentOf(t)];

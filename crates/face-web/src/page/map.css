@@ -40,8 +40,7 @@
   .node.selected { visibility: hidden; }
   /* A finished project, folded: a small card on the archive shelf. */
   .node.archived { display: flex; flex-direction: column; align-items: flex-start; text-align: left; justify-content: center; height: 34px; padding: 0 1.7em 0 .75em; border: 1px solid var(--line); border-radius: 10px; background: rgba(250, 249, 245, .7); }
-  .node.archived::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--done); opacity: .6; }
-  .node.archived.failed::before { background: var(--red); }
+  .node.archived::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--st); opacity: .6; }
   .node.archived:hover { background: var(--paper); }
   .node.archived .name { position: static; margin: 0; font: 500 13px/1.2 var(--serif); color: var(--muted); text-shadow: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .node.archived .more { position: absolute; right: .25em; top: 50%; transform: translateY(-50%); margin: 0; font-size: 11px; color: var(--muted); border-radius: 9px; padding: 0 .5em; }

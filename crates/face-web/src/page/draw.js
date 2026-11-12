@@ -30,11 +30,28 @@ function sessionOf(n) {
 // node is a planned join waiting on its work, and its compactions.
 export function dress(s, t, jump = false) {
   const n = graph.nodes.get(t.id);
-  s.set(trouble(t) ? "held" : stateOf(t), jump);
+  s.set(stateFor(t), jump);
   s.hollow = n?.kind === "planned" && !n.solid;
   s.letter = s.hollow ? String(waitingOn(t).n) : glyph(t);
   s.pips = n?.pips ?? 0;
   return s;
+}
+function stateFor(t) { return trouble(t) ? "held" : stateOf(t); }
+// The colours of task t's blob, for what shows its state as a dot: its fill
+// and its edge.
+export function colours(t) {
+  const [fill, edge] = STATES[stateFor(t)].col;
+  return { fill: `rgb(${fill})`, edge: `rgb(${edge})` };
+}
+// A task's state as a small dot (the card's header, the card asleep): its
+// blob's colours, in a shape `look`'s classes give; a chat not started yet
+// is a dashed ring.
+export function dot(d, t) {
+  d.className = `mini ${t ? look(t).cls : "starting"}`;
+  const c = t && colours(t);
+  d.style.background = c?.fill || "";
+  d.style.borderColor = c?.edge || "";
+  return d;
 }
 
 export function drawMap() {
@@ -77,7 +94,8 @@ export function drawMap() {
     }
     if (kind === "card") {
       const fc = folded.get(id), t = byId[id];
-      a.className = `node archived${look(t).cls.includes("failed") ? " failed" : ""}${faded}`;
+      a.className = `node archived${faded}`;
+      a.style.setProperty("--st", colours(t).fill);
       a.style.width = `${p.w}px`;
       $(".name", a).textContent = shortName(t);
       let more = $(".more", a);
@@ -117,9 +135,9 @@ export function drawNodes() {
     const m = k++ * MARK;
     marks[m] = c.x; marks[m + 1] = c.y; marks[m + 2] = radius(n);
     if (n.kind === "leg") {
-      // A finished task's own node in its blob's colour (stateOf), as its
-      // chat's dock shows it; any other leg ink.
-      const st = id === n.t.id && isDone(n.t) ? STATES[stateOf(n.t)].col[0] : null;
+      // A finished task's own node in its blob's colour, as its chat's dock
+      // shows it; any other leg ink.
+      const st = id === n.t.id && isDone(n.t) ? STATES[stateFor(n.t)].col[0] : null;
       marks.set(st ? rgb(...st) : INK, m + 4); marks[m + 7] = (n.old ? .15 : st ? .85 : .42) * dim;
       marks[m + 11] = 0;
     } else if (n.kind === "planned") {
