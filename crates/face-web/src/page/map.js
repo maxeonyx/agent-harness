@@ -121,9 +121,9 @@ export function waitingOn(t) {
 }
 // Waiting on its children: on a spawn, or a `wait` on one.
 const waitsOnKids = (t) => t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length);
-// How a finished task shows: one Max started in its outcome's colour, so it
-// stands out from the agents' finished work; anything else faint.
-const ended = (t) => (!t.started_by && { failed: "failed", result: "done" }[t.outcome?.kind]) || "ended";
+// How a finished task shows, whoever started it: done green, failed red,
+// abandoned grey.
+const ended = (t) => ({ failed: "failed", result: "done" }[t.outcome?.kind]) || "ended";
 // Waiting on its work: its planned join is big and hollow.
 const waitsOnWork = (t) => t.waiting?.kind === "listening" || waitsOnKids(t);
 

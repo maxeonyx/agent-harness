@@ -66,7 +66,7 @@ async function landAt(s) {
     const at = want === id ? before.pop() : after || before.pop();
     if (!at) return;
     pinned = false;
-    at.scrollIntoView({ block: "center" });
+    scrollTo(scrollEl.scrollTop + at.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top - (scrollEl.clientHeight - at.offsetHeight) / 2);
     at.classList.remove("revealed"); void at.offsetWidth; at.classList.add("revealed");
     at.addEventListener("animationend", () => at.classList.remove("revealed"), { once: true });
     return;
@@ -180,11 +180,14 @@ function entry(s, into, e, index, t, parent, only) {
       } else if (who.by === "prompt") {
         into.append(prompted(who.prompt, text));
       } else if (who.by === "compacted") {
-        // The harness's framing is its note; the summary is the agent's own.
+        // The harness's framing is its note; the summary is the agent's
+        // own, one row like a tool call's, opened to all of it.
         const carried = text.match(/^What you carried:\n\n([\s\S]*)$/);
         if (!carried) { into.append(note(text)); return; }
-        const card = el("div", "entry card carried");
-        card.append(el("div", "label", "What it carried"), markdown(carried[1]));
+        const detail = el("div", "detail");
+        detail.append(markdown(carried[1]));
+        const card = el("div", "fold one carried");
+        card.append(foldRow("Carried", firstLine(carried[1]), "", detail));
         into.append(card);
       } else if (who.by === "brief" || who.by === "mandate") {
         if (!run) {
@@ -350,28 +353,56 @@ function drawPast(s, into, chain, from, to, t, only = () => undefined) {
     into.append(chunk);
   }
 }
-// `placeholder` replaced by what `draw` makes, once Max scrolls near it or
-// something calls its `draw`. What he sees stays where it was: what follows
-// it, when it is above the view, as it is when he scrolls up to it; what
-// precedes it, when it is in view, as it is when he lands above it.
+// `placeholder` replaced by what `draw` makes, once Max scrolls towards it
+// (`sight`) or taps it, or something calls its `draw`; and put back once he
+// is far from it, so the log holds only the history near him.
 function onSight(placeholder, draw) {
-  const seen = new IntersectionObserver((sighted) => {
-    if (sighted.some((x) => x.isIntersecting)) placeholder.draw();
-  }, { root: scrollEl, rootMargin: "200px 0px 0px 0px" });
+  placeholder.title = "Show the earlier context";
+  placeholder.onclick = () => placeholder.draw();
   placeholder.draw = () => {
-    seen.disconnect();
     if (!placeholder.isConnected) return;
-    const replace = () => placeholder.replaceWith(draw());
-    if (placeholder.getBoundingClientRect().top < scrollEl.getBoundingClientRect().top) keep(placeholder.nextElementSibling, replace);
-    else replace();
+    const body = draw();
+    body.unload = () => swap(body, placeholder);
+    swap(placeholder, body);
   };
-  seen.observe(placeholder);
 }
+// What Max sees stays where it was: what follows `old`, when it starts
+// above the view, as it is when he scrolls up to it; what precedes it
+// otherwise.
+function swap(old, now) {
+  const replace = () => old.replaceWith(now);
+  if (old.getBoundingClientRect().top < scrollEl.getBoundingClientRect().top) keep(old.nextElementSibling, replace);
+  else replace();
+}
+// Only a scroll towards an earlier context draws it: one at a time, the
+// one nearest where he is going, within NEAR px of the view. Drawing one
+// moves the log the other way, so what it brings near waits for him to
+// scroll on. One FAR screens away goes back to its placeholder.
+// The page's own scrolling (`scrollTo`) is no scroll of his.
+const NEAR = 200, FAR = 3;
+let sightTop = 0;
+export function scrollTo(top) { scrollEl.scrollTop = top; sightTop = scrollEl.scrollTop; }
+function sight() {
+  const top = scrollEl.scrollTop, up = top < sightTop;
+  if (top === sightTop) return;
+  sightTop = top;
+  const v = scrollEl.getBoundingClientRect(), far = FAR * v.height;
+  for (const b of logEl.querySelectorAll(".replaced")) {
+    const r = b.getBoundingClientRect();
+    if (b.isConnected && (r.bottom < v.top - far || r.top > v.bottom + far)) b.unload();
+  }
+  const near = [...logEl.querySelectorAll(".earlier")].filter((p) => {
+    const r = p.getBoundingClientRect();
+    return p.draw && (up ? r.bottom > v.top - NEAR && r.top < v.bottom : r.top < v.bottom + NEAR && r.bottom > v.top);
+  });
+  (up ? near.pop() : near[0])?.draw();
+}
+scrollEl.addEventListener("scroll", sight, { passive: true });
 // A change above `anchor` that leaves what Max sees where it was.
 function keep(anchor, change) {
   const y = anchor.getBoundingClientRect().top;
   change();
-  scrollEl.scrollTop += anchor.getBoundingClientRect().top - y;
+  scrollTo(scrollEl.scrollTop + anchor.getBoundingClientRect().top - y);
 }
 
 // Words in a bubble on the right: Max's, or what his user is to an agent.
@@ -818,7 +849,7 @@ function following() {
 function stick(change) {
   const atBottom = following() || logState?.follow;
   change();
-  if (atBottom) { scrollEl.scrollTop = scrollEl.scrollHeight; if (logState) logState.follow = false; }
+  if (atBottom) { scrollTo(scrollEl.scrollHeight); if (logState) logState.follow = false; }
 }
 scrollEl.addEventListener("scroll", following, { passive: true });
 

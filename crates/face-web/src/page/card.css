@@ -7,8 +7,7 @@
   #panel > .bar { display: flex; align-items: center; gap: .55em; padding: .5em .6em .5em 1em; border-bottom: 1px solid var(--line); min-height: 2.9em; cursor: grab; }
   .mini { cursor: pointer; width: .85em; height: .85em; border-radius: 50%; border: 1.5px solid var(--s, var(--ink)); flex: none; background: var(--s, var(--paper)); }
   .mini.starting { border-style: dashed; }
-  .mini.paused { background: var(--ground); }
-  .mini.cancelled { background: var(--line); border-radius: 30%; }
+  .mini.cancelled { border-radius: 30%; }
   /* The card asleep: one button, its name in what shows of it. */
   #panel > .wake { display: none; }
   #panel.asleep { touch-action: none; box-shadow: 0 0 0 2px var(--ink), 0 22px 60px rgba(40, 30, 20, .2); }
@@ -110,8 +109,7 @@
   .card .label { font: 600 12px var(--sans); color: var(--muted); margin-bottom: .35em; display: flex; gap: .6em; align-items: baseline; }
   .card.mandate { background: transparent; }
   .card.mandate .prose { font-size: 15px; }
-  .card.carried { background: transparent; }
-  .compaction > .earlier { font: 12px var(--sans); color: var(--faint); text-align: center; padding: .5em 0 1em; }
+  .compaction > .earlier { font: 12px var(--sans); color: var(--faint); text-align: center; padding: .5em 0 1em; cursor: pointer; }
   .compaction > .replaced { opacity: .75; }
   .compaction > .divider { display: flex; align-items: center; gap: .75em; margin: 1.2em 0; font: 600 12px var(--sans); color: var(--muted); }
   .compaction > .divider::before, .compaction > .divider::after { content: ""; flex: 1; border-top: 1.5px solid var(--line); }

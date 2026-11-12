@@ -1,7 +1,7 @@
 import { $, el, getJson, panel } from "./base.js";
 import { byId, graph, view } from "./map.js";
 import { fit } from "./camera.js";
-import { drawMap } from "./draw.js";
+import { dot, drawMap } from "./draw.js";
 import { closeNode, go, mini, NEW, openId, start, title } from "./card.js";
 import { compose, drafts, giveBack, menu, newTuning, renderTune, say, takeWords } from "./compose.js";
 
@@ -15,7 +15,7 @@ import { compose, drafts, giveBack, menu, newTuning, renderTune, say, takeWords 
 export function buildNew() {
   title.textContent = "New chat";
   title.title = "";
-  mini.className = "mini starting";
+  dot(mini, null);
   $(".ctx", panel).hidden = true;
   const picks = $(".picks", compose);
   if (!picks) return;
