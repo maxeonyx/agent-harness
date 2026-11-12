@@ -14,11 +14,13 @@ use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
 use crate::build::{BuildId, Launch, Launched};
+use crate::domain::{Domain, PolicyAsks};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::fact::{Author, Fact, Refusal, Rejected, Stated};
+use crate::grant::{Answer, Grant, Uses};
 use crate::id::{
-    CallId, DeliveryId, EventId, LimbId, ModelCallId, ReplicaId, RoleId, Seq, TaskId, Time,
-    Timestamp, ValueId,
+    CallId, DeliveryId, EventId, GrantId, LimbId, ModelCallId, ReplicaId, RoleId, Seq, TaskId,
+    Time, Timestamp, ValueId,
 };
 use crate::legacy::{self, LimbKind, Now};
 use crate::limb::{
@@ -140,6 +142,11 @@ pub struct State {
     /// Since when the harness has had no claude.ai login, if it has none.
     signed_out: Option<Timestamp>,
     open: Open,
+    /// Max's grants in force, by the event that made each
+    /// ([`crate::grant`]).
+    grants: OrdMap<GrantId, Grant>,
+    /// This brain's domain, once Max has defined it ([`crate::domain`]).
+    domain: Option<Domain>,
 }
 
 /// A compaction as the fold keeps it: the provenance of the entries it
@@ -999,6 +1006,23 @@ impl State {
             Fact::Seen(_) => {}
             Fact::SignedIn => self.signed_out = None,
             Fact::Draft(id, event) => self.fold_draft(*id, event, record)?,
+            Fact::Grant(grant) => {
+                let policy = self.domain.as_ref().map_or(PolicyAsks::Each, |d| d.policy);
+                if grant.policy
+                    && grant.answer == Answer::Allow
+                    && grant.uses == Uses::Standing
+                    && policy != PolicyAsks::Standing
+                {
+                    return Err(Rejected::Policy);
+                }
+                self.grants.insert(GrantId(record.event), grant.clone());
+            }
+            Fact::Revoke(id) => {
+                if self.grants.remove(id).is_none() {
+                    return Err(Rejected::Unknown);
+                }
+            }
+            Fact::Domain(domain) => self.domain = Some(domain.clone()),
             Fact::Focus(focus) => {
                 let Author::Max = record.by else {
                     return Err(Rejected::Author);
@@ -1051,7 +1075,10 @@ impl State {
                 | Fact::Seen(_)
                 | Fact::Draft(..)
                 | Fact::Described { .. }
-                | Fact::Workdir { .. } => false,
+                | Fact::Workdir { .. }
+                | Fact::Grant(_)
+                | Fact::Revoke(_)
+                | Fact::Domain(_) => false,
                 Fact::Task(_, TaskEvent::Created(created)) => {
                     created.by.is_some() || self.carries_words(created)
                 }
@@ -1133,6 +1160,7 @@ impl State {
                 Fact::Call(_, CallEvent::Abandon | CallEvent::Backgrounded) => true,
                 Fact::Focus(_) | Fact::Seen(_) | Fact::Draft(..) => true,
                 Fact::Role(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
+                Fact::Grant(_) | Fact::Revoke(_) | Fact::Domain(_) => true,
                 Fact::Launched(_)
                 | Fact::Shutdown { .. }
                 | Fact::SignedIn
@@ -1503,7 +1531,7 @@ impl State {
                     let own = match made.call.caller {
                         Caller::Agent { task, .. } | Caller::Background { task, .. } => task == id,
                         Caller::Meta { call, .. } => Some(call) == compaction.by,
-                        Caller::Max { .. } => false,
+                        Caller::Max { .. } | Caller::Engine { .. } => false,
                     };
                     if !own {
                         return Err(Rejected::NotForTask);
@@ -2099,6 +2127,20 @@ impl State {
                 }
                 Some(*limb)
             }
+            // A run of the task's engine goes to the limb of its working
+            // directory, where the engine's own tools work.
+            Caller::Engine { task } => {
+                let task = self.tasks.get(task).ok_or(Rejected::Unknown)?;
+                if task.is_done() {
+                    return Err(Rejected::Finished);
+                }
+                task.context().ok_or(Rejected::Starting)?;
+                let limb = self.workdir(task).map(|w| w.limb);
+                if limb.is_none() {
+                    return Err(Rejected::Unroutable);
+                }
+                limb
+            }
         };
         if let Some(request) = thinking
             && let Some(sent) = self.model_calls.get_mut(&request)
@@ -2113,7 +2155,9 @@ impl State {
             self.leg_work(*task, id, *from);
         }
         let owner = match &call.caller {
-            Caller::Agent { task, .. } | Caller::Background { task, .. } => Owner::Task(*task),
+            Caller::Agent { task, .. }
+            | Caller::Background { task, .. }
+            | Caller::Engine { task } => Owner::Task(*task),
             Caller::Max { .. } => Owner::Max,
             Caller::Meta { call: by, .. } => self.calls.get(by).map_or(Owner::Max, |c| c.owner),
         };
@@ -2225,7 +2269,14 @@ impl State {
             Content::Prompt(Prompt::Unblocked) => {
                 self.open.unblocked.insert(delivery.to);
             }
-            Content::Prompt(Prompt::Done | Prompt::Tidy | Prompt::Park | Prompt::Resume) => {}
+            Content::Prompt(
+                Prompt::Done
+                | Prompt::Tidy
+                | Prompt::Park
+                | Prompt::Resume
+                | Prompt::Granted(_)
+                | Prompt::Restarted,
+            ) => {}
         }
         self.deliveries.insert(
             delivery.id,
@@ -2594,7 +2645,9 @@ impl State {
                 continue;
             };
             let caller = match c.call.caller {
-                Caller::Agent { task, .. } | Caller::Background { task, .. } => Some(task),
+                Caller::Agent { task, .. }
+                | Caller::Background { task, .. }
+                | Caller::Engine { task } => Some(task),
                 Caller::Max { chat, .. } => chat,
                 Caller::Meta { .. } => self.call_owner(*id),
             };

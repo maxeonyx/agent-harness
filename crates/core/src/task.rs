@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome, Owner};
 use crate::context::{Entry, EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
+use crate::engine::Session;
 use crate::fact::{Author, Fact, Rejected, Stated};
 use crate::id::{CallId, DeliveryId, LimbId, ModelCallId, RoleId, TaskId, Timestamp, ValueId};
 use crate::limb::Workdir;
@@ -166,6 +167,10 @@ pub struct Live {
     /// Max marked it done ([`crate::delivery::Prompt::Done`]): the end of a
     /// turn completes it as if it were autonomous ([`Task::closes`]).
     pub closing: bool,
+    /// Its engine's run now, for a hosted task
+    /// ([`crate::call::Caller::Engine`]): `None` while no process exists,
+    /// because it rests, is parked, or has not started.
+    pub run: Option<CallId>,
 }
 
 impl Live {
@@ -178,6 +183,7 @@ impl Live {
             failures: 0,
             parking: None,
             closing: false,
+            run: None,
         }
     }
 }
@@ -247,6 +253,10 @@ pub struct Context {
     /// ([`Note::Moved`]). Kept across further moves until a request is sent,
     /// so the note names the furthest point it left.
     pub moved: Option<EntryId>,
+    /// The Claude Code session it lives in, for a hosted task
+    /// ([`crate::engine::Session`]): named when the task is created, or by
+    /// the move back that forks a new one.
+    pub session: Option<Session>,
 }
 
 impl Context {
@@ -269,6 +279,7 @@ impl Context {
                 .collect(),
             learned: Vector::new(),
             moved: None,
+            session: None,
         }
     }
 
@@ -282,6 +293,7 @@ impl Context {
             knows: self.knows.clone(),
             learned: Vector::new(),
             moved: None,
+            session: None,
         }
     }
 
@@ -861,6 +873,7 @@ impl TaskEvent {
                 out.extend(report);
             }
             TaskEvent::Moved(Move::Back { to: _ })
+            | TaskEvent::Moved(Move::Compacted { onto: _ })
             | TaskEvent::Tuned(_)
             | TaskEvent::ModeSet(_)
             | TaskEvent::Renamed(_)
@@ -904,7 +917,15 @@ pub enum Move {
     /// described itself. A task has one: every later context is a
     /// [compaction](Move::Compact).
     Root(Box<Start>),
+    /// The harness compacted the context onto a fresh root. Refused for a
+    /// hosted task: its engine owns its context.
     Compact(Box<Compaction>),
+    /// A hosted task's engine compacted its own context (Claude Code's
+    /// `compact_boundary`): its next request extends `onto`, the task's
+    /// root followed by the engine's summary. Stated by the hosting limb
+    /// while the task's run is live; its root, binding and what it embodies
+    /// stay, since the harness handed the engine nothing new.
+    Compacted { onto: EntryId },
     /// Max puts the task back at an entry it has been at: its start, or an
     /// entry one of its own requests sent or received since. Edit, going
     /// back and choosing between versions of a reply are each this
@@ -954,9 +975,7 @@ pub enum Move {
     /// of the worktree. Here the files stay as they are and the context is
     /// told; restoring them is a separate act a workspace limb could offer
     /// Max, so going back to keep the code or to drop it are both one act.
-    Back {
-        to: EntryId,
-    },
+    Back { to: EntryId },
 }
 
 /// The task moves between phases of its work without losing itself: what
@@ -1320,6 +1339,12 @@ impl Task {
                 self.compact(compaction, at, world)?;
             }
             TaskEvent::Moved(Move::Back { to }) => self.back(*to, at, world)?,
+            TaskEvent::Moved(Move::Compacted { onto }) => {
+                let Life::Live(live) = &mut self.life else {
+                    return Err(Rejected::Finished);
+                };
+                live.context.head = *onto;
+            }
             TaskEvent::Drain(drain) => match &mut self.life {
                 Life::Starting => match drain {
                     Drain::ToMax { .. } => return Err(Rejected::Starting),

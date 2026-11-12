@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::grant::Ask;
 use crate::id::{CallId, LimbId, TaskId, ToolUseId, ValueId};
 use crate::resource::Observation;
 
@@ -135,6 +136,12 @@ pub enum Caller {
     /// brief or of a compaction. Owned by that call, and shown to each
     /// receiving task as its own.
     Meta { call: CallId, limb: LimbId },
+    /// The harness running a hosted task's engine: one run of Claude Code,
+    /// start to exit, its input a [`crate::engine::Launch`]
+    /// ([`crate::engine`]). Owned by the task but not its work: not
+    /// background work, never waited on, stopped after its tidy-up turn.
+    /// At most one unsettled per task ([`crate::task::Live::run`]).
+    Engine { task: TaskId },
 }
 
 /// Who a call is for now: who reads its outcome, who may stop it or pass it
@@ -334,6 +341,11 @@ pub enum Outcome {
     /// Nobody knows whether it ran, and its tool does not allow a rerun. The
     /// agent is told so and decides what to check.
     Unknown,
+    /// A hosted engine would have asked a person first, and no grant
+    /// answered: its limb denied it in band at once, so nothing ran and
+    /// nothing waits. Until a grant answers it, Max's proposal
+    /// ([`crate::grant`]).
+    Denied(Ask),
 }
 
 impl Outcome {
@@ -345,9 +357,10 @@ impl Outcome {
             | Outcome::Interrupted {
                 partial: Some(output),
             } => Some(output),
-            Outcome::Refused { .. } | Outcome::Interrupted { partial: None } | Outcome::Unknown => {
-                None
-            }
+            Outcome::Refused { .. }
+            | Outcome::Interrupted { partial: None }
+            | Outcome::Unknown
+            | Outcome::Denied(_) => None,
         }
     }
 

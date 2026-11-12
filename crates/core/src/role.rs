@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine::Engine;
 use crate::id::{LimbId, ValueId};
 use crate::limb::ToolSet;
 use crate::resource::Observation;
@@ -90,7 +91,10 @@ pub struct Role {
     /// The tool sets its agents hold, by name, in the order their tools are
     /// declared: `meta`, `web`, `user`, `workspace`, `browser`, `builds`,
     /// currently. One that holds [`crate::limb::WORKSPACE`] gives each agent
-    /// a working directory when it is created.
+    /// a working directory when it is created. One that holds
+    /// [`crate::engine::CLAUDE_CODE`] does too, and its agents' loops run
+    /// in Claude Code there ([`Role::engine`]); it holds no other set that
+    /// acts on the world ([`crate::engine::Effects`]).
     #[serde(default)]
     pub tools: Vec<String>,
     /// The roles a task in it can start fresh tasks in. A fork of itself can
@@ -104,7 +108,17 @@ pub struct Role {
 impl Role {
     /// Whether its agents have a working directory.
     pub fn works_in_a_directory(&self) -> bool {
-        self.tools.iter().any(|t| t == crate::limb::WORKSPACE)
+        self.tools
+            .iter()
+            .any(|t| t == crate::limb::WORKSPACE || t == crate::engine::CLAUDE_CODE)
+    }
+
+    /// Who runs its agents' loops.
+    pub fn engine(&self) -> Engine {
+        match self.tools.iter().any(|t| t == crate::engine::CLAUDE_CODE) {
+            true => Engine::ClaudeCode,
+            false => Engine::Brain,
+        }
     }
 }
 

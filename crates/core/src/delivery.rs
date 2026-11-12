@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{DeliveryId, TaskId, ValueId};
+use crate::id::{DeliveryId, GrantId, TaskId, ValueId};
 
 /// Something addressed to a task: Max's words, or a turn the harness asks
 /// for.
@@ -95,4 +95,14 @@ pub enum Prompt {
     /// Max resumed a task that parked or was asked to: carry on from where
     /// it left off. Said by the brain ([`crate::state::Todo::Resume`]).
     Resume,
+    /// Max answered a use this task's engine was denied
+    /// ([`crate::grant::Grant::answers`]): allowed now, once or from now on,
+    /// so try it again if it is still needed; or refused, with his message.
+    /// Said by the brain, once per grant.
+    Granted(GrantId),
+    /// The task's engine run was lost mid-turn (its machine restarted, or
+    /// its process died) and a new run resumes the session: the calls it had
+    /// running settled as unknown, and each result says so. Said by the
+    /// brain.
+    Restarted,
 }

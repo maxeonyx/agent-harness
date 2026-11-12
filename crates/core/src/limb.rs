@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::BuildId;
 use crate::call::{Call, Owner};
-use crate::id::{CallId, LimbId, ParseError, ReplicaId, TaskId, Timestamp, ValueId};
+use crate::engine::{Effects, Hosted};
+use crate::grant::Grant;
+use crate::id::{CallId, GrantId, LimbId, ParseError, ReplicaId, TaskId, Timestamp, ValueId};
 use crate::legacy;
 use crate::resource::Observation;
 use crate::role::{Role, RoleId};
@@ -274,6 +276,10 @@ pub struct ToolSet {
     /// directory's own instructions are its [`Prepared::Ready`].
     pub instructions: Vec<Instruction>,
     pub tools: Vec<Tool>,
+    /// What its tools act on: only a set that acts on the harness reaches a
+    /// hosted task ([`crate::engine::Effects`]).
+    #[serde(default)]
+    pub effects: Effects,
 }
 
 /// Which row of a limb's view of the brain.
@@ -290,6 +296,8 @@ pub enum LimbKey {
     Role(RoleId),
     Superseded,
     Workdir(PathBuf),
+    Hosted(TaskId),
+    Grant(GrantId),
 }
 
 /// One row of what a limb holds of the brain: what the brain wants of it,
@@ -358,6 +366,12 @@ pub enum LimbRow {
         #[serde(default)]
         agents: BTreeMap<TaskId, String>,
     },
+    /// What a hosted task's run on this limb should take now: Max's words,
+    /// harness tool answers, a hold, an interrupt ([`crate::engine::Hosted`]).
+    Hosted(Box<Hosted>),
+    /// A grant in force over a task this limb hosts: what it answers each
+    /// of the engine's permission asks from, at once ([`crate::grant`]).
+    Grant(Grant),
 }
 
 /// A limb's definition as a record holds it: one from before limbs were
@@ -380,6 +394,8 @@ impl std::fmt::Display for LimbKey {
             LimbKey::Role(id) => write!(f, "role:{id}"),
             LimbKey::Superseded => f.write_str("superseded"),
             LimbKey::Workdir(dir) => write!(f, "workdir:{}", dir.display()),
+            LimbKey::Hosted(task) => write!(f, "hosted:{task}"),
+            LimbKey::Grant(id) => write!(f, "grant:{id}"),
         }
     }
 }
@@ -390,7 +406,7 @@ impl std::str::FromStr for LimbKey {
     /// Also reads `environment:{id}`, what a role's row was called before.
     fn from_str(text: &str) -> Result<LimbKey, ParseError> {
         let invalid = ParseError {
-            expected: "a row: call:{id}, value:{id}, watch, definition, superseded, role:{id} or workdir:{dir}",
+            expected: "a row: call:{id}, value:{id}, watch, definition, superseded, role:{id}, workdir:{dir}, hosted:{task} or grant:{id}",
         };
         Ok(match text.split_once(':') {
             None if text == "watch" => LimbKey::Watch,
@@ -400,6 +416,8 @@ impl std::str::FromStr for LimbKey {
             Some(("value", id)) => LimbKey::Value(id.parse()?),
             Some(("role" | "environment", id)) => LimbKey::Role(id.parse()?),
             Some(("workdir", dir)) if !dir.is_empty() => LimbKey::Workdir(PathBuf::from(dir)),
+            Some(("hosted", task)) => LimbKey::Hosted(task.parse()?),
+            Some(("grant", id)) => LimbKey::Grant(id.parse()?),
             _ => return Err(invalid),
         })
     }

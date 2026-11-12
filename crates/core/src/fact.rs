@@ -9,10 +9,12 @@ use crate::attention::{Focus, Ranking};
 use crate::build::Launched;
 use crate::call::CallEvent;
 use crate::delivery::{Content, Delivery};
+use crate::domain::Domain;
 use crate::draft::DraftEvent;
+use crate::grant::Grant;
 use crate::id::{
-    CallId, DeliveryId, EventId, LimbId, ModelCallId, ReplicaId, Seq, TaskId, Time, Timestamp,
-    ValueId,
+    CallId, DeliveryId, EventId, GrantId, LimbId, ModelCallId, ReplicaId, Seq, TaskId, Time,
+    Timestamp, ValueId,
 };
 use crate::limb::{Defined, Description, Prepared, Reach};
 use crate::model_call::ModelCallEvent;
@@ -155,6 +157,14 @@ pub enum Fact {
     /// The harness has a claude.ai login again: ends the wait that
     /// [`crate::model_call::Ending::SignedOut`] began. Stated by the brain.
     SignedIn,
+    /// Max's standing answer to a kind of tool use by hosted engines,
+    /// in place of a permission prompt ([`crate::grant`]). Stated by Max.
+    Grant(Grant),
+    /// Max withdrew a grant. Stated by Max.
+    Revoke(GrantId),
+    /// What this brain's domain is called, what may run in it and which
+    /// brains its face takes him to ([`crate::domain`]). Stated by Max.
+    Domain(Domain),
 }
 
 impl Fact {
@@ -219,6 +229,16 @@ impl Fact {
             },
             Fact::Ranking(Ranking { order: _ }) => {}
             Fact::Focus(Focus { task: _ }) => {}
+            Fact::Grant(Grant {
+                rule: _,
+                scope: _,
+                answer: _,
+                uses: _,
+                policy: _,
+                answers: _,
+            })
+            | Fact::Revoke(_)
+            | Fact::Domain(_) => {}
         }
         values
     }
@@ -335,6 +355,10 @@ pub enum Rejected {
     /// would never move again: mark it done ([`crate::delivery::Prompt::Done`]),
     /// or say something with the change.
     Idle,
+    /// A grant that answers a managed policy's asks, in a domain that lets
+    /// Max's grants answer none of them, or, as a standing allow, only each
+    /// one ([`crate::domain::PolicyAsks`]).
+    Policy,
 }
 
 impl std::fmt::Display for Rejected {
@@ -390,6 +414,9 @@ impl std::fmt::Display for Rejected {
             Rejected::Unheard => "quotes words Max did not say to the quoting task",
             Rejected::Author => "its author may not state it",
             Rejected::Minted => "creates something under an id its event did not mint",
+            Rejected::Policy => {
+                "this domain lets Max answer the work policy's asks only one use at a time"
+            }
             Rejected::Idle => {
                 "the task would wait on nothing; mark it done, or say something with the change"
             }

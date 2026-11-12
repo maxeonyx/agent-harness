@@ -80,6 +80,10 @@ id!(
     /// brain, machine and user.
     LimbId
 );
+id!(
+    /// A [`crate::grant::Grant`]: the event in which Max made it.
+    GrantId
+);
 
 /// The position of one fact in its decider's timeline: the decider's record
 /// it took effect at ([`harness_substrate::Folding::here`]), and its index

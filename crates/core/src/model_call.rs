@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::context::{Entry, EntryId, Message, Role, Span};
+use crate::engine::Mirrored;
 use crate::id::{TaskId, Timestamp, ValueId};
 
 /// One request to the provider, as sent.
@@ -94,6 +95,12 @@ pub struct ModelCall {
     /// longer lifetime is a field here when the brain's policy first asks
     /// for one.
     pub breakpoints: Vec<EntryId>,
+    /// A hosted task's engine sent it, and its limb reports it as the engine
+    /// did, not as the bytes sent ([`crate::engine::Mirrored`]): `params` is
+    /// empty and `breakpoints` are the engine's own, unknown here. `None`:
+    /// the brain sent it, exactly as recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirrored: Option<Mirrored>,
 }
 
 impl ModelCall {
@@ -142,6 +149,7 @@ impl ModelCall {
             renders: _,
             params,
             breakpoints: _,
+            mirrored: _,
         } = self;
         out.extend(appends.iter().map(|m| m.content));
         out.push(*params);
