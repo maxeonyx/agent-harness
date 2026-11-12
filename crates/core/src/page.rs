@@ -60,10 +60,10 @@
 //! a write over a part another task changed since this one saw it, or an
 //! edit whose text is not in the body. Everything else is made impossible
 //! to get wrong. Every `page_write` states the end and where we are, so a
-//! page can't lack them. A theme is chosen from a list of the free ones. A
+//! page can't lack them. A theme is chosen from a list of the offered ones. A
 //! heading, bold, or a link to a kind that does not exist is drawn as plain
 //! text and listed as a problem. A task with no title or theme yet is drawn
-//! with its role's name, in its area's first free theme.
+//! with its role's name, in its area's first offered theme.
 //!
 //! **Not yet folded.** These types are the model. The facts that carry
 //! them are the build's to wire: `Fact::Page(TaskId, PageEvent)`,
@@ -72,9 +72,10 @@
 //! `TaskEvent::Themed(String)` (locked: folded only for a task with no
 //! theme), `Phase::AwaitingMax` carrying an `Option<Presented>`,
 //! `Prompt::Present`, `Content::Answer(Answer)`,
-//! `Content::Feedback(Feedback)`, Max's words carrying the [`Spot`] he was
-//! reading, a `says` on `resource::Change`, and `attention::Ranked` naming
-//! an [`crate::ask::Owed`]. The tools that make them are `describe` in the
+//! `Fact::Feedback(FeedbackId, FeedbackEvent)`, Max's words carrying the
+//! [`crate::design::Screen`] he was looking at, its [`Spot`] included, a
+//! `says` on `resource::Change`, and `attention::Ranked` naming an
+//! [`crate::ask::Owed`]. The tools that make them are `describe` in the
 //! meta tool set, for every task, and `page_read`, `page_write`,
 //! `page_edit`, `page_publish`, `ask`, `choose_theme` and `pass_on_style`
 //! in the user plugin. Those are declared only to a task that has Max, so
@@ -292,7 +293,7 @@ pub enum Spot {
 /// harness.
 ///
 /// The theme is not here either. It is chosen once, with `choose_theme`
-/// from the free ones, folded as `TaskEvent::Themed`, and locked: the tool
+/// from the offered ones, folded as `TaskEvent::Themed`, and locked: the tool
 /// is declared only while the task has no theme, and a second choice in the
 /// same context leaves the first, as its result says. An agent's look is
 /// how Max finds it again, so it never changes under him.

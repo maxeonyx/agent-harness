@@ -1,11 +1,28 @@
-//! The shared design system pages are drawn in, the themes they wear, and
-//! the agent that keeps them.
+//! The shared design system pages are drawn in, the themes they wear, the
+//! agent that keeps them, and how what Max says about the look reaches it.
 //!
-//! Not yet folded: see [`crate::page`].
+//! ```mermaid
+//! flowchart LR
+//!   max["Max, reading X's page"] -->|"his words, with the Screen"| x["Agent X"]
+//!   x -->|pass_on_style| f[("Feedback, open")]
+//!   tab["His tab"] -->|"a ground failed"| f
+//!   f -->|wakes| k["Keeper"]
+//!   k -->|"the art"| a["Art agent"]
+//!   a --> m["Artists"]
+//!   m --> c["Critic, then max-advocate"]
+//!   k -->|"merged, Answered"| d[("Design")]
+//!   d --> pages["Every page wearing it, from its next open"]
+//!   k -->|"before and after, proposals"| kp["Keeper's page"]
+//! ```
+//!
+//! Not yet folded: `Fact::Feedback(FeedbackId, FeedbackEvent)`, the open
+//! feedback a keeper wakes on, Max's words carrying a [`Screen`], and the
+//! rest listed in [`crate::page`].
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{DeliveryId, RoleId, TaskId, ValueId};
+use crate::id::{AskId, DeliveryId, RoleId, TaskId, ValueId};
+use crate::page::Spot;
 use crate::resource::Observation;
 
 /// The shared design system: one design language, the themes, the
@@ -16,7 +33,8 @@ use crate::resource::Observation;
 /// versioned as a role is. Agents never style: they give typed parts and
 /// short markdown ([`crate::page::Sheet`], [`crate::ask::Ask`]), and the
 /// face draws them in the language, dressed in the task's theme. A change
-/// here reaches every page, old versions included.
+/// here reaches every page, old versions included, from its next open: a
+/// page open on Max's screen is never redrawn under him.
 ///
 /// **The language is the same on every page.** It is what Max learns once:
 /// - The order: where this ends, where we are, the asks, then the detail,
@@ -46,6 +64,7 @@ pub struct Design {
     /// The language: the stylesheet every theme shares, written against the
     /// tokens a theme's style sets, and nothing else.
     pub language: ValueId,
+    /// The themes offered to agents, and those proposed to Max.
     pub themes: Vec<Theme>,
     pub components: Vec<Component>,
     /// What a task holding the user plugin is told: choose your theme first;
@@ -54,19 +73,34 @@ pub struct Design {
     /// now and why, and never retell it on the page; name live things
     /// instead of retyping their state; write no colours, typefaces, bold or
     /// headings; detail goes in `more`; Max's words about how your page
-    /// looks go to the keeper with `pass_on_style`. With the components and
+    /// looks, not what it says, go to the keeper whole with
+    /// `pass_on_style`. With the components and
     /// an example page.
     pub guide: ValueId,
-    /// The role of the standing agent that owns the look, and the one place
-    /// Max's words about it arrive, from any page ([`Feedback`]). It keeps
-    /// the language and the guide itself, and hands everything about the art
-    /// (grounds, palettes, new themes) to a standing art agent of its own.
-    /// The art agent keeps one artist per theme and resumes that artist when
-    /// its theme is spoken about, so the agent that knows a ground's code is
-    /// the one that changes it; a new theme gets a new artist. A change
-    /// reaches Max on the keeper's own page, before and after on the page he
-    /// spoke from, as an ask he can reject.
+    /// The role of the standing agent that owns the look: the one address
+    /// for what Max says about it, from any page ([`Feedback`]), which is
+    /// kept for this role while no keeper runs. The keeper keeps the
+    /// language, the components and the guide, and hands the art (grounds,
+    /// palettes, new themes) to a standing art agent of its own, which holds
+    /// the themes as a set, so they stay distinct from each other.
+    ///
+    /// Nobody judges their own work. A fix goes to the artist that made the
+    /// theme, resumed while it lives (it knows the code), or to a fresh one
+    /// that starts from the theme's file. Taste work (a new theme, "not
+    /// beautiful enough", "these look alike") goes to two or three artists
+    /// on materially different directions. Then a critic that made none of
+    /// it judges the result against Max's words, the whole set side by side
+    /// and the paintings he loved, and `max-advocate` judges which findings
+    /// he would act on. What he has said about the look is kept in the
+    /// design system's files beside the art, never only in an agent's
+    /// context. He sees a change on the keeper's own page: before and after
+    /// at the size he saw it, painted live by the ground figure.
     pub keeper: RoleId,
+    /// The longest a ground may take to paint on a phone. The face stops a
+    /// slower paint and draws the paper; the check holds every ground to
+    /// it at a quarter of desktop speed. 150 ms: he opens pages on his phone
+    /// between other things.
+    pub paint_ms: u32,
     /// The files this version was read from.
     pub source: Option<Observation>,
 }
@@ -74,8 +108,8 @@ pub struct Design {
 /// A look an agent wears: what makes its page and chat window its own.
 ///
 /// **Concept.** A finished piece of design, made with care in the design
-/// system's files by the art agent ([`Design::keeper`]), and never by an
-/// agent at run time. It has three parts:
+/// system's files by the keeper's art agent ([`Design::keeper`]), and never
+/// by an agent at run time. It has three parts:
 /// - a ground: a generative painting, drawn for each task from its id;
 /// - a palette: paper, ink, an accent and the figure colours, with the inks
 ///   for text set on the ground where they differ;
@@ -95,8 +129,9 @@ pub struct Design {
 /// box so text sits on calm ground, then fades into the theme's paper as
 /// Max scrolls. An agent's figures use the palette's tokens, never colours,
 /// so a figure redraws in any theme. The state tones ([`Tone`]) are never a
-/// theme's. An agent chooses its theme once and keeps it
-/// ([`crate::page::Description`]).
+/// theme's. An agent chooses its theme's name once and keeps it
+/// ([`crate::page::Description`]); a revised theme reaches it from its
+/// page's next open, so a fix shows on the page Max complained on.
 ///
 /// Serves: Max's "really elegant and artistic [...] beautiful backgrounds,
 /// UI themes, design systems, etc. that can be swapped between to make an
@@ -116,18 +151,30 @@ pub struct Theme {
     pub style: ValueId,
     /// Its ground: an ES module whose `paint(ctx, scene)` paints into a 2D
     /// canvas, given the canvas's size, the task's id as its seed, and the
-    /// box the page's lead sits in, which it keeps calm. The same agent looks
-    /// the same in every face, and no other agent looks quite like it. The
-    /// face paints it once when the window opens, at up to twice the CSS
-    /// pixels, and never animates it; scrolling slides and fades it into the
-    /// paper. Before a design version is published, the art agent's check
-    /// paints every ground at phone, desktop and thumbnail sizes for a set of
-    /// seeds and holds it to its bars: the lead's ink against the ground in
-    /// the lead's box at 7:1 for 95% of it and never under 4.5:1; a phone
-    /// paint within 150 ms at a quarter of desktop speed; a thumbnail that
-    /// reads as its theme. A ground that throws leaves plain paper, and its
-    /// error reaches the keeper.
+    /// box the page's lead sits in, which it keeps calm. It is deterministic
+    /// in its seed and size, so the same agent looks the same in every face,
+    /// no other agent looks quite like it, and the keeper can paint again
+    /// exactly what Max saw ([`Screen`]). The face paints it once when the
+    /// window opens, at up to twice the CSS pixels, off the page's thread,
+    /// and never animates it; scrolling slides and fades it into the paper.
+    /// A ground that throws or passes [`Design::paint_ms`] leaves plain
+    /// paper and reports itself ([`Fault`]). The face runs only grounds some
+    /// version of the design system declared, since a ground is a program
+    /// and a page body may hold none.
+    ///
+    /// Before a design version is published, the check paints every ground
+    /// at phone, desktop and thumbnail sizes, for a set of seeds and the
+    /// paintings Max loved, and holds it to its bars: the lead's ink against
+    /// the ground in the lead's box at 7:1 for 95% of it and never under
+    /// 4.5:1, since he reads it every day; [`Design::paint_ms`] at a quarter
+    /// of desktop speed; a thumbnail that reads as its theme, since that is
+    /// how he finds where he is; the same pixels when painted twice.
     pub ground: ValueId,
+    /// Shown to Max on the keeper's page and never offered to
+    /// `choose_theme`: a new theme waits for his choice, so no agent can
+    /// lock in one he then rejects. One he rejects is deleted, and his words
+    /// go in the design system's files.
+    pub proposed: bool,
 }
 
 /// An element a body may use beyond markdown.
@@ -147,44 +194,132 @@ pub struct Component {
     pub about: String,
 }
 
-/// What Max said about how a page looks, passed on to the agent that owns
-/// the look.
+/// What reaches the keeper about how a page looks: Max's words, passed on
+/// by the agent he said them to, or a ground that failed on his screen.
 ///
 /// **Concept.** Max gives his feedback to whichever agent he is reading,
-/// and that agent can't act on it, since it has no say over its look. Its
-/// `pass_on_style` call delivers this to the keeper's standing task, as
-/// `Content::Feedback`, waking it: his own words, exactly what he was
-/// looking at, and the agent's note. The keeper changes the design system,
-/// and every page shows the change. The tool is declared only while a
-/// keeper task is live, and the map draws the delivery as a line from the
-/// page's agent to the keeper.
+/// and that agent has no say over its look. So it passes his words on with
+/// `pass_on_style`, declared with the user plugin whether or not a keeper
+/// runs. They are kept as a fact, open until the keeper answers them
+/// ([`FeedbackEvent`]), and addressed to the keeper's role rather than to a
+/// task: nothing he says is lost while no keeper runs, a second comment
+/// during a fix is never dropped, and a keeper that wakes fresh reads what
+/// is open rather than remembering it. The page he spoke on shows his
+/// words' state, from taken to answered, and the map draws an open one as
+/// a line from the page's agent to the keeper.
 ///
 /// Serves: "if I give feedback on the styling, I'm going to give it to that
 /// agent, so it needs to be able to pass it on, even though it's not able
 /// to action it itself".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Feedback {
-    /// The task whose page he was reading.
-    pub page: TaskId,
-    /// The version he was reading, if it had been published.
-    pub version: Option<u32>,
-    /// The theme it wore.
-    pub theme: String,
-    /// His words, as delivered to the agent: quoted, never retold.
-    pub words: DeliveryId,
-    /// The agent's note: which part of the page he meant.
-    pub note: String,
-    /// The window he was reading in, so the art agent paints exactly what he
-    /// saw: a ground composes itself around the lead, which sits differently
-    /// on a phone. `None` when he spoke without the page open.
-    pub seen: Option<Viewport>,
+pub enum Feedback {
+    /// His words, passed on whole: the agent never splits or retells them,
+    /// since it is the least able to say which part is the ground's and
+    /// which the type's. They carry the [`Screen`] he was looking at. Words
+    /// he says in the keeper's own chat are kept the same way, by the
+    /// keeper.
+    Words {
+        words: DeliveryId,
+        /// The agent that passed them on.
+        by: TaskId,
+        /// Its note: what on its page he seems to mean.
+        note: String,
+    },
+    /// A ground that failed in his tab, reported by the face itself, once
+    /// per tab, ground, seed and failure. It needs nothing from him.
+    Fault(Box<Fault>),
 }
 
-/// A window's size, in CSS pixels.
+/// What happens to a piece of feedback, folded from
+/// `Fact::Feedback(FeedbackId, FeedbackEvent)`: open from `Given` until
+/// `Answered`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FeedbackEvent {
+    Given(Feedback),
+    /// It needs Max first: a choice between studies, or words that
+    /// contradict what he said before. Still open.
+    Asked(AskId),
+    /// A merged commit answers it: a change to the look, live on every page
+    /// from its next open, or only his words recorded in the design
+    /// system's files ("I love this one"). His rejection of the answer is
+    /// new feedback, and a revert answers that.
+    Answered {
+        /// It names this feedback in its message.
+        commit: String,
+        /// What changed, for Max, beside his words and the before and after.
+        note: String,
+    },
+}
+
+/// What was on Max's screen when he spoke, set by the face as he sends.
+///
+/// **Concept.** Exactly what he saw, as values rather than a picture: which
+/// page, which part of it, drawn by which programs, at what size. Grounds
+/// are deterministic, so any agent can paint it again, before and after a
+/// change, with no screenshot and no work data leaving the page. A ground
+/// composes itself around the lead, which sits differently on a phone, so
+/// the size is half of what he saw. His words carry it in place of the bare
+/// [`Spot`], and every agent can read it ("he was on his phone").
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Screen {
+    /// Whose page: also the seed its ground was painted with.
+    pub task: TaskId,
+    /// The page version drawn; `None`: none was published.
+    pub page: Option<u32>,
+    /// What he was reading, from the scroll.
+    pub spot: Option<Spot>,
+    pub theme: String,
+    /// What drew it, so a later version can't be mistaken for the one he
+    /// saw.
+    pub language: ValueId,
+    pub style: ValueId,
+    pub ground: ValueId,
+    pub viewport: Viewport,
+    /// The lead's box, which the ground keeps calm.
+    pub lead: Option<Rect>,
+    /// CSS pixels from the top.
+    pub scroll: u32,
+    /// How long the ground took to paint; `None`: it didn't finish.
+    pub paint_ms: Option<u32>,
+}
+
+/// A screen's size, in CSS pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Viewport {
     pub width: u32,
     pub height: u32,
+    /// Device pixels per CSS pixel, in percent: 300 on a 3x phone.
+    pub scale_percent: u16,
+}
+
+/// A box on the screen, in CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A ground that threw or passed [`Design::paint_ms`] on Max's screen.
+///
+/// **Concept.** The page never pays for a broken ground: the face paints
+/// off the page's thread, stops at the deadline, and draws the theme's
+/// paper instead.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fault {
+    pub screen: Screen,
+    /// The browser's user agent, since a phone's GPU is not the check's.
+    pub device: String,
+    pub failure: Failure,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Failure {
+    /// Its message and stack.
+    Threw(String),
+    /// Stopped at the deadline.
+    Slow,
 }
 
 /// The state colours: the same hues on every page and on the map, never a
