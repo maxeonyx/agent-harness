@@ -151,7 +151,7 @@ export const cardStatus = (c) => `Finished ${ago(c.last)} ago`;
 // knows its lane, the colour of its lane's line into it (`line`: an
 // agent's ink, an old version's faint, a call's blue, and Max's orange from
 // when it was handed to him), and, at the end of a finished life, how it
-// ended (`end`: green done, red not).
+// ended (`end`: green done, red failed, none abandoned).
 const laneOf = (t) => (chained(t) ? laneOf(byId[t.from]) : t.id);
 export function derive(openId) {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
@@ -186,7 +186,7 @@ export function derive(openId) {
         carry: l.began === "carry" && path.has(l.key), deps: l.on.map((d) => d.leg ?? `w:${d.work}`) });
     }
     const own = nodes.get(t.leg);
-    if (own && isDone(t)) own.end = t.outcome?.kind === "result" ? "green" : "red";
+    if (own && isDone(t)) own.end = { result: "green", failed: "red" }[t.outcome?.kind];
     for (const w of t.work || []) {
       const lane = `w:${w.call}`;
       let before = w.leg;
