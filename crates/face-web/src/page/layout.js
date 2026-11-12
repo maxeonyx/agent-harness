@@ -276,13 +276,14 @@ function spindles(L) {
 
 // A life's line drifts: each of its dots has its own x, and between two
 // dots the line runs an S-bend, upright at both, so its x at any height is
-// a mix of theirs. A lane pays BEND per px it moves across plus BENDS per
-// bend; it gains a px² for each px of height it sits one px nearer the
-// middle. So it stays straight unless coming in for long enough pays.
-const STIFF = { drift: [80, 800], loose: [30, 300], stiff: [200, 2000] };
+// a mix of theirs. A bend costs BEND per px it moves across plus BENDS; a
+// lane gains a px² for each px of height it sits one px nearer the middle,
+// or nearer centred among its spindles. So a line stays straight unless
+// moving pays.
+const STIFF = { drift: [15, 150], loose: [5, 50], stiff: [40, 400] };
 // A bend moves across at most SLANT times its height.
 let SLANT = .6;
-let BEND = STIFF.drift[0], BENDS = STIFF.drift[1];
+let [BEND, BENDS] = STIFF.drift;
 export function setStiff(name) { [BEND, BENDS, SLANT = SLANT] = STIFF[name] ?? name; }
 
 // Each lane's x at each of its dots, and so at every height: as near the
@@ -307,8 +308,66 @@ function across(L, ys) {
     }
   }
   const lanes = L.filter((l) => !l.spin);
-  for (const l of lanes.filter((l) => l.slot <= 0).sort((a, b) => b.slot - a.slot)) drift(l, need.get(l), -1, ys);
-  for (const l of lanes.filter((l) => l.slot > 0).sort((a, b) => a.slot - b.slot)) drift(l, need.get(l), 1, ys);
+  const out = [...lanes.filter((l) => l.slot <= 0).sort((a, b) => b.slot - a.slot), ...lanes.filter((l) => l.slot > 0).sort((a, b) => a.slot - b.slot)];
+  for (const l of out) drift(l, need.get(l), l.slot > 0 ? 1 : -1, ys);
+  for (const l of lanes) balance(l);
+  // A lane that leans can leave its neighbours short of room: out from the middle, each lane is pushed clear of those inside
+  // it.
+  for (const l of out) {
+    const s = l.slot > 0 ? 1 : -1, inner = (o) => (s > 0 ? o.slot < l.slot : o.slot > l.slot && o.slot <= 0);
+    for (let pass = 0; pass < 20; pass++) {
+      let moved = false;
+      for (const { o, y, g, s: t } of need.get(l)) {
+        if (t !== s || !inner(o)) continue;
+        const short = g - s * (l.xAt(y) - o.xAt(y));
+        if (short <= 1e-6) continue;
+        for (const v of l.dotsAt(y)) v.x += s * short;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+  }
+}
+
+// A lane with spindles on its dots leans away from them, so a dot and
+// what hangs beside it are centred where the lane would be: a spindle on
+// one side moves its maker half its width to the other. The lane's lean
+// at each of its dots is the cheapest path: each px of height a dot sits
+// a px off its centre costs one, and each change of lean BEND per px plus
+// BENDS, at most SLANT times the height it changes over.
+function balance(l) {
+  const D = l.dots ??= [...l.nodes].sort((a, b) => a.rank - b.rank), K = D.length;
+  if (!l.spins.length) return;
+  // A spindle beside the line next to a dot, above it or below.
+  const c = D.map((v, k) => {
+    let lo = v.n.r, hi = v.n.r;
+    for (const p of l.spins) if ((D[k - 1]?.rank ?? v.rank) < p.r && p.r < (D[k + 1]?.rank ?? v.rank + 1)) {
+      const n = p.nodes[0].n;
+      if (p.off > 0) hi = Math.max(hi, p.off + n.r); else lo = Math.max(lo, -p.off + n.r);
+    }
+    return (lo - hi) / 2;
+  });
+  if (c.every((x) => !x)) return;
+  const h = D.map((v, k) => ((D[k + 1] ?? v).y - (D[k - 1] ?? v).y) / 2 || 17);
+  const X = [...new Set([0, ...c])].sort((a, b) => a - b);
+  let cost = X.map((x) => h[0] * Math.abs(x - c[0]));
+  const back = [];
+  for (let k = 1; k < K; k++) {
+    const dy = D[k].y - D[k - 1].y, b = [];
+    cost = X.map((x, i) => {
+      let best = Infinity;
+      cost.forEach((w, j) => {
+        const d = Math.abs(x - X[j]);
+        if (d > SLANT * dy) return;
+        const t = w + (d ? BEND * d + BENDS : 0);
+        if (t < best) { best = t; b[i] = j; }
+      });
+      return best + h[k] * Math.abs(x - c[k]);
+    });
+    back.push(b);
+  }
+  let j = cost.indexOf(Math.min(...cost));
+  for (let k = K - 1; k >= 0; k--) { D[k].x += X[j]; if (k) j = back[k - 1][j]; }
 }
 
 // One lane's dots' x on side s, out from the middle, by the cheapest path
@@ -350,6 +409,11 @@ function drift(l, need, s, ys) {
   cost.forEach((w, i) => { if (w + C[i] * post < cost[j] + C[j] * post) j = i; });
   for (let k = K - 1; k >= 0; k--) { D[k].x = s * C[j]; if (k) j = back[k - 1][j]; }
   l.x = D[0].x;
+  // The dots that set the line's x at height y.
+  l.dotsAt = (y) => {
+    const k = dy.findIndex((h) => h >= y);
+    return y <= dy[0] ? [D[0]] : k < 0 ? [D[K - 1]] : dy[k] === y ? [D[k]] : [D[k - 1], D[k]];
+  };
   l.xAt = (y) => {
     if (y <= dy[0]) return D[0].x;
     const k = dy.findIndex((h) => h >= y);
