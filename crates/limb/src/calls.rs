@@ -250,7 +250,8 @@ fn after(before: Option<PipeReader>, cancel: &Cancel) -> io::Result<()> {
 /// Whether a call is still held to its own time limit (a command's
 /// `timeout_ms`). Clones share it.
 ///
-/// A time limit is for someone waiting on the call's result. A background
+/// A time limit is for someone waiting on the call's result, so a
+/// background call has one only if its input sets it. A background
 /// call passed to Max ([`harness_core::call::CallEvent::Passed`]) is kept
 /// for its lifetime instead, a dev server he goes on using, so its limit is
 /// lifted and it runs until he stops it. A call passed to an agent keeps

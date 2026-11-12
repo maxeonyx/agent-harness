@@ -21,7 +21,8 @@ pub enum Ended {
     Exited(ExitStatus),
     /// Its call was stopped.
     Stopped,
-    TimedOut,
+    /// It reached this time limit.
+    TimedOut(Duration),
 }
 
 pub struct Ran {
@@ -64,7 +65,8 @@ pub fn end_orphan(call: CallId) -> io::Result<()> {
 /// Run `command` with `bash -c` in `dir` as the tree of processes `call`
 /// owns ([`Group`]), in `scope` (or, if `systemd-run` fails, without one,
 /// saying why), its stdout and stderr merged as a terminal shows them,
-/// until it exits, reaches `timeout` (unless `limit` is lifted by then), or
+/// until it exits, reaches `timeout` if it has one (unless `limit` is lifted
+/// by then), or
 /// `cancel` is requested; then end what is left of the tree: `SIGTERM` to
 /// each process, and `SIGKILL` at the deadline (the cancel's, or a short
 /// grace), and kill what is left in its scope, `setsid` or not. Returns
@@ -79,7 +81,7 @@ pub fn run(
     command: &str,
     dir: &Path,
     scope: &Scope,
-    timeout: Duration,
+    timeout: Option<Duration>,
     limit: &Limit,
     cancel: &Cancel,
     truncator: Truncator,
@@ -119,7 +121,7 @@ pub fn run(
         progress,
     };
     let mut waiter = cancel.waiter()?;
-    let mut until = Some(Instant::now() + timeout);
+    let mut until = timeout.map(|t| Instant::now() + t);
     let ended = loop {
         output.drain();
         if let Some(status) = group.exited() {
@@ -135,12 +137,12 @@ pub fn run(
                 until = None;
                 continue;
             }
-            break Ended::TimedOut;
+            break Ended::TimedOut(timeout.unwrap_or_default());
         }
     };
     let deadline = match ended {
         Ended::Stopped => cancel.deadline().unwrap_or_else(Instant::now),
-        Ended::Exited(_) | Ended::TimedOut => Instant::now() + GRACE,
+        Ended::Exited(_) | Ended::TimedOut(_) => Instant::now() + GRACE,
     };
     let tree = group.end(&mut waiter, deadline, Some(libc::SIGTERM), || {
         output.drain();
@@ -195,14 +197,14 @@ impl<P: FnMut(&[u8])> Output<P> {
 }
 
 /// The line a command's result ends with.
-pub fn describe(ran: &Ran, timeout: Duration, shutdown: bool) -> String {
+pub fn describe(ran: &Ran, shutdown: bool) -> String {
     let ended = match &ran.ended {
         Ended::Exited(status) => match (status.code(), status.signal()) {
             (Some(code), _) => format!("[exit code {code}]"),
             (None, Some(signal)) => format!("[killed by signal {signal}]"),
             (None, None) => "[ended]".into(),
         },
-        Ended::TimedOut => format!(
+        Ended::TimedOut(timeout) => format!(
             "[stopped after {}s, the call's time limit]",
             timeout.as_secs()
         ),

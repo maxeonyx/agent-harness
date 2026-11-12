@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use harness_core::call::{Call, Outcome, Output};
+use harness_core::call::{Call, Caller, Outcome, Output};
 use harness_core::id::{CallId, Digest, ValueId};
 use harness_core::live::Live;
 use harness_core::resource::{Observation, Version};
@@ -113,8 +113,20 @@ impl Inner {
         report: &mut Report,
     ) -> Result<Outcome, String> {
         let call = running.id;
-        let timeout =
-            Duration::from_millis(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT));
+        // A time limit is for whoever waits on the result, and nobody waits
+        // on a background call: it has none unless it sets one.
+        let background = matches!(running.call.caller, Caller::Background { .. });
+        let timeout = match (input.timeout_ms, background) {
+            (Some(ms), false) if ms > MAX_TIMEOUT => {
+                return Err(format!(
+                    "`timeout_ms` is at most {MAX_TIMEOUT} for a call you wait on, and this one is {ms}; \
+                     in `background` a command has no time limit unless it sets one"
+                ));
+            }
+            (ms, false) => Some(ms.unwrap_or(DEFAULT_TIMEOUT)),
+            (ms, true) => ms,
+        }
+        .map(Duration::from_millis);
         let truncator = Truncator::new(pattern(input.grep.as_deref())?);
         // A character split across two reads is held until it is whole.
         let mut tail = Vec::new();
@@ -150,7 +162,7 @@ impl Inner {
         if ran.tree.survivors.is_empty() {
             self.marks.ran(call);
         }
-        let ended = shell::describe(&ran, timeout, running.shutting_down());
+        let ended = shell::describe(&ran, running.shutting_down());
         let (view, full) = self.shown(call, ran.output, report);
         let output = Output {
             model: report.text(&format!("{view}{ended}")),
@@ -159,7 +171,7 @@ impl Inner {
         };
         Ok(match ran.ended {
             Ended::Exited(status) if status.success() => Outcome::Completed(output),
-            Ended::Exited(_) | Ended::TimedOut => Outcome::Failed(output),
+            Ended::Exited(_) | Ended::TimedOut(_) => Outcome::Failed(output),
             Ended::Stopped => Outcome::Interrupted {
                 partial: Some(output),
             },
