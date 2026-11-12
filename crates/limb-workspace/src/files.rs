@@ -98,7 +98,7 @@ impl Inner {
             "bash" => parse(input).and_then(|i| self.bash(root, running, i, report)),
             "read" => parse(input).and_then(|i| self.read(root, i, report)),
             "write" => parse(input).and_then(|i| self.write(root, id, i, call, report)),
-            "edit" => parse(input).and_then(|i| self.edit(root, i, report)),
+            "edit" => parse(input).and_then(|i| self.edit(root, i, call, report)),
             "grep" => parse(input).and_then(|i| self.grep(root, id, i, running.cancel, report)),
             other => Err(format!("the workspace has no tool `{other}`")),
         };
@@ -281,8 +281,17 @@ impl Inner {
     /// is the check that the text it replaces is as the caller expects, so
     /// what the caller has seen of the file does not matter. One that does
     /// not match exactly once (or at all, with `all`) fails the edit, naming
-    /// it and showing the file, which the caller has then seen.
-    fn edit(&self, root: &Path, input: Edit, report: &mut Report) -> Result<Outcome, String> {
+    /// it and showing the file, which the caller has then seen. One that
+    /// lands has shown its caller the file only if the caller's view was
+    /// current, so only then does the caller see the version it made: a
+    /// later write on a stale view is still refused.
+    fn edit(
+        &self,
+        root: &Path,
+        input: Edit,
+        call: &Call,
+        report: &mut Report,
+    ) -> Result<Outcome, String> {
         let place = place(root, &input.path);
         let path = &input.path;
         let _files = lock(&self.files);
@@ -330,14 +339,21 @@ impl Inner {
             };
             count += found;
         }
+        let seen = self.seen(&place, call);
+        let knew = seen == Some(current) || self.made_by(&call.caller, &place.path);
         replace(&place.path, edited.as_bytes()).map_err(|e| format!("cannot write {path}: {e}"))?;
         let version = Version::Is(Digest::of(edited.as_bytes()));
         self.changed(report, &place.name, version);
-        let said = format!(
-            "Replaced {count} occurrence{} in {path}.",
-            if count == 1 { "" } else { "s" },
-        );
-        Ok(report.completed(&said, self.observations(&place.name, version)))
+        let s = if count == 1 { "" } else { "s" };
+        let said = format!("Replaced {count} occurrence{s} in {path}.");
+        if knew {
+            return Ok(report.completed(&said, self.observations(&place.name, version)));
+        }
+        let said = match seen {
+            Some(_) => format!("{said} The rest of it changed since you last saw it."),
+            None => said,
+        };
+        Ok(report.completed(&said, Vec::new()))
     }
 
     fn grep(

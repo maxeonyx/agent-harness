@@ -14,7 +14,9 @@
 //! anything. Over a file its caller never saw, a write goes ahead and says
 //! what it replaced. The refusal shows the file as a read would, which
 //! counts as seeing it, so a retry written after it goes through. An edit
-//! is checked by its text alone: each `old` must match. Forks and siblings share a
+//! is checked by its text alone: each `old` must match. One made on a
+//! stale view does not count as seeing the file it made, so a later write
+//! on that view is still refused. Forks and siblings share a
 //! directory; the notices and refusals are how they coordinate in it.
 //!
 //! Each directory the brain asks for ([`LimbRow::Workdir`]) is made ready on

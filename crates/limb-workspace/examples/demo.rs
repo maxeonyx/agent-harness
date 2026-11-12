@@ -96,6 +96,12 @@ fn main() {
         json!({ "path": "src/lib.rs", "edits": [{ "old": "-> i32", "new": "-> i64" }] }),
     );
 
+    title(
+        "A writes on the view it had before that edit: refused, since its edit showed it nothing of B's change",
+    );
+    let stale = json!({ "path": "src/lib.rs", "content": "pub fn add(a: i32, b: i32) -> i64 {\n    a + b\n}\n" });
+    brain.call(&mut a, "write", stale);
+
     title("B writes on its old view: refused, untouched, shown the file as it is; it retries");
     let whole = json!({ "path": "src/lib.rs", "content": "pub fn add(a: i64, b: i64) -> i64 {\n    b + a\n}\n" });
     brain.call(&mut b, "write", whole.clone());
