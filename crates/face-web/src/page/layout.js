@@ -165,14 +165,28 @@ function lanesOf(V, edges) {
 function columns(L) {
   const held = new Map();
   const free = (s, l) => !(held.get(s) || []).some((h) => h.r0 <= l.r1 && l.r0 <= h.r1);
+  const next = (s, side, l) => { while (!free(s, l)) s += side; return s; };
+  // The lanes a line from `m` to slot `s` would cross on row `r`.
+  const crossed = (m, s, r) => {
+    let n = 0;
+    for (let i = Math.min(m, s) + 1; i < Math.max(m, s); i++) n += (held.get(i) || []).filter((h) => h.r0 <= r && r <= h.r1).length;
+    return n;
+  };
   for (const l of L) {
     let s, side;
-    if (!l.from) { s = 0; side = 0; while (!free(s, l)) s++; }
+    if (!l.from) { s = next(0, 1, l); side = 0; }
     else {
       const m = l.from.lane;
-      side = m.side || (m.kids++ % 2 ? -1 : 1);
-      s = m.slot + side;
-      while (!free(s, l)) s += side;
+      side = m.side;
+      if (!side) {
+        // A maker in the middle alternates its children right and left,
+        // unless the other side is free of lanes to cross.
+        side = m.kids++ % 2 ? -1 : 1;
+        const a = next(m.slot + side, side, l), b = next(m.slot - side, -side, l);
+        const cost = (s) => crossed(m.slot, s, l.r0) + crossed(m.slot, s, l.r1);
+        if (cost(b) < cost(a)) side = -side;
+      }
+      s = next(m.slot + side, side, l);
     }
     l.slot = s; l.side = side;
     (held.get(s) ?? held.set(s, []).get(s)).push(l);
@@ -197,9 +211,19 @@ function across(L, held, nrows) {
       prev = s; reach = v ? v.n.hi : LIFE / 2;
     }
   }
+  // Out from slot 0 each way, so a column sits as near the middle as its
+  // neighbours let it: leftwards first, then rightwards, where a gap may
+  // be to a column on the left.
   const xs = new Map();
-  let last = null;
-  for (const s of slots) {
+  let last = 0;
+  for (const s of slots.filter((s) => s <= 0).reverse()) {
+    let x = s === 0 ? 0 : xs.get(last) - PITCH * (last - s);
+    for (const [r, g] of need.entries()) if (r > s && r <= 0) for (const [p, h] of g) if (p === s) x = Math.min(x, xs.get(r) - h);
+    xs.set(s, x);
+    last = s;
+  }
+  last = slots.filter((s) => s <= 0).at(-1);
+  for (const s of slots.filter((s) => s > 0)) {
     let x = last == null ? 0 : xs.get(last) + PITCH * (s - last);
     for (const [p, g] of need.get(s)) x = Math.max(x, xs.get(p) + g);
     xs.set(s, x);
