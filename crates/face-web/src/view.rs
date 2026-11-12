@@ -345,7 +345,7 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "head": t.head().map(|h| h.to_string()),
         "legs": state.legs(t.id).map_or(Value::Null, |l| legs(t.id, l)),
         "leg": state.legs(t.id).map(|l| l.head.to_string()),
-        "work": state.legs(t.id).map_or(Value::Null, |l| work(state, t.id, l)),
+        "work": state.legs(t.id).map_or(Value::Null, |l| work(state, l)),
         // When its last request ended: a retry can end where it began.
         "ended": last.map(|e| e.at.seq.n),
         "role": state.role(t.role).map(|r| r.name.clone()),
@@ -411,7 +411,7 @@ fn legs(task: TaskId, legs: &Legs) -> Value {
 
 /// The task's background calls that are not spawns, on the legs that
 /// started them.
-fn work(state: &State, task: TaskId, legs: &Legs) -> Value {
+fn work(state: &State, legs: &Legs) -> Value {
     let work = legs.work.iter();
     let rows = work
         .filter(|w| state.members(Scope::Spawn(w.call)).next().is_none())
@@ -426,10 +426,17 @@ fn work(state: &State, task: TaskId, legs: &Legs) -> Value {
                 "leg": w.leg.to_string(),
                 "at": w.at.to_string(),
                 "running": record.is_some_and(|r| r.settled.is_none()),
+                // When it settled, and whether it failed.
+                "ended": record.and_then(|r| r.settled.as_ref()).map(|s| s.at.at.0),
+                "failed": record.and_then(|r| r.outcome()).is_some_and(|o| !matches!(o, CallOutcome::Completed(_))),
                 "handed": record.is_some_and(|r| r.owner == Owner::Max),
-                // Its result is still to reach the task: it was not passed
-                // on, and it runs, or it settled and was not read yet.
-                "due": state.call_owner(w.call) == Some(task) && state.due(w.call),
+                // Who holds it now, a task's id or `max`, and each time it
+                // was passed up: to whom, and when.
+                "holder": record.map(|r| owner(r.owner)),
+                "passed": record.map_or_else(Vec::new, |r| r.passed.iter().map(|h| json!({"to": owner(h.to), "at": h.at.at.0})).collect()),
+                // Its result is still to reach its holder: it runs, or it
+                // settled and was not read yet.
+                "due": state.due(w.call),
             })
         });
     Value::Array(rows.collect())
@@ -518,6 +525,14 @@ fn waiting(state: &State, value: Text, w: &Waiting) -> Value {
     }
 }
 
+/// Who a call is for: a task's id, or `max`.
+fn owner(owner: Owner) -> String {
+    match owner {
+        Owner::Task(task) => task.to_string(),
+        Owner::Max => "max".into(),
+    }
+}
+
 fn call(state: &State, value: Text, id: CallId) -> Value {
     let Some(record) = state.call(id) else {
         return json!({"id": id.to_string()});
@@ -547,10 +562,7 @@ fn call(state: &State, value: Text, id: CallId) -> Value {
             Caller::Background { name, .. } => Some(name),
             _ => None,
         },
-        "owner": match record.owner {
-            Owner::Task(task) => task.to_string(),
-            Owner::Max => "max".into(),
-        },
+        "owner": owner(record.owner),
         "passed": record.passed.last().map(|h| json!({"by": h.by.to_string(), "why": h.why})),
         "abandoned": record.abandoned,
     })
