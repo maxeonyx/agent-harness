@@ -56,13 +56,16 @@ export function lanes(nodes) {
   const L = lanesOf(V, edges);
   columns(L);
   spindles(L);
-  across(L);
   // Down: each row as tall as its tallest node plus 17, the present row at
   // y = 0.
   const tall = [], ys = [0];
   for (const v of V) tall[v.rank] = Math.max(tall[v.rank] ?? 0, v.n.along);
   for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17;
-  for (const v of V) { v.y = ys[v.rank] - ys[P]; v.x = v.lane.spin ? v.lane.from.lane.x + v.lane.off : v.lane.x; }
+  const y0 = ys[P];
+  for (let r = 0; r < ys.length; r++) ys[r] -= y0;
+  for (const v of V) v.y = ys[v.rank];
+  across(L, ys);
+  for (const v of V) if (v.lane.spin) v.x = v.lane.from.lane.xAt(v.y) + v.lane.off;
   const sides = ports(edges);
   const at = [];
   for (const v of V) (at[v.rank] ??= []).push(v);
@@ -271,32 +274,88 @@ function spindles(L) {
   }
 }
 
-// Each lane's x: as near the middle as it can be, PITCH from the lanes it
-// shares a row with, or more where their reach needs CLEAR, in column
-// order. Lanes that never share a row may share an x. Out from column 0
-// each way: leftwards first, then rightwards, where a lane may need room
-// from one on the left.
-function across(L) {
+// A life's line drifts: each of its dots has its own x, and between two
+// dots the line runs an S-bend, upright at both, so its x at any height is
+// a mix of theirs. A lane pays BEND per px it moves across plus BENDS per
+// bend; it gains a px² for each px of height it sits one px nearer the
+// middle. So it stays straight unless coming in for long enough pays.
+const STIFF = { drift: [80, 800], loose: [30, 300], stiff: [200, 2000] };
+// A bend moves across at most SLANT times its height.
+let SLANT = .6;
+let BEND = STIFF.drift[0], BENDS = STIFF.drift[1];
+export function setStiff(name) { [BEND, BENDS, SLANT = SLANT] = STIFF[name] ?? name; }
+
+// Each lane's x at each of its dots, and so at every height: as near the
+// middle as stiffness allows, PITCH from the lanes it shares a row with,
+// and half way between two rows they both hold, or more where their reach
+// needs CLEAR, in column order. Lanes that never share a row may share an
+// x. Out from column 0 each way: leftwards first, then rightwards, where a
+// lane may need room from one on the left; each lane only from those
+// already placed.
+function across(L, ys) {
   const on = new Map();
   for (const l of L) if (!l.spin) for (let r = l.a; r <= l.b; r++) (on.get(r) ?? on.set(r, []).get(r)).push(l);
   const need = new Map(L.map((l) => [l, []]));
+  const holds = (l, r) => l.a <= r && r <= l.b;
   for (const [r, here] of on) {
     here.sort((a, b) => a.slot - b.slot);
     for (let i = 1; i < here.length; i++) {
       const [p, q] = [here[i - 1], here[i]], g = Math.max(PITCH, p.reach.get(r)[1] + CLEAR + q.reach.get(r)[0]);
-      need.get(q).push([p, g]);
-      need.get(p).push([q, -g]);
+      const at = [[ys[r], g]];
+      if (holds(p, r + 1) && holds(q, r + 1)) at.push([(ys[r] + ys[r + 1]) / 2, PITCH]);
+      for (const [y, g] of at) { need.get(q).push({ o: p, y, g, s: 1 }); need.get(p).push({ o: q, y, g, s: -1 }); }
     }
   }
   const lanes = L.filter((l) => !l.spin);
-  for (const l of lanes.filter((l) => l.slot <= 0).sort((a, b) => b.slot - a.slot)) {
-    l.x = 0;
-    for (const [q, g] of need.get(l)) if (g < 0 && q.slot <= 0 && q.x !== undefined) l.x = Math.min(l.x, q.x + g);
+  for (const l of lanes.filter((l) => l.slot <= 0).sort((a, b) => b.slot - a.slot)) drift(l, need.get(l), -1, ys);
+  for (const l of lanes.filter((l) => l.slot > 0).sort((a, b) => a.slot - b.slot)) drift(l, need.get(l), 1, ys);
+}
+
+// One lane's dots' x on side s, out from the middle, by the cheapest path
+// over the places its neighbours leave it (in u = s x, at least 0).
+function drift(l, need, s, ys) {
+  const D = [...l.nodes].sort((a, b) => a.rank - b.rank), K = D.length, dy = D.map((v) => v.y);
+  const lo = D.map(() => 0), mid = D.map(() => []);
+  for (const { o, y, g, s: t } of need) {
+    if (t !== s || !o.xAt) continue;
+    const u = s * o.xAt(y) + g;
+    let k = dy.findIndex((h) => h >= y);
+    if (k < 0) k = K - 1;
+    if (k === 0 || dy[k] === y) lo[k] = Math.max(lo[k], u);
+    else if (y > dy[K - 1]) lo[K - 1] = Math.max(lo[K - 1], u);
+    else mid[k].push([smooth((y - dy[k - 1]) / (dy[k] - dy[k - 1])), u]);
   }
-  for (const l of lanes.filter((l) => l.slot > 0).sort((a, b) => a.slot - b.slot)) {
-    l.x = 0;
-    for (const [p, g] of need.get(l)) if (g > 0) l.x = Math.max(l.x, p.x + g);
+  const C = [...new Set([0, ...lo, ...mid.flat().map((m) => m[1])].map((u) => Math.ceil(u * 2) / 2))].sort((a, b) => a - b);
+  // Straight past a spindle, which hangs beside it.
+  const held = D.map((v, k) => k > 0 && l.spins.some((c) => D[k - 1].rank < c.r && c.r < v.rank));
+  const pre = dy[0] - ys[l.a], post = ys[l.b] - dy[K - 1];
+  let cost = C.map((c) => (c >= lo[0] ? c * pre : Infinity));
+  const back = [];
+  for (let k = 1; k < K; k++) {
+    const h = dy[k] - dy[k - 1], b = [];
+    cost = C.map((c, i) => {
+      if (c < lo[k]) return Infinity;
+      let best = Infinity;
+      cost.forEach((w, j) => {
+        const a = C[j];
+        if (w === Infinity || (a !== c && (held[k] || Math.abs(c - a) > SLANT * h)) || mid[k].some(([f, u]) => a + (c - a) * f < u - 1e-6)) return;
+        const x = w + h * (a + c) / 2 + (a === c ? 0 : BEND * Math.abs(c - a) + BENDS);
+        if (x < best) { best = x; b[i] = j; }
+      });
+      return best;
+    });
+    back.push(b);
   }
+  let j = 0;
+  cost.forEach((w, i) => { if (w + C[i] * post < cost[j] + C[j] * post) j = i; });
+  for (let k = K - 1; k >= 0; k--) { D[k].x = s * C[j]; if (k) j = back[k - 1][j]; }
+  l.x = D[0].x;
+  l.xAt = (y) => {
+    if (y <= dy[0]) return D[0].x;
+    const k = dy.findIndex((h) => h >= y);
+    if (k < 0) return D[K - 1].x;
+    return D[k - 1].x + (D[k].x - D[k - 1].x) * smooth((y - dy[k - 1]) / (dy[k] - dy[k - 1] || 1));
+  };
 }
 
 // ─── Lines ─────────────────────────────────────────────────────────────────
@@ -382,6 +441,9 @@ function route(e, onRow, drawn) {
   const { v, d } = e;
   const P0 = e.a ? e.a.p : edge(d, [0, 1], TUCK), P1 = e.b ? e.b.p : edge(v, [0, -1], TUCK);
   let P = [P0, P1];
+  // A life drifting between two dots: its S-bend from middle to middle,
+  // inside its dots' edges.
+  if (e.kind === "life" && d.x !== v.x) P = [P0, ...bend([], d.x, d.y, 0, v.x, v.y, 0).filter((p) => P0[1] < p[1] && p[1] < P1[1]), P1];
   if (e.kind !== "life") {
     const x0 = Math.min(P0[0], P1[0]), x1 = Math.max(P0[0], P1[0]);
     const between = [];
@@ -401,7 +463,7 @@ function route(e, onRow, drawn) {
   e.P = P;
   const w = (e.kind === "fade" ? d : v).lane.light ? TOOL : LIFE;
   if (e.kind === "branch" || (e.kind === "life" && w === LIFE)) { e.W = null; return; }
-  if (e.kind === "life") { e.W = [w, w]; return; }
+  if (e.kind === "life") { e.W = P.map(() => w); return; }
   const len = [0];
   for (let i = 1; i < P.length; i++) len[i] = len[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
   const Lt = len[len.length - 1] || 1;
