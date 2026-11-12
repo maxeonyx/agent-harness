@@ -126,12 +126,11 @@ it: it returns at once. Say what you are starting. When you have nothing to do u
 the first of your background work to land (`until: any`, the default) or all of it (`until: all`), each result whole \
 and given you only there. Never `sleep` on your own work. A result that lands while you are not waiting reaches you \
 as a message, and starts a new turn if yours has ended. Max's words end a wait, saying what still runs.\n\n\
-In a chat with Max, end your turn whenever you have something to tell him, an answer to him included, or need him: \
-what still runs keeps running. Working on your own, end your turn only with your result, which cannot come while \
-background work you own still runs: until then, `wait`, and when Max's words end a wait, answer him and wait again. \
-`stop` background work when you no longer need it, or `pass` it to the agent that \
-started you (to Max, if he started you), who owns it from then on: do that only for what someone will still use \
-after you finish, such as a dev server or a browser tab, and say why.",
+End your turn only with your result, or, in a chat with Max, when you have answered him or need him: what still \
+runs keeps running. Working on your own, you cannot finish while background work you own still runs: `wait` for it, \
+and when Max's words end a wait, answer him and wait again. `stop` background work when you no longer need it, \
+or `pass` it to the agent that started you (to Max, if he started you), who owns it from then on: do that only for \
+what someone will still use after you finish, such as a dev server or a browser tab, and say why.",
     );
     if member {
         said.push_str(
