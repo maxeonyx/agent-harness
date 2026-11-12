@@ -9,7 +9,8 @@ import { layered } from "./layout.js";
 // not a spawn is a chip, hung from the leg that started it, and a task
 // with work out has a planned join under it, depending on the work whose
 // results are still due to it (the view's `due`): running, or finished and
-// not read yet. Work handed to Max is a side branch, never joined. Projects are the graph's connected pieces.
+// not read yet. Work handed to Max is a side branch, never joined.
+// Projects are the graph's connected pieces.
 //
 // Each live task is big: its planned join while it has work out, so it
 // sits below what it will take in, hollow only while it waits on it; its
@@ -106,7 +107,7 @@ export function stateOf(t) {
   return "brain";
 }
 // What a task waits on that still runs, as its hollow node's number and in
-// words: its agents, its background tasks (not those handed to Max) and
+// words: its agents, its background tasks (not those passed on) and
 // its other tool calls.
 export function waitingOn(t) {
   const w = t.waiting || {};

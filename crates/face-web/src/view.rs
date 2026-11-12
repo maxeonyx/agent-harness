@@ -345,7 +345,7 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "head": t.head().map(|h| h.to_string()),
         "legs": state.legs(t.id).map_or(Value::Null, |l| legs(t.id, l)),
         "leg": state.legs(t.id).map(|l| l.head.to_string()),
-        "work": state.legs(t.id).map_or(Value::Null, |l| work(state, l)),
+        "work": state.legs(t.id).map_or(Value::Null, |l| work(state, t.id, l)),
         // When its last request ended: a retry can end where it began.
         "ended": last.map(|e| e.at.seq.n),
         "role": state.role(t.role).map(|r| r.name.clone()),
@@ -411,7 +411,7 @@ fn legs(task: TaskId, legs: &Legs) -> Value {
 
 /// The task's background calls that are not spawns, on the legs that
 /// started them.
-fn work(state: &State, legs: &Legs) -> Value {
+fn work(state: &State, task: TaskId, legs: &Legs) -> Value {
     let work = legs.work.iter();
     let rows = work
         .filter(|w| state.members(Scope::Spawn(w.call)).next().is_none())
@@ -427,9 +427,9 @@ fn work(state: &State, legs: &Legs) -> Value {
                 "at": w.at.to_string(),
                 "running": record.is_some_and(|r| r.settled.is_none()),
                 "handed": record.is_some_and(|r| r.owner == Owner::Max),
-                // Its result is still to reach the task: running, or
-                // settled and not read yet.
-                "due": state.due(w.call),
+                // Its result is still to reach the task: it was not passed
+                // on, and it runs, or it settled and was not read yet.
+                "due": state.call_owner(w.call) == Some(task) && state.due(w.call),
             })
         });
     Value::Array(rows.collect())
