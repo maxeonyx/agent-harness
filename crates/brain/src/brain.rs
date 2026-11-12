@@ -1144,9 +1144,13 @@ Carry on with your next step, or, if your work is done, call `compact_and_report
                         Caller::Background { name, .. } => name.as_str(),
                         _ => "",
                     };
+                    let then = match parent.closes() {
+                        true => "You cannot finish until it has.",
+                        false => "You can end your turn meanwhile.",
+                    };
                     let said = words(&format!(
                         "Started `{name}` (`{}`) in the background: `wait` for it, or its result comes to you as a \
-message when it settles. You cannot finish until it has.",
+message when it settles. {then}",
                         started.tool
                     ));
                     let made = CallId(self.decider.next().event(batch.facts.len() as u32));
@@ -1163,11 +1167,14 @@ message when it settles. You cannot finish until it has.",
                 .call(id)
                 .is_some_and(|c| c.backgrounded.is_some());
             match meta::wait(self.state(), &parent, &input) {
-                Ok(_) if moved => Err(
+                Ok(_) if moved => Err(format!(
                     "Max wrote before this wait began, so it moved out of your round and \
-waited on nothing: answer him, then `wait` again"
-                        .to_string(),
-                ),
+waited on nothing: answer him, then {}",
+                    match parent.closes() {
+                        true => "`wait` again",
+                        false => "end your turn",
+                    }
+                )),
                 // It settles once what it waits for holds ([`Todo::Settle`]).
                 Ok(wait) => {
                     batch.facts.push(Fact::Call(id, CallEvent::Waits(wait)));

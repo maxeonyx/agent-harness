@@ -125,11 +125,12 @@ results.",
 it: it returns at once. Say what you are starting. When you have nothing to do until it lands, call `wait`: it returns \
 the first of your background work to land (`until: any`, the default) or all of it (`until: all`), each result whole \
 and given you only there. Never `sleep` on your own work. A result that lands while you are not waiting reaches you \
-as a message. Max's words end a wait, saying what still runs: answer him, then wait again.\n\n\
-End your turn only with your result, or, in a chat with Max, when you need him; otherwise `wait`. You cannot finish \
-while background work you own still runs. `stop` it when you no longer need it, or `pass` it to the agent that \
-started you (to Max, if he started you), who owns it from then on: do that only for what someone will still use \
-after you finish, such as a dev server or a browser tab, and say why.",
+as a message, and starts a new turn if yours has ended. Max's words end a wait, saying what still runs.\n\n\
+End your turn only with your result, or, in a chat with Max, when you have answered him or need him: what still \
+runs keeps running. Working on your own, you cannot finish while background work you own still runs: `wait` for it, \
+and when Max's words end a wait, answer him and wait again. `stop` background work when you no longer need it, \
+or `pass` it to the agent that started you (to Max, if he started you), who owns it from then on: do that only for \
+what someone will still use after you finish, such as a dev server or a browser tab, and say why.",
     );
     if member {
         said.push_str(
@@ -537,14 +538,17 @@ pub fn waited(state: &State, values: Values, call: CallId) -> Option<(Bytes, boo
     let wait = state.call(call)?.waits.as_ref()?;
     let (landed, running) = state.waited(call)?;
     let holds = wait.until.holds(landed.len(), running.len());
-    let stopping = (state.call_owner(call))
-        .and_then(|t| state.task(t))
-        .is_some_and(|t| t.drain().is_some());
+    let owner = state.call_owner(call).and_then(|t| state.task(t));
+    let stopping = owner.is_some_and(|t| t.drain().is_some());
     let mut said = Vec::new();
     if !holds {
-        said.push(text(match stopping {
-            true => "[harness] You are being stopped, so this wait ended.",
-            false => "[harness] Max wrote to you: answer him, then `wait` again.",
+        said.push(text(match (stopping, owner.is_some_and(Task::closes)) {
+            (true, _) => "[harness] You are being stopped, so this wait ended.",
+            (false, true) => "[harness] Max wrote to you: answer him, then `wait` again.",
+            (false, false) => {
+                "[harness] Max wrote to you: answer him and end your turn. What still runs keeps running, \
+and its result starts a new turn."
+            }
         }));
     }
     said.extend((landed.iter()).map(|c| crate::render::activity(state, values, *c)));

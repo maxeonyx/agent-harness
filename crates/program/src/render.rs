@@ -941,10 +941,13 @@ fn passed(state: &State, task: &Task, call: CallId) -> String {
             h.why.as_str(),
         )
     });
+    let finish = match task.closes() {
+        true => ", and you cannot finish while it runs",
+        false => "",
+    };
     text(&format!(
         "[harness] `{by}` passed you its background `{}` call `{name}`, which is still running: {why}\n\
-It is yours now: its result comes to you as a message when it settles, and you cannot finish while it runs. \
-`stop` it, or `pass` it up in turn.",
+It is yours now: its result comes to you as a message when it settles{finish}. `stop` it, or `pass` it up in turn.",
         record.call.tool
     ))
 }
