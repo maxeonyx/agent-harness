@@ -1,7 +1,8 @@
 // ─── The map's layout: lanes, and their lines ──────────────────────────────
-// Each life (a chat, an agent, a background call, an old version) keeps one
-// x, its lane, and its own line runs straight down it between its dots;
-// lanes pack as close as the rows they share allow. A life of one dot that
+// Each life (a chat, an agent, a background call, an old version) keeps a
+// lane, and its own line runs down it between its dots, straight unless
+// bending pays for itself; lanes pack as close as the rows they share
+// allow. A life of one dot that
 // its maker's next dot reads hangs beside its maker instead, a spindle. A
 // spawn bends from its maker all the way into the child's first dot; a
 // result bends from the last dot all the way into its reader. Rows are a
