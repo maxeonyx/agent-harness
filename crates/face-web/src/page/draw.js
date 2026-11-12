@@ -2,7 +2,7 @@ import { $, el, svgEl, when } from "./base.js";
 import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, LINE, look, positions, radius, routes, shortName, shown, stateOf, successor, unfolded, view, waitingOn } from "./map.js";
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
 import { ICON, layer, MARK, session, STATES } from "./blobs.js";
-import { LIFE, outline, polyline } from "./layout.js";
+import { GAP, LIFE, outline, polyline } from "./layout.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
 import { renderBuilds } from "./builds.js";
@@ -189,26 +189,40 @@ export function openAt(n) {
 // wherever they are shown, each point moving as the end nearer it does.
 // Lines of one colour and kind are one path: the tapers filled (each wound
 // the same way, so where they overlap they fill as one), the lines of one
-// width stroked, and the dashed ones each under one mask of dashes; a line
-// that passes under another is drawn in parts, with a gap there. Then each
-// finished call's gear.
-function line(key, r) {
-  const [from, to] = key.split(">");
+// width stroked, and the dashed ones each under one mask of dashes. A line
+// that passes under others is a path of its own, through a mask that
+// erases from it a band GAP wider each side than each line over it, near
+// where they cross. Then each finished call's gear.
+function bend(key) {
+  const [from, to] = key.split(">"), r = routes.get(key);
   const move = (id) => { const p = positions.get(id), s = shown.get(id); return s && p ? [s.x - p.x, s.y - p.y] : [0, 0]; };
-  const m0 = move(from), m1 = move(to), still = !m0[0] && !m0[1] && !m1[0] && !m1[1];
-  if (still && r.d) return r;
-  const y0 = r.parts[0].P[0][1], y1 = r.parts.at(-1).P.at(-1)[1];
-  const at = ([x, y]) => {
+  const m0 = move(from), m1 = move(to);
+  if (!r || (!m0[0] && !m0[1] && !m1[0] && !m1[1])) return null;
+  const y0 = r.P[0][1], y1 = r.P.at(-1)[1];
+  return ([x, y]) => {
     const u = y1 === y0 ? 0 : Math.max(0, Math.min(1, (y - y0) / (y1 - y0)));
     return [x + m0[0] + (m1[0] - m0[0]) * u, y + m0[1] + (m1[1] - m0[1]) * u];
   };
-  const parts = r.parts.map(({ P, W }) => ({ P: still ? P : P.map(at), W }));
-  const out = { d: parts.map(({ P, W }) => (W ? outline(P, W) : polyline(P))).join(""), mid: r.dashed ? parts.map(({ P }) => polyline(P)).join("") : "" };
+}
+function line(key, r) {
+  const at = bend(key), ats = r.gaps.map((g) => bend(g.over)), still = !at && ats.every((a) => !a);
+  if (still && r.d) return r;
+  const P = at ? r.P.map(at) : r.P, out = { d: r.W ? outline(P, r.W) : polyline(P), mid: r.dashed ? polyline(P) : "", s: "", f: "", box: null };
+  if (r.gaps.length) {
+    r.gaps.forEach((g, i) => {
+      const Q = ats[i] ? g.P.map(ats[i]) : g.P;
+      if (g.W) out.f += outline(Q, g.W.map((w) => w + 2 * GAP));
+      else out.s += polyline(Q);
+    });
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of P) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+    out.box = [x0 - 9, y0 - 9, x1 - x0 + 18, y1 - y0 + 18].map(Math.round);
+  }
   if (still) Object.assign(r, out);
   return out;
 }
-const paths = new Map();
-let dashes = null;
+const paths = new Map(), cuts = new Map();
+let dashes = null, defs = null, masks = 0;
 function pathFor(k, attrs, parent = edgesLayer) {
   let p = paths.get(k);
   if (!p) {
@@ -220,26 +234,55 @@ function pathFor(k, attrs, parent = edgesLayer) {
   }
   return p;
 }
+const set = (e, a, v) => { if (e[`_${a}`] !== v) { e[`_${a}`] = v; e.setAttribute(a, v); } };
+// A line under others: its own path, and the mask it is drawn through.
+function cutFor(k, r) {
+  let c = cuts.get(k);
+  if (!c) {
+    const mask = svgEl("mask"), rect = svgEl("rect"), s = svgEl("path"), f = svgEl("path"), path = svgEl("path");
+    mask.id = `cut${masks++}`;
+    mask.setAttribute("maskUnits", "userSpaceOnUse");
+    rect.setAttribute("fill", "#fff");
+    for (const [a, v] of Object.entries({ fill: "none", stroke: "#000", "stroke-width": LIFE + 2 * GAP })) s.setAttribute(a, v);
+    f.setAttribute("fill", "#000");
+    mask.append(rect, s, f);
+    defs.append(mask);
+    for (const [a, v] of Object.entries(r.W ? { fill: r.colour } : { fill: "none", stroke: r.colour, "stroke-width": LIFE, "stroke-linejoin": "round" })) path.setAttribute(a, v);
+    path.setAttribute("mask", `url(#${mask.id})`);
+    if (r.dashed) dashes.g.prepend(path);
+    else dashes.g.after(path);
+    c = { mask, rect, s, f, path };
+    cuts.set(k, c);
+  }
+  return c;
+}
 export function drawEdges() {
   if (!dashes) {
     edgesLayer.innerHTML = '<defs><mask id="dashes" maskUnits="userSpaceOnUse" x="-1e5" y="-1e5" width="2e5" height="2e5"><path fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="3.5 3"/></mask></defs><g mask="url(#dashes)"></g>';
     dashes = { mask: edgesLayer.querySelector("mask path"), g: edgesLayer.querySelector("g"), d: "" };
-    // Stacked in this order: fills, strokes, gears.
+    defs = edgesLayer.querySelector("defs");
+    // Stacked in this order: the lines under others, fills, strokes, gears.
     for (const c of Object.values(LINE)) pathFor(`f${c}`, { fill: c });
     for (const c of Object.values(LINE)) pathFor(`s${c}`, { fill: "none", stroke: c, "stroke-width": LIFE, "stroke-linejoin": "round" });
     for (const c of Object.values(GEAR)) pathFor(`g${c}`, { fill: c, "fill-rule": "evenodd" });
   }
   const ds = new Map(), add = (k, d) => { if (d) (ds.get(k) ?? ds.set(k, []).get(k)).push(d); };
+  const seen = new Set();
   let mask = "";
   for (const [key, r] of routes) {
-    const { d, mid } = line(key, r);
+    const { d, mid, s, f, box } = line(key, r), k = `${r.dashed ? "d" : ""}${r.W ? "f" : "s"}${r.colour}`;
     if (r.dashed) {
       // A dashed line: whole under the mask, its centre in the mask's dashes.
-      pathFor(`d${r.tapered ? "f" : "s"}${r.colour}`, r.tapered ? { fill: r.colour } : { fill: "none", stroke: r.colour, "stroke-width": LIFE }, dashes.g);
+      pathFor(k, r.W ? { fill: r.colour } : { fill: "none", stroke: r.colour, "stroke-width": LIFE }, dashes.g);
       mask += mid;
     }
-    add(`${r.dashed ? "d" : ""}${r.tapered ? "f" : "s"}${r.colour}`, d);
+    if (!box) { add(k, d); continue; }
+    const c = cutFor(`${k} ${key}`, r);
+    seen.add(`${k} ${key}`);
+    set(c.path, "d", d); set(c.s, "d", s); set(c.f, "d", f);
+    for (const e of [c.mask, c.rect]) ["x", "y", "width", "height"].forEach((a, i) => set(e, a, box[i]));
   }
+  for (const [k, c] of cuts) if (!seen.has(k)) { c.mask.remove(); c.path.remove(); cuts.delete(k); }
   for (const [id, s] of shown) {
     const n = graph.nodes.get(id);
     if (n?.kind === "chip" && !n.running && !s.card) { const c = centre(s); add(`g${GEAR[n.end]}`, gear(c.x, c.y, radius(n))); }
