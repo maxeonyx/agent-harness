@@ -96,10 +96,14 @@ pub struct Design {
     /// context. He sees a change on the keeper's own page: before and after
     /// at the size he saw it, painted live by the ground figure.
     pub keeper: RoleId,
-    /// The longest a ground may take to paint on a phone. The face stops a
-    /// slower paint and draws the paper; the check holds every ground to
-    /// it at a quarter of desktop speed. 150 ms: he opens pages on his phone
-    /// between other things.
+    /// How long the face waits for a ground, on Max's own device, before it
+    /// gives up, keeps the paper and reports a [`Fault`]. The page never
+    /// waits for its ground: he opens pages on his phone between other
+    /// things, and dictation starts as one opens. So the face paints off the
+    /// page's thread, shows the paper until the painting arrives, and keeps
+    /// each painting per task and window size, so a ground costs its time
+    /// once. Set from the paint times his devices report ([`Screen`]), since
+    /// no check here can stand in for his phone's GPU.
     pub paint_ms: u32,
     /// The files this version was read from.
     pub source: Option<Observation>,
@@ -126,8 +130,8 @@ pub struct Design {
 /// chart, Kauri up through a forest.
 ///
 /// The ground fills the cover behind the lead, composed around the lead's
-/// box so text sits on calm ground, then fades into the theme's paper as
-/// Max scrolls. An agent's figures use the palette's tokens, never colours,
+/// box so text sits on calm ground, and leaves with the cover as Max
+/// scrolls, its foot dissolving into the theme's paper. An agent's figures use the palette's tokens, never colours,
 /// so a figure redraws in any theme. The state tones ([`Tone`]) are never a
 /// theme's. An agent chooses its theme's name once and keeps it
 /// ([`crate::page::Description`]); a revised theme reaches it from its
@@ -155,8 +159,11 @@ pub struct Theme {
     /// in its seed and size, so the same agent looks the same in every face,
     /// no other agent looks quite like it, and the keeper can paint again
     /// exactly what Max saw ([`Screen`]). The face paints it once when the
-    /// window opens, at up to twice the CSS pixels, off the page's thread,
-    /// and never animates it; scrolling slides and fades it into the paper.
+    /// window opens, at up to twice the CSS pixels ([`Design::paint_ms`]),
+    /// and never animates it. Each part of the painting (the sun, the
+    /// ridges, the coast) draws from its own stream of the seed, so a
+    /// revision to one part leaves the rest of every agent's painting where
+    /// it was.
     /// A ground that throws or passes [`Design::paint_ms`] leaves plain
     /// paper and reports itself ([`Fault`]). The face runs only grounds some
     /// version of the design system declared, since a ground is a program
@@ -166,9 +173,11 @@ pub struct Theme {
     /// at phone, desktop and thumbnail sizes, for a set of seeds and the
     /// paintings Max loved, and holds it to its bars: the lead's ink against
     /// the ground in the lead's box at 7:1 for 95% of it and never under
-    /// 4.5:1, since he reads it every day; [`Design::paint_ms`] at a quarter
-    /// of desktop speed; a thumbnail that reads as its theme, since that is
-    /// how he finds where he is; the same pixels when painted twice.
+    /// 4.5:1, since he reads it every day; a thumbnail that reads as its
+    /// theme, since that is how he finds where he is; the same pixels when
+    /// painted twice. It reports the time to a finished canvas on a phone at
+    /// a quarter of desktop speed, rastered on the CPU, as the slow case: a
+    /// ground slower than its peers there is the one to make cheaper.
     pub ground: ValueId,
     /// Shown to Max on the keeper's page and never offered to
     /// `choose_theme`: a new theme waits for his choice, so no agent can
