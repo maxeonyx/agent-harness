@@ -221,8 +221,7 @@
   .io.found a { text-decoration: none; } .io.found .host { opacity: .6; }
   .chip { display: inline-flex; align-items: center; gap: .4em; padding: .25em .7em .25em .35em; border: 1px solid var(--line); border-radius: 999px; background: var(--white); font: 600 13px var(--serif); text-decoration: none; color: inherit; }
   .chip:hover { border-color: var(--ink); }
-  .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid var(--s, var(--ink)); background: var(--s); color: var(--on, inherit); display: grid; place-items: center; font: 600 9px var(--serif); }
-  .chip:is(.paused, .cancelled) .d { background: none; }
+  .chip .d { width: 1.15em; height: 1.15em; border-radius: 50%; border: 1.5px solid; display: grid; place-items: center; font: 600 9px/1 var(--serif); }
   .chip.done { color: var(--muted); }
   /* The log's end: its blob, below the last entry in a room that is the
      log's bottom padding, big, a little over the entry's end and a little

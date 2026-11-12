@@ -37,21 +37,26 @@ export function dress(s, t, jump = false) {
   return s;
 }
 function stateFor(t) { return trouble(t) ? "held" : stateOf(t); }
-// The colours of task t's blob, for what shows its state as a dot: its fill
-// and its edge.
-export function colours(t) {
-  const [fill, edge] = STATES[stateFor(t)].col;
-  return { fill: `rgb(${fill})`, edge: `rgb(${edge})` };
+// The colours of task t's blob, for what shows its state as a dot: its fill,
+// its edge and its letter.
+function colours(t) {
+  const [fill, edge, ink] = STATES[stateFor(t)].col;
+  return { fill: `rgb(${fill})`, edge: `rgb(${edge})`, ink: `rgb(${ink})` };
+}
+// An element painted in task t's blob's colours, or cleared for none.
+export function paint(d, t) {
+  const c = t && colours(t);
+  d.style.background = c?.fill || "";
+  d.style.borderColor = c?.edge || "";
+  d.style.color = c?.ink || "";
+  return d;
 }
 // A task's state as a small dot (the card's header, the card asleep): its
 // blob's colours, in a shape `look`'s classes give; a chat not started yet
 // is a dashed ring.
 export function dot(d, t) {
   d.className = `mini ${t ? look(t).cls : "starting"}`;
-  const c = t && colours(t);
-  d.style.background = c?.fill || "";
-  d.style.borderColor = c?.edge || "";
-  return d;
+  return paint(d, t);
 }
 
 export function drawMap() {
