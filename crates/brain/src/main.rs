@@ -226,7 +226,7 @@ use harness_core::schema;
 use harness_core::id::ValueId;
 use harness_core::role::UnknownEffort;
 use harness_face_web::{Dictation, Face, Feed, Folded, Source, Wiring};
-use harness_provider::{Client, Login};
+use harness_provider::{Client, Login, SCRIPTED};
 use harness_runtime::Cancel;
 use harness_store::Store;
 
@@ -407,6 +407,10 @@ fn run() -> Result<(), Failed> {
         errln!("harness-brain: the provider's models: {e}; aliases keep what they resolved to");
         vec![harness_provider::scripted()]
     });
+    // Whether the launch waits for a sign-in: not when every role runs on
+    // the scripted model, which sends nothing on the login, so a test
+    // brain or a rehearsal's scratch brain on no login runs as before.
+    let signed_out = every.as_deref() != Some(SCRIPTED) && !login.signed_in().unwrap_or(true);
     // An installed start makes a new database if none is there.
     let installed = match (&check, start) {
         (None, Start::Installed) => {
@@ -460,7 +464,15 @@ fn run() -> Result<(), Failed> {
         });
     };
     if check.is_some() {
-        gate::gate(&db, &client, roles.as_deref(), port, passed, serve)?;
+        gate::gate(
+            &db,
+            &client,
+            roles.as_deref(),
+            signed_out,
+            port,
+            passed,
+            serve,
+        )?;
         if !keep_serving {
             return Ok(());
         }
@@ -476,14 +488,26 @@ fn run() -> Result<(), Failed> {
             for d in &divergences {
                 errln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
             }
-            let opening = Opening::of(decider.state(), decider.next(), roles.as_deref())?;
+            let opening = Opening::of(
+                decider.state(),
+                decider.next(),
+                roles.as_deref(),
+                signed_out,
+            )?;
             let (listener, tls) = gate::serve(port)?;
             serve(&decider, listener, tls);
             (decider, opening)
         }
         None => {
-            let gate::Passed { decider, opening } =
-                gate::gate(&db, &client, roles.as_deref(), port, passed, serve)?;
+            let gate::Passed { decider, opening } = gate::gate(
+                &db,
+                &client,
+                roles.as_deref(),
+                signed_out,
+                port,
+                passed,
+                serve,
+            )?;
             (decider.storage().write()).map_err(|e| format!("the database writes: {e}"))?;
             install(&db)?;
             (decider, opening)

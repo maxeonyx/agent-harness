@@ -73,8 +73,9 @@ impl fmt::Display for Failure {
     }
 }
 
-/// Run the gate on the database at `db`, reading the role files in `roles`
-/// and binding `port` (0 for any), with `client`. Once it has decided, the
+/// Run the gate on the database at `db`, reading the role files in `roles`,
+/// launching `signed_out` ([`Opening::of`]) and binding `port` (0 for any),
+/// with `client`. Once it has decided, the
 /// fold, the port and its certificate go to `face`, which serves them
 /// read-only. Each pathway that passes is handed to `passed` with how long
 /// it took; every one that fails is returned. A pathway that cannot run
@@ -83,6 +84,7 @@ pub fn gate(
     db: &Path,
     client: &Client,
     roles: Option<&Path>,
+    signed_out: bool,
     port: u16,
     mut passed: impl FnMut(Pathway, Duration),
     face: impl FnOnce(&schema::Brain<Store>, TcpListener, Arc<rustls::ServerConfig>),
@@ -104,7 +106,7 @@ pub fn gate(
     check(Pathway::Fold, skipped, started);
 
     let started = Instant::now();
-    let opening = decide(&decider, roles);
+    let opening = decide(&decider, roles, signed_out);
     let decided = opening
         .as_ref()
         .map(|_| ())
@@ -158,10 +160,14 @@ fn fold(db: &Path) -> Result<(schema::Brain<Store>, Result<(), Vec<String>>), Ve
 
 /// What a launch would say first, said only to a copy of the state, and on
 /// that state the to-do list and the face's view.
-fn decide(decider: &schema::Brain<Store>, roles: Option<&Path>) -> Result<Opening, String> {
+fn decide(
+    decider: &schema::Brain<Store>,
+    roles: Option<&Path>,
+    signed_out: bool,
+) -> Result<Opening, String> {
     caught(|| {
         let at = decider.next();
-        let opening = Opening::of(decider.state(), at, roles)?;
+        let opening = Opening::of(decider.state(), at, roles, signed_out)?;
         let state = (opening.said(decider.state(), at))
             .map_err(|why| format!("the state refuses its launch: {why:?}"))?;
         let now = now();
