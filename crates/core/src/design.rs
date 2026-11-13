@@ -162,8 +162,11 @@ pub struct Theme {
     /// Its ground: an ES module whose `paint(ctx, scene)` paints into a 2D
     /// canvas, given the canvas's size, the task's id as its seed, its
     /// [`Identity`], and the box the page's lead sits in, which it keeps
-    /// calm. It also names the colour each identity paints in, which the
-    /// map draws the agent in. It is deterministic in its seed, identity and
+    /// calm. It also names the colour each identity paints in. The map
+    /// paints each project (Max's root task and all under it) with its
+    /// root's ground, faint behind the graph and fullest below the now
+    /// line, each live agent in a pool of its identity's colour, repainted
+    /// only when the zoom passes a step and never while he pans. It is deterministic in its seed, identity and
     /// size, so the same agent looks the same in every face,
     /// no other agent looks quite like it, and the keeper can paint again
     /// exactly what Max saw ([`Screen`]). The face paints it once when the
