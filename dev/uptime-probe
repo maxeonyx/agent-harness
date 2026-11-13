@@ -44,7 +44,7 @@ probe() {
   body=$(mktemp "$state/wiring.XXXXXX")
   local face tunnel dictation errors
   face=$(get https://localhost:4320/wiring "$body" || true)
-  dictation=$(jq -r '.dictation // "unknown"' "$body" 2>/dev/null || echo unknown)
+  dictation=$(jq -r '.dictation | if . == null then "unknown" else tostring end' "$body" 2>/dev/null || echo unknown)
   rm -f "$body"
   tunnel=$(get https://harness.maxeonyx.com/ /dev/null || true)
   local since=()
