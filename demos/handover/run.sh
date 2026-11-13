@@ -26,8 +26,7 @@ mkdir -p "$work"
 git clone -q "$repo" "$work/clone"
 git -C "$work/clone" checkout -q --detach "$(git -C "$repo" rev-parse HEAD)"
 # A target directory of its own, kept between runs so dependencies stay built.
-mkdir "$work/clone/.cargo"
-printf '[build]\ntarget-dir = "%s/.demo-handover-target.ignore"\n' "$repo" > "$work/clone/.cargo/config.toml"
+export CARGO_TARGET_DIR=$repo/.demo-handover-target.ignore
 git -C "$work/clone" config user.name demo
 git -C "$work/clone" config user.email demo@localhost
 
