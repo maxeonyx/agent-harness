@@ -26,8 +26,6 @@ import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const PAGE = path.join(ROOT, "crates/face-web/src/page");
-// The display faces, served beside the page's files as the face will once it serves binary files.
-const FONTS = path.join(ROOT, "crates/face-web/src/fonts");
 // The phone's paint budget in the slow case, in ms.
 const PAINT_MS = 500;
 const SIZES = {
@@ -71,7 +69,7 @@ window.__ready = true;
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://x");
   if (url.pathname === "/") return res.writeHead(200, { "content-type": "text/html" }).end(VIEW);
-  const name = path.basename(url.pathname), file = path.join(name.endsWith(".woff2") ? FONTS : PAGE, name);
+  const name = path.basename(url.pathname), file = path.join(PAGE, name);
   if (!url.pathname.startsWith("/page/") || !fs.existsSync(file)) return res.writeHead(404).end();
   const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".woff2") ? "font/woff2" : "application/octet-stream";
   res.writeHead(200, { "content-type": type }).end(fs.readFileSync(file));

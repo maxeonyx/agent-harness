@@ -330,9 +330,7 @@ impl<S: Source> Face<S> {
     fn build(&self) -> io::Result<String> {
         static BUILT_IN: OnceLock<String> = OnceLock::new();
         let Some(dir) = &self.wiring.page else {
-            return Ok(BUILT_IN
-                .get_or_init(|| build(PAGE.iter().map(|(n, t)| (*n, t.as_bytes()))))
-                .clone());
+            return Ok(BUILT_IN.get_or_init(|| build(PAGE.iter().copied())).clone());
         };
         let mut names = std::fs::read_dir(dir)?
             .map(|e| Ok(e?.file_name().to_string_lossy().into_owned()))
@@ -343,7 +341,7 @@ impl<S: Source> Face<S> {
             .iter()
             .map(|n| Ok((n.as_str(), self.page_file(n)?)))
             .collect::<io::Result<Vec<_>>>()?;
-        Ok(build(files.iter().map(|(n, t)| (*n, t.as_bytes()))))
+        Ok(build(files.iter().map(|(n, b)| (*n, &**b))))
     }
 
     /// What the page runs, by its name in a build: the tab's wasm, or one of
@@ -352,20 +350,17 @@ impl<S: Source> Face<S> {
         if name == "tab.wasm" {
             return Ok(Cow::Borrowed(TAB));
         }
-        Ok(match self.page_file(name)? {
-            Cow::Borrowed(text) => Cow::Borrowed(text.as_bytes()),
-            Cow::Owned(text) => Cow::Owned(text.into_bytes()),
-        })
+        self.page_file(name)
     }
 
     /// One of the page's files, by its name in `page/`: from disk, read now,
     /// if [`Wiring::page`] says where; otherwise as built in.
-    fn page_file(&self, name: &str) -> io::Result<Cow<'static, str>> {
+    fn page_file(&self, name: &str) -> io::Result<Cow<'static, [u8]>> {
         let missing = || io::Error::new(ErrorKind::NotFound, format!("no page file {name}"));
         match &self.wiring.page {
             // Only a name in the directory, never a path out of it.
             Some(dir) if !name.contains('/') && !name.starts_with('.') => {
-                std::fs::read_to_string(dir.join(name))
+                std::fs::read(dir.join(name))
                     .map(Cow::Owned)
                     .map_err(|e| io::Error::new(e.kind(), format!("page file {name}: {e}")))
             }
@@ -373,9 +368,19 @@ impl<S: Source> Face<S> {
             None => PAGE
                 .iter()
                 .find(|(n, _)| *n == name)
-                .map(|(_, text)| Cow::Borrowed(*text))
+                .map(|(_, bytes)| Cow::Borrowed(*bytes))
                 .ok_or_else(missing),
         }
+    }
+
+    /// One of the page's files that the document is joined from, as text.
+    fn page_text(&self, name: &str) -> io::Result<String> {
+        String::from_utf8(self.page_file(name)?.into_owned()).map_err(|_| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!("page file {name} is not UTF-8"),
+            )
+        })
     }
 
     /// Serve one connection: read its request, answer it.
@@ -385,7 +390,7 @@ impl<S: Source> Face<S> {
             "/" => match self.build().and_then(|build| {
                 let document = DOCUMENT
                     .iter()
-                    .map(|name| self.page_file(name))
+                    .map(|name| self.page_text(name))
                     .collect::<io::Result<String>>()?;
                 Ok(document.replace("{build}", &build))
             }) {
@@ -398,16 +403,11 @@ impl<S: Source> Face<S> {
                 Err(e) => http::refuse(&mut stream, "500 Internal Server Error", &e.to_string()),
             },
             "/page/sw.js" => match self.page_file("sw.js") {
-                Ok(text) => http::respond(&mut stream, JS, text.as_bytes(), false),
+                Ok(bytes) => http::respond(&mut stream, JS, &bytes, false),
                 Err(e) => http::refuse(&mut stream, "500 Internal Server Error", &e.to_string()),
             },
             "/page/manifest.webmanifest" => match self.page_file("manifest.webmanifest") {
-                Ok(text) => http::respond(
-                    &mut stream,
-                    "application/manifest+json",
-                    text.as_bytes(),
-                    false,
-                ),
+                Ok(bytes) => http::respond(&mut stream, "application/manifest+json", &bytes, false),
                 Err(e) => http::refuse(&mut stream, "500 Internal Server Error", &e.to_string()),
             },
             "/icon.png" => http::respond(&mut stream, "image/png", ICON, false),
@@ -481,6 +481,7 @@ impl<S: Source> Face<S> {
                     let kind = match name.rsplit_once('.') {
                         Some((_, "js")) => JS,
                         Some((_, "wasm")) => "application/wasm",
+                        Some((_, "woff2")) => "font/woff2",
                         _ => return http::not_found(&mut stream),
                     };
                     let now = match self.build() {
@@ -1029,7 +1030,7 @@ fn now() -> Timestamp {
 
 /// The page's files, built in: every file in `page/`, by name, as
 /// `build.rs` lists them. [`Wiring::page`] reads them from disk instead.
-const PAGE: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/page.rs"));
+const PAGE: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/page.rs"));
 /// The page's document and its style sheet, joined from these files in this
 /// order, with `{build}` in them the build they make. Its script is the
 /// modules `page/*.js`, served at `/page/<build>/<name>`: `main.js` starts
