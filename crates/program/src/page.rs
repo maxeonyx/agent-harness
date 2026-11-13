@@ -13,7 +13,7 @@
 //! `ask` call returns at once, and the background call it makes stays open
 //! until it settles, its result reaching the agent as a message.
 
-use harness_core::ask::{Ask, Choice, Link, Otherwise, Want};
+use harness_core::ask::{Ask, Choice, Link, Otherwise, Verdict, Want};
 use harness_core::body::{Problem, Spotted};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::design::{Feedback, FeedbackEvent};
@@ -23,7 +23,7 @@ use harness_core::limb::{Audience, Tool};
 use harness_core::page::{Claim, Description, Lead, PageEvent, Ref, Said, Sheet, Spot, Step};
 use harness_core::source::ItemKey;
 use harness_core::state::State;
-use harness_core::task::{Origin, Task, TaskEvent};
+use harness_core::task::{Task, TaskEvent};
 use harness_core::value::Bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -35,7 +35,7 @@ pub use harness_core::task::PRESENT;
 pub const PAGE_WRITE: &str = "page_write";
 pub const PAGE_EDIT: &str = "page_edit";
 pub const DESCRIBE: &str = "describe";
-pub const ASK: &str = "ask";
+pub use harness_core::ask::ASK;
 pub const WITHDRAW: &str = "withdraw";
 pub const CITE: &str = "cite";
 pub const PASS_ON: &str = "pass_on";
@@ -60,14 +60,7 @@ pub struct Done {
 /// The task whose page `task`'s page tools act on: its nearest ancestor that
 /// is not a fork, since a fork is its source doing a step.
 pub fn owner(state: &State, task: &Task) -> TaskId {
-    let mut at = task;
-    while let Origin::Fork { from } = at.origin {
-        match state.task(from) {
-            Some(source) => at = source,
-            None => break,
-        }
-    }
-    at.id
+    state.page_of(task.id)
 }
 
 /// Run `tool` for `task`'s call `call`. `mint(i)` is the id of the `i`th
@@ -701,6 +694,49 @@ fn pass_on(
         )],
         said: "Passed on to the design keeper: it is kept, open until the keeper answers it."
             .into(),
+    })
+}
+
+/// Settle the open ask `call` on the answer Max pressed for it
+/// ([`State::pressed`]): what the asker reads as the call's result.
+pub fn pressed(state: &State, values: Values, call: CallId) -> Result<Done, String> {
+    let (delivery, verdict) = state.pressed(call).ok_or("no answer was pressed")?;
+    let record = state.call(call).ok_or("no such ask")?;
+    let ask: Ask = serde_json::from_slice(&values(record.call.input))
+        .map_err(|e| format!("the ask's input does not read: {e}"))?;
+    let answer = match (verdict, &ask.want) {
+        (Verdict::Yes, Want::Go) => "Go".to_string(),
+        (Verdict::Yes, Want::Do { .. }) => "Done".to_string(),
+        (Verdict::Yes, _) => "Yes".to_string(),
+        (Verdict::No, _) => "No".to_string(),
+        (Verdict::Chose(key), Want::Choose { options, .. }) => {
+            match options.iter().find(|o| &o.key == key) {
+                Some(o) => format!("{} (`{key}`)", o.label),
+                None => format!("`{key}`"),
+            }
+        }
+        (Verdict::Chose(key), _) => format!("`{key}`"),
+        (Verdict::Reject, _) => {
+            "Wrong question: he rejects its frame, so ask again, revised, or withdraw it"
+                .to_string()
+        }
+    };
+    let words = match state.delivery(*delivery).map(|d| &d.delivery.content) {
+        Some(harness_core::delivery::Content::Words(w)) => *w,
+        _ => return Err("the press came with no words".into()),
+    };
+    let said = match crate::render::words(&values(words)).is_empty() {
+        true => format!("Max answered by pressing: {answer}. He sent no words with it."),
+        false => format!(
+            "Max answered by pressing: {answer}, with his words `{}`.",
+            crate::render::label(words)
+        ),
+    };
+    let (model, outcome) = completed(&said);
+    Ok(Done {
+        values: vec![model],
+        facts: vec![Fact::Call(call, CallEvent::Settled(outcome))],
+        said,
     })
 }
 

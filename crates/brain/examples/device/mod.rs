@@ -210,7 +210,13 @@ impl Device {
             values: vec![words.clone()],
             facts: vec![
                 Fact::Draft(draft, DraftEvent::Opened { session, at: None }),
-                Fact::Draft(draft, DraftEvent::Send { text: words.id() }),
+                Fact::Draft(
+                    draft,
+                    DraftEvent::Send {
+                        text: words.id(),
+                        presses: Vec::new(),
+                    },
+                ),
             ],
         })
     }

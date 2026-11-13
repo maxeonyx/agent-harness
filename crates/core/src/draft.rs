@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ask::Press;
 use crate::context::EntryId;
 use crate::fact::Rejected;
 use crate::id::{DeliveryId, EventId, ReplicaId, TaskId, ValueId};
@@ -52,8 +53,13 @@ pub enum DraftEvent {
     /// are lost.
     Text(ValueId),
     /// Deliver exactly `text`: the words on his screen, whatever another
-    /// device typed meanwhile.
-    Send { text: ValueId },
+    /// device typed meanwhile, with the answers he pressed on the task's
+    /// page, each settling its ask ([`crate::state::Todo::Pressed`]).
+    Send {
+        text: ValueId,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        presses: Vec<Press>,
+    },
     /// He threw it away. Text typed into it afterwards, on another device
     /// that had not seen the discard, brings it back.
     Discarded,
