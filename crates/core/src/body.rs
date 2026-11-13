@@ -2,9 +2,9 @@
 //! design language reads it.
 //!
 //! **Concept.** The agent's whole vocabulary for content. A body is GFM
-//! markdown, stored as a value, and read by one parser, in Rust: the brain
-//! checks every edit with it, and the tab draws with it, compiled to wasm,
-//! so what was checked is what is drawn. The vocabulary is small and fixed:
+//! markdown, stored as a value, and read by one parser, `harness-body`: the
+//! brain checks every edit with it, and parses each body for the view the
+//! face draws, so what was checked is what is drawn. The vocabulary is small and fixed:
 //! paragraphs, lists, quotes, code, and four components with rendering of
 //! their own (a figure, a table, a fold, a live name). There are no cards,
 //! grids, stat tiles, headings, bold, italic, colours or script, since the

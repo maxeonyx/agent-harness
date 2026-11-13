@@ -17,6 +17,11 @@ use pulldown_cmark::{CodeBlockKind, Event, LinkType, Options, Parser, Tag};
 
 use html::Tok;
 
+/// How deep quotes, lists, folds and inline spans nest before the rest of
+/// one is read as its plain text: the parser recurses per level, and an
+/// agent's body must not be able to overflow the brain's stack.
+const DEEPEST: usize = 16;
+
 /// A problem in a body, at its 1-based line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Found {
@@ -59,6 +64,8 @@ struct Reader<'m, 'k> {
     html: VecDeque<(Tok, u32)>,
     /// How many folds are open where the reader is.
     folds: usize,
+    /// How many containers are open where the reader is.
+    depth: usize,
     /// The task box of the list item being read.
     marker: Option<bool>,
     kinds: &'k [&'k str],
@@ -84,6 +91,7 @@ impl<'m, 'k> Reader<'m, 'k> {
             at: 0,
             html: VecDeque::new(),
             folds: 0,
+            depth: 0,
             marker: None,
             kinds,
             found: Vec::new(),
@@ -108,8 +116,23 @@ impl<'m, 'k> Reader<'m, 'k> {
     }
 
     /// The blocks up to the end of the container being read, which it
-    /// consumes, or, in a fold, up to its `</details>`.
+    /// consumes, or, in a fold, up to its `</details>`. Past [`DEEPEST`], a
+    /// container is one paragraph of its text, and a fold is left open.
     fn blocks(&mut self, in_fold: bool) -> Vec<Block> {
+        if self.depth >= DEEPEST {
+            if in_fold {
+                return Vec::new();
+            }
+            let pieces = self.flat();
+            return self.para(pieces).into_iter().collect();
+        }
+        self.depth += 1;
+        let out = self.blocks_within(in_fold);
+        self.depth -= 1;
+        out
+    }
+
+    fn blocks_within(&mut self, in_fold: bool) -> Vec<Block> {
         let mut out = Vec::new();
         loop {
             if let Some((tok, line)) = self.html.pop_front() {
@@ -181,12 +204,14 @@ impl<'m, 'k> Reader<'m, 'k> {
     }
 
     fn fold(&mut self, line: u32, out: &mut Vec<Block>) {
-        let summary = match self.html.front() {
-            Some((Tok::Summary(_), _)) => match self.html.pop_front() {
-                Some((Tok::Summary(s), _)) => s,
-                _ => unreachable!("matched"),
-            },
-            _ => String::new(),
+        let summary = match self.html.pop_front() {
+            Some((Tok::Summary(s), _)) => s,
+            other => {
+                if let Some(tok) = other {
+                    self.html.push_front(tok);
+                }
+                String::new()
+            }
         };
         if is_label(&summary) {
             self.spot(line, Problem::Summary);
@@ -312,12 +337,40 @@ impl<'m, 'k> Reader<'m, 'k> {
     /// The pieces up to the end of the inline container being read, which
     /// it consumes.
     fn inlines(&mut self) -> Vec<Piece> {
+        if self.depth >= DEEPEST {
+            return self.flat();
+        }
+        self.depth += 1;
         let mut out = Vec::new();
         while let Some((event, line)) = self.next() {
             if let Event::End(_) = event {
                 break;
             }
             self.inline(event, line, &mut out);
+        }
+        self.depth -= 1;
+        out
+    }
+
+    /// The text up to the end of the container being read, which it
+    /// consumes without recursing: a container nested past [`DEEPEST`].
+    fn flat(&mut self) -> Vec<Piece> {
+        if let Some((_, line)) = self.events.get(self.at) {
+            self.spot(*line, Problem::Nested);
+        }
+        let mut out = Vec::new();
+        let mut open = 0;
+        while let Some((event, _)) = self.next() {
+            match event {
+                Event::Start(_) => open += 1,
+                Event::End(_) if open == 0 => break,
+                Event::End(_) => open -= 1,
+                Event::Text(t) | Event::Code(t) => out.push(Piece::Inline(Inline::Text(t.into()))),
+                Event::SoftBreak | Event::HardBreak => {
+                    out.push(Piece::Inline(Inline::Text(" ".into())))
+                }
+                _ => {}
+            }
         }
         out
     }

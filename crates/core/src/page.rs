@@ -84,8 +84,7 @@
 //! [`crate::task::TaskEvent::Described`], on [`crate::task::Task`]; feedback
 //! is [`crate::fact::Fact::Feedback`]; an ask is a call. A round that
 //! presents ends the turn on Max's move once its calls have settled.
-//! `describe` is in the meta tool set, for every task; the rest are the
-//! `max` set's.
+//! Every page tool, `describe` included, is the `max` set's.
 //!
 //! **Not yet folded.** `Fact::Kind(SourceKind)`, `Fact::Design(Design)`,
 //! `TaskEvent::Looked(Look)`, `Phase::AwaitingMax` carrying an
