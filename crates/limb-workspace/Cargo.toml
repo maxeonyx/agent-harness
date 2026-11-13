@@ -3,7 +3,7 @@ name = "harness-limb-workspace"
 version = "0.0.0"
 edition.workspace = true
 license.workspace = true
-description = "The workspace tool set: a shell and file tools in any directory on the limb's machine; and the user set, Max's own instructions and skills."
+description = "The workspace tool set: a shell and file tools in any directory on the limb's machine; and the config set, Max's own instructions and skills."
 
 [dependencies]
 harness-core = { path = "../core" }

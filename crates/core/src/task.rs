@@ -537,7 +537,7 @@ impl Start {
     }
 }
 
-/// The meta tool by which an agent facing Max ([`crate::state::State::faces_max`])
+/// The [`crate::limb::MAX`] set's tool by which an agent facing Max ([`crate::state::State::faces_max`])
 /// opens a user-facing chat for him: a fresh agent in a role its own role
 /// starts, the one member of a background call's scope, so its opener owns
 /// it as background work and hears its result when he marks it done.
@@ -580,10 +580,9 @@ pub const OPEN_CHAT: &str = "open_chat";
 /// makes a session user-facing" (28 Oct): `open_chat` is held only by a
 /// task he is talking to.
 ///
-/// **Not built yet.** Nothing offers the `max` set: the facing instructions
-/// are in the `meta` set's and the roles' prompts, every task reads both
-/// ways of ending a turn, and no tool asks Max. [`OPEN_CHAT`] is built, and
-/// held by the `meta` set of every task facing Max.
+/// **Not built yet.** The `max` set holds [`OPEN_CHAT`] and the facing
+/// instructions only: no tool asks Max, and no agent has a page of its
+/// own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     /// The end of a turn completes the task, once nothing it started is

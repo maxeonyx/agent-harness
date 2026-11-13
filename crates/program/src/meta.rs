@@ -15,12 +15,10 @@
 //! has. `wait` waits in a round on some of that work, and its output is
 //! their results ([`harness_core::call::Wait`]). `stop`
 //! abandons one of those calls, and `pass` hands one up the tree
-//! ([`harness_core::call::Owner`]). `open_chat`, held only by a task facing
-//! Max, opens a user-facing chat for him as background work of its caller:
-//! a background call whose scope's one member is that chat. Their effects (the members' `Created`
-//! facts) are appended in the same batch as the
-//! `Dispatched`, so a crash leaves both or neither, and a restart never
-//! spawns twice.
+//! ([`harness_core::call::Owner`]). Their effects (the members' `Created`
+//! facts), and those of the [`crate::max`] set's `open_chat`, are appended
+//! in the same batch as the `Dispatched`, so a crash leaves both or
+//! neither, and a restart never spawns twice.
 
 use harness_core::call::{Call, Caller, Until, Wait};
 use harness_core::context::Rendered;
@@ -50,7 +48,6 @@ pub const WAIT: &str = "wait";
 pub const STOP: &str = "stop";
 pub const PASS: &str = "pass";
 pub const ATTACH: &str = "attach";
-pub use harness_core::task::OPEN_CHAT;
 
 /// The most of one attached call's text that is shown: about what a cut
 /// tool output shows.
@@ -62,10 +59,8 @@ pub const SET: &str = "meta";
 /// The `meta` set the brain `limb` gives a root in a role that starts
 /// `roles`; `dir` when the task has a working directory, which a fresh
 /// agent works in unless told otherwise; `member` when the task is in a
-/// scope it can add siblings to; `facing` when it faces Max
-/// ([`State::faces_max`]), so it can open chats for him in those roles.
-pub fn set(limb: LimbId, roles: &[&Role], dir: bool, member: bool, facing: bool) -> ToolSet {
-    let facing = facing && !roles.is_empty();
+/// scope it can add siblings to.
+pub fn set(limb: LimbId, roles: &[&Role], dir: bool, member: bool) -> ToolSet {
     let mut said = String::from(
         "All the calls of one response start together, and you get all of their results together, once the last \
 has finished. So no call sees another's result from the same response: a call that needs one goes in your next \
@@ -141,20 +136,11 @@ it: it returns at once. Say what you are starting. When you have nothing to do u
 the first of your background work to land (`until: any`, the default) or all of it (`until: all`), each result whole \
 and given you only there. Never `sleep` on your own work. A result that lands while you are not waiting reaches you \
 as a message, and starts a new turn if yours has ended. Max's words end a wait, saying what still runs.\n\n\
-End your turn only with your result, or, in a chat with Max, when you have answered him or need him: what still \
-runs keeps running. Working on your own, you cannot finish while background work you own still runs: `wait` for it, \
-and when Max's words end a wait, answer him and wait again. `stop` background work when you no longer need it, \
+End your turn when your work is done, with your result. You cannot finish while background work you own still \
+runs: `wait` for it, and when Max's words end a wait, answer him and wait again. `stop` background work when you no longer need it, \
 or `pass` it to the agent that started you (to Max, if he started you), who owns it from then on: do that only for \
 what someone will still use after you finish, such as a dev server or a browser tab, and say why.",
     );
-    if facing {
-        said.push_str(
-            "\n\n`open_chat` opens a chat for Max with a fresh agent in a role you can start, and returns at once \
-with its label. It is his chat: it appears in his queue and waits on him whenever its turn ends, and you own it as \
-background work, so you can `stop` it, and when he marks it done, its last message comes to you as a message. Open \
-one when Max should talk to an agent himself, rather than through you.",
-        );
-    }
     if member {
         said.push_str(
             "\n\n`add_sibling` adds members to the scope you are in, given as `spawn` takes them, \
@@ -259,28 +245,6 @@ and returns at once: the agent that started you gets their results with yours.",
         tool(STOP, stop),
         tool(PASS, pass),
     ];
-    if facing {
-        let mut properties = json!({
-            "name": { "type": "string", "description": "Short and descriptive, such as `wordcount`." },
-            "mandate": { "type": "string", "description": "What this agent is for and what Max needs from it: everything it needs, since it starts fresh." },
-            "role": { "type": "string", "enum": roles.iter().map(|r| &r.name).collect::<Vec<_>>(), "description": "The role of the agent Max talks to." },
-            "quotes": { "type": "array", "items": { "type": "string" }, "description": "Labels of Max's words (`max-…`) to give it verbatim." }
-        });
-        if roles.iter().any(|r| r.works_in_a_directory()) {
-            properties["dir"] = dir_field(dir, "Where it works, if its role works in a directory");
-        }
-        let open_chat = json!({
-            "name": OPEN_CHAT,
-            "description": "Open a chat for Max with a fresh agent, as background work of yours, and return at once.",
-            "input_schema": {
-                "type": "object",
-                "properties": properties,
-                "required": ["name", "mandate", "role"],
-                "additionalProperties": false
-            }
-        });
-        tools.push(tool(OPEN_CHAT, open_chat));
-    }
     if member {
         let sibling = json!({
             "name": ADD_SIBLING,
@@ -378,7 +342,7 @@ fn members_schema(roles: &[&Role], dir: bool) -> Value {
 
 /// A fresh agent's `dir` field, `what` it is: relative to the caller's
 /// directory when `dir`, the caller has one.
-fn dir_field(dir: bool, what: &str) -> Value {
+pub(crate) fn dir_field(dir: bool, what: &str) -> Value {
     let description = match dir {
         true => format!(
             "{what}: relative to your directory, absolute, or `~/…`. Default: your directory."
@@ -588,7 +552,7 @@ pub fn owned(state: &State, owner: &Task, input: &[u8]) -> Result<(CallId, Strin
 /// The newest of `owner`'s running background calls named `name`, or the
 /// one whose label it is (`call-…`, as a call moved to the background is
 /// named).
-fn named(state: &State, owner: &Task, name: &str) -> Option<CallId> {
+pub(crate) fn named(state: &State, owner: &Task, name: &str) -> Option<CallId> {
     owner.background.iter().rev().copied().find(|c| {
         c.label() == name
             || state.call(*c).is_some_and(
@@ -749,62 +713,6 @@ pub enum How {
 /// The keys of `start` that are not roles.
 const SHARED: [&str; 2] = ["brief", "quotes"];
 
-/// An `open_chat` call's input, as the spawn of its one member: a fresh
-/// agent, with Max's words it quotes.
-pub fn open_chat(input: &[u8]) -> Result<Spawn, String> {
-    let mut value: Value =
-        serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
-    let object = value.as_object_mut().ok_or("the input must be an object")?;
-    // Every call's input may carry its `summary` ([`crate::render`]).
-    object.remove("summary");
-    let [name, mandate, role] = fields(
-        &value,
-        "`open_chat`",
-        ["name", "mandate", "role"],
-        &["quotes", "dir"],
-    )?;
-    let member = Member {
-        name,
-        mandate,
-        how: How::Fresh {
-            role,
-            dir: string(&value, "dir")?,
-        },
-    };
-    Ok(Spawn {
-        members: vec![member],
-        brief: None,
-        quotes: labels(&value)?,
-    })
-}
-
-/// The background call an `open_chat` call `from` by `parent` makes, named
-/// after its chat, with the same input (`call`'s).
-pub fn open_chat_call(
-    state: &State,
-    parent: &Task,
-    from: CallId,
-    call: &Call,
-    input: &[u8],
-) -> Result<Call, String> {
-    let name = open_chat(input)?.members.remove(0).name;
-    if named(state, parent, &name).is_some() {
-        return Err(format!(
-            "you already have background work named `{name}` running"
-        ));
-    }
-    Ok(Call {
-        caller: Caller::Background {
-            task: parent.id,
-            from,
-            name,
-        },
-        expects: Vec::new(),
-        tool: OPEN_CHAT.into(),
-        input: call.input,
-    })
-}
-
 /// A spawn or add_sibling call's input. A key that means nothing to it is
 /// said back rather than dropped.
 pub fn parse(tool: &str, input: &[u8]) -> Result<Spawn, String> {
@@ -890,7 +798,7 @@ fn items<'a>(value: &'a Value, what: &str) -> Result<&'a [Value], String> {
 
 /// The required string fields of `item`, a member that is `what`, which
 /// may also take `optional`.
-fn fields<const N: usize>(
+pub(crate) fn fields<const N: usize>(
     item: &Value,
     what: &str,
     required: [&str; N],
@@ -917,7 +825,7 @@ fn fields<const N: usize>(
 }
 
 /// The labels `value`'s `quotes` lists.
-fn labels(value: &Value) -> Result<Vec<String>, String> {
+pub(crate) fn labels(value: &Value) -> Result<Vec<String>, String> {
     match &value["quotes"] {
         Value::Null => Ok(Vec::new()),
         Value::Array(labels) => labels
@@ -930,7 +838,7 @@ fn labels(value: &Value) -> Result<Vec<String>, String> {
 }
 
 /// The string `key` of `value`, if it has one.
-fn string(value: &Value, key: &str) -> Result<Option<String>, String> {
+pub(crate) fn string(value: &Value, key: &str) -> Result<Option<String>, String> {
     match &value[key] {
         Value::Null => Ok(None),
         Value::String(s) => Ok(Some(s.clone())),

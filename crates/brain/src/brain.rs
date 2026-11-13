@@ -41,7 +41,7 @@ use harness_store::Store;
 
 use crate::roles;
 use harness_program::meta::{self, How};
-use harness_program::{history, policy, render, web};
+use harness_program::{history, max, policy, render, web};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
@@ -600,7 +600,7 @@ impl Brain {
     }
 
     /// The tool set `name` as `limb` gives it to a root of `task`: the
-    /// brain's own as its code says, `meta` for the task's role; any other
+    /// brain's own as its code says, `meta` and `max` for the task's role; any other
     /// as its limb last described it. `None` for a set its limb has not
     /// described.
     fn tool_set(&self, task: &Task, name: &str, limb: LimbId) -> Option<ToolSet> {
@@ -608,16 +608,17 @@ impl Brain {
         if limb != self.brain {
             return state.described(limb)?.description.set(name).cloned();
         }
+        let starts = || -> Option<Vec<&harness_core::role::Role>> {
+            let role = state.role(task.role)?;
+            Some(role.starts.iter().filter_map(|r| state.role(*r)).collect())
+        };
+        let dir = state.workdir(task).is_some();
         Some(match name {
             meta::SET => {
-                let role = state.role(task.role)?;
-                let roles: Vec<&harness_core::role::Role> = (role.starts.iter())
-                    .filter_map(|r| state.role(*r))
-                    .collect();
                 let member = matches!(task.scope, Scope::Spawn(_));
-                let dir = state.workdir(task).is_some();
-                meta::set(self.brain, &roles, dir, member, state.faces_max(task.id))
+                meta::set(self.brain, &starts()?, dir, member)
             }
+            max::SET => max::set(self.brain, &starts()?, dir),
             web::SET => web::set(),
             history::SET => history::set(self.brain),
             // A set with nothing for an agent, such as `roles`.
@@ -1055,7 +1056,8 @@ impl Brain {
             return self.fail_call(id, "The harness routed this call nowhere.");
         };
         // The brain's own sets are told apart by tool name: Max's reading of
-        // the plan's usage, `history`'s reads, and every other is `meta`'s.
+        // the plan's usage, `history`'s reads, and every other is `meta`'s
+        // or `max`'s `open_chat`, which make members.
         if self.state().resolve(limb) == Some(self.brain) {
             return match call.tool.as_str() {
                 web::USAGE => self.read_usage(id, &call),
@@ -1130,7 +1132,7 @@ impl Brain {
         let parent = match call.caller {
             Caller::Agent { task, .. } => task,
             Caller::Background { task, .. }
-                if call.tool == meta::SPAWN || call.tool == meta::OPEN_CHAT =>
+                if call.tool == meta::SPAWN || call.tool == max::OPEN_CHAT =>
             {
                 task
             }
@@ -1223,9 +1225,9 @@ waited on nothing: answer him, then {}",
         } else if call.tool == meta::STOP || call.tool == meta::PASS {
             self.hand(&call.tool, &parent, &input, &mut batch)
                 .map(|said| words(&said))
-        } else if call.tool == meta::OPEN_CHAT && matches!(call.caller, Caller::Agent { .. }) {
+        } else if call.tool == max::OPEN_CHAT && matches!(call.caller, Caller::Agent { .. }) {
             self.open_chat(id, call, &parent, &input, &mut batch)
-        } else if [meta::SPAWN, meta::ADD_SIBLING, meta::OPEN_CHAT].contains(&call.tool.as_str()) {
+        } else if [meta::SPAWN, meta::ADD_SIBLING, max::OPEN_CHAT].contains(&call.tool.as_str()) {
             match self.members(id, &call.tool, &parent, &input, &mut batch) {
                 Ok(names) if call.tool == meta::ADD_SIBLING => {
                     Ok(words(&format!("Added {} to your scope.", names.join(", "))))
@@ -1274,11 +1276,11 @@ waited on nothing: answer him, then {}",
         input: &[u8],
         batch: &mut Batch,
     ) -> Result<Bytes, String> {
-        let opening = meta::open_chat_call(self.state(), parent, id, call, input)?;
+        let opening = max::open_chat_call(self.state(), parent, id, call, input)?;
         // What its dispatch will create, checked now so a mistake is the
         // agent's to fix rather than a message later.
         let made = CallId(self.decider.next().event(batch.facts.len() as u32));
-        self.members(made, meta::OPEN_CHAT, parent, input, &mut Batch::default())?;
+        self.members(made, max::OPEN_CHAT, parent, input, &mut Batch::default())?;
         let name = match &opening.caller {
             Caller::Background { name, .. } => name.clone(),
             _ => unreachable!("an opening is background work"),
@@ -1344,11 +1346,11 @@ comes to you as a message. `stop` it to close it.",
         batch: &mut Batch,
     ) -> Result<Vec<String>, String> {
         let spawn = match tool {
-            meta::OPEN_CHAT => meta::open_chat(input)?,
+            max::OPEN_CHAT => max::open_chat(input)?,
             _ => meta::parse(tool, input)?,
         };
         let mode = match tool {
-            meta::OPEN_CHAT => Mode::UserFacing,
+            max::OPEN_CHAT => Mode::UserFacing,
             _ => Mode::Autonomous,
         };
         let scope = match tool {
@@ -2130,11 +2132,12 @@ fn define(state: &State, facts: &mut Vec<Fact>, limb: Limb) -> LimbId {
     limb.id
 }
 
-/// The brain's own limb, with the tool sets it offers: `meta`, `web`,
-/// `history`, and `roles` over the role files in `roles`.
+/// The brain's own limb, with the tool sets it offers: `meta`, `max`,
+/// `web`, `history`, and `roles` over the role files in `roles`.
 fn brain_limb(id: LimbId, roles: Option<&Path>) -> Limb {
     let mut offers = vec![
         offer(meta::SET, "{}"),
+        offer(max::SET, "{}"),
         offer(web::SET, "{}"),
         offer(history::SET, "{}"),
     ];
@@ -2153,15 +2156,15 @@ fn brain_limb(id: LimbId, roles: Option<&Path>) -> Limb {
 }
 
 /// The limb on the brain's machine, as its user, named for the machine,
-/// with the tool sets it offers and their settings: `workspace`; `user`
+/// with the tool sets it offers and their settings: `workspace`; `config`
 /// over Max's config directory, with the skills `skills.txt` beside the
 /// role files names; `browser`, the one `$HARNESS_BROWSER` names (unset,
 /// as `found` had it); and `builds`, relaunching the brain's own service.
 fn local_limb(id: LimbId, found: Option<&Limb>, roles: Option<&Path>) -> Result<Limb, String> {
     let home = std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?;
-    let mut user = serde_json::json!({ "dir": PathBuf::from(home).join(".claude") });
+    let mut config = serde_json::json!({ "dir": PathBuf::from(home).join(".claude") });
     if let Some(dir) = roles {
-        user["skills"] = serde_json::json!(dir.join("skills.txt"));
+        config["skills"] = serde_json::json!(dir.join("skills.txt"));
     }
     let browser = match std::env::var("HARNESS_BROWSER") {
         Ok(word) => browser(&word).to_string(),
@@ -2178,7 +2181,7 @@ fn local_limb(id: LimbId, found: Option<&Limb>, roles: Option<&Path>) -> Result<
         host: Host::Local,
         offers: vec![
             offer(WORKSPACE, "{}"),
-            offer("user", &user.to_string()),
+            offer("config", &config.to_string()),
             offer("browser", &browser),
             offer("builds", &builds),
         ],

@@ -19,9 +19,10 @@
 //! ```
 //!
 //! `tools` names the tool sets its agents hold, in the order their tools
-//! are declared: the brain's own (`meta`, `web`) and those of the limb on a
-//! machine (`user`, `workspace`, `browser`, `builds`). A role holding
-//! `workspace` gives each agent a working directory. `starts` names the
+//! are declared: the brain's own (`meta`, `web`, `history`) and those of
+//! the limb on a machine (`config`, `workspace`, `browser`, `builds`);
+//! never `max`, which a task facing Max holds on top of them. A role
+//! holding `workspace` gives each agent a working directory. `starts` names the
 //! roles it can start fresh tasks in. Claude Code ignores the keys it does
 //! not know.
 //!

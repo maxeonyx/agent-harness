@@ -1,4 +1,4 @@
-//! The `user` tool set: Max's own agent configuration, which every role
+//! The `config` tool set: Max's own agent configuration, which every role
 //! holds.
 //!
 //! Its instructions are his `CLAUDE.md` and the index of his skills, from
@@ -23,7 +23,7 @@ use serde_json::json;
 use crate::absolute;
 
 /// The tool set's name.
-pub const SET: &str = "user";
+pub const SET: &str = "config";
 
 /// The file of Max's own instructions, relative to the directory, and the
 /// name of the resource it is among the set's instructions.
@@ -35,7 +35,7 @@ const INDEX: &str = "skills";
 /// The kind of a skill as a resource, named by the skill's name.
 const SKILL: &str = "skill";
 
-/// The `user` set's settings: its offer's `config`.
+/// The `config` set's settings: its offer's `config`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     /// Max's config directory: absolute, or `~/…`.
@@ -57,7 +57,7 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// The offer of the `user` set with these settings.
+    /// The offer of the `config` set with these settings.
     pub fn offer(&self) -> Result<Offer, String> {
         harness_limb::offer(SET, self)
     }
@@ -71,16 +71,16 @@ impl Settings {
     }
 }
 
-/// Open the `user` set on its offer's settings.
+/// Open the `config` set on its offer's settings.
 pub fn open(offer: &Offer, opening: &Opening) -> Result<Arc<dyn ToolSet>, String> {
-    Ok(Arc::new(User {
+    Ok(Arc::new(Config {
         voice: opening.voice.clone(),
         settings: Mutex::new(Settings::parse(&offer.config)?),
         watched: Mutex::default(),
     }))
 }
 
-struct User {
+struct Config {
     voice: Arc<Voice>,
     settings: Mutex<Settings>,
     /// The resources the brain asked to hear about, at the version last
@@ -88,7 +88,7 @@ struct User {
     watched: Mutex<HashMap<ResourceKey, Version>>,
 }
 
-impl ToolSet for User {
+impl ToolSet for Config {
     fn describe(&self) -> limb::ToolSet {
         let root = self.root();
         let mut instructions = Vec::new();
@@ -142,7 +142,7 @@ impl ToolSet for User {
     }
 }
 
-impl User {
+impl Config {
     fn root(&self) -> PathBuf {
         lock(&self.settings).dir.clone()
     }
