@@ -5,8 +5,9 @@
 //! review's model, in which a task facing Max holds that set, and holding
 //! it decides that the task's turns end on his move, that its result goes
 //! to him, and which tools reach him. Those tools are the page tools
-//! (`page_read`, `page_write`, `page_edit`, `page_publish`, `page_look`),
-//! `ask` and `withdraw`, `choose_theme`, `pass_on` and `open_chat`. A task
+//! (`page_read`, `page_write`, `page_edit`, `page_look`, and `present`,
+//! which ends a turn), the ask tools (`ask`, `withdraw`, `cite`),
+//! `pass_on` and `open_chat`. A task
 //! without the set has no page and no way to ask him anything, so no call
 //! is ever refused for not having him. The page is what opens when he
 //! taps the task on the map, read top to bottom: the vision's "an agent
@@ -35,8 +36,8 @@
 //!    nothing below matters.
 //! 3. Where we are ([`Sheet::now`]), as fact, the concrete thing first.
 //! 4. The plan ([`Step`]), which is most of a page: the task's own steps
-//!    ([`Description::plan`]), with each open ask ([`crate::ask::Ask`])
-//!    drawn whole inside the step it unblocks. Steps and asks are values
+//!    ([`Description::plan`]), with each of its open asks
+//!    ([`crate::ask::Ask`]) drawn whole inside the step it unblocks. Steps and asks are values
 //!    of their own, drawn as they stand now, never retold on the page.
 //! 5. Why this route ([`Sheet::why`]), after the route it argues for.
 //!
@@ -64,8 +65,8 @@
 //! - What a machine can know is bound, never written. A [`Ref`] draws its
 //!   thing's state now, whoever changed it; a plan step bound to one takes
 //!   its state from it; and the asks are drawn from the asks themselves.
-//! - A turn that owes Max a page ends on his move only with the page
-//!   touched after the turn's last other call ([`Presented`]).
+//! - A turn that ends on Max's move ends with `present`, which shows him
+//!   the page as it is now ([`Presented`]).
 //! - While the task works, its chat opens at its progress (the summaries
 //!   of its calls, which the harness already holds), and the newest
 //!   version is one line above it, marked as from before.
@@ -79,19 +80,20 @@
 //!
 //! **Not yet folded.** These types are the model. The build wires the
 //! facts that carry them: `Fact::Page(TaskId, PageEvent)`,
-//! `Fact::Ask(AskId, AskEvent)`, `Fact::Kind(SourceKind)`,
-//! `Fact::Design(Design)`, `Fact::Feedback(FeedbackId, FeedbackEvent)`,
+//! `Fact::Kind(SourceKind)`, `Fact::Design(Design)`,
+//! `Fact::Feedback(FeedbackId, FeedbackEvent)`,
 //! `TaskEvent::Described(Description)`, `TaskEvent::Looked(Look)`,
 //! `Phase::AwaitingMax` carrying an `Option<Presented>`, `Prompt::Present`,
-//! `Content::Answer(Answer)`, Max's words carrying the
+//! Max's words carrying his [`crate::ask::Press`]es and the
 //! [`crate::design::Screen`] he was reading, a `says` on
 //! `resource::Change`, and `attention::Ranked` naming an
-//! [`crate::ask::Owed`]. `describe` is in the meta tool set, for every
-//! task; the rest are the `max` set's.
+//! [`crate::ask::Owed`]. Asks need no fact of their own: they are calls.
+//! `describe` is in the meta tool set, for every task; the rest are the
+//! `max` set's.
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{AskId, CallId, TaskId, Timestamp, ValueId};
+use crate::id::{CallId, TaskId, Timestamp, ValueId};
 use crate::source::{ItemKey, Whose};
 
 /// A task's page: the stage its agent edits, and the versions Max was shown.
@@ -104,10 +106,12 @@ use crate::source::{ItemKey, Whose};
 /// work and at home, and versioned without git.
 ///
 /// **Where it sits.** In the task's chat, at the point each version was
-/// published, so scrolling up from a page shows the chat that led to it.
-/// When the task waits on Max, its chat opens at the newest version's top,
-/// not at the bottom, with dictation on. A version a newer one replaced
-/// shrinks to one line.
+/// presented, so scrolling up from a page shows the chat that led to it.
+/// When the task waits on Max, its chat opens at the top of the first
+/// thing it said since he last looked, not at the bottom, with dictation
+/// on. While it works, its progress comes first, and the newest version is
+/// one line, marked as from before. A version a newer one replaced shrinks
+/// to one line.
 ///
 /// Serves: the deliverable is a page, never markdown in a chat; "the agent
 /// should get tools to edit, stage, test, iterate on these pages before it
@@ -139,15 +143,13 @@ pub struct Page {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stage {
     pub sheet: Sheet,
-    /// The call that made the newest edit: whose work a write would replace,
-    /// and where the edit falls among the turn's calls, for the gate
-    /// ([`Presented`]).
+    /// The call that made the newest edit: whose work a write would replace.
     pub by: CallId,
 }
 
 /// A page Max was shown.
 ///
-/// **Concept.** Immutable once published. Its bodies are markdown in the
+/// **Concept.** Immutable once presented. Its bodies are markdown in the
 /// language's small vocabulary ([`crate::body`]), never CSS or colours, so
 /// an old version still draws after the design system changes. The plan
 /// and the asks are not in it: they are drawn live, as they stand now, so a
@@ -156,12 +158,14 @@ pub struct Stage {
 pub struct Version {
     pub n: u32,
     pub sheet: Sheet,
-    /// When it was published: where it sits among the chat's entries, and
+    /// When it was presented: where it sits among the chat's entries, and
     /// what `Fact::Seen` is compared with for what changed since he looked.
     pub at: Timestamp,
-    /// The `page_publish` call that made it, or `None` when the brain
-    /// published the stage as the turn ended.
-    pub by: Option<CallId>,
+    /// When a `present` last found it still holding, unchanged: drawn as
+    /// "still holds, checked 10:42".
+    pub held: Timestamp,
+    /// The `present` call that made it.
+    pub by: CallId,
 }
 
 /// What the agent writes on its page: the lead, where this ends, where we
@@ -277,38 +281,45 @@ pub struct Claim {
 pub enum PageEvent {
     /// The stage after a `page_write` or `page_edit`.
     Edited(Box<Sheet>),
-    /// Max is shown the stage: by `page_publish` mid-turn, so he can read on
-    /// while the agent works, or by the brain as a turn ends with the page
-    /// touched after the turn's other calls. A stage equal to the newest
-    /// version makes no new version: it says that version still holds,
-    /// which is the gate's cheapest pass. Never refused.
-    Published,
+    /// `present`: Max is shown the stage, and the turn ends on his move. A
+    /// stage changed since the newest version makes a new version; an
+    /// unchanged one says that version still holds ([`Version::held`]),
+    /// which is the cheapest way to end a turn. `say` is a line or two
+    /// above the page, for a quick reply while he works turn by turn.
+    /// Never refused.
+    Presented { say: Option<String> },
 }
 
 /// Whether the page Max is about to read is current: carried by a turn that
 /// ends on his move.
 ///
 /// **Concept.** The gate that makes "current by construction" a state, not
-/// a hope. When a turn of a task holding the `max` set ends, the brain
-/// looks at the page. If it was touched (edited or published) after the
-/// turn's last other call, or the turn made no calls, so its words are a
-/// reply under a page that still holds, the brain publishes the stage, and
-/// the task waits on Max, [`Presented::Current`]. If not, the task gets one
-/// more turn (`Prompt::Present`: "your page is version 4, from before
-/// Max's message at 10:02; update it, or publish it as it is if it still
-/// holds, then end your turn"). A second turn that ends without touching it
-/// waits on Max, [`Presented::Stale`], drawn as such. It never loops, and a
-/// stale page is never shown as current. The same rule serves a Claude
-/// Code session the harness drives, whose extra turn is a user message on
-/// its stream-json input, so it needs no hook an enterprise policy could
-/// block.
+/// a hope. A task holding the `max` set ends a turn on Max's move with
+/// `present`, as an autonomous task ends with `compact_and_report`: the
+/// page is the turn's ending, and [`Presented::Current`]. A turn that ends
+/// in plain text instead gets one more turn (`Prompt::Present`: "your page
+/// is version 4, from before Max's message at 10:02; update it, or present
+/// it as it is if it still holds"). A second that ends the same way waits
+/// on Max, [`Presented::Stale`], drawn as such. It never loops, and a stale
+/// page is never shown as current. The same rule serves a Claude Code
+/// session the harness drives, whose `present` is a tool of its MCP server
+/// and whose extra turn is a user message on its stream-json input, so it
+/// needs no hook an enterprise policy could block.
+///
+/// What it can't prove is that the page is true, only that the agent
+/// looked: the guide makes "still holds" a judgement, and the change bar
+/// shows Max what moved.
+///
+/// Serves: "when it ends its turn, it will be presented to me"; "it's up
+/// to date because the harness is built with that just as a foundational
+/// assumption".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Presented {
     Current {
         version: u32,
     },
-    /// Not touched after a reminder: the newest version, if any, is drawn
-    /// marked as from before the turn.
+    /// Not presented after a reminder: the newest version, if any, is
+    /// drawn marked as from before the turn.
     Stale {
         version: Option<u32>,
     },
@@ -348,7 +359,9 @@ pub enum Ref {
 /// the ask he last pressed in, else the part in the reading band. So "no,
 /// that's not where this is going", said while the end fills the screen,
 /// reaches the agent as a rejection of the end, with no button and no
-/// form. Also where a [`crate::body::Problem`] is, for the agent.
+/// form. It is what he was reading, for the agent to interpret, and never
+/// routes anything: his words go to the agent whose page it is. Also where
+/// a [`crate::body::Problem`] is, for the agent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Spot {
     Lead,
@@ -356,7 +369,8 @@ pub enum Spot {
     Now,
     /// A plan step, by its key.
     Step(String),
-    Ask(AskId),
+    /// An ask, by its call.
+    Ask(CallId),
     Why,
 }
 
@@ -381,8 +395,10 @@ pub struct Description {
     pub title: Option<String>,
     /// How the work gets from where it started to where it ends, done steps
     /// included, so the route reads whole. Replaced whole: a step left out
-    /// is gone, and its node on the map with it, and an ask that named it
-    /// moves to the first step not behind him.
+    /// is gone, and its node on the map with it. An open ask that named it
+    /// moves to the first step not behind him, and `describe`'s result says
+    /// so, for the agent to revise or withdraw it: never refused, since the
+    /// ask still has a place.
     pub plan: Option<Vec<Step>>,
 }
 
@@ -395,9 +411,11 @@ pub struct Description {
 /// that will exist is), and as a stop on the page's plan rail, with the
 /// asks it waits on inside it. A step bound to a live thing ([`Step::of`])
 /// takes its state from it ([`StepState`]), so a merged PR shows its step
-/// done without the agent saying so, and a step bound to a child task shows
-/// the child's now-claim with the child's open asks inside it, so an
-/// orchestrator never retells a child's question.
+/// done without the agent saying so. A step bound to a child task shows the
+/// child's now-claim, if it has a page, else its title and phase, and each
+/// of the child's open asks as one line, its question, which opens the
+/// child's page at that ask: the orchestrator never retells a child's
+/// question, and sends Max to each agent for its part.
 ///
 /// What an answer unblocks is its step and every step after it
 /// ([`Step::after`]): how the queue ranks an ask, since some unblock hours

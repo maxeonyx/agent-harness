@@ -21,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::ValueId;
+use crate::id::{DeliveryId, ValueId};
 use crate::page::{Ref, Spot};
 
 /// A parsed body: what the face draws.
@@ -39,9 +39,17 @@ pub enum Block {
         ordered: bool,
         items: Vec<Item>,
     },
-    /// Someone's words, behind a hairline rule. Max's own words, wherever
-    /// they appear, are drawn this way too.
+    /// Someone else's words, behind a hairline rule.
     Quote(Vec<Block>),
+    /// Max's own words, quoted from the delivery they came in: drawn behind
+    /// the rule that marks his words everywhere. Checked against that
+    /// delivery, so an agent can quote him but never misquote him: words
+    /// not in it are drawn as a plain quote and listed as
+    /// [`Problem::Misquoted`].
+    Said {
+        of: DeliveryId,
+        words: String,
+    },
     /// Literal text, in the mono face on the theme's tint: the only text the
     /// language ever boxes. On a phone it runs to the screen's edge and
     /// scrolls in its own frame.
@@ -83,7 +91,7 @@ pub enum Inline {
     /// `<github.pr:maxeonyx/agent-harness#241>`, draws the source's short
     /// name, the mark and the state's word ("#241 ● approved, yours to
     /// merge"): for tables and lists. A state changed since the page was
-    /// published adds a small note in the new state's colour ("now
+    /// presented adds a small note in the new state's colour ("now
     /// approved"), so prose written against the old state is never read
     /// as current. On a desktop a click goes to the thing and pointing
     /// shows its popover; on a phone a tap opens the popover, which links
@@ -220,6 +228,8 @@ pub enum Problem {
     NotFound(Ref),
     /// An image with no alt.
     NoAlt,
+    /// Words given as Max's that are not in the delivery named.
+    Misquoted,
     /// A figure that would not draw, with the drawer's message.
     Figure { error: String },
     /// A table with no rows, rows of different lengths, one column, or a

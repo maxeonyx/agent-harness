@@ -20,7 +20,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{AskId, DeliveryId, RoleId, TaskId, ValueId};
+use crate::id::{CallId, DeliveryId, RoleId, TaskId, ValueId};
 use crate::page::Spot;
 use crate::resource::Observation;
 
@@ -148,8 +148,9 @@ pub struct Design {
 pub struct Theme {
     /// `harbour`.
     pub name: String,
-    /// What it is, as `choose_theme`'s list says: "A hand-engraved chart of
-    /// a harbour: soundings, depth contours, shallows tinted blue."
+    /// What it is, as Max sees it when he changes an area's theme: "A
+    /// hand-tinted chart of a harbour: depth lines, soundings and a quiet
+    /// sea."
     pub about: String,
     pub palette: Palette,
     pub display: Face,
@@ -169,13 +170,18 @@ pub struct Theme {
     ///
     /// The face runs only grounds a version of the design system declared,
     /// since a ground is a program and a page body may hold none. Before a
-    /// version is published, its check paints every ground at phone,
+    /// version is merged, its check paints every ground at phone,
     /// desktop and thumbnail sizes for a set of identities, and holds it to
     /// its bars: the lead's ink on the ground in the lead's box at 7:1 for
     /// 95% of it and never under 4.5:1; a thumbnail that reads as its
     /// theme; identities planned one after another told apart at a glance;
     /// the same pixels painted twice; and a phone's paint time.
     pub ground: ValueId,
+    /// How many identities its ground paints told apart at a glance, in
+    /// the order the art agent set and checked by eye: slot 0 the area's
+    /// main agent, then each next agent as far from those before as the
+    /// art allows ([`Identity::slot`]).
+    pub slots: u8,
     /// Shown to Max on the keeper's page and never offered to an agent: a
     /// new theme waits for his choice, so no agent can lock in one he then
     /// rejects.
@@ -238,20 +244,20 @@ pub struct Face {
 
 /// What a task wears: its theme, and who it is among the agents wearing it.
 ///
-/// **Concept.** Given, not chosen per call, and fixed for the task's life,
-/// since an agent's look is how Max finds it again. A task Max starts (an
-/// area's first agent) chooses its theme once, with `choose_theme`,
-/// declared while it has none; until then it is drawn in its area's first
-/// free theme. Every task under it is given the same theme at its start,
-/// with its own [`Identity`], so where Max is shows at a glance and who is
-/// still its own. A resume carries its source on, look included. Folded
-/// from `TaskEvent::Looked`, once per task.
+/// **Concept.** Given by the harness when the task starts, never chosen by
+/// an agent, and fixed for the task's life, since an agent's look is how
+/// Max finds it again. A new area (a task Max starts) is given the theme
+/// no live area wears, or else the one worn least recently, so areas look
+/// as unlike each other as five themes allow. Every task under it wears
+/// the area's theme, with its own [`Identity`], so where Max is shows at a
+/// glance and who is still its own. Only Max changes an area's theme, from
+/// its page or the map, and its tasks redraw. A fork or a resume carries
+/// its source's look. Folded from `TaskEvent::Looked`.
 ///
 /// Serves: "every area can have some kind of like color or pattern, and
 /// each agent within that can again have variant color and patterns, so
-/// that it's easily visually distinguishable for me"; "maybe they get to
-/// choose from a set of themes initially, but they of course have to lock
-/// it in".
+/// that it's easily visually distinguishable for me"; "agents don't
+/// design their own themes. They only inform their own themes".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Look {
     /// A [`Theme::name`].
@@ -264,13 +270,16 @@ pub struct Look {
 ///
 /// **Concept.** Planned by the harness, not left to chance: with six
 /// colours and four agents, a random pick gives two of them the same
-/// colour 72% of the time. When a task is given its look, `at` is set to
-/// the middle of the widest gap left by the unfinished tasks already
-/// wearing the theme, so the agents on the map at once sit as far apart in
-/// the theme's range of colour as they can. `root` and `line` place the
-/// task among its ancestors wearing the same theme, for a ground whose
-/// picture nests: a Harbour child's chart is a closer look at a region of
-/// its parent's, so who started whom shows in the paintings.
+/// colour 72% of the time. When a task is given its look, it takes the
+/// lowest slot no live task wearing its theme holds, so the agents on the
+/// map at once wear the slots the art agent made most distinct. Slots, not
+/// a continuous range, because equal steps of hue don't look equally far
+/// apart: the art agent checks each slot by eye against the others.
+/// Past the theme's slots, slots repeat and the seed's composition tells
+/// them apart. `root` and `line` place the task among its ancestors
+/// wearing the same theme, for a ground whose picture nests: a Harbour
+/// child's chart is a closer look at a region of its parent's, so who
+/// started whom shows in the paintings.
 ///
 /// Serves: "inner variation in colour and identity, not just layout, so
 /// that individual agents within an area are distinguishable at a glance";
@@ -279,8 +288,8 @@ pub struct Look {
 /// identity somehow incorporated too".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Identity {
-    /// Where in the theme's range of colour, in 65536ths of the way round.
-    pub at: u16,
+    /// Which of the theme's identities ([`Theme::slots`]) it wears.
+    pub slot: u8,
     /// Whose id seeds the composition: the task's own, or for a resume its
     /// source's.
     pub seed: TaskId,
@@ -335,7 +344,7 @@ pub enum FeedbackEvent {
     Given(Feedback),
     /// It needs Max first: a choice between studies, or words that
     /// contradict what he said before. Still open.
-    Asked(AskId),
+    Asked(CallId),
     /// A merged commit answers it: a change live on every page from its
     /// next open, or only his words recorded in the design system's files.
     /// His rejection of the answer is new feedback.
@@ -358,7 +367,7 @@ pub enum FeedbackEvent {
 pub struct Screen {
     /// Whose page.
     pub task: TaskId,
-    /// The page version drawn; `None`: none was published.
+    /// The page version drawn; `None`: none was presented.
     pub version: Option<u32>,
     /// What he was reading, from the scroll.
     pub spot: Option<Spot>,

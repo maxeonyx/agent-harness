@@ -76,10 +76,6 @@ id!(
     RoleId
 );
 id!(
-    /// A [`crate::ask::Ask`]: the event that first asked it.
-    AskId
-);
-id!(
     /// A [`crate::design::Feedback`]: the event that gave it.
     FeedbackId
 );

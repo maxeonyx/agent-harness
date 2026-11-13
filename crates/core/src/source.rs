@@ -7,7 +7,7 @@
 //! kind). Each reading is a [`crate::resource::Change`] that carries what
 //! the source says ([`Says`]). So "the state you saw has changed" and "wake
 //! me when it is my move" reuse the one mechanism a file uses: a context
-//! that publishes a page or an ask observes the items they name, and a
+//! that presents a page or asks observes the items they name, and a
 //! change the adapter calls news wakes it. Not yet folded: see
 //! [`crate::page`].
 //!
@@ -101,7 +101,7 @@ pub struct Detail {
 ///
 /// **Concept.** What the face needs to draw a [`crate::page::Ref`] honestly
 /// on a page written at another time: the reading now, and what it said
-/// when the page was published. Prose written against the old state keeps
+/// when the page was presented. Prose written against the old state keeps
 /// its words; the mark beside it shows the state now, and pointing at it
 /// says what the state was when the page was written.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,7 +113,7 @@ pub struct Drawn {
     /// Why the reading may be out of date ("the work limb is offline since
     /// 14:10"): drawn faded, with the reason when pointed at.
     pub stale: Option<String>,
-    /// The state's word when the page was published, if it has changed
+    /// The state's word when the page was presented, if it has changed
     /// since.
     pub was: Option<String>,
 }
