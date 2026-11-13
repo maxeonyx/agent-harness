@@ -41,9 +41,10 @@ const STEEP = Math.PI / 6;
 const WIDE = Math.PI / 3, STEP = Math.PI / 9, LEAN = .5;
 // A big node's half width, for where lines meet it.
 const BIG_HALF = 13;
-// How much stiffer than a plain line's a lifeline's links, and a long line's
-// between its hidden points, pull: enough to keep them straight.
-const STIFF = 40;
+// How much stiffer than a plain line a lifeline pulls: enough to keep it
+// straight. How stiffly a long line resists bending, against how hard it
+// pulls: a turn spreads over about sqrt(BEND) rows.
+const STIFF = 40, BEND = 4;
 // The flattest a line between two rows runs on average, from upright.
 const FLAT = Math.PI / 3;
 
@@ -177,14 +178,19 @@ function kinds(V, edges) {
 // Rows are ordered by barycentre sweeps, where a dot's lines into the row
 // sit in its port order (its lifeline in the middle, its other own lines
 // either side of it, the rest either side of those), so siblings fan out
-// either side of the line their maker goes on down. Then across, each line
+// either side of the line their maker goes on down. Each sweep ends by
+// swapping neighbours that cross less swapped, and the order kept is the
+// sweep's with fewest crossings. Then across, each line
 // a spring pulling its ends together, each row placed as near its
-// neighbours as the gaps allow (PAVA). A lifeline's links, and a long
-// line's between its hidden points, are much stiffer springs, so a life
-// runs straight and its forks pack around it, and a long line keeps one x;
-// a line's link to a hidden point is a little stiffer; every node is pulled a little
-// to the centre line. Sets each node's x; each edge's hidden points, top
-// down, as `mid`. Returns the rows.
+// neighbours as the gaps allow (PAVA). A line's spring is shared evenly
+// by its links, so a long line pulls its ends as hard as a short one and
+// runs straight between them where nothing is in its way; it is also a
+// beam, so where something is, it bends round it over several rows rather
+// than at a corner. A lifeline is a much stiffer spring, so a life runs
+// straight and its forks pack around it. Every node, but no hidden point,
+// is pulled to the centre line by a small fraction of its lines' own pull.
+// Sets each node's x; each edge's hidden points, top down, as `mid`.
+// Returns the rows.
 function layered(V, edges) {
   const layers = [];
   const put = (v) => (layers[v.rank] ??= []).push(v);
@@ -200,7 +206,7 @@ function layered(V, edges) {
     for (let i = 0; i < chain.length - 1; i++) {
       const a = chain[i], b = chain[i + 1];
       a.up.push(b); b.down.push(a);
-      const k = e.kind === "life" || (a.dummy && b.dummy) ? STIFF : a.dummy || b.dummy ? 2 : 1;
+      const k = (e.kind === "life" ? STIFF : 1) * (chain.length - 1);
       a.k.set(b, k); b.k.set(a, k);
     }
     if (e.foot) v.own.set(chain[1], e.foot);
@@ -217,6 +223,7 @@ function layered(V, edges) {
     return inner.length ? [...out.slice(0, out.length >> 1), ...nest(u, inner, l + 1), ...out.slice(out.length >> 1)] : out;
   };
   const slot = (u, w, them) => (them.length < 2 ? 0 : (nest(u, them, 0).indexOf(w) - (them.length - 1) / 2) / them.length);
+  let best, fewest = Infinity;
   for (let it = 0; it < 9; it++) {
     const down = it % 2 === 0;
     for (const L of down ? layers.slice(1) : layers.slice(0, -1).reverse()) {
@@ -227,9 +234,13 @@ function layered(V, edges) {
       L.sort((a, b) => a.bary - b.bary || a.pos - b.pos);
       L.forEach((v, i) => (v.pos = i));
     }
+    transpose(layers);
+    const n = layers.reduce((s, L) => s + crossCount(L), 0);
+    if (n < fewest) { fewest = n; best = layers.map((L) => [...L]); }
   }
+  best.forEach((L, r) => { layers[r] = L; L.forEach((v, i) => (v.pos = i)); });
   const sep = (a, b) => a.hi + b.lo + (a.dummy || b.dummy ? 4 : 8);
-  const CENTRE = 1;
+  const CENTRE = .05;
   const gaps = layers.map((L) => L.slice(1).map((v, i) => sep(L[i], v)));
   for (const [r, L] of layers.entries()) {
     let x = 0;
@@ -247,35 +258,52 @@ function layered(V, edges) {
       for (let i = 0; i < L.length; i++) {
         const v = L[i], nb = both ? v.nb : down ? v.up : v.down;
         if (!nb.length) { t[i] = v.x; w[i] = .02; }
-        // A chain of single links stays straight.
-        else if (both && !v.dummy && v.up.length === 1 && v.up[0].down.length === 1 && !v.up[0].dummy) { t[i] = v.up[0].x; w[i] = 1; }
-        else if (both && !v.dummy && v.down.length === 1 && v.down[0].up.length === 1 && !v.down[0].dummy) { t[i] = v.down[0].x; w[i] = 1; }
         else {
           let sx = 0, sw = 0;
           for (const u of nb) { const k = v.k.get(u); sx += k * u.x; sw += k; }
+          // A hidden point also bends as a beam, as little as it can: its
+          // own turn, and the turns of the hidden points either side.
+          if (both && v.dummy) {
+            const a = v.up[0], b = v.down[0], B = BEND * v.k.get(a);
+            sx += 2 * B * (a.x + b.x); sw += 4 * B;
+            if (a.dummy) { sx += B * (2 * a.x - a.up[0].x); sw += B; }
+            if (b.dummy) { sx += B * (2 * b.x - b.down[0].x); sw += B; }
+          }
           t[i] = sx / sw; w[i] = sw;
         }
-        t[i] = (t[i] * w[i]) / (w[i] + CENTRE); w[i] += CENTRE;
+        if (!v.dummy) { t[i] /= 1 + CENTRE; w[i] *= 1 + CENTRE; }
       }
       pava(L, t, w, gaps[r]);
     }
   }
-  // A long edge's hidden points go to the one x nearest their mean that
-  // keeps every row's gaps; one crossed by another keeps its bends.
-  for (const e of edges) {
-    if (e.mid.length < 2) continue;
-    let lo = -Infinity, hi = Infinity, sum = 0;
-    for (const u of e.mid) {
-      const L = layers[u.rank], i = u.pos;
-      if (i > 0) lo = Math.max(lo, L[i - 1].x + sep(L[i - 1], u));
-      if (i < L.length - 1) hi = Math.min(hi, L[i + 1].x - sep(u, L[i + 1]));
-      sum += u.x;
-    }
-    if (lo > hi) continue;
-    const x = Math.min(hi, Math.max(lo, sum / e.mid.length));
-    for (const u of e.mid) u.x = x;
-  }
   return layers;
+}
+// Crossings between row L and the row above: inversions of the upper ends
+// of its lines, in order of their lower ends, by a Fenwick tree.
+function crossCount(L) {
+  const ends = [];
+  for (const v of L) for (const u of v.up) ends.push([v.pos, u.pos]);
+  ends.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const n = ends.reduce((m, [, b]) => Math.max(m, b + 1), 0), T = new Int32Array(n + 1);
+  let c = 0;
+  ends.forEach(([, b], seen) => {
+    for (let i = b + 1; i > 0; i -= i & -i) c -= T[i];
+    c += seen;
+    for (let i = b + 1; i <= n; i += i & -i) T[i]++;
+  });
+  return c;
+}
+// Neighbours swapped while that strictly lessens their crossings with the
+// rows above and below.
+function transpose(layers) {
+  const c = (u, w, side) => { let n = 0; for (const a of u[side]) for (const b of w[side]) if (a.pos > b.pos) n++; return n; };
+  for (let pass = 0, better = true; better && pass < 20; pass++) {
+    better = false;
+    for (const L of layers) for (let i = 0; i + 1 < L.length; i++) {
+      const u = L[i], w = L[i + 1];
+      if (c(w, u, "up") + c(w, u, "down") < c(u, w, "up") + c(u, w, "down")) { L[i] = w; L[i + 1] = u; u.pos = i + 1; w.pos = i; better = true; }
+    }
+  }
 }
 // Isotonic regression with minimum gaps: each node of row L as near its
 // target t[i] (weighted w[i]) as it can be, in order, each at least gap[i]
@@ -340,13 +368,10 @@ function taper(s, L, w) {
   return TIP * t * (2 - t) + (w - TIP) * smooth(Math.min(1, s / Math.min(L, TAPER)));
 }
 // An edge's points, and its widths if it tapers or is a tool's. A line runs
-// from its upper end through its hidden points to its lower end, each long
-// line keeping its own x down the rows between, so lines side by side stay
-// apart. Its x is a smooth function of its y through those points that
-// never swings past them (monotone cubic, Fritsch-Butland): where a line
-// turns to run straight down it meets the straight part upright, so a
-// bundle fans out and stays out. It leaves and arrives at its ports'
-// slopes.
+// from its upper end through its hidden points to its lower end, which
+// keep lines side by side apart. Its x is a smooth function of its y
+// through those points that never swings past them (monotone cubic,
+// Fritsch-Butland). It leaves and arrives at its ports' slopes.
 function route(e) {
   const { v, d } = e;
   const P0 = e.a ? e.a.p : edge(d, [0, 1], TUCK);
