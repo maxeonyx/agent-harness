@@ -727,15 +727,19 @@ fn hand_over(
     write(&old.data().join(Start::HANDOVER), &asked.to_string())?;
     systemctl(&["kill", "--kill-whom=main", "-s", "SIGUSR2", unit])?;
     let link = old.data().join("build");
+    let opened = || std::fs::canonicalize(&link).is_ok_and(|to| to == build);
     let until = Instant::now() + HANDING_OVER;
     loop {
-        if std::fs::canonicalize(&link).is_ok_and(|to| to == build) {
+        if opened() {
             return match started(unit, &build.join("bin/harness-brain")) {
                 0 => Err("it opened, but the unit never named it its main process".into()),
                 pid => Ok(pid),
             };
         }
-        if main_pid(unit).is_ok_and(|now| now != Some(old.pid)) {
+        // The candidate links itself before it names itself the main
+        // process, so a main process that changed since the look above
+        // is the candidate's only if the link names it now.
+        if main_pid(unit).is_ok_and(|now| now != Some(old.pid)) && !opened() {
             return Err(format!("its process ended{}", last_words(unit, since)));
         }
         if Instant::now() > until {
