@@ -420,6 +420,14 @@
 //! - A face holds the brain's derived rows, not its facts: it shows its
 //!   own pending acts as pending rather than predicting the brain's verdict.
 
+/// A deploy step: this build reads every record `main` writes, but writes
+/// none that build 73cbedf12ffb cannot read, so relaunching home onto it
+/// and from it onto `main` are both two-way. While on, no task is given a
+/// look (`TaskEvent::Looked`) and no ask is drawn on a page
+/// (`PageEvent::Asked`), so Max has no answer to press (a `DraftEvent::Send`
+/// carrying presses). The next deploy deletes it.
+pub const READER_STEP: bool = true;
+
 pub mod ask;
 pub mod attention;
 pub mod body;

@@ -3569,7 +3569,9 @@ impl State {
             .filter(|l| self.runs(*l) == Some(Runs::Process) && self.connected(*l).is_none());
         todo.extend(connect.map(Todo::Connect));
         todo.extend(starting);
-        todo.extend(self.looks_due().into_iter().map(Todo::Look));
+        if !crate::READER_STEP {
+            todo.extend(self.looks_due().into_iter().map(Todo::Look));
+        }
         // A brain shutting down starts nothing, and cuts what it has not
         // been able to finish by its deadline.
         if let Some(deadline) = self.shutdown {
