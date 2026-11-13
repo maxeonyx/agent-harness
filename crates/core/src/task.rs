@@ -537,6 +537,12 @@ impl Start {
     }
 }
 
+/// The meta tool by which an agent facing Max ([`crate::state::State::faces_max`])
+/// opens a user-facing chat for him: a fresh agent in a role its own role
+/// starts, the one member of a background call's scope, so its opener owns
+/// it as background work and hears its result when he marks it done.
+pub const OPEN_CHAT: &str = "open_chat";
+
 /// What the end of a model turn means for this task.
 ///
 /// The one difference between an autonomous subagent, a chat with Max, and
@@ -549,12 +555,6 @@ impl Start {
 /// it does). So the mode of a finished task says who may continue it: Max
 /// one that faced him, and only its owner an autonomous one, whose result
 /// went there.
-/// The meta tool by which an agent facing Max ([`State::faces_max`]) opens
-/// a user-facing chat for him: a fresh agent in a role its own role
-/// starts, the one member of a background call's scope, so its opener owns
-/// it as background work and hears its result when he marks it done.
-pub const OPEN_CHAT: &str = "open_chat";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     /// The end of a turn completes the task, once nothing it started is
