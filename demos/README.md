@@ -5,6 +5,7 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 | Demo | What it shows | Model | Cost, time |
 |---|---|---|---|
 | brain | an orchestrator, a fork and an engineer build a small repo; the brain is killed -9 mid-command and relaunched, and carries on with the same limbs | scripted (`MODEL=sonnet/low`: real agents) | free, 30 s (Sonnet: a few dozen requests, 2 min) |
+| history | Max tells one chat what the boat's hull should be; a max-advocate in another `find`s his words, labelled `max-…` with when and the chat he said them to, reads that chat with `context`, and quotes him by label; leaves the brain up | Sonnet low | 4 requests, under 1 min |
 | attach | a fork attaches its `bash` call to its report, and the chat receives the real output after the fork's words | Sonnet low | 4 requests, under 1 min |
 | background-on-message | a scripted orchestrator spawns a fork that sleeps 20 s; Max writes 2 s in, and a few seconds later the spawn moves to the background: the tool use is answered with its label, the reply comes while the fork runs, and the fork's result arrives later as a message that wakes it; leaves the brain up | scripted | free, 40 s |
 | browser | a chat hands a browser agent an expense claim in real pages; the tab is passed to Max, who stops it | Sonnet low | about 10 requests, under 1 min |

@@ -422,6 +422,7 @@ fn run() -> Result<(), Failed> {
     // opens: what it found, while the rest is checked.
     let values = Store::read(&db).map_err(|e| format!("the database opens: {e}"))?;
     let feed = Feed::default();
+    let index = Arc::new(harness_program::history::Index::default());
     let mut dictation = Dictation::new(login.clone()).map_err(|e| e.0)?;
     if let Some(sample) = sample {
         dictation = dictation.with_sample(&sample)?;
@@ -432,6 +433,7 @@ fn run() -> Result<(), Failed> {
             dictation: Some(dictation),
             login: Some(login.clone()),
             feed: feed.clone(),
+            index: Arc::clone(&index),
             models: offered.clone(),
             source: SOURCE.into(),
             page,
@@ -518,10 +520,7 @@ fn run() -> Result<(), Failed> {
     let mut brain = Brain::launch(
         decider,
         opening,
-        brain::Face {
-            folds,
-            address: format!("https://localhost:{port}"),
-        },
+        brain::Face { folds, index },
         client,
         roles::Models {
             offered,

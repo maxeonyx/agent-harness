@@ -134,7 +134,7 @@ impl Limb {
 pub struct Offer {
     /// The tool set's name, as roles name it: on a machine, `workspace`,
     /// `user` (Max's own instructions and skills), `browser`, `builds`; in
-    /// the brain, `meta`, `web`, `attention`, `roles`.
+    /// the brain, `meta`, `web`, `history`, `attention`, `roles`.
     pub set: String,
     /// Its settings as JSON, read by the limb alone: Max's config
     /// directory, the browser to launch, the unit to relaunch, the roles'

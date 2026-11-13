@@ -178,6 +178,9 @@ pub struct Wiring {
     pub login: Option<harness_provider::Login>,
     /// Live progress, from whoever runs things.
     pub feed: Feed,
+    /// The text of what was said, which `/find` searches, shared with the
+    /// brain's `history` set.
+    pub index: Arc<harness_program::history::Index>,
     /// The models on offer, newest first ([`harness_provider::Client::models`]),
     /// which Max chooses a chat's from.
     pub models: Vec<harness_provider::Model>,
@@ -234,7 +237,6 @@ pub struct Face<S> {
     wiring: Wiring,
     state: RwLock<State>,
     shown: Mutex<Option<Arc<Shown>>>,
-    said: find::Said,
     /// Where each tab's records go once the brain opens ([`Face::open`]).
     include: OnceLock<Include>,
 }
@@ -268,7 +270,6 @@ impl<S: Source> Face<S> {
             wiring,
             state: RwLock::new(State::default()),
             shown: Mutex::new(None),
-            said: find::Said::default(),
             include: OnceLock::new(),
         })
     }
@@ -442,8 +443,10 @@ impl<S: Source> Face<S> {
             }
             "/find" => {
                 let query = find::decode(request.query("q").unwrap_or(""));
-                let tasks = find::own_entries(&self.read());
-                let found = self.said.find(tasks, &query, |id| self.source.value(id));
+                let tasks = harness_program::history::own_entries(&self.read());
+                let found = find::find(&self.wiring.index, tasks, &query, &|id| {
+                    self.source.value(id)
+                });
                 http::respond(
                     &mut stream,
                     "application/json",
