@@ -419,6 +419,11 @@
 //!   session.
 //! - A face holds the brain's derived rows, not its facts: it shows its
 //!   own pending acts as pending rather than predicting the brain's verdict.
+//! - Whom an agent can message: its owner, the live agents it started,
+//!   and, if it faces Max, his other live chats; everyone else through
+//!   their owner ([`message::Kin`]).
+//! - A message wakes a chat waiting on Max for a turn he did not ask for,
+//!   and the chat keeps its place in his queue ([`message::Message`]).
 
 pub mod ask;
 pub mod attention;
@@ -435,6 +440,7 @@ pub mod id;
 pub mod legacy;
 pub mod limb;
 pub mod live;
+pub mod message;
 pub mod model_call;
 pub mod page;
 pub mod resource;

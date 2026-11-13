@@ -32,7 +32,7 @@ use harness_core::task::{Context, Task};
 use harness_core::value::Bytes;
 use serde_json::{Value, json};
 
-use crate::render::{Values, blocks, carried, text};
+use crate::render::{Values, blocks, carried, text, writers};
 
 pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
@@ -643,22 +643,38 @@ fn background_name(state: &State, call: CallId) -> String {
 /// A wait's output, and whether it completed: the whole result of each
 /// call it waits on that has settled, then what still runs, and, for one
 /// ended early, why. Only one its task's stopping ended is interrupted;
-/// one Max's words ended is an ordinary result.
+/// one that words, or a member waiting to hear from it, ended is an
+/// ordinary result.
 pub fn waited(state: &State, values: Values, call: CallId) -> Option<(Bytes, bool)> {
     let wait = state.call(call)?.waits.as_ref()?;
     let (landed, running) = state.waited(call)?;
-    let holds = wait.until.holds(landed.len(), running.len());
+    let holds = state.wait_holds(call, wait);
     let owner = state.call_owner(call).and_then(|t| state.task(t));
     let stopping = owner.is_some_and(|t| t.drain().is_some());
+    let listening: Vec<String> = (wait.on.iter())
+        .flat_map(|c| state.listening(*c))
+        .map(|t| format!("`{}`", t.name))
+        .collect();
     let mut said = Vec::new();
     if !holds {
-        said.push(text(match (stopping, owner.is_some_and(Task::closes)) {
-            (true, _) => "[harness] You are being stopped, so this wait ended.",
-            (false, true) => "[harness] Max wrote to you: answer him, then `wait` again.",
-            (false, false) => {
-                "[harness] Max wrote to you: answer him and end your turn. What still runs keeps running, \
-and its result starts a new turn."
+        let then = match owner.is_some_and(Task::closes) {
+            true => "then `wait` again.",
+            false => {
+                "and end your turn. What still runs keeps running, and its result starts a new turn."
             }
+        };
+        said.push(text(&match (stopping, owner) {
+            (true, _) => "[harness] You are being stopped, so this wait ended.".to_owned(),
+            (false, _) if !listening.is_empty() => format!(
+                "[harness] {} waits to hear from you, so waiting on it would wait forever: tell it what it \
+needs, {then}",
+                listening.join(", ")
+            ),
+            (false, Some(owner)) => {
+                let who = writers(state, owner).unwrap_or_else(|| "Words came".to_owned());
+                format!("[harness] {who} to you: answer, {then}")
+            }
+            (false, None) => format!("[harness] This wait ended: {then}"),
         }));
     }
     said.extend((landed.iter()).map(|c| crate::render::activity(state, values, *c)));
@@ -936,11 +952,12 @@ pub fn background_call(
 }
 
 /// Max's words a label names, among those `parent` has heard: his messages,
-/// the mandates he gave, his answers, and what briefs quoted.
+/// the mandates he gave, his answers, and what briefs and messages quoted.
 pub fn quoted(state: &State, parent: &Task, label: &str) -> Result<ValueId, String> {
-    let words = state.deliveries().filter_map(|d| match d.delivery.content {
-        Content::Words(words) => Some(words),
-        Content::Prompt(_) => None,
+    let words = state.deliveries().flat_map(|d| match &d.delivery.content {
+        Content::Words(words) => vec![*words],
+        Content::Message(message) => message.quotes.clone(),
+        Content::Prompt(_) => Vec::new(),
     });
     let mandates = state
         .tasks()

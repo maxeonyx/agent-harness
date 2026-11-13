@@ -851,7 +851,9 @@ fn author(state: &State, task: TaskId, from: &Rendered) -> Author {
                     },
                 ..
             }) => Author::Prompt(*prompt),
-            None => Author::Harness,
+            // An agent's message is the harness's text until the map draws
+            // where it was read.
+            Some(_) | None => Author::Harness,
         },
         Rendered::Call(_) => Author::Call,
         // A task Max started, an aside or a resume, opens with his words.

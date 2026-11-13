@@ -1262,8 +1262,8 @@ message when it settles. {then}",
                 .is_some_and(|c| c.backgrounded.is_some());
             match meta::wait(self.state(), &parent, &input) {
                 Ok(_) if moved => Err(format!(
-                    "Max wrote before this wait began, so it moved out of your round and \
-waited on nothing: answer him, then {}",
+                    "You were written to before this wait began, so it moved out of your round and \
+waited on nothing: answer, then {}",
                     match parent.closes() {
                         true => "`wait` again",
                         false => "end your turn",
@@ -1581,6 +1581,13 @@ comes to you as a message. `stop` it to close it.",
                     .map(|(_, words)| words)
                     .collect();
                 said.extend(render::late_words(&|v| self.value(v), &t.name, &late));
+                let told: Vec<_> = (self.state().unread_messages(t).into_iter())
+                    .filter_map(|d| match &d.delivery.content {
+                        Content::Message(message) => Some(message),
+                        _ => None,
+                    })
+                    .collect();
+                said.extend(render::late_told(&|v| self.value(v), &t.name, &told));
                 (t.name.clone(), said)
             })
             .collect();

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::id::{DeliveryId, TaskId, ValueId};
+use crate::message::Message;
 
 /// Something addressed to a task: Max's words, or a turn the harness asks
 /// for.
@@ -58,6 +59,10 @@ pub enum Content {
     /// They end his turn and clear the task from his queue, and the task has
     /// heard them, so it can quote them on ([`crate::task::Mandate::quotes`]).
     Words(ValueId),
+    /// Words another agent told it: its owner, a live agent it started, or
+    /// another of Max's chats ([`crate::message::Message`]). They land as
+    /// Max's words do, but leave its place in his queue as it was.
+    Message(Message),
     /// A turn the harness asks for.
     Prompt(Prompt),
 }
