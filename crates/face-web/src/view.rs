@@ -602,6 +602,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         },
         Fact::Shutdown { within } => format!("brain shutting down, within {}s", within / 1000),
         Fact::SignedIn => "signed in to claude.ai: work carries on".into(),
+        Fact::SignedOut => "not signed in to claude.ai: work waits for a sign-in".into(),
         Fact::Task(id, event) => match event {
             TaskEvent::Created(c) => {
                 let how = match &c.origin {

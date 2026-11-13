@@ -406,8 +406,9 @@ pub struct Stale {
 pub enum Hold {
     /// The subscription's limit, until it resets ([`Ending::Limited`]).
     Limited { until: Timestamp },
-    /// No claude.ai login ([`Ending::SignedOut`]) since `since`: until Max
-    /// signs in, which has no time of its own.
+    /// No claude.ai login since `since`, found by a request
+    /// ([`Ending::SignedOut`]) or at a launch ([`Fact::SignedOut`]): until
+    /// Max signs in, which has no time of its own.
     SignedOut { since: Timestamp },
 }
 
@@ -1000,6 +1001,9 @@ impl State {
             }
             Fact::Seen(_) => {}
             Fact::SignedIn => self.signed_out = None,
+            Fact::SignedOut => {
+                self.signed_out.get_or_insert(record.at);
+            }
             Fact::Draft(id, event) => self.fold_draft(*id, event, record)?,
             Fact::Focus(focus) => {
                 let Author::Max = record.by else {
@@ -1138,6 +1142,7 @@ impl State {
                 Fact::Launched(_)
                 | Fact::Shutdown { .. }
                 | Fact::SignedIn
+                | Fact::SignedOut
                 | Fact::ModelCall(..)
                 | Fact::Call(..)
                 | Fact::Change(_)
@@ -2736,6 +2741,11 @@ impl State {
     /// Until when the account is limited, if it is at `now`.
     pub fn limited(&self, now: Timestamp) -> Option<Timestamp> {
         self.limited_until.filter(|until| *until > now)
+    }
+
+    /// Whether the account waits for a sign-in ([`Hold::SignedOut`]).
+    pub fn signed_out(&self) -> bool {
+        self.signed_out.is_some()
     }
 
     /// What every ready task waits on at `now`, if anything: a sign-in

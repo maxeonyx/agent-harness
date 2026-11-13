@@ -173,8 +173,14 @@ pub struct Opening {
 impl Opening {
     /// What a launch on `state` says first, at `at`, its record's time,
     /// reading the role files in `roles`, or where the last launch read
-    /// them.
-    pub fn of(state: &State, at: Time, roles: Option<&Path>) -> Result<Opening, String> {
+    /// them; `signed_out` is whether the brain would send on a claude.ai
+    /// login and the harness has none.
+    pub fn of(
+        state: &State,
+        at: Time,
+        roles: Option<&Path>,
+        signed_out: bool,
+    ) -> Result<Opening, String> {
         let exe = std::env::current_exe()
             .and_then(std::fs::read)
             .map_err(|e| format!("the brain's own executable: {e}"))?;
@@ -184,6 +190,10 @@ impl Opening {
             limbs: limb_builds(),
             how: launch_how(state),
         })];
+        // Signed out with nothing refused yet: wait for a sign-in now.
+        if signed_out && !state.signed_out() {
+            facts.push(Fact::SignedOut);
+        }
         let roles = match roles {
             Some(dir) => Some(
                 dir.canonicalize()
