@@ -2827,7 +2827,6 @@ impl State {
         self.faces.contains(&replica)
     }
 
-    /// A task's page, once it has one.
     /// The task whose page `task` works on: its nearest ancestor that is
     /// not a fork, since a fork is its source doing a step.
     pub fn page_of(&self, task: TaskId) -> TaskId {
@@ -2847,6 +2846,7 @@ impl State {
         self.open.pressed.get(&call)
     }
 
+    /// A task's page, once it has one.
     pub fn page(&self, task: TaskId) -> Option<&Page> {
         self.pages.get(&task)
     }
@@ -2902,9 +2902,8 @@ impl State {
             true => self.least_worn(),
             false => self.look(top)?.theme.clone(),
         };
-        let held: BTreeSet<u8> = (self.tasks.values())
-            .filter(|t| !t.is_done())
-            .filter_map(|t| t.look.as_ref())
+        let held: BTreeSet<u8> = (self.live_wearers().into_iter())
+            .filter_map(|w| self.tasks.get(&w)?.look.as_ref())
             .filter(|l| l.theme == theme)
             .map(|l| l.identity.slot)
             .collect();
@@ -2935,18 +2934,25 @@ impl State {
     /// The theme for a new area: one no live task wears, else the one worn
     /// least recently; the earlier in [`THEMES`] on a tie.
     fn least_worn(&self) -> String {
+        let live = self.live_wearers();
         let mut worn: BTreeMap<&str, (i64, usize)> = BTreeMap::new();
         for t in self.tasks.values() {
             let Some(look) = &t.look else { continue };
             let e = worn.entry(look.theme.as_str()).or_default();
-            match t.is_done() {
-                true => e.0 = e.0.max(t.since.0),
-                false => (e.0, e.1) = (i64::MAX, e.1 + 1),
+            match live.contains(&t.id) {
+                false => e.0 = e.0.max(t.since.0),
+                true => (e.0, e.1) = (i64::MAX, e.1 + 1),
             }
         }
         let at = |name: &str| worn.get(name).copied().unwrap_or_default();
         let pick = (THEMES.iter().enumerate()).min_by_key(|(i, name)| (at(name), *i));
         pick.expect("there are themes").1.to_string()
+    }
+
+    /// The wearers of the live tasks: a finished chat whose resume runs
+    /// still wears its look on the map.
+    fn live_wearers(&self) -> BTreeSet<TaskId> {
+        self.live().map(|t| self.wearer(t.id)).collect()
     }
 
     /// The looks the brain should give now: each live task's wearer that

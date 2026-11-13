@@ -1356,6 +1356,12 @@ impl Task {
                 self.name = name.clone();
                 Ok(())
             }
+            // A finished chat is still the top of the area its resumes and
+            // the work under them carry on, and its look is theirs.
+            Fact::Task(id, TaskEvent::Looked(look)) if *id == self.id => {
+                self.look = Some(look.clone());
+                Ok(())
+            }
             Fact::Call(id, CallEvent::Made(call)) if matches!(call.caller, Caller::Max { chat: Some(t), .. } if t == self.id) =>
             {
                 self.max_actions.push(*id);
