@@ -23,8 +23,7 @@ root() {
     | (.tools | fromjson | map(.name)) as $tools
     | { who: $who,
         open_chat: ($tools | index("open_chat") != null),
-        facing: (.system | contains("This chat is Max'"'"'s")),
-        both_ways: (.system | contains("when you have answered him")) }'
+        facing: (.system | contains("This chat is Max'"'"'s")) }'
 }
 chat=$(node dev/drive.mjs chat --brain $b chat "$dir" "$(cat demos/max-set/mandate.md)")
 node dev/drive.mjs settle --brain $b "$chat" >/dev/null
