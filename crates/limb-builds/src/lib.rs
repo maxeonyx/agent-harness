@@ -1,4 +1,5 @@
-//! The builds tool set: relaunches its brain onto a target build, as a call of the harness's core model, through a rehearsal and a gated
+//! The builds tool set: relaunches its brain onto a target build, as a
+//! call of the harness's core model, through a rehearsal and a gated
 //! opening, and goes back if the new build dies just after it opens
 //! ([`harness_core::build`] holds the model, [`relaunch`] the procedure).
 //!
@@ -9,10 +10,9 @@
 //! branch has or one that lacks some of `main`, a second relaunch while
 //! one is under way, a build that fails its rehearsal, and a one-way
 //! relaunch unless the call says `one_way`: each before anything touches
-//! the live database, since
-//! the call's result arrives only after the relaunch. Otherwise the running
-//! brain drains and stops, the new build starts as a candidate, and the
-//! call settles once, after a window in which the limb watches the opened
+//! the live database, since the call's result arrives only after the
+//! relaunch. Otherwise the running brain drains and stops, the new build
+//! starts as a candidate, and the call settles once, after a window in which the limb watches the opened
 //! build: with the stage it reached ([`Ended::stage`]), then its words,
 //! which the face reads as where the relaunch stands.
 //!
