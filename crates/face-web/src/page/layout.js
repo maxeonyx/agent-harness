@@ -169,10 +169,10 @@ function byTime(V, by, P, kids) {
 // dot its life goes on from, into another life's. A lane is held from the
 // row its life starts on to the row its last line leaves it, and it stands
 // on the rows from the one below its maker's, `a`, to that last one, `b`:
-// on its maker's row its line is still bending out of its maker. A life of one
-// dot, made by another and read by its maker's next dot or by no one, with
-// no other line, is a spindle: it hangs beside its maker's lane and holds
-// none.
+// on its maker's row its line is still bending out of its maker. A life of
+// one dot, made by another and read by its maker's next dot or by no one,
+// with no other line, is a spindle: it hangs beside its maker's lane and
+// holds none.
 function lanesOf(V, edges) {
   const L = new Map();
   for (const v of V) {
@@ -205,13 +205,14 @@ function lanesOf(V, edges) {
 // Each lane's column, in the order they start. A column holds one life at
 // a time, with a row clear between them: a life read on the row another's
 // maker makes it on may share its column, one bending into its reader
-// above that row as the other bends out below. A life with no maker takes the first free column from the middle
-// rightward; a child takes the first free one on the side of its maker
-// where its lines cross fewer, at the rows they bend on: a lane held
-// there, and every line its dot there starts or reads; but never where its
-// maker's own result would pass over its start. Even, it goes on its
-// maker's outer side, or, for a maker in the middle, alternately right and
-// left. Columns are an order, not places: across() packs them.
+// above that row as the other bends out below. A life with no maker takes
+// the first free column from the middle rightward; a child takes the
+// first free one on the side of its maker where its lines cross fewer, at
+// the rows they bend on: a lane held there, and every line its dot there
+// starts or reads; but never where its maker's own result would pass over
+// its start. Even, it goes on its maker's outer side, or, for a maker in
+// the middle, alternately right and left. Columns are an order, not
+// places: across() packs them.
 function columns(L) {
   const held = new Map();
   const end = (l) => (l.reader ? l.r1 - 1 : l.r1);
@@ -392,9 +393,10 @@ function taper(s, L, w) {
 // An edge's ends, its points, and its widths if it tapers or is a tool's.
 // A life's own line runs upright between its dots; a spawn bends from its
 // port into its lane, and a result from its lane into its reader's port,
-// over as much height as it goes across (at least TURN, at most all of it): turning in the middle, or, where
-// that would pass over a node or cross a line already drawn, as much
-// nearer its slant end as clears the most.
+// over as much height as it goes across (at least TURN, at most all of
+// it): turning in the middle, or, where that would pass over a node or
+// cross a line already drawn, as much nearer its slant end as clears the
+// most.
 function route(e, onRow, drawn) {
   const { v, d } = e;
   const P0 = e.a ? e.a.p : edge(d, [0, 1], TUCK), P1 = e.b ? e.b.p : edge(v, [0, -1], TUCK);
