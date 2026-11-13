@@ -5,15 +5,23 @@
     --tint: #f4f1e8; --accent: #1d5f8a; --fig-1: #1d6a78; --fig-2: #b4573e; --fig-3: #6b7a2e; --fig-4: #5d6f86;
     --cover-ink: var(--ink); --cover-body: var(--body);
     --display: var(--serif); --display-bold: 600; --display-var: normal;
-    max-width: 48rem; margin: 0 auto 2em; padding: 2em 1.6em 1em;
-    background: var(--paper); color: var(--body); border-top: 1px solid var(--line);
+    --leaf: 42.5rem; --edge: 2.2rem;
+    position: relative; overflow: clip; padding: 0 0 2.6rem;
+    background: var(--paper); color: var(--body);
     font: 16.5px/1.6 var(--serif);
   }
-  /* The lead on the task's painted ground, which dissolves into the paper. */
-  .sheet .lead { position: relative; isolation: isolate; margin: -2em -1.6em 0; padding: 3.2em 1.6em 2.4em; display: flex; flex-direction: column; justify-content: flex-end; }
-  .sheet .lead.new { min-height: 46vh; padding-top: 4.5em; }
-  .sheet .lead .ground { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; -webkit-mask-image: linear-gradient(#000 65%, transparent); mask-image: linear-gradient(#000 65%, transparent); }
-  .sheet.folded .lead { min-height: 0; padding: 2.2em 1.6em 1.6em; cursor: pointer; }
+  /* The task's painting fills the chat window and stays where it is while
+     the page scrolls (sticky, taking no room); the sheet's paper shows until
+     it arrives. The lead stands on it, and the rest of the page is a leaf of
+     the theme's paper laid on it, the painting round its sides and below it. */
+  .sheet > .ground { position: sticky; top: 0; display: block; width: 100%; height: var(--win-h, 100vh); margin-bottom: calc(-1 * var(--win-h, 100vh)); pointer-events: none; }
+  .sheet > .lead { position: relative; max-width: var(--leaf); margin: 0 auto; padding: 3.2em var(--edge) 2.2em; display: flex; flex-direction: column; justify-content: flex-end; }
+  .sheet .lead.new { min-height: calc(var(--win-h, 100vh) * .3); }
+  /* The page's next shape has no hook: hidden here to study it. */
+  .sheet .lead .hook { display: none; }
+  .sheet > .leaf { position: relative; max-width: var(--leaf); margin: 0 auto; padding: 2em var(--edge) 1.2em; background: var(--paper); box-shadow: 0 0 0 1px color-mix(in oklab, var(--ink) 15%, transparent), 0 14px 44px -10px rgb(0 0 0 / .38); }
+  .sheet .leaf > section:first-child { margin-top: 0; }
+  .sheet.folded .lead { min-height: 0; padding: 2.2em var(--edge) 1.8em; cursor: pointer; }
   .sheet .lead .checked { margin: .4em 0 0; font: 14.5px var(--sans); color: var(--cover-body); }
   /* What changed since Max last looked: a bar in the left gutter. */
   .sheet .changed { position: relative; }
@@ -73,10 +81,11 @@
   .sheet-line .hook { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
   .sheet-line:hover { background: var(--hover); }
   @media (max-width: 760px) {
-    .sheet { padding: 1.4em 1em .6em; font-size: 16px; }
+    .sheet { --leaf: calc(100% - 28px); --edge: 1.05em; padding-bottom: 1.4rem; font-size: 16px; }
     .sheet h1 { font-size: 1.7em; }
-    .sheet .lead { margin: -1.4em -1em 0; padding: 2.6em 1em 2em; }
-    .sheet .lead.new { min-height: 40vh; padding-top: 3.5em; }
-    .sheet.folded .lead { padding: 2em 1em 1.4em; }
+    .sheet > .lead { padding: 2.6em var(--edge) 1.8em; }
+    .sheet .lead.new { min-height: calc(var(--win-h, 100vh) * .3); }
+    .sheet > .leaf { padding: 1.5em var(--edge) .8em; }
+    .sheet.folded .lead { padding: 2em var(--edge) 1.4em; }
     .sheet-line { padding: .55em 1em; }
   }

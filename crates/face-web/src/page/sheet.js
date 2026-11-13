@@ -42,8 +42,10 @@ export function sheetTop() {
 }
 
 // The page wears its task's look: the theme's tokens, and its ground
-// painted behind the lead, once per task and width. A task with none wears
-// sheet.css's plain default.
+// painted for the chat window, once per task and window size. The painting
+// fills the window and stays where it is (sticky in the sheet, sheet.css),
+// and the page's text below the lead is on a leaf of the theme's paper laid
+// on it. A task with none wears sheet.css's plain default.
 const grounds = new Map();
 async function dress(t) {
   const lead = $(".lead", sheetEl);
@@ -52,16 +54,21 @@ async function dress(t) {
   await wear(sheetEl, theme);
   await wear(lineEl, theme);
   if (!lead?.isConnected) return;
-  const at = `${t.id} ${lead.clientWidth} ${lead.clientHeight}`;
+  const w = scrollEl.clientWidth, h = scrollEl.clientHeight;
+  sheetEl.style.setProperty("--win-h", `${h}px`);
+  const at = `${t.id} ${w} ${h}`;
   let ground = grounds.get(t.id);
   if (ground?.at !== at) {
     ground = el("canvas", "ground");
     ground.at = at;
     grounds.set(t.id, ground);
-    lead.prepend(ground);
-    const h = $("h1", lead).getBoundingClientRect(), box = lead.getBoundingClientRect();
-    paintInto(ground, theme, t.look, { x: h.left - box.left, y: h.top - box.top, w: h.width, h: h.height });
-  } else lead.prepend(ground);
+    sheetEl.prepend(ground);
+    // The lead's words, where they stand on the window as the page opens.
+    const box = sheetEl.getBoundingClientRect(), words = [...lead.querySelectorAll("h1, .hook, .checked")].map((e) => e.getBoundingClientRect());
+    const x0 = Math.min(...words.map((r) => r.left)), y0 = Math.min(...words.map((r) => r.top));
+    const x1 = Math.max(...words.map((r) => r.right)), y1 = Math.max(...words.map((r) => r.bottom));
+    window.groundMs = paintInto(ground, theme, t.look, { x: x0 - box.left, y: y0 - box.top, w: x1 - x0, h: y1 - y0 }, { w, h, dpr: Math.min(2, devicePixelRatio || 1) });
+  } else sheetEl.prepend(ground);
 }
 const redraw = () => sheetEl.dispatchEvent(new CustomEvent("sheet", { bubbles: true }));
 
@@ -88,10 +95,12 @@ function page(p, t) {
     lead.onclick = () => { unfolded = at; redraw(); };
     return out;
   }
-  out.push(end(p.end), claim("now", p.now));
-  if (p.asks.length) out.push(part("asks", p.asks.map((a) => ask(a, t.id))));
-  if (p.plan.length) out.push(part("plan", [plan(p.plan, t.id)]));
-  if (p.why) out.push(part("why", blocks(p.why.blocks)));
+  const leaf = el("div", "leaf");
+  leaf.append(end(p.end), claim("now", p.now));
+  if (p.asks.length) leaf.append(part("asks", p.asks.map((a) => ask(a, t.id))));
+  if (p.plan.length) leaf.append(part("plan", [plan(p.plan, t.id)]));
+  if (p.why) leaf.append(part("why", blocks(p.why.blocks)));
+  out.push(leaf);
   return out;
 }
 function part(cls, children) {
