@@ -36,7 +36,8 @@
 //!
 //! Every command runs in a systemd scope of its own in its agent's slice
 //! ([`harness_limb::scope`]), and ends, with everything it started, when
-//! its call does.
+//! its call does. All of them yield to the harness itself
+//! ([`shell::yield_to_the_harness`]): Max's page never waits on a build.
 //!
 //! Access control is the definition and nothing else: the limb has no
 //! prompts and no checks on what a command may touch. A role either holds
@@ -121,6 +122,7 @@ pub fn open(_offer: &Offer, opening: &Opening) -> Result<Arc<dyn ToolSet>, Strin
         }
         Err(e) => eprintln!("the commands an earlier instance left running: {e}"),
     }
+    shell::yield_to_the_harness();
     Ok(Arc::new(Workspace {
         inner: Arc::new(inner),
     }))

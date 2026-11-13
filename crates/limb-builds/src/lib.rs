@@ -214,5 +214,6 @@ fn tool() -> Tool {
         name: RELAUNCH.into(),
         definition: definition.to_string(),
         audience: Audience::Agent,
+        held: false,
     }
 }

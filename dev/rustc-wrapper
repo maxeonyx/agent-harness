@@ -1,0 +1,7 @@
+#!/bin/sh
+# Cargo runs every rustc through this (.cargo/config.toml): through the
+# machine's shared compiler cache if dev/build-cache has set one up, else
+# plainly, so a clone builds the same on any machine.
+sccache="$HOME/.local/share/agent-harness/sccache/bin/sccache"
+[ -x "$sccache" ] && exec "$sccache" "$@"
+exec "$@"

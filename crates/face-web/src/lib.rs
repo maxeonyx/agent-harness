@@ -45,10 +45,15 @@
 //!
 //! **The map** is each task's legs, drawn from the rows the tab already has
 //! (`page/map.js`): every live task is a big node in the present row, its
-//! past rises above it as small dots, and what it waits on hangs below. The
-//! layout is `dot`'s layered layout, done in the page (`page/layout.js`);
-//! the nodes are drawn on one WebGL canvas (`page/blobs.js`) under the
-//! camera that moves the rest (`page/camera.js`). A tap on a small dot opens
+//! past rises above it as small dots, and what it waits on hangs below.
+//! Each life (a chat, an agent, a background call) keeps one x, a lane, its
+//! line running straight down it between its dots, and lanes pack close; a
+//! life of one dot that its maker reads next hangs beside its maker. A start
+//! grows out of its maker in a taper, and a result thins into its reader,
+//! each bending all the way into its dot (`page/layout.js`, which
+//! `dev/lanes-check.mjs` checks for crossings no routing forced). The
+//! nodes are drawn on one WebGL canvas (`page/blobs.js`) under the camera
+//! that moves the rest (`page/camera.js`). A tap on a small dot opens
 //! that chat at that leg, `#<task>@<entry>`.
 //!
 //! ```mermaid
@@ -57,7 +62,7 @@
 //! ---
 //! flowchart LR
 //!   view["/view rows<br/>legs, leg, work"] --> derive["map.js derive<br/>nodes, edges, projects"]
-//!   derive --> layout["layout.js layered<br/>rows, order, x"]
+//!   derive --> layout["layout.js lanes<br/>rows, columns, lines"]
 //!   layout --> draw["draw.js<br/>labels, tapered lines"]
 //!   layout --> blobs["blobs.js<br/>blobs and dots, one canvas"]
 //!   camera["camera.js<br/>one camera per frame"] --> draw
@@ -150,6 +155,7 @@ use harness_core::id::{ReplicaId, TaskId, Time, Timestamp, ValueId};
 use harness_core::schema::Record;
 use harness_core::state::{Delivered, State};
 use harness_face_tab::{Down, FaceKey, FaceRow, Up, View};
+use harness_provider::image;
 use harness_substrate::{Live, Publisher, Standing};
 use serde_json::{Value, json};
 use tungstenite::{Message, WebSocket};
@@ -466,6 +472,9 @@ impl<S: Source> Face<S> {
                         _ => http::not_found(&mut stream),
                     };
                 }
+                if let Some(at) = path.strip_prefix("/image/") {
+                    return self.image(&mut stream, at);
+                }
                 if let Some(at) = path.strip_prefix("/context/") {
                     if let Ok(head) = at.parse() {
                         return self.context(&mut stream, head, true);
@@ -630,7 +639,7 @@ impl<S: Source> Face<S> {
                     json!({
                         "id": id.to_string(),
                         "role": message.role.as_str(),
-                        "content": text(message.content),
+                        "content": self.source.value(message.content).map(|c| by_reference(id, c)),
                         "response": response,
                         "by": by.remove(&id),
                     })
@@ -643,6 +652,70 @@ impl<S: Source> Face<S> {
         let body = serde_json::to_vec(&chain).expect("a JSON value serialises");
         http::respond(stream, "application/json", &body, forever)
     }
+
+    /// `/image/ENTRY/N`: the `N`th image of entry ENTRY's content, as
+    /// [`by_reference`] numbers them; stored by the browser forever, since
+    /// an entry is its bytes.
+    fn image(&self, stream: &mut impl Write, at: &str) -> io::Result<()> {
+        let at = at.split_once('/');
+        let entry =
+            at.and_then(|(e, n)| Some((e.parse::<EntryId>().ok()?, n.parse::<usize>().ok()?)));
+        let Some((entry, n)) = entry else {
+            return http::not_found(stream);
+        };
+        let content = match self.read().entry(entry) {
+            Some(Entry::Message { message, .. }) => message.content,
+            _ => return http::not_found(stream),
+        };
+        let blocks = self.source.value(content);
+        let Some(mut blocks) = blocks.and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
+            return http::not_found(stream);
+        };
+        let (mut i, mut found) = (0, None);
+        image::each_image(&mut blocks, &mut |source| {
+            if i == n {
+                let kind = source["media_type"]
+                    .as_str()
+                    .filter(|k| k.starts_with("image/"));
+                found = image::decoded(source)
+                    .map(|bytes| (kind.unwrap_or("application/octet-stream").to_owned(), bytes));
+            }
+            i += 1;
+        });
+        match found {
+            Some((kind, bytes)) => http::respond(stream, &kind, &bytes, true),
+            None => http::not_found(stream),
+        }
+    }
+}
+
+/// A message's content as the page reads it: its JSON blocks as text, with
+/// each base64 image's data left out for where the page fetches it
+/// (`url`, `/image/ENTRY/N`), and its `width` and `height`, so the log
+/// keeps an image's room before it comes. An image is most of the bytes of
+/// the context it is in, and every context it is carried into.
+fn by_reference(entry: EntryId, content: Vec<u8>) -> String {
+    let blocks = content
+        .windows(7)
+        .any(|w| w == b"\"image\"")
+        .then(|| serde_json::from_slice::<Value>(&content).ok())
+        .flatten();
+    let Some(mut blocks) = blocks else {
+        return String::from_utf8_lossy(&content).into_owned();
+    };
+    let mut n = 0;
+    image::each_image(&mut blocks, &mut |source| {
+        if let Some(bytes) = image::decoded(source) {
+            if let Some((width, height)) = image::dimensions(&bytes) {
+                source["width"] = width.into();
+                source["height"] = height.into();
+            }
+            source["url"] = format!("/image/{entry}/{n}").into();
+            source.as_object_mut().map(|s| s.remove("data"));
+        }
+        n += 1;
+    });
+    blocks.to_string()
 }
 
 fn send<S: Socket>(tab: &mut WebSocket<S>, down: &Down) -> io::Result<()> {

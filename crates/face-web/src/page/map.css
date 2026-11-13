@@ -19,12 +19,6 @@
   #edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
   #empty { position: fixed; inset: 0; display: grid; place-content: center; color: var(--faint); font: 16px var(--serif); pointer-events: none; }
 
-  /* The map's lines (layout.js): tapers filled solid in a group faded as a
-     whole, so where they overlap they don't darken; old versions fainter. */
-  #edges .live { fill: var(--ink); opacity: .3; }
-  #edges .old { fill: var(--ink); opacity: .12; }
-  #edges .dash { fill: none; stroke: var(--ink); stroke-width: 1.4; stroke-dasharray: 3 3; stroke-linecap: round; opacity: .3; }
-
   /* A big node or a running chip: its blob or mark is drawn on the canvas
      (blobs.js); this is where it is pressed, and its name to its right. */
   .node { position: absolute; left: 0; top: 0; color: var(--ink); text-decoration: none; transition: opacity .25s; }
@@ -34,8 +28,10 @@
   .node.work .hit { left: -10px; top: -10px; width: 20px; height: 20px; }
   .node.work .name { left: 12.5px; font: 12px/18px var(--sans); color: var(--muted); }
   .node.work.yours .name { color: var(--ink); }
-  .node.work .g { position: absolute; left: -5.5px; top: -5.5px; width: 11px; height: 11px; color: rgba(20, 20, 19, .7); pointer-events: none; }
+  .node.work .g { position: absolute; left: -5.5px; top: -5.5px; width: 11px; height: 11px; color: var(--working); pointer-events: none; }
   .node.work .g svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  /* Max's running work: his orange card, under its gear. */
+  .node.work.yours .g { left: -7px; top: -7px; width: 14px; height: 14px; box-sizing: border-box; padding: 2px; border: 1.4px solid var(--yours); border-radius: 3.2px; background: var(--paper); color: var(--yours); }
   .node.unmatched { opacity: .12 !important; }
   .node.selected { visibility: hidden; }
   /* A finished project, folded: a small card on the archive shelf. */

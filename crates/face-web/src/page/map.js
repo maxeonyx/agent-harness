@@ -1,16 +1,18 @@
 import { ago, when } from "./base.js";
-import { layered } from "./layout.js";
+import { lanes } from "./layout.js";
 
 // ─── The model: the view as a map ──────────────────────────────────────────
 // The map is a graph of how contexts began, compacted, forked, spawned,
 // joined and were edited: the view's legs (`legs`, `leg` and `work` on each
 // task). A node is a leg, a stretch of one task's context; an edge points
 // from the newer node back to what it depends on. Background work that is
-// not a spawn is a chip, hung from the leg that started it, and a task
-// with work out has a planned join under it, depending on the work whose
-// results are still due to it (the view's `due`): running, or finished and
-// not read yet. Work handed to Max is a side branch, never joined.
-// Projects are the graph's connected pieces.
+// not a spawn is a chip, hung from the leg that started it through a ring
+// for each time it was passed on, and a task with work out has a planned
+// join under it, depending on the work whose results are still due to it
+// (the view's `due`): running, or finished and not read yet. Work handed to
+// Max is never joined. Each node is on a lane, its life's: its task's (a
+// resume of one of Max's chats carries on his chat's), an old version's,
+// or its work's. Projects are the graph's connected pieces.
 //
 // Each live task is big: its planned join while it has work out, so it
 // sits below what it will take in, hollow only while it waits on it; its
@@ -112,12 +114,21 @@ export function stateOf(t) {
 export function waitingOn(t) {
   const w = t.waiting || {};
   const agents = view.tasks.filter((m) => m.owner === t.id && m.due && !isDone(m)).length;
-  const background = (t.work || []).filter((b) => b.running && b.due).length;
+  const background = held(t).filter((b) => b.running && b.due).length;
   const tools = w.kind === "calls" ? w.calls.filter((c) => !c.children?.length && c.status !== "settled" && c.tool !== "wait").length : 0;
   const n = agents + background + tools;
   const parts = [[agents, "agent"], [background, "background task"], [tools, "tool call"]]
     .filter(([k]) => k).map(([k, what]) => `${k} ${what}${k === 1 ? "" : "s"}`);
   return { n, text: !n ? "" : parts.length === 1 ? `Waiting on ${parts[0]}` : `Waiting on ${n}: ${parts.join(", ")}` };
+}
+// The background work a task holds now: its own, and what was passed to it.
+let holding = { of: null, by: new Map() };
+function held(t) {
+  if (holding.of !== view) {
+    holding = { of: view, by: new Map() };
+    for (const m of view.tasks) for (const w of m.work || []) (holding.by.get(w.holder) ?? holding.by.set(w.holder, []).get(w.holder)).push(w);
+  }
+  return holding.by.get(t.id) ?? [];
 }
 // Waiting on its children: on a spawn, or a `wait` on one.
 const waitsOnKids = (t) => t.waiting?.kind === "calls" && t.waiting.calls.some((c) => c.children?.length);
@@ -136,8 +147,12 @@ export const unfolded = new Set();
 export const cardStatus = (c) => `Finished ${ago(c.last)} ago`;
 
 // Each task's legs into nodes, its work into chips, a planned join for
-// work out, the chains of compactions folded, and the projects. Work handed
-// to Max is his: a side branch off the leg that started it, never joined.
+// work out, the chains of compactions folded, and the projects. Each node
+// knows its lane, the colour of its lane's line into it (`line`: an
+// agent's ink, an old version's faint, a call's blue, and Max's orange from
+// when it was handed to him), and, at the end of a finished life, how it
+// ended (`end`: green done, red failed, none abandoned).
+const laneOf = (t) => (chained(t) ? laneOf(byId[t.from]) : t.id);
 export function derive(openId) {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
   const tasks = [...view.tasks].sort(order);
@@ -156,12 +171,33 @@ export function derive(openId) {
     // A leg is named by the entry that began it, so two fresh contexts
     // that open with the same words (a carry said twice) name one leg: it
     // is one node, the first.
+    // An old version is a lane of its own, from where it branched.
+    const oldLane = new Map();
     for (const l of legs) {
       if (nodes.has(l.key)) continue;
-      add({ id: l.key, kind: "leg", t, began: l.began, at: l.at, open: l.first, old: !path.has(l.key),
+      const old = !path.has(l.key);
+      let lane = laneOf(t);
+      if (old) {
+        const before = l.on.find((d) => mine.has(d.leg))?.leg;
+        lane = oldLane.get(before) ?? `o:${l.key}`;
+        oldLane.set(l.key, lane);
+      }
+      add({ id: l.key, kind: "leg", t, lane, line: old ? "faint" : "ink", began: l.began, at: l.at, open: l.first, old,
         carry: l.began === "carry" && path.has(l.key), deps: l.on.map((d) => d.leg ?? `w:${d.work}`) });
     }
-    for (const w of t.work || []) add({ id: `w:${w.call}`, kind: "chip", t, work: w, running: w.running, open: w.at, deps: [w.leg] });
+    const own = nodes.get(t.leg);
+    if (own && isDone(t)) own.end = { result: "green", failed: "red" }[t.outcome?.kind];
+    for (const w of t.work || []) {
+      const lane = `w:${w.call}`;
+      let before = w.leg;
+      (w.passed || []).forEach((p, i) => {
+        const id = `${lane}:${i}`;
+        add({ id, kind: "ring", t, lane, line: i && w.passed[i - 1].to === "max" ? "max" : "tool", time: [p.at, p.at], open: w.at, deps: [before] });
+        before = id;
+      });
+      add({ id: lane, kind: "chip", t, lane, line: w.holder === "max" ? "max" : "tool", end: w.running ? null : w.failed ? "red" : "green",
+        work: w, running: w.running, open: w.at, deps: [before] });
+    }
   }
   // A planned join under each live task with work out: members and calls
   // whose results are still due to it.
@@ -170,8 +206,8 @@ export function derive(openId) {
   for (const t of tasks) {
     if (isDone(t) || !t.leg) continue;
     const out = (members.get(t.id) || []).filter((m) => m.due && m.leg).map((m) => m.leg);
-    for (const w of t.work || []) if (w.due) out.push(`w:${w.call}`);
-    if (out.length) add({ id: `p:${t.id}`, kind: "planned", t, deps: [t.leg, ...out] });
+    for (const w of held(t)) if (w.due) out.push(`w:${w.call}`);
+    if (out.length) add({ id: `p:${t.id}`, kind: "planned", t, lane: laneOf(t), line: "ink", deps: [t.leg, ...out] });
   }
   // Big: each live task's own node. A task's own node, big or not, takes
   // the task's id. A planned join big while its task runs on is solid, and
@@ -244,7 +280,8 @@ export function derive(openId) {
   const list = [...comps.values()].map((c) => {
     const ts = [...c.tasks].sort(order);
     const root = ts[0];
-    const running = ts.some((t) => !isDone(t));
+    // Open while anything in it runs, a server handed to Max included.
+    const running = ts.some((t) => !isDone(t) || (t.work || []).some((w) => w.running));
     const last = Math.max(...ts.map((t) => t.waiting?.since || 0));
     const over = byId[successor(root.id)].outcome?.kind === "abandoned" || now - last > FOLD_AFTER;
     const folded = !running && over && !unfolded.has(root.id) && !ts.some((t) => t.id === openId && t.id !== root.id);
@@ -262,7 +299,7 @@ export const BIG = 64, BIG_REACH = { top: 12, foot: 8, side: 21 };
 const SERIF = getComputedStyle(document.documentElement).getPropertyValue("--serif") || "Georgia, serif";
 const SANS = getComputedStyle(document.documentElement).getPropertyValue("--sans") || "sans-serif";
 export const LABEL_FONT = `600 12.5px ${SERIF}`, CHIP_FONT = `12px ${SANS}`;
-export const radius = (n) => (n.kind === "chip" ? (n.running ? 7.5 : 2.4) : n.kind === "planned" ? 4.6 : 3.4);
+export const radius = (n) => (n.kind === "chip" ? (n.running ? 7.5 : 3) : n.kind === "planned" ? 4.6 : 3.4);
 export const label = (n) => (n.big ? shortName(n.t) : n.kind === "chip" && n.running ? n.work.name || "background" : "");
 const widths = new Map();
 const ctx2d = document.createElement("canvas").getContext("2d");
@@ -279,15 +316,16 @@ function measure(text, font) {
 function extent(n) {
   const r = n.big ? BIG_REACH.side : radius(n), l = label(n);
   const lw = l ? measure(l, n.big ? LABEL_FONT : CHIP_FONT) + 7 : 0;
-  return { lo: r + 3, hi: r + 3 + lw, along: n.big ? 2 * BIG_REACH.side - 6 : 2 * r + (l ? 4 : 0),
+  return { r, big: !!n.big, lo: r + 3, hi: r + 3 + lw, along: n.big ? 2 * BIG_REACH.side - 6 : 2 * r + (l ? 4 : 0),
     top: n.big ? BIG_REACH.top : r + 2, foot: n.big ? BIG_REACH.foot : r + 3,
-    now: (!!n.big && (n.kind !== "planned" || !!n.solid)) || (n.kind === "chip" && n.running && !n.work.handed),
-    planned: n.kind === "planned" && !n.solid, side: n.kind === "chip" && n.work.handed };
+    now: (!!n.big && (n.kind !== "planned" || !!n.solid)) || (n.kind === "chip" && n.running),
+    planned: n.kind === "planned" && !n.solid };
 }
 
-// A leg's life, in ms: from when it began to when the next leg of its task
-// began, or its task finished, or now.
-function life(n) {
+// A node's time, in ms: a ring's, when it was passed; a leg's, from when it
+// began to when the next leg of its task began, or its task finished, or now.
+function time(n) {
+  if (n.time) return n.time;
   if (n.kind !== "leg" || typeof n.at !== "number") return undefined;
   const next = (n.t.legs || []).map((l) => l.at).filter((a) => typeof a === "number" && a > n.at);
   const end = next.length ? Math.min(...next) : isDone(n.t) ? n.t.waiting.since : Date.now();
@@ -296,11 +334,16 @@ function life(n) {
 
 export let positions = new Map();   // id -> {x, y, w, h, top}: its box laid out; its centre is (x + w / 2, y + top)
 export let shown = new Map();       // id -> {x, y, w, h, top}: drawn now (tweened)
-export let routes = new Map();      // "from>to" -> {pts, dashed, old}: an edge's route, laid out
+export let routes = new Map();      // "from>to" -> {P, W, sheet, gaps: [{over, P, W}], colour, dashed}: an edge's line, laid out, with its sheet and the pieces of the lines over it where they cross
 export const centre = (p) => ({ x: p.x + p.w / 2, y: p.y + p.top });
 let shape = "";
 const laid = new Map();             // a project's shape -> its layout
-const lastX = new Map();            // a project's root -> each node's x as last laid out
+// The colours of lines: an agent's, an old version's, a call's, Max's, and
+// a result done or not. Solid, so nothing shows through anything.
+export const LINE = { ink: "#a3a19a", faint: "#d5d3cb", tool: "#87a0b4", max: "#e0975c", green: "#86ad87", red: "#cc7d74" };
+// A project's nodes, as layout.js takes them.
+export const nodesOf = (c) => c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), time: time(n), kind: n.kind, light: n.kind === "chip" || n.kind === "ring", lane: n.lane, line: n.line, end: n.end, old: n.old, solid: n.solid,
+  fork: n.kind === "leg" && n.t.origin === "fork" }));
 
 // Each project laid out on its own (layout.js), and again only when its
 // shape changes. Projects sit side by side in the order they began, PROJECT
@@ -313,9 +356,9 @@ export function layout() {
       const w = Math.min(240, Math.max(120, measure(shortName(c.root), `500 13px ${SERIF}`) + 34 + (c.tasks.length > 1 ? 14 : 0)));
       return { c, sig: `card ${c.root.id} ${Math.round(w)}`, w };
     }
-    const ns = c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), life: life(n), kind: n.kind, old: n.old, spent: n.kind === "chip" && !n.running, solid: n.solid }));
+    const ns = nodesOf(c);
     let sig = "";
-    for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}${n.now ? "!" : ""}${n.side ? "^" : ""}${n.old || n.spent ? "~" : ""}${n.solid ? "=" : ""}${Math.round(n.hi)};`;
+    for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}@${n.lane}${n.now ? "!" : ""}${n.line}${n.end ?? ""}${n.solid ? "=" : ""}${Math.round(n.hi)};`;
     return { c, sig, ns };
   });
   const sig = parts.map((p) => p.sig).join("\n") + (innerWidth > 760);
@@ -330,10 +373,9 @@ export function layout() {
     if (p.c.folded) continue;
     let l = was.get(p.sig);
     if (!l) {
-      l = layered(p.ns, lastX.get(p.c.root.id));
+      l = lanes(p.ns);
       l.x0 = Infinity; l.x1 = -Infinity; l.y1 = 0;
       for (const n of p.ns) { const q = l.at.get(n.id); l.x0 = Math.min(l.x0, q.x - n.lo); l.x1 = Math.max(l.x1, q.x + n.hi); l.y1 = Math.max(l.y1, q.y + n.along / 2); }
-      lastX.set(p.c.root.id, new Map([...l.at].map(([id, q]) => [id, q.x])));
     }
     laid.set(p.sig, l);
     // Its boxes and lines where it sits, kept while it sits there, so
@@ -343,10 +385,15 @@ export function layout() {
       l.dx = dx;
       l.boxes = p.ns.map((n) => { const q = l.at.get(n.id), r = n.lo - 3; return [n.id, { x: q.x + dx - r, y: q.y - n.top, w: 2 * r, h: n.top + n.foot, top: n.top }]; });
       const by = new Map(p.ns.map((n) => [n.id, n]));
-      // Dotted to what is planned, but for a solid one's line to its own leg and any line to background work; faint from an old version or finished background work.
-      const planned = (id) => by.get(id).kind === "planned", faint = (id) => by.get(id).old || by.get(id).spent;
-      const dashed = (e) => by.get(e.to).kind !== "chip" && ((planned(e.from) && by.get(e.from).solid !== e.to) || planned(e.to));
-      l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { pts: e.route.map(([a, b]) => [a + dx, b]), dashed: dashed(e), old: faint(e.from) || faint(e.to) }]);
+      // Dashed into what is planned, but for a solid one's line from its
+      // own leg. A line takes its life's colour and keeps it: a life's own
+      // line and its start the colour into the dot it reaches, an old
+      // version's faint, a result how its life ended.
+      const planned = (id) => by.get(id).kind === "planned";
+      const dashed = (e) => (planned(e.from) && by.get(e.from).solid !== e.to) || planned(e.to);
+      const colour = (e) => LINE[e.kind === "branch" ? "faint" : e.kind === "life" || e.kind === "grow" ? by.get(e.from).line : by.get(e.to).end ?? by.get(e.to).line];
+      const at = (P) => P.map(([a, b]) => [a + dx, b]);
+      l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { P: at(e.P), W: e.W, sheet: e.sheet, gaps: e.gaps.map((g) => ({ ...g, P: at(g.P) })), dashed: dashed(e), colour: colour(e) }]);
     }
     for (const [id, b] of l.boxes) positions.set(id, b);
     for (const [k, r] of l.lines) routes.set(k, r);

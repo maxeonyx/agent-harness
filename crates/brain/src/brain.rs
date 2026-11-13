@@ -173,8 +173,14 @@ pub struct Opening {
 impl Opening {
     /// What a launch on `state` says first, at `at`, its record's time,
     /// reading the role files in `roles`, or where the last launch read
-    /// them.
-    pub fn of(state: &State, at: Time, roles: Option<&Path>) -> Result<Opening, String> {
+    /// them; `signed_out` is whether the brain would send on a claude.ai
+    /// login and the harness has none.
+    pub fn of(
+        state: &State,
+        at: Time,
+        roles: Option<&Path>,
+        signed_out: bool,
+    ) -> Result<Opening, String> {
         let exe = std::env::current_exe()
             .and_then(std::fs::read)
             .map_err(|e| format!("the brain's own executable: {e}"))?;
@@ -184,6 +190,10 @@ impl Opening {
             limbs: limb_builds(),
             how: launch_how(state),
         })];
+        // Signed out with nothing refused yet: wait for a sign-in now.
+        if signed_out && !state.signed_out() {
+            facts.push(Fact::SignedOut);
+        }
         let roles = match roles {
             Some(dir) => Some(
                 dir.canonicalize()
@@ -606,7 +616,7 @@ impl Brain {
                     .filter_map(|r| state.role(*r))
                     .collect();
                 let member = matches!(task.scope, Scope::Spawn(_));
-                meta::set(self.brain, &roles, member)
+                meta::set(self.brain, &roles, member, state.faces_max(task.id))
             }
             web::SET => web::set(),
             // A set with nothing for an agent, such as `roles`.
@@ -1094,7 +1104,11 @@ impl Brain {
         // offers him none. An agent's background work may be a spawn.
         let parent = match call.caller {
             Caller::Agent { task, .. } => task,
-            Caller::Background { task, .. } if call.tool == meta::SPAWN => task,
+            Caller::Background { task, .. }
+                if call.tool == meta::SPAWN || call.tool == meta::OPEN_CHAT =>
+            {
+                task
+            }
             _ => {
                 let said = format!("The harness offers Max no tool `{}`.", call.tool);
                 return self.fail_call(id, &said);
@@ -1184,7 +1198,9 @@ waited on nothing: answer him, then {}",
         } else if call.tool == meta::STOP || call.tool == meta::PASS {
             self.hand(&call.tool, &parent, &input, &mut batch)
                 .map(|said| words(&said))
-        } else if call.tool == meta::SPAWN || call.tool == meta::ADD_SIBLING {
+        } else if call.tool == meta::OPEN_CHAT && matches!(call.caller, Caller::Agent { .. }) {
+            self.open_chat(id, call, &parent, &input, &mut batch)
+        } else if [meta::SPAWN, meta::ADD_SIBLING, meta::OPEN_CHAT].contains(&call.tool.as_str()) {
             match self.members(id, &call.tool, &parent, &input, &mut batch) {
                 Ok(names) if call.tool == meta::ADD_SIBLING => {
                     Ok(words(&format!("Added {} to your scope.", names.join(", "))))
@@ -1220,6 +1236,34 @@ waited on nothing: answer him, then {}",
                 Fact::Call(id, CallEvent::Settled(failed)),
             ],
         });
+    }
+
+    /// An agent's `open_chat`: the background call opening the chat,
+    /// appended to `batch` once what it would create is known to be
+    /// possible, and what the agent's call says.
+    fn open_chat(
+        &self,
+        id: CallId,
+        call: &Call,
+        parent: &Task,
+        input: &[u8],
+        batch: &mut Batch,
+    ) -> Result<Bytes, String> {
+        let opening = meta::open_chat_call(self.state(), parent, id, call, input)?;
+        // What its dispatch will create, checked now so a mistake is the
+        // agent's to fix rather than a message later.
+        let made = CallId(self.decider.next().event(batch.facts.len() as u32));
+        self.members(made, meta::OPEN_CHAT, parent, input, &mut Batch::default())?;
+        let name = match &opening.caller {
+            Caller::Background { name, .. } => name.clone(),
+            _ => unreachable!("an opening is background work"),
+        };
+        batch.facts.push(Fact::Call(made, CallEvent::Made(opening)));
+        Ok(words(&format!(
+            "Opened `{name}` (`{}`) for Max: it is in his queue, and when he marks it done its last message \
+comes to you as a message. `stop` it to close it.",
+            made.label()
+        )))
     }
 
     /// A `stop` or `pass` of one of `parent`'s running background calls:
@@ -1274,7 +1318,14 @@ waited on nothing: answer him, then {}",
         input: &[u8],
         batch: &mut Batch,
     ) -> Result<Vec<String>, String> {
-        let spawn = meta::parse(tool, input)?;
+        let spawn = match tool {
+            meta::OPEN_CHAT => meta::open_chat(input)?,
+            _ => meta::parse(tool, input)?,
+        };
+        let mode = match tool {
+            meta::OPEN_CHAT => Mode::UserFacing,
+            _ => Mode::Autonomous,
+        };
         let scope = match tool {
             meta::ADD_SIBLING => match parent.scope {
                 Scope::Max => return Err("you are not in a scope to add a sibling to".into()),
@@ -1347,7 +1398,7 @@ waited on nothing: answer him, then {}",
                 by: Some(call),
                 scope,
                 origin,
-                mode: Mode::Autonomous,
+                mode,
                 mandate: Mandate {
                     text: text.id(),
                     brief: brief.as_ref().filter(|_| fresh).map(Bytes::id),
@@ -1416,7 +1467,7 @@ waited on nothing: answer him, then {}",
             .state()
             .members(Scope::Spawn(id))
             .map(|t| {
-                let said = match t.outcome() {
+                let mut said = match t.outcome() {
                     Some(TaskOutcome::Result { entry }) => {
                         let mut said = vec![render::text(&self.visible(*entry))];
                         for call in self.attached(*entry) {
@@ -1442,6 +1493,10 @@ waited on nothing: answer him, then {}",
                     }
                     None => unreachable!("a scope settles when every member is done"),
                 };
+                let late: Vec<_> = (self.state().unread_words(t).into_iter())
+                    .map(|(_, words)| words)
+                    .collect();
+                said.extend(render::late_words(&|v| self.value(v), &t.name, &late));
                 (t.name.clone(), said)
             })
             .collect();

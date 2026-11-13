@@ -299,6 +299,7 @@ impl User {
             name: "skill".into(),
             definition: definition.to_string(),
             audience: Audience::Both,
+            held: false,
         })
     }
 

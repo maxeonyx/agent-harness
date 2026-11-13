@@ -450,6 +450,13 @@ pub struct Tool {
     /// schema, and whether it is deferred.
     pub definition: String,
     pub audience: Audience,
+    /// Whether an agent's call holds something open for as long as it runs,
+    /// as `tab` holds a browser tab, so it only ever runs in the
+    /// background: called directly, it moves there as soon as its response
+    /// is whole ([`crate::call::CallEvent::Backgrounded`]), named by its
+    /// label ([`CallId::label`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 /// Who may call a tool. Max's face renders his tools as controls; an

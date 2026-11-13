@@ -1,8 +1,8 @@
 import { $, el, svgEl, when } from "./base.js";
-import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, look, positions, radius, routes, shortName, shown, stateOf, successor, unfolded, view, waitingOn } from "./map.js";
+import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, LINE, look, positions, radius, routes, shortName, shown, stateOf, successor, unfolded, view, waitingOn } from "./map.js";
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
 import { ICON, layer, MARK, session, STATES } from "./blobs.js";
-import { curve, stroke, taper } from "./layout.js";
+import { GAP, LIFE, outline, polyline } from "./layout.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
 import { renderBuilds } from "./builds.js";
@@ -27,10 +27,11 @@ function sessionOf(n) {
 }
 // What task t's blob shows, on its map node and in its chat's dock alike:
 // its state, hollow with how many it waits on for its letter while its own
-// node is a planned join waiting on its work, and its compactions.
-export function dress(s, t, jump = false) {
+// node is a planned join waiting on its work, and its compactions; or
+// `state` in place of its own.
+export function dress(s, t, jump = false, state = stateFor(t)) {
   const n = graph.nodes.get(t.id);
-  s.set(stateFor(t), jump);
+  s.set(state, jump);
   s.hollow = n?.kind === "planned" && !n.solid;
   s.letter = s.hollow ? String(waitingOn(t).n) : glyph(t);
   s.pips = n?.pips ?? 0;
@@ -108,7 +109,7 @@ export function drawMap() {
         if (!more) { a.append(more = el("button", "more", "⌄")); more.title = "Unfold the project"; more.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); unfolded.add(id); refresh(); }); }
       } else more?.remove();
     } else {
-      a.className = `node ${kind}${n.work?.handed ? " yours" : ""}${id === openId ? " selected" : ""}${faded}`;
+      a.className = `node ${kind}${n.work?.holder === "max" ? " yours" : ""}${id === openId ? " selected" : ""}${faded}`;
       $(".name", a).textContent = label(n);
     }
   }
@@ -126,7 +127,9 @@ function elOf(id) {
 // and the marks written for the canvas.
 let marks = new Float32Array(0);
 const rgb = (r, g, b) => [r / 255, g / 255, b / 255];
-const INK = rgb(20, 20, 19), PAPER = rgb(250, 249, 245), YOURS = rgb(212, 105, 28);
+const INK = rgb(20, 20, 19), PAPER = rgb(250, 249, 245), STRETCH = rgb(131, 129, 123), OLD = rgb(196, 194, 186), RUNNING = rgb(58, 109, 176);
+// A ring is in the colour of the lane it sits on, one step darker.
+const RING = { ink: rgb(143, 141, 134), tool: rgb(111, 138, 161), max: rgb(201, 124, 66) };
 export function drawNodes() {
   if (marks.length < MARK * shown.size) marks = new Float32Array(MARK * shown.size * 2);
   let k = 0;
@@ -135,32 +138,29 @@ export function drawNodes() {
     if (a) a.style.transform = s.card ? `translate(${s.x}px, ${s.y}px)` : `translate(${c.x}px, ${c.y}px)`;
     const h = handles.get(id);
     if (h) { h.at(c.x, c.y); h.hide(id === openId); }
-    if (!n || n.big || s.card) continue;
+    // A finished call is a gear (drawEdges), and Max's running one a card.
+    if (!n || n.big || s.card || (n.kind === "chip" && (!n.running || n.work.holder === "max"))) continue;
     const dim = finding && !found.has(n.t.id) ? .12 : 1;
     const m = k++ * MARK;
     marks[m] = c.x; marks[m + 1] = c.y; marks[m + 2] = radius(n);
+    marks[m + 3] = 0; marks[m + 11] = 0; marks[m + 12] = 0;
     if (n.kind === "leg") {
       // A finished task's own node in its blob's colour, as its chat's dock
-      // shows it; any other leg ink.
+      // shows it; an old version's pale; any other the stretch's grey.
       const st = id === n.t.id && isDone(n.t) ? STATES[stateFor(n.t)].col[0] : null;
-      marks.set(st ? rgb(...st) : INK, m + 4); marks[m + 7] = (n.old ? .15 : st ? .85 : .42) * dim;
-      marks[m + 11] = 0;
+      marks.set(st ? rgb(...st) : n.old ? OLD : STRETCH, m + 4); marks[m + 7] = dim;
     } else if (n.kind === "planned") {
       // A planned join: paper, with a dotted ring.
       marks[m + 3] = 1.3;
       marks.set(PAPER, m + 4); marks[m + 7] = dim;
       marks.set(INK, m + 8); marks[m + 11] = .5 * dim;
       marks[m + 12] = Math.round((2 * Math.PI * radius(n)) / 3.2);
-    } else if (n.running) {
-      // Running background work: paper, ringed, under its gear.
+    } else {
+      // Where work was passed on: a ring in its lane's colour. Running work:
+      // paper, ringed blue, under its gear.
       marks[m + 3] = 1.4;
       marks.set(PAPER, m + 4); marks[m + 7] = dim;
-      marks.set(n.work.handed ? YOURS : INK, m + 8); marks[m + 11] = .7 * dim;
-      marks[m + 12] = 0;
-    } else {
-      // Finished background work: a faint small dot.
-      marks.set(INK, m + 4); marks[m + 7] = .25 * dim;
-      marks[m + 11] = 0;
+      marks.set(n.kind === "ring" ? RING[n.line] : RUNNING, m + 8); marks[m + 11] = dim;
     }
   }
   blobs?.marks(marks, k);
@@ -186,34 +186,114 @@ export function openAt(n) {
   go(n.t.id, n.id === n.t.id ? null : n.open || null);
 }
 
-// The lines: an edge's route as laid out, bent to follow its two ends
+// The lines: an edge's line as laid out, bent to follow its two ends
 // wherever they are shown, each point moving as the end nearer it does.
-// Each kind of line is one path of all of them: the tapers filled solid in
-// one fill (each wound the same way, so where they overlap they add up and
-// don't darken), old versions' in another, and the dashed ones stroked.
-function line(key, r) {
-  const [from, to] = key.split(">");
+// Lines of one colour and kind are one path: the tapers filled (each wound
+// the same way, so where they overlap they fill as one), the lines of one
+// width stroked, and the dashed ones each under one mask of dashes. The
+// lines that pass under others are drawn first, by their sheet (layout.js),
+// each sheet through one mask that erases from it a band GAP wider each
+// side than each line over one of them, near where they cross. Then each
+// finished call's gear.
+function bend(key) {
+  const [from, to] = key.split(">"), r = routes.get(key);
   const move = (id) => { const p = positions.get(id), s = shown.get(id); return s && p ? [s.x - p.x, s.y - p.y] : [0, 0]; };
-  const m0 = move(from), m1 = move(to), still = !m0[0] && !m0[1] && !m1[0] && !m1[1];
-  if (still && r.d) return r.d;
-  const y0 = r.pts[0][1], y1 = r.pts[r.pts.length - 1][1];
-  const pts = still ? r.pts : r.pts.map(([x, y]) => {
+  const m0 = move(from), m1 = move(to);
+  if (!r || (!m0[0] && !m0[1] && !m1[0] && !m1[1])) return null;
+  const y0 = r.P[0][1], y1 = r.P.at(-1)[1];
+  return ([x, y]) => {
     const u = y1 === y0 ? 0 : Math.max(0, Math.min(1, (y - y0) / (y1 - y0)));
     return [x + m0[0] + (m1[0] - m0[0]) * u, y + m0[1] + (m1[1] - m0[1]) * u];
-  });
-  const segs = curve(pts), d = r.dashed ? stroke(segs) : taper(segs, 2.2, .5);
-  if (still) r.d = d;
-  return d;
+  };
 }
-const paths = {};
-export function drawEdges() {
-  if (!paths.live) for (const k of ["old", "live", "dash"]) { paths[k] = svgEl("path"); paths[k].setAttribute("class", k); paths[k].d = ""; edgesLayer.append(paths[k]); }
-  const ds = { old: [], live: [], dash: [] };
-  for (const [key, r] of routes) ds[r.dashed ? "dash" : r.old ? "old" : "live"].push(line(key, r));
-  for (const k in ds) {
-    const d = ds[k].join("");
-    if (paths[k].d !== d) { paths[k].d = d; paths[k].setAttribute("d", d); }
+function line(key, r) {
+  const at = bend(key), ats = r.gaps.map((g) => bend(g.over)), still = !at && ats.every((a) => !a);
+  if (still && r.d) return r;
+  const P = at ? r.P.map(at) : r.P, out = { d: r.W ? outline(P, r.W) : polyline(P), mid: r.dashed ? polyline(P) : "", s: "", f: "" };
+  r.gaps.forEach((g, i) => {
+    const Q = ats[i] ? g.P.map(ats[i]) : g.P;
+    if (g.W) out.f += outline(Q, g.W.map((w) => w + 2 * GAP));
+    else out.s += polyline(Q);
+  });
+  if (still) Object.assign(r, out);
+  return out;
+}
+const paths = new Map(), sheets = [];
+let dashes = null;
+function pathFor(k, attrs, parent = edgesLayer) {
+  let p = paths.get(k);
+  if (!p) {
+    p = svgEl("path");
+    for (const [a, v] of Object.entries(attrs)) p.setAttribute(a, v);
+    p.d = "";
+    paths.set(k, p);
+    parent.append(p);
   }
+  return p;
+}
+const ink = (r) => (r.W ? { fill: r.colour } : { fill: "none", stroke: r.colour, "stroke-width": LIFE, "stroke-linejoin": "round" });
+const everywhere = { x: -1e5, y: -1e5, width: 2e5, height: 2e5 };
+// A sheet: its mask, white but for its bands (paths `Ns` and `Nf`), and
+// its two groups through it, the dashed one inside the mask of dashes;
+// stacked as the lines over them are.
+function sheet(n) {
+  if (!sheets[n]) {
+    const mask = svgEl("mask"), rect = svgEl("rect"), g = svgEl("g"), dg = svgEl("g");
+    for (const [a, v] of Object.entries({ id: `sheet${n}`, maskUnits: "userSpaceOnUse", ...everywhere })) mask.setAttribute(a, v);
+    for (const [a, v] of Object.entries({ fill: "#fff", ...everywhere })) rect.setAttribute(a, v);
+    mask.append(rect);
+    edgesLayer.querySelector("defs").append(mask);
+    pathFor(`${n}s`, { fill: "none", stroke: "#000", "stroke-width": LIFE + 2 * GAP }, mask);
+    pathFor(`${n}f`, { fill: "#000" }, mask);
+    for (const e of [g, dg]) e.setAttribute("mask", `url(#sheet${n})`);
+    dashes.g.after(g);
+    dashes.g.prepend(dg);
+    for (const c of Object.values(LINE)) pathFor(`${n}f${c}`, { fill: c }, g);
+    for (const c of Object.values(LINE)) pathFor(`${n}s${c}`, ink({ colour: c }), g);
+    sheets[n] = { g, dg };
+  }
+  return sheets[n];
+}
+export function drawEdges() {
+  if (!dashes) {
+    edgesLayer.innerHTML = '<defs><mask id="dashes" maskUnits="userSpaceOnUse" x="-1e5" y="-1e5" width="2e5" height="2e5"><path fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="3.5 3"/></mask></defs><g mask="url(#dashes)"></g>';
+    dashes = { mask: edgesLayer.querySelector("mask path"), g: edgesLayer.querySelector("g"), d: "" };
+    // Stacked in this order: the sheets, fills, strokes, gears.
+    for (const c of Object.values(LINE)) pathFor(`f${c}`, { fill: c });
+    for (const c of Object.values(LINE)) pathFor(`s${c}`, { fill: "none", stroke: c, "stroke-width": LIFE, "stroke-linejoin": "round" });
+    for (const c of Object.values(GEAR)) pathFor(`g${c}`, { fill: c, "fill-rule": "evenodd" });
+  }
+  const ds = new Map(), add = (k, d) => { if (d) (ds.get(k) ?? ds.set(k, []).get(k)).push(d); };
+  let mask = "";
+  for (const [key, r] of routes) {
+    const { d, mid, s, f } = line(key, r), n = r.sheet, k = `${n ?? ""}${r.dashed ? "d" : ""}${r.W ? "f" : "s"}${r.colour}`;
+    // A dashed line: whole under the mask, its centre in the mask's dashes.
+    if (r.dashed) mask += mid;
+    if (n !== undefined || r.dashed) pathFor(k, ink(r), n === undefined ? dashes.g : sheet(n)[r.dashed ? "dg" : "g"]);
+    add(k, d);
+    if (n !== undefined) { add(`${n}s`, s); add(`${n}f`, f); }
+  }
+  for (const [id, s] of shown) {
+    const n = graph.nodes.get(id);
+    if (n?.kind === "chip" && !n.running && !s.card) { const c = centre(s); add(`g${GEAR[n.end]}`, gear(c.x, c.y, radius(n))); }
+  }
+  if (dashes.d !== mask) { dashes.d = mask; dashes.mask.setAttribute("d", mask); }
+  for (const [k, p] of paths) {
+    const d = (ds.get(k) || []).join("");
+    if (p.d !== d) { p.d = d; p.setAttribute("d", d); }
+  }
+}
+// A finished call's gear: green done, red failed.
+const GEAR = { green: "#4f8a55", red: "#b3352c" };
+const f2 = (v) => (Math.round(v * 100) / 100).toString();
+function gear(cx, cy, R) {
+  const r = R * .71, n = 8, step = (2 * Math.PI) / n, pts = [];
+  for (let k = 0; k < n; k++) {
+    const a = k * step - Math.PI / 2;
+    for (const [rad, da] of [[r, -.34], [R, -.2], [R, .2], [r, .34]]) pts.push(`${f2(cx + rad * Math.cos(a + da * step))},${f2(cy + rad * Math.sin(a + da * step))}`);
+  }
+  const h = R * .32;
+  return `M${pts.join("L")}ZM${f2(cx + h)},${f2(cy)}A${h},${h} 0 1 0 ${f2(cx - h)},${f2(cy)}A${h},${h} 0 1 0 ${f2(cx + h)},${f2(cy)}Z`;
 }
 
 // Why a task is stuck, while it matters: a place it starts in that could
