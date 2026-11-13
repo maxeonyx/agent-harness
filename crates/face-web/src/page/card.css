@@ -54,8 +54,9 @@
   #panel.fresh > .body { display: none; }
   .pane { flex: 1; display: flex; min-width: 0; position: relative; }
   /* A log too short to fill the card ends the pane where it ends, so its
-     blob sits under the last entry. */
-  .pane:not(:has(> .dock[hidden])) { align-self: flex-start; max-height: 100%; }
+     blob sits under the last entry; one still loading leaves it the card's
+     height, its blob waiting in the middle. */
+  .pane:not(.loading, :has(> .dock[hidden])) { align-self: flex-start; max-height: 100%; }
   .scroll { flex: 1; overflow: auto; overscroll-behavior: contain; scroll-padding-bottom: 2em; touch-action: pan-y; }
   .log { max-width: 48rem; margin: 0 auto; padding: 1.4em 1.6em 2.5em; }
   .viewer { flex: 1; min-width: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; background: var(--white); }
@@ -101,7 +102,7 @@
   .prose table { border-collapse: collapse; font-size: .92em; display: block; max-width: max-content; overflow-x: auto; overflow-y: hidden; }
   .prose th, .prose td { border: 1px solid var(--line); padding: .3em .6em; text-align: left; overflow-wrap: break-word; }
   .prose a { color: var(--maroon); }
-  .prose img { max-width: 100%; }
+  .prose img, .log img { max-width: 100%; height: auto; }
   .plain { white-space: pre-wrap; }
   .said { display: flex; flex-direction: column; align-items: flex-end; }
   .said .bubble { max-width: 85%; background: #e9e5da; border-radius: 16px 16px 4px 16px; padding: .6em 1em; font: 15px/1.55 var(--sans); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -250,6 +251,10 @@
     position: absolute; left: 50%; bottom: 0; z-index: 3; display: grid; place-items: center; width: 152px; height: 152px; margin-left: -76px; pointer-events: none;
     transform: translateY(calc(50% - 52px));
   }
+  /* While the log loads, the blob waits in the middle of the pane, loading
+     (`log.js`). */
+  .pane.loading > .dock { bottom: calc(50% - 52px); }
+  .pane.loading > .acts { visibility: hidden; }
   .pane > .dock .blob { border-radius: 50%; pointer-events: auto; cursor: pointer; }
   .pane > .acts {
     position: absolute; right: max(1em, calc((100% - 48rem) / 2 + 1.6em)); bottom: 0; z-index: 3; display: flex; gap: 4px;

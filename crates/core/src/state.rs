@@ -1242,7 +1242,9 @@ impl State {
     /// is still running, it is an agent's call to the brain, the new task
     /// joins the scope the call opens or, as a sibling, its caller's own
     /// spawn scope, and it is a fork of the caller, a resume of a task the
-    /// caller owned, or fresh in a role the caller's own role starts.
+    /// caller owned, or fresh in a role the caller's own role starts. It is
+    /// user-facing exactly when it is a chat an `open_chat` call opens, and
+    /// never standing.
     fn creator(&self, by: CallId, created: &Created) -> Result<TaskId, Rejected> {
         let call = self.calls.get(&by).ok_or(Rejected::Unknown)?;
         if call.settled.is_some() {
@@ -1277,7 +1279,19 @@ impl State {
             Origin::Resume { from } => self.owner(*from) == Some(caller),
             Origin::Aside { .. } => false,
         };
-        if !origin || created.mode == Mode::Standing {
+        // A chat for Max is a fresh agent that one facing him opens, as
+        // background work of its own, and nothing else an agent starts is.
+        let opens = call.call.tool == crate::task::OPEN_CHAT;
+        let chat = opens
+            && matches!(call.call.caller, Caller::Background { .. })
+            && matches!(created.origin, Origin::Fresh { .. })
+            && self.faces_max(caller);
+        let mode = match created.mode {
+            Mode::Autonomous => !opens,
+            Mode::UserFacing => chat,
+            Mode::Standing => false,
+        };
+        if !origin || !mode {
             return Err(Rejected::CannotStart);
         }
         Ok(caller)
@@ -2774,6 +2788,20 @@ impl State {
         match self.signed_out {
             Some(since) => Some(Hold::SignedOut { since }),
             None => self.limited(now).map(|until| Hold::Limited { until }),
+        }
+    }
+
+    /// Whether the task faces Max: it is user-facing or standing, or a fork
+    /// of one that does. Only such a task opens chats for him
+    /// ([`crate::task::OPEN_CHAT`]).
+    pub fn faces_max(&self, task: TaskId) -> bool {
+        let Some(t) = self.tasks.get(&task) else {
+            return false;
+        };
+        match (t.mode, &t.origin) {
+            (Mode::UserFacing | Mode::Standing, _) => true,
+            (Mode::Autonomous, Origin::Fork { from }) => self.faces_max(*from),
+            (Mode::Autonomous, _) => false,
         }
     }
 
