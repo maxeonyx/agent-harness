@@ -9,10 +9,10 @@ use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::context::{Began, Dep, Legs};
 use harness_core::delivery::Content;
 use harness_core::fact::Fact;
-use harness_core::page::PageEvent;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::limb::{Defined, Host, Prepared, Reach};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
+use harness_core::page::PageEvent;
 use harness_core::role::{Effort, Role};
 use harness_core::state::{Ended, Hold, State, Waiting};
 use harness_core::task::{
@@ -23,7 +23,7 @@ use harness_provider::Model;
 use serde_json::{Value, json};
 
 /// A stored value as text, for the page: a mandate, a call's input.
-type Text<'a> = &'a dyn Fn(ValueId) -> Option<Vec<u8>>;
+pub(crate) type Text<'a> = &'a dyn Fn(ValueId) -> Option<Vec<u8>>;
 
 fn text(value: Text, id: ValueId) -> Option<String> {
     value(id).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
@@ -78,6 +78,7 @@ pub fn rows(
     for t in state.tasks() {
         let mut row = task(state, value, t, state.last_turn(t.id), now);
         row["turn"] = json!(turns.get(&t.id).map(|id| id.to_string()));
+        row["page"] = json!(crate::sheet::row(state, value, t));
         rows.insert(FaceKey::Task(t.id), FaceRow::Task(row));
     }
     let queue: Vec<Value> = state

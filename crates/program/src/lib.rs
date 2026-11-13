@@ -22,6 +22,7 @@
 pub mod history;
 pub mod max;
 pub mod meta;
+pub mod page;
 pub mod policy;
 pub mod render;
 pub mod web;

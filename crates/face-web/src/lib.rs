@@ -135,6 +135,7 @@ mod dictation;
 mod find;
 mod http;
 mod live;
+mod sheet;
 mod view;
 
 use std::borrow::Cow;

@@ -399,6 +399,7 @@ dependencies = [
 name = "harness-face-web"
 version = "0.0.0"
 dependencies = [
+ "harness-body",
  "harness-core",
  "harness-face-tab",
  "harness-program",
@@ -482,7 +483,9 @@ dependencies = [
 name = "harness-program"
 version = "0.0.0"
 dependencies = [
+ "harness-body",
  "harness-core",
+ "serde",
  "serde_json",
 ]
 
