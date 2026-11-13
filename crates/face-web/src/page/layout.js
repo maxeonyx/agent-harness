@@ -43,7 +43,7 @@ const WIDE = Math.PI / 3, STEP = Math.PI / 9, LEAN = .5;
 const BIG_HALF = 13;
 // How much stiffer than a plain line a lifeline pulls: enough to keep it
 // straight. How stiffly a long line resists bending, against how hard it
-// pulls: enough to round its turns over a few rows.
+// pulls: a turn spreads over about sqrt(BEND) rows.
 const STIFF = 40, BEND = 4;
 // The flattest a line between two rows runs on average, from upright.
 const FLAT = Math.PI / 3;
@@ -188,7 +188,7 @@ function kinds(V, edges) {
 // beam, so where something is, it bends round it over several rows rather
 // than at a corner. A lifeline is a much stiffer spring, so a life runs
 // straight and its forks pack around it. Every node, but no hidden point,
-// is pulled a little to the centre line. Sets each node's x; each edge's
+// is pulled to the centre line by a small fraction of its lines' own pull. Sets each node's x; each edge's
 // hidden points, top down, as `mid`. Returns the rows.
 function layered(V, edges) {
   const layers = [];
@@ -239,7 +239,7 @@ function layered(V, edges) {
   }
   best.forEach((L, r) => { layers[r] = L; L.forEach((v, i) => (v.pos = i)); });
   const sep = (a, b) => a.hi + b.lo + (a.dummy || b.dummy ? 4 : 8);
-  const CENTRE = 1;
+  const CENTRE = .05;
   const gaps = layers.map((L) => L.slice(1).map((v, i) => sep(L[i], v)));
   for (const [r, L] of layers.entries()) {
     let x = 0;
@@ -257,9 +257,6 @@ function layered(V, edges) {
       for (let i = 0; i < L.length; i++) {
         const v = L[i], nb = both ? v.nb : down ? v.up : v.down;
         if (!nb.length) { t[i] = v.x; w[i] = .02; }
-        // A chain of single links stays straight.
-        else if (both && !v.dummy && v.up.length === 1 && v.up[0].down.length === 1 && !v.up[0].dummy) { t[i] = v.up[0].x; w[i] = 1; }
-        else if (both && !v.dummy && v.down.length === 1 && v.down[0].up.length === 1 && !v.down[0].dummy) { t[i] = v.down[0].x; w[i] = 1; }
         else {
           let sx = 0, sw = 0;
           for (const u of nb) { const k = v.k.get(u); sx += k * u.x; sw += k; }
@@ -273,7 +270,7 @@ function layered(V, edges) {
           }
           t[i] = sx / sw; w[i] = sw;
         }
-        if (!v.dummy) { t[i] = (t[i] * w[i]) / (w[i] + CENTRE); w[i] += CENTRE; }
+        if (!v.dummy) { t[i] /= 1 + CENTRE; w[i] *= 1 + CENTRE; }
       }
       pava(L, t, w, gaps[r]);
     }
@@ -284,12 +281,11 @@ function layered(V, edges) {
 // of its lines, in order of their lower ends, by a Fenwick tree.
 function crossCount(L) {
   const ends = [];
-  for (const v of L) for (const u of v.up) ends.push(v.pos * 1e6 + u.pos);
-  ends.sort((a, b) => a - b);
-  const n = ends.reduce((m, e) => Math.max(m, e % 1e6 + 1), 0), T = new Int32Array(n + 1);
+  for (const v of L) for (const u of v.up) ends.push([v.pos, u.pos]);
+  ends.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const n = ends.reduce((m, [, b]) => Math.max(m, b + 1), 0), T = new Int32Array(n + 1);
   let c = 0;
-  ends.forEach((e, seen) => {
-    const b = e % 1e6;
+  ends.forEach(([, b], seen) => {
     for (let i = b + 1; i > 0; i -= i & -i) c -= T[i];
     c += seen;
     for (let i = b + 1; i <= n; i += i & -i) T[i]++;
