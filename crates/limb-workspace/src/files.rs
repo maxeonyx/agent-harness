@@ -1,7 +1,7 @@
 //! Running each tool.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -9,6 +9,7 @@ use harness_core::call::{Call, Caller, Outcome, Output};
 use harness_core::id::{CallId, Digest, ValueId};
 use harness_core::live::Live;
 use harness_core::resource::{Observation, Version};
+use ignore::WalkBuilder;
 use regex::Regex;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -380,37 +381,28 @@ impl Inner {
         let place = place(root, input.path.as_deref().unwrap_or("."));
         let mut truncator = Truncator::matching(regex.clone());
         let mut found = 0;
-        let mut pending = vec![place.path];
-        while let Some(path) = pending.pop() {
+        // What git ignores is skipped as well as `.git`: build output and
+        // `.ignore` copies of databases are gigabytes under a clone, and
+        // reading them through the page cache starved the live brain.
+        let walk = WalkBuilder::new(&place.path)
+            .hidden(false)
+            .filter_entry(|e| e.file_name() != ".git")
+            .sort_by_file_name(|a, b| a.cmp(b))
+            .build();
+        for entry in walk {
             if cancel.is_requested() {
                 return Ok(Outcome::Interrupted { partial: None });
             }
-            let Ok(meta) = fs::symlink_metadata(&path) else {
+            let Ok(entry) = entry else {
                 continue;
             };
-            if meta.is_dir() {
-                let Ok(entries) = fs::read_dir(&path) else {
-                    continue;
-                };
-                let mut children: Vec<PathBuf> = entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_name() != ".git")
-                    .map(|e| e.path())
-                    .collect();
-                // Popped from the end, so reverse order reads in name order.
-                children.sort_by(|a, b| b.cmp(a));
-                pending.extend(children);
+            if !entry.file_type().is_some_and(|t| t.is_file()) {
                 continue;
             }
-            if !meta.is_file() {
-                continue;
-            }
-            let Ok(bytes) = fs::read(&path) else {
+            let path = entry.into_path();
+            let Some(bytes) = text(&path) else {
                 continue;
             };
-            if bytes[..bytes.len().min(8192)].contains(&0) {
-                continue;
-            }
             let name = shown_as(root, &path);
             for (n, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
                 if regex.is_match(line) {
@@ -648,4 +640,17 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// The whole of the file at `path`, unless it cannot be read or its first
+/// 8 KiB hold a NUL, which marks it binary: then only those are read.
+fn text(path: &Path) -> Option<Vec<u8>> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    (&mut file).take(8192).read_to_end(&mut bytes).ok()?;
+    if bytes.contains(&0) {
+        return None;
+    }
+    file.read_to_end(&mut bytes).ok()?;
+    Some(bytes)
 }
