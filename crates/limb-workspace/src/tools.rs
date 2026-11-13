@@ -131,6 +131,7 @@ fn tool(name: &str, description: &str, properties: serde_json::Value, required: 
         name: name.into(),
         definition: definition.to_string(),
         audience: Audience::Both,
+        held: false,
     }
 }
 

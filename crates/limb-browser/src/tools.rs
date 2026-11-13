@@ -18,9 +18,9 @@ pub fn tools() -> Vec<Tool> {
     vec![
         tool(
             TAB,
-            "Run only through `background`: a tab of your own, open for as long as that background call runs, \
-whose `name` is the tab's name in your scripts: `background` with `{\"name\": \"bank\", \"tool\": \"tab\", \"input\": {\"url\": \"https://…\"}}`. \
-Stopping the background call closes the tab; `pass` hands the tab, still open, to whoever started you.",
+            "Open a tab of your own: it runs in the background, and the tab stays open for as long as it runs. \
+Its background name is the tab's name in your scripts: its label (`call-…`) when called directly, or the `name` you give \
+`background`. Stopping it closes the tab; `pass` hands the tab, still open, to whoever started you.",
             json!({ "url": { "type": "string", "description": "Where it opens; about:blank if absent." } }),
             &[],
         ),
@@ -62,6 +62,7 @@ fn tool(name: &str, description: &str, properties: serde_json::Value, required: 
         name: name.into(),
         definition: definition.to_string(),
         audience: Audience::Both,
+        held: name == TAB,
     }
 }
 
@@ -70,8 +71,8 @@ pub fn instructions(where_: &str) -> String {
     format!(
         "## The browser\n\n\
 The harness's browser: {where_}. It is shared: other agents' tabs are in it too, and you see only yours and Max's.\n\n\
-**Tabs.** Open a tab of your own by running the `tab` tool with `background`; its background name is the tab's \
-name. It stays open while that call runs: `stop` it to close the tab, or `pass` it to hand the tab on, open. A tab \
+**Tabs.** Open a tab of your own with the `tab` tool, which runs in the background; its background name is the \
+tab's name. It stays open while that call runs: `stop` it to close the tab, or `pass` it to hand the tab on, open. A tab \
 Max opened himself is his, named by its id in `tabs()`; work in it only when your task says to, and never close it.\n\n\
 **Scripts.** `browser` runs a script in a sandbox with these, and nothing else (no `fetch`, no timers):\n\
 - `tabs()`: `[{{tab, url, title, whose}}]`, the tabs you can use.\n\

@@ -2373,6 +2373,21 @@ impl State {
         self.calls.get(&id)
     }
 
+    /// Whether the call is of a tool that only runs in the background
+    /// ([`crate::limb::Tool::held`]), as its limb describes it now.
+    pub fn held(&self, id: CallId) -> bool {
+        let Some(made) = self.calls.get(&id) else {
+            return false;
+        };
+        (made.limb)
+            .and_then(|limb| self.described.get(&limb))
+            .is_some_and(|d| {
+                (d.description.sets.iter())
+                    .flat_map(|s| &s.tools)
+                    .any(|t| t.held && t.name == made.call.tool)
+            })
+    }
+
     /// Running background work agents have passed to Max ([`Owner::Max`]):
     /// his to use and stop.
     pub fn handed(&self) -> impl Iterator<Item = (CallId, &CallRecord)> {
@@ -2887,11 +2902,12 @@ impl State {
     }
 
     /// The calls of the task's round the brain moves to the background now
-    /// ([`Todo::Background`]): all of them once Max's words, or a turn one
-    /// of his acts asks for, have waited [`HEARD_AFTER`] for the round to
-    /// end by itself; while he interrupts it, its spawns, whose scopes his
-    /// interrupt never stops. Never a fresh context's attachments, and never
-    /// a wait, which his words settle instead ([`Todo::Settle`]).
+    /// ([`Todo::Background`]): its held calls ([`State::held`]) at once;
+    /// all of them once Max's words, or a turn one of his acts asks for,
+    /// have waited [`HEARD_AFTER`] for the round to end by itself; while he
+    /// interrupts it, its spawns, whose scopes his interrupt never stops.
+    /// Never a fresh context's attachments, and never a wait, which his
+    /// words settle instead ([`Todo::Settle`]).
     fn backgrounds(&self, task: &Task, now: Timestamp) -> Vec<CallId> {
         let Some(Phase::Acting(step)) = task.phase() else {
             return Vec::new();
@@ -2904,9 +2920,12 @@ impl State {
                 .filter(|c| self.calls.get(c).is_none_or(|r| r.waits.is_none()))
                 .copied()
                 .collect(),
-            None => Vec::new(),
+            None => (step.outstanding.iter())
+                .filter(|c| self.held(**c))
+                .copied()
+                .collect(),
             Some(Draining::ToMax) => (step.outstanding.iter())
-                .filter(|c| self.open.scopes.contains_key(&Scope::Spawn(**c)))
+                .filter(|c| self.open.scopes.contains_key(&Scope::Spawn(**c)) || self.held(**c))
                 .copied()
                 .collect(),
             Some(_) => Vec::new(),

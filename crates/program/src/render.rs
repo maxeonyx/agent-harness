@@ -6,7 +6,7 @@ use harness_core::call::{Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::fact::Author;
-use harness_core::id::{CallId, Digest, LimbId, Timestamp, ValueId};
+use harness_core::id::{CallId, LimbId, Timestamp, ValueId};
 use harness_core::limb::{Instruction, Tool, ToolSet};
 use harness_core::model_call::{Ending, Stop};
 use harness_core::resource::Observation;
@@ -558,7 +558,7 @@ carrying on."
         .filter_map(|c| Some((*c, state.call(*c)?)))
         .map(|(id, c)| match &c.call.caller {
             Caller::Background { name, .. } => format!("`{name}` (`{}`)", c.call.tool),
-            _ => format!("`{}` (`{}`)", call_label(id), c.call.tool),
+            _ => format!("`{}` (`{}`)", id.label(), c.call.tool),
         })
         .collect();
     if !running.is_empty() {
@@ -630,7 +630,7 @@ pub fn carried(state: &State, values: Values, whose: &str, call: CallId) -> Vec<
     }
     let failed = if error { " failed" } else { "" };
     let named = if labelled(&record.call.tool) {
-        format!(" (`{}`)", call_label(call))
+        format!(" (`{}`)", call.label())
     } else {
         String::new()
     };
@@ -642,13 +642,6 @@ pub fn carried(state: &State, values: Values, whose: &str, call: CallId) -> Vec<
     said
 }
 
-/// How an agent names one of its calls, or one its agents attached, to
-/// `attach` it: shown with the call's result.
-pub(crate) fn call_label(call: CallId) -> String {
-    let digest = Digest::of(call.to_string().as_bytes()).to_string();
-    format!("call-{}", &digest[..6])
-}
-
 /// Whether a call's result is worth attaching, and so shows its label:
 /// every tool's but the meta tools that only manage the agent's own work.
 fn labelled(tool: &str) -> bool {
@@ -658,7 +651,7 @@ fn labelled(tool: &str) -> bool {
 
 /// A call's label as the last block of its result, if it has one.
 fn label_block(tool: &str, call: CallId) -> Option<Value> {
-    labelled(tool).then(|| json!({ "type": "text", "text": format!("[{}]", call_label(call)) }))
+    labelled(tool).then(|| json!({ "type": "text", "text": format!("[{}]", call.label()) }))
 }
 
 /// Max's words in what a compaction replaces, in the order he said them:
@@ -827,10 +820,14 @@ fn backgrounded(state: &State, call: CallId) -> String {
     let Caller::Agent { tool_use, .. } = &record.call.caller else {
         unreachable!("only a round's call is backgrounded")
     };
+    let why = match state.held(call) {
+        true => format!("`{}` runs only in the background", record.call.tool),
+        false => "Max wrote while this ran".to_owned(),
+    };
     let said = format!(
-        "[harness] Max wrote while this ran. It keeps running in the background as `{}`. \
+        "[harness] {why}. It keeps running in the background as `{}`. \
 Its result comes to you as a message when it settles.",
-        call_label(call)
+        call.label()
     );
     json!({
         "type": "tool_result",
@@ -903,12 +900,17 @@ pub(crate) fn activity(state: &State, values: Values, call: CallId) -> String {
         Caller::Background { ref name, .. } => format!(
             "Your background call `{name}` (`{}`, `{}`) has settled",
             record.call.tool,
-            call_label(call)
+            call.label()
         ),
         Caller::Agent { .. } if record.backgrounded.is_some() && record.late.is_none() => format!(
-            "Your `{}` call (`{}`), which moved to the background when Max wrote, has settled",
+            "Your `{}` call (`{}`), which moved to the background{}, has settled",
             record.call.tool,
-            call_label(call)
+            call.label(),
+            if state.held(call) {
+                ""
+            } else {
+                " when Max wrote"
+            },
         ),
         _ => format!(
             "Your earlier `{}` call, whose outcome was unknown, did finish",
@@ -926,7 +928,7 @@ fn passed(state: &State, task: &Task, call: CallId) -> String {
     };
     let name = match &record.call.caller {
         Caller::Background { name, .. } => name.clone(),
-        _ => call_label(call),
+        _ => call.label(),
     };
     let handed = record
         .passed
