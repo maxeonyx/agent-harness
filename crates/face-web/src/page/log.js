@@ -712,13 +712,16 @@ function result(s, b) {
 // comes so the log does not move when it does. It is fetched only once it
 // is about to be seen: once `near` (the image itself, or the folded tool
 // call it is in, one tap from showing it) is within a screen of the view.
+// One that fails keeps its room, and is fetched again once the device is
+// back online.
 const soon = new IntersectionObserver((seen) => {
   for (const s of seen) if (s.isIntersecting) { soon.unobserve(s.target); for (const img of s.target.waiting) img.src = img.dataset.src; s.target.waiting = []; }
 }, { root: scrollEl, rootMargin: "100% 0px" });
 function image(source, cls, near) {
   const img = el("img", cls);
-  if (source?.width !== undefined) { img.width = source.width; img.height = source.height; }
-  img.dataset.src = source?.url ?? `data:${source?.media_type};base64,${source?.data}`;
+  if (source?.width !== undefined) { img.width = source.width; img.height = source.height; img.style.aspectRatio = `${source.width} / ${source.height}`; }
+  img.dataset.src = source?.url ?? "";
+  img.onerror = () => addEventListener("online", () => { img.src = img.dataset.src; }, { once: true });
   const at = near ?? img;
   at.waiting = [...(at.waiting ?? []), img];
   soon.observe(at);
