@@ -190,18 +190,18 @@ function kinds(V, edges) {
 // runs straight between them where nothing is in its way; it is also a
 // beam, so where something is, it bends round it over several rows rather
 // than at a corner. A lifeline is a much stiffer spring, so a life runs
-// straight and its forks pack around it. Every node, but no hidden point,
-// is pulled to the centre line by a small fraction of its lines' own pull.
-// Sets each node's x; each edge's hidden points, top down, as `mid`.
+// straight and its forks pack around it. After each sweep, each life moves
+// with all it started as one (`lives`). Sets each node's x; each edge's
+// hidden points, top down, as `mid`.
 // Returns the rows.
 function layered(V, edges) {
   const layers = [];
   const put = (v) => (layers[v.rank] ??= []).push(v);
-  for (const v of V) { Object.assign(v, { up: [], down: [], lo: v.n.lo, hi: v.n.hi, own: new Map(), k: new Map() }); put(v); }
+  for (const v of V) { Object.assign(v, { up: [], down: [], lo: v.n.lo, hi: v.n.hi, own: new Map(), k: new Map(), line: v.n.life }); put(v); }
   for (const e of edges) {
     const { v, d } = e, chain = [v];
     for (let r = v.rank - 1; r > d.rank; r--) {
-      const x = { dummy: true, rank: r, key: d.key + .5, up: [], down: [], lo: 1, hi: 1, own: new Map(), k: new Map() };
+      const x = { dummy: true, rank: r, key: d.key + .5, up: [], down: [], lo: 1, hi: 1, own: new Map(), k: new Map(), line: e.kind === "life" ? v.line : null, life: e.kind === "grow" || e.kind === "branch" ? v.life : d.life };
       put(x);
       chain.push(x);
     }
@@ -209,6 +209,9 @@ function layered(V, edges) {
     for (let i = 0; i < chain.length - 1; i++) {
       const a = chain[i], b = chain[i + 1];
       a.up.push(b); b.down.push(a);
+      // Along its own line: the next point up (`lu`) and down (`ld`).
+      if (e.kind === "life" || a.dummy) a.lu = b;
+      if (e.kind === "life" || b.dummy) b.ld = a;
       const k = (e.kind === "life" ? STIFF : 1) * (chain.length - 1);
       a.k.set(b, k); b.k.set(a, k);
     }
@@ -249,7 +252,6 @@ function layered(V, edges) {
   }
   best.forEach((L, r) => { layers[r] = L; L.forEach((v, i) => (v.pos = i)); });
   const sep = (a, b) => a.hi + b.lo + (a.dummy || b.dummy ? 4 : 8);
-  const CENTRE = .05;
   const gaps = layers.map((L) => L.slice(1).map((v, i) => sep(L[i], v)));
   for (const [r, L] of layers.entries()) {
     let x = 0;
@@ -257,7 +259,7 @@ function layered(V, edges) {
     for (const v of L) v.x -= x / 2;
   }
   for (const L of layers) for (const v of L) v.nb = [...v.up, ...v.down];
-  const most = layers.reduce((m, L) => Math.max(m, L.length), 0);
+  const most = layers.reduce((m, L) => Math.max(m, L.length), 0), trees = lives(layers, gaps);
   const t = new Float64Array(most), w = new Float64Array(most);
   for (let it = 0; it < 24; it++) {
     const down = it % 2 === 0, both = it >= 10;
@@ -270,22 +272,48 @@ function layered(V, edges) {
         else {
           let sx = 0, sw = 0;
           for (const u of nb) { const k = v.k.get(u); sx += k * u.x; sw += k; }
-          // A hidden point also bends as a beam, as little as it can: its
-          // own turn, and the turns of the hidden points either side.
-          if (both && v.dummy) {
-            const a = v.up[0], b = v.down[0], B = BEND * v.k.get(a);
+          // A line also bends as a beam, as little as it can, at each point
+          // inside it, a lifeline's dots too: its own turn, and the turns
+          // of its line's points either side.
+          const a = v.lu, b = v.ld;
+          if (both && a && b) {
+            const B = BEND * Math.min(v.k.get(a), v.k.get(b));
             sx += 2 * B * (a.x + b.x); sw += 4 * B;
-            if (a.dummy) { sx += B * (2 * a.x - a.up[0].x); sw += B; }
-            if (b.dummy) { sx += B * (2 * b.x - b.down[0].x); sw += B; }
+            if (a.line === v.line && a.lu) { sx += B * (2 * a.x - a.lu.x); sw += B; }
+            if (b.line === v.line && b.ld) { sx += B * (2 * b.x - b.ld.x); sw += B; }
           }
           t[i] = sx / sw; w[i] = sw;
         }
-        if (!v.dummy) { t[i] /= 1 + CENTRE; w[i] *= 1 + CENTRE; }
       }
       pava(L, t, w, gaps[r]);
     }
+    for (const move of trees) move();
   }
   return layers;
+}
+// Each life with all it started, the lives started from its dots and
+// theirs, deepest first: a rigid body, so a sweep need not creep it point
+// by point to where its lines out pull it. Each moves, without bending, to
+// where its lines to the rest balance, but only as far as the room in every
+// row it spans allows: the whole way to sit alongside what is there, or as
+// far as it fits. A hidden point is the life's its line starts, for a
+// start, or else the life's it leaves.
+function lives(layers, gaps) {
+  const anc = new Map(), own = new Map();
+  const above = (l) => anc.get(l) ?? anc.set(l, new Set([l, ...(l.from ? above(l.from.life) : [])])).get(l);
+  for (const L of layers) for (const p of L) for (const l of above(p.life)) (own.get(l) ?? own.set(l, []).get(l)).push(p);
+  return [...own].sort((a, b) => anc.get(b[0]).size - anc.get(a[0]).size).map(([l, P]) => () => {
+    const inside = (u) => anc.get(u.life).has(l);
+    let f = 0, w = 0, lo = -Infinity, hi = Infinity;
+    for (const p of P) {
+      for (const u of p.nb) if (!inside(u)) { const k = p.k.get(u); f += k * (u.x - p.x); w += k; }
+      const L = layers[p.rank], i = p.pos, g = gaps[p.rank];
+      if (i > 0 && !inside(L[i - 1])) lo = Math.max(lo, L[i - 1].x + g[i - 1] - p.x);
+      if (i + 1 < L.length && !inside(L[i + 1])) hi = Math.min(hi, L[i + 1].x - g[i] - p.x);
+    }
+    const s = w && lo <= hi ? Math.min(hi, Math.max(lo, f / w)) : 0;
+    for (const p of P) p.x += s;
+  });
 }
 // Which side each dot's odd one out goes, where a level of the lines it
 // starts is odd round more central ones. A life's dots, in the order they
