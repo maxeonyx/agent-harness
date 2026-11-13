@@ -32,6 +32,8 @@
 //! exits once none of them is left. Its limbs run on, with their calls, for
 //! the next brain. A second signal cuts everything now. Tasks are
 //! not stopped: the next launch carries them on ([`harness_core::cancel`]).
+//! `SIGUSR2` drains the same way, then hands the face over to the next
+//! build without a gap ([`handover`]).
 //!
 //! The face is served from the same process. After each change the brain
 //! hands it the state, a persistent value it holds while the brain moves
@@ -208,6 +210,7 @@ macro_rules! errln {
 
 mod brain;
 mod gate;
+mod handover;
 mod link;
 mod process;
 mod roles;
@@ -216,7 +219,7 @@ use std::net::{IpAddr, TcpListener};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -288,6 +291,11 @@ usage: harness-brain --db DB --port PORT [--candidate] [--login DB] [--roles DIR
   --version        print the commit it was built from
   --help           print this
 
+SIGTERM            drain, then exit (again: exit now)
+SIGUSR2            drain, then hand over: start the candidate the `handover`
+                   file beside DB names, on this brain's listener, and serve
+                   read-only until it has opened
+
 HARNESS_BROWSER    the harness's browser: an endpoint to attach to
                    (host:port, http://… or ws://…) or a browser to launch;
                    empty for Playwright's headless shell. A changed value is a
@@ -336,6 +344,7 @@ fn passed(pathway: Pathway, took: Duration) {
 }
 
 fn run() -> Result<(), Failed> {
+    let taking = handover::take()?;
     let mut args = std::env::args().skip(1);
     let (mut db, mut port, mut roles, mut sample, mut model) = (None, None, None, None, None);
     let (mut page, mut login, mut check, mut start) = (None, None, None, Start::Installed);
@@ -443,7 +452,12 @@ fn run() -> Result<(), Failed> {
         let face = Arc::clone(&face);
         move || face.follow(followed)
     });
+    // A copy of the listener, for the brain this one hands over to.
+    let listening = OnceLock::new();
     let serve = |decider: &schema::Brain<Store>, listener: TcpListener, tls| {
+        if let Ok(copy) = listener.try_clone() {
+            let _ = listening.set(copy);
+        }
         let _ = folds.send(Folded {
             state: decider.state().clone(),
             as_of: decider.head(),
@@ -461,13 +475,17 @@ fn run() -> Result<(), Failed> {
             }
         });
     };
+    let listen = match &taking {
+        Some(t) => gate::Listen::Inherited(t.listener.try_clone().map_err(|e| e.to_string())?),
+        None => gate::Listen::Port(port),
+    };
     if check.is_some() {
         gate::gate(
             &db,
             &client,
             roles.as_deref(),
             signed_out,
-            port,
+            gate::Listen::Port(port),
             passed,
             serve,
         )?;
@@ -492,7 +510,7 @@ fn run() -> Result<(), Failed> {
                 roles.as_deref(),
                 signed_out,
             )?;
-            let (listener, tls) = gate::serve(port)?;
+            let (listener, tls) = gate::serve(gate::Listen::Port(port))?;
             serve(&decider, listener, tls);
             (decider, opening)
         }
@@ -502,12 +520,15 @@ fn run() -> Result<(), Failed> {
                 &client,
                 roles.as_deref(),
                 signed_out,
-                port,
+                listen,
                 passed,
                 serve,
             )?;
             (decider.storage().write()).map_err(|e| format!("the database writes: {e}"))?;
             install(&db)?;
+            if let Some(taking) = taking {
+                taking.took_over()?;
+            }
             (decider, opening)
         }
     };
@@ -532,9 +553,20 @@ fn run() -> Result<(), Failed> {
         feed,
     );
     let ran = panic::catch_unwind(AssertUnwindSafe(|| brain.run()));
+    let handed = ran.is_ok()
+        && brain.handing_over()
+        && listening.get().is_some_and(|listener| {
+            brain.detach();
+            handover::hand_over(&db, listener, &face)
+        });
     errln!("harness-brain: shut down");
     let _ = std::io::Write::flush(&mut std::io::stdout());
-    std::process::exit(if ran.is_ok() { 0 } else { 101 })
+    std::process::exit(match ran {
+        Err(_) => 101,
+        // The unit starts the installed link again.
+        Ok(()) if brain.handing_over() && !handed => 1,
+        Ok(()) => 0,
+    })
 }
 
 /// Point the domain's installed link, `build` beside the database `db`, at

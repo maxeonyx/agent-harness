@@ -74,7 +74,7 @@ impl fmt::Display for Failure {
 }
 
 /// Run the gate on the database at `db`, reading the role files in `roles`,
-/// launching `signed_out` ([`Opening::of`]) and binding `port` (0 for any),
+/// launching `signed_out` ([`Opening::of`]) and listening as `listen` says,
 /// with `client`. Once it has decided, the
 /// fold, the port and its certificate go to `face`, which serves them
 /// read-only. Each pathway that passes is handed to `passed` with how long
@@ -85,7 +85,7 @@ pub fn gate(
     client: &Client,
     roles: Option<&Path>,
     signed_out: bool,
-    port: u16,
+    listen: Listen,
     mut passed: impl FnMut(Pathway, Duration),
     face: impl FnOnce(&schema::Brain<Store>, TcpListener, Arc<rustls::ServerConfig>),
 ) -> Result<Passed, Vec<Failure>> {
@@ -117,7 +117,7 @@ pub fn gate(
     // so would the face.
     if opening.is_ok() {
         let started = Instant::now();
-        let served = serve(port).map(|(listener, tls)| face(&decider, listener, tls));
+        let served = serve(listen).map(|(listener, tls)| face(&decider, listener, tls));
         check(Pathway::Serve, served.map_err(|why| vec![why]), started);
     }
 
@@ -305,8 +305,17 @@ fn response(client: &Client) -> Result<(), String> {
     })
 }
 
-/// The face's certificate, and its port bound.
-pub fn serve(port: u16) -> Result<(TcpListener, Arc<rustls::ServerConfig>), String> {
+/// Where the face listens.
+pub enum Listen {
+    /// Bind this port, 0 for any.
+    Port(u16),
+    /// The listener of the brain this one takes over from
+    /// ([`crate::handover`]).
+    Inherited(TcpListener),
+}
+
+/// The face's certificate, and its listener.
+pub fn serve(listen: Listen) -> Result<(TcpListener, Arc<rustls::ServerConfig>), String> {
     let certs = PathBuf::from(std::env::var("HOME").map_err(|e| format!("$HOME: {e}"))?)
         .join(".config/dev-certs/shared-local");
     let tls = harness_face_web::tls(
@@ -314,7 +323,12 @@ pub fn serve(port: u16) -> Result<(TcpListener, Arc<rustls::ServerConfig>), Stri
         &certs.join("wildcard-local.key"),
     )
     .map_err(|e| format!("the certificate: {e}"))?;
-    let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("port {port}: {e}"))?;
+    let listener = match listen {
+        Listen::Inherited(listener) => listener,
+        Listen::Port(port) => {
+            TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("port {port}: {e}"))?
+        }
+    };
     Ok((listener, tls))
 }
 
