@@ -342,7 +342,8 @@ const laid = new Map();             // a project's shape -> its layout
 // a result done or not. Solid, so nothing shows through anything.
 export const LINE = { ink: "#a3a19a", faint: "#d5d3cb", tool: "#87a0b4", max: "#e0975c", green: "#86ad87", red: "#cc7d74" };
 // A project's nodes, as layout.js takes them.
-export const nodesOf = (c) => c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), time: time(n), kind: n.kind, light: n.kind === "chip" || n.kind === "ring", lane: n.lane, line: n.line, end: n.end, old: n.old, solid: n.solid }));
+export const nodesOf = (c) => c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), time: time(n), kind: n.kind, light: n.kind === "chip" || n.kind === "ring", lane: n.lane, line: n.line, end: n.end, old: n.old, solid: n.solid,
+  fork: n.kind === "leg" && n.t.origin === "fork" }));
 
 // Each project laid out on its own (layout.js), and again only when its
 // shape changes. Projects sit side by side in the order they began, PROJECT
