@@ -14,40 +14,48 @@
 //! answers with a page", and "a question is a page plus a node, answered
 //! by talking".
 //!
+//! **Information only.** Max's time is scarce and highly leveraged, so
+//! every line on a page is information he doesn't have and wants: a fact
+//! about the world, shown rather than told where a picture can carry it.
+//! Nothing on it refers to what is below it, asks him for something in
+//! prose (that is an ask), talks about the page or the agent's turn, or
+//! names a part. The form is built so that the parts hold facts: the only
+//! sentence it requires is the lead, and everything else is shown or is a
+//! few words in a typed place.
+//!
 //! **Always the same order.** A page brings Max's picture of the work level
-//! with the agent's. Three things can differ, each with its own authority:
-//! where the work is going (his to agree with), where it stands (the
-//! agent's to report, and his to believe), and how it gets from one to the
-//! other (the agent's to propose, his to redirect). So every page says, in
-//! this order, set out by the harness and not the agent:
+//! with the agent's: where the work is going (his to agree with), where it
+//! stands (the agent's to report, and his to believe), and how it gets from
+//! one to the other (the agent's to propose, his to redirect). Set out by
+//! the harness, not the agent:
 //!
 //! ```mermaid
 //! flowchart TB
-//!   lead["The lead: the question, problem or news"] --> e["Where this ends: a claim, and what shows it"]
-//!   e --> n["Where we are: a claim, and what shows it"]
-//!   n --> p["The plan: the task's steps, each open ask inside the step it unblocks"]
-//!   p --> w["Why this route"]
+//!   lead["The lead: the question of an ask, or the fact he most needs"] --> p["The plan: each step what will be true, and where it stands now; each open ask inside the step it unblocks"]
+//!   p --> f["The facts, shown"]
+//!   f --> w["Why this route"]
 //! ```
 //!
-//! 1. The lead ([`Lead`]): why he is reading this now. A lead new to him
-//!    fills his first screen alone, on the task's painted ground.
-//! 2. Where this ends ([`Sheet::end`]): the eventual state, concretely
-//!    enough to point at a sentence and say "no". If he doesn't agree,
-//!    nothing below matters.
-//! 3. Where we are ([`Sheet::now`]), as fact, the concrete thing first.
-//! 4. The plan ([`Step`]), which is most of a page: the task's own steps
-//!    ([`Description::plan`]), with each of its open asks
-//!    ([`crate::ask::Ask`]) drawn whole inside the step it unblocks. Steps and asks are values
-//!    of their own, drawn as they stand now, never retold on the page.
-//! 5. Why this route ([`Sheet::why`]), after the route it argues for.
+//! 1. The lead ([`Lead`]): why he is reading this now, in one line.
+//! 2. The plan ([`Step`]), which is most of a page, and is where the work
+//!    ends, starting on his first screen under the lead: each step is
+//!    titled by what will be true, beside where that stands now, so the
+//!    rail reads as the eventual state and the current one in a single
+//!    list he can agree with or reject at a glance, end first in each
+//!    line. Each open ask ([`crate::ask::Ask`]) is drawn whole inside the
+//!    step it unblocks, after the steps' ends have been read. Steps and
+//!    asks are values of their own ([`Description::plan`]), drawn as they
+//!    stand now, never retold on the page. If he doesn't agree with where
+//!    the steps end, he says so, and nothing else on the page matters
+//!    until the agent changes them.
+//! 3. The facts ([`Sheet::facts`]): what backs the lead and the steps'
+//!    nows, shown.
+//! 4. Why this route ([`Sheet::why`]), after the route it argues for.
 //!
-//! Nothing names a part: no headings over them, no small labels above
-//! them, no cues to scroll. Each claim frames its part in its own words
-//! ("When this is done, …", "Today …"). A part Max is done with shrinks:
-//! a lead he has read takes a short band over the end, an end he has agreed
-//! (his go, or a reply that leaves it standing) folds to its claim and opens
-//! again when the agent changes it, and what changed since he last looked
-//! carries a bar in the left gutter.
+//! A part Max is done with shrinks: a lead he has read takes a short band,
+//! steps behind him are one line each, and a step whose title changed
+//! since he agreed with the plan ([`Page::agreed`]) carries a bar in the
+//! left gutter.
 //!
 //! **The agent writes content; the design system draws it.** The agent
 //! gives typed parts, and short markdown inside them ([`crate::body`]). It
@@ -67,17 +75,17 @@
 //!   thing's state now, whoever changed it; a plan step bound to one takes
 //!   its state from it; and the asks are drawn from the asks themselves.
 //! - A turn that ends on Max's move ends with `present`, which shows him
-//!   the page as it is now ([`Presented`]).
+//!   the page as it is now ([`Presented`]). Only a page that is not
+//!   current says so; a current one carries no line about itself.
 //! - While the task works, its chat opens at its progress (the summaries
 //!   of its calls, which the harness already holds), and the newest
 //!   version is one line above it, marked as from before.
 //!
 //! **A shape, not a refusal.** A page tool says no only when the world did:
 //! a write over a part another task changed since this one saw it, or an
-//! edit whose text is not in the body. Everything else is made impossible
+//! edit whose text is not in the page. Everything else is made impossible
 //! to get wrong, or drawn as well as it can be and listed for the agent as
-//! a [`crate::body::Problem`]. Every `page_write` states the lead, the end
-//! and where we are, so a page can't lack them.
+//! a [`crate::body::Problem`].
 //!
 //! **Folded so far.** A page is [`crate::fact::Fact::Page`], held by
 //! [`crate::state::State::page`]; a description is
@@ -132,27 +140,35 @@ pub struct Page {
     /// The `present` call that last showed him the page: the response that
     /// made it holds the quick answer, the line above the page.
     pub presented: Option<CallId>,
-    /// Where this ends, as Max last agreed with it: the newest version's
-    /// end when his words next reached the task. A reply that disputes it
-    /// leaves the agent to change it, and a changed end is no longer this,
-    /// so it opens again, marked.
-    pub agreed: Option<Claim>,
+    /// Where the work ends, as Max last agreed with it: each step of the
+    /// plan by its key and title, when his words last reached the task
+    /// ([`Page::agree`]). A reply that disputes it leaves the agent to
+    /// change the plan, and a step whose title is no longer the one he
+    /// agreed with, or that is new since, carries the change bar. A step's
+    /// progress is not a change: it is drawn by its mark.
+    pub agreed: Option<Vec<Agreed>>,
     /// The asks drawn on it, oldest first: the task's own and its forks',
     /// open or settled, each a call of `ask` ([`crate::ask`]).
     pub asks: Vec<CallId>,
 }
 
+/// One step of the plan as Max agreed with it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Agreed {
+    pub key: String,
+    pub title: Option<String>,
+}
+
 /// The page the agent is working on.
 ///
-/// **Concept.** The page's working copy. `page_write` states the lead, the
-/// end and where we are every time, and the why when it is given. A claim's
-/// body, or the why, is replaced only when given. `page_edit` applies each
-/// change to the body its old text occurs in once, as file edits do, so two
-/// forks building one page merge by text. A write says no only over a part
-/// another task changed after this one last saw it, since that work would
-/// be lost. A body with problems is still taken: the call's result lists
-/// them, each saying how to write it instead, so the agent iterates rather
-/// than retries.
+/// **Concept.** The page's working copy. `page_write` states the whole
+/// sheet every time. `page_edit` applies each change to the one part its
+/// old text occurs in once, as file edits do, so two forks building one
+/// page merge by text. A write says no only over a part another task
+/// changed after this one last saw it, since that work would be lost. A
+/// body with problems is still taken: the call's result lists them, each
+/// saying how to write it instead, so the agent iterates rather than
+/// retries.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stage {
     pub sheet: Sheet,
@@ -174,119 +190,88 @@ pub struct Version {
     /// When it was presented: where it sits among the chat's entries, and
     /// what `Fact::Seen` is compared with for what changed since he looked.
     pub at: Timestamp,
-    /// When a `present` last found it still holding, unchanged: drawn as
-    /// "still holds, checked 10:42".
+    /// When a `present` last found it unchanged: whether it is current
+    /// for the turn Max is answering. Never drawn: a current page needs no
+    /// line saying so.
     pub held: Timestamp,
     /// The `present` call that made it.
     pub by: CallId,
 }
 
-/// What the agent writes on its page: the lead, where this ends, where we
-/// are, and why this route.
+/// What the agent writes on its page: the lead, the facts, and why this
+/// route.
 ///
 /// **Concept.** The written half of a page, in parts the harness sets out
 /// in a fixed order, so every page reads the same way and the agent spends
 /// its words on content, never on arrangement, labels or emphasis. The
-/// other half is live and never written here: the plan's steps
-/// ([`Description::plan`]), the asks, and the state of everything a [`Ref`]
-/// names. There is no section of detail: detail folds beside the sentence
-/// it backs ([`crate::body::Fold`]), so the why behind anything he reads is
-/// one press from it.
+/// other half is live and never written here: the plan's steps, which say
+/// where the work ends and where each part of it stands
+/// ([`Description::plan`]), the asks, and the state of everything a
+/// [`Ref`] names. There is no section of detail: detail folds beside the
+/// sentence it backs ([`crate::body::Fold`]), so the why behind anything he
+/// reads is one press from it.
 ///
-/// Serves: "I want to see that we agree on the eventual state. Then I want
-/// to see where we are. And then finally, I'm ready for my asks"; "most of
-/// the pages should be about the third part, the plan, but the plan is
-/// meaningless without the first two"; "the agent should be given quite a
-/// structured way to put its information in"; "more content, less noise".
+/// Serves: "I like the hero question, if it's a question. But then, we need
+/// facts. Just start with facts"; "information is best presented visually,
+/// not verbally"; "I want to see that we agree on the eventual state. Then
+/// I want to see where we are. And then finally, I'm ready for my asks";
+/// "most of the pages should be about the third part, the plan"; "the
+/// agent should be given quite a structured way to put its information
+/// in"; "more content, less noise".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sheet {
     pub lead: Lead,
-    /// Where this ends: the world as it will be when the work is done, in
-    /// Max's nouns. "When this is done, every Claude Code session on the
-    /// work laptop runs under the harness, and stopping one takes under a
-    /// second." A state, not a list of work: what will be true, concretely
-    /// enough that he could point at it and say "no, that's wrong". Its
-    /// body shows what will be true as a task list (`- [ ]` not yet,
-    /// `- [x]` true already), his words where they set the destination, the
-    /// agent's own additions said as its own, since invented requirements
-    /// hide there, and what is deliberately left out. A figure of its own
-    /// when the end is a thing to look at, such as a screen.
-    pub end: Claim,
-    /// Where we are, as fact: "Today, a session runs only in a terminal,
-    /// and stopping one takes 8.2 s." Its body shows it: the real log
-    /// line, the count and where it was counted, one figure of the system
-    /// with what is to come drawn dashed, so one picture shows the end and
-    /// the now together; then the facts, naming live things ([`Ref`])
-    /// rather than retyping their state. What the agent couldn't find out
-    /// is said as a fact. A parent's plan step bound to this task shows
-    /// this claim. When the work is done, it is the end reached, with the
-    /// proof.
-    pub now: Claim,
-    /// Why this route, drawn after the steps it argues for: the routes Max
-    /// would think of, each killed in a sentence with its reason; the
-    /// calls the agent made for him, each with the question it answers, so
-    /// he can overturn one by saying so; and where the plan stops short of
-    /// the end, and what that costs. Body markdown. `None`: the steps say
-    /// it all.
+    /// What backs the lead and the steps' nows, shown: the real log line,
+    /// the count and where it was counted, the table of what the agent
+    /// checked and what each showed, the before and after, a screenshot,
+    /// one figure of the system with what is to come drawn dashed. What
+    /// the agent couldn't find out is a fact too. Not the plan again, and
+    /// not the children's state, which the plan draws live. Body markdown;
+    /// facts told in paragraphs where a table or figure would show them are
+    /// listed as a problem. `None`: the lead and the plan say it all, as
+    /// for an orchestrator whose children's steps are the news.
+    ///
+    /// `default`: versions presented before the facts existed have none.
+    #[serde(default)]
+    pub facts: Option<ValueId>,
+    /// Why this route, drawn after the steps it argues for: what Max might
+    /// overturn. The routes he would think of and why not, the calls the
+    /// agent made for him, and where the plan stops short of where he
+    /// wants to go, and what that costs; a table where they line up. Body
+    /// markdown. `None`: nothing to overturn.
     pub why: Option<ValueId>,
 }
 
-/// The lead: this moment's question, problem or news, the first thing Max
-/// reads.
+/// The lead: the one line Max reads first.
 ///
-/// **Concept.** The hook: what he needs to be on the same page, and why he
-/// should read on. Not the task's title, which the window's header
-/// already shows: the question the work now turns on ("Where should the
-/// work brain live?"), the problem ("Stopping a session takes 8
-/// seconds"), or the news since he last looked ("Every session at work now
-/// runs under the harness"), bad news first. If his last words asked
-/// something, it answers them. Never a label, a count of what is below, or
-/// "nothing needs you": the harness says that, from the asks.
+/// **Concept.** What hooks him: the question of an ask on this page, when
+/// the moment turns on one ("Should page art cover the whole page?"), or
+/// else the fact he most needs: the problem ("Your messages arrive without
+/// their first words") or the news since he last looked ("Pages now set
+/// text in Literata, Inter and Plex Mono"), bad news first. If his last
+/// words asked something, it answers them. Never a question with no ask
+/// behind it, since an open question asks him to do the agent's work;
+/// never a request, the task's title, a label, a count of what is below,
+/// or "nothing needs you": the harness says that, from the asks.
 ///
 /// Drawn in the theme's display face at the lead size, upright and
-/// readable, on the ground: alone on his first screen when it is new to
-/// him, and as a short band over the end once he has seen it. Bold while
-/// something on the page is his move; regular once nothing is, as on a
-/// finished task's page. It is also what the map's node and his queue say
-/// for the task, so a tap opens on what he tapped.
+/// readable, on the ground, with the plan starting on the same first
+/// screen; a short band once he has seen it. Bold while something on the
+/// page is his move; regular once nothing is, as on a finished task's page.
+/// It is also what the map's node and his queue say for the task, and what
+/// a parent's plan step bound to this task says it stands at, so a tap
+/// opens on what he tapped.
 ///
 /// Serves: "I need the core framing, the core navigational aid. I need the
-/// question. I need the problem. Whatever hooks me"; "I like the very
-/// clear, bold title for the question"; "the hero text is too big,
-/// unclearly worded, and italics is harder to read".
+/// question. I need the problem. Whatever hooks me"; "I like the hero
+/// question, if it's a question"; "the hero text is too big, unclearly
+/// worded, and italics is harder to read".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lead {
     /// Plain text, one line on a desktop, two on a phone. Over 70
     /// characters, or the task's title again, is drawn and listed as a
     /// problem.
     pub title: String,
-    /// One or two plain sentences under it, in reading type, when the title
-    /// alone would not say why it matters now.
-    pub hook: Option<String>,
-}
-
-/// One of the page's two states: where this ends, or where we are.
-///
-/// **Concept.** A claim Max can agree with or dispute, and what shows it.
-/// The claim is one sentence, drawn at the claim size in the display face,
-/// framed by its own words rather than a label. The body under it shows
-/// the claim, visual first: a figure, a table, a task list, then a few
-/// sentences. Because the claim is all he needs once he has agreed, an
-/// agreed end folds to its claim, and opens to its body when pressed or
-/// when the agent changes it.
-///
-/// Serves: "the agent can communicate to me its idea of the eventual state,
-/// can communicate to me the, in fact, current state"; "demonstrate
-/// through detailed and concrete diagrams, text [...] that it is on the
-/// same page as me"; "visual first".
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Claim {
-    /// One plain sentence. More than one, or over 160 characters, is drawn
-    /// and listed as a problem.
-    pub says: String,
-    /// Body markdown ([`crate::body::Body`]). `None`: the claim says it all,
-    /// as for a small fix.
-    pub shows: Option<ValueId>,
 }
 
 /// What happens to a page, stated by the brain in the batch that settles
@@ -297,7 +282,7 @@ pub enum PageEvent {
     Edited { sheet: Box<Sheet>, by: CallId },
     /// `present`: Max is shown the stage, and the turn ends on his move. A
     /// stage changed since the newest version makes a new version; an
-    /// unchanged one says that version still holds ([`Version::held`]),
+    /// unchanged one keeps that version current ([`Version::held`]),
     /// which is the cheapest way to end a turn. A quick reply while he
     /// works turn by turn is the text of the response that presents: a
     /// line in the chat above the page.
@@ -323,12 +308,28 @@ impl Page {
         }
     }
 
-    /// Max's words reached the task: he agrees with where its newest
-    /// version ends.
-    pub fn agree(&mut self) {
-        if let Some(newest) = self.versions.last() {
-            self.agreed = Some(newest.sheet.end.clone());
+    /// Max's words reached the task: he agrees with where its `plan` ends,
+    /// once it has shown him a page.
+    pub fn agree(&mut self, plan: &[Step]) {
+        if self.versions.is_empty() {
+            return;
         }
+        self.agreed = Some(
+            (plan.iter())
+                .map(|s| Agreed {
+                    key: s.key.clone(),
+                    title: s.title.clone(),
+                })
+                .collect(),
+        );
+    }
+
+    /// Whether `step` carries the change bar: Max agreed with a plan, and
+    /// this step was not in it as it is titled now.
+    pub fn changed(&self, step: &Step) -> bool {
+        self.agreed.as_ref().is_some_and(|agreed| {
+            !(agreed.iter()).any(|a| a.key == step.key && a.title == step.title)
+        })
     }
 
     /// The page after `event`, at `at`; `None` when it makes no sense: a
@@ -375,11 +376,10 @@ impl PageEvent {
         if let PageEvent::Edited { sheet, by: _ } = self {
             let Sheet {
                 lead: _,
-                end,
-                now,
+                facts,
                 why,
             } = &**sheet;
-            out.extend(end.shows.into_iter().chain(now.shows).chain(*why));
+            out.extend(facts.iter().chain(why));
         }
     }
 }
@@ -409,16 +409,16 @@ impl Description {
 /// page is the turn's ending, and [`Presented::Current`]. A turn that ends
 /// in plain text instead gets one more turn (`Prompt::Present`: "your page
 /// is version 4, from before Max's message at 10:02; update it, or present
-/// it as it is if it still holds"). A second that ends the same way waits
-/// on Max, [`Presented::Stale`], drawn as such. It never loops, and a stale
-/// page is never shown as current. The same rule serves a Claude Code
-/// session the harness drives, whose `present` is a tool of its MCP server
-/// and whose extra turn is a user message on its stream-json input, so it
-/// needs no hook an enterprise policy could block.
+/// it as it is if nothing on it changed"). A second that ends the same way
+/// waits on Max, [`Presented::Stale`], drawn as such. It never loops, and a
+/// stale page is never shown as current. The same rule serves a Claude
+/// Code session the harness drives, whose `present` is a tool of its MCP
+/// server and whose extra turn is a user message on its stream-json input,
+/// so it needs no hook an enterprise policy could block.
 ///
 /// What it can't prove is that the page is true, only that the agent
-/// looked: the guide makes "still holds" a judgement, and the change bar
-/// shows Max what moved.
+/// looked: the guide makes presenting it unchanged a judgement, and the
+/// change bar shows Max what moved.
 ///
 /// Serves: "when it ends its turn, it will be presented to me"; "it's up
 /// to date because the harness is built with that just as a foundational
@@ -455,8 +455,8 @@ pub enum Presented {
 /// source knows, the source says".
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Ref {
-    /// A task: its title (Max's rename wins), its now-claim, and whose move
-    /// it is. An orchestrator's page names its children by these.
+    /// A task: its title (Max's rename wins), its lead, and whose move it
+    /// is. An orchestrator's page names its children by these.
     Task(TaskId),
     /// A thing outside the harness that a source reads: a PR, a ticket.
     Item(ItemKey),
@@ -467,16 +467,15 @@ pub enum Ref {
 /// **Concept.** His words carry what he was looking at (Underview's "know
 /// what Max was looking at"), set by the face from the scroll as he sends:
 /// the ask he last pressed in, else the part in the reading band. So "no,
-/// that's not where this is going", said while the end fills the screen,
-/// reaches the agent as a rejection of the end, with no button and no
+/// that's not where this is going", said while a step fills the screen,
+/// reaches the agent as a rejection of that step, with no button and no
 /// form. It is what he was reading, for the agent to interpret, and never
 /// routes anything: his words go to the agent whose page it is. Also where
 /// a [`crate::body::Problem`] is, for the agent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Spot {
     Lead,
-    End,
-    Now,
+    Facts,
     /// A plan step, by its key.
     Step(String),
     /// An ask, by its call.
@@ -503,53 +502,61 @@ pub struct Description {
     /// (`TaskEvent::Renamed`) is shown over it, and `describe`'s result says
     /// so. The window's header, not the page's lead.
     pub title: Option<String>,
-    /// How the work gets from where it started to where it ends, done steps
-    /// included, so the route reads whole. Replaced whole: a step left out
-    /// is gone, and its node on the map with it. An open ask that named it
-    /// moves to the first step not behind him, and `describe`'s result says
-    /// so, for the agent to revise or withdraw it: never refused, since the
-    /// ask still has a place.
+    /// Where the work ends, and the route there: the steps that make it
+    /// true, done steps included, so the route reads whole. Replaced whole:
+    /// a step left out is gone, and its node on the map with it. An open
+    /// ask that named it moves to the first step not behind him, and
+    /// `describe`'s result says so, for the agent to revise or withdraw it:
+    /// never refused, since the ask still has a place.
     pub plan: Option<Vec<Step>>,
 }
 
-/// One step of a task's plan.
+/// One step of a task's plan: a part of where the work ends, and where it
+/// stands now.
 ///
 /// **Concept.** A thing the task does or produces on the way to its end,
 /// the size Max would recognise: a PR, a child task, a piece of the
-/// agent's own work that changes something he would notice. One value,
-/// drawn twice: as a node on the map (planned ones dashed, as everything
-/// that will exist is), and as a stop on the page's plan rail, with the
-/// asks it waits on inside it. A step bound to a live thing ([`Step::of`])
-/// takes its state from it ([`StepState`]), so a merged PR shows its step
-/// done without the agent saying so. A step bound to a child task shows the
-/// child's now-claim, if it has a page, else its title and phase, and each
-/// of the child's open asks as one line, its question, which opens the
-/// child's page at that ask: the orchestrator never retells a child's
-/// question, and sends Max to each agent for its part.
+/// agent's own work that changes something he would notice. Titled by
+/// what will be true once it is done, so the plan's titles are the eventual
+/// state, and beside it where that stands now ([`Step::now`]), so the plan
+/// is also the current state, and there is no separate list of either to
+/// say each thing twice. One value, drawn twice: as a node on the map
+/// (planned ones dashed, as everything that will exist is), and as a line
+/// on the page's plan rail, with the asks it waits on inside it. A step
+/// bound to a live thing ([`Step::of`]) takes its state from it
+/// ([`StepState`]), so a merged PR shows its step done without the agent
+/// saying so. A step bound to a child task shows the child's lead as where
+/// it stands, if it has a page, else its phase, and each of the child's
+/// open asks as one line, its question, which opens the child's page at
+/// that ask: the orchestrator never retells a child's question, and sends
+/// Max to each agent for its part.
 ///
 /// What an answer unblocks is its step and every step after it
 /// ([`Step::after`]): how the queue ranks an ask, since some unblock hours
 /// of agent work and others unblock nothing.
 ///
-/// Drawn by relevance: steps behind him are one small line each, and more
-/// than three fold into one line of their titles; the steps in play are
-/// full, with their body and asks; the steps ahead are their title and a
-/// short body.
+/// Drawn by relevance: each step is one line, its mark, its title and
+/// where it stands; the steps in play add their body and asks; the steps
+/// behind him are that line alone, and more than three fold into one line
+/// of their titles.
 ///
-/// Serves: "then the plan, the current plan on how to get from A to B, and
-/// including then asks"; the vision's "planned pull requests, planned
-/// design agents, planned user questions" as provisional nodes; "dependency
-/// diagrams, essentially, on actions for me, on chats, on agents to each
-/// other".
+/// Serves: "I want to see that we agree on the eventual state. Then I want
+/// to see where we are"; "then the plan, the current plan on how to get
+/// from A to B, and including then asks"; "less is more"; the vision's
+/// "planned pull requests, planned design agents, planned user questions"
+/// as provisional nodes; "dependency diagrams, essentially, on actions for
+/// me, on chats, on agents to each other".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
     /// The agent's name for it, unique in the plan: how an ask names the
     /// step it sits in ([`crate::ask::Ask::step`]), how `after` names it,
     /// and how a new plan keeps a step's node on the map. Never drawn.
     pub key: String,
-    /// What it makes true, in Max's nouns, short enough for a node: "The
-    /// advocate can search your words", not "T6". `None`: the name of what
-    /// it is bound to, so a child task's step shows the child's own title,
+    /// What will be true once it is done, in Max's nouns, concretely
+    /// enough that he could point at it and say "no", and short enough for
+    /// a node: "Every page opens on facts", not "T6" or "Rewrite the
+    /// guide". His words where they set it. `None`: the name of what it is
+    /// bound to, so a child task's step shows the child's own title,
     /// renamed or not.
     pub title: Option<String>,
     /// The steps that must be done before it starts, by key. `None`: the
@@ -560,8 +567,19 @@ pub struct Step {
     /// one.
     pub of: Option<Ref>,
     pub said: Said,
-    /// Body markdown: why this step, what it changes. Drawn in full while
-    /// the step is in play, shortened ahead, folded once behind him.
+    /// Where what the title names stands now, in a few words, the concrete
+    /// thing first: "opens on a request", "#284, live since 10:14",
+    /// "unknown: the agent browser isn't signed in". A done step's is its
+    /// proof. Inline markdown, naming live things ([`Ref`]). A step bound
+    /// to a live thing that has a reading shows that instead. Over about
+    /// fifteen words is listed as a problem: the detail goes in the body.
+    ///
+    /// `default`: plans described before steps had one have none.
+    #[serde(default)]
+    pub now: Option<String>,
+    /// Body markdown: what the step changes and how, and why it is there
+    /// when it is the agent's own addition rather than Max's. Drawn while
+    /// the step is in play or ahead; not once it is behind him.
     pub body: Option<ValueId>,
 }
 

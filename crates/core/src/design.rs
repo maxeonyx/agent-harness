@@ -38,15 +38,16 @@ use crate::resource::Observation;
 ///
 /// **The language is the same on every page.** It is what Max learns once,
 /// so that on any agent's page he knows where to look:
-/// - Order. The lead, where this ends, where we are, the plan with the asks
-///   in its steps, why this route. Nothing names a part: no headings over
-///   parts, no small labels above them, no cues to scroll.
-/// - Faces. The theme's display face for what is said once (the lead, the
-///   two claims, a step's title, a question); one reading face for prose;
+/// - Order. The lead, the plan with the asks in its steps, the facts, why
+///   this route ([`crate::page`]). Nothing names a part: no headings over
+///   parts, no small labels above them, no cues to scroll, and no line
+///   about the page itself, such as whether it still holds.
+/// - Faces. The theme's display face for what is said once (the lead, a
+///   step's title, a question); one reading face for prose;
 ///   one UI face for small text and data; one mono face for literal text.
 ///   Only the display face varies by theme.
 /// - Sizes. Four, on one scale: the lead (34 px on a desktop, 28 on a
-///   phone), a claim or a step in play (22, 20), reading (17.5, 17), small
+///   phone), a step in play (22, 20), reading (17.5, 17), small
 ///   (14.5, 14), for labels and data alike.
 /// - Weights. Regular, and bold only for what Max must read and answer
 ///   now: the lead while something is his move, and a question that is
@@ -54,8 +55,8 @@ use crate::resource::Observation;
 ///   Agents' markdown has no headings, bold or italic.
 /// - Measure and space. One column, 640 px; figures and tables that need
 ///   it break out to 820 px on a desktop, and scroll in their own frame on
-///   a phone. Space separates: 72 px between parts (56 on a phone), 44
-///   between the end and the now, which are a pair, 28 between blocks.
+///   a phone. Space separates: 72 px between parts (56 on a phone), 28
+///   between blocks.
 /// - No cards. Nothing is boxed but literal text (code, a prepared call),
 ///   on the theme's tint. Hairlines separate the rows of a table and
 ///   nothing else.
@@ -203,7 +204,7 @@ pub struct Theme {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Palette {
     pub paper: Rgb,
-    /// The claims, step titles, questions, the first column of a table.
+    /// Step titles, questions, the first column of a table.
     pub ink: Rgb,
     /// Reading text.
     pub body: Rgb,
@@ -219,7 +220,7 @@ pub struct Palette {
     pub figure: [Rgb; 4],
     /// The lead's ink, on the ground.
     pub cover_ink: Rgb,
-    /// The hook's ink, on the ground.
+    /// Reading text's ink, on the ground.
     pub cover_body: Rgb,
 }
 
@@ -229,8 +230,8 @@ pub struct Rgb(pub [u8; 3]);
 
 /// A theme's display face.
 ///
-/// **Concept.** The one typeface a theme chooses, for the lead, the claims,
-/// step titles and questions, upright only. Its bold is set per face so
+/// **Concept.** The one typeface a theme chooses, for the lead, step
+/// titles and questions, upright only. Its bold is set per face so
 /// that bold looks equally bold in every theme. The reading, UI and mono
 /// faces are the language's.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

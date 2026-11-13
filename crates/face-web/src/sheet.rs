@@ -1,7 +1,7 @@
 //! A task's page as a tab draws it: the newest version Max was shown, its
 //! bodies parsed by the one parser the brain checked them with
 //! ([`harness_body`]), and the live half drawn as it stands now: the plan's
-//! steps and the asks inside them.
+//! steps, each with where it stands, and the asks inside them.
 
 use harness_core::ask::Ask;
 use harness_core::context::Entry;
@@ -80,9 +80,11 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
             json!({
                 "key": s.key,
                 "title": title(state, s),
+                "now": now(state, s).map(|n| inline(&n)),
                 "state": state_of(s, yours),
                 "failed": match &s.said { Said::Failed { why } => Some(why), _ => None },
                 "body": body(s.body),
+                "changed": page.changed(s),
                 "asks": asks,
             })
         })
@@ -96,22 +98,14 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
             Entry::Root(_) => None,
         })
         .is_some_and(|content| !texts(&content).trim().is_empty());
-    let agreed = page.agreed.as_ref();
     Some(json!({
         "version": newest.n,
         "at": newest.at.0,
         "held": newest.held.0,
         "current": current,
-        "lead": newest.sheet.lead,
+        "lead": newest.sheet.lead.title,
         "quick": quick,
-        "end": {
-            "says": newest.sheet.end.says,
-            "shows": body(newest.sheet.end.shows),
-            // Agreed, it folds to its claim; changed since, it opens, marked.
-            "agreed": agreed == Some(&newest.sheet.end),
-            "changed": agreed.is_some_and(|a| *a != newest.sheet.end),
-        },
-        "now": { "says": newest.sheet.now.says, "shows": body(newest.sheet.now.shows) },
+        "facts": body(newest.sheet.facts),
         "plan": steps,
         "asks": loose,
         "why": body(newest.sheet.why),
@@ -127,6 +121,18 @@ fn title(state: &State, step: &Step) -> Option<String> {
         Some(Ref::Item(item)) => Some(item.name.clone()),
         None => None,
     })
+}
+
+/// Where a step stands: the newest lead of the task it is bound to, when
+/// that task has shown Max a page, else what the agent said.
+fn now(state: &State, step: &Step) -> Option<String> {
+    let bound = match &step.of {
+        Some(Ref::Task(id)) => (state.page(*id))
+            .and_then(|p| p.versions.last())
+            .map(|v| v.sheet.lead.title.clone()),
+        _ => None,
+    };
+    bound.or_else(|| step.now.clone())
 }
 
 /// A step's mark: what the agent said, unless an open ask in it makes it
