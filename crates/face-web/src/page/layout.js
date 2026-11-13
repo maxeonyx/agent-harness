@@ -9,8 +9,8 @@
 // stiff, so it runs straight wherever it can. Nothing here asks the browser
 // for geometry: sizes come in with the nodes, and lines are points.
 //
-// A node: { id, deps, lane, light, old, big, r, lo, hi, along, top, foot,
-// now, planned, fork }. `lane` names its life, `light` a tool's, `old` an
+// A node: { id, deps, life, light, old, big, r, lo, hi, along, top, foot,
+// now, planned, fork }. `life` names its life, `light` a tool's, `old` an
 // old version's, `fork` a fork's (a copy of its maker's context); `r` is a
 // dot's radius, and a big node reaches `top` above its centre and `foot`
 // below. `lo` and `hi` are how far it reaches
@@ -41,6 +41,11 @@ const STEEP = Math.PI / 6;
 const WIDE = Math.PI / 3, STEP = Math.PI / 9, LEAN = .5;
 // A big node's half width, for where lines meet it.
 const BIG_HALF = 13;
+// How much stiffer than a plain line's a lifeline's links, and a long line's
+// between its hidden points, pull: enough to keep them straight.
+const STIFF = 40;
+// The flattest a line between two rows runs on average, from upright.
+const FLAT = Math.PI / 3;
 
 // One project laid out: each node's centre, y = 0 on the present row, and
 // each edge's line.
@@ -53,11 +58,13 @@ export function layOut(nodes) {
   for (const v of V) for (const d of v.deps) edges.push({ v, d: by.get(d) });
   kinds(V, edges);
   const layers = layered(V, edges);
-  // Down: each row as tall as its tallest node plus 17, the present row at
-  // y = 0.
-  const tall = [], ys = [0];
+  // Down: each row as tall as its tallest node plus 17, and apart enough
+  // that no line between two rows runs flatter than FLAT on average, the
+  // present row at y = 0.
+  const tall = [], wide = [], ys = [0];
   for (const v of V) tall[v.rank] = Math.max(tall[v.rank] ?? 0, v.n.along);
-  for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17;
+  for (const L of layers) for (const u of L) for (const w of u.up) wide[w.rank] = Math.max(wide[w.rank] ?? 0, Math.abs(u.x - w.x));
+  for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + Math.max((tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17, (wide[r - 1] ?? 0) / Math.tan(FLAT));
   for (const [r, L] of layers.entries()) for (const u of L) u.y = ys[r] - ys[P];
   ports(edges);
   for (const e of edges) route(e);
@@ -149,8 +156,8 @@ function byTime(V, by, P, kids) {
 function kinds(V, edges) {
   const L = new Map();
   for (const v of V) {
-    let l = L.get(v.n.lane);
-    if (!l) L.set(v.n.lane, l = { first: v, light: v.n.light });
+    let l = L.get(v.n.life);
+    if (!l) L.set(v.n.life, l = { first: v, light: v.n.light });
     l.last = v;
     v.life = l;
   }
@@ -172,23 +179,30 @@ function kinds(V, edges) {
 // either side of it, the rest either side of those), so siblings fan out
 // either side of the line their maker goes on down. Then across, each line
 // a spring pulling its ends together, each row placed as near its
-// neighbours as the gaps allow (PAVA). A hidden point's link is a much
-// stiffer spring, so a long line keeps one x; every node is pulled a little
+// neighbours as the gaps allow (PAVA). A lifeline's links, and a long
+// line's between its hidden points, are much stiffer springs, so a life
+// runs straight and its forks pack around it, and a long line keeps one x;
+// a line's link to a hidden point is a little stiffer; every node is pulled a little
 // to the centre line. Sets each node's x; each edge's hidden points, top
 // down, as `mid`. Returns the rows.
 function layered(V, edges) {
   const layers = [];
   const put = (v) => (layers[v.rank] ??= []).push(v);
-  for (const v of V) { Object.assign(v, { up: [], down: [], lo: v.n.lo, hi: v.n.hi, own: new Map() }); put(v); }
+  for (const v of V) { Object.assign(v, { up: [], down: [], lo: v.n.lo, hi: v.n.hi, own: new Map(), k: new Map() }); put(v); }
   for (const e of edges) {
     const { v, d } = e, chain = [v];
     for (let r = v.rank - 1; r > d.rank; r--) {
-      const x = { dummy: true, rank: r, key: d.key + .5, up: [], down: [], lo: 1, hi: 1, own: new Map() };
+      const x = { dummy: true, rank: r, key: d.key + .5, up: [], down: [], lo: 1, hi: 1, own: new Map(), k: new Map() };
       put(x);
       chain.push(x);
     }
     chain.push(d);
-    for (let i = 0; i < chain.length - 1; i++) { chain[i].up.push(chain[i + 1]); chain[i + 1].down.push(chain[i]); }
+    for (let i = 0; i < chain.length - 1; i++) {
+      const a = chain[i], b = chain[i + 1];
+      a.up.push(b); b.down.push(a);
+      const k = e.kind === "life" || (a.dummy && b.dummy) ? STIFF : a.dummy || b.dummy ? 2 : 1;
+      a.k.set(b, k); b.k.set(a, k);
+    }
     if (e.foot) v.own.set(chain[1], e.foot);
     if (e.top) d.own.set(chain.at(-2), e.top);
     e.mid = chain.slice(1, -1).reverse();
@@ -216,7 +230,6 @@ function layered(V, edges) {
   }
   const sep = (a, b) => a.hi + b.lo + (a.dummy || b.dummy ? 4 : 8);
   const CENTRE = 1;
-  const stiff = (a, b) => (a.dummy && b.dummy ? 40 : a.dummy || b.dummy ? 2 : 1);
   const gaps = layers.map((L) => L.slice(1).map((v, i) => sep(L[i], v)));
   for (const [r, L] of layers.entries()) {
     let x = 0;
@@ -239,7 +252,7 @@ function layered(V, edges) {
         else if (both && !v.dummy && v.down.length === 1 && v.down[0].up.length === 1 && !v.down[0].dummy) { t[i] = v.down[0].x; w[i] = 1; }
         else {
           let sx = 0, sw = 0;
-          for (const u of nb) { const k = stiff(u, v); sx += k * u.x; sw += k; }
+          for (const u of nb) { const k = v.k.get(u); sx += k * u.x; sw += k; }
           t[i] = sx / sw; w[i] = sw;
         }
         t[i] = (t[i] * w[i]) / (w[i] + CENTRE); w[i] += CENTRE;
@@ -330,7 +343,7 @@ function taper(s, L, w) {
 // from its upper end through its hidden points to its lower end, each long
 // line keeping its own x down the rows between, so lines side by side stay
 // apart. Its x is a smooth function of its y through those points that
-// never swings past them (monotone cubic, Fritsch-Carlson): where a line
+// never swings past them (monotone cubic, Fritsch-Butland): where a line
 // turns to run straight down it meets the straight part upright, so a
 // bundle fans out and stays out. It leaves and arrives at its ports'
 // slopes.
@@ -341,7 +354,7 @@ function route(e) {
   e.P = curve([P0, ...e.mid.map((u) => [u.x, u.y]), P1], e.a?.k ?? 0, e.b?.k ?? 0);
   const w = (e.kind === "fade" ? d : v).life.light ? TOOL : LIFE;
   if (e.kind === "branch" || ((e.kind === "life" || (e.kind === "grow" && v.n.fork)) && w === LIFE)) { e.W = null; return; }
-  if (e.kind === "life") { e.W = [w, w]; return; }
+  if (e.kind === "life") { e.W = e.P.map(() => w); return; }
   const len = [0];
   for (let i = 1; i < e.P.length; i++) len[i] = len[i - 1] + Math.hypot(e.P[i][0] - e.P[i - 1][0], e.P[i][1] - e.P[i - 1][1]);
   const Lt = len.at(-1) || 1;
@@ -417,7 +430,7 @@ function crossings(edges) {
 }
 // Whose line it is, by a name: a result's is the life that finished; a
 // line out of a dot into another life's is its own.
-const own = (e) => (e.kind === "port" ? `${e.d.id}>${e.v.id}` : (e.kind === "fade" ? e.d : e.v).n.lane);
+const own = (e) => (e.kind === "port" ? `${e.d.id}>${e.v.id}` : (e.kind === "fade" ? e.d : e.v).n.life);
 const slope = (s) => Math.abs((s.b[0] - s.a[0]) / (s.b[1] - s.a[1] || 1e-9));
 const angle = (s, t) => {
   const u = [s.b[0] - s.a[0], s.b[1] - s.a[1]], v = [t.b[0] - t.a[0], t.b[1] - t.a[1]];

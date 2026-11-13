@@ -10,7 +10,7 @@ import { layOut } from "./layout.js";
 // for each time it was passed on, and a task with work out has a planned
 // join under it, depending on the work whose results are still due to it
 // (the view's `due`): running, or finished and not read yet. Work handed to
-// Max is never joined. Each node is on a lane, its life's: its task's (a
+// Max is never joined. Each node is on a life: its task's (a
 // resume of one of Max's chats carries on his chat's), an old version's,
 // or its work's. Projects are the graph's connected pieces.
 //
@@ -148,11 +148,11 @@ export const cardStatus = (c) => `Finished ${ago(c.last)} ago`;
 
 // Each task's legs into nodes, its work into chips, a planned join for
 // work out, the chains of compactions folded, and the projects. Each node
-// knows its lane, the colour of its lane's line into it (`line`: an
+// knows its life, the colour of its life's line into it (`line`: an
 // agent's ink, an old version's faint, a call's blue, and Max's orange from
 // when it was handed to him), and, at the end of a finished life, how it
 // ended (`end`: green done, red failed, none abandoned).
-const laneOf = (t) => (chained(t) ? laneOf(byId[t.from]) : t.id);
+const lifeOf = (t) => (chained(t) ? lifeOf(byId[t.from]) : t.id);
 export function derive(openId) {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
   const tasks = [...view.tasks].sort(order);
@@ -171,31 +171,31 @@ export function derive(openId) {
     // A leg is named by the entry that began it, so two fresh contexts
     // that open with the same words (a carry said twice) name one leg: it
     // is one node, the first.
-    // An old version is a lane of its own, from where it branched.
-    const oldLane = new Map();
+    // An old version is a life of its own, from where it branched.
+    const oldLife = new Map();
     for (const l of legs) {
       if (nodes.has(l.key)) continue;
       const old = !path.has(l.key);
-      let lane = laneOf(t);
+      let life = lifeOf(t);
       if (old) {
         const before = l.on.find((d) => mine.has(d.leg))?.leg;
-        lane = oldLane.get(before) ?? `o:${l.key}`;
-        oldLane.set(l.key, lane);
+        life = oldLife.get(before) ?? `o:${l.key}`;
+        oldLife.set(l.key, life);
       }
-      add({ id: l.key, kind: "leg", t, lane, line: old ? "faint" : "ink", began: l.began, at: l.at, open: l.first, old,
+      add({ id: l.key, kind: "leg", t, life, line: old ? "faint" : "ink", began: l.began, at: l.at, open: l.first, old,
         carry: l.began === "carry" && path.has(l.key), deps: l.on.map((d) => d.leg ?? `w:${d.work}`) });
     }
     const own = nodes.get(t.leg);
     if (own && isDone(t)) own.end = { result: "green", failed: "red" }[t.outcome?.kind];
     for (const w of t.work || []) {
-      const lane = `w:${w.call}`;
+      const life = `w:${w.call}`;
       let before = w.leg;
       (w.passed || []).forEach((p, i) => {
-        const id = `${lane}:${i}`;
-        add({ id, kind: "ring", t, lane, line: i && w.passed[i - 1].to === "max" ? "max" : "tool", time: [p.at, p.at], open: w.at, deps: [before] });
+        const id = `${life}:${i}`;
+        add({ id, kind: "ring", t, life, line: i && w.passed[i - 1].to === "max" ? "max" : "tool", time: [p.at, p.at], open: w.at, deps: [before] });
         before = id;
       });
-      add({ id: lane, kind: "chip", t, lane, line: w.holder === "max" ? "max" : "tool", end: w.running ? null : w.failed ? "red" : "green",
+      add({ id: life, kind: "chip", t, life, line: w.holder === "max" ? "max" : "tool", end: w.running ? null : w.failed ? "red" : "green",
         work: w, running: w.running, open: w.at, deps: [before] });
     }
   }
@@ -207,7 +207,7 @@ export function derive(openId) {
     if (isDone(t) || !t.leg) continue;
     const out = (members.get(t.id) || []).filter((m) => m.due && m.leg).map((m) => m.leg);
     for (const w of held(t)) if (w.due) out.push(`w:${w.call}`);
-    if (out.length) add({ id: `p:${t.id}`, kind: "planned", t, lane: laneOf(t), line: "ink", deps: [t.leg, ...out] });
+    if (out.length) add({ id: `p:${t.id}`, kind: "planned", t, life: lifeOf(t), line: "ink", deps: [t.leg, ...out] });
   }
   // Big: each live task's own node. A task's own node, big or not, takes
   // the task's id. A planned join big while its task runs on is solid, and
@@ -342,7 +342,7 @@ const laid = new Map();             // a project's shape -> its layout
 // a result done or not. Solid, so nothing shows through anything.
 export const LINE = { ink: "#a3a19a", faint: "#d5d3cb", tool: "#87a0b4", max: "#e0975c", green: "#86ad87", red: "#cc7d74" };
 // A project's nodes, as layout.js takes them.
-export const nodesOf = (c) => c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), time: time(n), kind: n.kind, light: n.kind === "chip" || n.kind === "ring", lane: n.lane, line: n.line, end: n.end, old: n.old, solid: n.solid,
+export const nodesOf = (c) => c.nodes.map((n) => ({ id: n.id, deps: n.deps, ...extent(n), time: time(n), kind: n.kind, light: n.kind === "chip" || n.kind === "ring", life: n.life, line: n.line, end: n.end, old: n.old, solid: n.solid,
   fork: n.kind === "leg" && n.t.origin === "fork" }));
 
 // Each project laid out on its own (layout.js), and again only when its
@@ -358,7 +358,7 @@ export function layout() {
     }
     const ns = nodesOf(c);
     let sig = "";
-    for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}@${n.lane}${n.now ? "!" : ""}${n.line}${n.end ?? ""}${n.solid ? "=" : ""}${Math.round(n.hi)};`;
+    for (const n of ns) sig += `${n.id}<${n.deps.join(",")}|${n.kind}@${n.life}${n.now ? "!" : ""}${n.line}${n.end ?? ""}${n.solid ? "=" : ""}${Math.round(n.hi)};`;
     return { c, sig, ns };
   });
   const sig = parts.map((p) => p.sig).join("\n") + (innerWidth > 760);
