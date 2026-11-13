@@ -45,6 +45,9 @@ const BIG_HALF = 13;
 // straight. How stiffly a long line resists bending, against how hard it
 // pulls: a turn spreads over about sqrt(BEND) rows.
 const STIFF = 40, BEND = 4;
+// How many dots along a life share a bag of sides for their odd lines out:
+// over any BAG of them its lone tools fall half each side.
+const BAG = 4;
 // The flattest a line between two rows runs on average, from upright.
 const FLAT = Math.PI / 3;
 
@@ -215,21 +218,27 @@ function layered(V, edges) {
   }
   for (let r = 0; r < layers.length; r++) layers[r] ??= [];
   for (const L of layers) { L.sort((a, b) => a.key - b.key); L.forEach((v, i) => (v.pos = i)); }
+  odd(V);
   // Where u's line to w sits among u's lines that way, from -1/2 to 1/2 of
-  // a place: in its port order, each level's lines half either side of the
-  // more central ones, in their order so far.
-  const nest = (u, them, l) => {
+  // a place: in its port order, each level's lines either side of the more
+  // central ones, in their order so far. Down, the lines a dot starts, half
+  // each side, an odd one out on its side; up, the lines that come back to
+  // it, each on the side it comes from.
+  const nest = (u, way, them, l) => {
     const out = them.filter((x) => (u.own.get(x) ?? 0) === l).sort((a, b) => a.pos - b.pos), inner = them.filter((x) => (u.own.get(x) ?? 0) > l);
-    return inner.length ? [...out.slice(0, out.length >> 1), ...nest(u, inner, l + 1), ...out.slice(out.length >> 1)] : out;
+    if (!inner.length) return out;
+    const mid = inner.reduce((s, x) => s + x.pos, 0) / inner.length;
+    const half = way === "up" ? out.filter((x) => x.pos < mid).length : (out.length + (u.odd.get(l) === -1 ? 1 : 0)) >> 1;
+    return [...out.slice(0, half), ...nest(u, way, inner, l + 1), ...out.slice(half)];
   };
-  const slot = (u, w, them) => (them.length < 2 ? 0 : (nest(u, them, 0).indexOf(w) - (them.length - 1) / 2) / them.length);
+  const slot = (u, w, way) => (u[way].length < 2 ? 0 : (nest(u, way, u[way], 0).indexOf(w) - (u[way].length - 1) / 2) / u[way].length);
   let best, fewest = Infinity;
   for (let it = 0; it < 9; it++) {
     const down = it % 2 === 0;
     for (const L of down ? layers.slice(1) : layers.slice(0, -1).reverse()) {
       for (const v of L) {
         const nb = down ? v.up : v.down;
-        v.bary = nb.length ? nb.reduce((s, u) => s + u.pos + slot(u, v, down ? u.down : u.up), 0) / nb.length : v.pos;
+        v.bary = nb.length ? nb.reduce((s, u) => s + u.pos + slot(u, v, down ? "down" : "up"), 0) / nb.length : v.pos;
       }
       L.sort((a, b) => a.bary - b.bary || a.pos - b.pos);
       L.forEach((v, i) => (v.pos = i));
@@ -277,6 +286,46 @@ function layered(V, edges) {
     }
   }
   return layers;
+}
+// Which side each dot's odd one out goes, where a level of the lines it
+// starts is odd round more central ones. A life's dots, in the order they
+// came, are dealt sides from bags of BAG, half each side, each shuffled by
+// its life and its place along it: a life stays balanced without a pattern,
+// and a new node moves no earlier choice. A dot's further odd levels take
+// turns from its own side. Sets each node's `odd`: level to -1 (left) or 1
+// (right).
+function odd(V) {
+  const along = new Map();
+  for (const v of V) {
+    const pos = along.get(v.n.life) ?? 0;
+    along.set(v.n.life, pos + 1);
+    v.odd = new Map();
+    const level = (x) => v.own.get(x) ?? 0;
+    let s = bag(v.n.life, Math.floor(pos / BAG))[pos % BAG];
+    for (let l = 0; v.down.some((x) => level(x) > l); l++) {
+      if (v.down.filter((x) => level(x) === l).length % 2 === 0) continue;
+      v.odd.set(l, s);
+      s = -s;
+    }
+  }
+}
+// The i-th bag of sides of a life: BAG / 2 of each, in an order drawn from
+// its name and i (FNV-1a seeding mulberry32).
+function bag(life, i) {
+  let h = 2166136261;
+  for (const c of `${life}/${i}`) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  const draw = () => {
+    h = (h + 0x6d2b79f5) | 0;
+    let t = Math.imul(h ^ (h >>> 15), 1 | h);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 2 ** 32;
+  };
+  const sides = Array.from({ length: BAG }, (_, j) => (j < BAG / 2 ? -1 : 1));
+  for (let j = BAG - 1; j > 0; j--) {
+    const r = Math.floor(draw() * (j + 1));
+    [sides[j], sides[r]] = [sides[r], sides[j]];
+  }
+  return sides;
 }
 // Crossings between row L and the row above: inversions of the upper ends
 // of its lines, in order of their lower ends, by a Fenwick tree.
