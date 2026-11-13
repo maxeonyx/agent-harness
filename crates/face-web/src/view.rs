@@ -19,6 +19,7 @@ use harness_core::task::{
     Drain, Draining, Input, Mode, Move, Onto, Origin, Outcome, Pause, Scope, Task, TaskEvent,
 };
 use harness_face_tab::{DraftRow, FaceKey, FaceRow};
+use harness_program::policy::{self, Resend};
 use harness_provider::Model;
 use serde_json::{Value, json};
 
@@ -283,7 +284,7 @@ fn visible(content: &str) -> String {
 }
 
 /// Why a task's last turn did not respond, if it did not.
-fn trouble(ended: &Ended) -> Value {
+fn trouble(ended: &Ended, failures: u32) -> Value {
     match &ended.ending {
         Ending::Failed {
             status, message, ..
@@ -292,6 +293,11 @@ fn trouble(ended: &Ended) -> Value {
             "text": match status {
                 Some(s) => format!("{s}: {message}"),
                 None => message.clone(),
+            },
+            // When the brain sends it again, while it does.
+            "retry": match policy::resend(ended, failures) {
+                Some(Resend::At(at)) => Some(at.0),
+                _ => None,
             },
         }),
         Ending::Limited { until } => json!({"at": ended.at.at.0, "until": until.0}),
@@ -377,7 +383,9 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
             _ => Value::Null,
         },
         "failures": t.live().map_or(0, |l| l.failures),
-        "trouble": last.map_or(Value::Null, trouble),
+        "trouble": last.map_or(Value::Null, |e| {
+            trouble(e, t.live().map_or(0, |l| l.failures))
+        }),
         "pending": pending_words(state, value, t),
         "background": t.background.iter().map(|c| call(state, value, *c)).collect::<Vec<_>>(),
         // What it passed to Max that still runs: his now.
