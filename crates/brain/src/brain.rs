@@ -389,10 +389,12 @@ impl Brain {
             Todo::Pressed(call) => {
                 let state = self.state();
                 match page::pressed(state, &|v| self.value(v), call) {
-                    Ok(done) => self.append(Batch {
-                        values: done.values,
-                        facts: done.facts,
-                    }),
+                    Ok(done) => {
+                        self.append(Batch {
+                            values: done.values,
+                            facts: done.facts,
+                        });
+                    }
                     Err(why) => errln!("harness-brain: Max's press on {call}: {why}"),
                 }
             }
@@ -402,12 +404,14 @@ impl Brain {
                     false => self.settle_scope(call),
                 }
             }
-            Todo::Background(_, calls) => self.append(Batch {
-                values: Vec::new(),
-                facts: (calls.into_iter())
-                    .map(|call| Fact::Call(call, CallEvent::Backgrounded))
-                    .collect(),
-            }),
+            Todo::Background(_, calls) => {
+                self.append(Batch {
+                    values: Vec::new(),
+                    facts: (calls.into_iter())
+                        .map(|call| Fact::Call(call, CallEvent::Backgrounded))
+                        .collect(),
+                });
+            }
             Todo::Linger(task) => self.prompt(task, Prompt::Lingering),
             Todo::Look(task) => {
                 if let Some(look) = self.state().look_for(task) {
@@ -738,11 +742,11 @@ impl Brain {
 
     /// Say a move of a task's head. Its limbs watch what it embodies
     /// through their rows.
-    fn moved(&mut self, id: TaskId, movement: Move, values: Vec<Bytes>) {
+    fn moved(&mut self, id: TaskId, movement: Move, values: Vec<Bytes>) -> bool {
         self.append(Batch {
             values,
             facts: vec![Fact::Task(id, TaskEvent::Moved(movement))],
-        });
+        })
     }
 
     /// Compact the task if the round of its compaction call is over: what
@@ -800,7 +804,10 @@ impl Brain {
             calls: &calls,
         };
         let report = ask.report.map(|r| words(&r));
-        self.compacted(task, Some(call), onto, carry, values, report);
+        if !self.compacted(task, Some(call), onto, carry, values, report) {
+            // Otherwise the next send would ask for the same compaction.
+            self.fail_task(task.id, "its compaction was refused, a bug in the brain");
+        }
         true
     }
 
@@ -814,7 +821,7 @@ impl Brain {
         carry: render::Carry,
         mut values: Vec<Bytes>,
         report: Option<Bytes>,
-    ) {
+    ) -> bool {
         let since = match &onto {
             Onto::Checkpoint(at) => Some(*at),
             Onto::Fresh(_) => None,
@@ -835,7 +842,7 @@ impl Brain {
         };
         values.push(content);
         values.extend(report);
-        self.moved(task.id, Move::Compact(Box::new(compaction)), values);
+        self.moved(task.id, Move::Compact(Box::new(compaction)), values)
     }
 
     // Requests.
@@ -1776,11 +1783,16 @@ comes to you as a message. `stop` it to close it.",
 
     /// Say the brain's own batch, at [`schema::Brain::next`], which the ids
     /// it creates are minted from. A refusal is a bug in the brain: nothing
-    /// is written, and it stops.
-    fn append(&mut self, batch: Batch) {
+    /// is written and it is logged, but the brain carries on, since one bad
+    /// batch must not take down every chat. False when refused.
+    fn append(&mut self, batch: Batch) -> bool {
         let shown: String = format!("{:?}", batch.facts).chars().take(600).collect();
-        if let Err(why) = self.say(batch) {
-            panic!("the brain refuses its own batch ({why:?}): {shown}");
+        match self.say(batch) {
+            Ok(()) => true,
+            Err(why) => {
+                errln!("harness-brain: a bug: it refused its own batch ({why:?}): {shown}");
+                false
+            }
         }
     }
 
