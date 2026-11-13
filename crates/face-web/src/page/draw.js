@@ -305,7 +305,10 @@ export function trouble(t) {
   const x = t.trouble;
   if (!x || isDone(t)) return null;
   if (x.until != null) return x.until > Date.now() ? `Limited until ${when(x.until)}` : null;
-  return t.failures ? `Failed ${t.failures === 1 ? "once" : `${t.failures} times`}: ${x.text}` : null;
+  if (!t.failures) return null;
+  const times = t.failures === 1 ? "once" : `${t.failures} times in a row`;
+  const next = x.retry == null ? "" : ` Trying again at ${new Date(x.retry).toLocaleTimeString([], { hour12: false })}.`;
+  return `Waiting on the provider: it failed ${times}, last with ${x.text}.${next}`;
 }
 
 // ─── The whole page, from the view ─────────────────────────────────────────
