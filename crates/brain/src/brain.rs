@@ -22,6 +22,7 @@ use harness_core::limb::{
     Workdir, normal,
 };
 use harness_core::live::Live;
+use harness_core::message;
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
 use harness_core::schema::{self, Record};
 use harness_core::state::{State, Todo};
@@ -1277,6 +1278,22 @@ waited on nothing: answer, then {}",
                 }
                 Err(why) => Err(why),
             }
+        } else if call.tool == message::MESSAGE {
+            meta::message(self.state(), &parent, &input).map(|telling| {
+                let text = Bytes::from(telling.words.as_str());
+                let message = message::Message {
+                    call: id,
+                    words: text.id(),
+                    quotes: telling.quotes,
+                };
+                batch.values.push(text);
+                batch.facts.push(Fact::Delivery(Delivery {
+                    id: DeliveryId(self.decider.next().event(batch.facts.len() as u32)),
+                    to: telling.to,
+                    content: Content::Message(message),
+                }));
+                words(&telling.said)
+            })
         } else if call.tool == meta::STOP || call.tool == meta::PASS {
             self.hand(&call.tool, &parent, &input, &mut batch)
                 .map(|said| words(&said))

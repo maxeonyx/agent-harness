@@ -7,7 +7,7 @@
 #   whose `dir` is beside its own directory, and one whose `dir` is under
 #   it, each of which works there;
 # - starts a quick background command, lets it land, then `wait`s on it
-#   by name, and on nothing: both return at once;
+#   by name: it returns at once;
 # - starts an engineer in the background whose script sleeps, stops it,
 #   and waits: the engineer's tidy-up turn ends with `compact_and_report`,
 #   and its report is what the orchestrator gets.
@@ -47,7 +47,6 @@ print("\n".join([
     tool("background", {"name": "quick", "tool": "bash", "input": {"command": "echo quick done"}}),
     tool("bash", {"command": "sleep 2"}),
     tool("wait", {"on": ["quick"]}),
-    tool("wait", {}),
     tool("background", {"name": "eng", "tool": "spawn", "input": {"start": {"engineer": [{"name": "eng", "mandate": engineer}]}}}),
     tool("bash", {"command": "sleep 3"}),
     tool("stop", {"call": "eng"}),
