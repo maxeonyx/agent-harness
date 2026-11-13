@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
@@ -19,8 +18,8 @@ use harness_core::id::{
 };
 use harness_core::legacy::LimbKind;
 use harness_core::limb::{
-    Branch, Defined, Hello, Host, Limb, LimbKey, LimbRow, Offer, Prepared, Reach, ToolSet,
-    WORKSPACE, Workdir, normal,
+    Defined, Hello, Host, Limb, LimbKey, LimbRow, Offer, Prepared, Reach, ToolSet, WORKSPACE,
+    Workdir, normal,
 };
 use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
@@ -606,7 +605,8 @@ impl Brain {
                     .filter_map(|r| state.role(*r))
                     .collect();
                 let member = matches!(task.scope, Scope::Spawn(_));
-                meta::set(self.brain, &roles, member)
+                let dir = state.workdir(task).is_some();
+                meta::set(self.brain, &roles, dir, member)
             }
             web::SET => web::set(),
             // A set with nothing for an agent, such as `roles`.
@@ -1292,26 +1292,26 @@ waited on nothing: answer him, then {}",
             .collect::<Result<Vec<_>, String>>()?;
         let mut names = Vec::new();
         for member in spawn.members {
+            // A resume's own quotes.
+            let mut own = Vec::new();
             let origin = match member.how {
                 How::Fork => Origin::Fork { from: parent.id },
-                How::Resume(name) => {
+                How::Resume { agent, ref quotes } => {
                     let from = state
                         .tasks()
-                        .filter(|t| state.owner(t.id) == Some(parent.id) && t.name == name)
+                        .filter(|t| state.owner(t.id) == Some(parent.id) && t.name == agent)
                         // The latest: the one its newest scope holds.
                         .max_by_key(|t| match t.scope {
                             Scope::Spawn(call) => state.call(call).map(|c| c.made.seq),
                             Scope::Max => None,
                         })
-                        .ok_or(format!("you started no agent named `{name}`"))?;
+                        .ok_or(format!("you started no agent named `{agent}`"))?;
+                    own = (quotes.iter())
+                        .map(|label| meta::quoted(state, parent, label))
+                        .collect::<Result<Vec<_>, String>>()?;
                     Origin::Resume { from: from.id }
                 }
-                How::Fresh {
-                    role,
-                    branch,
-                    base,
-                    repo,
-                } => {
+                How::Fresh { role, dir } => {
                     let own = state.role(parent.role).ok_or("your role is not defined")?;
                     let starts: Vec<_> = state
                         .roles()
@@ -1329,7 +1329,7 @@ waited on nothing: answer him, then {}",
                         )
                     })?;
                     let workdir = match role.works_in_a_directory() {
-                        true => Some(self.workdir(parent, repo, branch, base)?),
+                        true => Some(self.workdir(parent, dir)?),
                         false => None,
                     };
                     Origin::Fresh {
@@ -1351,7 +1351,7 @@ waited on nothing: answer him, then {}",
                 mandate: Mandate {
                     text: text.id(),
                     brief: brief.as_ref().filter(|_| fresh).map(Bytes::id),
-                    quotes: if fresh { quotes.clone() } else { Vec::new() },
+                    quotes: if fresh { quotes.clone() } else { own },
                 },
             };
             batch.values.push(text);
@@ -1365,45 +1365,41 @@ waited on nothing: answer him, then {}",
         Ok(names)
     }
 
-    /// A fresh member's working directory: its parent's, or the repository
-    /// `repo` names under it, or with a `branch`, a clone of its own of
-    /// that repository, beside it, on that branch, made from `base`.
-    fn workdir(
-        &self,
-        parent: &Task,
-        repo: Option<String>,
-        branch: Option<String>,
-        base: String,
-    ) -> Result<Workdir, String> {
-        let own = (self.state().workdir(parent))
-            .ok_or("you have no working directory to share or clone from")?;
-        let dir = match repo {
-            None => own.dir,
-            Some(repo) => {
-                let dir = normal(&own.dir.join(&repo));
-                if !dir.starts_with(&own.dir) {
-                    return Err(format!(
-                        "`repo` names a directory under yours, and `{repo}` is not under `{}`",
-                        own.dir.display()
-                    ));
-                }
-                dir
+    /// A fresh member's working directory: its parent's, or the one `dir`
+    /// names, relative to its parent's, absolute, or in the home of the
+    /// user of the limb it is on: its parent's, or with no directory of
+    /// its own, the brain's machine.
+    fn workdir(&self, parent: &Task, dir: Option<String>) -> Result<Workdir, String> {
+        let state = self.state();
+        let own = state.workdir(parent);
+        let Some(dir) = dir else {
+            return own
+                .map(|own| Workdir {
+                    branch: None,
+                    ..own
+                })
+                .ok_or("you have no directory of your own to give it: name its `dir`".into());
+        };
+        let named = PathBuf::from(&dir);
+        let rooted = named.is_absolute() || named.starts_with("~");
+        let (limb, dir) = match own {
+            Some(own) if rooted => (own.limb, named),
+            Some(own) => (own.limb, own.dir.join(named)),
+            None if rooted => {
+                let limb = (state.limbs().find(|l| l.host == Host::Local))
+                    .ok_or("the brain's machine has no limb to work on")?;
+                (limb.id, named)
+            }
+            None => {
+                return Err(format!(
+                    "you have no directory of your own for `{dir}` to be relative to: name it absolute or `~/…`"
+                ));
             }
         };
-        let limb = own.limb;
-        // Without a branch it works where it is pointed, as a fork does.
-        let Some(name) = branch else {
-            return Ok(Workdir {
-                limb,
-                dir,
-                branch: None,
-            });
-        };
-        let (from, dir) = clone_of(&dir, &name)?;
         Ok(Workdir {
             limb,
             dir: normal(&dir),
-            branch: Some(Branch { from, name, base }),
+            branch: None,
         })
     }
 
@@ -2000,42 +1996,6 @@ fn limb_builds() -> BTreeMap<String, BuildId> {
         Ok(bytes) => BTreeMap::from([("limb".to_owned(), BuildId::of(&bytes))]),
         Err(_) => BTreeMap::new(),
     }
-}
-
-/// A new clone for an agent started from a workspace at `dir`: cloned from
-/// what `dir` itself was cloned from (or `dir`, if it has no `origin`), into
-/// a sibling directory named for the repository and the branch, the way
-/// Max names his (`agent-harness` on `dev-x` is `agent-harness-dev-x`).
-/// A `dir` in no repository has nothing to clone: refused, saying so.
-pub fn clone_of(dir: &Path, branch: &str) -> Result<(String, PathBuf), String> {
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
-    if git(&["rev-parse", "--git-dir"]).is_none() {
-        return Err(format!(
-            "`{}` is not in a git repository, so there is nothing to clone branch `{branch}` from: \
-name a repository in `repo`, or omit `branch` to work in that directory",
-            dir.display()
-        ));
-    }
-    let from =
-        git(&["remote", "get-url", "origin"]).unwrap_or_else(|| dir.to_string_lossy().into_owned());
-    let repo = from
-        .trim_end_matches('/')
-        .rsplit(['/', ':'])
-        .next()
-        .unwrap_or("clone")
-        .trim_end_matches(".git");
-    let name = format!("{repo}-{}", branch.replace('/', "-"));
-    let parent = dir.parent().unwrap_or(dir);
-    Ok((from, parent.join(name)))
 }
 
 /// One text block saying `said`: what a call the brain runs answers.

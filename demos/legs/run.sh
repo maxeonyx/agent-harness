@@ -16,7 +16,7 @@ drive up
 mkdir -p "$at/dir"
 port=$(cat "$at/port")
 
-a=$(drive chat chat "$PWD/$at/dir" 'tool spawn {"tasks": [{"name": "B", "mandate": "say B is done."}, {"name": "C", "mandate": "say C is done."}]}
+a=$(drive chat chat "$PWD/$at/dir" 'tool spawn {"fork": [{"name": "B", "mandate": "say B is done."}, {"name": "C", "mandate": "say C is done."}]}
 tool compact_and_report {"carry": "B and C are done.", "report": "B and C are done."}')
 drive settle "$a" >/dev/null
 drive say "$a" "say First words." >/dev/null
@@ -26,7 +26,7 @@ drive settle "$a" >/dev/null
 # Max edits his second message, as he does on the page.
 edited='tool background {"name": "nap", "tool": "bash", "input": {"command": "sleep 5"}}
 say Napping.
-tool spawn {"tasks": [{"name": "f", "mandate": "say A fork of A."}]}
+tool spawn {"fork": [{"name": "f", "mandate": "say A fork of A."}]}
 say Forked.'
 drive page open "$a" click '.moves .mv[title^="Edit this message"] @last' \
   eval "(() => { const box = document.querySelector('.field textarea'); box.value = $(jq -Rs . <<<"$edited"); box.dispatchEvent(new Event('input', {bubbles: true})); })()" \

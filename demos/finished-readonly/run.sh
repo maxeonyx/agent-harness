@@ -25,7 +25,7 @@ repo=$PWD/.drive.ignore/readonly/repo
 demos/brain/scratch.sh "$repo" >/dev/null
 talker='slow 1000 say My first answer, which Max'"'"'s words hold back.'
 reporter='slow 1000 tool compact_and_report {\"carry\": \"Nothing to carry.\", \"report\": \"My first report, which Max'"'"'s words hold back.\", \"summary\": \"report\"}'
-mandate="tool spawn {\"summary\": \"two forks\", \"tasks\": [{\"name\": \"talker\", \"mandate\": \"$talker\"}, {\"name\": \"reporter\", \"mandate\": \"$reporter\"}]}
+mandate="tool spawn {\"summary\": \"two forks\", \"fork\": [{\"name\": \"talker\", \"mandate\": \"$talker\"}, {\"name\": \"reporter\", \"mandate\": \"$reporter\"}]}
 say Both forks have reported."
 chat=$(drive chat orchestrator "$repo" "$mandate")
 echo "== $(at) the orchestrator $chat spawns talker and reporter; their last turns stream slowly"

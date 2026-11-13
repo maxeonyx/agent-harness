@@ -612,10 +612,11 @@ pub enum Mode {
 /// context has not heard what its parent has since: a resumed designer is
 /// given Max's reaction to its page by its label, not retold. A fork takes
 /// neither: its context holds every word of Max's its parent's does, which
-/// compactions carry verbatim.
-///
-/// **Not built yet.** Today a resume cannot be given quotes, so a parent
-/// retells Max's words in its mandate.
+/// compactions carry verbatim. So `spawn` keys its members by kind, and
+/// each kind's items take exactly these: a `fork` a name and a mandate, a
+/// `resume` its quotes, and a fresh member, under its role in `start`,
+/// the brief and quotes its `start` shares (and, for a role that works in
+/// a directory, a `dir`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mandate {
     pub text: ValueId,

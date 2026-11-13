@@ -577,7 +577,7 @@ fn round_trip(
     }
     let token = format!("{mark}_{}", harness_limb::now().0);
     let child = json!({ "command": format!("printf %s {token} > token") });
-    let spawn = json!({ "tasks": [{
+    let spawn = json!({ "fork": [{
         "name": "child",
         "mandate": format!("tool bash {child}\nsay done"),
     }]});

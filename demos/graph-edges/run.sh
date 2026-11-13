@@ -30,7 +30,7 @@ slow='tool bash {"command": "sleep 600", "timeout_ms": 600000, "summary": "work 
 say Done.'
 w=$(drive chat chat "$PWD/$at/w" "Waits
 tool background {\"name\": \"watch\", \"tool\": \"bash\", \"input\": {\"command\": \"sleep 600\", \"timeout_ms\": 600000}} tool background {\"name\": \"nap\", \"tool\": \"bash\", \"input\": {\"command\": \"sleep 1\"}}
-tool spawn {\"tasks\": [{\"name\": \"quick\", \"mandate\": \"say Quick is done.\"}, {\"name\": \"slow-1\", \"mandate\": $(jq -Rs . <<<"$slow")}, {\"name\": \"slow-2\", \"mandate\": $(jq -Rs . <<<"$slow")}]}
+tool spawn {\"fork\": [{\"name\": \"quick\", \"mandate\": \"say Quick is done.\"}, {\"name\": \"slow-1\", \"mandate\": $(jq -Rs . <<<"$slow")}, {\"name\": \"slow-2\", \"mandate\": $(jq -Rs . <<<"$slow")}]}
 say All three are done.")
 sleep 4
 
