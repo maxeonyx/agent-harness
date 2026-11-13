@@ -28,11 +28,18 @@ export function renderSheet(t) {
   if (!full) { line(p, t); return false; }
   const key = JSON.stringify([t.id, p, t.look, unfolded]);
   if (sheetEl.drawn !== key) { sheetEl.drawn = key; sheetEl.replaceChildren(...page(p, t)); dress(t); }
-  return landed !== `${t.id} ${p.version}`;
+  return landed !== shown(t);
 }
-export const sheetSeen = (t) => { landed = `${t.id} ${t.page.version}`; };
-// Where the page starts in the card's scroll, while it shows whole.
-export const sheetTop = () => sheetEl.hidden ? null : scrollEl.scrollTop + sheetEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top;
+// Each present is landed on once: a new version, or one presented again.
+const shown = (t) => `${t.id} ${t.page.version} ${t.page.held}`;
+export const sheetSeen = (t) => { landed = shown(t); };
+// Where the card lands on the page while it shows: its top, or with a quick
+// answer, the chat's line above it, the page folded below it.
+export function sheetTop() {
+  if (sheetEl.hidden) return null;
+  const top = scrollEl.scrollTop + sheetEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top;
+  return sheetEl.classList.contains("folded") ? Math.max(0, top + sheetEl.offsetHeight - scrollEl.clientHeight) : top;
+}
 
 // The page wears its task's look: the theme's tokens, and its ground
 // painted behind the lead, once per task and width. A task with none wears
@@ -65,18 +72,19 @@ function line(p, t) {
 
 // The parts in the one order Max reads them, none of them named: each
 // claim frames its part in its own words. Presented again unchanged with a
-// quick answer, the page is that answer's line above its lead, which says
-// when it was checked and opens the rest.
+// quick answer, the answer is the chat's line above the page, which folds to
+// its lead, saying when it was checked; a press opens the rest. A lead new
+// to this tab fills the first screen; once seen, it is a short band.
 function page(p, t) {
-  const held = p.quick != null && p.held > p.at;
-  const lead = el("header", "lead");
+  const held = p.quick && p.held > p.at;
+  const lead = el("header", `lead${landed === shown(t) ? "" : " new"}`);
   lead.append(el("h1", null, p.lead.title));
   if (p.lead.hook) lead.append(el("p", "hook", p.lead.hook));
   if (held) lead.append(el("p", "checked", `Still holds, checked ${clock(p.held)}`));
-  const out = [...(held ? [el("p", "quick", p.quick)] : []), lead];
+  const out = [lead];
   const at = `${t.id} ${p.held}`;
+  sheetEl.classList.toggle("folded", held && unfolded !== at);
   if (held && unfolded !== at) {
-    lead.classList.add("folded");
     lead.onclick = () => { unfolded = at; redraw(); };
     return out;
   }

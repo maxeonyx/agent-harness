@@ -88,14 +88,14 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
         })
         .collect();
     let current = matches!(t.phase(), Some(Phase::AwaitingMax)) && newest.held >= t.since;
-    // The quick answer: what the response that last presented said.
+    // A quick answer: the response that last presented said something,
+    // which the chat shows as a line above the page.
     let quick = (page.presented)
         .and_then(|call| match state.entry(state.origin(call)?)? {
             Entry::Message { message, .. } => value(message.content),
             Entry::Root(_) => None,
         })
-        .map(|content| texts(&content))
-        .filter(|text| !text.trim().is_empty());
+        .is_some_and(|content| !texts(&content).trim().is_empty());
     let agreed = page.agreed.as_ref();
     Some(json!({
         "version": newest.n,
