@@ -33,15 +33,9 @@
 // coast are lit as Kitiro Tanaka's illuminated contours, so the terraces stand up. The lines sit
 // on their own layer, erased softly round the lead.
 //
-// Max's words about this theme: "The rings, harbor is quite good." "Cowrie looks a bit similar to
-// harbor." "Harbor and Cowrie seem very similar right now." On the second revision's grounds: "the
-// backgrounds are better [...] like 10% better, where I wanted like 5 times better." Twice, that
-// stray text is noise: so the soundings keep well clear of the lead. On telling agents apart:
-// "maps are a bit different, you don't necessarily *expect* colour to be identity in a map.
-// Perhaps map is well served by making successive subagents zoom in on ever more detailed
-// regions?" Reviews of earlier versions found it "a flat diagram with no light or material"
-// (hence the glazes, paper, relief and lit rings), then every seed the same composition, a clear
-// pool ringed by coast, with a compass rose on most (hence the windows and their kinds).
+// Stray text is noise, so the soundings keep well clear of the lead. The glazes, paper, relief and
+// lit rings give it light and material, and the windows and their kinds keep every seed from being
+// the same composition, a clear pool ringed by coast.
 
 const FACE = '"Newsreader", Georgia, serif';
 
@@ -88,7 +82,7 @@ export default {
 };
 
 // The agent's colour for its node on the map: its glazes' hue, strong enough to read as a dot.
-export function identity(at) {
+function identity(at) {
   return oklchHex(0.66, 0.1, glazeHue(at));
 }
 

@@ -18,15 +18,7 @@
 // small and blurred as foliage close to the eye is, each leaflet lit by how much light reaches it.
 // Then grain. The lead sits on the mist: near trunks and leaves keep out of its box, and what passes
 // behind it is far enough off to be pale.
-// No rings and no contour lines: both earlier Kauris drew rings, which is why it looked like Harbour.
-//
-// Max's words about this theme (he says "Cowrie"): "Cowrie looks a bit similar to harbor. I think
-// you can do better, but Cowrie is good." "I like your an orchestrator in Cowrie." "I like Tussock,
-// Harbor, Cowrie. I think they need to be a little bit visually more distinguished." "Harbor and
-// Cowrie seem very similar right now." On all the art: "really elegant and artistic", and the
-// second attempt's backgrounds were "like 10% better, where I wanted like 5 times better". On
-// identity: agents in an area need "inner variation in colour and identity, not just layout, so that
-// individual agents within an area are distinguishable at a glance".
+// No rings and no contour lines, so it never looks like Harbour.
 
 import { oklch, fromOklch } from "./theme.js";
 
@@ -192,7 +184,7 @@ function hourAt(t) {
 const hex = (c) => "#" + c.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, "0")).join("");
 
 // The agent's own colour, for its node on the map: its light, deep enough to read as a colour.
-export function identity(at) {
+function identity(at) {
   const [, C, H] = oklch(hex(hourAt(at).light));
   return fromOklch(0.72, Math.max(C * 1.3, 0.07), H);
 }

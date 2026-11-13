@@ -28,12 +28,7 @@
 // tussock blades are quadratic strokes; both are batched by width or length and tone, so thousands
 // cost a few dozen draw calls.
 //
-// Max's words. "Tussock is good" (first revision, a low sun over layered hills and grass; it was
-// kept as it was in the second). Of the backgrounds overall: "really elegant and artistic";
-// "Actually put some effort into making really beautiful backgrounds"; the second round was "like
-// 10% better, where I wanted like 5 times better". Text must sit on calm ground. Third round: agents
-// in an area need "inner variation in colour and identity, not just layout, so that individual
-// agents within an area are distinguishable at a glance. Tussock has a similar issue."
+// Text sits on calm ground.
 
 
 const TAU = Math.PI * 2;

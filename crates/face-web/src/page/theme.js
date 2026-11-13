@@ -4,8 +4,7 @@
 // A theme is the module theme-<name>.js, whose default export is
 //   { name, about, palette, display, slots, identity(at), map, paint(ctx, scene) }
 // palette holds design.rs's `Palette` fields as hex colours (figure: four); display its `Face`
-// ({ family, files, weights, bold, axes }), its files in face-web/src/fonts, fetched beside this
-// module (the face does not serve them yet: its page files are text); slots the identities'
+// ({ family, files, weights, bold, axes }), its files served beside this module as page files; slots the identities'
 // places in the theme's range of colour, in [0, 1), in the order checked by eye: slot 0 the area's
 // main agent, then each next agent as far from those before as the art allows. identity(at) is the
 // colour an agent is told apart by, for its node on the map. map says how a dark ground's shadows
@@ -258,17 +257,17 @@ export function settle(canvas) {
 //   spec = { w, h, now,             the region, and the now line's height in it
 //            scale,                 bitmap pixels per map unit
 //            paper,                 the map's paper
-//            wash }                 how it fades (WASH, the default)
-// A dark ground says how its shadows should lift, in `map: { tone, duo }`: they take the colour
-// `tone` in the share `duo` (0-1), so a night or a forest fades to a tinted print instead of grey.
-// A loud one may set `map.below`, a higher floor for the ground under the now line, and
-// `map.chroma`, its own colour gain.
 //            pools: [{ x, y, r, slot }] }     each live agent's node, reach and identity slot
+// It fades as WASH says. A dark ground says how its shadows should lift, in `map: { tone, duo }`:
+// they take the colour `tone` in the share `duo` (0-1), so a night or a forest fades to a tinted
+// print instead of grey. A loud one may set `map.below`, a higher floor for the ground under the now
+// line, and `map.chroma`, its own colour gain.
 // Pools change hue alone ("color" blending), so what is read over them keeps its contrast. Each live
 // agent's node stands in a small clearing of paper, so its state mark keeps the contrast it has on
 // bare paper: the state is the strongest colour where it stands.
 export function paintRegion(ground, who, spec) {
-  const { w, h, now, scale, paper, wash = WASH, pools = [] } = spec;
+  const { w, h, now, scale, paper, pools = [] } = spec;
+  const chroma = ground.map?.chroma ?? WASH.chroma;
   const art = document.createElement("canvas");
   paintInto(art, ground, who, null, { w, h, dpr: scale });
   const ac = art.getContext("2d");
@@ -278,8 +277,8 @@ export function paintRegion(ground, who, spec) {
   // above the now line no darker than names can be read on at 7:1, below it freer.
   const faded = shader(FADE, art.width, art.height, {
     u_img: art, u_now: (now + 70) / h, u_soft: 90 / h, u_top: oklch(paper)[0],
-    u_above: wash.above, u_below: ground.map?.below ?? wash.below, u_chroma: ground.map?.chroma ?? wash.chroma ?? 1.1,
-    u_chroma_above: (ground.map?.chroma ?? wash.chroma ?? 1.1) * (wash.chromaAbove ?? 1.1) / (wash.chroma ?? 1.1),
+    u_above: WASH.above, u_below: ground.map?.below ?? WASH.below, u_chroma: chroma,
+    u_chroma_above: (chroma * WASH.chromaAbove) / WASH.chroma,
     u_tone: ground.map?.tone ? labOf(ground.map.tone) : [0, 0, 0], u_duo: ground.map?.duo ?? 0,
   });
   if (faded) { ac.save(); ac.setTransform(1, 0, 0, 1, 0, 0); ac.globalCompositeOperation = "copy"; ac.drawImage(faded, 0, 0); ac.restore(); }
@@ -293,8 +292,7 @@ export function paintRegion(ground, who, spec) {
     const c = identity(ground, p.slot), y = now + 30;
     ac.save(); ac.translate(p.x, y); ac.scale(1, 0.62);
     const g = ac.createRadialGradient(0, 0, 0, 0, 0, p.r);
-    const k = wash.pool ?? 1;
-    g.addColorStop(0, alpha(c, 0.62 * k)); g.addColorStop(0.45, alpha(c, 0.42 * k)); g.addColorStop(1, alpha(c, 0));
+    g.addColorStop(0, alpha(c, 0.62 * WASH.pool)); g.addColorStop(0.45, alpha(c, 0.42 * WASH.pool)); g.addColorStop(1, alpha(c, 0));
     ac.fillStyle = g; ac.fillRect(-p.r, -p.r, 2 * p.r, 2 * p.r);
     ac.restore();
   }
@@ -326,10 +324,10 @@ export function paintRegion(ground, who, spec) {
 }
 
 // How the map fades a region. Above the now line, behind the streams Max reads, the painting keeps
-// lightness no lower than `above` (OKLab) and `chromaAbove` of its colour ("the background behind the
-// streams on the map needs to be a little bit more faded", 13 Nov); below it, where nothing is read,
+// lightness no lower than `above` (OKLab) and `chromaAbove` of its colour, faded more than below
+// it, so the streams read over it; below it, where nothing is read,
 // `below` and `chroma`. Each live agent's pool of colour at `pool` strength.
-export const WASH = { above: 0.9, below: 0.56, chroma: 1.1, chromaAbove: 0.35, pool: 0.5 };
+const WASH = { above: 0.9, below: 0.56, chroma: 1.1, chromaAbove: 0.35, pool: 0.5 };
 
 // How far a live agent's clearing reaches, in map units: past its mark and onto its name's start.
 const CLEARING = 50;

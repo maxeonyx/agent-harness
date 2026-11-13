@@ -24,15 +24,11 @@
 // (clear, stratus, a bank on the horizon, or a veil over the moon), the shore (open sea, a headland,
 // islands, or a bay between two headlands, sometimes a far range) and the water (glassy, calm or ruffled).
 //
-// Max's words that shaped it: Nocturne, with its stars, nebula, crescent moon and sparkles, was "a bit
-// much as a background"; the art should be "really elegant and artistic"; the backgrounds were "like
-// 10% better, where I wanted like 5 times better". A reviewer, of the first Marama: the moon read as "a
-// sticker" on a ruled horizon, the land's reflection as a black slab, and every seed as the same
-// postcard. "A moon over the sea is the most stock night image": the variety is what keeps it out of it.
-// Of the second: a moon high beside the lead pulled the eye; a faint disc showed through a cloud bank
-// over a bright path; small islands read as barges; a thin strip of stratus read as a contrail.
-// Max, on telling agents apart: individual agents in an area should be "distinguishable at a glance",
-// by "inner variation in colour and identity, not just layout".
+// What it keeps clear of: a moon that reads as a sticker on a ruled horizon or pulls the eye from
+// beside the lead, a reflection that reads as a black slab, a disc showing through a cloud bank over
+// a bright path, islands small enough to read as barges, a thin strip of stratus that reads as a
+// contrail, and every seed the same postcard: the variety is what keeps a moon over the sea from
+// being a stock night image.
 import { fromOklch } from "./theme.js";
 
 const FRAG = `precision highp float;
@@ -213,7 +209,7 @@ function night(at) {
   return { sky0: c(0.13, 0.022), sky1: c(0.33, 0.092), mist: c(0.42, 0.09), sea0: c(0.29, 0.082), halo: c(0.8, 0.058), ripple: c(0.53, 0.095) };
 }
 // The agent's colour on the map: its night's hue, light enough to read on the map's paper.
-export function identity(at) { return fromOklch(0.6, 0.12, hueOf(at)); }
+function identity(at) { return fromOklch(0.6, 0.12, hueOf(at)); }
 
 const hex3 = (h) => { const n = parseInt(h.slice(1), 16); return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; };
 const OFF = [0, 0, 0, -1];

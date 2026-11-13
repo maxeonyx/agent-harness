@@ -24,12 +24,8 @@
 // would alias. Then a sheen and glints where folds face the light, the window in the lacquer, bent
 // by the folds beneath, and now and then a warm flash on a steep fold.
 //
-// Max's words that shaped it: the art should be "really elegant and artistic"; the second attempt's
-// backgrounds were "like 10% better, where I wanted like 5 times better"; Nocturne "is a bit much as
-// a background"; pages were "way too busy"; "less is more". So the colour is confined to the light,
-// away from the lead, and everything near the lead is low and smooth. Then, seeing it: "I actually
-// like paua a lot - but you're right it needs inner variation in colour and identity, not just
-// layout, so that individual agents within an area are distinguishable at a glance."
+// The colour is confined to the light, away from the lead, and everything near the lead is low and
+// smooth.
 
 // The shells, round a ring: six interference colours each (deep, then round the loop), and the
 // signature colour that names the shell on the map. Each keeps a deep blue or indigo, as all pāua do.
@@ -60,7 +56,7 @@ function shellAt(s) {
 }
 
 // The agent's colour among the others wearing Pāua: its shell's signature, for its map node.
-export function identity(at) { return toHex(shellAt(at).sig); }
+function identity(at) { return toHex(shellAt(at).sig); }
 
 const FRAG = `
 precision highp float;
