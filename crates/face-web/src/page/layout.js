@@ -83,7 +83,7 @@ export function lanes(nodes) {
   }
   const cuts = crossings(edges);
   const key = (e) => `${e.v.id}>${e.d.id}`;
-  return { at: new Map(V.map((v) => [v.id, { x: v.x, y: v.y }])), cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, gaps: cuts.filter((c) => c.under === i).map((c) => ({ over: key(edges[c.over]), ...near(edges[c.over], c) })) })) };
+  return { at: new Map(V.map((v) => [v.id, { x: v.x, y: v.y }])), cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, gaps: cuts.filter((c) => c.under === i).map((c) => ({ over: key(edges[c.over]), ...near(edges[c.over], c, e.P) })) })) };
 }
 
 // ─── Rows ──────────────────────────────────────────────────────────────────
@@ -427,8 +427,7 @@ function over(P, u) {
   for (let i = 1; i < P.length; i++) {
     const [a, b] = [P[i - 1], P[i]];
     if ((a[1] < u.y - reach && b[1] < u.y - reach) || (a[1] > u.y + reach && b[1] > u.y + reach)) continue;
-    const vx = b[0] - a[0], vy = b[1] - a[1], t = Math.max(0, Math.min(1, ((u.x - a[0]) * vx + (u.y - a[1]) * vy) / (vx * vx + vy * vy || 1)));
-    if (Math.hypot(a[0] + t * vx - u.x, a[1] + t * vy - u.y) < reach) return true;
+    if (close(a, b, [u.x, u.y], reach)) return true;
   }
   return false;
 }
@@ -525,26 +524,37 @@ function meet(p, q, r, s) {
   return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? [p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])] : null;
 }
 
-// The over line of a crossing near where it crosses: SPAN along it each
-// way, as { P, W }. The page erases a band GAP wider than it each side from
-// the line under it, so the gap follows both lines and touches nothing else.
+// The over line of a crossing near where it crosses, as { P, W }: SPAN
+// along it each way, and on until its band is clear of the line under it
+// (U), where they cross at a shallow angle. The page erases that band, GAP
+// wider than it each side, from the line under it, so the gap follows both
+// lines and touches nothing else.
 const SPAN = 4 * (LIFE + GAP);
-function near(e, { at, seg }) {
+function near(e, { at, seg }, U) {
   const w = (i) => e.W?.[i] ?? LIFE, [a, b] = [e.P[seg - 1], e.P[seg]];
   const t = Math.hypot(at[0] - a[0], at[1] - a[1]) / (Math.hypot(b[0] - a[0], b[1] - a[1]) || 1);
   const mid = [...at, w(seg - 1) + t * (w(seg) - w(seg - 1))];
+  const clear = (p) => !U.some((q, i) => i && close(U[i - 1], q, p, p[2] / 2 + GAP + LIFE / 2));
   const walk = (i, step) => {
     const out = [];
-    let p = mid, left = SPAN;
+    let p = mid, s = 0;
     for (; i >= 0 && i < e.P.length; i += step) {
       const q = [...e.P[i], w(i)], d = Math.hypot(q[0] - p[0], q[1] - p[1]);
-      if (d >= left) { out.push(p.map((v, k) => v + (left / d) * (q[k] - v))); break; }
-      out.push(q); left -= d; p = q;
+      for (let l = Math.max(0, SPAN - s); l < d; l++) {
+        const r = p.map((v, k) => v + (l / d) * (q[k] - v));
+        if (clear(r)) return [...out, r];
+      }
+      out.push(q); s += d; p = q;
     }
     return out;
   };
   const Q = [...walk(seg - 1, -1).reverse(), mid, ...walk(seg, 1)];
   return { P: Q.map(([x, y]) => [x, y]), W: e.W && Q.map((q) => q[2]) };
+}
+// Whether point p is within r of the segment from a to b.
+function close(a, b, p, r) {
+  const vx = b[0] - a[0], vy = b[1] - a[1], t = Math.max(0, Math.min(1, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / (vx * vx + vy * vy || 1)));
+  return Math.hypot(a[0] + t * vx - p[0], a[1] + t * vy - p[1]) < r;
 }
 
 // ─── Drawing a line ────────────────────────────────────────────────────────
