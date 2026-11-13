@@ -448,6 +448,25 @@ pub struct Work {
     pub at: EntryId,
 }
 
+/// A message an agent sent ([`crate::message::Message`]): it hangs from the
+/// leg that sent it, at the response whose tool use sent it, until its
+/// recipient's [`Began::Join`] or [`Began::Carry`] takes it in, as a
+/// [`Work`] does its owner's. Unread, the map draws it dashed into the
+/// recipient's present; read, a thin solid line into that join. Between
+/// projects, so connected components never weld when agents talk, it is a
+/// stub at each end naming the other, which opens that chat at the
+/// message. Not yet folded: see [`crate::message`].
+///
+/// **Vision.** "Messaging, I find it interesting because I feel like it
+/// should show on the graph" (Max, 8 Nov).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Said {
+    pub delivery: DeliveryId,
+    pub to: TaskId,
+    pub leg: LegId,
+    pub at: EntryId,
+}
+
 /// A task's legs, as the fold keeps them ([`crate::state::State::legs`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Legs {

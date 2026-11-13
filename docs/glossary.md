@@ -40,7 +40,7 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Request | One call to the model. | `model_call::ModelCall` |
 | Call | One tool call. | `call::Call` |
 | Scope | The set of tasks a spawn starts. In a foreground spawn the parent makes no further decision until every result is in; in a background spawn it carries on and joins later. A task may add siblings to its own scope. | Partly: `task::Scope`, owned by its spawn call; every spawn is foreground. |
-| Message, watch | The two relationships between tasks that own nothing. A message is words delivered to a live task. A watch wakes a task when work it doesn't own settles or is abandoned; one that would close a circle of waits is refused. | Not built. |
+| Message, watch | The two relationships between tasks that own nothing. A message is words one agent tells another it can reach (its owner, an agent it started, or, between chats that face Max, each other), landing as Max's words do. A watch tells an agent when a task it didn't start ends; one that would close a circle of waits settles at once, saying so. | Designed, not built: `message::Message`, `message::Watch`. |
 | Hold | Using a resource (a clone, a tab, a dev server) without owning it; the resource is cleaned up after its last holder ends. | Not built. |
 | Fork | A child agent that starts from its parent's context, sharing its cache, and returns a summary. | `task::Origin::Fork` |
 | Aside | A user-facing child Max opens while its parent waits on other children. | `task::Origin::Aside` |
