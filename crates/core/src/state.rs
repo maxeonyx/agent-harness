@@ -2553,27 +2553,30 @@ impl State {
         })
     }
 
-    /// Each tool set a task's role holds, in the role's order, with the
-    /// limb that hosts it for the task: the brain, for a set the brain
-    /// offers; otherwise the limb of its working directory, or for a task
-    /// with none, the limb on the brain's own machine. A set that limb does
-    /// not offer is left out, so a root has only what is there to use.
+    /// Each tool set a task holds, with the limb that hosts it for the
+    /// task: its role's, in the role's order, then [`crate::limb::MAX`] if
+    /// it faces Max ([`State::faces_max`]). The host is the brain, for a
+    /// set the brain offers; otherwise the limb of its working directory,
+    /// or for a task with none, the limb on the brain's own machine. A set
+    /// that limb does not offer is left out, so a root has only what is
+    /// there to use.
     pub fn sets_of(&self, task: &Task) -> Vec<(String, LimbId)> {
         let Some(role) = self.roles.get(&task.role) else {
             return Vec::new();
         };
+        let max = self.faces_max(task.id).then(|| crate::limb::MAX.to_owned());
         let brain = self.brain();
         let machine = match self.workdir(task) {
             Some(workdir) => self.limbs.get(&workdir.limb),
             None => self.limbs.values().find(|l| l.host == Host::Local),
         };
-        (role.tools.iter())
+        (role.tools.iter().cloned().chain(max))
             .filter_map(|set| {
                 let host = [brain, machine]
                     .into_iter()
                     .flatten()
-                    .find(|l| l.offer(set).is_some())?;
-                Some((set.clone(), host.id))
+                    .find(|l| l.offer(&set).is_some())?;
+                Some((set, host.id))
             })
             .collect()
     }
@@ -2797,16 +2800,18 @@ impl State {
         }
     }
 
-    /// Whether the task faces Max: it is user-facing or standing, or a fork
-    /// of one that does. Only such a task opens chats for him
-    /// ([`crate::task::OPEN_CHAT`]).
+    /// Whether the task faces Max, and so holds the [`crate::limb::MAX`]
+    /// set: it is user-facing or standing, or an autonomous fork or resume
+    /// of one that does, which continues a context whose root holds it.
     pub fn faces_max(&self, task: TaskId) -> bool {
         let Some(t) = self.tasks.get(&task) else {
             return false;
         };
         match (t.mode, &t.origin) {
             (Mode::UserFacing | Mode::Standing, _) => true,
-            (Mode::Autonomous, Origin::Fork { from }) => self.faces_max(*from),
+            (Mode::Autonomous, Origin::Fork { from } | Origin::Resume { from }) => {
+                self.faces_max(*from)
+            }
             (Mode::Autonomous, _) => false,
         }
     }

@@ -25,10 +25,11 @@ use crate::value::Bytes;
 /// directory. A role that holds it gives each of its agents a [`Workdir`].
 pub const WORKSPACE: &str = "workspace";
 
-/// The tool set of a task facing Max: the tools that reach him (its page,
-/// `ask`, `open_chat`) and the instructions for talking with him. The
-/// brain hosts it. No role names it: a task holds it because of its
-/// [`crate::task::Mode`], on top of its role's sets.
+/// The tool set of a task facing Max: the tools that reach him
+/// (`open_chat`, and its page and `ask`, not built yet) and the
+/// instructions for talking with him. The brain hosts it. No role names
+/// it: a task holds it because of its [`crate::task::Mode`], on top of its
+/// role's sets ([`crate::state::State::sets_of`]).
 pub const MAX: &str = "max";
 
 /// A limb: a process the harness runs on one machine as one user, so that
@@ -133,8 +134,8 @@ impl Limb {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Offer {
     /// The tool set's name, as roles name it: on a machine, `workspace`,
-    /// `user` (Max's own instructions and skills), `browser`, `builds`; in
-    /// the brain, `meta`, `web`, `history`, `attention`, `roles`.
+    /// `config` (Max's own instructions and skills), `browser`, `builds`; in
+    /// the brain, `meta`, `web`, `history`, `max`, `attention`, `roles`.
     pub set: String,
     /// Its settings as JSON, read by the limb alone: Max's config
     /// directory, the browser to launch, the unit to relaunch, the roles'
@@ -269,7 +270,7 @@ impl Description {
 /// change together through notices.
 ///
 /// "Tool set" is Max's word for what a role holds: "The role includes the
-/// agent instructions, the skill set, the tool set." The `user` set carries
+/// agent instructions, the skill set, the tool set." The `config` set carries
 /// his own instructions and the index of his skills, so a role holding it
 /// has them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

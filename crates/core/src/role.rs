@@ -20,7 +20,7 @@ pub use crate::id::RoleId;
 /// on a limb when it is created: the brain's own sets on the brain, every
 /// other on the limb of the agent's working directory, or of the brain's
 /// own machine for an agent with none. Its instructions and skills come
-/// with the sets that carry them: Max's own with `user`, a directory's
+/// with the sets that carry them: Max's own with `config`, a directory's
 /// `AGENTS.md` with the working directory. "Orchestrator", "designer",
 /// "engineer" and "chat" are roles; a [`crate::task::Task`] is in exactly
 /// one, for life.
@@ -98,7 +98,7 @@ pub struct Role {
     /// version applies from each task's next request.
     pub params: ValueId,
     /// The tool sets every agent in it holds, by name, in the order their
-    /// tools are declared: `meta`, `web`, `user`, `workspace`, `browser`,
+    /// tools are declared: `meta`, `web`, `config`, `workspace`, `browser`,
     /// `builds`, currently. One that holds [`crate::limb::WORKSPACE`] gives
     /// each agent a working directory when it is created. Never
     /// [`crate::limb::MAX`], which facing Max adds.

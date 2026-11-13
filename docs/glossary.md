@@ -11,7 +11,7 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Face | What Max sees and acts through: the page, on the PC or the phone. Each tab is a replica. | `crates/face-web`, `crates/face-tab` |
 | Domain | A sphere of Max's obligations (home, work) with one attention: its own brain, queue, priority document and data. | Not built. |
 | Area | A mode of Max's life within a domain (hobby programming, life admin, Kibra's study), with a main agent that owns its work. | Not built. |
-| Tool set | A named set of tools and the instructions for using them, offered by a limb and held by roles: currently `workspace` (a shell and files in the working directory), `user` (Max's own instructions and skills), `web`, `meta`, `browser`, `builds`. | `limb::ToolSet`, offered by a limb as a `limb::Offer`; `harness_limb::ToolSet` runs one |
+| Tool set | A named set of tools and the instructions for using them, offered by a limb and held by roles: currently `workspace` (a shell and files in the working directory), `config` (Max's own instructions and skills), `web`, `meta`, `max` (the tools and instructions of a task facing Max), `browser`, `builds`. | `limb::ToolSet`, offered by a limb as a `limb::Offer`; `harness_limb::ToolSet` runs one |
 | Build | One compiled version of the harness, named by the hash of its executable. A supervisor starts a new build beside the old and rolls back if it fails. | `build::BuildId`, `crates/limb-builds` |
 | Program | Everything a session's behaviour depends on that can change under it: how its records fold, its policy, how its requests are written. No I/O, so it can later load as WASM. | `crates/program` |
 

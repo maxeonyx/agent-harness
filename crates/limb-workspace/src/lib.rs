@@ -1,6 +1,6 @@
 //! The workspace tool set: a shell and file tools in any directory on the
-//! limb's machine, and the `user` set of Max's own instructions and skills
-//! ([`user`]).
+//! limb's machine, and the `config` set of Max's own instructions and skills
+//! ([`config`]).
 //!
 //! **Concept.** One [`Workspace`] per limb serves every working directory
 //! its agents have ([`harness_core::limb::Workdir`]). It runs the coding
@@ -63,13 +63,13 @@
 //! the context has observed; and a limb that outlives the brain can still
 //! say how a call ended.
 
+pub mod config;
 mod files;
 mod git;
 mod record;
 mod shell;
 mod tools;
 mod trunc;
-pub mod user;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;

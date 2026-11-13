@@ -23,8 +23,8 @@ const SETS: &[(&str, Open)] = &[
         harness_limb_workspace::open,
     ),
     (
-        harness_limb_workspace::user::SET,
-        harness_limb_workspace::user::open,
+        harness_limb_workspace::config::SET,
+        harness_limb_workspace::config::open,
     ),
     (harness_limb_browser::SET, harness_limb_browser::open),
     (harness_limb_builds::SET, harness_limb_builds::open),

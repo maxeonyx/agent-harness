@@ -16,9 +16,9 @@
 //! shipped the calls it holds rows for.
 //!
 //! The brain is a limb: at launch it defines its own limb, which offers its
-//! own tool sets (`meta`, `web`, `roles`), and the limb on its machine,
-//! which offers `workspace`, `user`, `browser` and `builds`, and states a
-//! new version of either whose offers changed. The limb on the machine is
+//! own tool sets (`meta`, `max`, `web`, `history`, `roles`), and the limb
+//! on its machine, which offers `workspace`, `config`, `browser` and
+//! `builds`, and states a new version of either whose offers changed. The limb on the machine is
 //! one process however many directories its agents work in, which the
 //! brain reaches by running `harness-limb attach <limb>` from beside its
 //! own executable: that starts the limb if it is not running, and its stdin
