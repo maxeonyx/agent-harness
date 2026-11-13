@@ -104,7 +104,8 @@ pub fn gate(
     check(Pathway::Fold, skipped, started);
 
     let started = Instant::now();
-    let opening = decide(&decider, roles);
+    let signed_in = client.login().signed_in().unwrap_or(true);
+    let opening = decide(&decider, roles, signed_in);
     let decided = opening
         .as_ref()
         .map(|_| ())
@@ -158,10 +159,14 @@ fn fold(db: &Path) -> Result<(schema::Brain<Store>, Result<(), Vec<String>>), Ve
 
 /// What a launch would say first, said only to a copy of the state, and on
 /// that state the to-do list and the face's view.
-fn decide(decider: &schema::Brain<Store>, roles: Option<&Path>) -> Result<Opening, String> {
+fn decide(
+    decider: &schema::Brain<Store>,
+    roles: Option<&Path>,
+    signed_in: bool,
+) -> Result<Opening, String> {
     caught(|| {
         let at = decider.next();
-        let opening = Opening::of(decider.state(), at, roles)?;
+        let opening = Opening::of(decider.state(), at, roles, signed_in)?;
         let state = (opening.said(decider.state(), at))
             .map_err(|why| format!("the state refuses its launch: {why:?}"))?;
         let now = now();

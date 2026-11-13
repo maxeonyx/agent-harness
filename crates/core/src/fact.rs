@@ -155,6 +155,10 @@ pub enum Fact {
     /// The harness has a claude.ai login again: ends the wait that
     /// [`crate::model_call::Ending::SignedOut`] began. Stated by the brain.
     SignedIn,
+    /// The harness has no claude.ai login at a launch: begins the same wait
+    /// before any request is refused, so Max is asked to sign in at once.
+    /// Stated by the brain.
+    SignedOut,
 }
 
 impl Fact {
@@ -171,7 +175,8 @@ impl Fact {
                 how: _,
             })
             | Fact::Shutdown { within: _ }
-            | Fact::SignedIn => {}
+            | Fact::SignedIn
+            | Fact::SignedOut => {}
             Fact::Task(_, event) => event.values(&mut values),
             Fact::ModelCall(_, event) => event.values(&mut values),
             Fact::Call(_, event) => event.values(&mut values),

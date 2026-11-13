@@ -474,7 +474,9 @@ fn run() -> Result<(), Failed> {
             for d in &divergences {
                 errln!("harness-brain: skipping the record at {}: {}", d.at, d.why);
             }
-            let opening = Opening::of(decider.state(), decider.next(), roles.as_deref())?;
+            let signed_in = login.signed_in().unwrap_or(true);
+            let opening =
+                Opening::of(decider.state(), decider.next(), roles.as_deref(), signed_in)?;
             let (listener, tls) = gate::serve(port)?;
             serve(&decider, listener, tls);
             (decider, opening)

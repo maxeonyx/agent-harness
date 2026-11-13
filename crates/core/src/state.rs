@@ -1000,6 +1000,9 @@ impl State {
             }
             Fact::Seen(_) => {}
             Fact::SignedIn => self.signed_out = None,
+            Fact::SignedOut => {
+                self.signed_out.get_or_insert(record.at);
+            }
             Fact::Draft(id, event) => self.fold_draft(*id, event, record)?,
             Fact::Focus(focus) => {
                 let Author::Max = record.by else {
@@ -1138,6 +1141,7 @@ impl State {
                 Fact::Launched(_)
                 | Fact::Shutdown { .. }
                 | Fact::SignedIn
+                | Fact::SignedOut
                 | Fact::ModelCall(..)
                 | Fact::Call(..)
                 | Fact::Change(_)
@@ -2736,6 +2740,11 @@ impl State {
     /// Until when the account is limited, if it is at `now`.
     pub fn limited(&self, now: Timestamp) -> Option<Timestamp> {
         self.limited_until.filter(|until| *until > now)
+    }
+
+    /// Whether the account waits for a sign-in ([`Hold::SignedOut`]).
+    pub fn signed_out(&self) -> bool {
+        self.signed_out.is_some()
     }
 
     /// What every ready task waits on at `now`, if anything: a sign-in
