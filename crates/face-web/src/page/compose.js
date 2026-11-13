@@ -22,6 +22,17 @@ import { startNew } from "./newchat.js";
 // edit too: an edit inside it pins the text up to the end of his edit, and
 // the words still coming go after it.
 export const compose = $(".compose", panel);
+// The answers Max pressed on a task's page, by its id: each ask's call to
+// the verdict pressed. Held with what he writes until he sends, which
+// carries them; pressing again takes one back.
+const answers = new Map();
+export const answered = (key, call) => answers.get(key)?.get(call);
+export function answer(key, call, verdict) {
+  const held = answers.get(key) ?? new Map();
+  if (JSON.stringify(held.get(call)) === JSON.stringify(verdict)) held.delete(call); else held.set(call, verdict);
+  answers.set(key, held);
+  renderComposeState(byId[key]);
+}
 export let dictation = null;
 let box = null;
 // Until when sending waits, after another device changed the draft.
@@ -479,7 +490,7 @@ export function renderComposeState(t) {
   if (t && compose.dataset.key === t.id && !box !== readOnly(t)) buildCompose(t.id);
   if (!box) return;
   const key = box.dataset.key, send = $(".send", compose);
-  const typed = !!box.value.trim(), staged = draftContent(key).staged.length > 0;
+  const typed = !!box.value.trim(), staged = draftContent(key).staged.length > 0 || (answers.get(key)?.size ?? 0) > 0;
   const mine = t && key === t.id;
   if (key === NEW) box.placeholder = "New chat";
   else if (mine) box.placeholder = isDone(t) ? "Continue this chat" : "Reply";
@@ -538,8 +549,8 @@ const fade = (field) => field.classList.toggle("scrolled", field.scrollTop > 0);
 async function submit() {
   if (!box) return;
   const key = box.dataset.key, t = byId[key];
-  const blocks = draftContent(key).staged;
-  if (!blocks.length) return;
+  const blocks = draftContent(key).staged, pressed = answers.get(key) ?? new Map();
+  if (!blocks.length && !pressed.size) return;
   const { text, files } = split(blocks);
   if (!t) return startNew(text, files);
   say("");
@@ -556,13 +567,14 @@ async function submit() {
     local.delete(draft);
     return;
   }
+  const presses = [...pressed].map(([ask, verdict]) => ({ ask, verdict }));
   const sent = JSON.stringify(message(blocks)), id = digest(sent);
   let as = null;
   const sending = act((at) => {
     as = `${at}.0`;
     const facts = [];
     if (!draft) { draft = as; facts.push({ Draft: [draft, { Opened: { session: t.id } }] }); }
-    facts.push({ Draft: [draft, { Send: { text: id } }] }, ...release);
+    facts.push({ Draft: [draft, { Send: { text: id, ...(presses.length ? { presses } : {}) } }] }, ...release);
     return facts;
   }, [sent]);
   // Said, it is in the log until the brain takes it, however long that is.
@@ -580,6 +592,7 @@ async function submit() {
   if (held) leaving.delete(draft);
   renderOthers();
   if (held) return say(`Held, not heard: ${held.held}`, true);
+  answers.delete(key);
   renderComposeState(t);
 }
 // What is staged leaves the box as it is sent: what Max types while it
