@@ -43,10 +43,11 @@
 //!
 //! Nothing names a part: no headings over them, no small labels above
 //! them, no cues to scroll. Each claim frames its part in its own words
-//! ("When this is done, …", "Today …"). A part Max has seen shrinks: a
-//! seen lead takes a short band over the end, a seen end folds to its
-//! claim and opens again when the agent changes it, and what changed since
-//! he last looked carries a bar in the left gutter.
+//! ("When this is done, …", "Today …"). A part Max is done with shrinks:
+//! a lead he has read takes a short band over the end, an end he has agreed
+//! (his go, or a reply that leaves it standing) folds to its claim and opens
+//! again when the agent changes it, and what changed since he last looked
+//! carries a bar in the left gutter.
 //!
 //! **The agent writes content; the design system draws it.** The agent
 //! gives typed parts, and short markdown inside them ([`crate::body`]). It
@@ -258,9 +259,9 @@ pub struct Lead {
 /// The claim is one sentence, drawn at the claim size in the display face,
 /// framed by its own words rather than a label. The body under it shows
 /// the claim, visual first: a figure, a table, a task list, then a few
-/// sentences. Because the claim is all he needs to agree, a seen end folds
-/// to its claim, and opens to its body when pressed or when the agent
-/// changes it.
+/// sentences. Because the claim is all he needs once he has agreed, an
+/// agreed end folds to its claim, and opens to its body when pressed or
+/// when the agent changes it.
 ///
 /// Serves: "the agent can communicate to me its idea of the eventual state,
 /// can communicate to me the, in fact, current state"; "demonstrate
