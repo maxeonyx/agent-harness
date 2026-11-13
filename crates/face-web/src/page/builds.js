@@ -23,7 +23,7 @@ export function renderBuilds() {
   else if (r) { now = r.stage[0].toUpperCase() + r.stage.slice(1); rows.push([now, r.why || ""]); }
   if (old.length) rows.push(["On the old build", old.join(", ")]);
   commitEl.textContent = (view.source || "").replace(/^(\w{7})\w*/, "$1");
-  nowEl.textContent = old.length && !now ? `${old.length} limb${old.length > 1 ? "s" : ""} on the old build` : now;
+  nowEl.textContent = old.length && !now ? `${old.length} limb${old.length > 1 ? "s" : ""} behind` : now;
   badge.classList.toggle("back", !can.checking && !!r && r.stage !== "under way" && r.stage !== "opened");
   const key = JSON.stringify(rows);
   if (card.dataset.key === key) return;
