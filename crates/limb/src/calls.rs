@@ -3,7 +3,10 @@
 //! A call is run on its own thread, after the calls its task made before it
 //! on the same limb have ended, whichever of its tool sets they went to: a model writes one response's tool uses in
 //! the order it means them to happen (write a file, then commit it), so
-//! they run in that order. Other tasks' calls run alongside.
+//! they run in that order. A call of a held tool
+//! ([`harness_core::limb::Tool::held`]) runs after them too, but nothing
+//! waits on it: it runs for as long as it holds something open. Other
+//! tasks' calls run alongside.
 //!
 //! Each call is marked on disk as started before it has any effect, and
 //! settled in the log before it stops running. So a call row runs at most
@@ -70,11 +73,13 @@ impl Calls {
     /// instance was cut off running it is the same as running it once.
     /// `run` runs it on its input, once the task's earlier calls have
     /// ended, to the report and outcome it settles with; a panic in it
-    /// settles the call as failed, saying so.
+    /// settles the call as failed, saying so. `held`: its tool is held, so
+    /// the task's later calls do not wait for it.
     pub fn call(
         &self,
         row: CallRow,
         rerun: bool,
+        held: bool,
         run: impl FnOnce(&Bytes, &Cancel, &Limit, &mut Report) -> Outcome + Send + 'static,
     ) {
         let CallRow {
@@ -138,6 +143,10 @@ impl Calls {
         // This call's end: the writer, held until it has settled. The
         // task's next call waits on the reader.
         let (before, ended) = match (&call.caller, io::pipe()) {
+            (Caller::Agent { task, .. }, _) if held => {
+                let before = lock(&self.latest).get(task).map(PipeReader::try_clone);
+                (before.and_then(Result::ok), None)
+            }
             (Caller::Agent { task, .. }, Ok((reader, writer))) => {
                 (lock(&self.latest).insert(*task, reader), Some(writer))
             }

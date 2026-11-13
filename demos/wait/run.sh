@@ -22,7 +22,7 @@ mandate=$(python3 - <<'PY'
 import json
 def fork(name, secs):
     bash = json.dumps({"command": f"sleep {secs}; echo {name} checked"})
-    return json.dumps({"name": name, "tool": "spawn", "input": {"tasks": [
+    return json.dumps({"name": name, "tool": "spawn", "input": {"fork": [
         {"name": name, "mandate": f"tool bash {bash}\nsay {name}: all green after {secs} s."}]}})
 print("\n".join([
     " ".join(f"tool background {fork(n, s)}" for n, s in [("a", 3), ("b", 14), ("c", 22)]),

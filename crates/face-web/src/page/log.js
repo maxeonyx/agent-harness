@@ -705,10 +705,17 @@ function result(s, b) {
     $(".line", r.row).insertBefore(open, st);
   }
   // A spawn's result is its agents' parts, each in its agent's line.
-  const byAgent = r.b.name === "spawn" && !b.is_error ? parts(b.content, new Set((r.inner.tasks || []).map((x) => x.name))) : null;
+  const byAgent = r.b.name === "spawn" && !b.is_error ? parts(b.content, new Set(memberNames(r.inner))) : null;
   if (byAgent) { r.results = byAgent; fillMembers(s, b.tool_use_id); return; }
   for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") detail.append(image(x.source, "res", r.row));
   detail.append(out);
+}
+// The names of the members a spawn's input starts: its forks, resumes and
+// fresh agents by role, or, in a record from before, its one list of tasks.
+function memberNames(input) {
+  const { brief, quotes, ...roles } = input.start || {};
+  return [...(input.tasks || []), ...(input.fork || []), ...Object.values(roles).flat()].map((x) => x.name)
+    .concat((input.resume || []).map((x) => x.agent));
 }
 // An image of the log, from where the face serves it, sized before it
 // comes so the log does not move when it does. It is fetched only once it

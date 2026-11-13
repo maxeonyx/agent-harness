@@ -21,7 +21,7 @@ say A carried on')
 C=$(node dev/drive.mjs chat $B engineer "$W/a/nested" 'tool bash {"command":"sleep 3; echo changed > note.txt; echo wrote"}
 say C wrote')
 S=$(node dev/drive.mjs chat $B engineer "$W/b" 'tool bash {"command":"setsid sleep 4242 & sleep 4243"}')
-D=$(node dev/drive.mjs chat $B orchestrator "$W/b" 'tool spawn {"tasks":[{"name":"badbranch","role":"engineer","mandate":"say hi","branch":"x","base":"nope"}]}')
+D=$(node dev/drive.mjs chat $B orchestrator "$W/b" 'tool spawn {"start":{"engineer":[{"name":"elsewhere","mandate":"say hi","dir":"x"}]}}')
 sleep 2
 
 say "systemd: one limb scope, a scope per running command, a slice per agent"

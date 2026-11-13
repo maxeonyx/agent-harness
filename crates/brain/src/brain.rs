@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
@@ -19,8 +18,8 @@ use harness_core::id::{
 };
 use harness_core::legacy::LimbKind;
 use harness_core::limb::{
-    Branch, Defined, Hello, Host, Limb, LimbKey, LimbRow, Offer, Prepared, Reach, ToolSet,
-    WORKSPACE, Workdir, normal,
+    Defined, Hello, Host, Limb, LimbKey, LimbRow, Offer, Prepared, Reach, ToolSet, WORKSPACE,
+    Workdir, normal,
 };
 use harness_core::live::Live;
 use harness_core::model_call::{Ending, ModelCall, ModelCallEvent, Stop, Window};
@@ -42,7 +41,7 @@ use harness_store::Store;
 
 use crate::roles;
 use harness_program::meta::{self, How};
-use harness_program::{policy, render, web};
+use harness_program::{history, policy, render, web};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
@@ -116,9 +115,9 @@ struct Link {
 pub struct Face {
     /// Handed the state after each change.
     pub folds: Sender<Folded>,
-    /// Where it is served, as this machine reaches it: what agents read
-    /// others' work through.
-    pub address: String,
+    /// The text of what was said, which its `/find` and agents' `history`
+    /// calls search alike.
+    pub index: Arc<history::Index>,
 }
 
 /// One brain: the decider of everything its replicas say.
@@ -638,9 +637,11 @@ impl Brain {
                     .filter_map(|r| state.role(*r))
                     .collect();
                 let member = matches!(task.scope, Scope::Spawn(_));
-                meta::set(self.brain, &roles, member, state.faces_max(task.id))
+                let dir = state.workdir(task).is_some();
+                meta::set(self.brain, &roles, dir, member, state.faces_max(task.id))
             }
             web::SET => web::set(),
+            history::SET => history::set(self.brain),
             // A set with nothing for an agent, such as `roles`.
             name => ToolSet {
                 name: name.to_owned(),
@@ -703,7 +704,6 @@ impl Brain {
                 harness_provider::IDENTITY,
                 task.tuning.model(role),
                 &prompt,
-                &self.face.address,
                 &refs,
                 &workdir,
             )
@@ -1077,10 +1077,11 @@ impl Brain {
             return self.fail_call(id, "The harness routed this call nowhere.");
         };
         // The brain's own sets are told apart by tool name: Max's reading of
-        // the plan's usage, and every other is `meta`'s.
+        // the plan's usage, `history`'s reads, and every other is `meta`'s.
         if self.state().resolve(limb) == Some(self.brain) {
             return match call.tool.as_str() {
                 web::USAGE => self.read_usage(id, &call),
+                history::FIND | history::CONTEXT => self.history(id, &call),
                 _ => self.spawn(id, &call),
             };
         }
@@ -1103,6 +1104,30 @@ impl Brain {
             let reading = client.usage(&Cancel::new());
             let _ = events.send(Event::Usage(id, reading));
         });
+    }
+
+    /// Run an agent's `find` or `context`, settling it in the batch of its
+    /// dispatch: it only reads the state and the store.
+    fn history(&mut self, id: CallId, call: &Call) {
+        let said = match call.caller {
+            Caller::Agent { .. } | Caller::Background { .. } => {
+                let input = self.value(call.input);
+                let read = |v| self.decider.storage().value(v).ok().flatten();
+                match call.tool.as_str() {
+                    history::FIND => {
+                        history::find(self.state(), &self.face.index, &read, &local, &input)
+                    }
+                    _ => history::context(self.state(), &read, &local, &input),
+                }
+            }
+            _ => Err(format!("The harness offers Max no tool `{}`.", call.tool)),
+        };
+        let mut batch = Batch {
+            values: Vec::new(),
+            facts: vec![Fact::Call(id, CallEvent::Dispatched)],
+        };
+        settle(id, said, &mut batch);
+        self.answer(id, batch)
     }
 
     fn read(&mut self, id: CallId, reading: Result<BTreeMap<String, Window>, String>) {
@@ -1284,7 +1309,7 @@ waited on nothing: answer him, then {}",
         Ok(words(&format!(
             "Opened `{name}` (`{}`) for Max: it is in his queue, and when he marks it done its last message \
 comes to you as a message. `stop` it to close it.",
-            render::call_label(made)
+            made.label()
         )))
     }
 
@@ -1365,26 +1390,26 @@ comes to you as a message. `stop` it to close it.",
             .collect::<Result<Vec<_>, String>>()?;
         let mut names = Vec::new();
         for member in spawn.members {
+            // A resume's own quotes.
+            let mut own = Vec::new();
             let origin = match member.how {
                 How::Fork => Origin::Fork { from: parent.id },
-                How::Resume(name) => {
+                How::Resume { agent, ref quotes } => {
                     let from = state
                         .tasks()
-                        .filter(|t| state.owner(t.id) == Some(parent.id) && t.name == name)
+                        .filter(|t| state.owner(t.id) == Some(parent.id) && t.name == agent)
                         // The latest: the one its newest scope holds.
                         .max_by_key(|t| match t.scope {
                             Scope::Spawn(call) => state.call(call).map(|c| c.made.seq),
                             Scope::Max => None,
                         })
-                        .ok_or(format!("you started no agent named `{name}`"))?;
+                        .ok_or(format!("you started no agent named `{agent}`"))?;
+                    own = (quotes.iter())
+                        .map(|label| meta::quoted(state, parent, label))
+                        .collect::<Result<Vec<_>, String>>()?;
                     Origin::Resume { from: from.id }
                 }
-                How::Fresh {
-                    role,
-                    branch,
-                    base,
-                    repo,
-                } => {
+                How::Fresh { role, dir } => {
                     let own = state.role(parent.role).ok_or("your role is not defined")?;
                     let starts: Vec<_> = state
                         .roles()
@@ -1401,9 +1426,15 @@ comes to you as a message. `stop` it to close it.",
                             own.name
                         )
                     })?;
-                    let workdir = match role.works_in_a_directory() {
-                        true => Some(self.workdir(parent, repo, branch, base)?),
-                        false => None,
+                    let workdir = match (role.works_in_a_directory(), dir) {
+                        (true, dir) => Some(self.workdir(parent, dir)?),
+                        (false, None) => None,
+                        (false, Some(_)) => {
+                            return Err(format!(
+                                "a `{}` works in no directory, so `dir` means nothing to it",
+                                role.name
+                            ));
+                        }
                     };
                     Origin::Fresh {
                         role: role.id,
@@ -1424,7 +1455,7 @@ comes to you as a message. `stop` it to close it.",
                 mandate: Mandate {
                     text: text.id(),
                     brief: brief.as_ref().filter(|_| fresh).map(Bytes::id),
-                    quotes: if fresh { quotes.clone() } else { Vec::new() },
+                    quotes: if fresh { quotes.clone() } else { own },
                 },
             };
             batch.values.push(text);
@@ -1438,45 +1469,41 @@ comes to you as a message. `stop` it to close it.",
         Ok(names)
     }
 
-    /// A fresh member's working directory: its parent's, or the repository
-    /// `repo` names under it, or with a `branch`, a clone of its own of
-    /// that repository, beside it, on that branch, made from `base`.
-    fn workdir(
-        &self,
-        parent: &Task,
-        repo: Option<String>,
-        branch: Option<String>,
-        base: String,
-    ) -> Result<Workdir, String> {
-        let own = (self.state().workdir(parent))
-            .ok_or("you have no working directory to share or clone from")?;
-        let dir = match repo {
-            None => own.dir,
-            Some(repo) => {
-                let dir = normal(&own.dir.join(&repo));
-                if !dir.starts_with(&own.dir) {
-                    return Err(format!(
-                        "`repo` names a directory under yours, and `{repo}` is not under `{}`",
-                        own.dir.display()
-                    ));
-                }
-                dir
+    /// A fresh member's working directory: its parent's, or the one `dir`
+    /// names, relative to its parent's, absolute, or in the home of the
+    /// user of the limb it is on: its parent's, or with no directory of
+    /// its own, the brain's machine.
+    fn workdir(&self, parent: &Task, dir: Option<String>) -> Result<Workdir, String> {
+        let state = self.state();
+        let own = state.workdir(parent);
+        let Some(dir) = dir else {
+            return own
+                .map(|own| Workdir {
+                    branch: None,
+                    ..own
+                })
+                .ok_or("you have no directory of your own to give it: name its `dir`".into());
+        };
+        let named = PathBuf::from(&dir);
+        let rooted = named.is_absolute() || named.starts_with("~");
+        let (limb, dir) = match own {
+            Some(own) if rooted => (own.limb, named),
+            Some(own) => (own.limb, own.dir.join(named)),
+            None if rooted => {
+                let limb = (state.limbs().find(|l| l.host == Host::Local))
+                    .ok_or("the brain's machine has no limb to work on")?;
+                (limb.id, named)
+            }
+            None => {
+                return Err(format!(
+                    "you have no directory of your own for `{dir}` to be relative to: name it absolute or `~/…`"
+                ));
             }
         };
-        let limb = own.limb;
-        // Without a branch it works where it is pointed, as a fork does.
-        let Some(name) = branch else {
-            return Ok(Workdir {
-                limb,
-                dir,
-                branch: None,
-            });
-        };
-        let (from, dir) = clone_of(&dir, &name)?;
         Ok(Workdir {
             limb,
             dir: normal(&dir),
-            branch: Some(Branch { from, name, base }),
+            branch: None,
         })
     }
 
@@ -2079,42 +2106,6 @@ fn limb_builds() -> BTreeMap<String, BuildId> {
     }
 }
 
-/// A new clone for an agent started from a workspace at `dir`: cloned from
-/// what `dir` itself was cloned from (or `dir`, if it has no `origin`), into
-/// a sibling directory named for the repository and the branch, the way
-/// Max names his (`agent-harness` on `dev-x` is `agent-harness-dev-x`).
-/// A `dir` in no repository has nothing to clone: refused, saying so.
-pub fn clone_of(dir: &Path, branch: &str) -> Result<(String, PathBuf), String> {
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
-    if git(&["rev-parse", "--git-dir"]).is_none() {
-        return Err(format!(
-            "`{}` is not in a git repository, so there is nothing to clone branch `{branch}` from: \
-name a repository in `repo`, or omit `branch` to work in that directory",
-            dir.display()
-        ));
-    }
-    let from =
-        git(&["remote", "get-url", "origin"]).unwrap_or_else(|| dir.to_string_lossy().into_owned());
-    let repo = from
-        .trim_end_matches('/')
-        .rsplit(['/', ':'])
-        .next()
-        .unwrap_or("clone")
-        .trim_end_matches(".git");
-    let name = format!("{repo}-{}", branch.replace('/', "-"));
-    let parent = dir.parent().unwrap_or(dir);
-    Ok((from, parent.join(name)))
-}
-
 /// One text block saying `said`: what a call the brain runs answers.
 fn words(said: &str) -> Bytes {
     render::blocks(&[render::text(said)])
@@ -2161,10 +2152,14 @@ fn define(state: &State, facts: &mut Vec<Fact>, limb: Limb) -> LimbId {
     limb.id
 }
 
-/// The brain's own limb, with the tool sets it offers: `meta`, `web`, and
-/// `roles` over the role files in `roles`.
+/// The brain's own limb, with the tool sets it offers: `meta`, `web`,
+/// `history`, and `roles` over the role files in `roles`.
 fn brain_limb(id: LimbId, roles: Option<&Path>) -> Limb {
-    let mut offers = vec![offer(meta::SET, "{}"), offer(web::SET, "{}")];
+    let mut offers = vec![
+        offer(meta::SET, "{}"),
+        offer(web::SET, "{}"),
+        offer(history::SET, "{}"),
+    ];
     offers.extend(roles.map(|dir| {
         roles::Settings {
             dir: dir.to_path_buf(),

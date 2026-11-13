@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# The meta tools refuse only what means nothing, and return at once when
-# there is nothing to wait for. A scripted orchestrator in a repository:
-# - spawns a fork given a misspelt `task_base`, forks given a `brief`, a
-#   fork given a `branch`, and an engineer whose `repo` is outside its
-#   directory: each is said back, and nothing starts; then an engineer
-#   whose `repo` is under it, which works there;
+# Spawn takes one shape per kind of member, and the meta tools return at
+# once when there is nothing to wait for. A scripted orchestrator in a
+# repository:
+# - spawns with the old `tasks` list, and a fork given a `branch`: each is
+#   said back, and nothing starts; then a fork `helper` and an engineer
+#   whose `dir` is beside its own directory, and one whose `dir` is under
+#   it, each of which works there;
 # - starts a quick background command, lets it land, then `wait`s on it
 #   by name, and on nothing: both return at once;
 # - starts an engineer in the background whose script sleeps, stops it,
 #   and waits: the engineer's tidy-up turn ends with `compact_and_report`,
 #   and its report is what the orchestrator gets.
-# Last it prints the roles part of the orchestrator's instructions (each
-# role with its tool sets), and the engineer's `spawn` task schema: an
-# engineer starts nothing fresh, so it has no `role`, `branch`, `base` or
-# `repo`. Free (scripted model), about 30 s; it leaves the brain up:
+# Then Max writes again, and the orchestrator resumes `helper` quoting his
+# first message by its label: the resumed helper is given his words
+# verbatim. Last it prints the roles part of the orchestrator's
+# instructions, and the `spawn` schema of the orchestrator and of an
+# engineer, which starts nothing fresh, so has no `start`. Free (scripted
+# model), about 30 s; it leaves the brain up:
 # `node dev/drive.mjs down --brain meta-tidy`.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -31,17 +34,21 @@ engineer = "\n".join([
     tool("compact_and_report", {"carry": "Nothing done.", "report": "Stopped before I began: nothing was built."}),
 ])
 print("\n".join([
-    tool("spawn", {"tasks": [{"name": "step", "branch": "MC-x", "task_base": "main", "mandate": "say hi"}]}),
-    tool("spawn", {"brief": "Context.", "tasks": [{"name": "step", "mandate": "say hi"}], "summary": "fork a step"}),
-    tool("spawn", {"tasks": [{"name": "step", "branch": "MC-x", "mandate": "say hi"}]}),
-    tool("spawn", {"tasks": [{"name": "far", "role": "engineer", "repo": "../..", "mandate": "say hi"}]}),
+    tool("spawn", {"tasks": [{"name": "step", "mandate": "say hi"}]}),
+    tool("spawn", {"fork": [{"name": "step", "branch": "MC-x", "mandate": "say hi"}]}),
     tool("bash", {"command": "mkdir -p sub/repo"}),
-    tool("spawn", {"tasks": [{"name": "near", "role": "engineer", "repo": "sub/repo", "mandate": "tool bash {\"command\": \"pwd\"}\nsay Worked there."}]}),
+    tool("spawn", {
+        "fork": [{"name": "helper", "mandate": "say Helper is done."}],
+        "start": {"brief": "A demo.", "engineer": [
+            {"name": "beside", "dir": "../beside", "mandate": "tool bash {\"command\": \"pwd\"}\nsay Worked beside."},
+            {"name": "near", "dir": "sub/repo", "mandate": "tool bash {\"command\": \"pwd\"}\nsay Worked under."},
+        ]},
+    }),
     tool("background", {"name": "quick", "tool": "bash", "input": {"command": "echo quick done"}}),
     tool("bash", {"command": "sleep 2"}),
     tool("wait", {"on": ["quick"]}),
     tool("wait", {}),
-    tool("background", {"name": "eng", "tool": "spawn", "input": {"tasks": [{"name": "eng", "role": "engineer", "mandate": engineer}]}}),
+    tool("background", {"name": "eng", "tool": "spawn", "input": {"start": {"engineer": [{"name": "eng", "mandate": engineer}]}}}),
     tool("bash", {"command": "sleep 3"}),
     tool("stop", {"call": "eng"}),
     tool("wait", {"on": ["eng"]}),
@@ -51,16 +58,27 @@ PY
 )
 chat=$(drive chat orchestrator "$repo" "$mandate")
 drive settle "$chat" --timeout 90 >/dev/null
-drive log "$chat"
 port=$(cat .drive.ignore/meta-tidy/port)
 context() { curl -sk "https://localhost:$port/context/$1"; }
+first=$(context "$chat" | grep -o 'max-[0-9a-f]\{8\}' | head -1)
+resume=$(python3 - "$first" <<'PY'
+import json, sys
+print("tool spawn " + json.dumps({"resume": [{"agent": "helper", "mandate": "say Resumed, with Max's words.", "quotes": [sys.argv[1]]}]}) + "\nsay Done again.")
+PY
+)
+drive say "$chat" "$resume" >/dev/null
+drive settle "$chat" --timeout 60 >/dev/null
+drive log "$chat"
 eng=$(curl -sk "https://localhost:$port/view" | jq -r '.rows[] | .Task? | select(.name == "eng") | .id' | head -1)
 echo "== The engineer, stopped mid-sleep, ends its tidy-up turn with compact_and_report:"
 drive log "$eng"
 echo "== The roles in the orchestrator's instructions:"
 context "$chat" | jq -r '.[0].system | fromjson | .[].text | select(contains("The roles you can start fresh"))' \
   | grep -A4 '^The roles you can start fresh'
-echo "== spawn's task fields, for the orchestrator and for the engineer (which starts nothing fresh):"
-fields() { context "$1" | jq -c '.[0].tools | fromjson | .[] | select(.name == "spawn") | .input_schema.properties | {spawn: keys, task: (.tasks.items.properties | keys)}'; }
+helper=$(curl -sk "https://localhost:$port/view" | jq -r '.rows[] | .Task? | select(.name == "helper" and .origin == "resume") | .id' | head -1)
+echo "== The resumed helper's messages from its spawn: the quote, then its mandate. It quotes Max's first message ($first):"
+context "$helper" | jq -r '.[-3:-1][] | .content | fromjson | map(.text) | join("\n")' | cut -c1-160
+echo "== spawn's schema, for the orchestrator and for the engineer (which starts nothing fresh):"
+fields() { context "$1" | jq -c '.[0].tools | fromjson | .[] | select(.name == "spawn") | .input_schema.properties | {spawn: keys, fork: (.fork.items.properties | keys), resume: (.resume.items.properties | keys), start: (.start.properties // {} | with_entries(.value |= (.items.properties // null | if . then keys else "shared" end)))}'; }
 fields "$chat"
 fields "$eng"

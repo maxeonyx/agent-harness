@@ -29,6 +29,7 @@ pub fn set() -> ToolSet {
         name: name.into(),
         definition: json!({ "type": kind, "name": name }).to_string(),
         audience: Audience::Agent,
+        held: false,
     };
     let usage = Tool {
         name: USAGE.into(),
@@ -39,6 +40,7 @@ pub fn set() -> ToolSet {
         })
         .to_string(),
         audience: Audience::Max,
+        held: false,
     };
     ToolSet {
         name: SET.into(),

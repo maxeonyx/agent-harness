@@ -122,8 +122,8 @@ pub struct State {
     /// What each limb last found in each working directory.
     prepared: OrdMap<(LimbId, PathBuf), Readied>,
     resources: OrdMap<ResourceKey, Current>,
-    /// Max's words, each with when he first said them.
-    said: OrdMap<ValueId, Mark>,
+    /// Max's words, each with when he first said them and to which task.
+    said: OrdMap<ValueId, (Mark, TaskId)>,
     /// Which of Max's words each task has heard. A task continuing another's
     /// context (a fork, resume or aside) starts with its source's set, shared.
     heard: OrdMap<TaskId, OrdSet<ValueId>>,
@@ -1162,7 +1162,7 @@ impl State {
     /// Max said `words` to `to`.
     fn say(&mut self, words: ValueId, to: TaskId, at: Mark) {
         if !self.said.contains_key(&words) {
-            self.said.insert(words, at);
+            self.said.insert(words, (at, to));
         }
         self.heard.entry(to).or_default().insert(words);
     }
@@ -2410,6 +2410,21 @@ impl State {
         self.calls.get(&id)
     }
 
+    /// Whether the call is of a tool that only runs in the background
+    /// ([`crate::limb::Tool::held`]), as its limb describes it now.
+    pub fn held(&self, id: CallId) -> bool {
+        let Some(made) = self.calls.get(&id) else {
+            return false;
+        };
+        (made.limb)
+            .and_then(|limb| self.described.get(&limb))
+            .is_some_and(|d| {
+                (d.description.sets.iter())
+                    .flat_map(|s| &s.tools)
+                    .any(|t| t.held && t.name == made.call.tool)
+            })
+    }
+
     /// Running background work agents have passed to Max ([`Owner::Max`]):
     /// his to use and stop.
     pub fn handed(&self) -> impl Iterator<Item = (CallId, &CallRecord)> {
@@ -2442,7 +2457,13 @@ impl State {
 
     /// When Max first said `words`, if they are his.
     pub fn said(&self, words: ValueId) -> Option<Mark> {
-        self.said.get(&words).copied()
+        self.said.get(&words).map(|(at, _)| *at)
+    }
+
+    /// Every one of Max's words, with when he first said them and the task
+    /// he said them to.
+    pub fn sayings(&self) -> impl Iterator<Item = (ValueId, Mark, TaskId)> + '_ {
+        self.said.iter().map(|(words, (at, to))| (*words, *at, *to))
     }
 
     /// Whether `task` has heard Max say `words`: sent to it, given to it as
@@ -2943,7 +2964,8 @@ impl State {
     }
 
     /// The calls of the task's round the brain moves to the background now
-    /// ([`Todo::Background`]): each that has had [`HEARD_AFTER`] since it
+    /// ([`Todo::Background`]): its held calls ([`State::held`]) at once;
+    /// each that has had [`HEARD_AFTER`] since it
     /// was made, once Max's words, or a turn one of his acts asks for, have
     /// waited as long for the round to end by itself, so a quick call made
     /// after his words came (a last response's report among them) ends in
@@ -2960,15 +2982,20 @@ impl State {
         match task.drain() {
             None if self.spoken_to(task, Some((HEARD_AFTER, now))) => (step.outstanding.iter())
                 .filter(|c| {
-                    self.calls.get(c).is_none_or(|r| {
-                        r.waits.is_none() && now >= crate::cancel::deadline(r.made.at, HEARD_AFTER)
-                    })
+                    self.held(**c)
+                        || self.calls.get(c).is_none_or(|r| {
+                            r.waits.is_none()
+                                && now >= crate::cancel::deadline(r.made.at, HEARD_AFTER)
+                        })
                 })
                 .copied()
                 .collect(),
-            None => Vec::new(),
+            None => (step.outstanding.iter())
+                .filter(|c| self.held(**c))
+                .copied()
+                .collect(),
             Some(Draining::ToMax) => (step.outstanding.iter())
-                .filter(|c| self.open.scopes.contains_key(&Scope::Spawn(**c)))
+                .filter(|c| self.open.scopes.contains_key(&Scope::Spawn(**c)) || self.held(**c))
                 .copied()
                 .collect(),
             Some(_) => Vec::new(),

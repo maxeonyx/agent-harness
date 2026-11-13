@@ -25,6 +25,12 @@ use crate::value::Bytes;
 /// directory. A role that holds it gives each of its agents a [`Workdir`].
 pub const WORKSPACE: &str = "workspace";
 
+/// The tool set of a task facing Max: the tools that reach him (its page,
+/// `ask`, `open_chat`) and the instructions for talking with him. The
+/// brain hosts it. No role names it: a task holds it because of its
+/// [`crate::task::Mode`], on top of its role's sets.
+pub const MAX: &str = "max";
+
 /// A limb: a process the harness runs on one machine as one user, so that
 /// agents can do things there; or the brain, which hosts the harness's own
 /// tool sets.
@@ -128,7 +134,7 @@ impl Limb {
 pub struct Offer {
     /// The tool set's name, as roles name it: on a machine, `workspace`,
     /// `user` (Max's own instructions and skills), `browser`, `builds`; in
-    /// the brain, `meta`, `web`, `attention`, `roles`.
+    /// the brain, `meta`, `web`, `history`, `attention`, `roles`.
     pub set: String,
     /// Its settings as JSON, read by the limb alone: Max's config
     /// directory, the browser to launch, the unit to relaunch, the roles'
@@ -164,8 +170,8 @@ pub enum Host {
 /// **Concept.** Max (29 Oct): "An agent has a context and a working
 /// directory and a role." Given when the agent is created
 /// ([`crate::task::Origin::Fresh`]) and fixed for its life; its forks share
-/// it. A fresh agent works in its parent's directory, a directory under it,
-/// or a clone of its own ([`Branch`]). Several agents may work in one
+/// it. A fresh agent works in its parent's directory, or the one its spawn
+/// names; a clone of its own is one its parent made first. Several agents may work in one
 /// directory, as forks and siblings do: the stale-write refusal and the
 /// notices are how they coordinate, and those are the limb's, by absolute
 /// path, so they also reach an agent working in a directory that nests in
@@ -180,7 +186,8 @@ pub struct Workdir {
     /// As the brain named it: absolute, or `~/…` in the home of the limb's
     /// user, with no `.` or `..` in it ([`normal`]). The limb resolves it.
     pub dir: PathBuf,
-    /// The branch it is a clone for, made if `dir` does not exist yet.
+    /// The branch it is a clone for, made if `dir` does not exist yet:
+    /// only in records from when the brain made an agent's clone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<Branch>,
 }
@@ -444,6 +451,13 @@ pub struct Tool {
     /// schema, and whether it is deferred.
     pub definition: String,
     pub audience: Audience,
+    /// Whether an agent's call holds something open for as long as it runs,
+    /// as `tab` holds a browser tab, so it only ever runs in the
+    /// background: called directly, it moves there as soon as its response
+    /// is whole ([`crate::call::CallEvent::Backgrounded`]), named by its
+    /// label ([`CallId::label`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 /// Who may call a tool. Max's face renders his tools as controls; an

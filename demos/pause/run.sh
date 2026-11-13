@@ -18,7 +18,7 @@ mkdir -p "$at/dir"
 port=$(cat "$at/port")
 kinds() { curl -sk "https://localhost:$port/view" | jq -c '[.rows[] | objects | .Task? // empty | {(.name[0:12]): .waiting.kind}] | add'; }
 
-id=$(drive chat chat "$PWD/$at/dir" 'tool spawn {"tasks":[{"name":"streamer","mandate":"slow 2500 tool bash {\"command\":\"echo hi\",\"summary\":\"Say hi\"}\nsay streamer done"},{"name":"sleeper","mandate":"tool bash {\"command\":\"sleep 15\",\"summary\":\"Sleep a while\"}\nsay sleeper done"}]}
+id=$(drive chat chat "$PWD/$at/dir" 'tool spawn {"fork":[{"name":"streamer","mandate":"slow 2500 tool bash {\"command\":\"echo hi\",\"summary\":\"Say hi\"}\nsay streamer done"},{"name":"sleeper","mandate":"tool bash {\"command\":\"sleep 15\",\"summary\":\"Sleep a while\"}\nsay sleeper done"}]}
 say parent done')
 drive page --size phone open "$id" sleep 3000 shot "$PWD/$at/1-running.png" \
   click '[aria-label=Pause]' sleep 800 shot "$PWD/$at/2-paused-busy.png" \
