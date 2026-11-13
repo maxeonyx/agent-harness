@@ -683,7 +683,7 @@ export async function dictate(sample) {
   // Dictation goes in at the caret, a space from the word before it.
   let at = box.selectionEnd;
   if (at > 0 && !/\s/.test(box.value[at - 1])) { box.setRangeText(" ", at, at, "end"); at += 1; prev = box.value; }
-  const l = dictation = { ws: null, mic: null, key: box.dataset.key, T: "", P: 0, start: at };
+  const l = dictation = { ws: null, mic: null, audio: [], tries: 0, key: box.dataset.key, T: "", P: 0, start: at };
   micShows(true);
   say("Connecting");
   let rate = 16000;
@@ -703,22 +703,43 @@ export async function dictate(sample) {
     return say(`No microphone: ${e.message}`, true);
   }
   if (l.stopping) return finishDictation(l);
-  const ws = l.ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
-  ws.binaryType = "arraybuffer";
-  if (l.mic) l.mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); hear(level(new Int16Array(m.data))); };
+  // Every chunk since the press is kept, so a new socket can be given all
+  // of it again.
+  if (l.mic) l.mic.node.port.onmessage = (m) => { l.audio.push(m.data); if (l.ws?.readyState === 1) l.ws.send(m.data); hear(level(new Int16Array(m.data))); };
   hear(0);
-  ws.onopen = () => { if (l.stopping) ws.send(STOP); };
-  ws.onmessage = (m) => {
-    const d = JSON.parse(m.data);
-    if (d.listening) say(sample ? "Dictating the sample" : "Listening");
-    if (d.edits && dictation === l) applyEdits(d.edits);
-    if (d.error) { fail("dictating", d.error); say(d.error, true); }
-    if (d.final) finishDictation(l);
-  };
-  ws.onclose = () => finishDictation(l);
+  connectDictation(l, `wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`, sample);
   // The box takes the words without the focus, which on a phone would put
   // its keyboard up over them.
   if (!matchMedia("(pointer: coarse)").matches) box.focus();
+}
+// One socket of a press. It opens with the transcript the page holds and
+// all the audio so far; one that closes before the final text (the brain
+// relaunching, the connection dropping) is replaced a second later, while
+// Max keeps talking, for as long as the brain takes to come back, up to
+// RETRIES tries in a row. The face's dictation.rs says how the text joins.
+const RETRIES = 120;
+function connectDictation(l, url, sample) {
+  const ws = l.ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: "resume", text: l.T }));
+    for (const chunk of l.audio) ws.send(chunk);
+    if (l.stopping) ws.send(STOP);
+  };
+  let ended = false;
+  ws.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.listening) { l.tries = 0; if (!l.stopping) say(sample ? "Dictating the sample" : "Listening"); }
+    if (d.edits !== undefined && dictation === l) applyEdits(d.edits);
+    if (d.error !== undefined) { ended = true; fail("dictating", d.error); say(d.error, true); }
+    if (d.final) { ended = true; finishDictation(l); }
+  };
+  ws.onclose = () => {
+    if (ended || dictation !== l) return finishDictation(l);
+    if (++l.tries > RETRIES) { say("Dictation lost: the harness did not come back", true); return finishDictation(l); }
+    say(l.stopping ? "Reconnecting to finish" : "Reconnecting, still listening");
+    setTimeout(() => { if (dictation === l) connectDictation(l, url, sample); }, 1000);
+  };
 }
 function micShows(on) {
   const b = $(".mic", compose);
@@ -760,6 +781,7 @@ function finishDictation(l) {
   hear(null);
   dictation = null;
   l.ws?.close();
+  l.audio = [];
   micShows(false);
   if (!$(".status", compose)?.classList.contains("bad")) say("");
   if (l.then && box?.dataset.key === l.key) l.then();

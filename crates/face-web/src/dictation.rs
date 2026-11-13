@@ -13,9 +13,16 @@
 //! the traffic linear in the length of a dictation, and lets the page keep
 //! Max's own edits to the box while the words keep arriving.
 //!
-//! **One transcript per press.** A dropped endpoint socket is a fresh session
-//! on reconnect, so the text so far is kept and the new session's text is
-//! appended after it. The audio sent while reconnecting is lost.
+//! **One press survives its sockets.** The page keeps every chunk of audio
+//! since the press, so a socket that drops (the brain relaunching, the tunnel
+//! blinking, the endpoint ending its session) loses nothing: the page opens
+//! a new one, sends `{"type":"resume","text":T}` with the transcript it
+//! holds, then all the audio again, and keeps going live. The new session
+//! transcribes the whole press afresh; its text is held back until it has as
+//! many words as `T`, so the box never loses words while the replay catches
+//! up, and is then sent as edits against `T`. One mechanism covers every
+//! drop: the relay never reconnects the endpoint itself, it closes the page's
+//! socket and the page resumes.
 //!
 //! The protocol, as the dictation spike found it: binary frames of
 //! little-endian 16-bit mono PCM; `{"type":"KeepAlive"}` every few seconds;
@@ -98,7 +105,6 @@ const POLL: Duration = Duration::from_millis(10);
 /// The sample is sent at real time, in chunks this long, like a microphone.
 const CHUNK: Duration = Duration::from_millis(100);
 const SAMPLE_RATE: u32 = 16_000;
-const RECONNECTS: u32 = 3;
 
 impl Dictation {
     pub fn new(login: Login) -> Result<Dictation, TrustError> {
@@ -128,7 +134,8 @@ impl Dictation {
     ///
     /// The page is sent `{"listening": true}` once the endpoint is connected,
     /// `{"edits": [{"at", "cut", "put"}]}` as the text changes, then
-    /// `{"final": true}`; or `{"error": why}`.
+    /// `{"final": true}`; or `{"error": why}`. A socket closed with neither
+    /// is one the page resumes.
     pub fn relay<S: Socket>(&self, page: &mut WebSocket<S>, rate: u32, sample: bool) {
         let sample = if sample { self.sample.as_deref() } else { None };
         let rate = if sample.is_some() { SAMPLE_RATE } else { rate };
@@ -155,22 +162,29 @@ impl Dictation {
         let chunk = (SAMPLE_RATE as usize * 2 * CHUNK.as_millis() as usize) / 1000;
         let mut chunks = sample.map(|pcm| pcm.chunks(chunk));
         let mut sent = 0u32;
-        let mut reconnects = 0;
 
         loop {
-            // From the page: its audio, or the word to stop.
-            match page.read() {
-                Ok(Message::Binary(pcm)) if sample.is_none() && stopped.is_none() => {
-                    let _ = up.send(Message::Binary(pcm));
+            // From the page: the transcript it holds, its audio (a replay
+            // comes all at once, so take all there is), or the word to stop.
+            loop {
+                match page.read() {
+                    Ok(Message::Binary(pcm)) if sample.is_none() && stopped.is_none() => {
+                        let _ = up.send(Message::Binary(pcm));
+                    }
+                    Ok(Message::Text(frame)) if stopped.is_none() => {
+                        let frame: Value = serde_json::from_str(&frame).unwrap_or_default();
+                        if frame["type"] == "resume" {
+                            text = Transcript::resume(frame["text"].as_str().unwrap_or_default());
+                        } else {
+                            close(&mut up);
+                            stopped = Some(Instant::now());
+                        }
+                    }
+                    Ok(Message::Close(_)) => return Ok(()),
+                    Ok(_) => {}
+                    Err(e) if would_block(&e) => break,
+                    Err(_) => return Ok(()),
                 }
-                Ok(Message::Text(_)) if stopped.is_none() => {
-                    close(&mut up);
-                    stopped = Some(Instant::now());
-                }
-                Ok(Message::Close(_)) => return Ok(()),
-                Ok(_) => {}
-                Err(e) if would_block(&e) => {}
-                Err(_) => return Ok(()),
             }
 
             // The sample, paced like a microphone.
@@ -208,7 +222,7 @@ impl Dictation {
                             }
                         }
                         Some("TranscriptEndpoint") if stopped.is_some() => {
-                            return send_page(page, json!({"final": true}));
+                            return finish(page, &mut text);
                         }
                         Some("TranscriptError" | "error") => {
                             return Err(format!("dictation endpoint: {frame}"));
@@ -218,22 +232,15 @@ impl Dictation {
                 }
                 Err(e) if would_block(&e) => {}
                 Ok(Message::Close(_)) | Err(_) if stopped.is_some() => {
-                    return send_page(page, json!({"final": true}));
+                    return finish(page, &mut text);
                 }
-                Ok(Message::Close(_)) | Err(_) => {
-                    // A fresh session: keep what was said.
-                    reconnects += 1;
-                    if reconnects > RECONNECTS {
-                        return Err("the dictation endpoint keeps dropping the session".into());
-                    }
-                    text.keep();
-                    up = self.connect(rate)?;
-                }
+                // The page resumes on a new socket.
+                Ok(Message::Close(_)) | Err(_) => return Ok(()),
                 Ok(_) => {}
             }
 
             if stopped.is_some_and(|t| t.elapsed() > DRAIN) {
-                return send_page(page, json!({"final": true}));
+                return finish(page, &mut text);
             }
         }
     }
@@ -277,6 +284,15 @@ fn close<S: Read + Write>(up: &mut WebSocket<S>) {
     let _ = up.send(Message::text(r#"{"type":"CloseStream"}"#));
 }
 
+/// The last of the text, then `final`.
+fn finish<S: Socket>(page: &mut WebSocket<S>, text: &mut Transcript) -> Result<(), String> {
+    let edits = text.flush();
+    if !edits.is_empty() {
+        send_page(page, json!({"edits": edits_json(&edits)}))?;
+    }
+    send_page(page, json!({"final": true}))
+}
+
 fn send_page<S: Socket>(page: &mut WebSocket<S>, v: Value) -> Result<(), String> {
     page.send(Message::text(v.to_string()))
         .map_err(|e| format!("page: {e}"))
@@ -298,33 +314,45 @@ fn edits_json(edits: &[Edit]) -> Value {
         .collect()
 }
 
-/// One press's text: what earlier sessions said, then the current one's.
+/// One session's text: what the page holds, and what the endpoint says,
+/// held back while it has fewer words than the page's (a resumed press,
+/// whose replay is still being transcribed).
 #[derive(Default)]
 struct Transcript {
-    kept: String,
+    shown: String,
     session: String,
+    held: usize,
 }
 
 impl Transcript {
-    fn shown(&self) -> String {
-        match (self.kept.is_empty(), self.session.is_empty()) {
-            (false, false) => format!("{} {}", self.kept, self.session),
-            (false, true) => self.kept.clone(),
-            _ => self.session.clone(),
+    /// A resumed press, whose page already holds `shown`.
+    fn resume(shown: &str) -> Transcript {
+        Transcript {
+            shown: shown.to_owned(),
+            session: String::new(),
+            held: words(shown).len(),
         }
     }
 
-    /// The current session's text is now `text`: the edits that make it so.
+    /// The session's text is now `text`: the edits that make it so.
     fn session(&mut self, text: &str) -> Vec<Edit> {
-        let before = self.shown();
         self.session = text.to_owned();
-        edits(&before, &self.shown())
+        if words(text).len() < self.held {
+            return Vec::new();
+        }
+        self.flush()
     }
 
-    /// The session ended early: its text is kept, and a new one starts.
-    fn keep(&mut self) {
-        self.kept = self.shown();
-        self.session.clear();
+    /// The session's text, held or not; a session that said nothing keeps
+    /// what the page holds.
+    fn flush(&mut self) -> Vec<Edit> {
+        self.held = 0;
+        if self.session.is_empty() {
+            return Vec::new();
+        }
+        let edits = edits(&self.shown, &self.session);
+        self.shown.clone_from(&self.session);
+        edits
     }
 }
 
