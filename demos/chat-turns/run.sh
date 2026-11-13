@@ -62,7 +62,7 @@ told "$chat"
 echo "== $(at) the chat spawns an autonomous fork that backgrounds a job and waits"
 fork_script="$(bg fjob 8)\ntool wait {}"
 fork_script=${fork_script//\"/\\\"}
-drive say "$chat" "tool spawn {\"tasks\": [{\"name\": \"fork\", \"mandate\": \"$fork_script\"}]}
+drive say "$chat" "tool spawn {\"fork\": [{\"name\": \"fork\", \"mandate\": \"$fork_script\"}]}
 say The fork has reported."
 until [ -n "$(id_of fork)" ]; do sleep 0.2; done
 fork=$(id_of fork)

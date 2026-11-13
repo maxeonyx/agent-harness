@@ -34,14 +34,14 @@ q() { python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"; }
 for d in a u c f p; do mkdir -p "$at/$d"; done
 git init -q "$at/a/repo" && git -C "$at/a/repo" commit -q --allow-empty -m init
 
-# A spawn's input, its tasks as JSON.
-spawn() { echo "{\"tasks\": [$1]}"; }
+# A spawn's input, its forks as JSON.
+spawn() { echo "{\"fork\": [$1]}"; }
 bg() { echo "tool background {\"name\": \"$1\", \"tool\": \"$2\", \"input\": $3}"; }
 quick="{\"name\": \"quick\", \"mandate\": \"say Quick is done.\"}"
 sleep600='{"command": "sleep 600", "timeout_ms": 600000}'
 
 a=$(drive chat chat "$PWD/$at/a" "Abandon
-$(bg two spawn "$(spawn "{\"name\": \"victim\", \"role\": \"chat\", \"branch\": \"victim\", \"base\": \"master\", \"from\": \"repo\", \"mandate\": \"say Victim is done.\"}, {\"name\": \"fine\", \"mandate\": \"say Fine is done.\"}")")
+$(bg two spawn "{\"fork\": [{\"name\": \"fine\", \"mandate\": \"say Fine is done.\"}], \"start\": {\"chat\": [{\"name\": \"victim\", \"dir\": \"victim\", \"mandate\": \"say Victim is done.\"}]}}")
 tool wait {\"until\": \"all\"}
 say Read them both.")
 victim=""

@@ -20,7 +20,7 @@ mkdir -p "$at/k"
 
 member='tool bash {\"command\": \"sleep 3\", \"summary\": \"work for three seconds\"}\nsay Done.'
 k=$(drive chat chat "$PWD/$at/k" "Kids
-tool background {\"name\": \"kids\", \"tool\": \"spawn\", \"summary\": \"start h0 and h1\", \"input\": {\"summary\": \"two kids\", \"tasks\": [{\"name\": \"h0\", \"mandate\": \"$member\"}, {\"name\": \"h1\", \"mandate\": \"$member\"}]}}
+tool background {\"name\": \"kids\", \"tool\": \"spawn\", \"summary\": \"start h0 and h1\", \"input\": {\"summary\": \"two kids\", \"fork\": [{\"name\": \"h0\", \"mandate\": \"$member\"}, {\"name\": \"h1\", \"mandate\": \"$member\"}]}}
 tool wait {\"until\": \"all\", \"summary\": \"wait for the kids\"} tool compact_and_continue {\"carry\": \"say Both kids are done.\", \"summary\": \"carry their results\"}")
 drive settle "$k" >/dev/null
 

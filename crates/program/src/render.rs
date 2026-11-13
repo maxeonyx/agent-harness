@@ -582,10 +582,10 @@ carrying on."
     turn
 }
 
-/// The brief and Max's quoted words a fresh agent starts with, if its
-/// spawner gave any.
+/// The brief and Max's quoted words a fresh agent or a resume starts with,
+/// if its spawner gave any: a resume has quotes of its own, and no brief.
 pub fn briefing(values: Values, task: &Task) -> Option<Vec<String>> {
-    if !matches!(task.origin, Origin::Fresh { .. })
+    if !matches!(task.origin, Origin::Fresh { .. } | Origin::Resume { .. })
         || (task.mandate.brief.is_none() && task.mandate.quotes.is_empty())
     {
         return None;
@@ -1032,7 +1032,7 @@ fn elsewhere(state: &State, values: Values, task: &Task, call: CallId) -> String
     };
     let tool = record.call.tool.as_str();
     let said = if tool == crate::meta::SPAWN || tool == crate::meta::ADD_SIBLING {
-        let names = crate::meta::names(tool, &values(record.call.input));
+        let names = crate::meta::names(&values(record.call.input));
         format!("Started {}.", names.join(", "))
     } else {
         let parent = state

@@ -14,7 +14,7 @@ drive down --wipe >/dev/null
 drive up
 repo=$PWD/.drive.ignore/background/repo
 demos/brain/scratch.sh "$repo" >/dev/null
-mandate='tool spawn {"tasks": [{"name": "sleeper", "mandate": "tool bash {\"command\": \"sleep 20; echo the sleeper woke\"}\nsay I slept 20 s and woke."}]}'
+mandate='tool spawn {"fork": [{"name": "sleeper", "mandate": "tool bash {\"command\": \"sleep 20; echo the sleeper woke\"}\nsay I slept 20 s and woke."}]}'
 chat=$(drive chat orchestrator "$repo" "$mandate")
 echo "== $(at) the orchestrator $chat spawns a fork that sleeps 20 s"
 sleep 2

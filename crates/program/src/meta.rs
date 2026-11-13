@@ -60,10 +60,11 @@ const ATTACHED: usize = 16 * 1024;
 pub const SET: &str = "meta";
 
 /// The `meta` set the brain `limb` gives a root in a role that starts
-/// `roles`; `member` when the task is in a scope it can add siblings to,
-/// `facing` when it faces Max ([`State::faces_max`]), so it can open chats
-/// for him in those roles.
-pub fn set(limb: LimbId, roles: &[&Role], member: bool, facing: bool) -> ToolSet {
+/// `roles`; `dir` when the task has a working directory, which a fresh
+/// agent works in unless told otherwise; `member` when the task is in a
+/// scope it can add siblings to; `facing` when it faces Max
+/// ([`State::faces_max`]), so it can open chats for him in those roles.
+pub fn set(limb: LimbId, roles: &[&Role], dir: bool, member: bool, facing: bool) -> ToolSet {
     let facing = facing && !roles.is_empty();
     let mut said = String::from(
         "All the calls of one response start together, and you get all of their results together, once the last \
@@ -78,12 +79,13 @@ Fork for parts that can run at the same time, and for sequential steps too: a st
 need afterwards, only its result (an exploration, a search, a build and its checks), is a fork of one task, and your \
 own context keeps just that result. Do a step yourself when what you learn in it carries into the next. Start a \
 fresh agent for a larger task, or for work in another role.\n\n\
-Each task is a fork of you, a fresh agent, or a resume of an agent you started before that has finished. \
-A fork continues from this exact point of your context: it knows everything you know, so its mandate can be short, \
+Each member is a fork of you, a resume, or a fresh agent, and each kind has its own key. \
+A fork (`fork`) continues from this exact point of your context: it knows everything you know, Max's words included, so its mandate can be short, \
 and it shares your cache, so it is cheap. It works in your directory with you. \
-A resume continues that agent's own context with a new mandate, so a follow-up question keeps everything it learned. \
-A fresh agent starts from nothing but its role, the shared `brief`, the `quotes` and its mandate, so say everything it needs. \
-Each of Max's messages, mandates and answers is labelled `max-…`: name it in `quotes` to give his words to every fresh agent verbatim, rather than retelling them.\n\n\
+A resume (`resume`) continues the context of an agent you started before that has finished, with a new mandate, so a follow-up question keeps everything it learned. \
+A fresh agent (`start`, under its role) starts from nothing but its role, the `brief` and `quotes` its `start` shares, and its mandate, so say everything it needs. \
+Each of Max's messages, mandates and answers is labelled `max-…`: name it in `quotes` to give his words verbatim, rather than retelling them, \
+to fresh agents, or to a resume, which has not heard what he said to you since it finished.\n\n\
 A fork can itself spawn, and start the roles you can. A spawn reports once, when its last task has finished, so \
 start separately, each as its own background spawn, the pieces of work you will act on separately.",
     );
@@ -100,10 +102,11 @@ start separately, each as its own background spawn, the pieces of work you will 
                 role.description
             ));
         }
-        said.push_str(
-            "\n\nA fresh agent works in your directory, as a fork does, or in the repository under it that `repo` names; given a `branch`, it \
-gets its own clone of that repository instead, beside it, on that branch, made from `base`, and commits and pushes there.",
-        );
+        said.push_str(match dir {
+            true => "\n\nA fresh agent in a role that works in a directory works in yours, as a fork does, or in the `dir` you give it: \
+relative to yours, absolute, or `~/…`. To give it a clone of its own, make the clone first and name it as its `dir`.",
+            false => "\n\nA fresh agent in a role that works in a directory works in the `dir` you give it: absolute, or `~/…`.",
+        });
     }
     said.push_str(
         "\n\nYour context keeps checkpoints: its first message, each message that began one of your turns (Max's \
@@ -154,53 +157,16 @@ one when Max should talk to an agent himself, rather than through you.",
     }
     if member {
         said.push_str(
-            "\n\n`add_sibling` adds one task to the scope you are in, as a fork of you or in a role you can start, \
-and returns at once: the agent that started you gets its result with yours.",
+            "\n\n`add_sibling` adds members to the scope you are in, given as `spawn` takes them, \
+and returns at once: the agent that started you gets their results with yours.",
         );
     }
-    let mut task = json!({
-        "type": "object",
-        "properties": {
-            "name": { "type": "string", "description": "Short and descriptive, such as `wordcount`." },
-            "mandate": { "type": "string", "description": "What this agent must do, and how to check it is done." },
-            "resume": { "type": "string", "description": "The name of a finished agent you started, to continue it." }
-        },
-        "required": ["name", "mandate"]
-    });
-    if !roles.is_empty() {
-        let fresh = json!({
-            "role": { "type": "string", "enum": roles.iter().map(|r| &r.name).collect::<Vec<_>>(), "description": "Start a fresh agent in this role. Omit, with `resume`, to fork yourself." },
-            "branch": { "type": "string", "description": "A fresh agent's own branch, for its own clone. Omit it to have it work in your directory." },
-            "base": { "type": "string", "description": "What a fresh agent's branch is made from if it does not exist yet. Default `main`." },
-            "repo": { "type": "string", "description": "Only to work on a repository other than yours: a directory under your own, relative to it, that a fresh agent works in or, with a `branch`, clones and clones beside." }
-        });
-        let properties = task["properties"].as_object_mut().expect("an object");
-        properties.extend(fresh.as_object().expect("an object").clone());
-    }
-    let quotes = json!({
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "Labels of Max's words (`max-…`) to give every fresh agent verbatim, after the brief."
-    });
-    let mut spawn = json!({
+    let members = members_schema(roles, dir);
+    let spawn = json!({
         "name": SPAWN,
         "description": "Start agents to do parts of your work, together or a step at a time, and wait for all of their results.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "tasks": { "type": "array", "minItems": 1, "items": task },
-                "brief": { "type": "string", "description": "What every fresh agent in this call is given before its own mandate." },
-                "quotes": quotes
-            },
-            "required": ["tasks"]
-        }
+        "input_schema": members
     });
-    if roles.is_empty() {
-        spawn["input_schema"]["properties"]
-            .as_object_mut()
-            .expect("an object")
-            .retain(|k, _| k == "tasks");
-    }
     let carry = json!({ "type": "string", "description": "What you carry: what you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, and everything your report will need (friction, evidence, decisions), including what earlier compactions carried." });
     let fresh = json!({ "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and what you carry alone." });
     let compact_and_continue = json!({
@@ -294,45 +260,33 @@ and returns at once: the agent that started you gets its result with yours.",
         tool(PASS, pass),
     ];
     if facing {
-        let mut properties = task["properties"].clone();
-        let properties = properties.as_object_mut().expect("an object");
-        properties.remove("resume");
-        properties["role"]["description"] = Value::from("The role of the agent Max talks to.");
-        properties["mandate"]["description"] = Value::from(
-            "What this agent is for and what Max needs from it: everything it needs, since it starts fresh.",
-        );
-        properties.insert("quotes".into(), quotes.clone());
+        let mut properties = json!({
+            "name": { "type": "string", "description": "Short and descriptive, such as `wordcount`." },
+            "mandate": { "type": "string", "description": "What this agent is for and what Max needs from it: everything it needs, since it starts fresh." },
+            "role": { "type": "string", "enum": roles.iter().map(|r| &r.name).collect::<Vec<_>>(), "description": "The role of the agent Max talks to." },
+            "quotes": { "type": "array", "items": { "type": "string" }, "description": "Labels of Max's words (`max-…`) to give it verbatim." }
+        });
+        if roles.iter().any(|r| r.works_in_a_directory()) {
+            properties["dir"] = dir_field(dir, "Where it works, if its role works in a directory");
+        }
         let open_chat = json!({
             "name": OPEN_CHAT,
             "description": "Open a chat for Max with a fresh agent, as background work of yours, and return at once.",
             "input_schema": {
                 "type": "object",
                 "properties": properties,
-                "required": ["name", "mandate", "role"]
+                "required": ["name", "mandate", "role"],
+                "additionalProperties": false
             }
         });
         tools.push(tool(OPEN_CHAT, open_chat));
     }
     if member {
-        let mut sibling = json!({
+        let sibling = json!({
             "name": ADD_SIBLING,
-            "description": "Add one task to the scope you are in, and return at once.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "task": task,
-                    "brief": { "type": "string", "description": "What a fresh agent is given before its mandate." },
-                    "quotes": quotes
-                },
-                "required": ["task"]
-            }
+            "description": "Add members to the scope you are in, and return at once.",
+            "input_schema": members
         });
-        if roles.is_empty() {
-            sibling["input_schema"]["properties"]
-                .as_object_mut()
-                .expect("an object")
-                .retain(|k, _| k == "task");
-        }
         tools.push(tool(ADD_SIBLING, sibling));
     }
     ToolSet {
@@ -350,6 +304,88 @@ and returns at once: the agent that started you gets its result with yours.",
         }],
         tools,
     }
+}
+
+/// The input schema of `spawn` and `add_sibling`: one key per kind of
+/// member, each with exactly the fields that kind takes, so a field that
+/// cannot apply cannot be written. `start` has one key per role in
+/// `roles`, and a `dir` only for a role whose agents work in a directory,
+/// required when the caller has none of its own to give them.
+fn members_schema(roles: &[&Role], dir: bool) -> Value {
+    let name =
+        json!({ "type": "string", "description": "Short and descriptive, such as `wordcount`." });
+    let mandate = json!({ "type": "string", "description": "What this agent must do, and how to check it is done." });
+    let quotes = |whom: &str| {
+        json!({
+            "type": "array",
+            "items": { "type": "string" },
+            "description": format!("Labels of Max's words (`max-…`) to give {whom} verbatim.")
+        })
+    };
+    let list = |description: String, properties: Value, required: Vec<&str>| {
+        json!({
+            "type": "array",
+            "description": description,
+            "items": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": false
+            }
+        })
+    };
+    let mut properties = json!({
+        "fork": list(
+            "Forks of you, each continuing from this point of your context.".into(),
+            json!({ "name": name, "mandate": mandate }),
+            vec!["name", "mandate"],
+        ),
+        "resume": list(
+            "Finished agents you started, each continued with a new mandate.".into(),
+            json!({
+                "agent": { "type": "string", "description": "The name of the finished agent you started." },
+                "mandate": mandate,
+                "quotes": quotes("it, before its new mandate")
+            }),
+            vec!["agent", "mandate"],
+        ),
+    });
+    if !roles.is_empty() {
+        let mut start = json!({
+            "brief": { "type": "string", "description": "What every fresh agent in this call is given before its own mandate." },
+            "quotes": quotes("every fresh agent, after the brief")
+        });
+        for role in roles {
+            let mut fields = json!({ "name": name, "mandate": mandate });
+            let mut required = vec!["name", "mandate"];
+            if role.works_in_a_directory() {
+                fields["dir"] = dir_field(dir, "Where it works");
+                if !dir {
+                    required.push("dir");
+                }
+            }
+            start[&role.name] = list(format!("Fresh `{}` agents.", role.name), fields, required);
+        }
+        properties["start"] = json!({
+            "type": "object",
+            "description": "Fresh agents, under their roles, and what all of them share.",
+            "properties": start,
+            "additionalProperties": false
+        });
+    }
+    json!({ "type": "object", "properties": properties })
+}
+
+/// A fresh agent's `dir` field, `what` it is: relative to the caller's
+/// directory when `dir`, the caller has one.
+fn dir_field(dir: bool, what: &str) -> Value {
+    let description = match dir {
+        true => format!(
+            "{what}: relative to your directory, absolute, or `~/…`. Default: your directory."
+        ),
+        false => format!("{what}: absolute, or `~/…`."),
+    };
+    json!({ "type": "string", "description": description })
 }
 
 fn tool(name: &str, definition: Value) -> Tool {
@@ -682,8 +718,9 @@ and its result starts a new turn."
 /// A spawn or add_sibling call's input.
 pub struct Spawn {
     pub members: Vec<Member>,
+    /// What its `start` gives every fresh member.
     pub brief: Option<String>,
-    /// Labels of Max's words to quote.
+    /// Labels of Max's words its `start` quotes to every fresh member.
     pub quotes: Vec<String>,
 }
 
@@ -695,16 +732,22 @@ pub struct Member {
 
 pub enum How {
     Fork,
+    Resume {
+        /// The name of the finished agent it continues.
+        agent: String,
+        /// Labels of Max's words to quote to it.
+        quotes: Vec<String>,
+    },
     Fresh {
         role: String,
-        branch: Option<String>,
-        base: String,
-        /// The repository under the parent's directory it works on, if
-        /// not the parent's own.
-        repo: Option<String>,
+        /// Where it works, as the caller named it, if not the caller's
+        /// own directory.
+        dir: Option<String>,
     },
-    Resume(String),
 }
+
+/// The keys of `start` that are not roles.
+const SHARED: [&str; 2] = ["brief", "quotes"];
 
 /// An `open_chat` call's input, as the spawn of its one member: a fresh
 /// agent, with Max's words it quotes.
@@ -714,26 +757,24 @@ pub fn open_chat(input: &[u8]) -> Result<Spawn, String> {
     let object = value.as_object_mut().ok_or("the input must be an object")?;
     // Every call's input may carry its `summary` ([`crate::render`]).
     object.remove("summary");
-    let quotes = match object.remove("quotes") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(labels)) => labels
-            .iter()
-            .map(|l| l.as_str().map(str::to_owned))
-            .collect::<Option<_>>()
-            .ok_or("`quotes` must be a list of labels")?,
-        Some(_) => return Err("`quotes` must be a list of labels".into()),
+    let [name, mandate, role] = fields(
+        &value,
+        "`open_chat`",
+        ["name", "mandate", "role"],
+        &["quotes", "dir"],
+    )?;
+    let member = Member {
+        name,
+        mandate,
+        how: How::Fresh {
+            role,
+            dir: string(&value, "dir")?,
+        },
     };
-    if object.contains_key("resume") {
-        return Err("a chat is a fresh agent, so `resume` means nothing to `open_chat`".into());
-    }
-    let member = member(&value)?;
-    if !matches!(member.how, How::Fresh { .. }) {
-        return Err("a chat is a fresh agent: give it a `role`".into());
-    }
     Ok(Spawn {
         members: vec![member],
         brief: None,
-        quotes,
+        quotes: labels(&value)?,
     })
 }
 
@@ -764,59 +805,73 @@ pub fn open_chat_call(
     })
 }
 
-/// The keys a task takes.
-const TASK_KEYS: [&str; 7] = [
-    "name", "mandate", "role", "resume", "branch", "base", "repo",
-];
-
-/// A spawn or add_sibling call's input. A key that means nothing to it,
-/// or that cannot apply to the task it is given in, is said back rather
-/// than dropped.
+/// A spawn or add_sibling call's input. A key that means nothing to it is
+/// said back rather than dropped.
 pub fn parse(tool: &str, input: &[u8]) -> Result<Spawn, String> {
     let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
     let object = value.as_object().ok_or("the input must be an object")?;
-    let list = if tool == ADD_SIBLING { "task" } else { "tasks" };
     // Every call's input may carry its `summary` ([`crate::render`]).
     if let Some(key) = object
         .keys()
-        .find(|k| ![list, "brief", "quotes", "summary"].contains(&k.as_str()))
+        .find(|k| !["fork", "resume", "start", "summary"].contains(&k.as_str()))
     {
         return Err(format!(
-            "`{key}` means nothing to `{tool}`: it takes `{list}`, `brief` and `quotes`"
+            "`{key}` means nothing to `{tool}`: it takes `fork`, `resume` and `start`"
         ));
     }
-    let tasks: Vec<&Value> = if tool == ADD_SIBLING {
-        vec![&value["task"]]
-    } else {
-        value["tasks"]
-            .as_array()
-            .filter(|t| !t.is_empty())
-            .ok_or("`tasks` must be a non-empty list")?
-            .iter()
-            .collect()
-    };
-    let members = tasks
-        .into_iter()
-        .map(member)
-        .collect::<Result<Vec<_>, String>>()?;
-    let fresh = members.iter().any(|m| matches!(m.how, How::Fresh { .. }));
-    let brief = string(&value, "brief")?;
-    for key in ["brief", "quotes"] {
-        if !fresh && object.contains_key(key) {
-            return Err(format!(
-                "`{key}` is given only to fresh agents, and this call starts none"
-            ));
-        }
+    let mut members = Vec::new();
+    for item in items(&value["fork"], "`fork`")? {
+        let [name, mandate] = fields(item, "a fork", ["name", "mandate"], &[])?;
+        members.push(Member {
+            name,
+            mandate,
+            how: How::Fork,
+        });
     }
-    let quotes = match &value["quotes"] {
-        Value::Null => Vec::new(),
-        Value::Array(labels) => labels
-            .iter()
-            .map(|l| l.as_str().map(str::to_owned))
-            .collect::<Option<_>>()
-            .ok_or("`quotes` must be a list of labels")?,
-        _ => return Err("`quotes` must be a list of labels".into()),
+    for item in items(&value["resume"], "`resume`")? {
+        let [agent, mandate] = fields(item, "a resume", ["agent", "mandate"], &["quotes"])?;
+        members.push(Member {
+            name: agent.clone(),
+            mandate,
+            how: How::Resume {
+                agent,
+                quotes: labels(item)?,
+            },
+        });
+    }
+    let start = &value["start"];
+    let (brief, quotes) = match start {
+        Value::Null => (None, Vec::new()),
+        Value::Object(roles) => {
+            let fresh = members.len();
+            for (role, list) in roles.iter().filter(|(k, _)| !SHARED.contains(&k.as_str())) {
+                for item in items(list, &format!("`start.{role}`"))? {
+                    let what = format!("a fresh `{role}`");
+                    let [name, mandate] = fields(item, &what, ["name", "mandate"], &["dir"])?;
+                    members.push(Member {
+                        name,
+                        mandate,
+                        how: How::Fresh {
+                            role: role.clone(),
+                            dir: string(item, "dir")?,
+                        },
+                    });
+                }
+            }
+            if members.len() == fresh {
+                return Err(
+                    "`start` starts no one: list the agents to start under their role".into(),
+                );
+            }
+            (string(start, "brief")?, labels(start)?)
+        }
+        _ => return Err("`start` must be an object, keyed by role".into()),
     };
+    if members.is_empty() {
+        return Err(format!(
+            "`{tool}` starts no one: give it a `fork`, a `resume` or a `start`"
+        ));
+    }
     Ok(Spawn {
         members,
         brief,
@@ -824,55 +879,54 @@ pub fn parse(tool: &str, input: &[u8]) -> Result<Spawn, String> {
     })
 }
 
-/// One task of a spawn's input.
-fn member(task: &Value) -> Result<Member, String> {
-    let object = task.as_object().ok_or("each task must be an object")?;
-    if let Some(key) = object.keys().find(|k| !TASK_KEYS.contains(&k.as_str())) {
+/// The items of the list `value`, which `what` names; none if absent.
+fn items<'a>(value: &'a Value, what: &str) -> Result<&'a [Value], String> {
+    match value {
+        Value::Null => Ok(&[]),
+        Value::Array(items) => Ok(items),
+        _ => Err(format!("{what} must be a list")),
+    }
+}
+
+/// The required string fields of `item`, a member that is `what`, which
+/// may also take `optional`.
+fn fields<const N: usize>(
+    item: &Value,
+    what: &str,
+    required: [&str; N],
+    optional: &[&str],
+) -> Result<[String; N], String> {
+    let object = item
+        .as_object()
+        .ok_or(format!("each of {what}s must be an object"))?;
+    if let Some(key) =
+        (object.keys()).find(|k| !required.contains(&k.as_str()) && !optional.contains(&k.as_str()))
+    {
+        let mut takes: Vec<&str> = required.to_vec();
+        takes.extend(optional);
         return Err(format!(
-            "`{key}` means nothing in a task: a task takes `{}`",
-            TASK_KEYS.join("`, `")
+            "`{key}` means nothing to {what}: it takes `{}`",
+            takes.join("`, `")
         ));
     }
-    let name = string(task, "name")?.ok_or("each task needs a `name`")?;
-    let mandate = string(task, "mandate")?.ok_or("each task needs a `mandate`")?;
-    let how = match (string(task, "role")?, string(task, "resume")?) {
-        (Some(_), Some(_)) => {
-            return Err(format!(
-                "task `{name}` has a `role` or a `resume`, not both"
-            ));
-        }
-        (Some(role), None) => {
-            let branch = string(task, "branch")?;
-            if branch.is_none() && object.contains_key("base") {
-                return Err(format!(
-                    "task `{name}` has a `base` but no `branch` to make from it"
-                ));
-            }
-            How::Fresh {
-                role,
-                branch,
-                base: string(task, "base")?.unwrap_or_else(|| "main".into()),
-                repo: string(task, "repo")?,
-            }
-        }
-        (None, resume) => {
-            let what = match resume {
-                Some(_) => "a resume",
-                None => "a fork",
-            };
-            if let Some(key) = ["branch", "base", "repo"]
-                .into_iter()
-                .find(|k| object.contains_key(*k))
-            {
-                return Err(format!(
-                    "task `{name}` is {what}, which works where its agent did, so `{key}` means nothing to it: \
-only a fresh agent, with a `role`, takes one"
-                ));
-            }
-            resume.map_or(How::Fork, How::Resume)
-        }
-    };
-    Ok(Member { name, mandate, how })
+    let mut out = Vec::new();
+    for key in required {
+        out.push(string(item, key)?.ok_or(format!("{what} needs a `{key}`"))?);
+    }
+    Ok(out.try_into().expect("one per key"))
+}
+
+/// The labels `value`'s `quotes` lists.
+fn labels(value: &Value) -> Result<Vec<String>, String> {
+    match &value["quotes"] {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(labels) => labels
+            .iter()
+            .map(|l| l.as_str().map(str::to_owned))
+            .collect::<Option<_>>()
+            .ok_or("`quotes` must be a list of labels".into()),
+        _ => Err("`quotes` must be a list of labels".into()),
+    }
 }
 
 /// The string `key` of `value`, if it has one.
@@ -884,20 +938,29 @@ fn string(value: &Value, key: &str) -> Result<Option<String>, String> {
     }
 }
 
-/// The task names a spawn's input gives, for the neutral answer a fork
-/// sees: read from any input it was given, as the call was made.
-pub(crate) fn names(tool: &str, input: &[u8]) -> Vec<String> {
+/// The member names a spawn's input gives, for the neutral answer a fork
+/// sees: read from any input it was given, as the call was made, in
+/// today's shape or the one list of `tasks` (`task`, for `add_sibling`)
+/// that records from before it hold.
+pub(crate) fn names(input: &[u8]) -> Vec<String> {
     let Ok(value) = serde_json::from_slice::<Value>(input) else {
         return Vec::new();
     };
-    let tasks = match tool {
-        ADD_SIBLING => vec![&value["task"]],
-        _ => value["tasks"].as_array().into_iter().flatten().collect(),
-    };
-    tasks
-        .into_iter()
-        .filter_map(|t| t["name"].as_str().map(str::to_owned))
-        .collect()
+    let field = |key: &'static str| move |t: &Value| t[key].as_str().map(str::to_owned);
+    let list = |v: &Value| v.as_array().cloned().unwrap_or_default();
+    let mut names: Vec<String> = (list(&value["tasks"]).iter())
+        .chain([&value["task"]])
+        .chain(&list(&value["fork"]))
+        .filter_map(field("name"))
+        .collect();
+    names.extend(list(&value["resume"]).iter().filter_map(field("agent")));
+    if let Some(start) = value["start"].as_object() {
+        let fresh = (start.iter())
+            .filter(|(k, _)| !SHARED.contains(&k.as_str()))
+            .flat_map(|(_, l)| list(l));
+        names.extend(fresh.filter_map(|t| field("name")(&t)));
+    }
+    names
 }
 
 /// A scope's result: each member's outcome under its name, as a tool
