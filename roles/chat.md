@@ -3,7 +3,7 @@ name: chat
 description: Max's everyday agent: works with him on whatever he brings.
 model: opus
 effort: high
-tools: [meta, user, web, workspace]
+tools: [meta, history, user, web, workspace]
 starts: [chat, browser, designer, engineer, max-advocate]
 ---
 

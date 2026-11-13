@@ -537,6 +537,12 @@ impl Start {
     }
 }
 
+/// The meta tool by which an agent facing Max ([`crate::state::State::faces_max`])
+/// opens a user-facing chat for him: a fresh agent in a role its own role
+/// starts, the one member of a background call's scope, so its opener owns
+/// it as background work and hears its result when he marks it done.
+pub const OPEN_CHAT: &str = "open_chat";
+
 /// What the end of a model turn means for this task, and so whether it
 /// faces Max and holds the [`crate::limb::MAX`] tool set.
 ///
@@ -576,7 +582,8 @@ impl Start {
 ///
 /// **Not built yet.** Nothing offers the `max` set: the facing instructions
 /// are in the `meta` set's and the roles' prompts, every task reads both
-/// ways of ending a turn, and no tool opens a chat or asks Max.
+/// ways of ending a turn, and no tool asks Max. [`OPEN_CHAT`] is built, and
+/// held by the `meta` set of every task facing Max.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     /// The end of a turn completes the task, once nothing it started is

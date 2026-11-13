@@ -65,6 +65,16 @@ id!(
     /// A [`crate::model_call::ModelCall`]: one request to a provider.
     ModelCallId
 );
+
+impl CallId {
+    /// How an agent names the call: `call-` and a short digest, shown with
+    /// its result, and the name of a call that runs in the background
+    /// without one of its own.
+    pub fn label(self) -> String {
+        let digest = Digest::of(self.to_string().as_bytes()).to_string();
+        format!("call-{}", &digest[..6])
+    }
+}
 id!(
     /// Max's message: a [`crate::draft::Draft`] from the moment his face
     /// opens it, and the [`crate::delivery::Delivery`] it becomes when sent,

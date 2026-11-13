@@ -41,7 +41,7 @@ use harness_store::Store;
 
 use crate::roles;
 use harness_program::meta::{self, How};
-use harness_program::{policy, render, web};
+use harness_program::{history, policy, render, web};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
@@ -115,9 +115,9 @@ struct Link {
 pub struct Face {
     /// Handed the state after each change.
     pub folds: Sender<Folded>,
-    /// Where it is served, as this machine reaches it: what agents read
-    /// others' work through.
-    pub address: String,
+    /// The text of what was said, which its `/find` and agents' `history`
+    /// calls search alike.
+    pub index: Arc<history::Index>,
 }
 
 /// One brain: the decider of everything its replicas say.
@@ -616,9 +616,10 @@ impl Brain {
                     .collect();
                 let member = matches!(task.scope, Scope::Spawn(_));
                 let dir = state.workdir(task).is_some();
-                meta::set(self.brain, &roles, dir, member)
+                meta::set(self.brain, &roles, dir, member, state.faces_max(task.id))
             }
             web::SET => web::set(),
+            history::SET => history::set(self.brain),
             // A set with nothing for an agent, such as `roles`.
             name => ToolSet {
                 name: name.to_owned(),
@@ -681,7 +682,6 @@ impl Brain {
                 harness_provider::IDENTITY,
                 task.tuning.model(role),
                 &prompt,
-                &self.face.address,
                 &refs,
                 &workdir,
             )
@@ -1055,10 +1055,11 @@ impl Brain {
             return self.fail_call(id, "The harness routed this call nowhere.");
         };
         // The brain's own sets are told apart by tool name: Max's reading of
-        // the plan's usage, and every other is `meta`'s.
+        // the plan's usage, `history`'s reads, and every other is `meta`'s.
         if self.state().resolve(limb) == Some(self.brain) {
             return match call.tool.as_str() {
                 web::USAGE => self.read_usage(id, &call),
+                history::FIND | history::CONTEXT => self.history(id, &call),
                 _ => self.spawn(id, &call),
             };
         }
@@ -1083,6 +1084,30 @@ impl Brain {
         });
     }
 
+    /// Run an agent's `find` or `context`, settling it in the batch of its
+    /// dispatch: it only reads the state and the store.
+    fn history(&mut self, id: CallId, call: &Call) {
+        let said = match call.caller {
+            Caller::Agent { .. } | Caller::Background { .. } => {
+                let input = self.value(call.input);
+                let read = |v| self.decider.storage().value(v).ok().flatten();
+                match call.tool.as_str() {
+                    history::FIND => {
+                        history::find(self.state(), &self.face.index, &read, &local, &input)
+                    }
+                    _ => history::context(self.state(), &read, &local, &input),
+                }
+            }
+            _ => Err(format!("The harness offers Max no tool `{}`.", call.tool)),
+        };
+        let mut batch = Batch {
+            values: Vec::new(),
+            facts: vec![Fact::Call(id, CallEvent::Dispatched)],
+        };
+        settle(id, said, &mut batch);
+        self.answer(id, batch)
+    }
+
     fn read(&mut self, id: CallId, reading: Result<BTreeMap<String, Window>, String>) {
         match reading {
             Ok(reading) => {
@@ -1104,7 +1129,11 @@ impl Brain {
         // offers him none. An agent's background work may be a spawn.
         let parent = match call.caller {
             Caller::Agent { task, .. } => task,
-            Caller::Background { task, .. } if call.tool == meta::SPAWN => task,
+            Caller::Background { task, .. }
+                if call.tool == meta::SPAWN || call.tool == meta::OPEN_CHAT =>
+            {
+                task
+            }
             _ => {
                 let said = format!("The harness offers Max no tool `{}`.", call.tool);
                 return self.fail_call(id, &said);
@@ -1194,7 +1223,9 @@ waited on nothing: answer him, then {}",
         } else if call.tool == meta::STOP || call.tool == meta::PASS {
             self.hand(&call.tool, &parent, &input, &mut batch)
                 .map(|said| words(&said))
-        } else if call.tool == meta::SPAWN || call.tool == meta::ADD_SIBLING {
+        } else if call.tool == meta::OPEN_CHAT && matches!(call.caller, Caller::Agent { .. }) {
+            self.open_chat(id, call, &parent, &input, &mut batch)
+        } else if [meta::SPAWN, meta::ADD_SIBLING, meta::OPEN_CHAT].contains(&call.tool.as_str()) {
             match self.members(id, &call.tool, &parent, &input, &mut batch) {
                 Ok(names) if call.tool == meta::ADD_SIBLING => {
                     Ok(words(&format!("Added {} to your scope.", names.join(", "))))
@@ -1230,6 +1261,34 @@ waited on nothing: answer him, then {}",
                 Fact::Call(id, CallEvent::Settled(failed)),
             ],
         });
+    }
+
+    /// An agent's `open_chat`: the background call opening the chat,
+    /// appended to `batch` once what it would create is known to be
+    /// possible, and what the agent's call says.
+    fn open_chat(
+        &self,
+        id: CallId,
+        call: &Call,
+        parent: &Task,
+        input: &[u8],
+        batch: &mut Batch,
+    ) -> Result<Bytes, String> {
+        let opening = meta::open_chat_call(self.state(), parent, id, call, input)?;
+        // What its dispatch will create, checked now so a mistake is the
+        // agent's to fix rather than a message later.
+        let made = CallId(self.decider.next().event(batch.facts.len() as u32));
+        self.members(made, meta::OPEN_CHAT, parent, input, &mut Batch::default())?;
+        let name = match &opening.caller {
+            Caller::Background { name, .. } => name.clone(),
+            _ => unreachable!("an opening is background work"),
+        };
+        batch.facts.push(Fact::Call(made, CallEvent::Made(opening)));
+        Ok(words(&format!(
+            "Opened `{name}` (`{}`) for Max: it is in his queue, and when he marks it done its last message \
+comes to you as a message. `stop` it to close it.",
+            made.label()
+        )))
     }
 
     /// A `stop` or `pass` of one of `parent`'s running background calls:
@@ -1284,7 +1343,14 @@ waited on nothing: answer him, then {}",
         input: &[u8],
         batch: &mut Batch,
     ) -> Result<Vec<String>, String> {
-        let spawn = meta::parse(tool, input)?;
+        let spawn = match tool {
+            meta::OPEN_CHAT => meta::open_chat(input)?,
+            _ => meta::parse(tool, input)?,
+        };
+        let mode = match tool {
+            meta::OPEN_CHAT => Mode::UserFacing,
+            _ => Mode::Autonomous,
+        };
         let scope = match tool {
             meta::ADD_SIBLING => match parent.scope {
                 Scope::Max => return Err("you are not in a scope to add a sibling to".into()),
@@ -1338,9 +1404,15 @@ waited on nothing: answer him, then {}",
                             own.name
                         )
                     })?;
-                    let workdir = match role.works_in_a_directory() {
-                        true => Some(self.workdir(parent, dir)?),
-                        false => None,
+                    let workdir = match (role.works_in_a_directory(), dir) {
+                        (true, dir) => Some(self.workdir(parent, dir)?),
+                        (false, None) => None,
+                        (false, Some(_)) => {
+                            return Err(format!(
+                                "a `{}` works in no directory, so `dir` means nothing to it",
+                                role.name
+                            ));
+                        }
                     };
                     Origin::Fresh {
                         role: role.id,
@@ -1357,7 +1429,7 @@ waited on nothing: answer him, then {}",
                 by: Some(call),
                 scope,
                 origin,
-                mode: Mode::Autonomous,
+                mode,
                 mandate: Mandate {
                     text: text.id(),
                     brief: brief.as_ref().filter(|_| fresh).map(Bytes::id),
@@ -2058,10 +2130,14 @@ fn define(state: &State, facts: &mut Vec<Fact>, limb: Limb) -> LimbId {
     limb.id
 }
 
-/// The brain's own limb, with the tool sets it offers: `meta`, `web`, and
-/// `roles` over the role files in `roles`.
+/// The brain's own limb, with the tool sets it offers: `meta`, `web`,
+/// `history`, and `roles` over the role files in `roles`.
 fn brain_limb(id: LimbId, roles: Option<&Path>) -> Limb {
-    let mut offers = vec![offer(meta::SET, "{}"), offer(web::SET, "{}")];
+    let mut offers = vec![
+        offer(meta::SET, "{}"),
+        offer(web::SET, "{}"),
+        offer(history::SET, "{}"),
+    ];
     offers.extend(roles.map(|dir| {
         roles::Settings {
             dir: dir.to_path_buf(),

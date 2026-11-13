@@ -10,6 +10,7 @@ harness-core = { path = "../core" }
 harness-face-tab = { path = "../face-tab" }
 harness-substrate = { path = "../substrate" }
 harness-provider = { path = "../provider" }
+harness-program = { path = "../program" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde_json = "1"
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }

@@ -1,0 +1,3 @@
+[build]
+# Relative to this file's parent's parent: the repo root.
+rustc-wrapper = "dev/rustc-wrapper"

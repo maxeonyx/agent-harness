@@ -15,8 +15,11 @@
 #   it with that build's roles and any further flags (`--model scripted`,
 #   `--sample WAV`). It prints the commit and the URL once the brain serves
 #   its face.
-# - If it runs, it relaunches it, as the `relaunch` tool does, with the
-#   running build's own `builds` set: it rehearses the new build on a
+# - If it runs, it relaunches it onto this clone's HEAD, as the `relaunch`
+#   tool does, with the running build's own `builds` set: HEAD must be
+#   pushed and contain all of main, since it is built in the brain's own
+#   source clone, ~/.local/share/agent-harness/NAME/source (made from
+#   GitHub on the first relaunch, then fetched). It rehearses the new build on a
 #   copy, the brain drains (its requests in flight get up to five
 #   minutes), the new build starts as a candidate on the same database
 #   with the same flags, and it waits until the build has opened and run
@@ -53,7 +56,7 @@ home=${XDG_DATA_HOME:-$HOME/.local/share}/agent-harness
 if systemctl --user -q is-active "$unit"; then
     [[ $# -eq 0 ]] || echo "dev/serve: $unit keeps the flags it runs with; stop it to change them" >&2
     pid=$(systemctl --user show -p MainPID --value "$unit")
-    exec "$(dirname "$(readlink -f "/proc/$pid/exe")")/harness-limb" relaunch "$unit" "$repo"
+    exec "$(dirname "$(readlink -f "/proc/$pid/exe")")/harness-limb" relaunch "$unit" "$(git rev-parse HEAD)"
 fi
 
 build=$(cargo run -q --release -p harness-limb-machine -- install "$repo")

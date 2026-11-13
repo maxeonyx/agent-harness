@@ -1,4 +1,5 @@
-//! Images shrunk to a size the API accepts in any request.
+//! The images in a message's content: each one found at any depth, read,
+//! and shrunk to a size the API accepts in any request.
 
 use std::io::Cursor;
 
@@ -36,24 +37,45 @@ pub fn shrunk(content: Vec<u8>) -> Vec<u8> {
 
 /// Shrinks every image in `value`; whether any was.
 fn shrink_all(value: &mut Value) -> bool {
+    let mut any = false;
+    each_image(value, &mut |source| any |= shrink(source));
+    any
+}
+
+/// Calls `f` with the `source` of every image block in `value` (a message's
+/// JSON blocks), at any depth (a tool result's images too), always in the
+/// same order for the same value: the `n`th call is its `n`th image.
+pub fn each_image(value: &mut Value, f: &mut impl FnMut(&mut Value)) {
     match value {
         Value::Object(block) if block.get("type").and_then(Value::as_str) == Some("image") => {
-            block.get_mut("source").is_some_and(shrink)
+            if let Some(source) = block.get_mut("source") {
+                f(source);
+            }
         }
-        Value::Object(members) => members.values_mut().fold(false, |a, v| shrink_all(v) | a),
-        Value::Array(items) => items.iter_mut().fold(false, |a, v| shrink_all(v) | a),
-        _ => false,
+        Value::Object(members) => members.values_mut().for_each(|v| each_image(v, f)),
+        Value::Array(items) => items.iter_mut().for_each(|v| each_image(v, f)),
+        _ => {}
     }
+}
+
+/// The image a base64 `source` holds, as bytes; none for any other source.
+pub fn decoded(source: &Value) -> Option<Vec<u8>> {
+    STANDARD.decode(source.get("data")?.as_str()?).ok()
+}
+
+/// An image's width and height in pixels, from its header.
+pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    reader.into_dimensions().ok()
 }
 
 /// Replaces a base64 `source`'s data with the image scaled to fit
 /// [`MAX_EDGE`], if it does not already; whether it did. A JPEG stays a
 /// JPEG; anything else becomes a PNG.
 fn shrink(source: &mut Value) -> bool {
-    let Some(data) = source.get("data").and_then(Value::as_str) else {
-        return false;
-    };
-    let Ok(bytes) = STANDARD.decode(data) else {
+    let Some(bytes) = decoded(source) else {
         return false;
     };
     let Ok(reader) = ImageReader::new(Cursor::new(&bytes)).with_guessed_format() else {
