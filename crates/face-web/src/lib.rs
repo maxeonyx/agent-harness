@@ -1042,6 +1042,7 @@ const DOCUMENT: &[&str] = &[
     "map.css",
     "overlays.css",
     "card.css",
+    "sheet.css",
     "compose.css",
     "phone.css",
     "body.html",
