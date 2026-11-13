@@ -481,8 +481,9 @@ pub enum Waiting {
 }
 
 /// How long, in milliseconds, Max's words wait for a task's round to end
-/// by itself before what it waits on moves to the background
-/// ([`Todo::Background`]): a quick call answers them in its own time.
+/// by itself, and each call of it has had since it was made, before it
+/// moves to the background ([`Todo::Background`]): a quick call answers
+/// them in its own time, even one made after they came.
 pub const HEARD_AFTER: u64 = 3_000;
 
 /// One thing the brain should do now. The whole of its loop: act on each,
@@ -2901,9 +2902,9 @@ impl State {
     /// The calls of the task's round the brain moves to the background now
     /// ([`Todo::Background`]): each that has had [`HEARD_AFTER`] since it
     /// was made, once Max's words, or a turn one of his acts asks for, have
-    /// waited as long for the round to end by itself, so a round that starts
-    /// as his words come (a last response's report) gets its chance to end;
-    /// while he interrupts it, its spawns, whose scopes his
+    /// waited as long for the round to end by itself, so a quick call made
+    /// after his words came (a last response's report among them) ends in
+    /// its own time; while he interrupts it, its spawns, whose scopes his
     /// interrupt never stops. Never a fresh context's attachments, and never
     /// a wait, which his words settle instead ([`Todo::Settle`]).
     fn backgrounds(&self, task: &Task, now: Timestamp) -> Vec<CallId> {
