@@ -1,4 +1,4 @@
-import { $, clock, diagram, el, panel, scrollEl } from "./base.js";
+import { $, diagram, el, panel, scrollEl } from "./base.js";
 import { answer, answered } from "./compose.js";
 import { load, paintInto, wear } from "./theme.js";
 
@@ -66,21 +66,21 @@ async function dress(t) {
 const redraw = () => sheetEl.dispatchEvent(new CustomEvent("sheet", { bubbles: true }));
 
 function line(p, t) {
-  lineEl.replaceChildren(el("span", "title", p.lead.title), ...(p.lead.hook ? [el("span", "hook", p.lead.hook)] : []));
+  lineEl.replaceChildren(el("span", "title", p.lead));
   lineEl.onclick = () => { opened = t.id; landed = null; lineEl.dispatchEvent(new CustomEvent("sheet", { bubbles: true })); };
 }
 
-// The parts in the one order Max reads them, none of them named: each
-// claim frames its part in its own words. Presented again unchanged with a
-// quick answer, the answer is the chat's line above the page, which folds to
-// its lead, saying when it was checked; a press opens the rest. A lead new
-// to this tab fills the first screen; once seen, it is a short band.
+// The parts in the one order Max reads them, none of them named, and no
+// line about the page itself: the lead, the plan (or the asks, with no
+// plan), the facts that back them, why. Presented again unchanged with a
+// quick answer, the answer is the chat's line above the page, which folds
+// to its lead; a press opens the rest. A lead new to this tab stands taller,
+// with the plan still starting on the first screen; once seen, it is a
+// short band.
 function page(p, t) {
   const held = p.quick && p.held > p.at;
   const lead = el("header", `lead${landed === shown(t) ? "" : " new"}`);
-  lead.append(el("h1", null, p.lead.title));
-  if (p.lead.hook) lead.append(el("p", "hook", p.lead.hook));
-  if (held) lead.append(el("p", "checked", `Still holds, checked ${clock(p.held)}`));
+  lead.append(el("h1", null, p.lead));
   const out = [lead];
   const at = `${t.id} ${p.held}`;
   sheetEl.classList.toggle("folded", held && unfolded !== at);
@@ -88,9 +88,9 @@ function page(p, t) {
     lead.onclick = () => { unfolded = at; redraw(); };
     return out;
   }
-  out.push(end(p.end), claim("now", p.now));
   if (p.asks.length) out.push(part("asks", p.asks.map((a) => ask(a, t.id))));
   if (p.plan.length) out.push(part("plan", [plan(p.plan, t.id)]));
+  if (p.facts != null) out.push(part("facts", blocks(p.facts.blocks)));
   if (p.why) out.push(part("why", blocks(p.why.blocks)));
   return out;
 }
@@ -99,38 +99,31 @@ function part(cls, children) {
   s.append(...children);
   return s;
 }
-const claim = (cls, c) => part(cls, [el("p", "says", c.says), ...(c.shows ? blocks(c.shows.blocks) : [])]);
-// Where this ends: folded to its claim once Max has agreed with it, and
-// marked in the gutter when it changed since.
-function end(e) {
-  if (!e.agreed) {
-    const s = claim("end", e);
-    s.classList.toggle("changed", e.changed);
-    return s;
-  }
-  const d = el("details");
-  d.append(el("summary", "says", e.says), ...(e.shows ? blocks(e.shows.blocks) : []));
-  return part("end agreed", [d]);
-}
-
+// The plan: each step one line, its mark, what will be true and where it
+// stands now, so the rail is the end and the now at once. A step in play
+// or ahead adds its body; a step behind him is its line alone. A step
+// whose title changed since Max agreed with the plan carries the gutter bar.
 const MARK = { done: "✓", failed: "✕", yours: "●", working: "◐", planned: "○" };
 function plan(steps, key) {
   const ol = el("ol", "steps");
   for (const s of steps) {
-    const li = el("li", `step ${s.state}`);
+    const li = el("li", `step ${s.state}${s.changed ? " changed" : ""}`);
     const head = el("div", "head");
-    head.append(el("span", "mark", MARK[s.state] || "○"), el("span", "title", s.title || s.key));
+    head.append(el("span", "mark", MARK[s.state] ?? "○"), el("span", "title", s.title ?? s.key));
+    if (s.now != null) head.append(inlines(s.now, "span", "now"));
     li.append(head);
-    if (s.failed) li.append(el("p", "failed", s.failed));
-    if (s.body) li.append(...blocks(s.body.blocks));
+    if (s.failed != null) li.append(el("p", "failed", s.failed));
+    if (s.body != null && s.state !== "done") li.append(...blocks(s.body.blocks));
     li.append(...s.asks.map((a) => ask(a, key)));
     ol.append(li);
   }
   return ol;
 }
 
-// An ask: the question, what answering it needs, and what happens without
-// an answer. A press is held with what he types or dictates until he sends
+// An ask, standing on its own: the question; where it ends (a hollow ring)
+// and where it is now (a filled dot), end first as a step reads; why it is
+// his; what shows it; the answers; and what the agent does without one, in
+// its own words. A press is held with what he types or dictates until he sends
 // it, which carries both; pressing again takes it back. "Wrong question"
 // is always last.
 function ask(a, key) {
@@ -142,8 +135,9 @@ function ask(a, key) {
     box.append(el("p", "how", a.settled));
     return box;
   }
-  const said = [...(a.now?.length ? [inlines(a.now, "p", "now")] : []), ...(a.why?.length ? [inlines(a.why, "p", "why")] : [])];
-  box.append(...said);
+  if (a.end?.length) { const e = el("p", "end"); e.append(el("span", "ring", "○"), a.end); box.append(e); }
+  if (a.now?.length) { const n = inlines(a.now, "p", "now"); n.prepend(el("span", "dot", "●")); box.append(n); }
+  if (a.why?.length) box.append(inlines(a.why, "p", "why"));
   if (a.shows) box.append(...blocks(a.shows.blocks));
   const want = a.want;
   const choices = el("div", "choices");
@@ -157,7 +151,7 @@ function ask(a, key) {
   }
   choices.append(press("Wrong question", "Reject"));
   box.append(choices);
-  if (a.otherwise) box.append(el("p", "otherwise", `Otherwise: ${a.otherwise}`));
+  if (a.otherwise != null) box.append(el("p", "otherwise", a.otherwise));
   return box;
 }
 // One answer's pill: armed while its press is held. One press per ask, so

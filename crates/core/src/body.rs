@@ -66,9 +66,7 @@ pub enum Block {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Item {
     /// A task list's box: `Some(false)` for `- [ ]`, `Some(true)` for
-    /// `- [x]`. In an end, this is what will be true: a hollow ring for not
-    /// yet, a filled dot for already true, so the end shows how far it is
-    /// without a second list.
+    /// `- [x]`: a hollow ring for not yet, a filled dot for already true.
     pub holds: Option<bool>,
     pub blocks: Vec<Block>,
 }
