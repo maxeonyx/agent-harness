@@ -24,7 +24,7 @@ export function renderSheet(t) {
   lineEl.hidden = full;
   sheetEl.hidden = !full;
   if (!full) { line(p, t); return false; }
-  const key = `${t.id} ${p.version} ${JSON.stringify(p.plan.map((s) => [s.state, s.asks.map((a) => a.open)]))}`;
+  const key = `${t.id} ${p.version} ${JSON.stringify(p.plan.map((s) => [s.state, s.asks.map((a) => a.call)]))}`;
   if (sheetEl.drawn !== key) { sheetEl.drawn = key; sheetEl.replaceChildren(...page(p)); }
   return landed !== `${t.id} ${p.version}`;
 }
@@ -44,8 +44,7 @@ function page(p) {
   lead.append(el("h1", null, p.lead.title));
   if (p.lead.hook) lead.append(el("p", "hook", p.lead.hook));
   const out = [lead, claim("end", p.end), claim("now", p.now)];
-  const open = p.asks.filter((a) => a.open);
-  if (open.length) out.push(part("asks", open.map(ask)));
+  if (p.asks.length) out.push(part("asks", p.asks.map(ask)));
   if (p.plan.length) out.push(part("plan", [plan(p.plan)]));
   if (p.why) out.push(part("why", blocks(p.why.blocks)));
   return out;
@@ -67,7 +66,7 @@ function plan(steps) {
     li.append(head);
     if (s.failed) li.append(el("p", "failed", s.failed));
     if (s.body) li.append(...blocks(s.body.blocks));
-    li.append(...s.asks.filter((a) => a.open).map(ask));
+    li.append(...s.asks.map(ask));
     ol.append(li);
   }
   return ol;

@@ -237,7 +237,8 @@ pub enum Problem {
     /// A table with no rows, rows of different lengths, one column, or a
     /// cell over about fifteen words.
     Table { why: String },
-    /// A fold inside a fold: drawn open.
+    /// A fold inside a fold, drawn open, or anything nested past
+    /// `harness_body`'s deepest level, drawn as its text.
     Nested,
     /// A fold's summary that is a label, not what is inside.
     Summary,

@@ -14,7 +14,7 @@
 //! until it settles, its result reaching the agent as a message.
 
 use harness_core::ask::{Ask, Choice, Link, Otherwise, Want};
-use harness_core::body::Problem;
+use harness_core::body::{Problem, Spotted};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
 use harness_core::design::{Feedback, FeedbackEvent};
 use harness_core::fact::Fact;
@@ -105,6 +105,14 @@ fn input_of(input: &[u8]) -> Result<Value, String> {
     Ok(value)
 }
 
+/// Keep `markdown` as a value of the batch, and name it.
+fn stash(values: &mut Vec<Bytes>, markdown: String) -> ValueId {
+    let bytes = Bytes::from(markdown);
+    let id = bytes.id();
+    values.push(bytes);
+    id
+}
+
 fn parse<T: for<'de> Deserialize<'de>>(input: Value) -> Result<T, String> {
     serde_json::from_value(input).map_err(|e| e.to_string())
 }
@@ -140,14 +148,7 @@ fn write(state: &State, owner: TaskId, call: CallId, input: Value) -> Result<Don
         why,
     } = parse(input)?;
     let mut values = Vec::new();
-    let mut body = |markdown: Option<String>| {
-        markdown.map(|m| {
-            let bytes = Bytes::from(m);
-            let id = bytes.id();
-            values.push(bytes);
-            id
-        })
-    };
+    let mut body = |markdown: Option<String>| markdown.map(|m| stash(&mut values, m));
     let sheet = Sheet {
         lead: Lead {
             title: lead.title,
@@ -163,15 +164,10 @@ fn write(state: &State, owner: TaskId, call: CallId, input: Value) -> Result<Don
         },
         why: body(why),
     };
-    let texts: Vec<(ValueId, String)> = values
-        .iter()
-        .map(|b| (b.id(), String::from_utf8_lossy(b).into_owned()))
-        .collect();
     let read = |v: ValueId| {
-        texts
-            .iter()
-            .find(|(id, _)| *id == v)
-            .map(|(_, t)| t.clone())
+        (values.iter())
+            .find(|b| b.id() == v)
+            .map(|b| String::from_utf8_lossy(b).into_owned())
     };
     let said = staged(state, owner, &sheet, &read);
     Ok(Done {
@@ -246,22 +242,13 @@ fn edit(
     let [title, hook, end, end_shows, now, now_shows, why] =
         <[String; 7]>::try_from(parts).expect("seven parts");
     let lift = |t: String| Some(t).filter(|t| !t.is_empty());
-    let mut written = json!({
+    let written = json!({
         "lead": { "title": title, "hook": lift(hook) },
         "end": { "says": end, "shows": lift(end_shows) },
         "now": { "says": now, "shows": lift(now_shows) },
         "why": lift(why),
     });
-    // Absent rather than null, as a writer would give it.
-    strip_nulls(&mut written);
     write(state, owner, call, written)
-}
-
-fn strip_nulls(value: &mut Value) {
-    if let Value::Object(map) = value {
-        map.retain(|_, v| !v.is_null());
-        map.values_mut().for_each(strip_nulls);
-    }
 }
 
 fn body_text(body: Option<ValueId>, text_of: &dyn Fn(ValueId) -> Option<String>) -> String {
@@ -276,16 +263,24 @@ fn staged(
     sheet: &Sheet,
     text_of: &dyn Fn(ValueId) -> Option<String>,
 ) -> String {
-    let mut found: Vec<(Spot, Option<u32>, Problem)> = Vec::new();
+    let mut found: Vec<Spotted> = Vec::new();
     let title = state
         .task(owner)
         .map(|t| t.description.title.clone().unwrap_or(t.name.clone()));
     if sheet.lead.title.chars().count() > 70 || Some(&sheet.lead.title) == title.as_ref() {
-        found.push((Spot::Lead, None, Problem::Lead));
+        found.push(Spotted {
+            at: Spot::Lead,
+            line: None,
+            problem: Problem::Lead,
+        });
     }
     for (spot, claim) in [(Spot::End, &sheet.end), (Spot::Now, &sheet.now)] {
         if claim.says.chars().count() > 160 || sentences(&claim.says) > 1 {
-            found.push((spot.clone(), None, Problem::Claim));
+            found.push(Spotted {
+                at: spot.clone(),
+                line: None,
+                problem: Problem::Claim,
+            });
         }
     }
     for (spot, body) in [
@@ -295,11 +290,11 @@ fn staged(
     ] {
         if let Some(markdown) = body.and_then(text_of) {
             let (_, problems) = harness_body::body(&markdown, KINDS);
-            found.extend(
-                problems
-                    .into_iter()
-                    .map(|f| (spot.clone(), f.line, f.problem)),
-            );
+            found.extend(problems.into_iter().map(|f| Spotted {
+                at: spot.clone(),
+                line: f.line,
+                problem: f.problem,
+            }));
         }
     }
     let mut said = String::from(
@@ -307,10 +302,10 @@ fn staged(
     );
     if !found.is_empty() {
         said.push_str(" It is drawn as well as it can be, but these differ from what you wrote:");
-        for (spot, line, problem) in found {
+        for Spotted { at, line, problem } in found {
             let at = match line {
-                Some(line) => format!("{}, line {line}", spot_name(&spot)),
-                None => spot_name(&spot).to_string(),
+                Some(line) => format!("{}, line {line}", spot_name(&at)),
+                None => spot_name(&at).to_string(),
             };
             said.push_str(&format!("\n- {at}: {}", explain(&problem)));
         }
@@ -353,7 +348,7 @@ pub fn explain(problem: &Problem) -> String {
         Problem::Misquoted => "words given as Max's that he did not say, drawn as a plain quote.".into(),
         Problem::Figure { error } => format!("a figure that would not draw: {error}"),
         Problem::Table { why } => format!("a table that reads badly: {why}."),
-        Problem::Nested => "a fold inside a fold, drawn open: folds do not nest.".into(),
+        Problem::Nested => "nested too deep, drawn as its text: folds do not nest, and nothing nests past 16 levels.".into(),
         Problem::Summary => "a fold's summary that is a label: say what is inside, in under 100 characters.".into(),
         Problem::Lead => "over 70 characters, or the task's title again: the lead is the question, problem or news this moment turns on.".into(),
         Problem::Claim => "more than one sentence, or over 160 characters: the claim is one sentence, and its body shows it.".into(),
@@ -431,12 +426,7 @@ fn describe(owner: TaskId, input: Value) -> Result<Done, String> {
                         why: s.failed.unwrap_or_default(),
                     },
                 };
-                let body = s.body.map(|m| {
-                    let bytes = Bytes::from(m);
-                    let id = bytes.id();
-                    values.push(bytes);
-                    id
-                });
+                let body = s.body.map(|m| stash(&mut values, m));
                 out.push(Step {
                     key: s.key,
                     title: s.title,
@@ -567,12 +557,7 @@ fn ask(
         },
     };
     let mut values = Vec::new();
-    let shows = a.shows.map(|m| {
-        let bytes = Bytes::from(m);
-        let id = bytes.id();
-        values.push(bytes);
-        id
-    });
+    let shows = a.shows.map(|m| stash(&mut values, m));
     let ask = Ask {
         key: a.key.clone(),
         question: a.question,

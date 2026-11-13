@@ -4,7 +4,6 @@
 //! steps and the asks inside them.
 
 use harness_core::ask::Ask;
-use harness_core::call::{Caller, Outcome};
 use harness_core::id::ValueId;
 use harness_core::page::{Ref, Said, Step};
 use harness_core::state::State;
@@ -23,21 +22,14 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
         Some(harness_body::body(&String::from_utf8_lossy(&text), KINDS).0)
     };
     let inline = |text: &str| harness_body::inline(text, KINDS).0;
-    // The asks, oldest first: open ones drawn whole, settled ones quietly.
-    let asks: Vec<(String, Value)> = state
-        .calls()
-        .filter(|(_, r)| {
-            r.call.tool == ASK
-                && matches!(r.call.caller, Caller::Background { task, .. } if task == t.id)
-        })
+    // Its open asks, oldest first: the task's own background work, rather
+    // than every call the harness has made, since rows are derived on
+    // every fold.
+    let asks: Vec<(String, Value)> = (t.background.iter())
+        .filter_map(|id| Some((*id, state.call(*id)?)))
+        .filter(|(_, r)| r.call.tool == ASK)
         .filter_map(|(id, r)| {
             let ask: Ask = serde_json::from_slice(&value(r.call.input)?).ok()?;
-            let settled = r.settled.as_ref().map(|s| match &s.outcome {
-                Outcome::Completed(o) | Outcome::Failed(o) => value(o.model)
-                    .map(|m| harness_program::render::visible(&m))
-                    .unwrap_or_default(),
-                other => format!("{other:?}"),
-            });
             let row = json!({
                 "call": id.to_string(),
                 "label": id.label(),
@@ -49,8 +41,6 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
                 "shows": body(ask.shows),
                 "want": ask.want,
                 "otherwise": ask.otherwise.map(|o| o.then),
-                "open": settled.is_none(),
-                "settled": settled,
             });
             Some((ask.step.unwrap_or_default(), row))
         })
@@ -82,7 +72,7 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
                 .filter(|(k, _)| *k == s.key)
                 .map(|(_, a)| a)
                 .collect();
-            let yours = asks.iter().any(|a| a["open"] == json!(true));
+            let yours = !asks.is_empty();
             json!({
                 "key": s.key,
                 "title": title(state, s),
