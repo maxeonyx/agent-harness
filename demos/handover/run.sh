@@ -23,8 +23,12 @@ step() { printf '\n== %s\n' "$*"; }
 systemctl --user -q is-active "$unit" && systemctl --user stop "$unit"
 rm -rf "$work" "$home/$name"
 mkdir -p "$work"
-git clone -q "$repo" "$work/clone"
-git -C "$work/clone" checkout -q --detach "$(git -C "$repo" rev-parse HEAD)"
+# An upstream of its own, which the relaunch fetches from: it builds only
+# a commit on a branch that contains main.
+git init -q --bare "$work/upstream.git"
+git -C "$repo" push -q "$work/upstream.git" HEAD:refs/heads/main
+git clone -q "$work/upstream.git" "$work/clone"
+git clone -q "$work/upstream.git" "$home/$name/source"
 # A target directory of its own, kept between runs so dependencies stay built.
 export CARGO_TARGET_DIR=$repo/.demo-handover-target.ignore
 git -C "$work/clone" config user.name demo
@@ -36,6 +40,7 @@ step "serve $base"
 "$work/clone/dev/serve" "$name" "$port" --model scripted
 git -C "$work/clone" commit -q --allow-empty -m "demo: the next build"
 next=$(git -C "$work/clone" rev-parse --short=12 HEAD)
+git -C "$work/clone" push -q origin HEAD:refs/heads/main
 
 step "relaunch onto $next, asking for the page every 200 ms"
 since=$(date '+%Y-%m-%d %H:%M:%S')
