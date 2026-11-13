@@ -9,6 +9,7 @@ use harness_core::call::{Caller, Outcome as CallOutcome, Owner};
 use harness_core::context::{Began, Dep, Legs};
 use harness_core::delivery::Content;
 use harness_core::fact::Fact;
+use harness_core::page::PageEvent;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::limb::{Defined, Host, Prepared, Reach};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
@@ -617,6 +618,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             }
             TaskEvent::ModeSet(mode) => format!("{} is now {mode:?}", name(*id)),
             TaskEvent::Renamed(new) => format!("{} renamed to {new}", name(*id)),
+            TaskEvent::Described(_) => format!("{} described itself", name(*id)),
             TaskEvent::Tuned(tuning) => format!(
                 "{} tuned to {} at {} effort",
                 name(*id),
@@ -773,6 +775,11 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         }
         Fact::Ranking(r) => format!("queue ranked: {} placed", r.order.len()),
         Fact::Focus(_) => "a face changed focus".into(),
+        Fact::Page(id, PageEvent::Edited { .. }) => format!("{} edited its page", name(*id)),
+        Fact::Page(id, PageEvent::Presented { .. }) => {
+            format!("{} presented its page to Max", name(*id))
+        }
+        Fact::Feedback(_, _) => "feedback for the design keeper".into(),
         Fact::Face(replica) => format!("tab {replica} is Max's"),
         Fact::Seen(at) => format!("as seen at {at}"),
         Fact::Draft(id, event) => {
