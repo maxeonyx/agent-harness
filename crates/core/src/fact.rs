@@ -9,13 +9,15 @@ use crate::attention::{Focus, Ranking};
 use crate::build::Launched;
 use crate::call::CallEvent;
 use crate::delivery::{Content, Delivery};
+use crate::design::FeedbackEvent;
 use crate::draft::DraftEvent;
 use crate::id::{
-    CallId, DeliveryId, EventId, LimbId, ModelCallId, ReplicaId, Seq, TaskId, Time, Timestamp,
-    ValueId,
+    CallId, DeliveryId, EventId, FeedbackId, LimbId, ModelCallId, ReplicaId, Seq, TaskId, Time,
+    Timestamp, ValueId,
 };
 use crate::limb::{Defined, Description, Prepared, Reach};
 use crate::model_call::ModelCallEvent;
+use crate::page::PageEvent;
 use crate::resource::Change;
 use crate::role::Role;
 use crate::task::TaskEvent;
@@ -152,6 +154,12 @@ pub enum Fact {
     Ranking(Ranking),
     /// Which task the face stating it shows Max.
     Focus(Focus),
+    /// A task's page changed or was shown to Max ([`crate::page`]). Stated
+    /// by the brain.
+    Page(TaskId, PageEvent),
+    /// What reaches the design keeper about how pages look or read
+    /// ([`crate::design::Feedback`]). Stated by the brain.
+    Feedback(FeedbackId, FeedbackEvent),
     /// The harness has a claude.ai login again: ends the wait that
     /// [`crate::model_call::Ending::SignedOut`] began, and any
     /// [`crate::model_call::Ending::Limited`] one, since the login may be
@@ -227,6 +235,8 @@ impl Fact {
             },
             Fact::Ranking(Ranking { order: _ }) => {}
             Fact::Focus(Focus { task: _ }) => {}
+            Fact::Page(_, event) => event.values(&mut values),
+            Fact::Feedback(_, _) => {}
         }
         values
     }

@@ -5,6 +5,7 @@ import { dress, paint, trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { dictate, dictation, editMessage, modelName, readOnly, say, sending } from "./compose.js";
 import { layer, session } from "./blobs.js";
+import { renderSheet, sheetSeen, sheetTop } from "./sheet.js";
 
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
 const contexts = new Map();
@@ -41,7 +42,10 @@ export async function renderLog(t) {
   stick(() => renderTail(s, t));
   if (pane.classList.contains("loading") && (s.head || !t.head)) settle(t);
   if (s.at && s.head) landAt(s);
+  // A page shown whole opens at its top once its chat is drawn above it.
+  else if (renderSheet(t) && (s.head || !t.head)) { pinned = false; s.follow = false; scrollTo(sheetTop()); sheetSeen(t); }
 }
+panel.addEventListener("sheet", () => { if (logState && byId[logState.id]) renderLog(byId[logState.id]); });
 
 // Opened at an entry (`#TASK@ENTRY`, card.js): the log scrolls to it and
 // marks it, drawing the earlier contexts it lies in as scrolling up would.
@@ -890,7 +894,10 @@ function following() {
 function stick(change) {
   const atBottom = following() || logState?.follow;
   change();
-  if (atBottom) { scrollTo(scrollEl.scrollHeight); if (logState) logState.follow = false; }
+  // Followed to where its reading starts: a page shown whole, at its top.
+  const top = logState?.follow ? sheetTop() : null;
+  if (top != null) pinned = false;
+  if (atBottom) { scrollTo(top ?? scrollEl.scrollHeight); if (logState) logState.follow = false; }
 }
 scrollEl.addEventListener("scroll", following, { passive: true });
 

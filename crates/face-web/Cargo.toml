@@ -6,6 +6,7 @@ license.workspace = true
 description = "The harness's web face: the task tree, a replica in every tab, and Max's compose box with dictation, over HTTPS."
 
 [dependencies]
+harness-body = { path = "../body" }
 harness-core = { path = "../core" }
 harness-face-tab = { path = "../face-tab" }
 harness-substrate = { path = "../substrate" }

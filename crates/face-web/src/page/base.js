@@ -99,10 +99,10 @@ export function markdown(text) {
 // A mermaid diagram where its source was. The library loads the first time
 // one is shown; a source it cannot draw stays as written.
 let mermaidLib = null, diagrams = 0;
-async function diagram(pre, source) {
+export async function diagram(pre, source) {
   try {
     mermaidLib ||= import("https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs")
-      .then((m) => { m.default.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" }); return m.default; });
+      .then((m) => { m.default.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict", htmlLabels: false, flowchart: { htmlLabels: false } }); return m.default; });
     const { svg } = await (await mermaidLib).render(`mermaid-${++diagrams}`, source);
     const fig = el("div", "diagram");
     fig.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true } });

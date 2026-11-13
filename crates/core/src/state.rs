@@ -14,17 +14,19 @@ use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
 use crate::build::{BuildId, Launch, Launched};
+use crate::design::FeedbackEvent;
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::fact::{Author, Fact, Refusal, Rejected, Stated};
 use crate::id::{
-    CallId, DeliveryId, EventId, LimbId, ModelCallId, ReplicaId, RoleId, Seq, TaskId, Time,
-    Timestamp, ValueId,
+    CallId, DeliveryId, EventId, FeedbackId, LimbId, ModelCallId, ReplicaId, RoleId, Seq, TaskId,
+    Time, Timestamp, ValueId,
 };
 use crate::legacy::{self, LimbKind, Now};
 use crate::limb::{
     Audience, Defined, Description, Host, Limb, LimbKey, LimbRow, Prepared, Reach, Workdir,
 };
 use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
+use crate::page::Page;
 use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::role::Role;
 use crate::schema::Harness;
@@ -139,6 +141,11 @@ pub struct State {
     limited_until: Option<Timestamp>,
     /// Since when the harness has had no claude.ai login, if it has none.
     signed_out: Option<Timestamp>,
+    /// Each task's page, once it has one ([`crate::page`]).
+    pages: OrdMap<TaskId, Page>,
+    /// What reached the design keeper, each with what has happened to it
+    /// since, oldest first.
+    feedback: OrdMap<FeedbackId, Vec<FeedbackEvent>>,
     open: Open,
 }
 
@@ -1010,6 +1017,32 @@ impl State {
                 self.signed_out.get_or_insert(record.at);
             }
             Fact::Draft(id, event) => self.fold_draft(*id, event, record)?,
+            Fact::Page(task, event) => {
+                if !self.tasks.contains_key(task) {
+                    return Err(Rejected::Unknown);
+                }
+                let mut page = self.pages.get(task).cloned().unwrap_or(Page {
+                    task: *task,
+                    stage: None,
+                    versions: Vec::new(),
+                });
+                page.apply(event, record.at).ok_or(Rejected::NotForTask)?;
+                self.pages.insert(*task, page);
+            }
+            Fact::Feedback(id, event) => {
+                let events = match event {
+                    FeedbackEvent::Given(_) => {
+                        if self.feedback.contains_key(id) {
+                            return Err(Rejected::Exists);
+                        }
+                        minted(id.0, record)?;
+                        Vec::new()
+                    }
+                    _ => self.feedback.get(id).cloned().ok_or(Rejected::Unknown)?,
+                };
+                self.feedback
+                    .insert(*id, [events, vec![event.clone()]].concat());
+            }
             Fact::Focus(focus) => {
                 let Author::Max = record.by else {
                     return Err(Rejected::Author);
@@ -1129,6 +1162,7 @@ impl State {
                     ),
                     TaskEvent::Expired => false,
                     TaskEvent::Moved(movement) => matches!(movement, Move::Back { .. }),
+                    TaskEvent::Described(_) => false,
                     TaskEvent::ModeSet(_)
                     | TaskEvent::Renamed(_)
                     | TaskEvent::Tuned(_)
@@ -1143,6 +1177,7 @@ impl State {
                 }
                 Fact::Call(_, CallEvent::Abandon | CallEvent::Backgrounded) => true,
                 Fact::Focus(_) | Fact::Seen(_) | Fact::Draft(..) => true,
+                Fact::Page(..) | Fact::Feedback(..) => false,
                 Fact::Role(_) | Fact::Limb(_) | Fact::Ranking(_) => true,
                 Fact::Launched(_)
                 | Fact::Shutdown { .. }
@@ -2755,6 +2790,16 @@ impl State {
     /// Whether the brain accepted `replica` as one of Max's faces.
     pub fn is_face(&self, replica: ReplicaId) -> bool {
         self.faces.contains(&replica)
+    }
+
+    /// A task's page, once it has one.
+    pub fn page(&self, task: TaskId) -> Option<&Page> {
+        self.pages.get(&task)
+    }
+
+    /// What reached the design keeper, each with what has happened to it.
+    pub fn feedback(&self) -> impl Iterator<Item = (&FeedbackId, &Vec<FeedbackEvent>)> {
+        self.feedback.iter()
     }
 
     pub fn draft(&self, id: DeliveryId) -> Option<&Draft> {

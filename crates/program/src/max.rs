@@ -2,10 +2,10 @@
 //! ([`State::faces_max`]) on top of its role's sets: the tools that reach
 //! him, and the instructions for talking with him.
 //!
-//! Its one tool today is `open_chat`, which opens a user-facing chat for
+//! Its tools are the page and ask tools ([`crate::page`]), with the guide
+//! to writing a page, and `open_chat`, which opens a user-facing chat for
 //! him as background work of its caller: a background call whose scope's
-//! one member is that chat. The pages design's tools that reach him (its
-//! page, `ask`) belong here too.
+//! one member is that chat.
 
 use harness_core::call::{Call, Caller};
 use harness_core::id::{CallId, Digest, LimbId};
@@ -22,13 +22,16 @@ pub use harness_core::limb::MAX as SET;
 pub use harness_core::task::OPEN_CHAT;
 
 /// How a task facing Max talks with him.
-const FACING: &str = "This chat is Max's. End your turn when you have answered him or need something only he knows: \
-ask it in your reply, and he answers here. Ending your turn gives him the move, and what still runs keeps running; \
+const FACING: &str = "This chat is Max's. End your turn when you have answered him or need something only he knows, \
+by presenting your page. Ending your turn gives him the move, and what still runs keeps running; \
 your work is done when he says so, not when you think it is. A fork of you continues this context, but its own turn \
 ends its own work.\n\n\
 He often watches you work, so talk to him as you go. Open with a line echoing what you take him to want, so he \
 catches a misreading before you spend anything on it; when you move to a new step, say in a sentence what you're \
 doing next. That's for him to follow along, not a report: keep it short.";
+
+/// How to write a page and ask Max things: the design system's guide.
+const GUIDE: &str = include_str!("page-guide.md");
 
 /// What `open_chat` adds to the instructions, for a task that can start
 /// fresh agents.
@@ -42,7 +45,9 @@ one when Max should talk to an agent himself, rather than through you.";
 /// chat it opens works in unless told otherwise.
 pub fn set(limb: LimbId, roles: &[&Role], dir: bool) -> ToolSet {
     let mut said = String::from(FACING);
-    let mut tools = Vec::new();
+    said.push_str("\n\n");
+    said.push_str(GUIDE);
+    let mut tools = crate::page::tools();
     if !roles.is_empty() {
         said.push_str("\n\n");
         said.push_str(OPENS);
