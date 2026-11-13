@@ -13,7 +13,9 @@
 //! to one of the caller's other tools, or a `spawn`, that no round waits on:
 //! its result arrives as a message, and its owner cannot finish until it
 //! has. `wait` waits in a round on some of that work, and its output is
-//! their results ([`harness_core::call::Wait`]). `stop`
+//! their results, or, naming none, for words ([`harness_core::call::Wait`]).
+//! `message` tells one of the caller's kin something, in the batch that
+//! settles it ([`harness_core::message::Message`]). `stop`
 //! abandons one of those calls, and `pass` hands one up the tree
 //! ([`harness_core::call::Owner`]). Their effects (the members' `Created`
 //! facts), and those of the [`crate::max`] set's `open_chat`, are appended
@@ -25,10 +27,11 @@ use harness_core::context::Rendered;
 use harness_core::delivery::Content;
 use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
 use harness_core::limb::{Audience, Instruction, Tool, ToolSet};
+use harness_core::message::{Kin, MESSAGE};
 use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::role::Role;
 use harness_core::state::State;
-use harness_core::task::{Context, Task};
+use harness_core::task::{Context, Outcome, Phase, Task};
 use harness_core::value::Bytes;
 use serde_json::{Value, json};
 
@@ -136,9 +139,10 @@ results.",
 it: it returns at once. Say what you are starting. When you have nothing to do until it lands, call `wait`: it returns \
 the first of your background work to land (`until: any`, the default) or all of it (`until: all`), each result whole \
 and given you only there. Never `sleep` on your own work. A result that lands while you are not waiting reaches you \
-as a message, and starts a new turn if yours has ended. Max's words end a wait, saying what still runs.\n\n\
+as a message, and starts a new turn if yours has ended. Words, Max's or another agent's message, end a wait, saying what \
+still runs.\n\n\
 End your turn when your work is done, with your result. You cannot finish while background work you own still \
-runs: `wait` for it, and when Max's words end a wait, answer him and wait again. `stop` background work when you no longer need it, \
+runs: `wait` for it, and when words end a wait, answer them and wait again. `stop` background work when you no longer need it, \
 or `pass` it to the agent that started you (to Max, if he started you), who owns it from then on: do that only for \
 what someone will still use after you finish, such as a dev server or a browser tab, and say why.",
     );
@@ -202,13 +206,26 @@ and returns at once: the agent that started you gets their results with yours.",
     });
     let wait = json!({
         "name": WAIT,
-        "description": "Wait for your own background work: until the first of it lands (`until: any`, the default) or all of it (`until: all`). The results come whole in this call's output. Max's words end it early, saying what still runs.",
+        "description": "Wait for your own background work: until the first of it lands (`until: any`, the default) or all of it (`until: all`). The results come whole in this call's output. With none running, name nothing to wait for words. Any words end it early, Max's or another agent's message, saying what still runs.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "on": { "type": "array", "items": { "type": "string" }, "description": "The background calls' names, or their labels (`call-…`). Default: all your running background work." },
+                "on": { "type": "array", "items": { "type": "string" }, "description": "The background calls' names, or their labels (`call-…`). Default: all your running background work, or, with none running, words alone." },
                 "until": { "type": "string", "enum": ["any", "all"], "description": "Return when any of them has landed, or all. Default `any`." }
             }
+        }
+    });
+    let message = json!({
+        "name": MESSAGE,
+        "description": "Tell an agent something now, without waiting for it: one that is waiting reads it at once, and one that is working in about half a minute. You can reach the agent that started you, the agents you started, and, in a chat with Max, his other chats. From the agent that started you it is instructions; from any other, a report or a request. Message what it needs before it would otherwise hear from you, and send no acknowledgements. To hear back, `wait`.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": { "type": "string", "description": "Its name or task id, or `owner` for the agent that started you." },
+                "words": { "type": "string" },
+                "quotes": { "type": "array", "items": { "type": "string" }, "description": "Labels of Max's words (`max-…`) to hand on verbatim." }
+            },
+            "required": ["to", "words"]
         }
     });
     let stop = json!({
@@ -241,6 +258,7 @@ and returns at once: the agent that started you gets their results with yours.",
         tool(ATTACH, attach),
         tool(BACKGROUND, background),
         tool(WAIT, wait),
+        tool(MESSAGE, message),
         tool(STOP, stop),
         tool(PASS, pass),
     ];
@@ -559,15 +577,15 @@ pub(crate) fn named(state: &State, owner: &Task, name: &str) -> Option<CallId> {
 
 /// What a `wait` by `owner` asks for.
 pub enum Waiting {
-    /// To wait on its running background calls.
+    /// To wait on its running background calls, or, naming none, for words.
     On(Wait),
-    /// Nothing: what it names has landed, or nothing runs. What it says.
+    /// Nothing: what it names has landed. What it says.
     Holds(String),
 }
 
 /// What a `wait` by `owner` asks for: the running background calls its
-/// input names, or all of them; or, when what it names has landed already,
-/// or nothing runs, to return at once.
+/// input names, or all of them, which may be none, when it waits for words;
+/// or, when what it names has landed already, to return at once.
 pub fn wait(state: &State, owner: &Task, input: &[u8]) -> Result<Waiting, String> {
     let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
     let until = match value["until"].as_str() {
@@ -577,7 +595,10 @@ pub fn wait(state: &State, owner: &Task, input: &[u8]) -> Result<Waiting, String
     };
     let (mut on, mut landed) = (Vec::new(), Vec::new());
     match &value["on"] {
+        // Naming nothing is waiting on all of it: a wait for words alone
+        // while work runs would outlast the work.
         Value::Null => on.clone_from(&owner.background),
+        Value::Array(names) if names.is_empty() => on.clone_from(&owner.background),
         Value::Array(names) => {
             for n in names {
                 let n = n.as_str().ok_or("`on` must be a list of names")?;
@@ -593,18 +614,14 @@ pub fn wait(state: &State, owner: &Task, input: &[u8]) -> Result<Waiting, String
         _ => return Err("`on` must be a list of names".into()),
     }
     on.dedup();
-    if !on.is_empty() && (landed.is_empty() || until == Until::All) {
+    // With nothing running, it waits for words alone.
+    if landed.is_empty() || (!on.is_empty() && until == Until::All) {
         return Ok(Waiting::On(Wait { on, until }));
     }
     let names = |calls: &[CallId]| -> String {
         let names: Vec<String> = calls.iter().map(|c| background_name(state, *c)).collect();
         names.join(", ")
     };
-    if landed.is_empty() {
-        return Ok(Waiting::Holds(
-            "You have no background work running, so there is nothing to wait on.".into(),
-        ));
-    }
     let mut said = format!(
         "Already landed, and its result has reached you: {}.",
         names(&landed)
@@ -613,6 +630,144 @@ pub fn wait(state: &State, owner: &Task, input: &[u8]) -> Result<Waiting, String
         said.push_str(&format!(" Still running: {}.", names(&on)));
     }
     Ok(Waiting::Holds(said))
+}
+
+/// What a `message` asks for: the task it tells, its words, the Max's words
+/// it hands on, and what its call says.
+pub struct Telling {
+    pub to: TaskId,
+    pub words: String,
+    pub quotes: Vec<ValueId>,
+    pub said: String,
+}
+
+/// What a `message` by `from` asks for. Its `to` names one of `from`'s kin
+/// ([`Kin`]): `owner`, or a name or task id among them, a live one before
+/// one that has finished. A name that matches no kin fails saying who can
+/// be reached; one that matches several live ones lists their ids.
+pub fn message(state: &State, from: &Task, input: &[u8]) -> Result<Telling, String> {
+    let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
+    let to = value["to"]
+        .as_str()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or("`to` must name an agent, or be `owner`")?;
+    let words = value["words"]
+        .as_str()
+        .filter(|w| !w.trim().is_empty())
+        .ok_or("`words` must say something")?;
+    let quotes = match &value["quotes"] {
+        Value::Null => Vec::new(),
+        Value::Array(labels) => (labels.iter())
+            .map(|l| {
+                let l = l.as_str().ok_or("`quotes` must be a list of labels")?;
+                quoted(state, from, l)
+            })
+            .collect::<Result<_, String>>()?,
+        _ => return Err("`quotes` must be a list of labels".into()),
+    };
+    let kin: Vec<(&Task, Kin)> = (state.tasks())
+        .filter_map(|t| Some((t, state.kin(from.id, t.id)?)))
+        .collect();
+    let named: Vec<&Task> = (kin.iter())
+        .filter(|(t, k)| match to {
+            "owner" => *k == Kin::Owner,
+            _ => t.name == to || t.id.to_string() == to,
+        })
+        .map(|(t, _)| *t)
+        .collect();
+    let live: Vec<&Task> = named.iter().copied().filter(|t| !t.is_done()).collect();
+    let recipient = match (live.as_slice(), named.last()) {
+        ([one], _) => *one,
+        ([], Some(done)) => return Err(finished(done)),
+        ([], None) => return Err(unreachable(to, &kin)),
+        (many, _) => {
+            let ids: Vec<String> = many.iter().map(|t| format!("`{}`", t.id)).collect();
+            return Err(format!(
+                "{} agents near you are named `{to}`: name one by its task id, {}.",
+                many.len(),
+                ids.join(" or ")
+            ));
+        }
+    };
+    if recipient.ends() {
+        return Err(format!(
+            "`{}` is being stopped, so it would never read this.",
+            recipient.name
+        ));
+    }
+    Ok(Telling {
+        to: recipient.id,
+        words: words.to_owned(),
+        quotes,
+        said: delivered(state, recipient),
+    })
+}
+
+/// What a `message` call says of its recipient, as it is told.
+fn delivered(state: &State, to: &Task) -> String {
+    let name = &to.name;
+    let waits = |step: &harness_core::task::Step| {
+        (step.outstanding.iter()).any(|c| state.call(*c).is_some_and(|r| r.waits.is_some()))
+    };
+    let parked = matches!(state.pause(to.id), Some((p, _)) if p != harness_core::task::Pause::Off);
+    let how = match to.phase() {
+        None => format!("`{name}` is starting, and reads this after its mandate."),
+        Some(Phase::Parked) => format!("`{name}` is parked, and reads this when Max resumes it."),
+        _ if parked => format!("`{name}` is paused, and reads this when Max resumes it."),
+        Some(Phase::AwaitingMax) => {
+            format!("`{name}` was waiting on Max. This wakes it; it keeps its place in his queue.")
+        }
+        Some(Phase::Listening) => format!("`{name}` had ended its turn. This wakes it."),
+        Some(Phase::Acting(step)) if waits(step) => {
+            format!("`{name}` was waiting, and this ends its wait.")
+        }
+        Some(_) => format!("`{name}` is working, and reads this in about half a minute."),
+    };
+    format!("Delivered: {how}")
+}
+
+/// Why a `message` to a finished agent fails.
+fn finished(task: &Task) -> String {
+    let how = match task.outcome() {
+        Some(Outcome::Failed { .. }) => "failed",
+        Some(Outcome::Abandoned { .. }) => "was stopped",
+        _ => "finished",
+    };
+    format!(
+        "`{}` {how} before your message, so nothing reads it: resume it with this as its mandate, if it's yours.",
+        task.name
+    )
+}
+
+/// Why a `message` to `to`, which names none of `kin`, fails: whom its
+/// sender can reach.
+fn unreachable(to: &str, kin: &[(&Task, Kin)]) -> String {
+    let names = |of: Kin| -> Vec<String> {
+        (kin.iter())
+            .filter(|(t, k)| *k == of && !t.is_done())
+            .map(|(t, _)| format!("`{}`", t.name))
+            .collect()
+    };
+    let mut reach = Vec::new();
+    for (of, one, many) in [
+        (Kin::Owner, "started you", "started you"),
+        (Kin::Member, "you started it", "you started them"),
+        (Kin::Peer, "Max's other chat", "Max's other chats"),
+    ] {
+        let names = names(of);
+        let why = if names.len() == 1 { one } else { many };
+        if !names.is_empty() {
+            reach.push(format!("{} ({why})", names.join(", ")));
+        }
+    }
+    match reach.is_empty() {
+        true => format!("No agent named `{to}` near you, and you can reach no one now."),
+        false => format!(
+            "No agent named `{to}` near you. You can reach {}.",
+            reach.join("; ")
+        ),
+    }
 }
 
 /// The newest of `owner`'s settled background calls named `name`, or the
