@@ -23,9 +23,10 @@ const failed = new Set();   // the keys of paintings the worker could not paint
 // painting is fullest.
 const SIDE = 70, NAMES = 170, ABOVE = 60, BELOW = 170, POOL = 90;
 // A painting's longest side, in bitmap pixels: the largest texture every
-// GPU takes, phones' included. A project taller than that at the zoom's step
+// GPU takes, phones' included; and its most pixels, so a few paintings
+// fit in a phone's memory. A project larger than that at the zoom's step
 // is painted coarser rather than not at all.
-const MAXPX = 4096;
+const MAXPX = 4096, MOST = 4e6;
 const worker = typeof OffscreenCanvas === "function" ? new Worker(new URL("./regions-paint.js", import.meta.url), { type: "module" }) : null;
 let queued = false, painting = 0, inflight = null;
 
@@ -36,8 +37,13 @@ export function paintRegions() {
   requestAnimationFrame(() => { queued = false; if (!inflight) next(); });
 }
 
-// The camera moved: paint again only if the zoom passed a step.
-export function zoomed() { if (step() !== painting) paintRegions(); }
+// The camera moved: paint again only if the zoom passed a step, once it
+// has rested there a moment, so a pinch or a fly paints only where it ends.
+let zooming = 0;
+export function zoomed() {
+  clearTimeout(zooming);
+  zooming = setTimeout(() => { if (step() !== painting) paintRegions(); }, 250);
+}
 
 // Bitmap pixels per map unit: the zoom's power of two, at up to 2.
 const step = () => Math.min(2, Math.max(0.25, 2 ** Math.round(Math.log2(cam.k * Math.min(2, devicePixelRatio || 1)))));
@@ -84,7 +90,7 @@ function wanted() {
       return { x: Math.round(q.x - r.x), y: Math.round(q.y - r.y), r: POOL, slot: n.t.look.slot };
     });
     painting = step();
-    const scale = Math.min(painting, MAXPX / r.w, MAXPX / r.h);
+    const scale = Math.min(painting, MAXPX / r.w, MAXPX / r.h, Math.sqrt(MOST / (r.w * r.h)));
     out.set(top.id, { look: top.look, r, pools, scale, key: JSON.stringify([top.look, r, pools, scale]) });
   }
   return out;
