@@ -28,11 +28,14 @@ const PITCH = 20, CLEAR = 8, SPIN = 5;
 // under the edge of its dots. A taper runs from TIP up to its line's width
 // over at most TAPER, then keeps it; it narrows to a point over its last
 // POINT, which stops NGAP short of the dot it starts from or rejoins. A
-// crossing's gap is GAP each side of the line over it.
+// crossing's gap is GAP each side of the line over it, and only where the
+// lines cross at STEEP or more: at a shallower angle they run along each
+// other, and a gap would cut the line under into islands, so the line over
+// simply covers it.
 export const LIFE = 2.2;
 const TOOL = 1.2;
 export const GAP = 1.5;
-const TIP = .5, POINT = 4, NGAP = 1.5, TUCK = -.6, TAPER = 48;
+const TIP = .5, POINT = 4, NGAP = 1.5, TUCK = -.6, TAPER = 48, STEEP = Math.PI / 6;
 // Ports: the lines out of a node's bottom, and into its top, spread evenly
 // over the WIDE either side of upright, its own lifeline upright in the
 // middle and each other line on the side facing its other end, in the
@@ -83,7 +86,7 @@ export function lanes(nodes) {
   }
   const cuts = crossings(edges);
   const key = (e) => `${e.v.id}>${e.d.id}`;
-  const gaps = edges.map((e, i) => cuts.filter((c) => c.under === i).map((c) => ({ over: key(edges[c.over]), ...near(edges[c.over], c, e.P) })));
+  const gaps = edges.map((e, i) => cuts.filter((c) => c.under === i && c.angle >= STEEP).map((c) => ({ over: key(edges[c.over]), ...near(edges[c.over], c) })));
   const sheet = sheets(edges, gaps);
   return { at: new Map(V.map((v) => [v.id, { x: v.x, y: v.y }])), cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, sheet: sheet[i], gaps: gaps[i] })) };
 }
@@ -437,8 +440,9 @@ function over(P, u) {
 // ─── Crossings ─────────────────────────────────────────────────────────────
 // Every place two lines of different lives cross, away from a node both
 // end at: the more upright one goes over, the other under. Each as
-// { over, under, at, seg, forced }: `over` and `under` the indices of the
-// edges, `seg` the over one's segment there, ending at P[seg], and forced
+// { over, under, at, seg, angle, forced }: `over` and `under` the indices
+// of the edges, `seg` the over one's segment there, ending at P[seg],
+// `angle` between the two there, from 0 to a right angle, and forced
 // when no routing could avoid it: as many of two lives' crossings as the
 // times their order across changes from one of their dots' rows to the
 // next, where the dots pin them. A line out of a dot into another life's
@@ -471,7 +475,7 @@ export function crossings(edges) {
       if (seen.has(key)) continue;
       seen.add(key);
       const [o, u] = slope(A) <= slope(B) ? [A, B] : [B, A];
-      out.push({ over: o.i, under: u.i, at: p, seg: o.j, forced: false });
+      out.push({ over: o.i, under: u.i, at: p, seg: o.j, angle: angle(A, B), forced: false });
     }
   }
   const lives = chains(edges), left = new Map();
@@ -518,6 +522,10 @@ function swaps(A, B) {
 // line out of a dot into another life's is its own.
 const own = (e) => (e.kind === "port" ? `${e.d.id}>${e.v.id}` : (e.kind === "fade" ? e.d : e.v).n.lane);
 const slope = (s) => Math.abs((s.b[0] - s.a[0]) / (s.b[1] - s.a[1] || 1e-9));
+const angle = (s, t) => {
+  const u = [s.b[0] - s.a[0], s.b[1] - s.a[1]], v = [t.b[0] - t.a[0], t.b[1] - t.a[1]];
+  return Math.atan2(Math.abs(u[0] * v[1] - u[1] * v[0]), Math.abs(u[0] * v[0] + u[1] * v[1]));
+};
 function meet(p, q, r, s) {
   const d = (q[0] - p[0]) * (s[1] - r[1]) - (q[1] - p[1]) * (s[0] - r[0]);
   if (!d) return null;
@@ -527,25 +535,22 @@ function meet(p, q, r, s) {
 }
 
 // The over line of a crossing near where it crosses, as { P, W }: SPAN
-// along it each way, and on until its band is clear of the line under it
-// (U), where they cross at a shallow angle. The page erases that band, GAP
-// wider than it each side, from the line under it, so the gap follows both
-// lines and touches nothing else.
-const SPAN = 4 * (LIFE + GAP);
-function near(e, { at, seg }, U) {
+// along it each way. The page erases that band, GAP wider than it each
+// side, from the line under it, so the gap follows both lines and touches
+// nothing else. Two lines LIFE wide clear each other's gap once LIFE + GAP
+// apart, within (LIFE + GAP) / sin(STEEP) of a crossing at STEEP, the
+// shallowest that has a gap; SPAN is twice that, room for them to bend.
+const SPAN = 2 * (LIFE + GAP) / Math.sin(STEEP);
+function near(e, { at, seg }) {
   const w = (i) => e.W?.[i] ?? LIFE, [a, b] = [e.P[seg - 1], e.P[seg]];
   const t = Math.hypot(at[0] - a[0], at[1] - a[1]) / (Math.hypot(b[0] - a[0], b[1] - a[1]) || 1);
   const mid = [...at, w(seg - 1) + t * (w(seg) - w(seg - 1))];
-  const clear = (p) => !U.some((q, i) => i && close(U[i - 1], q, p, p[2] / 2 + GAP + LIFE / 2));
   const walk = (i, step) => {
     const out = [];
     let p = mid, s = 0;
     for (; i >= 0 && i < e.P.length; i += step) {
       const q = [...e.P[i], w(i)], d = Math.hypot(q[0] - p[0], q[1] - p[1]);
-      for (let l = Math.max(0, SPAN - s); l < d; l++) {
-        const r = p.map((v, k) => v + (l / d) * (q[k] - v));
-        if (clear(r)) return [...out, r];
-      }
+      if (s + d >= SPAN) return [...out, p.map((v, k) => v + ((SPAN - s) / d) * (q[k] - v))];
       out.push(q); s += d; p = q;
     }
     return out;
