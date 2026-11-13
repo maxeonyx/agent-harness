@@ -78,7 +78,8 @@ const IDLE = { r: .17, g: 0 }, ACTIVE = { r: .42, g: -.05 };
 // gap if not IDLE's, and its colours. A `still` state waits on something
 // outside the agent: its blob does not wobble, and settles. A `bare` one
 // shows no idle icons. Paused, a task rests in the brain: the brain's
-// shape, grey, still and bare.
+// shape, grey, still and bare. Loading, the page has yet to read what a
+// chat holds: grey and bare, its balls circling the centre.
 export const STATES = {
   first:     { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
   streaming: { active: "model", centre: .3, col: [C.working, C.working, C.paper] },
@@ -89,6 +90,7 @@ export const STATES = {
   max:       { active: "max", centre: .3, still: true, col: [C.yours, C.yours, C.paper] },
   held:      { active: "model", centre: .32, size: .36, still: true, col: [tint(C.red, .12), C.red, C.red] },
   starting:  { active: null, centre: .4, col: [C.working, C.working, C.paper] },
+  loading:   { active: null, centre: .4, bare: true, col: [C.faint, C.faint, C.paper] },
   paused:    { active: "centre", centre: .54, gap: -.15, still: true, bare: true, col: [[233, 229, 217], C.faint, C.muted] },
   done:      { active: null, centre: .48, merged: true, still: true, col: [C.green, C.green, C.paper] },
   failed:    { active: null, centre: .48, merged: true, still: true, col: [C.red, C.red, C.paper] },
@@ -848,7 +850,8 @@ export function layer(host) {
           const ph = (t * .9 - k / 3) % 1;
           gr = .2 * Math.sin(Math.PI * ph); gg = .25 + .5 * ph - st.centre - gr;
         }
-        const r = 4 * i + 1 + k, g = 3 * i + k, an = SAT_ANG[k], heard = SAT_KEYS[k] === "max" && s.voice !== null;
+        if (name === "loading") gr = IDLE.r + .07 * Math.sin(t * 5 - k * 2 * Math.PI / 3); // circling the centre, swelling in turn
+        const r = 4 * i + 1 + k, g = 3 * i + k, an = SAT_ANG[k] + (name === "loading" ? t * 2.2 : 0), heard = SAT_KEYS[k] === "max" && s.voice !== null;
         if (heard) gr += VOICE * s.voice;
         if (heard ? pull(R, RV, r, gr, dt, 28, 400) : pull(R, RV, r, gr, dt, 17)) stirring = true;
         if (pull(G, GV, g, gg, dt, 26)) stirring = true;

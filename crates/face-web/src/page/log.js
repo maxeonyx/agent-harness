@@ -30,6 +30,7 @@ export async function renderLog(t) {
   if (s.seen !== seen) {
     s.seen = seen;
     const head = t.head, moved = s.head !== head;
+    if (moved && head && s.rendered.length === 0 && !contexts.has(head)) load(t);
     const [chain, versions] = await Promise.all([moved && head ? contextOf(head) : [], versionsOf(t.id)]);
     if (logState !== s || s.seen !== seen) return;
     if (!chain) { s.seen = undefined; return; }
@@ -38,6 +39,7 @@ export async function renderLog(t) {
     stick(() => markVersions(s));
   }
   stick(() => renderTail(s, t));
+  if (pane.classList.contains("loading") && (s.head || !t.head)) settle(t);
   if (s.at && s.head) landAt(s);
 }
 
@@ -798,8 +800,20 @@ function renderTail(s, t) {
 // and a tap goes to the bottom. Where it is and how big is the scroll's alone
 // (`card.css`). While the chat waits on Max a tap also starts dictation, and
 // while he dictates its microphone swells with his voice and a tap stops it.
-const blobSession = session(), dock = $(".pane > .dock", panel);
+const blobSession = session(), dock = $(".pane > .dock", panel), pane = dock.parentElement;
 let blobs, blobBox = null, blobTask = null;
+// While a chat's log loads its blob waits, loading, in the middle of the
+// empty log (`card.css`); once the log is drawn it glides from there to its
+// place below the last entry, and shows the chat's state.
+function load(t) { pane.classList.add("loading"); showBlob(t); }
+// Its acts, hidden while it loads, come down with it.
+function settle(t) {
+  const from = dock.getBoundingClientRect().top;
+  pane.classList.remove("loading");
+  showBlob(t);
+  const glide = [{ translate: `0 ${from - dock.getBoundingClientRect().top}px` }, { translate: "0 0" }];
+  for (const x of [dock, $(".pane > .acts", panel)]) x.animate(glide, { duration: 700, easing: "cubic-bezier(.3, 0, .2, 1)" });
+}
 function showBlob(t) {
   if (blobs === undefined) blobs = layer(dock);
   dock.hidden = !blobs;
@@ -813,6 +827,7 @@ function showBlob(t) {
     dock.append(blobBox);
   }
   dress(blobSession, t, blobTask !== t.id);
+  if (pane.classList.contains("loading")) blobSession.set("loading", true);
   blobBox.title = blobSession.state === "max" && can.dictation ? "Go to bottom and dictate" : "Go to bottom";
   blobTask = t.id;
 }
