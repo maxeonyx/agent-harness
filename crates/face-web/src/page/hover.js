@@ -123,11 +123,13 @@ export function fillTip() {
   tip.hidden = false;
 }
 const BEGAN = { start: "Started", carry: "Compacted", join: "Took in results", version: "Edited" };
-// A chip's call, as the task's background calls have it.
+// A chip's call, as whoever holds it now has it: a task's background
+// calls, or for Max, what some task handed him.
 function callOf(n) {
   const w = n.work;
-  return [...(n.t.background || []), ...(n.t.handed || [])].find((c) => c.id === w.call)
-    || { id: w.call, name: w.name, tool: "background", status: w.running ? "running" : "settled", owner: w.handed ? "max" : n.t.id };
+  const calls = w.holder === "max" ? Object.values(byId).flatMap((t) => t.handed || []) : byId[w.holder]?.background || [];
+  return calls.find((c) => c.id === w.call)
+    || { id: w.call, name: w.name, tool: "background", status: w.running ? "running" : "settled", owner: w.holder };
 }
 // The task it belongs to, its actions, and Open: drawn again only when
 // they change, so an armed action stays armed.

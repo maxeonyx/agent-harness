@@ -406,8 +406,9 @@ pub struct Stale {
 pub enum Hold {
     /// The subscription's limit, until it resets ([`Ending::Limited`]).
     Limited { until: Timestamp },
-    /// No claude.ai login ([`Ending::SignedOut`]) since `since`: until Max
-    /// signs in, which has no time of its own.
+    /// No claude.ai login since `since`, found by a request
+    /// ([`Ending::SignedOut`]) or at a launch ([`Fact::SignedOut`]): until
+    /// Max signs in, which has no time of its own.
     SignedOut { since: Timestamp },
 }
 
@@ -481,8 +482,9 @@ pub enum Waiting {
 }
 
 /// How long, in milliseconds, Max's words wait for a task's round to end
-/// by itself before what it waits on moves to the background
-/// ([`Todo::Background`]): a quick call answers them in its own time.
+/// by itself, and each call of it has had since it was made, before it
+/// moves to the background ([`Todo::Background`]): a quick call answers
+/// them in its own time, even one made after they came.
 pub const HEARD_AFTER: u64 = 3_000;
 
 /// One thing the brain should do now. The whole of its loop: act on each,
@@ -557,7 +559,8 @@ pub enum Todo {
     Settle(CallId),
     /// Move these calls of the task's round to the background, in one
     /// batch ([`CallEvent::Backgrounded`]): every call still outstanding
-    /// [`HEARD_AFTER`] Max's words or one of his acts reached the task, or
+    /// [`HEARD_AFTER`] after both it was made and Max's words or one of his
+    /// acts reached the task, or
     /// the spawns of a round he interrupted.
     Background(TaskId, Vec<CallId>),
     /// Every member of an aside's scope but the asides is done, and it has
@@ -997,7 +1000,15 @@ impl State {
                 self.faces.insert(*replica);
             }
             Fact::Seen(_) => {}
-            Fact::SignedIn => self.signed_out = None,
+            // A sign-in may be another account, whose limit is its own: if
+            // it is limited too, its first refused request says so again.
+            Fact::SignedIn => {
+                self.signed_out = None;
+                self.limited_until = None;
+            }
+            Fact::SignedOut => {
+                self.signed_out.get_or_insert(record.at);
+            }
             Fact::Draft(id, event) => self.fold_draft(*id, event, record)?,
             Fact::Focus(focus) => {
                 let Author::Max = record.by else {
@@ -1136,6 +1147,7 @@ impl State {
                 Fact::Launched(_)
                 | Fact::Shutdown { .. }
                 | Fact::SignedIn
+                | Fact::SignedOut
                 | Fact::ModelCall(..)
                 | Fact::Call(..)
                 | Fact::Change(_)
@@ -2183,6 +2195,17 @@ impl State {
             self.put(task);
         }
         let mark = Mark::of(record);
+        // A scope's result carries the words Max wrote to a member after it
+        // was done: its owner has heard them.
+        if let Some(owner) = self.call_owner(id) {
+            let late: Vec<ValueId> = (self.members(Scope::Spawn(id)))
+                .flat_map(|m| self.unread_words(m))
+                .map(|(_, words)| words)
+                .collect();
+            for words in late {
+                self.say(words, owner, mark);
+            }
+        }
         // A settlement Max authors is his words, heard by the caller's task.
         if let Author::Max = record.by
             && let Some(output) = outcome.output()
@@ -2740,6 +2763,11 @@ impl State {
         self.limited_until.filter(|until| *until > now)
     }
 
+    /// Whether the account waits for a sign-in ([`Hold::SignedOut`]).
+    pub fn signed_out(&self) -> bool {
+        self.signed_out.is_some()
+    }
+
     /// What every ready task waits on at `now`, if anything: a sign-in
     /// first, since it has no end of its own.
     pub fn hold(&self, now: Timestamp) -> Option<Hold> {
@@ -2903,11 +2931,13 @@ impl State {
 
     /// The calls of the task's round the brain moves to the background now
     /// ([`Todo::Background`]): its held calls ([`State::held`]) at once;
-    /// all of them once Max's words, or a turn one of his acts asks for,
-    /// have waited [`HEARD_AFTER`] for the round to end by itself; while he
-    /// interrupts it, its spawns, whose scopes his interrupt never stops.
-    /// Never a fresh context's attachments, and never a wait, which his
-    /// words settle instead ([`Todo::Settle`]).
+    /// each that has had [`HEARD_AFTER`] since it
+    /// was made, once Max's words, or a turn one of his acts asks for, have
+    /// waited as long for the round to end by itself, so a quick call made
+    /// after his words came (a last response's report among them) ends in
+    /// its own time; while he interrupts it, its spawns, whose scopes his
+    /// interrupt never stops. Never a fresh context's attachments, and never
+    /// a wait, which his words settle instead ([`Todo::Settle`]).
     fn backgrounds(&self, task: &Task, now: Timestamp) -> Vec<CallId> {
         let Some(Phase::Acting(step)) = task.phase() else {
             return Vec::new();
@@ -2917,7 +2947,13 @@ impl State {
         }
         match task.drain() {
             None if self.spoken_to(task, Some((HEARD_AFTER, now))) => (step.outstanding.iter())
-                .filter(|c| self.calls.get(c).is_none_or(|r| r.waits.is_none()))
+                .filter(|c| {
+                    self.held(**c)
+                        || self.calls.get(c).is_none_or(|r| {
+                            r.waits.is_none()
+                                && now >= crate::cancel::deadline(r.made.at, HEARD_AFTER)
+                        })
+                })
                 .copied()
                 .collect(),
             None => (step.outstanding.iter())
@@ -2932,10 +2968,12 @@ impl State {
         }
     }
 
-    /// Max's words to the task that no request has read yet, oldest first:
-    /// what an aside the brain opened for them took with it, in records
-    /// from before his words reached a waiting task directly.
-    fn unread_words(&self, task: &Task) -> Vec<(DeliveryId, ValueId)> {
+    /// Max's words to the task that no request has read yet, oldest first.
+    /// What an aside the brain opened for them took with it, in records
+    /// from before his words reached a waiting task directly; and, of a
+    /// finished task, what Max wrote to it after it was done, which goes
+    /// up to its owner with its result.
+    pub fn unread_words(&self, task: &Task) -> Vec<(DeliveryId, ValueId)> {
         (task.pending.iter())
             .filter_map(|p| match p {
                 Input::Delivery(id) => self.deliveries.get(id),
