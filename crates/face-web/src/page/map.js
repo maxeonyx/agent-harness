@@ -1,5 +1,5 @@
 import { ago, when } from "./base.js";
-import { lanes } from "./layout.js";
+import { layOut } from "./layout.js";
 
 // ─── The model: the view as a map ──────────────────────────────────────────
 // The map is a graph of how contexts began, compacted, forked, spawned,
@@ -373,7 +373,7 @@ export function layout() {
     if (p.c.folded) continue;
     let l = was.get(p.sig);
     if (!l) {
-      l = lanes(p.ns);
+      l = layOut(p.ns);
       l.x0 = Infinity; l.x1 = -Infinity; l.y1 = 0;
       for (const n of p.ns) { const q = l.at.get(n.id); l.x0 = Math.min(l.x0, q.x - n.lo); l.x1 = Math.max(l.x1, q.x + n.hi); l.y1 = Math.max(l.y1, q.y + n.along / 2); }
     }
