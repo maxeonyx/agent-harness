@@ -397,6 +397,11 @@ impl Brain {
                     .collect(),
             }),
             Todo::Linger(task) => self.prompt(task, Prompt::Lingering),
+            Todo::Look(task) => {
+                if let Some(look) = self.state().look_for(task) {
+                    self.fact(Fact::Task(task, TaskEvent::Looked(look)));
+                }
+            }
             Todo::Park(task) => self.prompt(task, Prompt::Park),
             Todo::Resume(task) => self.prompt(task, Prompt::Resume),
             Todo::Unblock(aside) => self.prompt(aside, Prompt::Unblocked),

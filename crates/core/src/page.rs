@@ -87,7 +87,7 @@
 //! Every page tool, `describe` included, is the `max` set's.
 //!
 //! **Not yet folded.** `Fact::Kind(SourceKind)`, `Fact::Design(Design)`,
-//! `TaskEvent::Looked(Look)`, `Phase::AwaitingMax` carrying an
+//! `Phase::AwaitingMax` carrying an
 //! `Option<Presented>` and `Prompt::Present`, Max's words carrying his
 //! [`crate::ask::Press`]es and the [`crate::design::Screen`] he was
 //! reading, a `says` on `resource::Change`, and `attention::Ranked`

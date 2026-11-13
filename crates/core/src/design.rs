@@ -123,6 +123,10 @@ pub struct Design {
     pub source: Option<Observation>,
 }
 
+/// The themes the harness gives areas, by [`Theme::name`], in the order a
+/// new area takes them when none is worn more recently than another.
+pub const THEMES: [&str; 5] = ["tussock", "harbour", "kauri", "paua", "marama"];
+
 /// An art direction an agent's page wears.
 ///
 /// **Concept.** A finished piece of design, made with care in the design

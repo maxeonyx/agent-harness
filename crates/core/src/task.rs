@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::call::{CallEvent, Caller, Outcome as CallOutcome, Owner};
 use crate::context::{Entry, EntryId, Message, Note, Rendered, Role, Root, Span};
 use crate::delivery::{Content, Delivery, Prompt};
+use crate::design::Look;
 use crate::fact::{Author, Fact, Rejected, Stated};
 use crate::id::{CallId, DeliveryId, LimbId, ModelCallId, RoleId, TaskId, Timestamp, ValueId};
 use crate::limb::Workdir;
@@ -120,6 +121,10 @@ pub struct Task {
     pub max_actions: Vec<CallId>,
     /// What its agent says about itself: its title and its plan.
     pub description: Description,
+    /// What it wears, once the harness has given it ([`TaskEvent::Looked`]).
+    /// `None` for a fork, a resume or an aside, which wear their source's
+    /// ([`State::look`]).
+    pub look: Option<Look>,
     pub life: Life,
 }
 
@@ -835,6 +840,8 @@ pub enum TaskEvent {
     /// Its agent's `describe`: what it says about itself, each field given
     /// replacing only itself ([`Description::and`]).
     Described(Description),
+    /// The harness gives it what it wears ([`Look`]). Stated by the brain.
+    Looked(Look),
     /// Max sets the model and effort its next requests run at
     /// ([`Tuning`]), the whole setting at once.
     Tuned(Tuning),
@@ -937,6 +944,7 @@ impl TaskEvent {
             | TaskEvent::Renamed(_)
             | TaskEvent::Drain(_)
             | TaskEvent::Expired
+            | TaskEvent::Looked(_)
             | TaskEvent::Pause(_) => {}
             TaskEvent::Described(description) => description.values(out),
         }
@@ -1204,6 +1212,7 @@ impl Task {
             background: Vec::new(),
             max_actions,
             description: Description::default(),
+            look: None,
             life,
         })
     }
@@ -1399,6 +1408,7 @@ impl Task {
             }
             TaskEvent::Renamed(name) => self.name = name.clone(),
             TaskEvent::Described(said) => self.description = self.description.and(said),
+            TaskEvent::Looked(look) => self.look = Some(look.clone()),
             TaskEvent::Tuned(tuning) => self.tuning = tuning.clone(),
             TaskEvent::Moved(Move::Root(start)) => {
                 if self.life != Life::Starting {

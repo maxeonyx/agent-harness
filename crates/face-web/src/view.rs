@@ -332,6 +332,14 @@ fn task(state: &State, value: Text, t: &Task, last: Option<&Ended>, now: Timesta
         "closing": t.live().is_some_and(|l| l.closing),
         "origin": origin,
         "from": from.map(|t| t.to_string()),
+        // What it wears: its area's theme, and who it is among those wearing it.
+        "look": state.look(t.id).map(|l| json!({
+            "theme": l.theme,
+            "slot": l.identity.slot,
+            "seed": l.identity.seed.to_string(),
+            "root": l.identity.root.to_string(),
+            "line": l.identity.line,
+        })),
         "owner": state.owner(t.id).map(|t| t.to_string()),
         // Its result is still to reach its owner: it runs, or it is done
         // and the owner has not read it yet.
@@ -620,6 +628,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             TaskEvent::ModeSet(mode) => format!("{} is now {mode:?}", name(*id)),
             TaskEvent::Renamed(new) => format!("{} renamed to {new}", name(*id)),
             TaskEvent::Described(_) => format!("{} described itself", name(*id)),
+            TaskEvent::Looked(look) => format!("{} wears {}", name(*id), look.theme),
             TaskEvent::Tuned(tuning) => format!(
                 "{} tuned to {} at {} effort",
                 name(*id),

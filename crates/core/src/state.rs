@@ -14,7 +14,7 @@ use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
 use crate::build::{BuildId, Launch, Launched};
-use crate::design::FeedbackEvent;
+use crate::design::{FeedbackEvent, Identity, Look, THEMES};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::fact::{Author, Fact, Refusal, Rejected, Stated};
 use crate::id::{
@@ -576,6 +576,10 @@ pub enum Todo {
     /// An autonomous task ended its turn with background work running and
     /// has not been told what that means: deliver [`Prompt::Lingering`].
     Linger(TaskId),
+    /// A task wearing a look of its own has none yet: give it
+    /// [`State::look_for`]'s ([`TaskEvent::Looked`]). Listed for each live
+    /// task's wearer, and for the top of its area first.
+    Look(TaskId),
 }
 
 impl State {
@@ -1162,7 +1166,7 @@ impl State {
                     ),
                     TaskEvent::Expired => false,
                     TaskEvent::Moved(movement) => matches!(movement, Move::Back { .. }),
-                    TaskEvent::Described(_) => false,
+                    TaskEvent::Described(_) | TaskEvent::Looked(_) => false,
                     TaskEvent::ModeSet(_)
                     | TaskEvent::Renamed(_)
                     | TaskEvent::Tuned(_)
@@ -2797,6 +2801,125 @@ impl State {
         self.pages.get(&task)
     }
 
+    /// What `task` wears: its wearer's look, once it has been given one.
+    pub fn look(&self, task: TaskId) -> Option<&Look> {
+        self.tasks.get(&self.wearer(task))?.look.as_ref()
+    }
+
+    /// The task whose look `task` wears: itself, or for a fork, a resume or
+    /// an aside, its source's, since each carries on its source's context.
+    fn wearer(&self, mut task: TaskId) -> TaskId {
+        loop {
+            match self.tasks.get(&task).map(|t| &t.origin) {
+                Some(Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from }) => {
+                    task = *from
+                }
+                _ => return task,
+            }
+        }
+    }
+
+    /// The wearer above `task` in its area: its owner's.
+    fn wears_under(&self, task: TaskId) -> Option<TaskId> {
+        self.owner(task).map(|o| self.wearer(o))
+    }
+
+    /// The wearers from `task` up to the top of its area, `task` first.
+    fn area_line(&self, task: TaskId) -> Vec<TaskId> {
+        let mut line = vec![task];
+        while let Some(up) = self.wears_under(line[line.len() - 1]) {
+            if line.contains(&up) {
+                break;
+            }
+            line.push(up);
+        }
+        line
+    }
+
+    /// The look the harness gives `task`, a wearer with none yet; `None`
+    /// while the top of its area has none.
+    ///
+    /// An area is a chat Max started and everything under it. Its top is
+    /// given the theme no live area wears, else the one worn least
+    /// recently, so areas look as unlike each other as the themes allow;
+    /// everything under it wears the same theme. Each takes the lowest
+    /// identity slot no live task wearing that theme holds, so the agents
+    /// on the map at once wear the slots the art made most distinct.
+    pub fn look_for(&self, task: TaskId) -> Option<Look> {
+        let up = self.area_line(task);
+        let top = *up.last().expect("a line holds its task");
+        let theme = match top == task {
+            true => self.least_worn(),
+            false => self.look(top)?.theme.clone(),
+        };
+        let held: BTreeSet<u8> = (self.tasks.values())
+            .filter(|t| !t.is_done())
+            .filter_map(|t| t.look.as_ref())
+            .filter(|l| l.theme == theme)
+            .map(|l| l.identity.slot)
+            .collect();
+        let slot = (0..=u8::MAX).find(|s| !held.contains(s)).unwrap_or(0);
+        // Each step down, the child's place among its siblings by creation.
+        let line = (up.windows(2).rev())
+            .map(|pair| {
+                let (child, parent) = (pair[0], pair[1]);
+                let mut siblings: Vec<&Task> = (self.tasks.values())
+                    .filter(|t| matches!(t.origin, Origin::Fresh { .. }))
+                    .filter(|t| self.wears_under(t.id) == Some(parent))
+                    .collect();
+                siblings.sort_by_key(|t| t.created.seq);
+                siblings.iter().position(|t| t.id == child).unwrap_or(0) as u32
+            })
+            .collect();
+        Some(Look {
+            theme,
+            identity: Identity {
+                slot,
+                seed: task,
+                root: top,
+                line,
+            },
+        })
+    }
+
+    /// The theme for a new area: one no live task wears, else the one worn
+    /// least recently; the earlier in [`THEMES`] on a tie.
+    fn least_worn(&self) -> String {
+        let mut worn: BTreeMap<&str, (i64, usize)> = BTreeMap::new();
+        for t in self.tasks.values() {
+            let Some(look) = &t.look else { continue };
+            let e = worn.entry(look.theme.as_str()).or_default();
+            match t.is_done() {
+                true => e.0 = e.0.max(t.since.0),
+                false => (e.0, e.1) = (i64::MAX, e.1 + 1),
+            }
+        }
+        let at = |name: &str| worn.get(name).copied().unwrap_or_default();
+        let pick = (THEMES.iter().enumerate()).min_by_key(|(i, name)| (at(name), *i));
+        pick.expect("there are themes").1.to_string()
+    }
+
+    /// The looks the brain should give now: each live task's wearer that
+    /// has none, or the top of its area while that has none.
+    fn looks_due(&self) -> BTreeSet<TaskId> {
+        let mut due = BTreeSet::new();
+        for t in self.live() {
+            let w = self.wearer(t.id);
+            let Some(wearer) = self.tasks.get(&w) else {
+                continue;
+            };
+            if wearer.look.is_some() || !matches!(wearer.origin, Origin::Fresh { .. }) {
+                continue;
+            }
+            let top = *self.area_line(w).last().expect("a line holds its task");
+            due.insert(match self.look(top) {
+                Some(_) => w,
+                None => top,
+            });
+        }
+        due
+    }
+
     /// What reached the design keeper, each with what has happened to it.
     pub fn feedback(&self) -> impl Iterator<Item = (&FeedbackId, &Vec<FeedbackEvent>)> {
         self.feedback.iter()
@@ -3387,6 +3510,7 @@ impl State {
             .filter(|l| self.runs(*l) == Some(Runs::Process) && self.connected(*l).is_none());
         todo.extend(connect.map(Todo::Connect));
         todo.extend(starting);
+        todo.extend(self.looks_due().into_iter().map(Todo::Look));
         // A brain shutting down starts nothing, and cuts what it has not
         // been able to finish by its deadline.
         if let Some(deadline) = self.shutdown {
