@@ -23,12 +23,13 @@
 use harness_core::call::{Call, Caller, Until, Wait};
 use harness_core::context::Rendered;
 use harness_core::delivery::Content;
+use harness_core::fact::Author;
 use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
 use harness_core::limb::{Audience, Instruction, Tool, ToolSet};
 use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::role::Role;
 use harness_core::state::State;
-use harness_core::task::{Context, Task};
+use harness_core::task::{Context, Input, Task};
 use harness_core::value::Bytes;
 use serde_json::{Value, json};
 
@@ -639,22 +640,37 @@ fn background_name(state: &State, call: CallId) -> String {
 /// A wait's output, and whether it completed: the whole result of each
 /// call it waits on that has settled, then what still runs, and, for one
 /// ended early, why. Only one its task's stopping ended is interrupted;
-/// one Max's words ended is an ordinary result.
+/// one that words, or a member waiting to hear from it, ended is an
+/// ordinary result.
 pub fn waited(state: &State, values: Values, call: CallId) -> Option<(Bytes, bool)> {
     let wait = state.call(call)?.waits.as_ref()?;
     let (landed, running) = state.waited(call)?;
-    let holds = wait.until.holds(landed.len(), running.len());
+    let holds = state.wait_holds(call, wait);
     let owner = state.call_owner(call).and_then(|t| state.task(t));
     let stopping = owner.is_some_and(|t| t.drain().is_some());
+    let listening: Vec<String> = (wait.on.iter())
+        .flat_map(|c| state.listening(*c))
+        .map(|t| format!("`{}`", t.name))
+        .collect();
     let mut said = Vec::new();
     if !holds {
-        said.push(text(match (stopping, owner.is_some_and(Task::closes)) {
-            (true, _) => "[harness] You are being stopped, so this wait ended.",
-            (false, true) => "[harness] Max wrote to you: answer him, then `wait` again.",
-            (false, false) => {
-                "[harness] Max wrote to you: answer him and end your turn. What still runs keeps running, \
-and its result starts a new turn."
+        let then = match owner.is_some_and(Task::closes) {
+            true => "then `wait` again.",
+            false => {
+                "and end your turn. What still runs keeps running, and its result starts a new turn."
             }
+        };
+        said.push(text(&match (stopping, owner) {
+            (true, _) => "[harness] You are being stopped, so this wait ended.".to_owned(),
+            (false, _) if !listening.is_empty() => format!(
+                "[harness] {} waits to hear from you, so waiting on it would wait forever: tell it what it \
+needs, {then}",
+                listening.join(", ")
+            ),
+            (false, Some(owner)) => {
+                format!("[harness] {} to you: answer, {then}", writers(state, owner))
+            }
+            (false, None) => format!("[harness] This wait ended: {then}"),
         }));
     }
     said.extend((landed.iter()).map(|c| crate::render::activity(state, values, *c)));
@@ -673,6 +689,33 @@ and its result starts a new turn."
         ));
     }
     Some((blocks(&said), holds || !stopping))
+}
+
+/// Who has written to `task` since its last request: Max, and the agents
+/// whose messages wait for it.
+fn writers(state: &State, task: &Task) -> String {
+    let mut who: Vec<String> = Vec::new();
+    for p in &task.pending {
+        let Input::Delivery(d) = p else { continue };
+        let Some(delivered) = state.delivery(*d) else {
+            continue;
+        };
+        let name = match (delivered.by, state.teller(delivered)) {
+            (Author::Max, _) => "Max".to_owned(),
+            (_, Some((from, _))) => {
+                (state.task(from)).map_or("An agent".to_owned(), |t| format!("`{}`", t.name))
+            }
+            _ => continue,
+        };
+        if !who.contains(&name) {
+            who.push(name);
+        }
+    }
+    match who.as_slice() {
+        [] => "Words came".to_owned(),
+        [one] => format!("{one} wrote"),
+        [rest @ .., last] => format!("{} and {last} wrote", rest.join(", ")),
+    }
 }
 
 /// A spawn or add_sibling call's input.
@@ -932,11 +975,12 @@ pub fn background_call(
 }
 
 /// Max's words a label names, among those `parent` has heard: his messages,
-/// the mandates he gave, his answers, and what briefs quoted.
+/// the mandates he gave, his answers, and what briefs and messages quoted.
 pub fn quoted(state: &State, parent: &Task, label: &str) -> Result<ValueId, String> {
-    let words = state.deliveries().filter_map(|d| match d.delivery.content {
-        Content::Words(words) => Some(words),
-        Content::Prompt(_) => None,
+    let words = state.deliveries().flat_map(|d| match &d.delivery.content {
+        Content::Words(words) => vec![*words],
+        Content::Message(message) => message.quotes.clone(),
+        Content::Prompt(_) => Vec::new(),
     });
     let mandates = state
         .tasks()

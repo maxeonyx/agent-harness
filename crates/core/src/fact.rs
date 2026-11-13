@@ -197,6 +197,10 @@ impl Fact {
                 content,
             }) => match content {
                 Content::Words(words) => values.push(*words),
+                Content::Message(message) => {
+                    values.push(message.words);
+                    values.extend(&message.quotes);
+                }
                 Content::Prompt(_) => {}
             },
             Fact::Change(Change {
@@ -353,6 +357,10 @@ pub enum Rejected {
     /// would never move again: mark it done ([`crate::delivery::Prompt::Done`]),
     /// or say something with the change.
     Idle,
+    /// A message to a task that is not its sender's kin: not its owner, a
+    /// live agent it started, or another of Max's chats when it is one
+    /// ([`crate::message::Kin`]).
+    Unreachable,
 }
 
 impl std::fmt::Display for Rejected {
@@ -411,6 +419,7 @@ impl std::fmt::Display for Rejected {
             Rejected::Idle => {
                 "the task would wait on nothing; mark it done, or say something with the change"
             }
+            Rejected::Unreachable => "a message to a task its sender cannot reach",
         };
         f.write_str(said)
     }

@@ -460,7 +460,8 @@ fn work(state: &State, legs: &Legs) -> Value {
 }
 
 /// What was delivered to the task that no request has rendered yet: Max's
-/// words the agent has not read, and a standard prompt (his Done, a stop).
+/// words and agents' messages the agent has not read, and a standard
+/// prompt (his Done, a stop).
 fn pending_words(state: &State, value: Text, t: &Task) -> Vec<Value> {
     t.pending
         .iter()
@@ -468,10 +469,16 @@ fn pending_words(state: &State, value: Text, t: &Task) -> Vec<Value> {
             Input::Delivery(id) => state.delivery(*id),
             _ => None,
         })
-        .map(|d| match d.delivery.content {
+        .map(|d| match &d.delivery.content {
             Content::Words(words) => json!({
                 "at": d.at.at.0,
-                "content": text(value, words),
+                "content": text(value, *words),
+            }),
+            Content::Message(message) => json!({
+                "at": d.at.at.0,
+                "content": text(value, message.words)
+                    .map(|t| json!([{ "type": "text", "text": t }]).to_string()),
+                "from": state.teller(d).and_then(|(from, _)| state.task(from)).map(|t| t.name.clone()),
             }),
             Content::Prompt(prompt) => json!({
                 "at": d.at.at.0,
@@ -741,6 +748,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Delivery(d) => {
             let what = match &d.content {
                 Content::Words(_) => "words".to_string(),
+                Content::Message(m) => format!("message from {}", call_name(m.call)),
                 Content::Prompt(p) => format!("{p:?} prompt"),
             };
             format!("{what} delivered to {}", name(d.to))

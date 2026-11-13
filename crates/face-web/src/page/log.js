@@ -806,7 +806,7 @@ function renderTail(s, t) {
   showBlob(t);
   // Not read yet: dashed, until the request that reads it.
   for (const p of t.pending || []) {
-    const when = `${clock(p.at)}, not read yet`;
+    const when = `${clock(p.at)}${p.from ? `, from ${p.from}` : ""}, not read yet`;
     parts.push(p.prompt ? said(PROMPTS[p.prompt] || p.prompt, when, "queued-words prompt") : said(p.content, when, "queued-words"));
   }
   // Sent from this tab, and not yet taken by a brain.

@@ -12,6 +12,7 @@ use crate::attention::{Queued, Ranking};
 use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome, Owner, Wait};
 use crate::context::{Entry, EntryId, Legs, Note, Rendered, Span};
 use crate::delivery::{Content, Delivery, Prompt};
+use crate::message::{Kin, MESSAGE, Message, TOLD_AFTER};
 use harness_substrate::{Durability, Folding, Schema};
 
 use crate::build::{BuildId, Launch, Launched};
@@ -568,14 +569,15 @@ pub enum Todo {
     /// A call the brain runs, which ends on something else, is due to
     /// settle: a spawn every member of whose scope is done, with their
     /// outcomes; or a wait ([`CallEvent::Waits`]) whose calls have settled
-    /// as it asks, or that Max's words or one of his acts end first, saying
-    /// what still runs, or its task's stopping ends, as interrupted.
+    /// as it asks, or that words (Max's, one of his acts, a message) or a
+    /// member waiting to hear from its task end first, saying what still
+    /// runs, or its task's stopping ends, as interrupted.
     Settle(CallId),
     /// Move these calls of the task's round to the background, in one
     /// batch ([`CallEvent::Backgrounded`]): every call still outstanding
-    /// [`HEARD_AFTER`] after both it was made and Max's words or one of his
-    /// acts reached the task, or
-    /// the spawns of a round he interrupted.
+    /// the words' grace after both it was made and words reached the task
+    /// ([`State::backgrounds`]), a spawn with a member waiting to hear from
+    /// it, or the spawns of a round Max interrupted.
     Background(TaskId, Vec<CallId>),
     /// Every member of an aside's scope but the asides is done, and it has
     /// not been told: deliver [`Prompt::Unblocked`].
@@ -1581,6 +1583,12 @@ impl State {
                 Rendered::Note(
                     Note::Compacted | Note::Kept { .. } | Note::Mandate | Note::Brief,
                 ) => {}
+                // Its owner's message, kept as it was told.
+                Rendered::Delivery(d)
+                    if (self.deliveries.get(d)).is_some_and(|d| {
+                        d.delivery.to == id
+                            && self.teller(d).is_some_and(|(_, kin)| kin == Kin::Owner)
+                    }) => {}
                 Rendered::Delivery(_) | Rendered::Note(_) => return Err(Rejected::NotForTask),
             }
         }
@@ -1985,7 +1993,8 @@ impl State {
     }
 
     /// A call of an agent's round, dispatched to the brain and still
-    /// running, waits on some of the agent's running background work.
+    /// running, waits on some of the agent's running background work, or,
+    /// naming none, for words.
     fn waits(&mut self, id: CallId, wait: &Wait) -> Result<(), Rejected> {
         let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
         if made.settled.is_some() {
@@ -2001,7 +2010,7 @@ impl State {
         let own = |c: &CallId| task.background.contains(c);
         let in_round =
             matches!(task.phase(), Some(Phase::Acting(step)) if step.outstanding.contains(&id));
-        if !in_round || wait.on.is_empty() || !wait.on.iter().all(own) {
+        if !in_round || !wait.on.iter().all(own) {
             return Err(Rejected::NotForTask);
         }
         if let Some(made) = self.calls.get_mut(&id) {
@@ -2031,18 +2040,26 @@ impl State {
         Some((ids(landed), ids(running)))
     }
 
-    /// Whether the brain settles the wait `call` now: what it waits for
-    /// holds, Max's words or one of his acts have reached its task, or its
-    /// task is stopping ([`Todo::Settle`]).
+    /// Whether the brain settles the wait `call` now: what it waits on
+    /// holds, words have reached its task (Max's, one of his acts, or a
+    /// message), a member it waits on waits to hear from it
+    /// ([`State::listening`]), or its task is stopping ([`Todo::Settle`]).
     fn wait_due(&self, call: CallId, wait: &Wait) -> bool {
         let task = self.call_owner(call).and_then(|t| self.tasks.get(&t));
         let Some(task) = task else {
             return true;
         };
-        let (landed, running) = self.waited(call).unwrap_or_default();
-        wait.until.holds(landed.len(), running.len())
+        self.wait_holds(call, wait)
             || task.drain().is_some()
-            || self.spoken_to(task, None)
+            || self.spoken_to(task, None).is_some()
+            || wait.on.iter().any(|c| !self.listening(*c).is_empty())
+    }
+
+    /// Whether what the wait `call` is on has come as it asks. A wait naming
+    /// nothing waits only for words.
+    pub fn wait_holds(&self, call: CallId, wait: &Wait) -> bool {
+        let (landed, running) = self.waited(call).unwrap_or_default();
+        !wait.on.is_empty() && wait.until.holds(landed.len(), running.len())
     }
 
     /// A background call moves one level up the tree, from the task that
@@ -2309,6 +2326,9 @@ impl State {
         if self.deliveries.contains_key(&delivery.id) {
             return Err(Rejected::Exists);
         }
+        if let Content::Message(message) = &delivery.content {
+            self.check_message(message, delivery.to)?;
+        }
         let mut task = self
             .tasks
             .get(&delivery.to)
@@ -2318,6 +2338,12 @@ impl State {
         self.put(task);
         let mark = Mark::of(record);
         match &delivery.content {
+            // It has heard what the message hands on.
+            Content::Message(message) => {
+                for quote in &message.quotes {
+                    self.say(*quote, delivery.to, mark);
+                }
+            }
             Content::Words(words) => {
                 self.say(*words, delivery.to, mark);
                 // His reply to a page agrees with where it ends, unless the
@@ -2343,6 +2369,31 @@ impl State {
                 seen: record.seen,
             },
         );
+        Ok(())
+    }
+
+    /// Whether `message` can be told to `to`: its call is an agent's
+    /// `message` call, `to` is its kin and still running, and it hands on
+    /// only Max's words its sender has heard.
+    fn check_message(&self, message: &Message, to: TaskId) -> Result<(), Rejected> {
+        let made = self.calls.get(&message.call).ok_or(Rejected::Unknown)?;
+        let Caller::Agent { task: from, .. } = made.call.caller else {
+            return Err(Rejected::NotForTask);
+        };
+        if made.call.tool != MESSAGE {
+            return Err(Rejected::NotForTask);
+        }
+        let recipient = self.tasks.get(&to).ok_or(Rejected::Unknown)?;
+        if recipient.is_done() {
+            return Err(Rejected::Finished);
+        }
+        if ends(recipient.drain()) {
+            return Err(Rejected::Draining);
+        }
+        self.kin(from, to).ok_or(Rejected::Unreachable)?;
+        if !message.quotes.iter().all(|q| self.heard(from, *q)) {
+            return Err(Rejected::Unheard);
+        }
         Ok(())
     }
 
@@ -3049,6 +3100,46 @@ impl State {
         }
     }
 
+    /// What `other` is to `of`, when they can tell each other things: `of`'s
+    /// owner, an agent `of` started (a chat it opened for Max among them),
+    /// or, when both are Max's live chats, a peer. Max and a standing task
+    /// are no one's kin. Whether a member is still running is the
+    /// recipient's to say, as for every message.
+    pub fn kin(&self, of: TaskId, other: TaskId) -> Option<Kin> {
+        let (a, b) = (self.tasks.get(&of)?, self.tasks.get(&other)?);
+        if of == other || a.mode == Mode::Standing || b.mode == Mode::Standing {
+            return None;
+        }
+        if self.starter(of) == Some(other) {
+            return Some(Kin::Owner);
+        }
+        if self.starter(other) == Some(of) {
+            return Some(Kin::Member);
+        }
+        let chat = |t: &Task| t.scope == Scope::Max && t.mode == Mode::UserFacing && !t.is_done();
+        (chat(a) && chat(b)).then_some(Kin::Peer)
+    }
+
+    /// The task that started this one: its owner, or the agent that opened
+    /// it for Max.
+    fn starter(&self, task: TaskId) -> Option<TaskId> {
+        let t = self.tasks.get(&task)?;
+        match t.scope {
+            Scope::Spawn(_) => self.owner(task),
+            Scope::Max => t.by.and_then(|c| self.call_owner(c)),
+        }
+    }
+
+    /// Who told a message delivery, and what it is to the task it told.
+    /// `None` for anything else delivered.
+    pub fn teller(&self, delivered: &Delivered) -> Option<(TaskId, Kin)> {
+        let Content::Message(message) = &delivered.delivery.content else {
+            return None;
+        };
+        let from = self.call_owner(message.call)?;
+        Some((from, self.kin(delivered.delivery.to, from)?))
+    }
+
     /// The task a call belongs to now ([`Owner`]): its agent, the task it
     /// was passed to, or for the harness's call, the task whose call it runs
     /// for. `None` for Max's: his own, and what was passed to him.
@@ -3178,29 +3269,56 @@ impl State {
         }
     }
 
-    /// Whether Max's words, or a turn one of his acts asks for, have reached
-    /// the task and wait for its next request: at least `grace`
-    /// milliseconds ago, if given.
-    fn spoken_to(&self, task: &Task, grace: Option<(u64, Timestamp)>) -> bool {
-        (task.pending.iter()).any(|p| match p {
-            Input::Delivery(d) => self.deliveries.get(d).is_some_and(|d| {
-                matches!(d.by, Author::Max)
-                    && grace
-                        .is_none_or(|(after, now)| now >= crate::cancel::deadline(d.at.at, after))
+    /// Whether words wait for the task's next request: Max's, a turn one of
+    /// his acts asks for, or an agent's message. Each waits its grace for
+    /// the round to end by itself, Max's [`HEARD_AFTER`] and a message
+    /// [`TOLD_AFTER`]: given `now`, the shortest grace of those that have
+    /// waited it, and otherwise of any.
+    fn spoken_to(&self, task: &Task, now: Option<Timestamp>) -> Option<u64> {
+        (task.pending.iter())
+            .filter_map(|p| match p {
+                Input::Delivery(d) => self.deliveries.get(d),
+                _ => None,
+            })
+            .filter_map(|d| match (&d.by, &d.delivery.content) {
+                (Author::Max, _) => Some((d, HEARD_AFTER)),
+                (_, Content::Message(_)) => Some((d, TOLD_AFTER)),
+                _ => None,
+            })
+            .filter(|(d, grace)| {
+                now.is_none_or(|now| now >= crate::cancel::deadline(d.at.at, *grace))
+            })
+            .map(|(_, grace)| grace)
+            .min()
+    }
+
+    /// The members of the spawn `call` that wait to hear from its task: each
+    /// in a `wait` naming nothing. A wait on them, or a round on the spawn,
+    /// would close a circle, so it ends at once instead.
+    pub fn listening(&self, call: CallId) -> Vec<&Task> {
+        let waits_for_words = |t: &&Task| match t.phase() {
+            Some(Phase::Acting(step)) => step.outstanding.iter().any(|c| {
+                (self.calls.get(c))
+                    .and_then(|r| r.waits.as_ref())
+                    .is_some_and(|w| w.on.is_empty())
             }),
             _ => false,
-        })
+        };
+        self.members(Scope::Spawn(call))
+            .filter(waits_for_words)
+            .collect()
     }
 
     /// The calls of the task's round the brain moves to the background now
-    /// ([`Todo::Background`]): its held calls ([`State::held`]) at once;
-    /// each that has had [`HEARD_AFTER`] since it
-    /// was made, once Max's words, or a turn one of his acts asks for, have
-    /// waited as long for the round to end by itself, so a quick call made
-    /// after his words came (a last response's report among them) ends in
-    /// its own time; while he interrupts it, its spawns, whose scopes his
-    /// interrupt never stops. Never a fresh context's attachments, and never
-    /// a wait, which his words settle instead ([`Todo::Settle`]).
+    /// ([`Todo::Background`]): its held calls ([`State::held`]) and a spawn
+    /// with a member waiting to hear from it ([`State::listening`]) at once;
+    /// each that has had the words' grace since it was made, once words
+    /// have waited as long for the round to end by itself
+    /// ([`State::spoken_to`]), so a quick call made after they came (a last
+    /// response's report among them) ends in its own time; while Max
+    /// interrupts it, its spawns, whose scopes his interrupt never stops.
+    /// Never a fresh context's attachments, and never a wait, which words
+    /// settle instead ([`Todo::Settle`]).
     fn backgrounds(&self, task: &Task, now: Timestamp) -> Vec<CallId> {
         let Some(Phase::Acting(step)) = task.phase() else {
             return Vec::new();
@@ -3208,21 +3326,23 @@ impl State {
         if step.response.is_none() {
             return Vec::new();
         }
+        let now_due = |c: CallId| self.held(c) || !self.listening(c).is_empty();
         match task.drain() {
-            None if self.spoken_to(task, Some((HEARD_AFTER, now))) => (step.outstanding.iter())
-                .filter(|c| {
-                    self.held(**c)
-                        || self.calls.get(c).is_none_or(|r| {
-                            r.waits.is_none()
-                                && now >= crate::cancel::deadline(r.made.at, HEARD_AFTER)
-                        })
-                })
-                .copied()
-                .collect(),
-            None => (step.outstanding.iter())
-                .filter(|c| self.held(**c))
-                .copied()
-                .collect(),
+            None => {
+                let grace = self.spoken_to(task, Some(now));
+                (step.outstanding.iter())
+                    .filter(|c| {
+                        now_due(**c)
+                            || grace.is_some_and(|grace| {
+                                self.calls.get(c).is_none_or(|r| {
+                                    r.waits.is_none()
+                                        && now >= crate::cancel::deadline(r.made.at, grace)
+                                })
+                            })
+                    })
+                    .copied()
+                    .collect()
+            }
             Some(Draining::ToMax) => (step.outstanding.iter())
                 .filter(|c| self.open.scopes.contains_key(&Scope::Spawn(**c)) || self.held(**c))
                 .copied()
@@ -3246,6 +3366,19 @@ impl State {
                 (Author::Max, Content::Words(words)) => Some((d.delivery.id, *words)),
                 _ => None,
             })
+            .collect()
+    }
+
+    /// Messages to the task that no request has read yet, oldest first: of
+    /// a finished task, what its owner told it after it was done, which goes
+    /// back to the owner with its result.
+    pub fn unread_messages(&self, task: &Task) -> Vec<&Delivered> {
+        (task.pending.iter())
+            .filter_map(|p| match p {
+                Input::Delivery(id) => self.deliveries.get(id),
+                _ => None,
+            })
+            .filter(|d| matches!(d.delivery.content, Content::Message(_)))
             .collect()
     }
 

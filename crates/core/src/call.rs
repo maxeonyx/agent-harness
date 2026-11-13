@@ -262,9 +262,10 @@ impl CallEvent {
 /// nothing waits on it reaches the agent as a message at its next request
 /// ([`crate::task::Input::Background`]). A chat's ended turn waits on its
 /// work as well as on Max, so a chat need not call it; one that has only
-/// answered him waits here instead, so it is not shown as his move. Max's
-/// words settle a wait rather than moving it to the background, at once:
-/// an ordinary result saying he wrote and what still runs, and the agent
+/// answered him waits here instead, so it is not shown as his move. Words,
+/// Max's or a message, settle a wait rather than moving it to the
+/// background, at once: an ordinary result saying who wrote and what
+/// still runs, and the agent
 /// waits again once it has answered him. Its task's stopping settles it as
 /// interrupted ([`crate::state::Todo::Settle`]). A wait is never moved to
 /// the background, since waiting in the background is not waiting.
@@ -288,9 +289,10 @@ impl CallEvent {
 /// with a foreground `sleep`, and every one of those agents worked on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wait {
-    /// The calls it waits on, never empty, each running background work of
-    /// the caller's when it is stated. The tool's default is all of it. One
-    /// passed on since is no longer waited on.
+    /// The calls it waits on, each running background work of the caller's
+    /// when it is stated. The tool's default is all of it. One passed on
+    /// since is no longer waited on. Empty, it waits for words alone: Max's,
+    /// or a message ([`crate::message::Message`]).
     pub on: Vec<CallId>,
     pub until: Until,
 }

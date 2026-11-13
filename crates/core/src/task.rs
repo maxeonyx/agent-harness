@@ -687,7 +687,8 @@ pub enum Input {
     /// ([`crate::call::CallEvent::Passed`]), which is its own from now on.
     /// Rides along.
     Passed(CallId),
-    /// Max's words, or a turn the harness asks for. Wakes it.
+    /// Max's words, another agent's message, or a turn the harness asks
+    /// for. Wakes it.
     Delivery(DeliveryId),
 }
 
@@ -1940,16 +1941,18 @@ impl Task {
     }
 
     /// Whether what arrived during the turn that ended asks for another.
-    /// Max's words do not, to an autonomous task: Max can give it feedback
-    /// while it works, not once it is done. They stay unread, and go up to
-    /// its owner with its result ([`State::unread_words`]).
+    /// Words do not, to an autonomous task: Max and its owner can tell it
+    /// things while it works, not once it is done. They stay unread, and go
+    /// up to its owner with its result ([`State::unread_words`],
+    /// [`State::unread_messages`]).
     fn carries_on(&self, world: &State) -> bool {
-        let late = match self.mode {
-            Mode::Autonomous => world.unread_words(self),
+        let late: Vec<DeliveryId> = match self.mode {
+            Mode::Autonomous => (world.unread_words(self).into_iter().map(|(d, _)| d))
+                .chain(world.unread_messages(self).iter().map(|d| d.delivery.id))
+                .collect(),
             _ => Vec::new(),
         };
-        (self.pending.iter())
-            .any(|p| p.wakes() && !late.iter().any(|(d, _)| *p == Input::Delivery(*d)))
+        (self.pending.iter()).any(|p| p.wakes() && !late.iter().any(|d| *p == Input::Delivery(*d)))
     }
 
     /// Whether the end of a turn completes it, once nothing it started
@@ -2198,7 +2201,8 @@ fn requeue(world: &State, rendered: &Rendered, to: EntryId, round: &[CallId]) ->
         }
         Rendered::Delivery(id) => match world.delivery(*id)?.delivery.content {
             Content::Words(_) | Content::Prompt(Prompt::Park | Prompt::Resume) => None,
-            Content::Prompt(_) => Some(Input::Delivery(*id)),
+            // Another agent's words are not Max's to write again.
+            Content::Message(_) | Content::Prompt(_) => Some(Input::Delivery(*id)),
         },
         Rendered::Note(Note::Passed { call }) => Some(Input::Passed(*call)),
         Rendered::Note(_) => None,

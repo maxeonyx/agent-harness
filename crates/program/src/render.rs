@@ -6,8 +6,9 @@ use harness_core::call::{self, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::fact::Author;
-use harness_core::id::{CallId, LimbId, Timestamp, ValueId};
+use harness_core::id::{CallId, DeliveryId, LimbId, Timestamp, ValueId};
 use harness_core::limb::{Instruction, Tool, ToolSet};
+use harness_core::message::{Kin, Message};
 use harness_core::model_call::{Ending, Stop};
 use harness_core::resource::Observation;
 use harness_core::role::Binding;
@@ -19,17 +20,22 @@ use serde_json::{Value, json};
 /// The bytes of a stored value.
 pub type Values<'a> = &'a dyn Fn(ValueId) -> Vec<u8>;
 
-/// Where Max's words fall in the agent's work: during a turn, the tool
-/// calls it made after the brain time his face had shown him, and
-/// whether he asked them to wait for its turn's end.
+/// Where words fall in the agent's work: during a turn, the tool calls it
+/// made after the brain time Max's face had shown him, or after the
+/// sender's `message` call was made.
 fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> String {
-    let (Author::Max, Some(seen)) = (delivered.by, delivered.seen) else {
-        return String::new();
+    let seen = match (delivered.by, delivered.seen, &delivered.delivery.content) {
+        (Author::Max, Some(seen), _) => seen.n,
+        (_, _, Content::Message(message)) => match state.call(message.call) {
+            Some(sent) => sent.made.seq.n,
+            None => return String::new(),
+        },
+        _ => return String::new(),
     };
     let mut unseen: Vec<_> = state
         .calls()
         .filter_map(|(_, c)| match &c.call.caller {
-            Caller::Agent { task: t, tool_use } if *t == task.id && c.made.seq.n > seen.n => {
+            Caller::Agent { task: t, tool_use } if *t == task.id && c.made.seq.n > seen => {
                 Some((c.made.seq, tool_use.0.as_str()))
             }
             _ => None,
@@ -191,6 +197,19 @@ pub fn late_words(values: Values, name: &str, unread: &[ValueId]) -> Vec<String>
     out
 }
 
+/// What the owner told the member `name` after it was done, which it
+/// never read: each message as it was told, to follow its result.
+pub fn late_told(values: Values, name: &str, unread: &[&Message]) -> Vec<String> {
+    let mut out = Vec::new();
+    for message in unread {
+        out.push(text(&format!(
+            "[harness] You told `{name}` this after it was done, so it never read it:"
+        )));
+        out.extend(told_words(values, message));
+    }
+    out
+}
+
 /// How an agent names Max's words to quote them in a brief.
 pub fn label(words: ValueId) -> String {
     format!("max-{}", &words.to_string()[..8])
@@ -326,6 +345,13 @@ pub fn turn(
                         "[harness] Max wrote this{} (`{}` quotes it in a brief):",
                         when(state, task, delivered, mid_turn),
                         label(*words)
+                    )));
+                }
+                if let Content::Message(_) = content {
+                    said.push(text(&told(
+                        state,
+                        delivered,
+                        &when(state, task, delivered, mid_turn),
                     )));
                 }
                 said.extend(body);
@@ -533,8 +559,9 @@ pub struct Carry<'a> {
     pub summary: Option<&'a str>,
     /// Who compacted, and onto what.
     pub why: Why,
-    /// Max's words from what it replaced ([`kept`]).
-    pub words: &'a [ValueId],
+    /// Max's words and the owner's messages from what it replaced
+    /// ([`kept`]).
+    pub words: &'a [Kept],
     /// Settled calls whose tool uses it replaced: the round's other results.
     pub calls: &'a [CallId],
 }
@@ -552,8 +579,9 @@ pub enum Why {
 
 /// A compaction's carry: one user message, in the agent's own story. On a
 /// fresh root it opens with the mandate; then the framing and the summary,
-/// with the background work the task still owns; then Max's words verbatim;
-/// then the outputs of the calls whose tool uses it replaced.
+/// with the background work the task still owns; then Max's words and the
+/// owner's messages verbatim; then the outputs of the calls whose tool uses
+/// it replaced.
 pub fn carry(state: &State, values: Values, task: &Task, carry: &Carry) -> Turn {
     let mut turn = Turn::default();
     if carry.why != Why::Checkpoint {
@@ -572,7 +600,9 @@ carrying on."
             .to_owned(),
     };
     if !carry.words.is_empty() {
-        framing.push_str(" Max's words from that work follow, as he wrote them.");
+        framing.push_str(
+            " Max's words and your owner's messages from that work follow, as they were written.",
+        );
     }
     if !carry.calls.is_empty() {
         framing.push_str(" Then the results of your calls that had not yet reached you.");
@@ -597,13 +627,28 @@ carrying on."
         )));
     }
     turn.push(Rendered::Note(Note::Compacted), said);
-    for words in carry.words {
-        let mut said = vec![text(&format!(
-            "[harness] Max wrote this (`{}` quotes it in a brief):",
-            label(*words)
-        ))];
-        said.extend(self::words(&values(*words)));
-        turn.push(Rendered::Note(Note::Kept { words: *words }), said);
+    for kept in carry.words {
+        match *kept {
+            Kept::Words(words) => {
+                let mut said = vec![text(&format!(
+                    "[harness] Max wrote this (`{}` quotes it in a brief):",
+                    label(words)
+                ))];
+                said.extend(self::words(&values(words)));
+                turn.push(Rendered::Note(Note::Kept { words }), said);
+            }
+            Kept::Told(id) => {
+                let Some(delivered) = state.delivery(id) else {
+                    continue;
+                };
+                let Content::Message(message) = &delivered.delivery.content else {
+                    continue;
+                };
+                let mut said = vec![text(&told(state, delivered, ""))];
+                said.extend(told_words(values, message));
+                turn.push(Rendered::Delivery(id), said);
+            }
+        }
     }
     for call in carry.calls {
         turn.push(
@@ -683,13 +728,22 @@ fn label_block(tool: &str, call: CallId) -> Option<Value> {
     labelled(tool).then(|| json!({ "type": "text", "text": format!("[{}]", call.label()) }))
 }
 
-/// Max's words in what a compaction replaces, in the order he said them:
-/// what the requests on the task's chain after `since` rendered of his
-/// (messages and answers), and what compactions there carried. Everything
+/// What a compaction keeps verbatim: Max's words, and the messages of the
+/// task's owner, which amend its mandate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kept {
+    Words(ValueId),
+    Told(DeliveryId),
+}
+
+/// Max's words and the owner's messages in what a compaction replaces, in
+/// the order they came: what the requests on the task's chain after
+/// `since` rendered of them (his messages and answers), and what
+/// compactions there carried. Everything
 /// up to `since` is kept, and his words with it; with no `since` (a new
 /// root) nothing is, back to the chain's root, through the context a fork
 /// or a resumed chat began with.
-pub fn kept(state: &State, task: &Task, since: Option<EntryId>) -> Vec<ValueId> {
+pub fn kept(state: &State, task: &Task, since: Option<EntryId>) -> Vec<Kept> {
     let Some(head) = task.head() else {
         return Vec::new();
     };
@@ -711,17 +765,28 @@ pub fn kept(state: &State, task: &Task, since: Option<EntryId>) -> Vec<ValueId> 
         }
         for from in spans {
             let words = match from {
-                Rendered::Delivery(d) => match state.delivery(*d).map(|d| &d.delivery.content) {
-                    Some(Content::Words(words)) => Some(*words),
+                Rendered::Delivery(d) => state.delivery(*d).and_then(|delivered| match &delivered
+                    .delivery
+                    .content
+                {
+                    Content::Words(words) => Some(Kept::Words(*words)),
+                    Content::Message(_)
+                        if state
+                            .teller(delivered)
+                            .is_some_and(|(_, k)| k == Kin::Owner) =>
+                    {
+                        Some(Kept::Told(*d))
+                    }
                     _ => None,
-                },
+                }),
                 Rendered::Call(c) => state
                     .call(*c)
                     .and_then(|c| c.outcome())
                     .and_then(Outcome::output)
                     .map(|o| o.model)
-                    .filter(|m| state.said(*m).is_some()),
-                Rendered::Note(Note::Kept { words }) => Some(*words),
+                    .filter(|m| state.said(*m).is_some())
+                    .map(Kept::Words),
+                Rendered::Note(Note::Kept { words }) => Some(Kept::Words(*words)),
                 Rendered::Note(_) => None,
             };
             if let Some(words) = words.filter(|w| !found.contains(w)) {
@@ -840,8 +905,8 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
     .to_string()
 }
 
-/// The answer to a tool use whose call Max's words moved to the
-/// background: it runs on, and its result comes later as a message.
+/// The answer to a tool use whose call words moved to the background: it
+/// runs on, and its result comes later as a message.
 fn backgrounded(state: &State, call: CallId) -> String {
     let record = state
         .call(call)
@@ -849,9 +914,16 @@ fn backgrounded(state: &State, call: CallId) -> String {
     let Caller::Agent { tool_use, .. } = &record.call.caller else {
         unreachable!("only a round's call is backgrounded")
     };
+    let listening: Vec<String> = (state.listening(call).iter())
+        .map(|t| format!("`{}`", t.name))
+        .collect();
     let why = match state.held(call) {
         true => format!("`{}` runs only in the background", record.call.tool),
-        false => "Max wrote while this ran".to_owned(),
+        false if !listening.is_empty() => format!(
+            "{} waits to hear from you, so this would never end by itself",
+            listening.join(", ")
+        ),
+        false => "You were written to while this ran".to_owned(),
     };
     let said = format!(
         "[harness] {why}. It keeps running in the background as `{}`. \
@@ -908,7 +980,7 @@ fn outcome_content(values: Values, outcome: &Outcome) -> (Value, bool) {
 }
 
 /// A call outside the round that has settled: background work, a call
-/// moved out of its round when Max wrote, the late outcome of a call
+/// moved out of its round when words came, the late outcome of a call
 /// earlier said to be unknown, or something Max did in the chat.
 pub(crate) fn activity(state: &State, values: Values, call: CallId) -> String {
     let Some(record) = state.call(call) else {
@@ -938,7 +1010,7 @@ pub(crate) fn activity(state: &State, values: Values, call: CallId) -> String {
             if state.held(call) {
                 ""
             } else {
-                " when Max wrote"
+                " when you were written to"
             },
         ),
         _ => format!(
@@ -996,6 +1068,7 @@ change back only what you changed yourself."
     };
     let said = match content {
         Content::Words(words) => return words_of(values, *words),
+        Content::Message(message) => return told_words(values, message),
         Content::Prompt(Prompt::Done) if aside => {
             "Max has marked this aside done. Summarise what came of your talk with him since it was opened, \
 for the context it was opened on: what he said, what was decided, and what must now be done differently. \
@@ -1050,6 +1123,34 @@ aside. Tell Max; he decides when this aside is done."
         }
     };
     vec![text(&format!("[harness] {said}"))]
+}
+
+/// The framing of a message: who told it, what they are to the reader,
+/// and `when` in its work.
+fn told(state: &State, delivered: &Delivered, when: &str) -> String {
+    let Some((from, kin)) = state.teller(delivered) else {
+        return format!("[harness] An agent wrote this{when}:");
+    };
+    let name = state.task(from).map_or("an agent", |t| t.name.as_str());
+    let relation = match kin {
+        Kin::Owner => "which started you",
+        Kin::Member => "which you started",
+        Kin::Peer => "another of Max's chats",
+    };
+    format!("[harness] `{name}`, {relation}, wrote this{when}:")
+}
+
+/// A message's words, then each of Max's it hands on under its label.
+fn told_words(values: Values, message: &Message) -> Vec<String> {
+    let mut said = vec![text(&String::from_utf8_lossy(&values(message.words)))];
+    for quote in &message.quotes {
+        said.push(text(&format!(
+            "[harness] Max's own words, quoted verbatim (`{}`):",
+            label(*quote)
+        )));
+        said.extend(words_of(values, *quote));
+    }
+    said
 }
 
 fn words_of(values: Values, id: ValueId) -> Vec<String> {
