@@ -497,15 +497,11 @@ pub enum Origin {
     /// a task of a scope it owned, so an orchestrator can ask its designer a
     /// follow-up with the designer's context intact.
     Resume { from: TaskId },
-    /// The head of a task waiting on its children, opened by Max as a
-    /// user-facing fork so he can talk to it meanwhile. It joins the scope
-    /// the task waits on, as the one member Max talks to: it is told when
-    /// every other member is done ([`Prompt::Unblocked`]), it is done when
-    /// he marks it done, and its result reaches the task with theirs, so the
-    /// task carries on with everything, the talk included. Nothing opens
-    /// one now: Max's words reach a waiting task itself
-    /// ([`CallEvent::Backgrounded`]). Records from before hold asides, some
-    /// opened by the brain with his unread words.
+    /// The head of a task waiting on its children, opened as a user-facing
+    /// fork so Max could talk to it meanwhile, joining the scope the task
+    /// waited on. In records from before only, some opened by the brain
+    /// with his unread words: nothing opens one now, since his words reach
+    /// a waiting task itself ([`CallEvent::Backgrounded`]).
     Aside { from: TaskId },
 }
 

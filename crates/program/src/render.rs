@@ -523,12 +523,6 @@ fn mandated(state: &State, values: Values, task: &Task, carried: bool) -> Vec<St
     // Max's words are a block of their own after the harness's framing,
     // so a face shows them as he wrote them.
     let framing = match (task.origin.clone(), task.scope) {
-        (Origin::Aside { .. }, _) => Some(format!(
-            "[harness] This is an aside: Max forked you to talk while the agents you started work. You are \
-told when they are all done. When Max marks this aside done, you summarise what came of the talk, and that \
-goes back to the context you were forked from with their results. He wrote (`{}` quotes it in a brief):",
-            label(task.mandate.text)
-        )),
         (Origin::Resume { .. }, Scope::Max) if task.by.is_none() => Some(format!(
             "[harness] Max has reopened this chat after it finished. He wrote (`{}` quotes it in a brief):",
             label(task.mandate.text)
@@ -540,14 +534,6 @@ goes back to the context you were forked from with their results. He wrote (`{}`
         (_, Scope::Spawn(_)) => None,
     };
     match framing {
-        // An aside's mandate may be one of his messages as he sent it, with
-        // what he attached, in records from before his words reached a
-        // waiting task.
-        Some(framing) if matches!(task.origin, Origin::Aside { .. }) => {
-            let mut said = vec![text(&framing)];
-            said.extend(words_of(values, task.mandate.text));
-            said
-        }
         Some(framing) => vec![text(&framing), text(&said(values, task.mandate.text))],
         None => vec![text(&mandate(state, values, task, carried))],
     }
@@ -1092,7 +1078,6 @@ It is yours now: its result comes to you as a message when it settles{finish}. `
 
 /// What a delivery made `at` says.
 fn delivery(values: Values, task: &Task, content: &Content, at: Timestamp) -> Vec<String> {
-    let aside = matches!(task.origin, Origin::Aside { .. });
     // A fork works in the same directory as the agent it was forked from.
     let shared = match task.origin {
         Origin::Fork { .. } | Origin::Aside { .. } => {
@@ -1104,12 +1089,6 @@ change back only what you changed yourself."
     let said = match content {
         Content::Words(words) => return words_of(values, *words),
         Content::Message(message) => return told_words(values, message),
-        Content::Prompt(Prompt::Done) if aside => {
-            "Max has marked this aside done. Summarise what came of your talk with him since it was opened, \
-for the context it was opened on: what he said, what was decided, and what must now be done differently. \
-This is your last message here."
-                .to_owned()
-        }
         Content::Prompt(Prompt::Done) => {
             "Max has marked this chat done. Write your result: what you did, what you learned, and what is \
 left undone. This is your last message here."

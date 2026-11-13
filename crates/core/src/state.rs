@@ -196,8 +196,6 @@ struct Open {
     last_turn: OrdMap<TaskId, ModelCallId>,
     /// Tasks told they are lingering ([`Prompt::Lingering`]).
     lingered: OrdSet<TaskId>,
-    /// Asides told the rest of their scope is done ([`Prompt::Unblocked`]).
-    unblocked: OrdSet<TaskId>,
     /// The last model call to report the quota.
     quota: Option<ModelCallId>,
     /// Open asks Max answered by pressing, with the words that carried each
@@ -579,9 +577,6 @@ pub enum Todo {
     /// ([`State::backgrounds`]), a spawn with a member waiting to hear from
     /// it, or the spawns of a round Max interrupted.
     Background(TaskId, Vec<CallId>),
-    /// Every member of an aside's scope but the asides is done, and it has
-    /// not been told: deliver [`Prompt::Unblocked`].
-    Unblock(TaskId),
     /// An autonomous task ended its turn with background work running and
     /// has not been told what that means: deliver [`Prompt::Lingering`].
     Linger(TaskId),
@@ -2355,10 +2350,9 @@ impl State {
             Content::Prompt(Prompt::Lingering) => {
                 self.open.lingered.insert(delivery.to);
             }
-            Content::Prompt(Prompt::Unblocked) => {
-                self.open.unblocked.insert(delivery.to);
-            }
-            Content::Prompt(Prompt::Done | Prompt::Tidy | Prompt::Park | Prompt::Resume) => {}
+            Content::Prompt(
+                Prompt::Done | Prompt::Tidy | Prompt::Park | Prompt::Resume | Prompt::Unblocked,
+            ) => {}
         }
         self.deliveries.insert(
             delivery.id,
@@ -3653,7 +3647,6 @@ impl State {
                     .members(Scope::Spawn(*id))
                     .filter(|m| !m.is_done())
                     .collect();
-                let aside = |m: &&Task| matches!(m.origin, Origin::Aside { .. });
                 if live.is_empty() {
                     todo.push(Todo::Settle(*id));
                 } else if stopping {
@@ -3664,9 +3657,6 @@ impl State {
                         (drain, _) => !ends(drain),
                     };
                     todo.extend(live.iter().filter(due).map(|m| Todo::Abandon(m.id)));
-                } else if live.iter().all(aside) {
-                    let unblock = live.iter().filter(|m| !self.open.unblocked.contains(&m.id));
-                    todo.extend(unblock.map(|m| Todo::Unblock(m.id)));
                 }
                 continue;
             }
