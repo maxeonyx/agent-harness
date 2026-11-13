@@ -1931,12 +1931,12 @@ comes to you as a message. `stop` it to close it.",
         self.reported = true;
     }
 
-    /// A stored value's bytes. Every value a fact names is stored.
     /// A call's input as the harness's own tools read it ([`render::arguments`]).
     fn arguments(&self, input: ValueId) -> Vec<u8> {
         render::arguments(&self.value(input))
     }
 
+    /// A stored value's bytes. Every value a fact names is stored.
     fn value(&self, id: ValueId) -> Vec<u8> {
         self.decider
             .storage()
