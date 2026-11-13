@@ -81,6 +81,7 @@ export function lanes(nodes) {
   const L = lanesOf(V, edges);
   let layers = null;
   if (variant.place === "layered") layers = layered(V, edges);
+  else if (variant.place === "sugi" || variant.place === "tree") layers = placed(V, edges);
   else { columns(L); spindles(L); across(L); }
   // Down: each row as tall as its tallest node plus 17, the present row at
   // y = 0.
@@ -97,7 +98,7 @@ export function lanes(nodes) {
   // Then each side's ports in the order its lines, as drawn, reach the
   // height where the shortest of them ends, and those lines drawn again.
   for (const { h, step } of sides) {
-    if (h.length < 2) continue;
+    if (h.length < 2 || mine()) continue;
     const y = h[0].v.y + h[0].side * Math.min(...h.map((p) => Math.abs(p.far.y - p.v.y)));
     const out = (p) => Math.abs((xAt(p.e, y) ?? p.far.x) - p.v.x);
     const was = [...h];
@@ -422,6 +423,257 @@ function layered(V, edges) {
   }
   return layers;
 }
+// ─── Placement by order (spike MC-graph-layout) ────────────────────────────
+// The whole Sugiyama pipeline on the rows above: a long edge a hidden point
+// in each row it crosses; each row's order, for as few crossings as can be
+// found; then each point's x. `place`: sugi (the order from barycentre
+// sweeps with transposition, a life's own line held in the middle of what
+// ties with it) or tree (the order read off the tree of lives: each life's
+// children either side of its line, balanced, a longer one outside a
+// shorter, then transposition). `coords`: qp (each line a spring, x the
+// least energy that keeps every row's gaps, the main life pulled to the
+// middle) or bk (Brandes and Koepf: lines aligned straight where they can
+// be, the four alignments' median). Sets x and `mid` as layered() does.
+const mine = () => variant.place === "sugi" || variant.place === "tree";
+function placed(V, edges) {
+  const layers = [];
+  const put = (u) => (layers[u.rank] ??= []).push(u);
+  for (const v of V) { Object.assign(v, { up: [], down: [], lo: v.n.lo, hi: v.n.hi, life: v.n.lane }); put(v); }
+  for (const e of edges) {
+    const { v, d } = e, chain = [v];
+    // A hidden point is on the life the line belongs to: a result's to the
+    // child that ends, anything else to the life it runs into.
+    const life = e.kind === "fade" ? d.n.lane : v.n.lane;
+    for (let r = v.rank - 1; r > d.rank; r--) {
+      const x = { dummy: true, e, rank: r, key: d.key + .5, up: [], down: [], lo: 1, hi: 1, life, own: e.kind === "life" };
+      put(x);
+      chain.push(x);
+    }
+    chain.push(d);
+    for (let i = 0; i < chain.length - 1; i++) { chain[i].up.push(chain[i + 1]); chain[i + 1].down.push(chain[i]); }
+    e.mid = chain.slice(1, -1).reverse();
+  }
+  for (let r = 0; r < layers.length; r++) layers[r] ??= [];
+  for (const L of layers) for (const u of L) u.nb = [...u.up, ...u.down];
+  if (variant.place === "tree") treeOrder(V, edges, layers);
+  else sweepOrder(layers);
+  transpose(layers);
+  const sep = (a, b) => a.hi + b.lo + (a.dummy || b.dummy ? 4 : 8);
+  if (variant.coords === "bk") brandesKoepf(layers, sep, V[0].n.lane);
+  else springs(layers, sep, V[0].n.lane);
+  return layers;
+}
+const renumber = (L) => L.forEach((u, i) => (u.pos = i));
+// Crossings between two rows, the lower one's lines up to the upper.
+function crossCount(lower) {
+  const pairs = [];
+  for (const u of lower) for (const w of u.up) pairs.push([u.pos, w.pos]);
+  pairs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  // Inversions of the upper ends, by a Fenwick tree.
+  const n = pairs.reduce((m, p) => Math.max(m, p[1] + 1), 0), T = new Int32Array(n + 1);
+  let c = 0, seen = 0;
+  for (const [, b] of pairs) {
+    let s = 0;
+    for (let i = b + 1; i > 0; i -= i & -i) s += T[i];
+    c += seen - s; seen++;
+    for (let i = b + 1; i <= n; i += i & -i) T[i]++;
+  }
+  return c;
+}
+const allCrossings = (layers) => layers.reduce((s, L, r) => s + (r ? crossCount(L) : 0), 0);
+// Barycentre sweeps, down then up, keeping the order with fewest crossings.
+// What ties sits in its old order, but a life's own line, the one on the
+// life of the point it ties on, goes to the middle of the tie: a life's
+// branches balance either side of it.
+function sweepOrder(layers) {
+  for (const L of layers) { L.sort((a, b) => a.key - b.key); renumber(L); }
+  let best = layers.map((L) => [...L]), fewest = allCrossings(layers);
+  for (let it = 0; it < 16 && fewest; it++) {
+    const down = it % 2 === 0;
+    for (const L of down ? layers.slice(1) : layers.slice(0, -1).reverse()) {
+      for (const u of L) {
+        const nb = down ? u.up : u.down;
+        u.bary = nb.length ? nb.reduce((s, w) => s + w.pos, 0) / nb.length : u.pos;
+        u.tie = nb.length === 1 ? nb[0] : null;
+      }
+      L.sort((a, b) => a.bary - b.bary || a.pos - b.pos);
+      for (let i = 0; i < L.length;) {
+        let j = i + 1;
+        while (j < L.length && L[j].bary === L[i].bary) j++;
+        const c = L.slice(i, j).findIndex((u) => u.tie && u.life === u.tie.life);
+        if (j - i > 2 && c >= 0) { const [m] = L.splice(i + c, 1); L.splice(i + ((j - i - 1) >> 1), 0, m); }
+        i = j;
+      }
+      renumber(L);
+    }
+    transpose(layers);
+    const n = allCrossings(layers);
+    if (n < fewest) { fewest = n; best = layers.map((L) => [...L]); }
+  }
+  best.forEach((L, r) => { layers[r] = L; renumber(L); });
+}
+// Neighbours swapped while that strictly lessens the crossings with the
+// rows above and below.
+function transpose(layers) {
+  const c = (u, w, side) => {
+    let n = 0;
+    for (const a of u[side]) for (const b of w[side]) if (a.pos > b.pos) n++;
+    return n;
+  };
+  for (let pass = 0, better = true; better && pass < 20; pass++) {
+    better = false;
+    for (const L of layers) for (let i = 0; i + 1 < L.length; i++) {
+      const [u, w] = [L[i], L[i + 1]];
+      if (c(w, u, "up") + c(w, u, "down") < c(u, w, "up") + c(u, w, "down")) { L[i] = w; L[i + 1] = u; u.pos = i + 1; w.pos = i; better = true; }
+    }
+  }
+}
+// The order of the tree of lives: each life's children either side of its
+// line, by when they start, each on the side less deep over its rows (in
+// turn when even), a longer one outside a shorter; read off left to right,
+// each child with its own children round it. Every row in that order.
+function treeOrder(V, edges, layers) {
+  const lives = new Map();
+  for (const v of V) { const l = lives.get(v.n.lane) ?? lives.set(v.n.lane, { id: v.n.lane, a: v.rank, b: v.rank, kids: [], key: v.key }).get(v.n.lane); l.b = Math.max(l.b, v.rank); }
+  for (const e of edges) {
+    const c = lives.get(e.v.n.lane), m = lives.get(e.d.n.lane);
+    if (e.kind === "grow" || e.kind === "branch") { if (!c.from) { c.from = m; c.a = e.d.rank; m.kids.push(c); } }
+    else if (e.kind === "fade") m.b = Math.max(m.b, e.v.rank);
+  }
+  const at = new Map();
+  let i = 0;
+  const walk = (l) => {
+    const side = { [-1]: [], [1]: [] };
+    let was = 1;
+    for (const c of l.kids.sort((p, q) => p.a - q.a || q.b - p.b || p.key - q.key)) {
+      const deep = (s) => side[s].filter((o) => o.a <= c.b && c.a <= o.b).length;
+      const s = deep(-1) < deep(1) ? -1 : deep(1) < deep(-1) ? 1 : (was = -was);
+      side[s].push(c);
+    }
+    const outward = (s) => side[s].sort((p, q) => p.b - p.a - (q.b - q.a) || p.a - q.a);
+    for (const c of outward(-1).reverse()) walk(c);
+    at.set(l.id, i++);
+    for (const c of outward(1)) walk(c);
+  };
+  for (const l of [...lives.values()].filter((l) => !l.from).sort((p, q) => p.key - q.key)) walk(l);
+  for (const L of layers) { L.sort((a, b) => at.get(a.life) - at.get(b.life) || (a.own ? -1 : 0) - (b.own ? -1 : 0) || a.key - b.key); renumber(L); }
+}
+// Each line a spring, three times stiffer between two hidden points, twice
+// between a hidden point and a node, and four times stiffer again on a
+// life's own line, so lines run straight but may lean; the main life's
+// nodes pulled to x = 0. The least energy keeping each row's gaps, by
+// sweeps of rows, each row exact given its neighbours (PAVA).
+function springs(layers, sep, main) {
+  const stiff = (a, b) => (a.dummy && b.dummy ? 8 : a.dummy || b.dummy ? 2 : 1) * (a.life === b.life ? 4 : 1);
+  const gaps = layers.map((L) => L.slice(1).map((v, i) => sep(L[i], v)));
+  for (const [r, L] of layers.entries()) {
+    let x = 0;
+    L.forEach((v, i) => { if (i) x += gaps[r][i - 1]; v.x = x; });
+    for (const v of L) v.x -= x / 2;
+  }
+  const most = layers.reduce((m, L) => Math.max(m, L.length), 0);
+  const t = new Float64Array(most), w = new Float64Array(most);
+  for (let it = 0; it < 120; it++) {
+    const down = it % 2 === 0;
+    for (let j = 0; j < layers.length; j++) {
+      const r = down ? j : layers.length - 1 - j, L = layers[r];
+      for (let i = 0; i < L.length; i++) {
+        const v = L[i], pull = v.life === main && !v.dummy ? 4 : .01;
+        let sx = 0, sw = pull;
+        for (const u of v.nb) { const k = stiff(u, v); sx += k * u.x; sw += k; }
+        t[i] = sx / sw; w[i] = sw;
+      }
+      pava(L, t, w, gaps[r]);
+    }
+  }
+}
+// Brandes and Koepf: in each of four directions each point aligned in one
+// block with its median neighbour, unless that crosses an alignment already
+// made or a line between two hidden points (those keep straight first); the
+// blocks packed against that side; then each x the mean of the middle two
+// of the four. The main life's mean x is moved to 0.
+function brandesKoepf(layers, sep, main) {
+  const all = layers.flat();
+  // Lines between two hidden points that a line out of a node crosses: the
+  // node's line may not align across them.
+  const marked = new Set();
+  for (let r = 1; r < layers.length; r++) {
+    const L = layers[r];
+    let k0 = 0, l = 0;
+    for (let l1 = 0; l1 < L.length; l1++) {
+      const inner = L[l1].dummy && L[l1].up[0]?.dummy ? L[l1].up[0] : null;
+      if (l1 === L.length - 1 || inner) {
+        const k1 = inner ? inner.pos : layers[r - 1].length - 1;
+        for (; l <= l1; l++) for (const u of L[l].up) if ((u.pos < k0 || u.pos > k1) && !(L[l].dummy && u.dummy)) marked.add(`${u.pos}:${r}:${L[l].pos}`);
+        k0 = k1;
+      }
+    }
+  }
+  const runs = [];
+  for (const vert of [0, 1]) for (const horiz of [0, 1]) {
+    const rows = vert ? [...layers].reverse() : layers;
+    const ord = (L) => (horiz ? [...L].reverse() : L);
+    const nbOf = (u) => (vert ? u.down : u.up);
+    const root = new Map(), align = new Map();
+    for (const u of all) { root.set(u, u); align.set(u, u); }
+    for (const L of rows) {
+      let lastPos = -Infinity;
+      for (const v of ord(L)) {
+        const nb = [...nbOf(v)].sort((a, b) => (horiz ? b.pos - a.pos : a.pos - b.pos));
+        if (!nb.length) continue;
+        const m = nb.length;
+        for (const i of [...new Set([Math.floor((m - 1) / 2), Math.ceil((m - 1) / 2)])]) {
+          if (align.get(v) !== v) break;
+          const u = nb[i], p = horiz ? -u.pos : u.pos;
+          const key = vert ? `${v.pos}:${u.rank}:${u.pos}` : `${u.pos}:${v.rank}:${v.pos}`;
+          if (!marked.has(key) && p > lastPos) {
+            align.set(u, v); root.set(v, root.get(u)); align.set(v, root.get(v)); lastPos = p;
+          }
+        }
+      }
+    }
+    // Pack the blocks: each as far toward its side as its row neighbours
+    // allow (a longest path over blocks; classes kept apart by a shift).
+    const sink = new Map(all.map((u) => [u, u])), shift = new Map(), x = new Map();
+    const pred = (v) => { const L = layers[v.rank], i = horiz ? v.pos + 1 : v.pos - 1; return i >= 0 && i < L.length ? L[i] : null; };
+    const gapOf = (a, b) => (horiz ? sep(b, a) : sep(a, b));
+    const placeBlock = (v) => {
+      if (x.has(v)) return;
+      x.set(v, 0);
+      let w = v;
+      do {
+        const p = pred(w);
+        if (p) {
+          const u = root.get(p);
+          placeBlock(u);
+          if (sink.get(v) === v) sink.set(v, sink.get(u));
+          if (sink.get(v) !== sink.get(u)) shift.set(sink.get(u), Math.min(shift.get(sink.get(u)) ?? Infinity, x.get(v) - x.get(u) - gapOf(p, w)));
+          else x.set(v, Math.max(x.get(v), x.get(u) + gapOf(p, w)));
+        }
+        w = align.get(w);
+      } while (w !== v);
+    };
+    for (const u of all) if (root.get(u) === u) placeBlock(u);
+    const X = new Map();
+    for (const u of all) {
+      const rt = root.get(u), s = shift.get(sink.get(rt));
+      X.set(u, (horiz ? -1 : 1) * (x.get(rt) + (s !== undefined && s < Infinity ? s : 0)));
+    }
+    runs.push(X);
+  }
+  // Align the four to the narrowest, then the mean of the middle two.
+  const span = runs.map((X) => { const xs = [...X.values()]; return [Math.min(...xs), Math.max(...xs)]; });
+  const n = span.reduce((b, s, i) => (s[1] - s[0] < span[b][1] - span[b][0] ? i : b), 0);
+  runs.forEach((X, i) => {
+    const d = i % 2 ? span[n][1] - span[i][1] : span[n][0] - span[i][0];
+    for (const [u, v] of X) X.set(u, v + d);
+  });
+  for (const u of all) { const xs = runs.map((X) => X.get(u)).sort((a, b) => a - b); u.x = (xs[1] + xs[2]) / 2; }
+  const ms = all.filter((u) => u.life === main && !u.dummy);
+  const c = ms.reduce((s, u) => s + u.x, 0) / (ms.length || 1);
+  for (const u of all) u.x -= c;
+}
+
 // The room each hidden point has in its row, from the nearest real node on
 // its left to the nearest on its right, less 4 px: its line passes anywhere
 // in it, drawn taut (funnel()).
@@ -540,6 +792,9 @@ function edge(v, u, gap) {
 function ports(edges) {
   const at = new Map();
   const port = (e, v, side, far, gap) => {
+    // Placed by order: the line's next point, its first hidden one or its
+    // other end, so ports keep the rows' order.
+    if (mine() && e.mid.length) far = side > 0 ? e.mid[0] : e.mid.at(-1);
     const s = Math.sign(far.x - v.x) || 1, key = `${v.id}:${side}`;
     const p = { e, v, far, gap, s, side };
     (at.get(key) ?? at.set(key, []).get(key)).push(p);
