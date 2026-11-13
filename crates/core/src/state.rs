@@ -1000,7 +1000,12 @@ impl State {
                 self.faces.insert(*replica);
             }
             Fact::Seen(_) => {}
-            Fact::SignedIn => self.signed_out = None,
+            // A sign-in may be another account, whose limit is its own: if
+            // it is limited too, its first refused request says so again.
+            Fact::SignedIn => {
+                self.signed_out = None;
+                self.limited_until = None;
+            }
             Fact::SignedOut => {
                 self.signed_out.get_or_insert(record.at);
             }

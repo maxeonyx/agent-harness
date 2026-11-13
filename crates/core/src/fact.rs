@@ -153,7 +153,9 @@ pub enum Fact {
     /// Which task the face stating it shows Max.
     Focus(Focus),
     /// The harness has a claude.ai login again: ends the wait that
-    /// [`crate::model_call::Ending::SignedOut`] began. Stated by the brain.
+    /// [`crate::model_call::Ending::SignedOut`] began, and any
+    /// [`crate::model_call::Ending::Limited`] one, since the login may be
+    /// another account. Stated by the brain.
     SignedIn,
     /// The harness has no claude.ai login at a launch: begins the same wait
     /// before any request is refused, so Max is asked to sign in at once.
