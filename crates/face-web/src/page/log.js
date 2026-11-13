@@ -1,4 +1,4 @@
-import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
+import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, reduced, scrollEl } from "./base.js";
 import { act, can } from "./tab.js";
 import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
 import { dress, paint, trouble } from "./draw.js";
@@ -811,6 +811,7 @@ function settle(t) {
   const from = dock.getBoundingClientRect().top;
   pane.classList.remove("loading");
   showBlob(t);
+  if (reduced()) return;
   const glide = [{ translate: `0 ${from - dock.getBoundingClientRect().top}px` }, { translate: "0 0" }];
   for (const x of [dock, $(".pane > .acts", panel)]) x.animate(glide, { duration: 700, easing: "cubic-bezier(.3, 0, .2, 1)" });
 }
