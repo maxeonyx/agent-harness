@@ -31,23 +31,25 @@
 //!
 //! ```mermaid
 //! flowchart TB
-//!   lead["The lead: the question of an ask, or the fact he most needs"] --> f["The facts, shown"]
-//!   f --> p["The plan: each step what will be true, and where it stands now; each open ask inside the step it unblocks"]
-//!   p --> w["Why this route"]
+//!   lead["The lead: the question of an ask, or the fact he most needs"] --> p["The plan: each step what will be true, and where it stands now; each open ask inside the step it unblocks"]
+//!   p --> f["The facts, shown"]
+//!   f --> w["Why this route"]
 //! ```
 //!
 //! 1. The lead ([`Lead`]): why he is reading this now, in one line.
-//! 2. The facts ([`Sheet::facts`]): what he needs in order to read the
-//!    plan, shown, beginning on his first screen under the lead.
-//! 3. The plan ([`Step`]), which is most of a page, and is where the work
-//!    ends: each step is titled by what will be true, beside where that
-//!    stands now, so the rail reads as the eventual state and the current
-//!    one in a single list, end first in each line. Each open ask
-//!    ([`crate::ask::Ask`]) is drawn whole inside the step it unblocks.
-//!    Steps and asks are values of their own ([`Description::plan`]),
-//!    drawn as they stand now, never retold on the page. If he doesn't
-//!    agree with where the steps end, he says so, and nothing else on the
-//!    page matters until the agent changes them.
+//! 2. The plan ([`Step`]), which is most of a page, and is where the work
+//!    ends, starting on his first screen under the lead: each step is
+//!    titled by what will be true, beside where that stands now, so the
+//!    rail reads as the eventual state and the current one in a single
+//!    list he can agree with or reject at a glance, end first in each
+//!    line. Each open ask ([`crate::ask::Ask`]) is drawn whole inside the
+//!    step it unblocks, after the steps' ends have been read. Steps and
+//!    asks are values of their own ([`Description::plan`]), drawn as they
+//!    stand now, never retold on the page. If he doesn't agree with where
+//!    the steps end, he says so, and nothing else on the page matters
+//!    until the agent changes them.
+//! 3. The facts ([`Sheet::facts`]): what backs the lead and the steps'
+//!    nows, shown.
 //! 4. Why this route ([`Sheet::why`]), after the route it argues for.
 //!
 //! A part Max is done with shrinks: a lead he has read takes a short band,
@@ -219,7 +221,7 @@ pub struct Version {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sheet {
     pub lead: Lead,
-    /// What Max needs in order to read the plan, shown: the real log line,
+    /// What backs the lead and the steps' nows, shown: the real log line,
     /// the count and where it was counted, the table of what the agent
     /// checked and what each showed, the before and after, a screenshot,
     /// one figure of the system with what is to come drawn dashed. What
@@ -253,7 +255,7 @@ pub struct Sheet {
 /// or "nothing needs you": the harness says that, from the asks.
 ///
 /// Drawn in the theme's display face at the lead size, upright and
-/// readable, on the ground, with the facts starting on the same first
+/// readable, on the ground, with the plan starting on the same first
 /// screen; a short band once he has seen it. Bold while something on the
 /// page is his move; regular once nothing is, as on a finished task's page.
 /// It is also what the map's node and his queue say for the task, and what

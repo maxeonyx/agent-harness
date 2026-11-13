@@ -38,7 +38,7 @@ use crate::resource::Observation;
 ///
 /// **The language is the same on every page.** It is what Max learns once,
 /// so that on any agent's page he knows where to look:
-/// - Order. The lead, the facts, the plan with the asks in its steps, why
+/// - Order. The lead, the plan with the asks in its steps, the facts, why
 ///   this route ([`crate::page`]). Nothing names a part: no headings over
 ///   parts, no small labels above them, no cues to scroll, and no line
 ///   about the page itself, such as whether it still holds.
