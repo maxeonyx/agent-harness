@@ -28,6 +28,9 @@
   :is(.failed, .stuck) { --s: var(--failed); --on: var(--paper); }
   :is(.paused, .cancelled) { --s: var(--paused); --on: var(--muted); }
   * { box-sizing: border-box; }
+  /* Nothing is italic, not even emphasis or highlighted code: the faces
+     have no italic, and the browser would fake one. */
+  *, .hljs-emphasis { font-style: normal; }
   /* Scrollbars thin and in the page's colours, wherever they appear. */
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
