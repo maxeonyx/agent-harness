@@ -20,9 +20,11 @@ const painted = new Map();  // an area's top -> { key, canvas }
 const SIDE = 70, NAMES = 170, ABOVE = 60, BELOW = 170, POOL = 90;
 let queued = false, painting = 0;
 
-// Paint what has changed, after this frame.
+// Paint what has changed, after this frame. Off for now: each painting
+// holds the page's thread for up to half a second, so the map lags.
+const OFF = true;
 export function paintRegions() {
-  if (queued) return;
+  if (OFF || queued) return;
   queued = true;
   requestAnimationFrame(() => setTimeout(() => { queued = false; next(); }));
 }
