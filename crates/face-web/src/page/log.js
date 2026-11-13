@@ -156,7 +156,7 @@ function entry(s, into, e, index, t, parent, only) {
       if (b.type === "tool_result") { if (only !== "words") result(s, b); return; }
       if (only === "results") return;
       closeGroup(s);
-      if (b.type === "image") { const img = el("img"); img.src = `data:${b.source?.media_type};base64,${b.source?.data}`; img.style.maxWidth = "100%"; into.append(img); return; }
+      if (b.type === "image") { into.append(image(b.source)); return; }
       if (b.type !== "text" || who.by === "label") return;
       const text = b.text || "";
       if (who.by === "max" && carry) {
@@ -705,8 +705,24 @@ function result(s, b) {
   // A spawn's result is its agents' parts, each in its agent's line.
   const byAgent = r.b.name === "spawn" && !b.is_error ? parts(b.content, new Set((r.inner.tasks || []).map((x) => x.name))) : null;
   if (byAgent) { r.results = byAgent; fillMembers(s, b.tool_use_id); return; }
-  for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") { const img = el("img", "res"); img.src = `data:${x.source?.media_type};base64,${x.source?.data}`; img.style.maxWidth = "100%"; detail.append(img); }
+  for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") detail.append(image(x.source, "res", r.row));
   detail.append(out);
+}
+// An image of the log, from where the face serves it, sized before it
+// comes so the log does not move when it does. It is fetched only once it
+// is about to be seen: once `near` (the image itself, or the folded tool
+// call it is in, one tap from showing it) is within a screen of the view.
+const soon = new IntersectionObserver((seen) => {
+  for (const s of seen) if (s.isIntersecting) { soon.unobserve(s.target); for (const img of s.target.waiting) img.src = img.dataset.src; s.target.waiting = []; }
+}, { root: scrollEl, rootMargin: "100% 0px" });
+function image(source, cls, near) {
+  const img = el("img", cls);
+  if (source?.width !== undefined) { img.width = source.width; img.height = source.height; }
+  img.dataset.src = source?.url ?? `data:${source?.media_type};base64,${source?.data}`;
+  const at = near ?? img;
+  at.waiting = [...(at.waiting ?? []), img];
+  soon.observe(at);
+  return img;
 }
 // A tool's input, or a result that is data, as it reads: each field by its
 // name, an empty one left out; a string as text (an agent's own words as
