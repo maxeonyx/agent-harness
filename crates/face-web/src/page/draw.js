@@ -1,5 +1,5 @@
 import { $, el, svgEl, when } from "./base.js";
-import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, LINE, look, positions, radius, routes, shortName, shown, stateOf, successor, unfolded, view, waitingOn } from "./map.js";
+import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, LINE, look, positions, radius, remeasure, routes, shortName, shown, stateOf, successor, unfolded, view, waitingOn } from "./map.js";
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
 import { ICON, layer, MARK, session, STATES } from "./blobs.js";
 import { GAP, LIFE, outline, polyline } from "./layout.js";
@@ -343,6 +343,8 @@ export function refresh() {
   })();
   return running;
 }
+// A face that arrives after the labels were measured changes their widths.
+document.fonts.addEventListener("loadingdone", () => { remeasure(); refresh(); });
 
 export function render() {
   if (!view) return;

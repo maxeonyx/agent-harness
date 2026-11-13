@@ -311,6 +311,7 @@ function measure(text, font) {
   }
   return widths.get(k);
 }
+export function remeasure() { widths.clear(); }
 // How far a node reaches, from its centre: across (its label to the right)
 // and along the flow, and where lines meet it.
 function extent(n) {
