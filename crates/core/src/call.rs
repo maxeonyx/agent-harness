@@ -85,6 +85,13 @@ pub struct Call {
     pub expects: Vec<Observation>,
 }
 
+/// The field every agent's call input may carry beside its arguments: its
+/// few words on what the call does, which the harness adds to every tool's
+/// schema and the page shows in place of the input. A call's input keeps it,
+/// as written; whatever runs a tool hands the tool its input without it, so
+/// no tool knows about it, and a parser that refuses unknown fields is safe.
+pub const SUMMARY: &str = "summary";
+
 impl Call {
     pub(crate) fn values(&self, out: &mut Vec<ValueId>) {
         let Call {
