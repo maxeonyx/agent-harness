@@ -2,12 +2,12 @@
 # Max talks to an agent's subagents only while they work. A scripted
 # orchestrator spawns two forks whose last turns stream slowly. Max writes
 # to each during that last turn: `talker` ends its turn with a reply, and
-# `reporter` with compact_and_report. Neither finishes there: the words
-# keep the turn open, the held-back answer is just a message in its log,
-# and its next turn's answer is the result the orchestrator gets. Once
-# they have finished, Max continuing one is refused (only the
-# orchestrator can, with `spawn` and `resume`), while the orchestrator's
-# own chat, which faced him, he can still continue. Free (scripted
+# `reporter` with compact_and_report. Both finish there, without reading
+# his words: each one's answer is the result the orchestrator gets, and
+# his words follow it there, verbatim under their label, as written to it
+# after it was done. Once they have finished, Max's words to one are
+# held, not heard, and continuing one is refused (only the orchestrator can, with `spawn` and `resume`), while
+# the orchestrator's own chat, which faced him, he can still continue. Free (scripted
 # model), about 40 s; it leaves the brain up to look at the page:
 # `node dev/drive.mjs down --brain readonly`.
 set -euo pipefail
@@ -23,8 +23,8 @@ waiting() { view | jq -r --arg id "$1" '.rows["task:" + $id].Task.waiting.kind';
 act() { target/release/examples/act "$port" "$@" || true; }
 repo=$PWD/.drive.ignore/readonly/repo
 demos/brain/scratch.sh "$repo" >/dev/null
-talker='slow 1000 say My first answer, which Max'"'"'s words hold back.'
-reporter='slow 1000 tool compact_and_report {\"carry\": \"Nothing to carry.\", \"report\": \"My first report, which Max'"'"'s words hold back.\", \"summary\": \"report\"}'
+talker='slow 1000 say My answer: the result.'
+reporter='slow 1000 tool compact_and_report {\"carry\": \"Nothing to carry.\", \"report\": \"My report: the result.\", \"summary\": \"report\"}'
 mandate="tool spawn {\"summary\": \"two forks\", \"tasks\": [{\"name\": \"talker\", \"mandate\": \"$talker\"}, {\"name\": \"reporter\", \"mandate\": \"$reporter\"}]}
 say Both forks have reported."
 chat=$(drive chat orchestrator "$repo" "$mandate")
@@ -33,15 +33,18 @@ until [ -n "$(id_of talker)" ] && [ -n "$(id_of reporter)" ]; do sleep 0.2; done
 talker=$(id_of talker) reporter=$(id_of reporter)
 sleep 2
 echo "== $(at) Max writes to each while its last turn is in flight"
-act say "$talker" "say Heard you, Max: this is my real result."
-act say "$reporter" "say Heard you, Max: this is my real report."
+act say "$talker" "say Heard you, Max: this reply would replace my result."
+act say "$reporter" "say Heard you, Max: this reply would replace my report."
 drive settle "$chat" >/dev/null
-echo "== $(at) talker's log: its first answer stays a message, and its next is the result"
+echo "== $(at) talker's log: its answer is its last entry, and Max's words never reached it"
 drive log "$talker"
-echo "== $(at) reporter's log: the compaction and its report stay, and Max's words follow"
+echo "== $(at) reporter's log: its report is its last entry, and Max's words never reached it"
 drive log "$reporter"
-echo "== $(at) what the orchestrator got:"
-drive log "$chat"
+echo "== $(at) what the orchestrator got: each result, then what Max wrote to it after it was done"
+drive log "$chat" --full
+echo "== $(at) Max writes to the finished talker: his words are held, not heard"
+act say "$talker" "say Too late?" >/dev/null
+view | jq -c '.rows[] | .Draft? // empty | select(.held) | {session, held}'
 echo "== $(at) Max continues the finished talker: refused"
 act continue "$talker" "say Can I keep going?"
 echo "== $(at) Max marks the orchestrator's chat done, then continues it, since it faced him: a new chat"
