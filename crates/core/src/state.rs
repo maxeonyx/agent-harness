@@ -1242,7 +1242,9 @@ impl State {
     /// is still running, it is an agent's call to the brain, the new task
     /// joins the scope the call opens or, as a sibling, its caller's own
     /// spawn scope, and it is a fork of the caller, a resume of a task the
-    /// caller owned, or fresh in a role the caller's own role starts.
+    /// caller owned, or fresh in a role the caller's own role starts. It is
+    /// user-facing exactly when it is a chat an `open_chat` call opens, and
+    /// never standing.
     fn creator(&self, by: CallId, created: &Created) -> Result<TaskId, Rejected> {
         let call = self.calls.get(&by).ok_or(Rejected::Unknown)?;
         if call.settled.is_some() {
@@ -1277,7 +1279,19 @@ impl State {
             Origin::Resume { from } => self.owner(*from) == Some(caller),
             Origin::Aside { .. } => false,
         };
-        if !origin || created.mode == Mode::Standing {
+        // A chat for Max is a fresh agent that one facing him opens, as
+        // background work of its own, and nothing else an agent starts is.
+        let opens = call.call.tool == crate::task::OPEN_CHAT;
+        let chat = opens
+            && matches!(call.call.caller, Caller::Background { .. })
+            && matches!(created.origin, Origin::Fresh { .. })
+            && self.faces_max(caller);
+        let mode = match created.mode {
+            Mode::Autonomous => !opens,
+            Mode::UserFacing => chat,
+            Mode::Standing => false,
+        };
+        if !origin || !mode {
             return Err(Rejected::CannotStart);
         }
         Ok(caller)
@@ -2396,6 +2410,21 @@ impl State {
         self.calls.get(&id)
     }
 
+    /// Whether the call is of a tool that only runs in the background
+    /// ([`crate::limb::Tool::held`]), as its limb describes it now.
+    pub fn held(&self, id: CallId) -> bool {
+        let Some(made) = self.calls.get(&id) else {
+            return false;
+        };
+        (made.limb)
+            .and_then(|limb| self.described.get(&limb))
+            .is_some_and(|d| {
+                (d.description.sets.iter())
+                    .flat_map(|s| &s.tools)
+                    .any(|t| t.held && t.name == made.call.tool)
+            })
+    }
+
     /// Running background work agents have passed to Max ([`Owner::Max`]):
     /// his to use and stop.
     pub fn handed(&self) -> impl Iterator<Item = (CallId, &CallRecord)> {
@@ -2768,6 +2797,20 @@ impl State {
         }
     }
 
+    /// Whether the task faces Max: it is user-facing or standing, or a fork
+    /// of one that does. Only such a task opens chats for him
+    /// ([`crate::task::OPEN_CHAT`]).
+    pub fn faces_max(&self, task: TaskId) -> bool {
+        let Some(t) = self.tasks.get(&task) else {
+            return false;
+        };
+        match (t.mode, &t.origin) {
+            (Mode::UserFacing | Mode::Standing, _) => true,
+            (Mode::Autonomous, Origin::Fork { from }) => self.faces_max(*from),
+            (Mode::Autonomous, _) => false,
+        }
+    }
+
     /// The task that owns this one: the caller of its scope's spawn. `None`
     /// in Max's scope.
     pub fn owner(&self, task: TaskId) -> Option<TaskId> {
@@ -2921,7 +2964,8 @@ impl State {
     }
 
     /// The calls of the task's round the brain moves to the background now
-    /// ([`Todo::Background`]): each that has had [`HEARD_AFTER`] since it
+    /// ([`Todo::Background`]): its held calls ([`State::held`]) at once;
+    /// each that has had [`HEARD_AFTER`] since it
     /// was made, once Max's words, or a turn one of his acts asks for, have
     /// waited as long for the round to end by itself, so a quick call made
     /// after his words came (a last response's report among them) ends in
@@ -2938,15 +2982,20 @@ impl State {
         match task.drain() {
             None if self.spoken_to(task, Some((HEARD_AFTER, now))) => (step.outstanding.iter())
                 .filter(|c| {
-                    self.calls.get(c).is_none_or(|r| {
-                        r.waits.is_none() && now >= crate::cancel::deadline(r.made.at, HEARD_AFTER)
-                    })
+                    self.held(**c)
+                        || self.calls.get(c).is_none_or(|r| {
+                            r.waits.is_none()
+                                && now >= crate::cancel::deadline(r.made.at, HEARD_AFTER)
+                        })
                 })
                 .copied()
                 .collect(),
-            None => Vec::new(),
+            None => (step.outstanding.iter())
+                .filter(|c| self.held(**c))
+                .copied()
+                .collect(),
             Some(Draining::ToMax) => (step.outstanding.iter())
-                .filter(|c| self.open.scopes.contains_key(&Scope::Spawn(**c)))
+                .filter(|c| self.open.scopes.contains_key(&Scope::Spawn(**c)) || self.held(**c))
                 .copied()
                 .collect(),
             Some(_) => Vec::new(),

@@ -109,7 +109,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "grep",
-            "Search a file, or the text files under a directory, for a regular expression, skipping `.git`. \
+            "Search a file, or the text files under a directory, for a regular expression, skipping `.git` and what git ignores. \
              Prints `path:line:text`; a long line shows the part around its match. \
              Many matches are cut like `bash` output, the whole list kept in a file the result names.",
             json!({
@@ -131,6 +131,7 @@ fn tool(name: &str, description: &str, properties: serde_json::Value, required: 
         name: name.into(),
         definition: definition.to_string(),
         audience: Audience::Both,
+        held: false,
     }
 }
 

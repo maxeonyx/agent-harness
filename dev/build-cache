@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# The compiler cache every clone on this machine shares.
+#
+#   dev/build-cache [SIZE]    (default 10G)
+#
+# Installs sccache into its own Nix profile,
+# ~/.local/share/agent-harness/sccache, and runs its server as the durable
+# user unit harness-sccache.service, caching compiled crates in
+# ~/.cache/agent-harness-sccache up to SIZE, evicting the least recently
+# used. Each clone's cargo finds it through dev/rustc-wrapper, so there is
+# no per-clone step; a machine without it builds plainly. Clones share
+# compiled crates, not target directories.
+#
+# The server runs every compile it caches, so it sits in harness.slice
+# with agents' commands and yields to the brains as they do. It runs
+# outside any command's scope, so a command ending doesn't take it down
+# under another agent's build. Run it again to change SIZE or update
+# sccache. Its stats: ~/.local/share/agent-harness/sccache/bin/sccache -s
+set -euo pipefail
+
+size=${1:-10G}
+profile=~/.local/share/agent-harness/sccache
+unit=~/.config/systemd/user/harness-sccache.service
+
+mkdir -p "$(dirname "$profile")" "$(dirname "$unit")"
+if [ -e "$profile" ]; then
+  nix profile upgrade --profile "$profile" sccache
+else
+  nix profile add --profile "$profile" nixpkgs#sccache
+fi
+
+cat >"$unit" <<EOF
+[Unit]
+Description=The compiler cache agent-harness clones share (dev/build-cache)
+
+[Service]
+Slice=harness.slice
+IOSchedulingClass=idle
+# What sccache --start-server runs in the process it forks: the server.
+Environment=SCCACHE_START_SERVER=1 SCCACHE_NO_DAEMON=1 SCCACHE_IDLE_TIMEOUT=0
+Environment=SCCACHE_DIR=%h/.cache/agent-harness-sccache SCCACHE_CACHE_SIZE=$size
+ExecStart=$profile/bin/sccache
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable harness-sccache
+systemctl --user restart harness-sccache
+systemctl --user --no-pager status harness-sccache | head -n 3

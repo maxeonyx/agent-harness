@@ -1,18 +1,18 @@
-//! The builds tool set: relaunches its brain onto the commit of a clone,
-//! as a call of the harness's core model, through a rehearsal and a gated
+//! The builds tool set: relaunches its brain onto a target build, as a
+//! call of the harness's core model, through a rehearsal and a gated
 //! opening, and goes back if the new build dies just after it opens
 //! ([`harness_core::build`] holds the model, [`relaunch`] the procedure).
 //!
 //! **Concept.** Offered by the limb on the brain's machine, its resource is
 //! the brain's own service, the systemd user unit its settings name
-//! ([`Settings`]). Its `relaunch` tool refuses in band a clone with
-//! uncommitted changes, a commit that does not descend from the running one
-//! unless the call says `back`, a second relaunch while one is under way,
-//! a build that fails its rehearsal, and a one-way relaunch unless the call
-//! says `one_way`: each before anything touches the live database, since
-//! the call's result arrives only after the relaunch. Otherwise the running
-//! brain drains and stops, the new build starts as a candidate, and the
-//! call settles once, after a window in which the limb watches the opened
+//! ([`Settings`]). Its `relaunch` tool names its target (`main`,
+//! `previous` or a commit: [`relaunch`]), and refuses in band a commit no
+//! branch has or one that lacks some of `main`, a second relaunch while
+//! one is under way, a build that fails its rehearsal, and a one-way
+//! relaunch unless the call says `one_way`: each before anything touches
+//! the live database, since the call's result arrives only after the
+//! relaunch. Otherwise the running brain drains and stops, the new build
+//! starts as a candidate, and the call settles once, after a window in which the limb watches the opened
 //! build: with the stage it reached ([`Ended::stage`]), then its words,
 //! which the face reads as where the relaunch stands.
 //!
@@ -26,7 +26,6 @@
 
 pub mod relaunch;
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use harness_core::call::Outcome;
@@ -96,19 +95,22 @@ impl ToolSet for Builds {
         let unit = lock(&self.settings).unit.clone();
         let text = format!(
             "## Relaunching the harness\n\n\
-`relaunch` moves the brain you run on ({}) onto the commit a clone has checked out, and every session, \
-yours included, carries on from the same records on the new build. It builds and installs the commit, and \
-rehearses it beside the running brain: the new build's gate on a copy of the database, two scratch brains \
-of it making a tool round trip through the running build's limb and its own, and the running build reading \
-back what they wrote. Then the brain stops (its requests in flight finish first), and the new build opens \
-only once its gate has passed on the live database, writing nothing before. For a few minutes after it \
-opens, if its process ends, the harness goes back to the build before. The call returns once, after that, \
-saying how it went; your next turn may be on either build.\n\n\
-Merge your work first: it refuses a clone with uncommitted changes, and a commit that does not descend \
-from the one running unless you say `back`. It refuses a one-way relaunch, one the running build could \
-not read back, naming what it could not read, unless you say `one_way`: going back after a one-way \
-relaunch skips what the older build cannot read and may run a call a second time. Relaunch only at a \
-moment no other agent's work would be lost.\n",
+`relaunch` moves the brain you run on ({}) onto a target build, and every session, yours included, \
+carries on from the same records on the new build. The target is `main`, the latest commit of the \
+harness's `main`; a commit of any pushed branch that contains all of `main`, so you can relaunch work \
+before it merges; or `previous`, the build this brain ran before the one it runs, to go back. It builds \
+and installs a commit, and rehearses it beside the running brain: the new build's gate on a copy of the \
+database, two scratch brains of it making a tool round trip through the running build's limb and its \
+own, and the running build reading back what they wrote. Then the brain stops (its requests in flight \
+finish first), and the new build opens only once its gate has passed on the live database, writing \
+nothing before. For a few minutes after it opens, if its process ends, the harness goes back to the \
+build before. The call returns once, after that, saying how it went; your next turn may be on either \
+build.\n\n\
+A relaunch the running build can read back needs nothing more. One it cannot is one-way: going back \
+after it skips what the older build cannot read and may run a call a second time. It is refused, naming \
+what could not be read; that is a sign to go back to the design and make the change readable by the \
+running build. Say `one_way` only when one-way cannot be avoided. Relaunch only at a moment no other \
+agent's work would be lost.\n",
             unit.as_deref()
                 .unwrap_or("no systemd unit: it cannot be relaunched")
         );
@@ -156,10 +158,10 @@ moment no other agent's work would be lost.\n",
             move |line: &str| eprintln!("{unit}: {line}")
         };
         let asked = Asked {
-            back: request.back,
+            target: request.target,
             one_way: request.one_way,
         };
-        let ended = relaunch::relaunch(&unit, &request.clone, asked, Some(running.id), &say);
+        let ended = relaunch::relaunch(&unit, &asked, Some(running.id), &say);
         let said = format!("{}: {}", ended.stage(), ended.words());
         say(&said);
         match ended {
@@ -187,10 +189,9 @@ fn observe(voice: &Voice, unit: &str, commit: &str) -> Observation {
 
 /// A `relaunch` call's input.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Request {
-    clone: PathBuf,
-    #[serde(default)]
-    back: bool,
+    target: String,
     #[serde(default)]
     one_way: bool,
 }
@@ -198,20 +199,21 @@ struct Request {
 fn tool() -> Tool {
     let definition = json!({
         "name": RELAUNCH,
-        "description": "Relaunch the harness onto the commit a clone has checked out, through a rehearsal and a \
-    gated opening. It returns a few minutes after the new build opens, or when the relaunch is refused or fails, \
-    saying the stage it reached and whether the harness went back.",
+        "description": "Relaunch the harness onto a target build, through a rehearsal and a gated opening. It \
+    returns a few minutes after the new build opens, or when the relaunch is refused or fails, saying the stage \
+    it reached and whether the harness went back.",
         "input_schema": { "type": "object", "properties": {
-            "clone": { "type": "string", "description": "The clone's directory: its HEAD is built." },
-            "back": { "type": "boolean", "description": "Allow a commit that does not descend from the running one." },
-            "one_way": { "type": "boolean", "description": "Allow a one-way relaunch: one whose records the running build \
-    cannot all read, so going back after it skips those and may run a call a second time. A relaunch refused as \
-    one-way says so; call again with this to go ahead." },
-        }, "required": ["clone"] },
+            "target": { "type": "string", "description": "`main`; a commit of a pushed branch that contains all of \
+    `main`; or `previous`, the build this brain ran before this one." },
+            "one_way": { "type": "boolean", "description": "Go ahead with a one-way relaunch, one the running build \
+    cannot read back. Only when one-way cannot be avoided: a relaunch refused as one-way is a sign to change the \
+    design instead." },
+        }, "required": ["target"] },
     });
     Tool {
         name: RELAUNCH.into(),
         definition: definition.to_string(),
         audience: Audience::Agent,
+        held: false,
     }
 }

@@ -49,6 +49,31 @@ pub fn unit(call: CallId) -> String {
     format!("harness-call-{call}")
 }
 
+/// Every agent's slice, `harness-<task>.slice`, sits in `harness.slice`.
+/// Make what runs there yield to the brains and the tunnel the page comes
+/// through: a fifth of their CPU share, and its memory reclaimed before
+/// theirs once it passes 60% of the machine's. Agents' builds and copies
+/// had swapped the live brain out and stalled the disk for tens of
+/// seconds, dropping Max's page and dictation. For the user manager's
+/// lifetime, so each limb that starts sets it again.
+pub fn yield_to_the_harness() {
+    if !scope::user_manager() {
+        return;
+    }
+    let set = std::process::Command::new("systemctl")
+        .args(["--user", "set-property", "--runtime", "harness.slice"])
+        .args(["CPUWeight=20", "MemoryHigh=60%"])
+        .output();
+    match set {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => eprintln!(
+            "agents' commands do not yield to the harness: systemctl said {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => eprintln!("agents' commands do not yield to the harness: systemctl: {e}"),
+    }
+}
+
 /// End what the command of `call` left running when an earlier instance of
 /// the limb was killed: its marked processes, then what is left in its
 /// scope.

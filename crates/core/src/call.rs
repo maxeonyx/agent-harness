@@ -203,8 +203,10 @@ pub enum CallEvent {
     /// outstanding a grace after Max's words, or a turn one of his acts asks
     /// for, reach it ([`crate::state::Todo::Background`]), so he is heard
     /// while the work goes on; and for a spawn of a round he interrupts, so
-    /// his interrupt never stops a scope. Or by Max, for one call he moves
-    /// to the background himself. Never for a fresh context's attachments.
+    /// his interrupt never stops a scope; and at once for a call of a held
+    /// tool ([`crate::limb::Tool::held`]), which only runs in the
+    /// background. Or by Max, for one call he moves to the background
+    /// himself. Never for a fresh context's attachments.
     ///
     /// **Concept.** A blocking call blocks the agent, never Max. The
     /// provider needs every tool use answered before anything new is said,
