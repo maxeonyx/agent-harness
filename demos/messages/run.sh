@@ -8,7 +8,7 @@
 #    wrote this", answers, and keeps its place in Max's queue.
 # 2. Max has the chat tell `kid`, mid `sleep 120`, something with his
 #    words quoted by label: `kid` reads it, "which started you", with the
-#    quote, within 30 s.
+#    quote, about 30 s later (its 30 s grace, then a poll).
 # 3. One of Max's chats tells another, by task id; a name that is no one
 #    near it fails saying whom it can reach.
 # 4. The circle: an owner waits on `listener`, a member that waits for
