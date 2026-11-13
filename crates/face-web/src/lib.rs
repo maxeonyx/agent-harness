@@ -113,6 +113,7 @@
 //!   participant brain as The brain
 //!   page->>page: Max presses the microphone: the page makes 16-bit PCM<br/>compose.js dictate: getUserMedia, an AudioWorklet
 //!   page->>face: open the dictation socket<br/>wss /dictation?rate=Hz: Face::dictate
+//!   Note over page: what the microphone hears while the socket opens is held, and sent first once it is open
 //!   face->>api: open the speech stream with the login's token, and keep it alive<br/>Dictation::relay, session, connect: wss, KeepAlive
 //!   face-->>page: listening
 //!   loop until Max stops

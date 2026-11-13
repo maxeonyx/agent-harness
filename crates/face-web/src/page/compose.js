@@ -718,9 +718,20 @@ export async function dictate(sample) {
   if (l.stopping) return finishDictation(l);
   const ws = l.ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
   ws.binaryType = "arraybuffer";
-  if (l.mic) l.mic.node.port.onmessage = (m) => { if (ws.readyState === 1) ws.send(m.data); hear(level(new Int16Array(m.data))); };
+  // What the microphone hears while the socket opens is held, and goes
+  // first once it is open: Max talks from the press, and on his phone the
+  // socket takes a moment to open.
+  const held = [];
+  if (l.mic) l.mic.node.port.onmessage = (m) => {
+    if (ws.readyState === WebSocket.CONNECTING) held.push(m.data);
+    else if (ws.readyState === WebSocket.OPEN) ws.send(m.data);
+    hear(level(new Int16Array(m.data)));
+  };
   hear(0);
-  ws.onopen = () => { if (l.stopping) ws.send(STOP); };
+  ws.onopen = () => {
+    for (const pcm of held.splice(0)) ws.send(pcm);
+    if (l.stopping) ws.send(STOP);
+  };
   ws.onmessage = (m) => {
     const d = JSON.parse(m.data);
     if (d.listening) say(sample ? "Dictating the sample" : "Listening");
