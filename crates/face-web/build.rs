@@ -42,7 +42,7 @@ fn main() {
     println!("cargo::rerun-if-changed=../substrate/src");
 }
 
-/// Every file in `src/page`, as `&[(&str, &str)]` of name and text, so a
+/// Every file in `src/page`, as `&[(&str, &[u8])]` of name and bytes, so a
 /// new file is built in without naming it anywhere else.
 fn page(out: &Path) {
     let page = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/page");
@@ -58,7 +58,7 @@ fn page(out: &Path) {
     names.sort();
     let entries: String = names
         .iter()
-        .map(|n| format!("    ({n:?}, include_str!({:?})),\n", page.join(n)))
+        .map(|n| format!("    ({n:?}, include_bytes!({:?})),\n", page.join(n)))
         .collect();
     std::fs::write(out.join("page.rs"), format!("&[\n{entries}]\n")).expect("OUT_DIR is writable");
     println!("cargo::rerun-if-changed=src/page");
