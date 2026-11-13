@@ -20,7 +20,7 @@
 //! in the same batch as the `Dispatched`, so a crash leaves both or
 //! neither, and a restart never spawns twice.
 
-use harness_core::call::{Call, Caller, Until, Wait};
+use harness_core::call::{Call, Caller, Owner, Until, Wait};
 use harness_core::context::Rendered;
 use harness_core::delivery::Content;
 use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
@@ -616,13 +616,17 @@ pub fn wait(state: &State, owner: &Task, input: &[u8]) -> Result<Waiting, String
 }
 
 /// The newest of `owner`'s settled background calls named `name`, or the
-/// one whose label it is.
+/// one whose label it is: one it started with `background`, one Max's words
+/// moved out of its round, or one passed to it.
 fn settled(state: &State, owner: &Task, name: &str) -> Option<CallId> {
     (state.calls())
         .filter(|(c, r)| {
             r.settled.is_some()
-                && matches!(&r.call.caller, Caller::Background { task, name: n, .. }
-                    if *task == owner.id && (n == name || c.label() == name))
+                && r.owner == Owner::Task(owner.id)
+                && match &r.call.caller {
+                    Caller::Background { name: n, .. } => n == name || c.label() == name,
+                    _ => (r.backgrounded.is_some() || !r.passed.is_empty()) && c.label() == name,
+                }
         })
         .map(|(c, _)| c)
         .max()
