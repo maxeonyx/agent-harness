@@ -178,7 +178,9 @@ function kinds(V, edges) {
 // Rows are ordered by barycentre sweeps, where a dot's lines into the row
 // sit in its port order (its lifeline in the middle, its other own lines
 // either side of it, the rest either side of those), so siblings fan out
-// either side of the line their maker goes on down. Then across, each line
+// either side of the line their maker goes on down. Each sweep ends by
+// swapping neighbours that cross less swapped, and the order kept is the
+// sweep's with fewest crossings. Then across, each line
 // a spring pulling its ends together, each row placed as near its
 // neighbours as the gaps allow (PAVA). A line's spring is shared evenly
 // by its links, so a long line pulls its ends as hard as a short one and
@@ -220,6 +222,7 @@ function layered(V, edges) {
     return inner.length ? [...out.slice(0, out.length >> 1), ...nest(u, inner, l + 1), ...out.slice(out.length >> 1)] : out;
   };
   const slot = (u, w, them) => (them.length < 2 ? 0 : (nest(u, them, 0).indexOf(w) - (them.length - 1) / 2) / them.length);
+  let best, fewest = Infinity;
   for (let it = 0; it < 9; it++) {
     const down = it % 2 === 0;
     for (const L of down ? layers.slice(1) : layers.slice(0, -1).reverse()) {
@@ -230,7 +233,11 @@ function layered(V, edges) {
       L.sort((a, b) => a.bary - b.bary || a.pos - b.pos);
       L.forEach((v, i) => (v.pos = i));
     }
+    transpose(layers);
+    const n = layers.reduce((s, L) => s + crossCount(L), 0);
+    if (n < fewest) { fewest = n; best = layers.map((L) => [...L]); }
   }
+  best.forEach((L, r) => { layers[r] = L; L.forEach((v, i) => (v.pos = i)); });
   const sep = (a, b) => a.hi + b.lo + (a.dummy || b.dummy ? 4 : 8);
   const CENTRE = 1;
   const gaps = layers.map((L) => L.slice(1).map((v, i) => sep(L[i], v)));
@@ -272,6 +279,34 @@ function layered(V, edges) {
     }
   }
   return layers;
+}
+// Crossings between row L and the row above: inversions of the upper ends
+// of its lines, in order of their lower ends, by a Fenwick tree.
+function crossCount(L) {
+  const ends = [];
+  for (const v of L) for (const u of v.up) ends.push(v.pos * 1e6 + u.pos);
+  ends.sort((a, b) => a - b);
+  const n = ends.reduce((m, e) => Math.max(m, e % 1e6 + 1), 0), T = new Int32Array(n + 1);
+  let c = 0;
+  ends.forEach((e, seen) => {
+    const b = e % 1e6;
+    for (let i = b + 1; i > 0; i -= i & -i) c -= T[i];
+    c += seen;
+    for (let i = b + 1; i <= n; i += i & -i) T[i]++;
+  });
+  return c;
+}
+// Neighbours swapped while that strictly lessens their crossings with the
+// rows above and below.
+function transpose(layers) {
+  const c = (u, w, side) => { let n = 0; for (const a of u[side]) for (const b of w[side]) if (a.pos > b.pos) n++; return n; };
+  for (let pass = 0, better = true; better && pass < 20; pass++) {
+    better = false;
+    for (const L of layers) for (let i = 0; i + 1 < L.length; i++) {
+      const u = L[i], w = L[i + 1];
+      if (c(w, u, "up") + c(w, u, "down") < c(u, w, "up") + c(u, w, "down")) { L[i] = w; L[i + 1] = u; u.pos = i + 1; w.pos = i; better = true; }
+    }
+  }
 }
 // Isotonic regression with minimum gaps: each node of row L as near its
 // target t[i] (weighted w[i]) as it can be, in order, each at least gap[i]
