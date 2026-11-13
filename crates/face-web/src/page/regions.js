@@ -1,7 +1,6 @@
 import { $ } from "./base.js";
 import { centre, graph, isDone, positions, shown } from "./map.js";
 import { cam } from "./camera.js";
-import { load, paintRegion } from "./theme.js";
 
 // ─── Each area's ground, faint behind its part of the map ─────────────────
 // An area is a chat Max started and everything under it, and every task in
@@ -10,23 +9,31 @@ import { load, paintRegion } from "./theme.js";
 // of its own colour. A painting is a canvas in #under, behind the lines, in
 // the map's units, of the project as laid out; it is painted again only
 // when the project's shape or its live agents move, or the zoom passes a
-// step, and one at a time after the map has drawn, so the map never waits
-// for it. Every frame the nodes are drawn, each painting is stretched over
-// where its project is drawn now (`placeRegions`), so it moves with them
-// while they glide. A project with no look stands on the bare ground.
+// step. It is painted in a worker (regions-paint.js), one at a time, so the
+// map never waits for it, and shown in one step when it lands, over the
+// one before. Every frame the nodes are drawn, each painting is stretched
+// over where its project is drawn now (`placeRegions`), so it moves with
+// them while they glide. A project with no look stands on the bare ground,
+// and so does every project where a worker cannot paint.
 const under = $("#under"), edges = $("#edges"), map = $("#map");
 const painted = new Map();  // an area's top -> { key, r, canvas }: r is the box it was painted for
+const failed = new Set();   // the keys of paintings the worker could not paint
 // Room around a project's nodes: at its sides (more at its right, for the
 // names), above into its history, and below the present row, where the
 // painting is fullest.
 const SIDE = 70, NAMES = 170, ABOVE = 60, BELOW = 170, POOL = 90;
-let queued = false, painting = 0;
+// A painting's longest side, in bitmap pixels: the largest texture every
+// GPU takes, phones' included. A project taller than that at the zoom's step
+// is painted coarser rather than not at all.
+const MAXPX = 4096;
+const worker = typeof OffscreenCanvas === "function" ? new Worker(new URL("./regions-paint.js", import.meta.url), { type: "module" }) : null;
+let queued = false, painting = 0, inflight = null;
 
 // Paint what has changed, after this frame.
 export function paintRegions() {
-  if (queued) return;
+  if (!worker || queued) return;
   queued = true;
-  requestAnimationFrame(() => setTimeout(() => { queued = false; next(); }));
+  requestAnimationFrame(() => { queued = false; if (!inflight) next(); });
 }
 
 // The camera moved: paint again only if the zoom passed a step.
@@ -76,26 +83,44 @@ function wanted() {
       const q = centre(positions.get(n.id));
       return { x: Math.round(q.x - r.x), y: Math.round(q.y - r.y), r: POOL, slot: n.t.look.slot };
     });
-    const scale = painting = step();
+    painting = step();
+    const scale = Math.min(painting, MAXPX / r.w, MAXPX / r.h);
     out.set(top.id, { look: top.look, r, pools, scale, key: JSON.stringify([top.look, r, pools, scale]) });
   }
   return out;
 }
 
-// One painting, then the next after the browser has had the thread back.
-async function next() {
+// Ask the worker for the first painting that is out of date.
+function next() {
   const want = wanted();
   for (const [id, p] of painted) if (!want.has(id)) { p.canvas.remove(); painted.delete(id); }
-  const [id, w] = [...want].find(([id, w]) => painted.get(id)?.key !== w.key) ?? [];
+  const [id, w] = [...want].find(([id, w]) => painted.get(id)?.key !== w.key && !failed.has(w.key)) ?? [];
   if (!w) return;
-  const ground = await load(w.look.theme);
+  inflight = { id, key: w.key, r: w.r };
   const paper = getComputedStyle(map).getPropertyValue("--ground").trim();
-  const { slot, seed, root, line } = w.look;
-  const canvas = paintRegion(ground, { slot, seed, root, line }, { w: w.r.w, h: w.r.h, now: -w.r.y, scale: w.scale, paper, pools: w.pools });
-  canvas.style.cssText = `position: absolute; left: ${w.r.x}px; top: ${w.r.y}px; width: ${w.r.w}px; height: ${w.r.h}px; pointer-events: none; transform-origin: 0 0`;
-  painted.get(id)?.canvas.remove();
-  under.insertBefore(canvas, edges);
-  painted.set(id, { key: w.key, r: w.r, canvas });
-  placeRegions();
-  paintRegions();
+  const { theme, slot, seed, root, line } = w.look;
+  worker.postMessage({ id, key: w.key, theme, who: { slot, seed, root, line }, spec: { w: w.r.w, h: w.r.h, now: -w.r.y, scale: w.scale, paper, pools: w.pools } });
 }
+
+// A painting has landed: show it, if its project still wants it, and ask for the next.
+worker?.addEventListener("message", ({ data: { id, key, bitmap, error } }) => {
+  const { r } = inflight;
+  inflight = null;
+  if (error) { console.error(error); failed.add(key); }
+  else if (wanted().get(id)?.key === key) {
+    let p = painted.get(id);
+    if (!p) {
+      const canvas = document.createElement("canvas");
+      canvas.style.cssText = "position: absolute; pointer-events: none; transform-origin: 0 0";
+      under.insertBefore(canvas, edges);
+      p = { canvas };
+      painted.set(id, p);
+    }
+    Object.assign(p.canvas, { width: bitmap.width, height: bitmap.height });
+    p.canvas.getContext("bitmaprenderer").transferFromImageBitmap(bitmap);
+    Object.assign(p.canvas.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+    Object.assign(p, { key, r });
+    placeRegions();
+  }
+  next();
+});
