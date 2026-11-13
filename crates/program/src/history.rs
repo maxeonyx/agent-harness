@@ -3,10 +3,6 @@
 //! words were said, newest first, with when; `context` shows one chat as
 //! text, from its end. The face's `/find` searches the same [`Index`].
 //!
-//! The chats searched are the harness's own. A later source of what was
-//! said (Max's sessions in other harnesses, say) adds its own [`Found`]
-//! hits to [`find`]'s list, which merges them by when they were said.
-//!
 //! What is searched is each message's text blocks, Max's and the agents';
 //! tool inputs and results are not what was said. Each task is searched in
 //! the entries it added itself: a fork's inherited prefix is its parent's,
@@ -65,6 +61,7 @@ pub fn set(limb: LimbId) -> ToolSet {
         })
         .to_string(),
         audience: Audience::Agent,
+        held: false,
     };
     ToolSet {
         name: SET.into(),
@@ -214,7 +211,7 @@ impl Index {
     }
 }
 
-/// One place some words were said, from any source: what `find` lists.
+/// One place some words were said: what `find` lists.
 struct Found {
     at: Option<Timestamp>,
     /// Who said them where, as one line.
