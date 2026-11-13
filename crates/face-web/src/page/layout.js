@@ -433,7 +433,9 @@ function layered(V, edges) {
 // shorter, then transposition). `coords`: qp (each line a spring, x the
 // least energy that keeps every row's gaps, the main life pulled to the
 // middle) or bk (Brandes and Koepf: lines aligned straight where they can
-// be, the four alignments' median). Sets x and `mid` as layered() does.
+// be, the four alignments' median). `hug`: with qp, the stiffness of the
+// spring holding each point to its parent life in its row (sugi-qp2 is 2).
+// Sets x and `mid` as layered() does.
 const mine = () => variant.place === "sugi" || variant.place === "tree";
 function placed(V, edges) {
   const layers = [];
@@ -460,7 +462,7 @@ function placed(V, edges) {
   transpose(layers);
   const sep = (a, b) => a.hi + b.lo + (a.dummy || b.dummy ? 4 : 8);
   if (variant.coords === "bk") brandesKoepf(layers, sep, V[0].n.lane);
-  else springs(layers, sep, V[0].n.lane);
+  else springs(layers, sep, V[0].n.lane, parents(edges));
   return layers;
 }
 const renumber = (L) => L.forEach((u, i) => (u.pos = i));
@@ -563,7 +565,25 @@ function treeOrder(V, edges, layers) {
 // life's own line, so lines run straight but may lean; the main life's
 // nodes pulled to x = 0. The least energy keeping each row's gaps, by
 // sweeps of rows, each row exact given its neighbours (PAVA).
-function springs(layers, sep, main) {
+// A life's parent: the life it grew or branched from.
+function parents(edges) {
+  const from = new Map();
+  for (const e of edges) if ((e.kind === "grow" || e.kind === "branch") && !from.has(e.v.n.lane)) from.set(e.v.n.lane, e.d.n.lane);
+  return from;
+}
+// Each point also held by a spring of `hug` to its parent life in its row,
+// where that life passes (its dot, or its own line): a child keeps near the
+// line it came from, both pulled together, and no free space is left between.
+function springs(layers, sep, main, from) {
+  const hug = variant.hug ?? 0;
+  if (hug) for (const L of layers) {
+    const at = new Map();
+    for (const u of L) if (!u.dummy || u.own) at.set(u.life, u);
+    for (const u of L) {
+      const p = at.get(from.get(u.life));
+      if (p && p !== u) { (u.side ??= []).push(p); (p.side ??= []).push(u); }
+    }
+  }
   const stiff = (a, b) => (a.dummy && b.dummy ? 8 : a.dummy || b.dummy ? 2 : 1) * (a.life === b.life ? 4 : 1);
   const gaps = layers.map((L) => L.slice(1).map((v, i) => sep(L[i], v)));
   for (const [r, L] of layers.entries()) {
@@ -581,6 +601,7 @@ function springs(layers, sep, main) {
         const v = L[i], pull = v.life === main && !v.dummy ? 4 : .01;
         let sx = 0, sw = pull;
         for (const u of v.nb) { const k = stiff(u, v); sx += k * u.x; sw += k; }
+        for (const u of v.side ?? []) { sx += hug * u.x; sw += hug; }
         t[i] = sx / sw; w[i] = sw;
       }
       pava(L, t, w, gaps[r]);
