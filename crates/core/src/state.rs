@@ -2373,10 +2373,14 @@ impl State {
     }
 
     /// Whether `message` can be told to `to`: its call is an agent's
-    /// `message` call, `to` is its kin and still running, and it hands on
-    /// only Max's words its sender has heard.
+    /// `message` call not yet settled, since the batch that settles it
+    /// states its one message, `to` is its kin and still running, and it
+    /// hands on only Max's words its sender has heard.
     fn check_message(&self, message: &Message, to: TaskId) -> Result<(), Rejected> {
         let made = self.calls.get(&message.call).ok_or(Rejected::Unknown)?;
+        if made.settled.is_some() {
+            return Err(Rejected::Exists);
+        }
         let Caller::Agent { task: from, .. } = made.call.caller else {
             return Err(Rejected::NotForTask);
         };

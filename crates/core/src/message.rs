@@ -19,11 +19,10 @@
 //! chats relaunching the brain over each other eleven times, with no way to
 //! tell each other; and six times Max carried words between chats by hand.
 //!
-//! **Read, not yet written.** The brain folds and renders a message
-//! ([`crate::delivery::Content::Message`]), a [`crate::call::Wait`] with `on`
-//! empty, and a compaction that renders an owner's message again; nothing
-//! states them yet: the `message` tool and a `wait` naming nothing come in
-//! the build after. **Not yet folded.** `CallEvent::Watches(TaskId)` in
+//! **Built.** The `meta` tool `message` states a message
+//! ([`crate::delivery::Content::Message`]) in the batch that settles its
+//! call, and a [`crate::call::Wait`] with `on` empty waits for words.
+//! **Not yet folded.** `CallEvent::Watches(TaskId)` in
 //! [`crate::call::CallEvent`]; `Dep::Said(DeliveryId)` and `Legs::said`
 //! holding each said line on the map. Each new record kind is read by a
 //! brain deployed before any brain writes it, so a relaunch back never
@@ -58,7 +57,7 @@ pub const TOLD_AFTER: u64 = 30_000;
 /// since the provider forbids it, so a message comes straight after the
 /// round's results; a round still running [`TOLD_AFTER`] after both it
 /// began and the message came moves to the background, so a correction
-/// reaches a child in a long build or a foreground spawn within half a
+/// reaches a child in a long build or a foreground spawn in about half a
 /// minute ([`crate::call::CallEvent::Backgrounded`]). A starting recipient
 /// reads it after its mandate; a parked or paused one when Max resumes it,
 /// since his controls win.
