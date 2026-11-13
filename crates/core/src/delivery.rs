@@ -69,23 +69,22 @@ pub enum Content {
 
 /// Why the harness asks for a turn the model did not otherwise have.
 ///
-/// Only prompts something produces are here. A compaction the harness asks
+/// Only prompts something produces are here, and the one records from
+/// before hold ([`Prompt::Unblocked`]). A compaction the harness asks
 /// for (the cache is about to expire, Max asks from his face) is a new
 /// variant when the brain's policy first asks for one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Prompt {
-    /// Max marked a task done: write the result for the owner (for an
-    /// aside, what came of the talk since it was opened). The turn it asks
-    /// for is its last ([`crate::task::Live::closing`]); its mode stays.
+    /// Max marked a task done: write the result for the owner. The turn it
+    /// asks for is its last ([`crate::task::Live::closing`]); its mode stays.
     Done,
     /// An autonomous turn ended with background work still running: it will
     /// wake the task when it ends, and the task cannot finish before; stop
     /// it if it is not needed. Said once per task
     /// ([`crate::state::Todo::Linger`]).
     Lingering,
-    /// Every other member of the scope this aside is in is done: the task
-    /// it was opened on is waiting only on it, and carries on once Max marks
-    /// it done. Said once per aside ([`crate::state::Todo::Unblock`]).
+    /// Every other member of the scope an aside was in was done. In
+    /// records from before only: nothing says it now.
     Unblocked,
     /// The task is abandoned, and everything it started has stopped: leave
     /// what it was doing safe and understandable, then end the turn with a

@@ -416,7 +416,6 @@ impl Brain {
             }
             Todo::Park(task) => self.prompt(task, Prompt::Park),
             Todo::Resume(task) => self.prompt(task, Prompt::Resume),
-            Todo::Unblock(aside) => self.prompt(aside, Prompt::Unblocked),
             Todo::SignIn => {
                 if let Ok(true) = self.client.login().signed_in() {
                     self.fact(Fact::SignedIn);

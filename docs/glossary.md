@@ -45,7 +45,7 @@ The words the vision, the plan and Max use. Where the code names a thing differe
 | Message, watch | The two relationships between tasks that own nothing. A message is words delivered to a live task. A watch wakes a task when work it doesn't own settles or is abandoned; one that would close a circle of waits is refused. | A message is `message::Message`; a watch is not built. |
 | Hold | Using a resource (a clone, a tab, a dev server) without owning it; the resource is cleaned up after its last holder ends. | Not built. |
 | Fork | A child agent that starts from its parent's context, sharing its cache, and returns a summary. | `task::Origin::Fork` |
-| Aside | A user-facing child Max opens while its parent waits on other children. | `task::Origin::Aside` |
+| Aside | A user-facing child Max opened while its parent waited on other children, before his words reached a waiting task directly. | In records from before only: `task::Origin::Aside`. |
 | Compaction | An agent moving its head to a new root that carries its own summary, and carrying on as the same agent. Not "handover": Max, "It is too othering". | `task::Compaction` |
 | Initialise, refurbish | With compaction, the three things done to a context. Initialising writes its system prompt: for a new task, a compaction or a refurbishment. Refurbishing transforms the existing context to use fewer tokens without compacting it, with code and perhaps a utility model. Not "rebuild". | Partly: initialising is `program::render::root`; refurbishing is not built. |
 | Context | The immutable, content-addressed tree of exactly what was sent to the model. | `context::Entry`, `context::EntryId` |
