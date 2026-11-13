@@ -45,8 +45,8 @@ const BIG_HALF = 13;
 // straight. How stiffly a long line resists bending, against how hard it
 // pulls: a turn spreads over about sqrt(BEND) rows.
 const STIFF = 40, BEND = 4;
-// How many dots along a life share a bag of sides for their odd lines out:
-// over any BAG of them its lone tools fall half each side.
+// A life's dots, from its first, share sides in runs of BAG, half each side,
+// shuffled; a dot with an odd line out sends it to its own.
 const BAG = 4;
 // The flattest a line between two rows runs on average, from upright.
 const FLAT = Math.PI / 3;
