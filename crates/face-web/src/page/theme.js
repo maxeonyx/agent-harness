@@ -151,7 +151,8 @@ export function shader(frag, w, h, uniforms = {}) {
     const u = gl.getUniformLocation(prog, name);
     if (u === null) continue;
     if (typeof v === "number") gl.uniform1f(u, v);
-    else if (v instanceof HTMLCanvasElement) {
+    else if (Array.isArray(v)) gl[`uniform${v.length}fv`](u, v);
+    else {
       // A canvas is a texture, its top row at v = 0, linearly filtered and clamped at its edges.
       textures[unit] ??= gl.createTexture();
       gl.activeTexture(gl.TEXTURE0 + unit);
@@ -159,7 +160,7 @@ export function shader(frag, w, h, uniforms = {}) {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
       for (const [k, x] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, x);
       gl.uniform1i(u, unit++);
-    } else gl[`uniform${v.length}fv`](u, v);
+    }
   }
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   return glCanvas;
@@ -302,7 +303,8 @@ export function paintRegion(ground, who, spec) {
     g.addColorStop(0, alpha(paper, 0.97)); g.addColorStop(0.55, alpha(paper, 0.85)); g.addColorStop(1, alpha(paper, 0));
     ac.fillStyle = g; ac.fillRect(p.x - CLEARING, p.y - CLEARING, 2 * CLEARING, 2 * CLEARING);
   }
-  // The edges: up into history, down to nothing, and out at the sides, ragged like a wash's.
+  // The edges: up into history, down to nothing, and out at the sides, ragged like a wash's, and
+  // clear at the canvas's own edges however the rag falls.
   const cell = 8, cw = Math.max(2, Math.ceil(w / cell)), ch = Math.max(2, Math.ceil(h / cell));
   const edge = document.createElement("canvas");
   edge.width = cw; edge.height = ch;
@@ -311,8 +313,8 @@ export function paintRegion(ground, who, spec) {
   const side = Math.min(130, w * 0.22), top = now - 40, foot = h - now;
   for (let j = 0, i = 0; j < ch; j++) for (let k = 0; k < cw; k++, i += 4) {
     const x = k * cell, y = j * cell, wob = n.fbm(x * 0.006, y * 0.006, 4);
-    const rise = ease((y + 90 * wob) / top);
-    const a = ease((Math.min(x, w - x) + 46 * wob) / side) * rise * rise * ease((h - y + 50 * wob) / (foot * 0.75));
+    const rise = ease((y + 90 * (wob - 1)) / top);
+    const a = ease((Math.min(x, w - x) + 46 * (wob - 1)) / side) * rise * rise * ease((h - y + 50 * (wob - 1)) / (foot * 0.75));
     d[i + 3] = Math.round(255 * a);
   }
   ec.putImageData(img, 0, 0);
