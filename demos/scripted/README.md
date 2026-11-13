@@ -19,6 +19,6 @@ What to look for:
   - `fail TEXT`
   - `drop`
   
-  A verb may follow `slow MS` (stream each piece after MS) or `flaky STATUS` (refused once, then answered). For example `flaky 529 slow 300 say retried, then streamed slowly`, which you can stop mid-stream.
+  A verb may follow `slow MS` (stream each piece after MS) or `flaky STATUS` (refused once, then answered; `flaky STATUSxN`, N times). For example `flaky 529 slow 300 say retried, then streamed slowly`, which you can stop mid-stream.
 
 The verbs are documented in `crates/provider/src/scripted.rs`. Any brain can choose the model too: `model: scripted` in a role file, or the pill on one chat.

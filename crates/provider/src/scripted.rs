@@ -28,7 +28,8 @@
 //!
 //! A verb may follow `slow MS` (MS before each streamed piece),
 //! `flaky STATUS` (the first time this client sees the request, it is
-//! refused with STATUS; a retry gets the step) and `think "TEXT"` (the
+//! refused with STATUS; a retry gets the step; `flaky STATUSxN`, the first
+//! N times) and `think "TEXT"` (the
 //! response opens with a thinking block of TEXT, a JSON string), and
 //! `text "TEXT"` (then a text block of TEXT, as a reply that also uses a
 //! tool says something first):
@@ -87,10 +88,10 @@ pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashMap<u64, u3
         *n
     };
     let step = step(&messages);
-    if let Some(status) = step.flaky
-        && asked == 1
+    if let Some((status, times)) = step.flaky
+        && asked <= times
     {
-        return refused(status, "flaky: refused the first time");
+        return refused(status, &format!("flaky: refused {asked} of {times} times"));
     }
     let (verb, rest) = step.act.split_once(' ').unwrap_or((&step.act, ""));
     let rest = rest.trim();
@@ -176,7 +177,8 @@ pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashMap<u64, u3
 /// One response's worth of the script.
 struct Step {
     slow: Duration,
-    flaky: Option<u16>,
+    /// The status to refuse with, and how many times.
+    flaky: Option<(u16, u32)>,
     /// The thinking the response opens with.
     thought: Option<String>,
     /// The text it says before its verb's blocks.
@@ -279,7 +281,10 @@ fn parse(line: &str) -> Option<Step> {
                 let (n, after) = after.trim().split_once(' ').unwrap_or((after.trim(), ""));
                 match word {
                     "slow" => step.slow = Duration::from_millis(n.parse().ok()?),
-                    _ => step.flaky = Some(n.parse().ok()?),
+                    _ => {
+                        let (status, times) = n.split_once('x').unwrap_or((n, "1"));
+                        step.flaky = Some((status.parse().ok()?, times.parse().ok()?));
+                    }
                 }
                 rest = after.trim();
             }

@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use harness_core::build::{BuildId, Launch, Launched, blames_build};
+use harness_core::build::{BuildId, Launch, Launched};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Message, Note, Rendered, Role, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
@@ -41,6 +41,7 @@ use harness_store::Store;
 
 use crate::roles;
 use harness_program::meta::{self, How};
+use harness_program::policy::Resend;
 use harness_program::{history, max, page, policy, render, web};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
@@ -848,38 +849,11 @@ impl Brain {
         let head = task.head().expect("a ready task has a context");
         let failures = task.live().map_or(0, |l| l.failures);
         // Nothing is in flight for a ready task, so every turn has ended.
-        let last = self.state().last_turn(id).cloned();
-        if failures > 0
-            && let Some(Ending::Failed {
-                status, message, ..
-            }) = last.as_ref().map(|e| &e.ending)
-        {
-            let said = match status {
-                Some(s) => format!("{s}: {message}"),
-                None => message.clone(),
-            };
-            if status.is_some_and(blames_build) {
-                return self.fail_task(id, format!("the provider rejected the request, {said}"));
-            }
-            if failures >= policy::GIVE_UP {
-                return self.fail_task(
-                    id,
-                    format!("the provider failed {failures} times in a row, last with {said}"),
-                );
-            }
-        }
-        if failures > 0
-            && let Some(ended) = &last
-        {
-            let after = match ended.ending {
-                Ending::Failed {
-                    retry: Some(when), ..
-                } => when.0,
-                _ => ended.at.at.0 + policy::backoff_ms(failures),
-            };
-            if now.0 < after {
-                return;
-            }
+        let last = self.state().last_turn(id);
+        match last.and_then(|e| policy::resend(e, failures)) {
+            Some(Resend::Fail(why)) => return self.fail_task(id, why),
+            Some(Resend::At(at)) if now < at => return,
+            _ => {}
         }
         // What follows is read off the head: the response it is, if any,
         // while nothing has moved on from it but its calls' results.

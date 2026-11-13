@@ -4,10 +4,12 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use harness_core::build::blames_build;
 use harness_core::context::{Entry, EntryId};
 use harness_core::id::Timestamp;
+use harness_core::model_call::Ending;
 use harness_core::resource::ResourceKey;
-use harness_core::state::State;
+use harness_core::state::{Ended, State};
 use harness_core::task::Task;
 
 /// The soft limit of context in a window of `window`, past which each
@@ -25,13 +27,62 @@ pub fn offer_at(window: u64) -> u64 {
     limit(window).saturating_sub(50_000)
 }
 
-/// Requests that may fail in a row before the task fails.
-pub const GIVE_UP: u32 = 5;
+/// Requests that may fail in a row before the task fails. With
+/// [`backoff_ms`] between them, the last is sent about 15 minutes after the
+/// first failed: a provider outage of minutes (503s for 23 s, twice, on
+/// 13 Nov) is ridden out, and one that lasts longer fails the task. A
+/// request the provider refuses for good fails it at once instead
+/// ([`harness_core::build::blames_build`]).
+pub const GIVE_UP: u32 = 20;
 
-/// How long to wait before resending after `failures` failures in a row,
-/// when the provider did not say: 2, 4, 8, 16 seconds.
+/// How long to wait before resending after `failures` failures in a row:
+/// 2, 4, 8, 16, 32 seconds, then a minute. A provider's own retry time
+/// that is later wins ([`resend_at`]).
 pub fn backoff_ms(failures: u32) -> i64 {
-    1000 << failures.min(5)
+    (1000 << failures.min(6)).min(60_000)
+}
+
+/// What a task does after `failures` failed requests in a row, the last
+/// one's turn `last`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Resend {
+    /// It sends again at this time: after the backoff, or the provider's
+    /// own retry time if that is later. Never sooner than the backoff, so a
+    /// provider asking for quick retries cannot use up [`GIVE_UP`] in
+    /// seconds.
+    At(Timestamp),
+    /// It fails, for this reason.
+    Fail(String),
+}
+
+/// What a task does after `failures` failed requests in a row, the last one
+/// ending `last`; `None` when none has failed.
+pub fn resend(last: &Ended, failures: u32) -> Option<Resend> {
+    if failures == 0 {
+        return None;
+    }
+    let backoff = Timestamp(last.at.at.0 + backoff_ms(failures));
+    let Ending::Failed {
+        status,
+        message,
+        retry,
+    } = &last.ending
+    else {
+        return Some(Resend::At(backoff));
+    };
+    let said = match status {
+        Some(s) => format!("{s}: {message}"),
+        None => message.clone(),
+    };
+    Some(if status.is_some_and(blames_build) {
+        Resend::Fail(format!("the provider rejected the request, {said}"))
+    } else if failures >= GIVE_UP {
+        Resend::Fail(format!(
+            "the provider failed {failures} times in a row, last with {said}"
+        ))
+    } else {
+        Resend::At(retry.map_or(backoff, |r| r.max(backoff)))
+    })
 }
 
 /// Where a request asks the provider to cache, at most the provider's four
