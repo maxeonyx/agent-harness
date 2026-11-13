@@ -27,7 +27,7 @@ until drive log "$chat" | grep -v '^max:' | grep -q 'Back, after'; do
   if [ "$now" != "$seen" ]; then echo "$(date +%T) $now"; seen=$now; fi
   if [ "$now" != "${now/\"failures\":3/}" ] && [ ! -e "$at/waiting.png" ]; then
     echo "   the page shows: $(drive page open "$chat" text "Waiting on the provider" shot "$at/waiting.png" \
-      eval 'document.querySelector(".entry.card.ended").textContent' | grep -v "run's log" | tail -1)"
+      eval 'document.querySelector(".entry.card.ended").textContent' | grep -m1 'Waiting on the provider')"
   fi
   sleep 1
 done
