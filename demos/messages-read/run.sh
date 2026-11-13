@@ -53,7 +53,7 @@ kid_id=$(echo "$told" | awk '{print $2}')
 echo "== $(at) relaunched; kid's sleep runs on until 30 s after the message came"
 for _ in $(seq 60); do drive log "$kid_id" | grep -q "Heard you, owner" && break; sleep 2; done
 echo "== $(at) kid has read it:"
-drive log "$kid_id" --full | grep -A12 "written to while this ran" | head -24
+drive log "$kid_id" --full | grep -A12 "while this ran" | head -24
 
 echo "== $(at) one more relaunch folds everything again"
 drive up >/dev/null
