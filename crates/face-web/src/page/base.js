@@ -19,6 +19,9 @@ export const kTokens = (n) => n == null ? "?" : n < 1000 ? `${n}` : n < 1e6 ? `$
 // the brain's log (the first script in head.html): `doing` is what the page
 // was trying to do.
 export const fail = (doing, e) => reportError(Object.assign(new Error(String(e), { cause: e }), { doing }));
+// What went wrong that the page tells Max, to the brain's log as well: not an
+// error of the page's, so not thrown.
+export const report = (doing, error) => dispatchEvent(new CustomEvent("report", { detail: { doing, error } }));
 // The JSON at `url`; `fallback` after reporting why not.
 export const getJson = (url, doing, fallback) => fetch(url)
   .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
