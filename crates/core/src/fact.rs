@@ -157,7 +157,8 @@ pub enum Fact {
     SignedIn,
     /// The harness has no claude.ai login at a launch: begins the same wait
     /// before any request is refused, so Max is asked to sign in at once.
-    /// Stated by the brain.
+    /// Stated by the brain, in its opening, unless every role runs on the
+    /// scripted model, which needs no login.
     SignedOut,
 }
 

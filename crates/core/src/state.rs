@@ -406,8 +406,9 @@ pub struct Stale {
 pub enum Hold {
     /// The subscription's limit, until it resets ([`Ending::Limited`]).
     Limited { until: Timestamp },
-    /// No claude.ai login ([`Ending::SignedOut`]) since `since`: until Max
-    /// signs in, which has no time of its own.
+    /// No claude.ai login since `since`, found by a request
+    /// ([`Ending::SignedOut`]) or at a launch ([`Fact::SignedOut`]): until
+    /// Max signs in, which has no time of its own.
     SignedOut { since: Timestamp },
 }
 
