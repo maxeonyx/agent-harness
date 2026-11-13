@@ -206,18 +206,18 @@ and returns at once: the agent that started you gets their results with yours.",
     });
     let wait = json!({
         "name": WAIT,
-        "description": "Wait for your own background work: until the first of it lands (`until: any`, the default) or all of it (`until: all`). The results come whole in this call's output. Name nothing to wait for words. Any words end it early, Max's or another agent's message, saying what still runs.",
+        "description": "Wait for your own background work: until the first of it lands (`until: any`, the default) or all of it (`until: all`). The results come whole in this call's output. With none running, name nothing to wait for words. Any words end it early, Max's or another agent's message, saying what still runs.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "on": { "type": "array", "items": { "type": "string" }, "description": "The background calls' names, or their labels (`call-…`). Default: all your running background work, or, with none running, words alone. `[]` waits for words alone." },
+                "on": { "type": "array", "items": { "type": "string" }, "description": "The background calls' names, or their labels (`call-…`). Default: all your running background work, or, with none running, words alone." },
                 "until": { "type": "string", "enum": ["any", "all"], "description": "Return when any of them has landed, or all. Default `any`." }
             }
         }
     });
     let message = json!({
         "name": MESSAGE,
-        "description": "Tell an agent something now, without waiting for it: it reads it within half a minute, whatever it is doing. You can reach the agent that started you, the agents you started, and, in a chat with Max, his other chats. From the agent that started you it is instructions; from any other, a report or a request. Message what it needs before it would otherwise hear from you, and send no acknowledgements. To hear back, `wait`.",
+        "description": "Tell an agent something now, without waiting for it: one that is waiting reads it at once, and one that is working in about half a minute. You can reach the agent that started you, the agents you started, and, in a chat with Max, his other chats. From the agent that started you it is instructions; from any other, a report or a request. Message what it needs before it would otherwise hear from you, and send no acknowledgements. To hear back, `wait`.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -595,7 +595,10 @@ pub fn wait(state: &State, owner: &Task, input: &[u8]) -> Result<Waiting, String
     };
     let (mut on, mut landed) = (Vec::new(), Vec::new());
     match &value["on"] {
+        // Naming nothing is waiting on all of it: a wait for words alone
+        // while work runs would outlast the work.
         Value::Null => on.clone_from(&owner.background),
+        Value::Array(names) if names.is_empty() => on.clone_from(&owner.background),
         Value::Array(names) => {
             for n in names {
                 let n = n.as_str().ok_or("`on` must be a list of names")?;
@@ -611,7 +614,7 @@ pub fn wait(state: &State, owner: &Task, input: &[u8]) -> Result<Waiting, String
         _ => return Err("`on` must be a list of names".into()),
     }
     on.dedup();
-    // Naming nothing, it waits for words alone.
+    // With nothing running, it waits for words alone.
     if landed.is_empty() || (!on.is_empty() && until == Until::All) {
         return Ok(Waiting::On(Wait { on, until }));
     }
@@ -719,7 +722,7 @@ fn delivered(state: &State, to: &Task) -> String {
         Some(Phase::Acting(step)) if waits(step) => {
             format!("`{name}` was waiting, and this ends its wait.")
         }
-        Some(_) => format!("`{name}` is working, and reads this within half a minute."),
+        Some(_) => format!("`{name}` is working, and reads this in about half a minute."),
     };
     format!("Delivered: {how}")
 }

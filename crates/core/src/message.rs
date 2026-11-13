@@ -57,7 +57,7 @@ pub const TOLD_AFTER: u64 = 30_000;
 /// since the provider forbids it, so a message comes straight after the
 /// round's results; a round still running [`TOLD_AFTER`] after both it
 /// began and the message came moves to the background, so a correction
-/// reaches a child in a long build or a foreground spawn within half a
+/// reaches a child in a long build or a foreground spawn in about half a
 /// minute ([`crate::call::CallEvent::Backgrounded`]). A starting recipient
 /// reads it after its mandate; a parked or paused one when Max resumes it,
 /// since his controls win.
