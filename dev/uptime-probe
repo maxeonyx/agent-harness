@@ -6,6 +6,7 @@
 #   dev/uptime-probe install   install it as the user timer harness-uptime.timer
 #   dev/uptime-probe           probe once, appending a line (what the timer runs)
 #   dev/uptime-probe outages   print each run of failed probes in the log
+#   dev/uptime-probe press     dictate one press now, printing how it went
 #
 # install copies this script to ~/.local/share/agent-harness/uptime-probe,
 # so the timer runs no clone's copy; run install again after changing it.
@@ -17,7 +18,10 @@
 # answer within 5 s); dictation: whether that face can dictate; tunnel:
 # https://harness.maxeonyx.com through cloudflared (Cloudflare Access's 302
 # is up); cloudflared: its ERR and WRN lines since the last probe;
-# io, memory: /proc/pressure avg10, some/full.
+# io, memory: /proc/pressure avg10, some/full. Every 5 min the line ends
+# with press=: a real press of the microphone, 1 s of silence through the
+# face's /dictation to the transcription endpoint and back: ok/<ms>, or
+# fail/<what the relay said> (the brain's log has the whole error).
 set -euo pipefail
 
 state=~/.local/state/agent-harness
@@ -51,19 +55,40 @@ probe() {
   [ -e "$state/cloudflared.cursor" ] || since=(--since now)
   errors=$(journalctl -u cloudflared.service --cursor-file="$state/cloudflared.cursor" "${since[@]}" \
     --no-pager -q -o cat | grep -cE ' (ERR|WRN) ' || true)
+  local press=
+  (($(date +%s) % 300 < 10)) && press=" press=$(press)"
   echo "$(TZ=Pacific/Auckland date '+%F %T %Z') face=$face dictation=$dictation tunnel=$tunnel" \
-    "cloudflared=$errors io=$(pressure io) memory=$(pressure memory)" >>"$log"
+    "cloudflared=$errors io=$(pressure io) memory=$(pressure memory)$press" >>"$log"
 }
 
-# A probe failed when the face doesn't answer 200 with dictation, or the
-# tunnel doesn't answer 200 or 302.
+# One press of the microphone on the home brain's face, as the page makes
+# it: ok/<ms> once the final text arrives, else fail/<why>, one word.
+press() {
+  NODE_NO_WARNINGS=1 NODE_TLS_REJECT_UNAUTHORIZED=0 node --input-type=module - <<'EOF' 2>/dev/null || echo fail/node
+const t0 = Date.now();
+const done = (s) => { console.log(s.replace(/\s+/g, "_").slice(0, 200)); process.exit(0); };
+setTimeout(() => done("fail/timeout"), 15000);
+const ws = new WebSocket("wss://localhost:4320/dictation?rate=16000");
+ws.onopen = () => { for (let i = 0; i < 10; i++) ws.send(new Int16Array(1600).buffer); ws.send("stop"); };
+ws.onmessage = (m) => {
+  const d = JSON.parse(m.data);
+  if (d.error) done(`fail/${d.error}`);
+  if (d.final) done(`ok/${Date.now() - t0}ms`);
+};
+ws.onclose = () => done("fail/closed");
+ws.onerror = () => done("fail/unreachable");
+EOF
+}
+
+# A probe failed when the face doesn't answer 200 with dictation, the
+# tunnel doesn't answer 200 or 302, or a press failed.
 outages() {
   awk '
-    function up() { return $4 ~ /^face=200\// && $5 == "dictation=true" && $6 ~ /^tunnel=(200|302)\// }
+    function up() { return $4 ~ /^face=200\// && $5 == "dictation=true" && $6 ~ /^tunnel=(200|302)\// && $NF !~ /^press=fail/ }
     function flush() { if (n) print from " to " last ", " n " probes: " why; n = 0 }
     { stamp = $1 " " $2 }
     up() { flush(); next }
-    { if (!n) { from = stamp; why = $4 " " $5 " " $6 } n++; last = stamp }
+    { if (!n) { from = stamp; why = $4 " " $5 " " $6 ($NF ~ /^press=/ ? " " $NF : "") } n++; last = stamp }
     END { flush() }
   ' "$log"
 }
@@ -98,6 +123,7 @@ EOF
 case ${1:-probe} in
   probe) probe ;;
   outages) outages ;;
+  press) press ;;
   install) install ;;
-  *) echo "usage: $0 [install|outages]" >&2; exit 2 ;;
+  *) echo "usage: $0 [install|outages|press]" >&2; exit 2 ;;
 esac

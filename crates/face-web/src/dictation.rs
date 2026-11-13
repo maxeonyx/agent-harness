@@ -35,7 +35,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use harness_provider::{Login, TrustError};
+use harness_provider::{Login, Token, TrustError};
 use serde_json::{Value, json};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::{Message, WebSocket};
@@ -134,6 +134,7 @@ impl Dictation {
         let rate = if sample.is_some() { SAMPLE_RATE } else { rate };
         page.get_ref().set_read_timeout(Some(POLL)).ok();
         if let Err(e) = self.session(page, rate, sample) {
+            let _ = writeln!(io::stderr(), "dictation: {e}");
             let _ = send_page(page, json!({"error": e}));
         }
         let _ = page.close(None);
@@ -146,7 +147,9 @@ impl Dictation {
         rate: u32,
         sample: Option<&[u8]>,
     ) -> Result<(), String> {
-        let mut up = self.connect(rate)?;
+        let mut token = self.token()?;
+        let mut refreshed = false;
+        let mut up = self.connect(rate, &token)?;
         send_page(page, json!({"listening": true}))?;
         let mut text = Transcript::default();
         let mut stopped: Option<Instant> = None;
@@ -210,6 +213,16 @@ impl Dictation {
                         Some("TranscriptEndpoint") if stopped.is_some() => {
                             return send_page(page, json!({"final": true}));
                         }
+                        // A token the endpoint no longer takes, though it
+                        // has not expired: refresh it once, as a 401 would.
+                        Some("error")
+                            if frame["error"]["type"] == "permission_error" && !refreshed =>
+                        {
+                            refreshed = true;
+                            token = self.login.refused(&token).map_err(|e| e.to_string())?;
+                            text.keep();
+                            up = self.connect(rate, &token)?;
+                        }
                         Some("TranscriptError" | "error") => {
                             return Err(format!("dictation endpoint: {frame}"));
                         }
@@ -227,7 +240,8 @@ impl Dictation {
                         return Err("the dictation endpoint keeps dropping the session".into());
                     }
                     text.keep();
-                    up = self.connect(rate)?;
+                    token = self.token()?;
+                    up = self.connect(rate, &token)?;
                 }
                 Ok(_) => {}
             }
@@ -238,12 +252,16 @@ impl Dictation {
         }
     }
 
-    /// A new session on the endpoint, with the login's current token.
+    fn token(&self) -> Result<Token, String> {
+        self.login.token().map_err(|e| e.to_string())
+    }
+
+    /// A new session on the endpoint, signed in with `token`.
     fn connect(
         &self,
         rate: u32,
+        token: &Token,
     ) -> Result<WebSocket<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>, String> {
-        let token = self.login.token().map_err(|e| e.to_string())?;
         let url = format!("wss://{HOST}{PATH}?{QUERY}&sample_rate={rate}");
         let mut request = url.into_client_request().map_err(|e| e.to_string())?;
         let bearer = token
