@@ -47,9 +47,8 @@ fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> St
     }
 }
 
-/// A new root of a role: the identity, the role prompt, how to read others'
-/// work at the `face`'s address, each tool set's instructions, then the
-/// working directory's, in `system`; the tools its
+/// A new root of a role: the identity, the role prompt, each tool set's
+/// instructions, then the working directory's, in `system`; the tools its
 /// binding routes, each taking a [`summary`](summarised) last.
 pub struct NewRoot {
     pub root: Root,
@@ -64,16 +63,10 @@ pub fn root(
     identity: &str,
     model: &str,
     role: &str,
-    face: &str,
     sets: &[(LimbId, &ToolSet)],
     workdir: &[Instruction],
 ) -> Result<NewRoot, String> {
-    let mut system = vec![
-        text(identity),
-        text(role),
-        text(SUMMARY),
-        text(&others(face)),
-    ];
+    let mut system = vec![text(identity), text(role), text(SUMMARY)];
     let mut observes = Vec::new();
     let instructions = sets.iter().flat_map(|(_, set)| &set.instructions);
     for instruction in instructions.chain(workdir) {
@@ -113,17 +106,6 @@ pub fn root(
 /// schema alone leaves a model's first calls without one.
 const SUMMARY: &str = "Every tool call takes a `summary`, written last, after the arguments: what the call does, \
 like `run the tests` or `find where compactions render`. Max reads it in place of the call's input.";
-
-/// What `system` says of reading another agent's work: through the face,
-/// served at `face`, never its database.
-fn others(face: &str) -> String {
-    format!(
-        "To read another agent's work, use the harness's face, never its database: \
-`curl -s '{face}/find?q=<words>'` lists the chats those words were said in, each with its `task` and the `entry` \
-they were last said at; `curl -s {face}/context/<task or entry>` is that chat's context up to its latest entry \
-or up to that one, as a JSON array, last entry last."
-    )
-}
 
 /// `tool` taking a required `summary` as its input's last property: the
 /// agent's few words on what each call does, which the page shows in place

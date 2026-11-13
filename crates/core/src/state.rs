@@ -122,8 +122,8 @@ pub struct State {
     /// What each limb last found in each working directory.
     prepared: OrdMap<(LimbId, PathBuf), Readied>,
     resources: OrdMap<ResourceKey, Current>,
-    /// Max's words, each with when he first said them.
-    said: OrdMap<ValueId, Mark>,
+    /// Max's words, each with when he first said them and to which task.
+    said: OrdMap<ValueId, (Mark, TaskId)>,
     /// Which of Max's words each task has heard. A task continuing another's
     /// context (a fork, resume or aside) starts with its source's set, shared.
     heard: OrdMap<TaskId, OrdSet<ValueId>>,
@@ -1150,7 +1150,7 @@ impl State {
     /// Max said `words` to `to`.
     fn say(&mut self, words: ValueId, to: TaskId, at: Mark) {
         if !self.said.contains_key(&words) {
-            self.said.insert(words, at);
+            self.said.insert(words, (at, to));
         }
         self.heard.entry(to).or_default().insert(words);
     }
@@ -2405,7 +2405,13 @@ impl State {
 
     /// When Max first said `words`, if they are his.
     pub fn said(&self, words: ValueId) -> Option<Mark> {
-        self.said.get(&words).copied()
+        self.said.get(&words).map(|(at, _)| *at)
+    }
+
+    /// Every one of Max's words, with when he first said them and the task
+    /// he said them to.
+    pub fn sayings(&self) -> impl Iterator<Item = (ValueId, Mark, TaskId)> + '_ {
+        self.said.iter().map(|(words, (at, to))| (*words, *at, *to))
     }
 
     /// Whether `task` has heard Max say `words`: sent to it, given to it as

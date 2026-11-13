@@ -345,6 +345,7 @@ version = "0.0.0"
 dependencies = [
  "harness-core",
  "harness-face-tab",
+ "harness-program",
  "harness-provider",
  "harness-substrate",
  "rustls",

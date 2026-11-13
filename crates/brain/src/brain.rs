@@ -42,7 +42,7 @@ use harness_store::Store;
 
 use crate::roles;
 use harness_program::meta::{self, How};
-use harness_program::{policy, render, web};
+use harness_program::{history, policy, render, web};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
@@ -116,9 +116,9 @@ struct Link {
 pub struct Face {
     /// Handed the state after each change.
     pub folds: Sender<Folded>,
-    /// Where it is served, as this machine reaches it: what agents read
-    /// others' work through.
-    pub address: String,
+    /// The text of what was said, which its `/find` and agents' `history`
+    /// calls search alike.
+    pub index: Arc<history::Index>,
 }
 
 /// One brain: the decider of everything its replicas say.
@@ -609,6 +609,7 @@ impl Brain {
                 meta::set(self.brain, &roles, member)
             }
             web::SET => web::set(),
+            history::SET => history::set(self.brain),
             // A set with nothing for an agent, such as `roles`.
             name => ToolSet {
                 name: name.to_owned(),
@@ -671,7 +672,6 @@ impl Brain {
                 harness_provider::IDENTITY,
                 task.tuning.model(role),
                 &prompt,
-                &self.face.address,
                 &refs,
                 &workdir,
             )
@@ -1045,10 +1045,11 @@ impl Brain {
             return self.fail_call(id, "The harness routed this call nowhere.");
         };
         // The brain's own sets are told apart by tool name: Max's reading of
-        // the plan's usage, and every other is `meta`'s.
+        // the plan's usage, `history`'s reads, and every other is `meta`'s.
         if self.state().resolve(limb) == Some(self.brain) {
             return match call.tool.as_str() {
                 web::USAGE => self.read_usage(id, &call),
+                history::FIND | history::CONTEXT => self.history(id, &call),
                 _ => self.spawn(id, &call),
             };
         }
@@ -1071,6 +1072,30 @@ impl Brain {
             let reading = client.usage(&Cancel::new());
             let _ = events.send(Event::Usage(id, reading));
         });
+    }
+
+    /// Run an agent's `find` or `context`, settling it in the batch of its
+    /// dispatch: it only reads the state and the store.
+    fn history(&mut self, id: CallId, call: &Call) {
+        let said = match call.caller {
+            Caller::Agent { .. } | Caller::Background { .. } => {
+                let input = self.value(call.input);
+                let read = |v| self.decider.storage().value(v).ok().flatten();
+                match call.tool.as_str() {
+                    history::FIND => {
+                        history::find(self.state(), &self.face.index, &read, &local, &input)
+                    }
+                    _ => history::context(self.state(), &read, &local, &input),
+                }
+            }
+            _ => Err(format!("The harness offers Max no tool `{}`.", call.tool)),
+        };
+        let mut batch = Batch {
+            values: Vec::new(),
+            facts: vec![Fact::Call(id, CallEvent::Dispatched)],
+        };
+        settle(id, said, &mut batch);
+        self.answer(id, batch)
     }
 
     fn read(&mut self, id: CallId, reading: Result<BTreeMap<String, Window>, String>) {
@@ -2084,10 +2109,14 @@ fn define(state: &State, facts: &mut Vec<Fact>, limb: Limb) -> LimbId {
     limb.id
 }
 
-/// The brain's own limb, with the tool sets it offers: `meta`, `web`, and
-/// `roles` over the role files in `roles`.
+/// The brain's own limb, with the tool sets it offers: `meta`, `web`,
+/// `history`, and `roles` over the role files in `roles`.
 fn brain_limb(id: LimbId, roles: Option<&Path>) -> Limb {
-    let mut offers = vec![offer(meta::SET, "{}"), offer(web::SET, "{}")];
+    let mut offers = vec![
+        offer(meta::SET, "{}"),
+        offer(web::SET, "{}"),
+        offer(history::SET, "{}"),
+    ];
     offers.extend(roles.map(|dir| {
         roles::Settings {
             dir: dir.to_path_buf(),
