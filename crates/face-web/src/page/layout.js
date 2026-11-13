@@ -83,7 +83,9 @@ export function lanes(nodes) {
   }
   const cuts = crossings(edges);
   const key = (e) => `${e.v.id}>${e.d.id}`;
-  return { at: new Map(V.map((v) => [v.id, { x: v.x, y: v.y }])), cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, gaps: cuts.filter((c) => c.under === i).map((c) => ({ over: key(edges[c.over]), ...near(edges[c.over], c, e.P) })) })) };
+  const gaps = edges.map((e, i) => cuts.filter((c) => c.under === i).map((c) => ({ over: key(edges[c.over]), ...near(edges[c.over], c, e.P) })));
+  const sheet = sheets(edges, gaps);
+  return { at: new Map(V.map((v) => [v.id, { x: v.x, y: v.y }])), cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, sheet: sheet[i], gaps: gaps[i] })) };
 }
 
 // ─── Rows ──────────────────────────────────────────────────────────────────
@@ -550,6 +552,39 @@ function near(e, { at, seg }, U) {
   };
   const Q = [...walk(seg - 1, -1).reverse(), mid, ...walk(seg, 1)];
   return { P: Q.map(([x, y]) => [x, y]), W: e.W && Q.map((q) => q[2]) };
+}
+// Each line under others on a sheet, the page's one mask for all of a
+// sheet's bands: the first sheet where none of its bands touches another
+// line, and no other line's band touches it, so a band erases only the line
+// it was made for. Few sheets, so few masks. Each edge's sheet, or
+// undefined.
+function sheets(edges, gaps) {
+  const box = (P, r) => { const xs = P.map((p) => p[0]), ys = P.map((p) => p[1]); return [Math.min(...xs) - r, Math.min(...ys) - r, Math.max(...xs) + r, Math.max(...ys) + r]; };
+  const lines = edges.map((e) => ({ P: e.P, box: box(e.P, LIFE) }));
+  const bands = gaps.map((G) => G.map((g) => ({ ...g, box: box(g.P, LIFE + 2 * GAP) })));
+  const apart = (a, b) => a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1];
+  const touches = (i, j) => bands[i].some((g) => {
+    if (apart(g.box, lines[j].box)) return false;
+    const P = lines[j].P;
+    for (let m = 1; m < P.length; m++) {
+      const c = P[m - 1], q = P[m];
+      if (apart(g.box, [Math.min(c[0], q[0]), Math.min(c[1], q[1]), Math.max(c[0], q[0]), Math.max(c[1], q[1])])) continue;
+      for (let k = 1; k < g.P.length; k++) {
+        const a = g.P[k - 1], p = g.P[k], r = Math.max(g.W?.[k - 1] ?? LIFE, g.W?.[k] ?? LIFE) / 2 + GAP + LIFE / 2;
+        if (meet(a, p, c, q) || close(c, q, a, r) || close(c, q, p, r) || close(a, p, c, r) || close(a, p, q, r)) return true;
+      }
+    }
+    return false;
+  });
+  const on = [], out = [];
+  gaps.forEach((G, i) => {
+    if (!G.length) return;
+    let s = on.findIndex((S) => S.every((j) => !touches(i, j) && !touches(j, i)));
+    if (s < 0) s = on.push([]) - 1;
+    on[s].push(i);
+    out[i] = s;
+  });
+  return out;
 }
 // Whether point p is within r of the segment from a to b.
 function close(a, b, p, r) {
