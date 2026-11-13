@@ -42,6 +42,10 @@ const WIDE = Math.PI / 3, LEAN = .5;
 // A line leaving or reaching a port at a slant bulges at most REACH times
 // as far across as it goes.
 const REACH = 1;
+// A spawn or a result bends over as much of its height as it goes across,
+// but at least TURN, at its maker's or its reader's end, and stands upright
+// in its own lane the rest.
+const TURN = 48;
 // A big node's half width, for where lines meet it.
 const BIG_HALF = 13;
 
@@ -160,7 +164,9 @@ function byTime(V, by, P, kids) {
 // first dot (`branch` for an old version, which keeps one width). `fade`: a
 // life's result, from its last dot into its reader. `port`: a line out of a
 // dot its life goes on from, into another life's. A lane is held from the
-// row its life starts on to the row its last line leaves it. A life of one
+// row its life starts on to the row its last line leaves it, and it stands
+// on the rows from the one below its maker's, `a`, to that last one, `b`:
+// on its maker's row its line is still bending out of its maker. A life of one
 // dot, made by another and read by its maker's next dot or by no one, with
 // no other line, is a spindle: it hangs beside its maker's lane and holds
 // none.
@@ -184,6 +190,7 @@ function lanesOf(V, edges) {
   for (const l of L.values()) {
     const v = l.nodes[0];
     l.r0 = l.from ? l.from.rank : v.rank;
+    l.a = l.from ? l.r0 + 1 : l.r0; l.b = l.r1;
     l.light = v.n.light;
     l.spin = l.nodes.length === 1 && !!l.from && !v.n.old && (!l.reader || l.reader === l.from.lane) && v.fan === (l.reader ? 2 : 1)
       && !l.from.lane.nodes.some((u) => l.r0 < u.rank && u.rank < l.r1);
@@ -193,7 +200,9 @@ function lanesOf(V, edges) {
 }
 
 // Each lane's column, in the order they start. A column holds one life at
-// a time. A life with no maker takes the first free column from the middle
+// a time, with a row clear between them: a life read on the row another's
+// maker makes it on may share its column, one bending into its reader
+// above that row as the other bends out below. A life with no maker takes the first free column from the middle
 // rightward; a child takes the first free one on the side of its maker
 // where its lines cross fewer, at the rows they bend on: a lane held
 // there, and every line its dot there starts or reads; but never where its
@@ -202,7 +211,8 @@ function lanesOf(V, edges) {
 // left. Columns are an order, not places: across() packs them.
 function columns(L) {
   const held = new Map();
-  const free = (s, l) => !(held.get(s) || []).some((h) => h.r0 <= l.r1 && l.r0 <= h.r1);
+  const end = (l) => (l.reader ? l.r1 - 1 : l.r1);
+  const free = (s, l) => !(held.get(s) || []).some((h) => h.a <= end(l) + 1 && l.a <= end(h) + 1);
   const next = (s, side, l) => { while (!free(s, l)) s += side; return s; };
   // The lines a line of `l` from `m` to slot `s` would cross on row `r`,
   // below it for a start (`down`), above it for a result: not a lane that
@@ -243,9 +253,8 @@ function spindles(L) {
     if (m.spin) continue;
     const dot = new Map(m.nodes.map((v) => [v.rank, v]));
     const own = (r, s) => { const v = dot.get(r); return v ? (s > 0 ? v.n.hi : v.n.lo) : LIFE / 2; };
-    m.a = m.r0; m.b = m.r1;
     m.reach = new Map();
-    for (let r = m.a; r <= m.b; r++) m.reach.set(r, [own(r, -1), own(r, 1)]);
+    for (let r = m.r0; r <= m.r1; r++) m.reach.set(r, [own(r, -1), own(r, 1)]);
     const tracks = { [-1]: [], [1]: [] };
     let was = -1;
     for (const c of m.spins.sort((a, b) => a.r1 - a.r0 - (b.r1 - b.r0) || a.r0 - b.r0 || a.nodes[0].key - b.nodes[0].key)) {
@@ -379,22 +388,25 @@ function taper(s, L, w) {
 }
 // An edge's ends, its points, and its widths if it tapers or is a tool's.
 // A life's own line runs upright between its dots; a spawn bends from its
-// port all the way into its first dot, and a result from its last dot all
-// the way into its reader's port: turning in the middle, or, where that
-// would pass over a node or cross a line already drawn, as much nearer its
-// slant end as clears the most.
+// port into its lane, and a result from its lane into its reader's port,
+// over as much height as it goes across (at least TURN, at most all of it): turning in the middle, or, where
+// that would pass over a node or cross a line already drawn, as much
+// nearer its slant end as clears the most.
 function route(e, onRow, drawn) {
   const { v, d } = e;
   const P0 = e.a ? e.a.p : edge(d, [0, 1], TUCK), P1 = e.b ? e.b.p : edge(v, [0, -1], TUCK);
   let P = [P0, P1];
   if (e.kind !== "life") {
     const x0 = Math.min(P0[0], P1[0]), x1 = Math.max(P0[0], P1[0]);
+    const turn = Math.max(TURN, x1 - x0), long = e.kind !== "port" && P1[1] - P0[1] > turn, fade = e.kind === "fade";
+    const B0 = long && fade ? [P0[0], P1[1] - turn] : P0, B1 = long && !fade ? [P1[0], P0[1] + turn] : P1;
     const between = [];
     for (let r = d.rank; r <= v.rank; r++) for (const u of onRow[r] ?? []) if (u !== v && u !== d && u.x > x0 - 12 && u.x < x1 + 12) between.push(u);
     const near = [...drawn.values()].filter((o) => o.x0 <= x1 && x0 <= o.x1 && o.P[0][1] <= P1[1] && P0[1] <= o.P.at(-1)[1]);
     let fewest = Infinity;
     for (const late of [1, 2, 4, .5, .25]) {
-      const Q = bend([], P0[0], P0[1], e.a?.k ?? 0, P1[0], P1[1], e.b?.k ?? 0, late);
+      const B = bend([], B0[0], B0[1], e.a?.k ?? 0, B1[0], B1[1], e.b?.k ?? 0, late);
+      const Q = !long ? B : fade ? [P0, ...B] : [...B, P1];
       let n = 0;
       for (const u of between) if (over(Q, u)) n += 100;
       for (const o of near) n += meets(Q, o.P);
