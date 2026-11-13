@@ -7,7 +7,8 @@
 # is held until he sends it with his words; the agent's answer is a quick
 # line above its page, which still holds, folded to its lead. Then the agent
 # changes its page: where it ends, which Max's reply agreed with, folds to
-# its claim. Screenshots wide and on a phone into
+# its claim. Last, the map: each area faint on its theme's ground.
+# Screenshots wide and on a phone into
 # demos/agent-pages/shots.ignore. Scripted: no model call. Leaves the
 # brain up.
 set -euo pipefail
@@ -45,7 +46,7 @@ page open "$a" wait ".sheet:not([hidden]) h1" sleep 1000 \
   eval "[...document.querySelectorAll('.sheet .press')].map((b) => b.textContent + (b.classList.contains('armed') ? ' (held)' : '')).join(' | ')" \
   shot "$shots/press-held.png" \
   type ".compose textarea" "text \"Going with GitHub's cache. The page still holds.\" tool present {}" \
-  click ".compose .send" sleep 500 click ".compose .send" reply sleep 1500 \
+  click ".compose .send" sleep 500 click ".compose .send" reply wait ".sheet.folded .checked" sleep 1000 \
   eval "document.querySelector('.sheet.folded .checked')?.textContent" \
   shot "$shots/quick-wide.png"
 page --size phone open "$a" wait ".sheet.folded" sleep 1500 shot "$shots/quick-phone.png"
@@ -57,5 +58,8 @@ drive settle "$a" >/dev/null
 view "$a" '.page | { version, held, end: (.end | { says, agreed, changed }) }'
 page open "$a" wait ".sheet .end.agreed" sleep 1500 shot "$shots/agreed-wide.png"
 page --size phone open "$a" wait ".sheet .end.agreed" sleep 1500 shot "$shots/agreed-phone.png"
+echo
+echo "== the map: each area on its ground, faint behind its part"
+page sleep 3000 shot "$shots/map-wide.png"
 ls "$shots"/*.png
 echo "end it with: node dev/drive.mjs down --brain $b"
