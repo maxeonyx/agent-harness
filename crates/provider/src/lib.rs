@@ -71,7 +71,7 @@
 
 mod client;
 mod http;
-mod image;
+pub mod image;
 mod login;
 pub mod request;
 mod response;
