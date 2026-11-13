@@ -129,6 +129,17 @@ pub struct Page {
     pub stage: Option<Stage>,
     /// What Max was shown, oldest first, kept for the task's life.
     pub versions: Vec<Version>,
+    /// The `present` call that last showed him the page: the response that
+    /// made it holds the quick answer, the line above the page.
+    pub presented: Option<CallId>,
+    /// Where this ends, as Max last agreed with it: the newest version's
+    /// end when his words next reached the task. A reply that disputes it
+    /// leaves the agent to change it, and a changed end is no longer this,
+    /// so it opens again, marked.
+    pub agreed: Option<Claim>,
+    /// The asks drawn on it, oldest first: the task's own and its forks',
+    /// open or settled, each a call of `ask` ([`crate::ask`]).
+    pub asks: Vec<CallId>,
 }
 
 /// The page the agent is working on.
@@ -291,9 +302,35 @@ pub enum PageEvent {
     /// works turn by turn is the text of the response that presents: a
     /// line in the chat above the page.
     Presented { by: CallId },
+    /// An `ask` for this page, made by the call `call`: by the task or one of
+    /// its forks. One asked again under its key `revises` the old one, and
+    /// takes its place.
+    Asked {
+        call: CallId,
+        revises: Option<CallId>,
+    },
 }
 
 impl Page {
+    pub fn new(task: TaskId) -> Page {
+        Page {
+            task,
+            stage: None,
+            versions: Vec::new(),
+            presented: None,
+            agreed: None,
+            asks: Vec::new(),
+        }
+    }
+
+    /// Max's words reached the task: he agrees with where its newest
+    /// version ends.
+    pub fn agree(&mut self) {
+        if let Some(newest) = self.versions.last() {
+            self.agreed = Some(newest.sheet.end.clone());
+        }
+    }
+
     /// The page after `event`, at `at`; `None` when it makes no sense: a
     /// present with nothing staged.
     pub fn apply(&mut self, event: &PageEvent, at: Timestamp) -> Option<()> {
@@ -304,7 +341,14 @@ impl Page {
                     by: *by,
                 });
             }
+            PageEvent::Asked { call, revises } => {
+                match revises.and_then(|old| self.asks.iter().position(|a| *a == old)) {
+                    Some(at) => self.asks[at] = *call,
+                    None => self.asks.push(*call),
+                }
+            }
             PageEvent::Presented { by } => {
+                self.presented = Some(*by);
                 let sheet = &self.stage.as_ref()?.sheet;
                 match self.versions.last_mut() {
                     Some(newest) if newest.sheet == *sheet => newest.held = at,

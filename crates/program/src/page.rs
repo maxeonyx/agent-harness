@@ -600,6 +600,13 @@ fn ask(
             input: input.id(),
         }),
     ));
+    facts.push(Fact::Page(
+        owner(state, task),
+        PageEvent::Asked {
+            call: made,
+            revises: revised,
+        },
+    ));
     values.push(input);
     let step = match &ask.step {
         Some(key) => format!(" It is drawn in the step `{key}`."),

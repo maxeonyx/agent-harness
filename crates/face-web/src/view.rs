@@ -789,6 +789,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         Fact::Page(id, PageEvent::Presented { .. }) => {
             format!("{} presented its page to Max", name(*id))
         }
+        Fact::Page(id, PageEvent::Asked { .. }) => format!("an ask on {}'s page", name(*id)),
         Fact::Feedback(_, _) => "feedback for the design keeper".into(),
         Fact::Face(replica) => format!("tab {replica} is Max's"),
         Fact::Seen(at) => format!("as seen at {at}"),

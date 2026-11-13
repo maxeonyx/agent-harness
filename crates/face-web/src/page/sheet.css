@@ -9,6 +9,19 @@
     background: var(--paper); color: var(--body); border-top: 1px solid var(--line);
     font: 16.5px/1.6 var(--serif);
   }
+  /* The lead on the task's painted ground, which dissolves into the paper. */
+  .sheet .lead { position: relative; isolation: isolate; margin: -2em -1.6em 0; padding: 4.5em 1.6em 3em; min-height: 46vh; display: flex; flex-direction: column; justify-content: flex-end; }
+  .sheet .lead .ground { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; -webkit-mask-image: linear-gradient(#000 65%, transparent); mask-image: linear-gradient(#000 65%, transparent); }
+  .sheet .lead.folded { min-height: 0; padding: 2.2em 1.6em 1.6em; cursor: pointer; }
+  .sheet .lead .checked { margin: .4em 0 0; font: 14.5px var(--sans); color: var(--cover-body); }
+  .sheet .quick { margin: 0 0 1.4em; color: var(--body); }
+  /* What changed since Max last looked: a bar in the left gutter. */
+  .sheet .changed { position: relative; }
+  .sheet .changed::before { content: ""; position: absolute; left: -.9em; top: .2em; bottom: .2em; width: 3px; border-radius: 2px; background: var(--accent); }
+  .sheet .end.agreed summary { list-style: none; }
+  .sheet .end.agreed summary::-webkit-details-marker { display: none; }
+  .sheet .end.agreed summary::after { content: " ›"; color: var(--muted); }
+  .sheet .end.agreed details[open] summary::after { content: " ‹"; }
   .sheet h1 { margin: 0 0 .4em; font: var(--display-bold) 2em/1.15 var(--display); font-variation-settings: var(--display-var); color: var(--cover-ink); text-wrap: balance; }
   .sheet .lead .hook { margin: 0; font-size: 1.12em; color: var(--cover-body); }
   .sheet section { margin-top: 1.8em; }
@@ -42,6 +55,9 @@
   .sheet .ask .question { color: var(--ink); font-size: 1.05em; font-weight: 600; }
   .sheet .ask :is(.now, .why, .otherwise) { color: var(--body); font-size: .94em; }
   .sheet .ask .otherwise { color: var(--muted); }
+  .sheet .ask.settled { background: none; border-left-color: var(--line); }
+  .sheet .ask.settled .question { font-weight: normal; }
+  .sheet .ask.settled .how { color: var(--muted); font-size: .94em; }
   .sheet .choices { display: flex; flex-wrap: wrap; gap: .5em; margin: 0 0 .7em; font: 14px var(--sans); }
   .sheet .press.recommended { border-color: var(--ink); }
   .sheet .press.recommended::after { content: "recommended"; margin-left: .3em; color: var(--muted); font-size: .85em; }
@@ -58,6 +74,19 @@
   .sheet-line:hover { background: var(--hover); }
   @media (max-width: 760px) {
     .sheet { padding: 1.4em 1em .6em; font-size: 16px; }
-    .sheet h1 { font-size: 1.7em; }
+    /* The lead on the task's painted ground, which dissolves into the paper. */
+  .sheet .lead { position: relative; isolation: isolate; margin: -2em -1.6em 0; padding: 4.5em 1.6em 3em; min-height: 46vh; display: flex; flex-direction: column; justify-content: flex-end; }
+  .sheet .lead .ground { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; -webkit-mask-image: linear-gradient(#000 65%, transparent); mask-image: linear-gradient(#000 65%, transparent); }
+  .sheet .lead.folded { min-height: 0; padding: 2.2em 1.6em 1.6em; cursor: pointer; }
+  .sheet .lead .checked { margin: .4em 0 0; font: 14.5px var(--sans); color: var(--cover-body); }
+  .sheet .quick { margin: 0 0 1.4em; color: var(--body); }
+  /* What changed since Max last looked: a bar in the left gutter. */
+  .sheet .changed { position: relative; }
+  .sheet .changed::before { content: ""; position: absolute; left: -.9em; top: .2em; bottom: .2em; width: 3px; border-radius: 2px; background: var(--accent); }
+  .sheet .end.agreed summary { list-style: none; }
+  .sheet .end.agreed summary::-webkit-details-marker { display: none; }
+  .sheet .end.agreed summary::after { content: " ›"; color: var(--muted); }
+  .sheet .end.agreed details[open] summary::after { content: " ‹"; }
+  .sheet h1 { font-size: 1.7em; }
     .sheet-line { padding: .55em 1em; }
   }

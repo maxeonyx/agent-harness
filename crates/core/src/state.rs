@@ -1025,11 +1025,7 @@ impl State {
                 if !self.tasks.contains_key(task) {
                     return Err(Rejected::Unknown);
                 }
-                let mut page = self.pages.get(task).cloned().unwrap_or(Page {
-                    task: *task,
-                    stage: None,
-                    versions: Vec::new(),
-                });
+                let mut page = (self.pages.get(task).cloned()).unwrap_or_else(|| Page::new(*task));
                 page.apply(event, record.at).ok_or(Rejected::NotForTask)?;
                 self.pages.insert(*task, page);
             }
@@ -2294,7 +2290,14 @@ impl State {
         self.put(task);
         let mark = Mark::of(record);
         match &delivery.content {
-            Content::Words(words) => self.say(*words, delivery.to, mark),
+            Content::Words(words) => {
+                self.say(*words, delivery.to, mark);
+                // His reply to a page agrees with where it ends, unless the
+                // agent changes that after it.
+                if let Some(page) = self.pages.get_mut(&delivery.to) {
+                    page.agree();
+                }
+            }
             Content::Prompt(Prompt::Lingering) => {
                 self.open.lingered.insert(delivery.to);
             }

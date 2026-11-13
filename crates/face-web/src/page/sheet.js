@@ -1,4 +1,5 @@
-import { $, diagram, el, panel, scrollEl } from "./base.js";
+import { $, clock, diagram, el, panel, scrollEl } from "./base.js";
+import { load, paintInto, wear } from "./theme.js";
 
 // ─── A chat's page: what its agent presented to Max, drawn by the theme ───
 // The brain parses every body (harness-body) and the row carries what it
@@ -12,7 +13,7 @@ import { $, diagram, el, panel, scrollEl } from "./base.js";
 // works, its progress is the card's reading and the page is one line at the
 // top, which opens it.
 const sheetEl = $(".sheet", panel), lineEl = $(".sheet-line", panel);
-let opened = null, landed = null;
+let opened = null, landed = null, unfolded = null;
 
 // Draws `t`'s page, and says whether the card should open at its top
 // (then `sheetSeen`): the first time this tab shows this version in full.
@@ -24,13 +25,37 @@ export function renderSheet(t) {
   lineEl.hidden = full;
   sheetEl.hidden = !full;
   if (!full) { line(p, t); return false; }
-  const key = `${t.id} ${p.version} ${JSON.stringify(p.plan.map((s) => [s.state, s.asks.map((a) => a.call)]))}`;
-  if (sheetEl.drawn !== key) { sheetEl.drawn = key; sheetEl.replaceChildren(...page(p)); }
+  const key = JSON.stringify([t.id, p, t.look, unfolded]);
+  if (sheetEl.drawn !== key) { sheetEl.drawn = key; sheetEl.replaceChildren(...page(p, t)); dress(t); }
   return landed !== `${t.id} ${p.version}`;
 }
 export const sheetSeen = (t) => { landed = `${t.id} ${t.page.version}`; };
 // Where the page starts in the card's scroll, while it shows whole.
 export const sheetTop = () => sheetEl.hidden ? null : scrollEl.scrollTop + sheetEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top;
+
+// The page wears its task's look: the theme's tokens, and its ground
+// painted behind the lead, once per task and width. A task with none wears
+// sheet.css's plain default.
+const grounds = new Map();
+async function dress(t) {
+  const lead = $(".lead", sheetEl);
+  if (!t.look) { sheetEl.removeAttribute("style"); lineEl.removeAttribute("style"); return; }
+  const theme = await load(t.look.theme);
+  await wear(sheetEl, theme);
+  await wear(lineEl, theme);
+  if (!lead?.isConnected) return;
+  const at = `${t.id} ${lead.clientWidth} ${lead.clientHeight}`;
+  let ground = grounds.get(t.id);
+  if (ground?.at !== at) {
+    ground = el("canvas", "ground");
+    ground.at = at;
+    grounds.set(t.id, ground);
+    lead.prepend(ground);
+    const h = $("h1", lead).getBoundingClientRect(), box = lead.getBoundingClientRect();
+    paintInto(ground, theme, t.look, { x: h.left - box.left, y: h.top - box.top, w: h.width, h: h.height });
+  } else lead.prepend(ground);
+}
+const redraw = () => sheetEl.dispatchEvent(new CustomEvent("sheet", { bubbles: true }));
 
 function line(p, t) {
   lineEl.replaceChildren(el("span", "title", p.lead.title), ...(p.lead.hook ? [el("span", "hook", p.lead.hook)] : []));
@@ -38,12 +63,23 @@ function line(p, t) {
 }
 
 // The parts in the one order Max reads them, none of them named: each
-// claim frames its part in its own words.
-function page(p) {
+// claim frames its part in its own words. Presented again unchanged with a
+// quick answer, the page is that answer's line above its lead, which says
+// when it was checked and opens the rest.
+function page(p, t) {
+  const held = p.quick != null && p.held > p.at;
   const lead = el("header", "lead");
   lead.append(el("h1", null, p.lead.title));
   if (p.lead.hook) lead.append(el("p", "hook", p.lead.hook));
-  const out = [lead, claim("end", p.end), claim("now", p.now)];
+  if (held) lead.append(el("p", "checked", `Still holds, checked ${clock(p.held)}`));
+  const out = [...(held ? [el("p", "quick", p.quick)] : []), lead];
+  const at = `${t.id} ${p.held}`;
+  if (held && unfolded !== at) {
+    lead.classList.add("folded");
+    lead.onclick = () => { unfolded = at; redraw(); };
+    return out;
+  }
+  out.push(end(p.end), claim("now", p.now));
   if (p.asks.length) out.push(part("asks", p.asks.map(ask)));
   if (p.plan.length) out.push(part("plan", [plan(p.plan)]));
   if (p.why) out.push(part("why", blocks(p.why.blocks)));
@@ -55,6 +91,18 @@ function part(cls, children) {
   return s;
 }
 const claim = (cls, c) => part(cls, [el("p", "says", c.says), ...(c.shows ? blocks(c.shows.blocks) : [])]);
+// Where this ends: folded to its claim once Max has agreed with it, and
+// marked in the gutter when it changed since.
+function end(e) {
+  if (!e.agreed) {
+    const s = claim("end", e);
+    s.classList.toggle("changed", e.changed);
+    return s;
+  }
+  const d = el("details");
+  d.append(el("summary", "says", e.says), ...(e.shows ? blocks(e.shows.blocks) : []));
+  return part("end agreed", [d]);
+}
 
 const MARK = { done: "✓", failed: "✕", yours: "●", working: "◐", planned: "○" };
 function plan(steps) {
@@ -78,6 +126,12 @@ function plan(steps) {
 function ask(a) {
   const box = el("div", "ask");
   box.append(el("p", "question", a.question));
+  // Settled, it stays where it was, quiet, saying how it settled.
+  if (a.settled != null) {
+    box.classList.add("settled");
+    box.append(el("p", "how", a.settled));
+    return box;
+  }
   const said = [...(a.now?.length ? [inlines(a.now, "p", "now")] : []), ...(a.why?.length ? [inlines(a.why, "p", "why")] : [])];
   box.append(...said);
   if (a.shows) box.append(...blocks(a.shows.blocks));
