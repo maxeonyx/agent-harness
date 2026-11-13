@@ -188,8 +188,9 @@ function kinds(V, edges) {
 // beam, so where something is, it bends round it over several rows rather
 // than at a corner. A lifeline is a much stiffer spring, so a life runs
 // straight and its forks pack around it. Every node, but no hidden point,
-// is pulled to the centre line by a small fraction of its lines' own pull. Sets each node's x; each edge's
-// hidden points, top down, as `mid`. Returns the rows.
+// is pulled to the centre line by a small fraction of its lines' own pull.
+// Sets each node's x; each edge's hidden points, top down, as `mid`.
+// Returns the rows.
 function layered(V, edges) {
   const layers = [];
   const put = (v) => (layers[v.rank] ??= []).push(v);
