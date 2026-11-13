@@ -1129,7 +1129,7 @@ impl Brain {
     fn history(&mut self, id: CallId, call: &Call) {
         let said = match call.caller {
             Caller::Agent { .. } | Caller::Background { .. } => {
-                let input = self.value(call.input);
+                let input = self.arguments(call.input);
                 let read = |v| self.decider.storage().value(v).ok().flatten();
                 match call.tool.as_str() {
                     history::FIND => {
@@ -1165,7 +1165,7 @@ impl Brain {
             }
         };
         let task = self.state().task(task).expect("the calling task").clone();
-        let input = self.value(call.input);
+        let input = self.arguments(call.input);
         let next = self.decider.next();
         let offset = batch.facts.len();
         let mint = |i: usize| next.event((offset + i) as u32);
@@ -1227,7 +1227,7 @@ impl Brain {
             values: Vec::new(),
             facts: vec![Fact::Call(id, CallEvent::Dispatched)],
         };
-        let input = self.value(call.input);
+        let input = self.arguments(call.input);
         // Only a stopping task's tidy-up turn makes calls while it ends: it
         // can attach and report, but nothing new can start.
         let reports = call.tool == meta::COMPACT_AND_REPORT || call.tool == meta::ATTACH;
@@ -1944,6 +1944,11 @@ comes to you as a message. `stop` it to close it.",
         };
         outln!("\n== the task is done; its result:\n\n{said}\n");
         self.reported = true;
+    }
+
+    /// A call's input as the harness's own tools read it ([`render::arguments`]).
+    fn arguments(&self, input: ValueId) -> Vec<u8> {
+        render::arguments(&self.value(input))
     }
 
     /// A stored value's bytes. Every value a fact names is stored.

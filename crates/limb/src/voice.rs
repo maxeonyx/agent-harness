@@ -1,12 +1,13 @@
 //! What a limb says, and how: its records, stored in its own log and then
 //! shipped; the brain's rows for it, as they stand; and its tool sets.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use harness_core::call::{Call, CallEvent, Outcome, Output, Owner};
+use harness_core::call::{Call, CallEvent, Outcome, Output, Owner, SUMMARY};
 use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::Digest;
 use harness_core::id::{CallId, LimbId, ReplicaId, Timestamp, ValueId};
@@ -470,10 +471,11 @@ impl Instance {
         let shutting_down = self.calls.shutting_down_flag();
         self.calls
             .call(row, rerun, held, move |input, cancel, limit, report| {
+                let arguments = arguments(&input.0);
                 let running = Running {
                     id,
                     call: &call,
-                    input: &input.0,
+                    input: &arguments,
                     owner,
                     dir: dir.as_deref(),
                     cancel,
@@ -529,4 +531,18 @@ pub fn instant(at: Timestamp) -> Instant {
 /// A mutex's guard, whether or not a holder panicked.
 pub fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A call's input as its tool reads it: without the [`SUMMARY`] beside its
+/// arguments.
+fn arguments(input: &[u8]) -> Cow<'_, [u8]> {
+    let Ok(mut object) =
+        serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(input)
+    else {
+        return Cow::Borrowed(input);
+    };
+    match object.shift_remove(SUMMARY) {
+        Some(_) => Cow::Owned(serde_json::Value::Object(object).to_string().into_bytes()),
+        None => Cow::Borrowed(input),
+    }
 }

@@ -89,12 +89,10 @@ pub fn run(
     }
 }
 
-/// A call's input as a value, without the `summary` every input may carry.
+/// A call's input as a value.
 fn input_of(input: &[u8]) -> Result<Value, String> {
-    let mut value: Value =
-        serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
-    let object = value.as_object_mut().ok_or("the input must be an object")?;
-    object.remove("summary");
+    let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
+    value.as_object().ok_or("the input must be an object")?;
     Ok(value)
 }
 

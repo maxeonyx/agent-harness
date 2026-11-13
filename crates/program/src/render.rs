@@ -2,7 +2,7 @@
 //! a model. Policy: the core fixes what must be rendered (every result of
 //! the last round) and leaves the rest here.
 
-use harness_core::call::{Caller, Outcome, Output, Owner};
+use harness_core::call::{self, Caller, Outcome, Output, Owner};
 use harness_core::context::{Entry, EntryId, Note, Rendered, Role, Root, Span};
 use harness_core::delivery::{Content, Delivery, Prompt};
 use harness_core::fact::Author;
@@ -111,8 +111,9 @@ like `run the tests` or `find where compactions render`. Max reads it in place o
 /// agent's few words on what each call does, which the page shows in place
 /// of the call's input. Last, so the model writes it from the arguments it
 /// has just written. Added here, for every limb's tools, and recorded in the
-/// call's input with the rest; a limb reads the fields it names, so none
-/// knows about it. A server tool, with no input schema, is left as it is.
+/// call's input with the rest; whatever runs the tool takes it off first
+/// ([`call::SUMMARY`], [`arguments`]), so no tool knows about it. A server tool,
+/// with no input schema, is left as it is.
 /// The definition keeps its order (serde_json's `preserve_order`), which
 /// is the order the model sees.
 ///
@@ -128,17 +129,30 @@ fn summarised(tool: &Tool) -> Tool {
     let Some(schema) = definition.get_mut("input_schema") else {
         return tool.clone();
     };
-    schema["properties"]["summary"] = json!({
+    schema["properties"][call::SUMMARY] = json!({
         "type": "string",
         "description": "What this call does, like `run the tests` or `find where compactions render`."
     });
     match schema["required"].as_array_mut() {
-        Some(required) => required.push(json!("summary")),
-        None => schema["required"] = json!(["summary"]),
+        Some(required) => required.push(json!(call::SUMMARY)),
+        None => schema["required"] = json!([call::SUMMARY]),
     }
     Tool {
         definition: definition.to_string(),
         ..tool.clone()
+    }
+}
+
+/// A call's input as the harness's own tools read it: without the
+/// [`call::SUMMARY`] beside its arguments. A limb's tools get theirs from
+/// the limb.
+pub fn arguments(input: &[u8]) -> Vec<u8> {
+    let Ok(mut object) = serde_json::from_slice::<serde_json::Map<String, Value>>(input) else {
+        return input.to_vec();
+    };
+    match object.shift_remove(call::SUMMARY) {
+        Some(_) => Value::Object(object).to_string().into_bytes(),
+        None => input.to_vec(),
     }
 }
 
