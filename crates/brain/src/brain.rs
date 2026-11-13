@@ -91,7 +91,7 @@ impl Inbox {
     /// first shuts it down gracefully, the next at once.
     pub fn signals(&self) -> Result<(), String> {
         let events = self.events.clone();
-        let stops = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+        let stops = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, HANDOVER];
         signals::forward(&stops, move |s| {
             let _ = events.send(Event::Signal(s));
         })
@@ -156,7 +156,14 @@ pub struct Brain {
     root: Option<TaskId>,
     started: Instant,
     reported: bool,
+    /// Whether its shutdown hands over to the next build ([`HANDOVER`]).
+    handing_over: bool,
 }
+
+/// The signal that shuts the brain down as [`SIGTERM`](libc::SIGTERM)
+/// does, then hands over to the build `relaunch` named
+/// ([`crate::handover`]).
+pub const HANDOVER: libc::c_int = libc::SIGUSR2;
 
 /// What a launch says first: its [`Launched`], and the brain's own limb and
 /// the limb on its machine, defined anew where their offers changed.
@@ -272,6 +279,7 @@ impl Brain {
             root: None,
             started: Instant::now(),
             reported: false,
+            handing_over: false,
         };
         brain.append(Batch {
             values: Vec::new(),
@@ -434,6 +442,7 @@ impl Brain {
     /// brings the deadline to now. Tasks are not stopped: the next launch
     /// carries them on.
     fn signal(&mut self, signal: libc::c_int) {
+        self.handing_over |= signal == HANDOVER;
         let again = self.state().shutdown().is_some();
         let within = if again { Duration::ZERO } else { policy::DRAIN };
         let name = signals::name(signal);
@@ -448,6 +457,19 @@ impl Brain {
         self.fact(Fact::Shutdown {
             within: policy::ms(within),
         });
+    }
+
+    /// Whether its shutdown hands over to the next build.
+    pub fn handing_over(&self) -> bool {
+        self.handing_over
+    }
+
+    /// End its links to limbs, which run on, with their calls, for the
+    /// next brain: what exiting does, for a brain that stays to hand over.
+    pub fn detach(&mut self) {
+        for (_, mut process) in self.limbs.drain() {
+            process.end();
+        }
     }
 
     /// Whether the brain has shut down: no request is left, or its
@@ -2235,7 +2257,7 @@ fn hostname() -> String {
 }
 /// The environment variable that tells a brain the `relaunch` call that
 /// started it, which the `builds` set puts in its unit's environment.
-const RELAUNCHED_BY: &str = "HARNESS_RELAUNCHED_BY";
+pub const RELAUNCHED_BY: &str = "HARNESS_RELAUNCHED_BY";
 
 /// How this launch came: [`Launch::Relaunched`] after a brain that shut
 /// down, or by the builds limb's `relaunch` call its unit's environment

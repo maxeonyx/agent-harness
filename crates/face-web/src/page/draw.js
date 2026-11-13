@@ -128,7 +128,7 @@ function elOf(id) {
 let marks = new Float32Array(0);
 const rgb = (r, g, b) => [r / 255, g / 255, b / 255];
 const INK = rgb(20, 20, 19), PAPER = rgb(250, 249, 245), STRETCH = rgb(131, 129, 123), OLD = rgb(196, 194, 186), RUNNING = rgb(58, 109, 176);
-// A ring is in the colour of the lane it sits on, one step darker.
+// A ring is in the colour of the life it is on, one step darker.
 const RING = { ink: rgb(143, 141, 134), tool: rgb(111, 138, 161), max: rgb(201, 124, 66) };
 export function drawNodes() {
   if (marks.length < MARK * shown.size) marks = new Float32Array(MARK * shown.size * 2);
@@ -156,7 +156,7 @@ export function drawNodes() {
       marks.set(INK, m + 8); marks[m + 11] = .5 * dim;
       marks[m + 12] = Math.round((2 * Math.PI * radius(n)) / 3.2);
     } else {
-      // Where work was passed on: a ring in its lane's colour. Running work:
+      // Where work was passed on: a ring in its life's colour. Running work:
       // paper, ringed blue, under its gear.
       marks[m + 3] = 1.4;
       marks.set(PAPER, m + 4); marks[m + 7] = dim;

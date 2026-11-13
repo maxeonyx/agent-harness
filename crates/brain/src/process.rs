@@ -94,6 +94,12 @@ impl Process {
         }
     }
 
+    /// End the link, as the brain exiting does: the limb runs on.
+    pub fn end(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+
     /// How it ended, once it has.
     pub fn exited(&mut self) -> Option<ExitStatus> {
         self.child.try_wait().ok().flatten()

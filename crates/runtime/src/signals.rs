@@ -88,6 +88,7 @@ pub fn name(signal: libc::c_int) -> &'static str {
         libc::SIGINT => "SIGINT",
         libc::SIGTERM => "SIGTERM",
         libc::SIGHUP => "SIGHUP",
+        libc::SIGUSR2 => "SIGUSR2",
         _ => "a signal",
     }
 }
