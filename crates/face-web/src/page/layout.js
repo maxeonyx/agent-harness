@@ -294,25 +294,32 @@ function layered(V, edges) {
 // Each life with all it started, the lives started from its dots and
 // theirs, deepest first: a rigid body, so a sweep need not creep it point
 // by point to where its lines out pull it. Each moves, without bending, to
-// where its lines to the rest balance, but only as far as the room in every
-// row it spans allows: the whole way to sit alongside what is there, or as
-// far as it fits. A hidden point is the life's its line starts, for a
-// start, or else the life's it leaves.
+// where its lines to the rest balance, if that fits in every row it spans;
+// else it stays: it moves the whole way to sit alongside what is there, or
+// not at all, never part of the way. A hidden point belongs to the life its
+// line starts (for a start), otherwise to the life it leaves. Which lines
+// leave a body and which of its points meet a row neighbour outside it are
+// fixed once the rows are ordered, so they are found once.
 function lives(layers, gaps) {
   const anc = new Map(), own = new Map();
   const above = (l) => anc.get(l) ?? anc.set(l, new Set([l, ...(l.from ? above(l.from.life) : [])])).get(l);
   for (const L of layers) for (const p of L) for (const l of above(p.life)) (own.get(l) ?? own.set(l, []).get(l)).push(p);
-  return [...own].sort((a, b) => anc.get(b[0]).size - anc.get(a[0]).size).map(([l, P]) => () => {
-    const inside = (u) => anc.get(u.life).has(l);
-    let f = 0, w = 0, lo = -Infinity, hi = Infinity;
+  return [...own].sort((a, b) => anc.get(b[0]).size - anc.get(a[0]).size).map(([l, P]) => {
+    const inside = (u) => anc.get(u.life).has(l), out = [], left = [], right = [];
     for (const p of P) {
-      for (const u of p.nb) if (!inside(u)) { const k = p.k.get(u); f += k * (u.x - p.x); w += k; }
+      for (const u of p.nb) if (!inside(u)) out.push([p, u, p.k.get(u)]);
       const L = layers[p.rank], i = p.pos, g = gaps[p.rank];
-      if (i > 0 && !inside(L[i - 1])) lo = Math.max(lo, L[i - 1].x + g[i - 1] - p.x);
-      if (i + 1 < L.length && !inside(L[i + 1])) hi = Math.min(hi, L[i + 1].x - g[i] - p.x);
+      if (i > 0 && !inside(L[i - 1])) left.push([p, L[i - 1], g[i - 1]]);
+      if (i + 1 < L.length && !inside(L[i + 1])) right.push([p, L[i + 1], g[i]]);
     }
-    const s = w && lo <= hi ? Math.min(hi, Math.max(lo, f / w)) : 0;
-    for (const p of P) p.x += s;
+    return () => {
+      let f = 0, w = 0, lo = -Infinity, hi = Infinity;
+      for (const [p, u, k] of out) { f += k * (u.x - p.x); w += k; }
+      for (const [p, u, g] of left) lo = Math.max(lo, u.x + g - p.x);
+      for (const [p, u, g] of right) hi = Math.min(hi, u.x - g - p.x);
+      const s = w && lo <= f / w && f / w <= hi ? f / w : 0;
+      if (s) for (const p of P) p.x += s;
+    };
   });
 }
 // Which side each dot's odd one out goes, where a level of the lines it
