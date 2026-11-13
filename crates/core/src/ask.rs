@@ -30,9 +30,10 @@ pub const ASK: &str = "ask";
 /// yes.
 ///
 /// **How it is drawn.** The bold question; then its end, hanging from a
-/// small hollow ring (will be); its now, from a small filled dot (is); its
-/// why, unmarked; what shows it; the answers as pills; and what the agent
-/// does without him, in one small line. No labels. It is drawn whole on
+/// small hollow ring (will be), and its now, from a small filled dot (is),
+/// end first as a plan step reads; its why, unmarked; what shows it; the
+/// answers as pills; and what the agent does without him, in one small
+/// line, in its own words. No labels. It is drawn whole on
 /// its asker's page, inside the plan step it unblocks, and in his queue.
 /// On a page above its asker it is one line, its question, in the step
 /// bound to the asker, and a press opens the asker's page at the ask: what
@@ -60,13 +61,13 @@ pub struct Ask {
     /// What Max is asked, in words he can answer by talking: "Where should
     /// the work brain live?" Plain text.
     pub question: String,
-    /// Where this ask ends: what is true once it is answered and acted on.
-    /// "The work brain runs where every limb can reach it." Often narrower
-    /// than its page's end, so never left to the page around it. Plain
-    /// text.
+    /// Where this ask ends: what is true once it is answered and acted on,
+    /// in a few words. "The work brain runs where every limb can reach
+    /// it." Often narrower than its step, so never left to the page around
+    /// it. Plain text.
     pub end: String,
-    /// Where it is now: "There is no work brain; the laptop runs a test
-    /// one." Inline markdown, naming live things ([`Ref`]).
+    /// Where it is now, in a few words: "No work brain; the laptop runs a
+    /// test one." Inline markdown, naming live things ([`Ref`]).
     pub now: String,
     /// Why this ask gets from now to the end, and why it is his to answer:
     /// "Limbs on the laptop and on EC2 both need to reach it, and where it

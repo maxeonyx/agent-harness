@@ -2341,10 +2341,13 @@ impl State {
             }
             Content::Words(words) => {
                 self.say(*words, delivery.to, mark);
-                // His reply to a page agrees with where it ends, unless the
-                // agent changes that after it.
+                // His reply to a page agrees with where its plan ends,
+                // unless the agent changes that after it.
+                let plan = (self.tasks.get(&delivery.to))
+                    .and_then(|t| t.description.plan.clone())
+                    .unwrap_or_default();
                 if let Some(page) = self.pages.get_mut(&delivery.to) {
-                    page.agree();
+                    page.agree(&plan);
                 }
             }
             Content::Prompt(Prompt::Lingering) => {
