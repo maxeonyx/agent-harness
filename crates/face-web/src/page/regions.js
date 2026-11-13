@@ -1,4 +1,4 @@
-import { $ } from "./base.js";
+import { $, fail } from "./base.js";
 import { centre, graph, isDone, positions, shown } from "./map.js";
 import { cam } from "./camera.js";
 
@@ -14,7 +14,7 @@ import { cam } from "./camera.js";
 // one before. Every frame the nodes are drawn, each painting is stretched
 // over where its project is drawn now (`placeRegions`), so it moves with
 // them while they glide. A project with no look stands on the bare ground,
-// and so does every project where a worker cannot paint.
+// and so does every project where a worker cannot paint, or once it fails.
 const under = $("#under"), edges = $("#edges"), map = $("#map");
 const painted = new Map();  // an area's top -> { key, r, canvas }: r is the box it was painted for
 const failed = new Set();   // the keys of paintings the worker could not paint
@@ -27,7 +27,7 @@ const SIDE = 70, NAMES = 170, ABOVE = 60, BELOW = 170, POOL = 90;
 // fit in a phone's memory. A project larger than that at the zoom's step
 // is painted coarser rather than not at all.
 const MAXPX = 4096, MOST = 4e6;
-const worker = typeof OffscreenCanvas === "function" ? new Worker(new URL("./regions-paint.js", import.meta.url), { type: "module" }) : null;
+let worker = typeof OffscreenCanvas === "function" ? new Worker(new URL("./regions-paint.js", import.meta.url), { type: "module" }) : null;
 let queued = false, painting = 0, inflight = null;
 
 // Paint what has changed, after this frame.
@@ -89,8 +89,7 @@ function wanted() {
       const q = centre(positions.get(n.id));
       return { x: Math.round(q.x - r.x), y: Math.round(q.y - r.y), r: POOL, slot: n.t.look.slot };
     });
-    painting = step();
-    const scale = Math.min(painting, MAXPX / r.w, MAXPX / r.h, Math.sqrt(MOST / (r.w * r.h)));
+    const scale = Math.min(step(), MAXPX / r.w, MAXPX / r.h, Math.sqrt(MOST / (r.w * r.h)));
     out.set(top.id, { look: top.look, r, pools, scale, key: JSON.stringify([top.look, r, pools, scale]) });
   }
   return out;
@@ -103,6 +102,7 @@ function next() {
   const [id, w] = [...want].find(([id, w]) => painted.get(id)?.key !== w.key && !failed.has(w.key)) ?? [];
   if (!w) return;
   inflight = { id, key: w.key, r: w.r };
+  painting = step();
   const paper = getComputedStyle(map).getPropertyValue("--ground").trim();
   const { theme, slot, seed, root, line } = w.look;
   worker.postMessage({ id, key: w.key, theme, who: { slot, seed, root, line }, spec: { w: w.r.w, h: w.r.h, now: -w.r.y, scale: w.scale, paper, pools: w.pools } });
@@ -112,7 +112,7 @@ function next() {
 worker?.addEventListener("message", ({ data: { id, key, bitmap, error } }) => {
   const { r } = inflight;
   inflight = null;
-  if (error) { console.error(error); failed.add(key); }
+  if (error) { fail("painting an area's ground, which stays bare", error); failed.add(key); }
   else if (wanted().get(id)?.key === key) {
     let p = painted.get(id);
     if (!p) {
@@ -127,6 +127,16 @@ worker?.addEventListener("message", ({ data: { id, key, bitmap, error } }) => {
     Object.assign(p.canvas.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
     Object.assign(p, { key, r });
     placeRegions();
-  }
+  } else bitmap?.close();
   next();
+});
+
+// The worker could not load, or died: every project stands on the bare ground.
+worker?.addEventListener("error", (e) => {
+  fail("painting the areas' grounds, which stay bare", e.message ?? "the worker failed");
+  worker.terminate();
+  worker = null;
+  inflight = null;
+  for (const p of painted.values()) p.canvas.remove();
+  painted.clear();
 });
