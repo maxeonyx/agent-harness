@@ -5,10 +5,12 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use harness_core::build::blames_build;
-use harness_core::context::EntryId;
+use harness_core::context::{Entry, EntryId};
 use harness_core::id::Timestamp;
 use harness_core::model_call::Ending;
-use harness_core::state::Ended;
+use harness_core::resource::ResourceKey;
+use harness_core::state::{Ended, State};
+use harness_core::task::Task;
 
 /// The soft limit of context in a window of `window`, past which each
 /// request tells the agent to compact now: 300k, or 80% of a smaller window,
@@ -162,4 +164,69 @@ pub fn share(now: Timestamp, deadline: Timestamp) -> u64 {
 /// A duration as the milliseconds a fact states.
 pub fn ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Why a task's next compaction starts a new root instead of keeping its
+/// latest checkpoint.
+///
+/// A new root costs about what compacting onto the checkpoint costs: the
+/// new context is the root, which every agent of the role shares in the
+/// cache, then the mandate, Max's words and the carry, written once. So the
+/// harness re-roots whenever keeping the checkpoints buys nothing: the root
+/// no longer says what the agent is, or what they keep is already long. A
+/// busy agent's cache never goes cold, so its compaction is where a change
+/// to its role reaches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reroot {
+    /// Its role, its tool sets' or its directory's instructions, or its
+    /// model changed since its root was rendered.
+    Stale,
+    /// What its checkpoints keep is past [`keep_at`].
+    Long,
+}
+
+/// The most context a compaction keeps: half the [`limit`], so a context
+/// compacted onto its checkpoint has room to work before the next one.
+pub fn keep_at(window: u64) -> u64 {
+    limit(window) / 2
+}
+
+/// Whether a resource is one a root embodies, so only a new root takes up
+/// its change.
+pub fn rooted(resource: &ResourceKey) -> bool {
+    resource.kind == "role" || resource.kind == "instructions"
+}
+
+/// Why `task`'s next compaction starts a new root, if it does, for a model
+/// whose window is `window`.
+pub fn reroot(state: &State, task: &Task, window: u64) -> Option<Reroot> {
+    let context = task.context()?;
+    let entries = state.context(context.head);
+    let model = state.role(task.role).map(|role| task.tuning.model(role));
+    let remodelled = match entries.first() {
+        Some((_, Entry::Root(root))) => model.is_some_and(|m| m != root.model),
+        _ => false,
+    };
+    let moved = context.knows.iter().any(|(resource, known)| {
+        rooted(resource)
+            && state
+                .resource(resource)
+                .is_some_and(|now| now.version != known.has)
+    });
+    if remodelled || moved {
+        return Some(Reroot::Stale);
+    }
+    // The first request whose prompt reached the checkpoint measures what
+    // compacting onto it keeps.
+    let checkpoint = state.checkpoint(task)?;
+    let kept = (entries.iter())
+        .skip_while(|(id, _)| *id != checkpoint)
+        .find_map(|(id, _)| {
+            [state.request(*id), state.response(*id)]
+                .into_iter()
+                .flatten()
+                .find_map(|r| r.ended.as_ref()?.usage.as_ref())
+        })?;
+    let kept = kept.input + kept.cache_read + kept.cache_write_short + kept.cache_write_long;
+    (kept > keep_at(window)).then_some(Reroot::Long)
 }

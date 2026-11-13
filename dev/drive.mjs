@@ -2,7 +2,7 @@
 // Throwaway test brains by name, their chats, and their pages driven the
 // way Max drives them. Every command takes `--brain NAME` (default `test`):
 //
-//   node dev/drive.mjs up [MODEL] [--sample WAV] [--login DB]
+//   node dev/drive.mjs up [MODEL] [--sample WAV] [--login DB] [--roles DIR]
 //   node dev/drive.mjs chat ROLE DIR|- WORDS
 //   node dev/drive.mjs say CHAT WORDS
 //   node dev/drive.mjs settle CHAT [--timeout S]
@@ -35,7 +35,9 @@
 // (`--page`), so an edit to the page shows on reload, with no rebuild.
 // `--sample WAV` gives the page a recording to dictate, and `--login DB`
 // the claude.ai login in DB rather than the home brain's (the brain's
-// flags): an empty database is a brain that is signed out.
+// flags): an empty database is a brain that is signed out. `--roles DIR`
+// defines its roles from DIR rather than this clone's roles/, so a demo can
+// change one while it runs.
 //
 // `chat` starts a chat as Max does at a tab, with no browser (the `act`
 // example): in ROLE, working in DIR or in no directory, with WORDS as
@@ -160,7 +162,8 @@ async function up(brain, args) {
     return at < 0 ? [] : [name, path.resolve(args.splice(at, 2)[1] ?? fail(`${name} needs ${what}`))];
   };
   const flags = [...flag("--sample", "a WAV"), ...flag("--login", "a database")];
-  if (args.length > 1) fail("usage: up [MODEL] [--sample WAV] [--login DB]");
+  const roles = flag("--roles", "a directory")[1] ?? path.join(repo, "roles");
+  if (args.length > 1) fail("usage: up [MODEL] [--sample WAV] [--login DB] [--roles DIR]");
   const model = args[0] ?? "scripted";
   execFileSync("cargo", ["build", "-q", "--release", "--bins", "--example", "act"], { cwd: repo, stdio: "inherit" });
   await stop(brain);
@@ -170,7 +173,7 @@ async function up(brain, args) {
   for (const port of candidates(brain)) {
     if (tried.has(port) || !(await free(port))) continue;
     tried.add(port);
-    const launched = await launch(brain, model, port, log, flags);
+    const launched = await launch(brain, model, port, log, roles, flags);
     if (launched === "taken") continue;
     fs.writeFileSync(brain.file("port"), `${port}\n`);
     fs.writeFileSync(brain.file("pid"), `${launched}\n`);
@@ -182,11 +185,11 @@ async function up(brain, args) {
 
 // Start the brain on `port`: its pid once this launch's log says it
 // serves, or "taken" if another process bound the port first.
-async function launch(brain, model, port, log, flags) {
+async function launch(brain, model, port, log, roles, flags) {
   fs.closeSync(fs.openSync(log, "a"));
   const from = fs.statSync(log).size;
   const command = [path.join(repo, "target/release/harness-brain"),
-    "--roles", path.join(repo, "roles"), "--db", brain.file("brain.sqlite"), "--port", String(port), "--model", model,
+    "--roles", roles, "--db", brain.file("brain.sqlite"), "--port", String(port), "--model", model,
     "--page", path.join(repo, "crates/face-web/src/page"), ...flags];
   const env = { ...process.env, [brain.mark]: "1", XDG_STATE_HOME: brain.file("state") };
   const { pid, exited } = service(brain, command, env, log) ?? detached(command, env, log);

@@ -119,9 +119,10 @@ When your work is done, call `compact_and_report` instead, with what you carry a
 your turn, and the report is your last message in the new context, right after what you carried. Max reads it, or, if you \
 were started by another agent, it is your result, and what you read alongside it reaches that agent with it. Put \
 everything the reader needs in the report: they never see what you carried.\n\n\
-With `fresh: true` either tool starts a new context instead, from your role, your mandate, Max's words and what you \
-carry alone. Use it when even your checkpoints have grown long; what you carry must then hold everything else you \
-need. A change to your role's definition takes effect then. A `compact_and_continue` right after another compaction, with no other \
+The harness decides where a compaction starts from: your latest checkpoint, or, when your role, your \
+instructions or your model have changed or what your checkpoints keep has grown long, a new context from your role, \
+your mandate, Max's words and what you carry alone. Your turn's opening line says when your next compaction will, so \
+what you carry then holds everything else you need. A `compact_and_continue` right after another compaction, with no other \
 call since or alongside it, is refused: there is nothing to replace.\n\n\
 Each result of a call you make ends with its label, such as `[call-3fa2c1]`. `attach` gives back the outputs of the \
 calls you name by label, exactly as the harness recorded them, so whoever reads your work sees the real output (the \
@@ -154,13 +155,12 @@ and returns at once: the agent that started you gets their results with yours.",
         "input_schema": members
     });
     let carry = json!({ "type": "string", "description": "What you carry: what you did since the checkpoint, what you found and decided and why, and what is left: everything you need to carry on, and everything your report will need (friction, evidence, decisions), including what earlier compactions carried." });
-    let fresh = json!({ "type": "boolean", "description": "Start a new context instead, from your role, your mandate, Max's words and what you carry alone." });
     let compact_and_continue = json!({
         "name": COMPACT_AND_CONTINUE,
         "description": "Replace your work since your latest checkpoint with what you carry from it, and carry on from that in the same turn, with your next step. The results of other calls in the same response are carried with it: read a file alongside it to keep it as it is now.",
         "input_schema": {
             "type": "object",
-            "properties": { "carry": carry, "fresh": fresh },
+            "properties": { "carry": carry },
             "required": ["carry"]
         }
     });
@@ -171,8 +171,7 @@ and returns at once: the agent that started you gets their results with yours.",
             "type": "object",
             "properties": {
                 "carry": carry,
-                "report": { "type": "string", "description": "Your report: what the reader (Max, or the agent that started you) needs to know. It is your last message; they never see what you carried." },
-                "fresh": fresh
+                "report": { "type": "string", "description": "Your report: what the reader (Max, or the agent that started you) needs to know. It is your last message; they never see what you carried." }
             },
             "required": ["carry", "report"]
         }
@@ -364,7 +363,6 @@ fn tool(name: &str, definition: Value) -> Tool {
 /// What a compaction call asks for.
 pub struct Compact {
     pub summary: String,
-    pub fresh: bool,
     /// `compact_and_report`'s report, which ends the turn.
     pub report: Option<String>,
 }
@@ -413,11 +411,9 @@ pub fn compaction(tool: &str, input: &[u8]) -> Result<Compact, String> {
     } else {
         None
     };
-    Ok(Compact {
-        summary,
-        fresh: value["fresh"].as_bool().unwrap_or(false),
-        report,
-    })
+    // A `fresh` an older root's tools offered is the agent's guess at what
+    // the harness decides ([`crate::policy::reroot`]), so it goes unread.
+    Ok(Compact { summary, report })
 }
 
 /// An `attach` call's output: each call its input names, headed by what it

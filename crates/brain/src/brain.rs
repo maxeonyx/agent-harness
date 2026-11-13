@@ -746,9 +746,9 @@ impl Brain {
     }
 
     /// Compact the task if the round of its compaction call is over: what
-    /// it did since its latest checkpoint, or its whole context when it
-    /// asks for a fresh one or has no checkpoint, is replaced by what it
-    /// carries. False when it asked for none.
+    /// it did since its latest checkpoint, or its whole context when the
+    /// policy re-roots it ([`policy::reroot`]) or it has no checkpoint, is
+    /// replaced by what it carries. False when it asked for none.
     fn compact(&mut self, task: &Task) -> bool {
         let asked = task.pending.iter().find_map(|p| {
             let Input::Result(call) = *p else {
@@ -780,7 +780,11 @@ impl Brain {
         if task.ends() && !(ask.report.is_some() && task.tidying()) {
             return false;
         }
-        let checkpoint = self.state().checkpoint(task).filter(|_| !ask.fresh);
+        let window = (self.state().role(task.role)).map_or(0, |role| {
+            harness_provider::context_window(task.tuning.model(role))
+        });
+        let checkpoint = (self.state().checkpoint(task))
+            .filter(|_| policy::reroot(self.state(), task, window).is_none());
         let (onto, values, why) = match checkpoint {
             Some(at) => (Onto::Checkpoint(at), Vec::new(), render::Why::Checkpoint),
             None => match self.restart(task.id) {
