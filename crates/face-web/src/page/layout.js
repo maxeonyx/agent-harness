@@ -41,9 +41,10 @@ const STEEP = Math.PI / 6;
 const WIDE = Math.PI / 3, STEP = Math.PI / 9, LEAN = .5;
 // A big node's half width, for where lines meet it.
 const BIG_HALF = 13;
-// How much stiffer than a plain line's a lifeline's links, and a long line's
-// between its hidden points, pull: enough to keep them straight.
-const STIFF = 40;
+// How much stiffer than a plain line a lifeline pulls: enough to keep it
+// straight. How stiffly a long line resists bending, against how hard it
+// pulls: enough to round its turns over a few rows.
+const STIFF = 40, BEND = 4;
 // The flattest a line between two rows runs on average, from upright.
 const FLAT = Math.PI / 3;
 
@@ -179,12 +180,14 @@ function kinds(V, edges) {
 // either side of it, the rest either side of those), so siblings fan out
 // either side of the line their maker goes on down. Then across, each line
 // a spring pulling its ends together, each row placed as near its
-// neighbours as the gaps allow (PAVA). A lifeline's links, and a long
-// line's between its hidden points, are much stiffer springs, so a life
-// runs straight and its forks pack around it, and a long line keeps one x;
-// a line's link to a hidden point is a little stiffer; every node is pulled a little
-// to the centre line. Sets each node's x; each edge's hidden points, top
-// down, as `mid`. Returns the rows.
+// neighbours as the gaps allow (PAVA). A line's spring is shared evenly
+// by its links, so a long line pulls its ends as hard as a short one and
+// runs straight between them where nothing is in its way; it is also a
+// beam, so where something is, it bends round it over several rows rather
+// than at a corner. A lifeline is a much stiffer spring, so a life runs
+// straight and its forks pack around it. Every node, but no hidden point,
+// is pulled a little to the centre line. Sets each node's x; each edge's
+// hidden points, top down, as `mid`. Returns the rows.
 function layered(V, edges) {
   const layers = [];
   const put = (v) => (layers[v.rank] ??= []).push(v);
@@ -200,7 +203,7 @@ function layered(V, edges) {
     for (let i = 0; i < chain.length - 1; i++) {
       const a = chain[i], b = chain[i + 1];
       a.up.push(b); b.down.push(a);
-      const k = e.kind === "life" || (a.dummy && b.dummy) ? STIFF : a.dummy || b.dummy ? 2 : 1;
+      const k = (e.kind === "life" ? STIFF : 1) * (chain.length - 1);
       a.k.set(b, k); b.k.set(a, k);
     }
     if (e.foot) v.own.set(chain[1], e.foot);
@@ -253,27 +256,20 @@ function layered(V, edges) {
         else {
           let sx = 0, sw = 0;
           for (const u of nb) { const k = v.k.get(u); sx += k * u.x; sw += k; }
+          // A hidden point also bends as a beam, as little as it can: its
+          // own turn, and the turns of the hidden points either side.
+          if (both && v.dummy) {
+            const a = v.up[0], b = v.down[0], B = BEND * v.k.get(a);
+            sx += 2 * B * (a.x + b.x); sw += 4 * B;
+            if (a.dummy) { sx += B * (2 * a.x - a.up[0].x); sw += B; }
+            if (b.dummy) { sx += B * (2 * b.x - b.down[0].x); sw += B; }
+          }
           t[i] = sx / sw; w[i] = sw;
         }
-        t[i] = (t[i] * w[i]) / (w[i] + CENTRE); w[i] += CENTRE;
+        if (!v.dummy) { t[i] = (t[i] * w[i]) / (w[i] + CENTRE); w[i] += CENTRE; }
       }
       pava(L, t, w, gaps[r]);
     }
-  }
-  // A long edge's hidden points go to the one x nearest their mean that
-  // keeps every row's gaps; one crossed by another keeps its bends.
-  for (const e of edges) {
-    if (e.mid.length < 2) continue;
-    let lo = -Infinity, hi = Infinity, sum = 0;
-    for (const u of e.mid) {
-      const L = layers[u.rank], i = u.pos;
-      if (i > 0) lo = Math.max(lo, L[i - 1].x + sep(L[i - 1], u));
-      if (i < L.length - 1) hi = Math.min(hi, L[i + 1].x - sep(u, L[i + 1]));
-      sum += u.x;
-    }
-    if (lo > hi) continue;
-    const x = Math.min(hi, Math.max(lo, sum / e.mid.length));
-    for (const u of e.mid) u.x = x;
   }
   return layers;
 }
@@ -340,13 +336,10 @@ function taper(s, L, w) {
   return TIP * t * (2 - t) + (w - TIP) * smooth(Math.min(1, s / Math.min(L, TAPER)));
 }
 // An edge's points, and its widths if it tapers or is a tool's. A line runs
-// from its upper end through its hidden points to its lower end, each long
-// line keeping its own x down the rows between, so lines side by side stay
-// apart. Its x is a smooth function of its y through those points that
-// never swings past them (monotone cubic, Fritsch-Butland): where a line
-// turns to run straight down it meets the straight part upright, so a
-// bundle fans out and stays out. It leaves and arrives at its ports'
-// slopes.
+// from its upper end through its hidden points to its lower end, which
+// keep lines side by side apart. Its x is a smooth function of its y
+// through those points that never swings past them (monotone cubic,
+// Fritsch-Butland). It leaves and arrives at its ports' slopes.
 function route(e) {
   const { v, d } = e;
   const P0 = e.a ? e.a.p : edge(d, [0, 1], TUCK);
