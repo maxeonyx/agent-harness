@@ -34,9 +34,9 @@ fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> St
     };
     let mut unseen: Vec<_> = state
         .calls()
-        .filter_map(|(_, c)| match &c.call.caller {
-            Caller::Agent { task: t, tool_use } if *t == task.id && c.made.seq.n > seen => {
-                Some((c.made.seq, tool_use.0.as_str()))
+        .filter_map(|(id, c)| match &c.call.caller {
+            Caller::Agent { task: t, .. } if *t == task.id && c.made.seq.n > seen => {
+                Some((c.made.seq, format!("`{}` (`{}`)", c.call.tool, id.label())))
             }
             _ => None,
         })
@@ -45,9 +45,9 @@ fn when(state: &State, task: &Task, delivered: &Delivered, mid_turn: bool) -> St
     match unseen.as_slice() {
         [] if mid_turn => " while you were working".to_string(),
         [] => String::new(),
-        [(_, one)] => format!(" while you were working, before your tool call `{one}`"),
+        [(_, one)] => format!(" while you were working, before your tool call {one}"),
         [(_, first), ..] => format!(
-            " while you were working, before your last {} tool calls (from `{first}` on)",
+            " while you were working, before your last {} tool calls (from {first} on)",
             unseen.len()
         ),
     }
@@ -905,6 +905,34 @@ fn result(state: &State, values: Values, task: &Task, call: CallId) -> String {
     .to_string()
 }
 
+/// Who has written to `task` since its last request, Max and the agents
+/// whose messages wait for it: "Max wrote", "`kid` and Max wrote". `None`
+/// if no one has.
+pub(crate) fn writers(state: &State, task: &Task) -> Option<String> {
+    let mut who: Vec<String> = Vec::new();
+    for p in &task.pending {
+        let Input::Delivery(d) = p else { continue };
+        let Some(delivered) = state.delivery(*d) else {
+            continue;
+        };
+        let name = match (delivered.by, state.teller(delivered)) {
+            (Author::Max, _) => "Max".to_owned(),
+            (_, Some((from, _))) => {
+                (state.task(from)).map_or("An agent".to_owned(), |t| format!("`{}`", t.name))
+            }
+            _ => continue,
+        };
+        if !who.contains(&name) {
+            who.push(name);
+        }
+    }
+    match who.as_slice() {
+        [] => None,
+        [one] => Some(format!("{one} wrote")),
+        [rest @ .., last] => Some(format!("{} and {last} wrote", rest.join(", "))),
+    }
+}
+
 /// The answer to a tool use whose call words moved to the background: it
 /// runs on, and its result comes later as a message.
 fn backgrounded(state: &State, call: CallId) -> String {
@@ -923,7 +951,14 @@ fn backgrounded(state: &State, call: CallId) -> String {
             "{} waits to hear from you, so this would never end by itself",
             listening.join(", ")
         ),
-        false => "You were written to while this ran".to_owned(),
+        false => {
+            let who = (state.call_owner(call).and_then(|t| state.task(t)))
+                .and_then(|t| writers(state, t));
+            format!(
+                "{} while this ran",
+                who.as_deref().unwrap_or("You were written to")
+            )
+        }
     };
     let said = format!(
         "[harness] {why}. It keeps running in the background as `{}`. \

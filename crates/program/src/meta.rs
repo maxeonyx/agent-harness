@@ -23,17 +23,16 @@
 use harness_core::call::{Call, Caller, Until, Wait};
 use harness_core::context::Rendered;
 use harness_core::delivery::Content;
-use harness_core::fact::Author;
 use harness_core::id::{CallId, Digest, LimbId, TaskId, ValueId};
 use harness_core::limb::{Audience, Instruction, Tool, ToolSet};
 use harness_core::resource::{Observation, ResourceKey, Version};
 use harness_core::role::Role;
 use harness_core::state::State;
-use harness_core::task::{Context, Input, Task};
+use harness_core::task::{Context, Task};
 use harness_core::value::Bytes;
 use serde_json::{Value, json};
 
-use crate::render::{Values, blocks, carried, text};
+use crate::render::{Values, blocks, carried, text, writers};
 
 pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
@@ -668,7 +667,8 @@ needs, {then}",
                 listening.join(", ")
             ),
             (false, Some(owner)) => {
-                format!("[harness] {} to you: answer, {then}", writers(state, owner))
+                let who = writers(state, owner).unwrap_or_else(|| "Words came".to_owned());
+                format!("[harness] {who} to you: answer, {then}")
             }
             (false, None) => format!("[harness] This wait ended: {then}"),
         }));
@@ -689,33 +689,6 @@ needs, {then}",
         ));
     }
     Some((blocks(&said), holds || !stopping))
-}
-
-/// Who has written to `task` since its last request: Max, and the agents
-/// whose messages wait for it.
-fn writers(state: &State, task: &Task) -> String {
-    let mut who: Vec<String> = Vec::new();
-    for p in &task.pending {
-        let Input::Delivery(d) = p else { continue };
-        let Some(delivered) = state.delivery(*d) else {
-            continue;
-        };
-        let name = match (delivered.by, state.teller(delivered)) {
-            (Author::Max, _) => "Max".to_owned(),
-            (_, Some((from, _))) => {
-                (state.task(from)).map_or("An agent".to_owned(), |t| format!("`{}`", t.name))
-            }
-            _ => continue,
-        };
-        if !who.contains(&name) {
-            who.push(name);
-        }
-    }
-    match who.as_slice() {
-        [] => "Words came".to_owned(),
-        [one] => format!("{one} wrote"),
-        [rest @ .., last] => format!("{} and {last} wrote", rest.join(", ")),
-    }
 }
 
 /// A spawn or add_sibling call's input.
