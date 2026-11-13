@@ -8,8 +8,9 @@
 // Reports the page's errors to the brain's log (`GET /report`: which tab,
 // what it was doing, the error). A classic script, and the first, so it also
 // sees a page script that fails to load or throws while loading, which a
-// module could not report. It hears whatever is uncaught, and whatever a page
-// script hands to `fail` (base.js), which `reportError`s. The console still
+// module could not report. It hears whatever is uncaught, whatever a page
+// script hands to `fail` (base.js), which `reportError`s, and what the page
+// tells Max went wrong (`report`). The console still
 // has each one; the brain's log has it too, so nobody has to open the console.
 (() => {
   const sent = new Set();
@@ -25,14 +26,17 @@
     let tab = "unknown";
     try { tab = sessionStorage.getItem("replica") ?? tab; } catch { /* no storage: the tab has no id to give */ }
     const query = new URLSearchParams({ tab, doing: clip(doing, 600), error: clip(error, 1000) });
-    fetch(`/report?${query}`, { cache: "no-store" })
+    // The brain may be relaunching or the connection down: try for a minute.
+    const send = (tries) => fetch(`/report?${query}`, { cache: "no-store" })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
-      .catch((e) => console.warn(`could not report to the brain: ${e}`));
+      .catch((e) => tries > 1 ? setTimeout(() => send(tries - 1), 5000) : console.warn(`could not report to the brain: ${e}`));
+    send(12);
   };
   addEventListener("error", (e) => {
     if (e.target !== window) return ship(`loading ${e.target.src ?? e.target.href}`, "it did not load");
     ship(e.error?.doing ?? `running ${e.filename.replace(origin, "")}:${e.lineno}:${e.colno}`, text(e.error ?? e.message));
   }, true);
+  addEventListener("report", (e) => ship(e.detail.doing, e.detail.error));
   addEventListener("unhandledrejection", (e) => {
     const where = frames(e.reason);
     ship(e.reason?.doing ?? `running ${where.length > 0 ? where : "a promise nobody awaited"}`, text(e.reason));

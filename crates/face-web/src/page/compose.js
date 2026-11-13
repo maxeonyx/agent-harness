@@ -1,4 +1,4 @@
-import { $, el, fail, icon, ICONS, kTokens, panel, parse } from "./base.js";
+import { $, el, fail, icon, ICONS, kTokens, panel, parse, report } from "./base.js";
 import { act, can, digest, tab } from "./tab.js";
 import { byId, isDone, shortName, view } from "./map.js";
 import { NEW, resume } from "./card.js";
@@ -518,10 +518,12 @@ function press() {
   if (lockedUntil <= Date.now()) submit();
 }
 // Only what went wrong is said; what went right shows as itself. What went
-// wrong clears itself on his next edit, or after a while.
+// wrong clears itself on his next edit, or after a while, and reaches the
+// brain's log, so what he saw can be read there whole.
 let unsay = 0;
 export const say = (text, bad) => {
   clearTimeout(unsay);
+  if (bad) report("showing Max", text);
   const s = $(".status", compose);
   if (!s) return;
   s.textContent = bad ? text : ""; s.title = text; s.className = `status${bad ? " bad" : ""}`;
@@ -712,8 +714,7 @@ export async function dictate(sample) {
     }
   } catch (e) {
     finishDictation(l);
-    fail("opening the microphone", e);
-    return say(`No microphone: ${e.message}`, true);
+    return say(`No microphone: ${e}`, true);
   }
   if (l.stopping) return finishDictation(l);
   const ws = l.ws = new WebSocket(`wss://${location.host}/dictation?rate=${rate}${sample ? "&sample" : ""}`);
@@ -725,7 +726,7 @@ export async function dictate(sample) {
     const d = JSON.parse(m.data);
     if (d.listening) say(sample ? "Dictating the sample" : "Listening");
     if (d.edits && dictation === l) applyEdits(d.edits);
-    if (d.error) { fail("dictating", d.error); say(d.error, true); }
+    if (d.error) say(`Dictation: ${d.error}`, true);
     if (d.final) finishDictation(l);
   };
   ws.onclose = () => finishDictation(l);
