@@ -14,20 +14,20 @@ use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
 use crate::build::{BuildId, Launch, Launched};
+use crate::design::FeedbackEvent;
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::fact::{Author, Fact, Refusal, Rejected, Stated};
 use crate::id::{
-    CallId, DeliveryId, EventId, FeedbackId, LimbId, ModelCallId, ReplicaId, RoleId, Seq, TaskId, Time,
-    Timestamp, ValueId,
+    CallId, DeliveryId, EventId, FeedbackId, LimbId, ModelCallId, ReplicaId, RoleId, Seq, TaskId,
+    Time, Timestamp, ValueId,
 };
 use crate::legacy::{self, LimbKind, Now};
 use crate::limb::{
     Audience, Defined, Description, Host, Limb, LimbKey, LimbRow, Prepared, Reach, Workdir,
 };
 use crate::model_call::{Ending, ModelCall, ModelCallEvent, Quota, Stop, Usage};
-use crate::resource::{Change, Observation, ResourceKey, Version};
-use crate::design::FeedbackEvent;
 use crate::page::Page;
+use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::role::Role;
 use crate::schema::Harness;
 use crate::task::{
@@ -1026,8 +1026,7 @@ impl State {
                     stage: None,
                     versions: Vec::new(),
                 });
-                page.apply(event, record.at)
-                    .ok_or(Rejected::NotForTask)?;
+                page.apply(event, record.at).ok_or(Rejected::NotForTask)?;
                 self.pages.insert(*task, page);
             }
             Fact::Feedback(id, event) => {
@@ -1041,7 +1040,8 @@ impl State {
                     }
                     _ => self.feedback.get(id).cloned().ok_or(Rejected::Unknown)?,
                 };
-                self.feedback.insert(*id, [events, vec![event.clone()]].concat());
+                self.feedback
+                    .insert(*id, [events, vec![event.clone()]].concat());
             }
             Fact::Focus(focus) => {
                 let Author::Max = record.by else {

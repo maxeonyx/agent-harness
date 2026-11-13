@@ -12,8 +12,8 @@ use crate::delivery::{Content, Delivery, Prompt};
 use crate::fact::{Author, Fact, Rejected, Stated};
 use crate::id::{CallId, DeliveryId, LimbId, ModelCallId, RoleId, TaskId, Timestamp, ValueId};
 use crate::limb::Workdir;
-use crate::page::Description;
 use crate::model_call::{Ending, ModelCallEvent, Stop};
+use crate::page::Description;
 use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::role::{Binding, Tuning};
 use crate::state::{Mark, State};
@@ -552,11 +552,7 @@ pub const PRESENT: &str = "present";
 
 /// Whether the round of the response `entry` presented the page: one of its
 /// calls is a `present` that completed, the one settling `now` included.
-fn presented(
-    world: &State,
-    entry: EntryId,
-    now: (CallId, Option<&CallOutcome>),
-) -> bool {
+fn presented(world: &State, entry: EntryId, now: (CallId, Option<&CallOutcome>)) -> bool {
     let Some(request) = world.response(entry) else {
         return false;
     };
