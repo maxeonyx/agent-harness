@@ -12,11 +12,14 @@ use crate::id::{DeliveryId, TaskId, ValueId};
 /// delivery wakes a task that waits. Nothing is pushed into a context while
 /// a request or a tool round is in flight: the provider forbids it (every
 /// tool use needs its result first), and a model's thought would come to
-/// depend on text that arrived after it began. So Max's words typed while a
-/// designer streams its last response are read before its result goes
-/// anywhere, and words typed during a long tool round arrive straight after
-/// the results. A round still running a few seconds after his words arrive
-/// moves to the background, so he is heard while its work goes on
+/// depend on text that arrived after it began. So words typed during a long
+/// tool round arrive straight after the results. Max's words typed while an
+/// autonomous task streams its last response come too late: it is done, and
+/// they go up to its owner with its result, unread
+/// ([`crate::state::State::unread_words`]). A chat that faces Max reads them
+/// before its turn's end gives him the move. A round still running a few
+/// seconds after both it began and his words arrived moves to the
+/// background, so he is heard while its work goes on
 /// ([`crate::call::CallEvent::Backgrounded`]); to be heard at once he
 /// interrupts.
 ///

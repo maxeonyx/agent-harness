@@ -1231,7 +1231,8 @@ impl Task {
     /// This is the whole agent loop. Three properties hold by construction:
     /// no request is sent while a drain is pending or a tool use of the last
     /// response is unanswered; a task is done only when nothing it started
-    /// is outstanding and nothing waking is unread; and Max's words are never
+    /// is outstanding and nothing waking is unread, but for Max's words to an
+    /// autonomous task, which go up with its result; and Max's words are never
     /// lost, to a turn that ends first or to a compaction.
     pub(crate) fn apply(&mut self, record: &Stated, world: &State) -> Result<(), Rejected> {
         let at = record.at;
@@ -1809,7 +1810,7 @@ impl Task {
             live.parking = None;
             return self.enter(Phase::Parked, at);
         }
-        if self.wakes() || self.news(world) {
+        if self.carries_on(world) || self.news(world) {
             // Max's words, a prompt, or news arrived during the turn.
             return self.enter(Phase::Ready, at);
         }
@@ -1817,6 +1818,19 @@ impl Task {
             return self.finish(Outcome::Result { entry }, at);
         }
         self.wait(at, world);
+    }
+
+    /// Whether what arrived during the turn that ended asks for another.
+    /// Max's words do not, to an autonomous task: Max can give it feedback
+    /// while it works, not once it is done. They stay unread, and go up to
+    /// its owner with its result ([`State::unread_words`]).
+    fn carries_on(&self, world: &State) -> bool {
+        let late = match self.mode {
+            Mode::Autonomous => world.unread_words(self),
+            _ => Vec::new(),
+        };
+        (self.pending.iter())
+            .any(|p| p.wakes() && !late.iter().any(|(d, _)| *p == Input::Delivery(*d)))
     }
 
     /// Whether the end of a turn completes it, once nothing it started

@@ -1416,7 +1416,7 @@ waited on nothing: answer him, then {}",
             .state()
             .members(Scope::Spawn(id))
             .map(|t| {
-                let said = match t.outcome() {
+                let mut said = match t.outcome() {
                     Some(TaskOutcome::Result { entry }) => {
                         let mut said = vec![render::text(&self.visible(*entry))];
                         for call in self.attached(*entry) {
@@ -1442,6 +1442,10 @@ waited on nothing: answer him, then {}",
                     }
                     None => unreachable!("a scope settles when every member is done"),
                 };
+                let late: Vec<_> = (self.state().unread_words(t).into_iter())
+                    .map(|(_, words)| words)
+                    .collect();
+                said.extend(render::late_words(&|v| self.value(v), &t.name, &late));
                 (t.name.clone(), said)
             })
             .collect();
