@@ -173,8 +173,8 @@ export const MARK = 16;
 // distance (as Mapbox's tiny-sdf does). Each layer uploads it when it grows.
 const CELL = 128, COLS = 8, glyphs = new Map();
 let atlas = new Float32Array(0), atlasRows = 0, atlasVersion = 0;
-function addCell(draw) {
-  const n = glyphs.size, row = Math.floor(n / COLS);
+function addCell(draw, n = glyphs.size) {
+  const row = Math.floor(n / COLS);
   if (row >= atlasRows) {
     const grown = new Float32Array(COLS * CELL * CELL * (row + 1)).fill(1e3);
     grown.set(atlas); atlas = grown; atlasRows = row + 1;
@@ -224,13 +224,19 @@ function glyph(ch) {
     if (ic.fill) g.fill(path);
     else { g.lineWidth = 2; g.lineCap = g.lineJoin = "round"; g.stroke(path); }
   }));
-  if (!glyphs.has("letter " + ch)) glyphs.set("letter " + ch, addCell((g) => {
-    g.font = `600 80px ${getComputedStyle(document.body).getPropertyValue("--serif")}`;
-    g.textAlign = "center"; g.textBaseline = "middle";
-    g.fillText(ch, CELL / 2, CELL / 2);
-  }));
+  if (!glyphs.has("letter " + ch)) glyphs.set("letter " + ch, addCell(letter(ch)));
   return glyphs.get("letter " + ch);
 }
+const letter = (ch) => (g) => {
+  g.font = `600 80px ${getComputedStyle(document.body).getPropertyValue("--serif")}`;
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText(ch, CELL / 2, CELL / 2);
+};
+// A face that arrives after the letters were drawn draws them again, in their cells.
+document.fonts.addEventListener("loadingdone", () => {
+  for (const [k, n] of glyphs) if (k.startsWith("letter ")) addCell(letter(k.slice(7)), n);
+  wake();
+});
 
 // ─── The shaders ───────────────────────────────────────────────────────────
 const BLOB_VS = `#version 300 es

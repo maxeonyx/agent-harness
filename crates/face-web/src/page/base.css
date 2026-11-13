@@ -1,4 +1,11 @@
   /* The ground everything stands on: colours, type, the page itself. */
+  /* The language's faces, beside this file with their licences: Literata to
+     read, Inter for small text, IBM Plex Mono for literal text. Upright only:
+     the language has no italic. */
+  @font-face { font-family: Literata; src: url(/page/{build}/font-literata.woff2) format("woff2"); font-weight: 400 700; font-display: swap; }
+  @font-face { font-family: Inter; src: url(/page/{build}/font-inter.woff2) format("woff2"); font-weight: 400 700; font-display: swap; }
+  @font-face { font-family: "IBM Plex Mono"; src: url(/page/{build}/font-plex-mono.woff2) format("woff2"); font-weight: 400; font-display: swap; }
+  @font-face { font-family: "IBM Plex Mono"; src: url(/page/{build}/font-plex-mono-semibold.woff2) format("woff2"); font-weight: 600; font-display: swap; }
   :root {
     --ground: #f0eee6; --paper: #faf9f5; --white: #fffefb; --line: #e3dfd3; --ink: #141413;
     --muted: #6b6a64; --faint: #a19f96; --maroon: #7a1f22; --hover: #e9e5d9;
@@ -6,9 +13,9 @@
     /* What a task's state is, by its colour: Max's turn, an agent at work,
        waiting on other agents, done, paused or abandoned, failed or stuck. */
     --yours: #d4691c; --working: #3a6db0; --others: #8b5aa6; --done: var(--green); --paused: var(--faint); --failed: var(--red);
-    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
-    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: Literata, "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
     --ease: cubic-bezier(.2, .8, .2, 1);
   }
   /* A task's state sets its colour here once, as --s, and --on for what is
@@ -21,6 +28,9 @@
   :is(.failed, .stuck) { --s: var(--failed); --on: var(--paper); }
   :is(.paused, .cancelled) { --s: var(--paused); --on: var(--muted); }
   * { box-sizing: border-box; }
+  /* Nothing is italic, not even emphasis or highlighted code: the faces
+     have no italic, and the browser would fake one. */
+  *, .hljs-emphasis { font-style: normal; }
   /* Scrollbars thin and in the page's colours, wherever they appear. */
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }

@@ -153,9 +153,9 @@
   .chunk:hover .meta, .row.expanded > .meta { opacity: 1; }
   .thought { font-size: 13px; color: var(--muted); margin: 0 0 .7em; }
   /* A thought is one faint line, cut short; opened, all of it. */
-  .thought > summary { display: block; cursor: pointer; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thought > summary { display: block; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .thought[open] > summary { white-space: pre-wrap; }
-  .thought > summary::before { content: "◌ "; font-style: normal; }
+  .thought > summary::before { content: "◌ "; }
   /* A folded block: a round of tool calls, or the root. One line until
      opened, then a row to each call, each opened to all of it. Nothing in
      it scrolls: it grows. */
