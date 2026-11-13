@@ -1,4 +1,5 @@
 import { $, clock, diagram, el, panel, scrollEl } from "./base.js";
+import { answer, answered } from "./compose.js";
 import { load, paintInto, wear } from "./theme.js";
 
 // ─── A chat's page: what its agent presented to Max, drawn by the theme ───
@@ -80,8 +81,8 @@ function page(p, t) {
     return out;
   }
   out.push(end(p.end), claim("now", p.now));
-  if (p.asks.length) out.push(part("asks", p.asks.map(ask)));
-  if (p.plan.length) out.push(part("plan", [plan(p.plan)]));
+  if (p.asks.length) out.push(part("asks", p.asks.map((a) => ask(a, t.id))));
+  if (p.plan.length) out.push(part("plan", [plan(p.plan, t.id)]));
   if (p.why) out.push(part("why", blocks(p.why.blocks)));
   return out;
 }
@@ -105,7 +106,7 @@ function end(e) {
 }
 
 const MARK = { done: "✓", failed: "✕", yours: "●", working: "◐", planned: "○" };
-function plan(steps) {
+function plan(steps, key) {
   const ol = el("ol", "steps");
   for (const s of steps) {
     const li = el("li", `step ${s.state}`);
@@ -114,16 +115,17 @@ function plan(steps) {
     li.append(head);
     if (s.failed) li.append(el("p", "failed", s.failed));
     if (s.body) li.append(...blocks(s.body.blocks));
-    li.append(...s.asks.map(ask));
+    li.append(...s.asks.map((a) => ask(a, key)));
     ol.append(li);
   }
   return ol;
 }
 
 // An ask: the question, what answering it needs, and what happens without
-// an answer. Its presses are held in the reply until Max sends it, beside
-// what he types or dictates; pressing again takes one back.
-function ask(a) {
+// an answer. A press is held with what he types or dictates until he sends
+// it, which carries both; pressing again takes it back. "Wrong question"
+// is always last.
+function ask(a, key) {
   const box = el("div", "ask");
   box.append(el("p", "question", a.question));
   // Settled, it stays where it was, quiet, saying how it settled.
@@ -137,34 +139,33 @@ function ask(a) {
   if (a.shows) box.append(...blocks(a.shows.blocks));
   const want = a.want;
   const choices = el("div", "choices");
-  if (want === "Go") choices.append(press(a, "Go"));
-  else if (want.Choose) for (const o of want.Choose.options) choices.append(press(a, o.label, o.key === want.Choose.recommended, o.means));
+  const press = (label, verdict, recommended, means) => pill(key, a, label, verdict, recommended, means);
+  if (want === "Go") choices.append(press("Go", "Yes"));
+  else if (want.Choose) for (const o of want.Choose.options) choices.append(press(o.label, { Chose: o.key }, o.key === want.Choose.recommended, o.means));
   else if (want.Do) {
     if (want.Do.link) { const l = el("a", "do", want.Do.link.label); l.href = want.Do.link.url; l.target = "_blank"; l.rel = "noopener"; choices.append(l); }
     if (want.Do.paste) box.append(code(null, want.Do.paste));
-    choices.append(press(a, "Done"));
+    choices.append(press("Done", "Yes"));
   }
-  if (choices.childElementCount) box.append(choices);
+  choices.append(press("Wrong question", "Reject"));
+  box.append(choices);
   if (a.otherwise) box.append(el("p", "otherwise", `Otherwise: ${a.otherwise}`));
   return box;
 }
-function press(a, label, recommended, means) {
+// One answer's pill: armed while its press is held. One press per ask, so
+// arming one disarms the others.
+function pill(key, a, label, verdict, recommended, means) {
   const b = el("button", `btn press${recommended ? " recommended" : ""}`, label);
   b.type = "button";
   if (means) b.title = means;
-  const words = `${a.question} ${label}.`;
+  const mine = JSON.stringify(verdict);
+  b.dataset.verdict = mine;
+  b.classList.toggle("armed", JSON.stringify(answered(key, a.call)) === mine);
   b.onclick = () => {
-    const box = $(".compose textarea", panel);
-    if (!box) return;
-    const lines = box.value ? box.value.split("\n") : [];
-    const at = lines.indexOf(words);
-    if (at >= 0) lines.splice(at, 1); else lines.push(words);
-    box.value = lines.join("\n");
-    b.classList.toggle("armed", at < 0);
-    box.dispatchEvent(new Event("input", { bubbles: true }));
+    answer(key, a.call, verdict);
+    const now = JSON.stringify(answered(key, a.call));
+    for (const o of b.parentElement.querySelectorAll(".press")) o.classList.toggle("armed", o.dataset.verdict === now);
   };
-  const box = $(".compose textarea", panel);
-  b.classList.toggle("armed", !!box?.value.split("\n").includes(words));
   return b;
 }
 

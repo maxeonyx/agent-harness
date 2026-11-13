@@ -300,16 +300,21 @@ pub fn turn(
                 };
                 let Delivery { content, .. } = &delivered.delivery;
                 let mut said = Vec::new();
+                let body = delivery(values, task, content, delivered.at.at);
                 // Max's words are labelled, so a brief can quote them, and
-                // say where in the agent's work he wrote them.
-                if let Content::Words(words) = content {
+                // say where in the agent's work he wrote them. Words he
+                // sent empty, with only the answers he pressed, which reach
+                // the agent as its asks settling, say nothing.
+                if let Content::Words(words) = content
+                    && !body.is_empty()
+                {
                     said.push(text(&format!(
                         "[harness] Max wrote this{} (`{}` quotes it in a brief):",
                         when(state, task, delivered, mid_turn),
                         label(*words)
                     )));
                 }
-                said.extend(delivery(values, task, content, delivered.at.at));
+                said.extend(body);
                 texts.push(Rendered::Delivery(id), said);
             }
         }

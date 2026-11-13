@@ -7,6 +7,7 @@ use imbl::{OrdMap, OrdSet};
 
 mod legs;
 
+use crate::ask::{ASK, Press, Verdict};
 use crate::attention::{Queued, Ranking};
 use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome, Owner, Wait};
 use crate::context::{Entry, EntryId, Legs, Note, Rendered, Span};
@@ -198,6 +199,9 @@ struct Open {
     unblocked: OrdSet<TaskId>,
     /// The last model call to report the quota.
     quota: Option<ModelCallId>,
+    /// Open asks Max answered by pressing, with the words that carried each
+    /// press: [`Todo::Pressed`] until the ask settles.
+    pressed: OrdMap<CallId, (DeliveryId, Verdict)>,
 }
 
 /// What a path Max moved a task off changed in the world
@@ -558,6 +562,9 @@ pub enum Todo {
     /// The task parked, or was asked to, and Max has resumed it: deliver
     /// [`Prompt::Resume`].
     Resume(TaskId),
+    /// Max pressed an answer to this open ask and sent it: settle it as
+    /// [`crate::ask::Settled::Answered`] ([`State::pressed`]).
+    Pressed(CallId),
     /// A call the brain runs, which ends on something else, is due to
     /// settle: a spawn every member of whose scope is done, with their
     /// outcomes; or a wait ([`CallEvent::Waits`]) whose calls have settled
@@ -790,7 +797,7 @@ impl State {
                 });
                 draft.discarded = false;
             }
-            DraftEvent::Send { text } => {
+            DraftEvent::Send { text, presses } => {
                 let mut draft = self.drafts.get(&id).ok_or(Rejected::Unknown)?.clone();
                 match &draft.sent {
                     Some(sent) if sent.text == *text => {}
@@ -833,6 +840,7 @@ impl State {
                                     text: *text,
                                     at: Mark::of(record),
                                 });
+                                self.press(id, draft.session, presses);
                             }
                             Err(why) => draft.held = Some(why),
                         }
@@ -2199,6 +2207,25 @@ impl State {
         Ok(())
     }
 
+    /// Keep each of Max's `presses`, sent in `delivery` to `to`, that
+    /// answers an open ask on `to`'s page: one asked by `to` or a fork of
+    /// it. A press on an ask that has settled, or another page's, answers
+    /// nothing: his words still go.
+    fn press(&mut self, delivery: DeliveryId, to: TaskId, presses: &[Press]) {
+        for press in presses {
+            let asker = match self.calls.get(&press.ask) {
+                Some(r) if r.settled.is_none() && r.call.tool == ASK => match r.call.caller {
+                    Caller::Background { task, .. } => task,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            if self.page_of(asker) == to {
+                (self.open.pressed).insert(press.ask, (delivery, press.verdict.clone()));
+            }
+        }
+    }
+
     fn settle(
         &mut self,
         id: CallId,
@@ -2206,6 +2233,7 @@ impl State {
         record: &Stated,
     ) -> Result<(), Rejected> {
         let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
+        self.open.pressed.remove(&id);
         let late = match &made.settled {
             None => false,
             Some(first) if first.outcome == CallOutcome::Unknown && made.late.is_none() => true,
@@ -2800,6 +2828,25 @@ impl State {
     }
 
     /// A task's page, once it has one.
+    /// The task whose page `task` works on: its nearest ancestor that is
+    /// not a fork, since a fork is its source doing a step.
+    pub fn page_of(&self, task: TaskId) -> TaskId {
+        let mut at = task;
+        while let Some(Origin::Fork { from }) = self.tasks.get(&at).map(|t| &t.origin) {
+            if !self.tasks.contains_key(from) {
+                break;
+            }
+            at = *from;
+        }
+        at
+    }
+
+    /// The answer Max pressed for an open ask, and the words that carried
+    /// it, until the ask settles.
+    pub fn pressed(&self, call: CallId) -> Option<&(DeliveryId, Verdict)> {
+        self.open.pressed.get(&call)
+    }
+
     pub fn page(&self, task: TaskId) -> Option<&Page> {
         self.pages.get(&task)
     }
@@ -3379,6 +3426,9 @@ impl State {
         if self.signed_out.is_some() {
             todo.push(Todo::SignIn);
         }
+        // Before the asker's next request, so it wakes once, to his words
+        // and his answers together.
+        todo.extend(self.open.pressed.keys().map(|call| Todo::Pressed(*call)));
         let mut readers: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
         let mut needed: BTreeSet<LimbId> = BTreeSet::new();
         let mut starting = Vec::new();

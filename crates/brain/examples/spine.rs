@@ -103,6 +103,7 @@ in as few words as you can. Now reply only `ready`, and end your turn.",
                 draft,
                 DraftEvent::Send {
                     text: finished.id(),
+                    presses: Vec::new(),
                 },
             ),
         ],

@@ -384,6 +384,16 @@ impl Brain {
             Todo::Abandon(task) => self.stop_member(task),
             Todo::Tidy(task) => self.prompt(task, Prompt::Tidy),
             Todo::Expire(task) => self.fact(Fact::Task(task, TaskEvent::Expired)),
+            Todo::Pressed(call) => {
+                let state = self.state();
+                match page::pressed(state, &|v| self.value(v), call) {
+                    Ok(done) => self.append(Batch {
+                        values: done.values,
+                        facts: done.facts,
+                    }),
+                    Err(why) => errln!("harness-brain: Max's press on {call}: {why}"),
+                }
+            }
             Todo::Settle(call) => {
                 match self.state().call(call).is_some_and(|c| c.waits.is_some()) {
                     true => self.settle_wait(call),
