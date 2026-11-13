@@ -215,21 +215,27 @@ function layered(V, edges) {
   }
   for (let r = 0; r < layers.length; r++) layers[r] ??= [];
   for (const L of layers) { L.sort((a, b) => a.key - b.key); L.forEach((v, i) => (v.pos = i)); }
+  odd(V);
   // Where u's line to w sits among u's lines that way, from -1/2 to 1/2 of
-  // a place: in its port order, each level's lines half either side of the
-  // more central ones, in their order so far.
-  const nest = (u, them, l) => {
+  // a place: in its port order, each level's lines either side of the more
+  // central ones, in their order so far. Down, the lines a dot starts, half
+  // each side, an odd one out on its side; up, the lines that come back to
+  // it, each on the side it comes from.
+  const nest = (u, way, them, l) => {
     const out = them.filter((x) => (u.own.get(x) ?? 0) === l).sort((a, b) => a.pos - b.pos), inner = them.filter((x) => (u.own.get(x) ?? 0) > l);
-    return inner.length ? [...out.slice(0, out.length >> 1), ...nest(u, inner, l + 1), ...out.slice(out.length >> 1)] : out;
+    if (!inner.length) return out;
+    const mid = inner.reduce((s, x) => s + x.pos, 0) / inner.length;
+    const half = way === "up" ? out.filter((x) => x.pos < mid).length : (out.length + (u.odd.get(l) === -1 ? 1 : 0)) >> 1;
+    return [...out.slice(0, half), ...nest(u, way, inner, l + 1), ...out.slice(half)];
   };
-  const slot = (u, w, them) => (them.length < 2 ? 0 : (nest(u, them, 0).indexOf(w) - (them.length - 1) / 2) / them.length);
+  const slot = (u, w, way) => (u[way].length < 2 ? 0 : (nest(u, way, u[way], 0).indexOf(w) - (u[way].length - 1) / 2) / u[way].length);
   let best, fewest = Infinity;
   for (let it = 0; it < 9; it++) {
     const down = it % 2 === 0;
     for (const L of down ? layers.slice(1) : layers.slice(0, -1).reverse()) {
       for (const v of L) {
         const nb = down ? v.up : v.down;
-        v.bary = nb.length ? nb.reduce((s, u) => s + u.pos + slot(u, v, down ? u.down : u.up), 0) / nb.length : v.pos;
+        v.bary = nb.length ? nb.reduce((s, u) => s + u.pos + slot(u, v, down ? "down" : "up"), 0) / nb.length : v.pos;
       }
       L.sort((a, b) => a.bary - b.bary || a.pos - b.pos);
       L.forEach((v, i) => (v.pos = i));
@@ -277,6 +283,24 @@ function layered(V, edges) {
     }
   }
   return layers;
+}
+// Which side each dot's odd one out goes, where a level of the lines it
+// starts is odd round more central ones: the side the map has had fewer
+// on, in the order the nodes came, so the map stays balanced and a new node
+// moves no earlier choice. Sets each node's `odd`: level to -1 (left) or 1
+// (right).
+function odd(V) {
+  let map = 0;
+  for (const v of V) {
+    v.odd = new Map();
+    const level = (x) => v.own.get(x) ?? 0;
+    for (let l = 0; v.down.some((x) => level(x) > l); l++) {
+      if (v.down.filter((x) => level(x) === l).length % 2 === 0) continue;
+      const s = map > 0 ? -1 : 1;
+      v.odd.set(l, s);
+      map += s;
+    }
+  }
 }
 // Crossings between row L and the row above: inversions of the upper ends
 // of its lines, in order of their lower ends, by a Fenwick tree.
