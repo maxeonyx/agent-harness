@@ -11,8 +11,9 @@
 # it settles:
 #   1. `main`, after a good build is merged: rehearsed, opened as a
 #      candidate, watched for 3 min;
-#   then, refused at once with nothing built: a commit that lacks some of
-#   main, and one no branch has;
+#   then `previous`, back to the build before it, though that lacks some
+#   of main; then, refused at once with nothing built: a commit that lacks
+#   some of main, and one no branch has;
 #   2. one whose --check fails: refused at rehearsal with its gate: line;
 #   3. one whose page throws as it loads: refused at rehearsal, naming the
 #      exception headless Chrome saw;
@@ -21,7 +22,8 @@
 #   5. one whose brain dies 20 s after opening: the harness goes back;
 #   6. one the running build cannot read back (it renames a field of
 #      Launched): refused as one-way, then opened with `one_way: true`;
-#   7. `previous`: back to the build before it.
+#   7. `previous` after that: refused at rehearsal, since the build before
+#      cannot read what the one-way build wrote.
 # Each rehearsal and each candidate has the provider count tokens and
 # stream one short response: a few real requests.
 set -euo pipefail
@@ -101,6 +103,10 @@ git -C "$work/clone" push -q origin "$good:refs/heads/main"
 relaunch main "" "$good"
 runs
 
+step "back to previous"
+relaunch previous "" "took over from $good"
+runs
+
 step "refused with nothing built: a commit that lacks some of main, and one no branch has"
 relaunch "$base" "" "$base does not contain"
 unpushed=$(git -C "$work/clone" commit-tree -m "demo: never pushed" "$good^{tree}" | cut -c1-12)
@@ -143,8 +149,8 @@ relaunch "$oneway" ""
 relaunch "$oneway" ',"one_way":true' "" "refused at rehearsal"
 runs
 
-step "7. back to previous"
-relaunch previous "" "took over from $oneway"
+step "7. back to previous after a one-way relaunch: refused"
+relaunch previous "" "$base failed its gate"
 runs
 
 step "end: retire the brain's unit and delete the demo's builds"
