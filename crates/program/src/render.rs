@@ -180,6 +180,21 @@ pub fn brief(said: Option<&str>, quotes: &[(ValueId, Vec<String>)]) -> Vec<Strin
     out
 }
 
+/// What Max wrote to the member `name` after it was done, which it never
+/// read: each of his messages verbatim under its label, to follow its
+/// result.
+pub fn late_words(values: Values, name: &str, unread: &[ValueId]) -> Vec<String> {
+    let mut out = Vec::new();
+    for id in unread {
+        out.push(text(&format!(
+            "[harness] Max wrote this to `{name}` after it was done, so it never read it (`{}`):",
+            label(*id)
+        )));
+        out.extend(words(&values(*id)));
+    }
+    out
+}
+
 /// How an agent names Max's words to quote them in a brief.
 pub fn label(words: ValueId) -> String {
     format!("max-{}", &words.to_string()[..8])

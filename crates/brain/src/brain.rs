@@ -172,8 +172,14 @@ pub struct Opening {
 impl Opening {
     /// What a launch on `state` says first, at `at`, its record's time,
     /// reading the role files in `roles`, or where the last launch read
-    /// them.
-    pub fn of(state: &State, at: Time, roles: Option<&Path>) -> Result<Opening, String> {
+    /// them; `signed_out` is whether the brain would send on a claude.ai
+    /// login and the harness has none.
+    pub fn of(
+        state: &State,
+        at: Time,
+        roles: Option<&Path>,
+        signed_out: bool,
+    ) -> Result<Opening, String> {
         let exe = std::env::current_exe()
             .and_then(std::fs::read)
             .map_err(|e| format!("the brain's own executable: {e}"))?;
@@ -183,6 +189,10 @@ impl Opening {
             limbs: limb_builds(),
             how: launch_how(state),
         })];
+        // Signed out with nothing refused yet: wait for a sign-in now.
+        if signed_out && !state.signed_out() {
+            facts.push(Fact::SignedOut);
+        }
         let roles = match roles {
             Some(dir) => Some(
                 dir.canonicalize()
@@ -1412,7 +1422,7 @@ waited on nothing: answer him, then {}",
             .state()
             .members(Scope::Spawn(id))
             .map(|t| {
-                let said = match t.outcome() {
+                let mut said = match t.outcome() {
                     Some(TaskOutcome::Result { entry }) => {
                         let mut said = vec![render::text(&self.visible(*entry))];
                         for call in self.attached(*entry) {
@@ -1438,6 +1448,10 @@ waited on nothing: answer him, then {}",
                     }
                     None => unreachable!("a scope settles when every member is done"),
                 };
+                let late: Vec<_> = (self.state().unread_words(t).into_iter())
+                    .map(|(_, words)| words)
+                    .collect();
+                said.extend(render::late_words(&|v| self.value(v), &t.name, &late));
                 (t.name.clone(), said)
             })
             .collect();
