@@ -102,11 +102,7 @@ fn open_chat_tool(roles: &[&Role], dir: bool) -> Tool {
 /// An `open_chat` call's input, as the spawn of its one member: a fresh
 /// agent, with Max's words it quotes.
 pub fn open_chat(input: &[u8]) -> Result<Spawn, String> {
-    let mut value: Value =
-        serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
-    let object = value.as_object_mut().ok_or("the input must be an object")?;
-    // Every call's input may carry its `summary` ([`crate::render`]).
-    object.remove("summary");
+    let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
     let [name, mandate, role] = meta::fields(
         &value,
         "`open_chat`",

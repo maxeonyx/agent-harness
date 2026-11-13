@@ -718,10 +718,9 @@ const SHARED: [&str; 2] = ["brief", "quotes"];
 pub fn parse(tool: &str, input: &[u8]) -> Result<Spawn, String> {
     let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
     let object = value.as_object().ok_or("the input must be an object")?;
-    // Every call's input may carry its `summary` ([`crate::render`]).
     if let Some(key) = object
         .keys()
-        .find(|k| !["fork", "resume", "start", "summary"].contains(&k.as_str()))
+        .find(|k| !["fork", "resume", "start"].contains(&k.as_str()))
     {
         return Err(format!(
             "`{key}` means nothing to `{tool}`: it takes `fork`, `resume` and `start`"

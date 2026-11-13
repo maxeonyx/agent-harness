@@ -70,6 +70,7 @@ pub struct Opening {
 pub struct Running<'a> {
     pub id: CallId,
     pub call: &'a Call,
+    /// The call's arguments: its input without its [`harness_core::call::SUMMARY`].
     pub input: &'a [u8],
     /// Who the call is for now ([`harness_core::limb::LimbRow::Call`]).
     pub owner: Option<Owner>,
