@@ -7,7 +7,7 @@
 //   node dev/drive.mjs say CHAT WORDS
 //   node dev/drive.mjs settle CHAT [--timeout S]
 //   node dev/drive.mjs log CHAT [--full]
-//   node dev/drive.mjs page [--size WxH[@DPR] | --size phone] [--timeout S] [--log FILE] STEP...
+//   node dev/drive.mjs page [--size WxH[@DPR] | --size phone] [--mic WAV] [--timeout S] [--log FILE] STEP...
 //   node dev/drive.mjs down [--wipe]
 //
 // A brain is everything in .drive.ignore/NAME/: its port, pid, database,
@@ -50,7 +50,9 @@
 // and its children's.
 //
 // `page` opens the face in a fresh headless Chromium at 1920x1080 (or a
-// phone: 390x844, touch, twice the pixels) and runs the steps in order:
+// phone: 390x844, touch, twice the pixels) and runs the steps in order. Its
+// microphone plays a tone, or with `--mic WAV` that recording, once, from
+// when the page first opens it:
 //
 //   chat ROLE DIR WORDS  start a chat by the clicks Max makes: +, its
 //                        role, its working directory (- for none), the
@@ -395,15 +397,16 @@ function chromium() {
 class Browser {
   // Its Chromium stays in this process's group, so whatever kills the
   // group kills it too, and carries the brain's mark, so `down` finds it.
-  static async open(brain, size, log) {
+  static async open(brain, size, log, mic) {
     const profile = fs.mkdtempSync(path.join(brain.dir, "chrome-"));
     const proc = spawn(chromium(), [
       "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
       "--ignore-certificate-errors", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",
       // Without it Chromium waits on the system keyring, and may never start.
       "--password-store=basic",
-      // A microphone that plays a tone, granted without asking, so a page can dictate.
+      // A microphone that plays a tone, or the recording, granted without asking, so a page can dictate.
       "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream",
+      ...(mic === undefined ? [] : [`--use-file-for-fake-audio-capture=${mic}%noloop`]),
       `--window-size=${size.width},${size.height}`, "about:blank",
     ], { stdio: "ignore", env: { ...process.env, [brain.mark]: "1" } });
     const b = new Browser(proc, profile, size, log);
@@ -649,10 +652,12 @@ const steps = {
 async function page(brain, args) {
   let size = { width: 1920, height: 1080, dpr: 1, phone: false };
   let log = brain.file("page.log");
+  let mic;
   while (args[0]?.startsWith("--")) {
     const [flag, value] = args.splice(0, 2);
     if (value === undefined) fail(`${flag} needs a value`);
     if (flag === "--log") log = path.resolve(value);
+    else if (flag === "--mic") mic = path.resolve(value);
     else if (flag === "--size" && value === "phone") size = { width: 390, height: 844, dpr: 2, phone: true };
     else if (flag === "--size") {
       const [, w, h, dpr = "1"] = value.match(/^(\d+)x(\d+)(?:@([\d.]+))?$/) ?? fail(`--size: not WxH[@DPR] or phone: ${value}`);
@@ -669,7 +674,7 @@ async function page(brain, args) {
   }
   const port = brain.port;
   if (!(await listening(port))) fail(`brain ${brain.name} does not listen on ${port}: node dev/drive.mjs up --brain ${brain.name}`);
-  const b = await Browser.open(brain, size, log);
+  const b = await Browser.open(brain, size, log, mic);
   let at = "loading the page";
   try {
     await b.send("Page.navigate", { url: `https://mx-hv-mj.local:${port}/` });

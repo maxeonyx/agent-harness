@@ -122,7 +122,7 @@
 //!     face-->>page: what changed, as edits: at, cut, put<br/>Transcript::session, a word-level diff
 //!     Note over page: the edits go in where dictation began, at the caret, keeping Max's own edits<br/>applyEdits
 //!   end
-//!   Note over face,api: a session the endpoint drops is replaced, up to 3 times<br/>Transcript::keep holds the text so far
+//!   Note over page,api: a socket that drops (a relaunch, the tunnel, the endpoint) is replaced by the page, which keeps all the audio<br/>connectDictation: resume with the text it holds, then the audio again; Transcript::resume holds the new text back until it catches up
 //!   page->>face: Max stops<br/>stopDictation
 //!   Note over page: the microphone is released at once<br/>stopDictation: releaseMic
 //!   face->>api: no more audio<br/>CloseStream
