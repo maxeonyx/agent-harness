@@ -826,8 +826,7 @@ function showBlob(t) {
     };
     dock.append(blobBox);
   }
-  dress(blobSession, t, blobTask !== t.id);
-  if (pane.classList.contains("loading")) blobSession.set("loading", true);
+  dress(blobSession, t, blobTask !== t.id, pane.classList.contains("loading") ? "loading" : undefined);
   blobBox.title = blobSession.state === "max" && can.dictation ? "Go to bottom and dictate" : "Go to bottom";
   blobTask = t.id;
 }
