@@ -2,7 +2,7 @@ import { $, el, svgEl, when } from "./base.js";
 import { BIG, byId, centre, derive, glyph, graph, isDone, label, layout, LINE, look, positions, radius, routes, shortName, shown, stateOf, successor, unfolded, view, waitingOn } from "./map.js";
 import { cam, drag, edgesLayer, fit, framed, glide, nodesLayer, seam, seamFor, setFramed, setSeam } from "./camera.js";
 import { ICON, layer, MARK, session, STATES } from "./blobs.js";
-import { LIFE, outline, polyline } from "./layout.js";
+import { GAP, LIFE, outline, polyline } from "./layout.js";
 import { fillTip, hoverable, tipFor } from "./hover.js";
 import { notify, renderUsage } from "./chrome.js";
 import { renderBuilds } from "./builds.js";
@@ -189,25 +189,35 @@ export function openAt(n) {
 // wherever they are shown, each point moving as the end nearer it does.
 // Lines of one colour and kind are one path: the tapers filled (each wound
 // the same way, so where they overlap they fill as one), the lines of one
-// width stroked, and the dashed ones each under one mask of dashes; a line
-// that passes under another is drawn in parts, with a gap there. Then each
+// width stroked, and the dashed ones each under one mask of dashes. The
+// lines that pass under others are drawn first, by their sheet (layout.js),
+// each sheet through one mask that erases from it a band GAP wider each
+// side than each line over one of them, near where they cross. Then each
 // finished call's gear.
-function line(key, r) {
-  const [from, to] = key.split(">");
+function bend(key) {
+  const [from, to] = key.split(">"), r = routes.get(key);
   const move = (id) => { const p = positions.get(id), s = shown.get(id); return s && p ? [s.x - p.x, s.y - p.y] : [0, 0]; };
-  const m0 = move(from), m1 = move(to), still = !m0[0] && !m0[1] && !m1[0] && !m1[1];
-  if (still && r.d) return r;
-  const y0 = r.parts[0].P[0][1], y1 = r.parts.at(-1).P.at(-1)[1];
-  const at = ([x, y]) => {
+  const m0 = move(from), m1 = move(to);
+  if (!r || (!m0[0] && !m0[1] && !m1[0] && !m1[1])) return null;
+  const y0 = r.P[0][1], y1 = r.P.at(-1)[1];
+  return ([x, y]) => {
     const u = y1 === y0 ? 0 : Math.max(0, Math.min(1, (y - y0) / (y1 - y0)));
     return [x + m0[0] + (m1[0] - m0[0]) * u, y + m0[1] + (m1[1] - m0[1]) * u];
   };
-  const parts = r.parts.map(({ P, W }) => ({ P: still ? P : P.map(at), W }));
-  const out = { d: parts.map(({ P, W }) => (W ? outline(P, W) : polyline(P))).join(""), mid: r.dashed ? parts.map(({ P }) => polyline(P)).join("") : "" };
+}
+function line(key, r) {
+  const at = bend(key), ats = r.gaps.map((g) => bend(g.over)), still = !at && ats.every((a) => !a);
+  if (still && r.d) return r;
+  const P = at ? r.P.map(at) : r.P, out = { d: r.W ? outline(P, r.W) : polyline(P), mid: r.dashed ? polyline(P) : "", s: "", f: "" };
+  r.gaps.forEach((g, i) => {
+    const Q = ats[i] ? g.P.map(ats[i]) : g.P;
+    if (g.W) out.f += outline(Q, g.W.map((w) => w + 2 * GAP));
+    else out.s += polyline(Q);
+  });
   if (still) Object.assign(r, out);
   return out;
 }
-const paths = new Map();
+const paths = new Map(), sheets = [];
 let dashes = null;
 function pathFor(k, attrs, parent = edgesLayer) {
   let p = paths.get(k);
@@ -220,11 +230,34 @@ function pathFor(k, attrs, parent = edgesLayer) {
   }
   return p;
 }
+const ink = (r) => (r.W ? { fill: r.colour } : { fill: "none", stroke: r.colour, "stroke-width": LIFE, "stroke-linejoin": "round" });
+const everywhere = { x: -1e5, y: -1e5, width: 2e5, height: 2e5 };
+// A sheet: its mask, white but for its bands (paths `Ns` and `Nf`), and
+// its two groups through it, the dashed one inside the mask of dashes;
+// stacked as the lines over them are.
+function sheet(n) {
+  if (!sheets[n]) {
+    const mask = svgEl("mask"), rect = svgEl("rect"), g = svgEl("g"), dg = svgEl("g");
+    for (const [a, v] of Object.entries({ id: `sheet${n}`, maskUnits: "userSpaceOnUse", ...everywhere })) mask.setAttribute(a, v);
+    for (const [a, v] of Object.entries({ fill: "#fff", ...everywhere })) rect.setAttribute(a, v);
+    mask.append(rect);
+    edgesLayer.querySelector("defs").append(mask);
+    pathFor(`${n}s`, { fill: "none", stroke: "#000", "stroke-width": LIFE + 2 * GAP }, mask);
+    pathFor(`${n}f`, { fill: "#000" }, mask);
+    for (const e of [g, dg]) e.setAttribute("mask", `url(#sheet${n})`);
+    dashes.g.after(g);
+    dashes.g.prepend(dg);
+    for (const c of Object.values(LINE)) pathFor(`${n}f${c}`, { fill: c }, g);
+    for (const c of Object.values(LINE)) pathFor(`${n}s${c}`, ink({ colour: c }), g);
+    sheets[n] = { g, dg };
+  }
+  return sheets[n];
+}
 export function drawEdges() {
   if (!dashes) {
     edgesLayer.innerHTML = '<defs><mask id="dashes" maskUnits="userSpaceOnUse" x="-1e5" y="-1e5" width="2e5" height="2e5"><path fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="3.5 3"/></mask></defs><g mask="url(#dashes)"></g>';
     dashes = { mask: edgesLayer.querySelector("mask path"), g: edgesLayer.querySelector("g"), d: "" };
-    // Stacked in this order: fills, strokes, gears.
+    // Stacked in this order: the sheets, fills, strokes, gears.
     for (const c of Object.values(LINE)) pathFor(`f${c}`, { fill: c });
     for (const c of Object.values(LINE)) pathFor(`s${c}`, { fill: "none", stroke: c, "stroke-width": LIFE, "stroke-linejoin": "round" });
     for (const c of Object.values(GEAR)) pathFor(`g${c}`, { fill: c, "fill-rule": "evenodd" });
@@ -232,13 +265,12 @@ export function drawEdges() {
   const ds = new Map(), add = (k, d) => { if (d) (ds.get(k) ?? ds.set(k, []).get(k)).push(d); };
   let mask = "";
   for (const [key, r] of routes) {
-    const { d, mid } = line(key, r);
-    if (r.dashed) {
-      // A dashed line: whole under the mask, its centre in the mask's dashes.
-      pathFor(`d${r.tapered ? "f" : "s"}${r.colour}`, r.tapered ? { fill: r.colour } : { fill: "none", stroke: r.colour, "stroke-width": LIFE }, dashes.g);
-      mask += mid;
-    }
-    add(`${r.dashed ? "d" : ""}${r.tapered ? "f" : "s"}${r.colour}`, d);
+    const { d, mid, s, f } = line(key, r), n = r.sheet, k = `${n ?? ""}${r.dashed ? "d" : ""}${r.W ? "f" : "s"}${r.colour}`;
+    // A dashed line: whole under the mask, its centre in the mask's dashes.
+    if (r.dashed) mask += mid;
+    if (n !== undefined || r.dashed) pathFor(k, ink(r), n === undefined ? dashes.g : sheet(n)[r.dashed ? "dg" : "g"]);
+    add(k, d);
+    if (n !== undefined) { add(`${n}s`, s); add(`${n}f`, f); }
   }
   for (const [id, s] of shown) {
     const n = graph.nodes.get(id);

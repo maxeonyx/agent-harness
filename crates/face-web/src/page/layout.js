@@ -31,7 +31,7 @@ const PITCH = 20, CLEAR = 8, SPIN = 5;
 // crossing's gap is GAP each side of the line over it.
 export const LIFE = 2.2;
 const TOOL = 1.2;
-const GAP = 1.5;
+export const GAP = 1.5;
 const TIP = .5, POINT = 4, NGAP = 1.5, TUCK = -.6, TAPER = 48;
 // Ports: the lines out of a node's bottom, and into its top, spread evenly
 // over the WIDE either side of upright, its own lifeline upright in the
@@ -82,7 +82,10 @@ export function lanes(nodes) {
     for (const p of h) { drawn.delete(p.e); route(p.e, at, drawn); }
   }
   const cuts = crossings(edges);
-  return { at: new Map(V.map((v) => [v.id, { x: v.x, y: v.y }])), cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, parts: cut(e, cuts.filter((c) => c.under === i)) })) };
+  const key = (e) => `${e.v.id}>${e.d.id}`;
+  const gaps = edges.map((e, i) => cuts.filter((c) => c.under === i).map((c) => ({ over: key(edges[c.over]), ...near(edges[c.over], c, e.P) })));
+  const sheet = sheets(edges, gaps);
+  return { at: new Map(V.map((v) => [v.id, { x: v.x, y: v.y }])), cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, sheet: sheet[i], gaps: gaps[i] })) };
 }
 
 // ─── Rows ──────────────────────────────────────────────────────────────────
@@ -426,17 +429,16 @@ function over(P, u) {
   for (let i = 1; i < P.length; i++) {
     const [a, b] = [P[i - 1], P[i]];
     if ((a[1] < u.y - reach && b[1] < u.y - reach) || (a[1] > u.y + reach && b[1] > u.y + reach)) continue;
-    const vx = b[0] - a[0], vy = b[1] - a[1], t = Math.max(0, Math.min(1, ((u.x - a[0]) * vx + (u.y - a[1]) * vy) / (vx * vx + vy * vy || 1)));
-    if (Math.hypot(a[0] + t * vx - u.x, a[1] + t * vy - u.y) < reach) return true;
+    if (close(a, b, [u.x, u.y], reach)) return true;
   }
   return false;
 }
 
 // ─── Crossings ─────────────────────────────────────────────────────────────
 // Every place two lines of different lives cross, away from a node both
-// end at: the more upright one stays whole, the other is cut GAP each side
-// of it. Each as { over, under, at, dir, forced }: `over` and `under` the
-// indices of the edges, `dir` the over one's direction there, and forced
+// end at: the more upright one goes over, the other under. Each as
+// { over, under, at, seg, forced }: `over` and `under` the indices of the
+// edges, `seg` the over one's segment there, ending at P[seg], and forced
 // when no routing could avoid it: as many of two lives' crossings as the
 // times their order across changes from one of their dots' rows to the
 // next, where the dots pin them. A line out of a dot into another life's
@@ -447,7 +449,7 @@ export function crossings(edges) {
   const segs = [];
   edges.forEach((e, i) => {
     for (let j = 1; j < e.P.length; j++) {
-      const a = e.P[j - 1], b = e.P[j], s = { i, a, b, up: a[0] === b[0] };
+      const a = e.P[j - 1], b = e.P[j], s = { i, j, a, b };
       const k = segs.push(s) - 1;
       for (let cx = Math.floor(Math.min(a[0], b[0]) / CELL); cx <= Math.floor(Math.max(a[0], b[0]) / CELL); cx++)
         for (let cy = Math.floor(Math.min(a[1], b[1]) / CELL); cy <= Math.floor(Math.max(a[1], b[1]) / CELL); cy++) {
@@ -469,8 +471,7 @@ export function crossings(edges) {
       if (seen.has(key)) continue;
       seen.add(key);
       const [o, u] = slope(A) <= slope(B) ? [A, B] : [B, A];
-      const m = Math.hypot(o.b[0] - o.a[0], o.b[1] - o.a[1]) || 1;
-      out.push({ over: o.i, under: u.i, at: p, dir: [(o.b[0] - o.a[0]) / m, (o.b[1] - o.a[1]) / m], forced: false });
+      out.push({ over: o.i, under: u.i, at: p, seg: o.j, forced: false });
     }
   }
   const lives = chains(edges), left = new Map();
@@ -525,44 +526,70 @@ function meet(p, q, r, s) {
   return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? [p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])] : null;
 }
 
-// A line in parts, cut where it passes under another: a gap GAP clear of
-// the over line each side, measured across it, so nothing else is covered.
-// Each part { P, W }.
-function cut(e, under) {
-  const len = [0];
-  for (let i = 1; i < e.P.length; i++) len[i] = len[i - 1] + Math.hypot(e.P[i][0] - e.P[i - 1][0], e.P[i][1] - e.P[i - 1][1]);
-  const gaps = under.map(({ at, dir }) => {
-    let best = 0, d = Infinity, u = [0, 1];
-    for (let i = 1; i < e.P.length; i++) {
-      const [a, b] = [e.P[i - 1], e.P[i]], vx = b[0] - a[0], vy = b[1] - a[1], L = vx * vx + vy * vy || 1;
-      const t = Math.max(0, Math.min(1, ((at[0] - a[0]) * vx + (at[1] - a[1]) * vy) / L));
-      const q = Math.hypot(a[0] + t * vx - at[0], a[1] + t * vy - at[1]);
-      if (q < d) { d = q; best = len[i - 1] + t * (len[i] - len[i - 1]); u = [vx / Math.sqrt(L), vy / Math.sqrt(L)]; }
+// The over line of a crossing near where it crosses, as { P, W }: SPAN
+// along it each way, and on until its band is clear of the line under it
+// (U), where they cross at a shallow angle. The page erases that band, GAP
+// wider than it each side, from the line under it, so the gap follows both
+// lines and touches nothing else.
+const SPAN = 4 * (LIFE + GAP);
+function near(e, { at, seg }, U) {
+  const w = (i) => e.W?.[i] ?? LIFE, [a, b] = [e.P[seg - 1], e.P[seg]];
+  const t = Math.hypot(at[0] - a[0], at[1] - a[1]) / (Math.hypot(b[0] - a[0], b[1] - a[1]) || 1);
+  const mid = [...at, w(seg - 1) + t * (w(seg) - w(seg - 1))];
+  const clear = (p) => !U.some((q, i) => i && close(U[i - 1], q, p, p[2] / 2 + GAP + LIFE / 2));
+  const walk = (i, step) => {
+    const out = [];
+    let p = mid, s = 0;
+    for (; i >= 0 && i < e.P.length; i += step) {
+      const q = [...e.P[i], w(i)], d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      for (let l = Math.max(0, SPAN - s); l < d; l++) {
+        const r = p.map((v, k) => v + (l / d) * (q[k] - v));
+        if (clear(r)) return [...out, r];
+      }
+      out.push(q); s += d; p = q;
     }
-    const g = (LIFE + GAP) / Math.max(.3, Math.abs(u[0] * dir[1] - u[1] * dir[0]));
-    return [best - g, best + g];
-  }).sort((a, b) => a[0] - b[0]);
-  const parts = [];
-  let from = 0;
-  for (const [g0, g1] of [...gaps, [Infinity, Infinity]]) {
-    if (g0 > from) parts.push(piece(e, len, from, Math.min(g0, len.at(-1))));
-    from = Math.max(from, g1);
-    if (from >= len.at(-1)) break;
-  }
-  return parts;
-}
-// The part of a line from length s0 along it to s1.
-function piece(e, len, s0, s1) {
-  const P = [], W = e.W && [];
-  const point = (s) => {
-    const i = Math.max(1, len.findIndex((l) => l >= s)), t = (s - len[i - 1]) / (len[i] - len[i - 1] || 1);
-    P.push([e.P[i - 1][0] + t * (e.P[i][0] - e.P[i - 1][0]), e.P[i - 1][1] + t * (e.P[i][1] - e.P[i - 1][1])]);
-    if (W) W.push(e.W[i - 1] + t * (e.W[i] - e.W[i - 1]));
+    return out;
   };
-  point(s0);
-  for (let i = 0; i < e.P.length; i++) if (len[i] > s0 && len[i] < s1) { P.push(e.P[i]); if (W) W.push(e.W[i]); }
-  point(s1);
-  return { P, W };
+  const Q = [...walk(seg - 1, -1).reverse(), mid, ...walk(seg, 1)];
+  return { P: Q.map(([x, y]) => [x, y]), W: e.W && Q.map((q) => q[2]) };
+}
+// Each line under others on a sheet, the page's one mask for all of a
+// sheet's bands: the first sheet where none of its bands touches another
+// line, and no other line's band touches it, so a band erases only the line
+// it was made for. Few sheets, so few masks. Each edge's sheet, or
+// undefined.
+function sheets(edges, gaps) {
+  const box = (P, r) => { const xs = P.map((p) => p[0]), ys = P.map((p) => p[1]); return [Math.min(...xs) - r, Math.min(...ys) - r, Math.max(...xs) + r, Math.max(...ys) + r]; };
+  const lines = edges.map((e) => ({ P: e.P, box: box(e.P, LIFE) }));
+  const bands = gaps.map((G) => G.map((g) => ({ ...g, box: box(g.P, LIFE + 2 * GAP) })));
+  const apart = (a, b) => a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1];
+  const touches = (i, j) => bands[i].some((g) => {
+    if (apart(g.box, lines[j].box)) return false;
+    const P = lines[j].P;
+    for (let m = 1; m < P.length; m++) {
+      const c = P[m - 1], q = P[m];
+      if (apart(g.box, [Math.min(c[0], q[0]), Math.min(c[1], q[1]), Math.max(c[0], q[0]), Math.max(c[1], q[1])])) continue;
+      for (let k = 1; k < g.P.length; k++) {
+        const a = g.P[k - 1], p = g.P[k], r = Math.max(g.W?.[k - 1] ?? LIFE, g.W?.[k] ?? LIFE) / 2 + GAP + LIFE / 2;
+        if (meet(a, p, c, q) || close(c, q, a, r) || close(c, q, p, r) || close(a, p, c, r) || close(a, p, q, r)) return true;
+      }
+    }
+    return false;
+  });
+  const on = [], out = [];
+  gaps.forEach((G, i) => {
+    if (!G.length) return;
+    let s = on.findIndex((S) => S.every((j) => !touches(i, j) && !touches(j, i)));
+    if (s < 0) s = on.push([]) - 1;
+    on[s].push(i);
+    out[i] = s;
+  });
+  return out;
+}
+// Whether point p is within r of the segment from a to b.
+function close(a, b, p, r) {
+  const vx = b[0] - a[0], vy = b[1] - a[1], t = Math.max(0, Math.min(1, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / (vx * vx + vy * vy || 1)));
+  return Math.hypot(a[0] + t * vx - p[0], a[1] + t * vy - p[1]) < r;
 }
 
 // ─── Drawing a line ────────────────────────────────────────────────────────

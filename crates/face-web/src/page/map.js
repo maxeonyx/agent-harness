@@ -334,7 +334,7 @@ function time(n) {
 
 export let positions = new Map();   // id -> {x, y, w, h, top}: its box laid out; its centre is (x + w / 2, y + top)
 export let shown = new Map();       // id -> {x, y, w, h, top}: drawn now (tweened)
-export let routes = new Map();      // "from>to" -> {parts: [{P, W}], colour, dashed}: an edge's line, laid out, in parts where it passes under others
+export let routes = new Map();      // "from>to" -> {P, W, sheet, gaps: [{over, P, W}], colour, dashed}: an edge's line, laid out, with its sheet and the pieces of the lines over it where they cross
 export const centre = (p) => ({ x: p.x + p.w / 2, y: p.y + p.top });
 let shape = "";
 const laid = new Map();             // a project's shape -> its layout
@@ -392,7 +392,8 @@ export function layout() {
       const planned = (id) => by.get(id).kind === "planned";
       const dashed = (e) => (planned(e.from) && by.get(e.from).solid !== e.to) || planned(e.to);
       const colour = (e) => LINE[e.kind === "branch" ? "faint" : e.kind === "life" || e.kind === "grow" ? by.get(e.from).line : by.get(e.to).end ?? by.get(e.to).line];
-      l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { parts: e.parts.map(({ P, W }) => ({ P: P.map(([a, b]) => [a + dx, b]), W })), tapered: !!e.W, dashed: dashed(e), colour: colour(e) }]);
+      const at = (P) => P.map(([a, b]) => [a + dx, b]);
+      l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { P: at(e.P), W: e.W, sheet: e.sheet, gaps: e.gaps.map((g) => ({ ...g, P: at(g.P) })), dashed: dashed(e), colour: colour(e) }]);
     }
     for (const [id, b] of l.boxes) positions.set(id, b);
     for (const [k, r] of l.lines) routes.set(k, r);
