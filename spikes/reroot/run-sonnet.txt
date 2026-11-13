@@ -1,0 +1,10 @@
+1 start                             200  model=claude-sonnet-5-5  input=4  cache_write=0  cache_read=10494  blocks=thinking,text,tool_use
+2 continue (same root)              200  model=claude-sonnet-5-5  input=2  cache_write=152  cache_read=10494  blocks=text
+3 re-root: system+tools             200  model=claude-sonnet-5-5  input=2  cache_write=221  cache_read=10462  blocks=text
+4 continue on new root              200  model=claude-sonnet-5-5  input=2  cache_write=0  cache_read=10683  blocks=text
+5 re-root: used tool gone           200  model=claude-sonnet-5-5  input=2  cache_write=221  cache_read=10392  blocks=thinking,text
+6 re-root: effort low               200  model=claude-sonnet-5-5  input=2  cache_write=152  cache_read=10494  blocks=text
+7 re-root: model claude-opus-5-5    200  model=claude-opus-5-5  input=2  cache_write=221  cache_read=10462  blocks=thinking,text
+8 control: edited summary           200  model=claude-sonnet-5-5  input=2  cache_write=0  cache_read=10683  blocks=text
+9 control: edited signature         400  model=claude-sonnet-5-5  input=-  cache_write=-  cache_read=-  error="messages.1.content.0: Invalid `signature` in `thinking` block"
+10 control: thinking dropped        200  model=claude-sonnet-5-5  input=2  cache_write=0  cache_read=10683  blocks=text
