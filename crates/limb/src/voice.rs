@@ -11,7 +11,9 @@ use harness_core::fact::{Batch, Fact, Refusal};
 use harness_core::id::Digest;
 use harness_core::id::{CallId, LimbId, ReplicaId, Timestamp, ValueId};
 use harness_core::limb;
-use harness_core::limb::{Defined, Description, Instruction, LimbDown, LimbKey, LimbRow, Offer};
+use harness_core::limb::{
+    Defined, Description, Instruction, LimbDown, LimbKey, LimbRow, Offer, Tool,
+};
 use harness_core::live::Live;
 use harness_core::resource::{Change, Observation, ResourceKey, Version};
 use harness_core::schema::{Harness, Record};
@@ -241,8 +243,8 @@ pub struct Instance {
 struct Opened {
     config: String,
     set: Result<Arc<dyn ToolSet>, String>,
-    /// Its tools, by name, as it last described them.
-    tools: Vec<String>,
+    /// Its tools, as it last described them.
+    tools: Vec<Tool>,
 }
 
 impl Instance {
@@ -385,7 +387,7 @@ impl Instance {
         };
         let tools = match &set {
             Ok(set) => guard(|| set.describe())
-                .map(|d| d.tools.into_iter().map(|t| t.name).collect())
+                .map(|d| d.tools)
                 .unwrap_or_default(),
             Err(why) => {
                 eprintln!("the tool set `{}` cannot open: {why}", offer.set);
@@ -400,7 +402,7 @@ impl Instance {
     }
 
     /// The sets that opened, with their tools.
-    fn opened(&self) -> Vec<(String, Arc<dyn ToolSet>, Vec<String>)> {
+    fn opened(&self) -> Vec<(String, Arc<dyn ToolSet>, Vec<Tool>)> {
         lock(&self.sets)
             .iter()
             .filter_map(|(name, o)| Some((name.clone(), o.set.clone().ok()?, o.tools.clone())))
@@ -422,7 +424,7 @@ impl Instance {
                 Ok(set) => set,
                 Err(why) => self.unavailable(name, &why),
             };
-            opened.tools = set.tools.iter().map(|t| t.name.clone()).collect();
+            opened.tools = set.tools.clone();
             described.push(set);
         }
         drop(sets);
@@ -450,10 +452,14 @@ impl Instance {
     }
 
     /// Run a call row with the set that has its tool.
-    fn dispatch(&self, row: CallRow<'_>, sets: &[(String, Arc<dyn ToolSet>, Vec<String>)]) {
+    fn dispatch(&self, row: CallRow<'_>, sets: &[(String, Arc<dyn ToolSet>, Vec<Tool>)]) {
         let tool = row.call.tool.clone();
-        let Some((_, set, _)) = sets.iter().find(|(_, _, tools)| tools.contains(&tool)) else {
-            return self.calls.call(row, true, move |_, _, _, report| {
+        let found = (sets.iter()).find_map(|(_, set, tools)| {
+            let held = tools.iter().find(|t| t.name == tool)?.held;
+            Some((set, held))
+        });
+        let Some((set, held)) = found else {
+            return self.calls.call(row, true, false, move |_, _, _, report| {
                 report.failed(&format!("this limb offers no tool `{tool}`"))
             });
         };
@@ -463,7 +469,7 @@ impl Instance {
         let dir = row.dir.map(Path::to_path_buf);
         let shutting_down = self.calls.shutting_down_flag();
         self.calls
-            .call(row, rerun, move |input, cancel, limit, report| {
+            .call(row, rerun, held, move |input, cancel, limit, report| {
                 let running = Running {
                     id,
                     call: &call,

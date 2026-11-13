@@ -543,18 +543,47 @@ impl Start {
 /// it as background work and hears its result when he marks it done.
 pub const OPEN_CHAT: &str = "open_chat";
 
-/// What the end of a model turn means for this task.
+/// What the end of a model turn means for this task, and so whether it
+/// faces Max and holds the [`crate::limb::MAX`] tool set.
 ///
-/// The one difference between an autonomous subagent, a chat with Max, and
-/// a standing agent such as the attention scheduler. His chats and asides
-/// are user-facing, and so is a chat an agent facing him opens for him
-/// with [`OPEN_CHAT`]; anything else an agent starts, a fork included, is
-/// autonomous. Marking a task done does not change its mode:
-/// it asks for one last turn ([`Live::closing`]), which writes the result
-/// (with [`crate::delivery::Prompt::Done`], so the model has seen it before
-/// it does). So the mode of a finished task says who may continue it: Max
-/// one that faced him, and only its owner an autonomous one, whose result
-/// went there.
+/// **Concept.** The one difference between an autonomous subagent, a chat
+/// with Max, and a standing agent such as the attention scheduler. A task
+/// that is not autonomous faces Max, and each of its roots holds the `max`
+/// set on top of its role's sets: the tools that reach him (its page,
+/// `ask`, `open_chat`) and the instructions for talking with him (say what
+/// you take him to want, talk as you go, end your turn when you have
+/// answered him or need him). An autonomous task holds none of it, so it
+/// reaches Max only through whoever started it, and no call of its is
+/// refused for not having him: it has no such call. A fork or a resume
+/// continues a context, so it holds what that context's root holds: a fork
+/// of a chat can ask Max for the chat, and its own turn still ends its work.
+/// A task that comes to face Max, such as a finished subagent he resumes,
+/// holds the set from its next root.
+///
+/// Only Max and `open_chat` make a task face him: his chats, and the chats
+/// opened by a task he is already talking to. What `spawn` starts is
+/// autonomous. So no role is facing in itself, and no role names the `max`
+/// set: the same designer is Max's chat when he starts it and an
+/// orchestrator's subagent when it starts one.
+///
+/// Marking a task done does not change its mode: it asks for one last turn
+/// ([`Live::closing`]), which writes the result (with
+/// [`crate::delivery::Prompt::Done`], so the model has seen it before it
+/// does). So the mode of a finished task says who may continue it: Max one
+/// that faced him, and only its owner an autonomous one, whose result went
+/// there.
+///
+/// **Vision.** Max (12 Nov): "if we define an agent type has a minimum set
+/// of plugins, but could have additional ones. And the presence or absence
+/// of the user plugin decides a bunch of other things as well." A role's
+/// sets are the minimum, and facing Max adds `max`. "Only his own action
+/// makes a session user-facing" (28 Oct): `open_chat` is held only by a
+/// task he is talking to.
+///
+/// **Not built yet.** Nothing offers the `max` set: the facing instructions
+/// are in the `meta` set's and the roles' prompts, every task reads both
+/// ways of ending a turn, and no tool asks Max. [`OPEN_CHAT`] is built, and
+/// held by the `meta` set of every task facing Max.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     /// The end of a turn completes the task, once nothing it started is
@@ -580,21 +609,29 @@ pub enum Mode {
 /// it on ([`State::heard`]). Who gave any other mandate is the caller of the
 /// meta call that created the task ([`Task::by`]).
 ///
-/// A fresh task's mandate also carries what every member of its spawn
-/// shares, rendered before its own text and identical for each of them, so
-/// N siblings are one cache prefix: the parent's brief, and Max's words the
-/// parent quotes. A quote is the value of his words itself, so a brief
-/// carries them verbatim by construction, the same words have the same
-/// label wherever they are quoted, and the child can tell them from its
-/// parent's paraphrase.
+/// A fresh task's mandate also carries what every fresh member of its
+/// spawn shares, rendered before its own text and identical for each of
+/// them, so N siblings are one cache prefix: the parent's brief, and Max's
+/// words the parent quotes. A quote is the value of his words itself, so a
+/// brief carries them verbatim by construction, the same words have the
+/// same label wherever they are quoted, and the child can tell them from
+/// its parent's paraphrase. A resume takes quotes of its own, since its
+/// context has not heard what its parent has since: a resumed designer is
+/// given Max's reaction to its page by its label, not retold. A fork takes
+/// neither: its context holds every word of Max's its parent's does, which
+/// compactions carry verbatim.
+///
+/// **Not built yet.** Today a resume cannot be given quotes, so a parent
+/// retells Max's words in its mandate.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mandate {
     pub text: ValueId,
     /// What every member of the spawn is told first.
     pub brief: Option<ValueId>,
     /// Max's words, each one the creating task has heard: words he sent it,
-    /// the mandate he gave it, his answer to its question, or a quote in its
-    /// own mandate.
+    /// the mandate he gave it, his answer to its question, a quote in its
+    /// own mandate, or his words a call's output showed it verbatim, such as
+    /// a search of his chats.
     pub quotes: Vec<ValueId>,
 }
 
@@ -993,6 +1030,14 @@ pub enum Move {
 /// the reset, when even that has grown long, or to pick up a changed role,
 /// model, instructions or tool set.
 ///
+/// The harness chooses which, never the agent: it knows whether the root
+/// is stale and how long the kept checkpoints are, and the agent knows
+/// neither. When its next compaction will start a fresh root, every turn's
+/// opening line says so before the agent writes its carry, so the carry
+/// holds what it needs. **Not built yet:** today the agent chooses, with
+/// `fresh: true`, and a notice asks it to; 6 of 455 compactions on the home
+/// brain did, against 80 such notices.
+///
 /// **Vision.** "The agent can be considered the same despite the
 /// compaction" (Max, 2026-10-17): the carry is the agent's own note, never
 /// a handover to someone else. The fork-per-phase want ("the main context
@@ -1040,8 +1085,9 @@ pub enum Onto {
     /// The task's latest checkpoint: everything up to it is kept verbatim.
     Checkpoint(EntryId),
     /// A new root, rendered from the role's current version, where a
-    /// changed role, model, instructions or tool set takes effect. It has
-    /// no attachments of its own: they are in the carry.
+    /// changed role, model, instructions or tool set takes effect: the
+    /// harness's choice when the old root is stale or the checkpoints have
+    /// grown long. It has no attachments of its own: they are in the carry.
     Fresh(Box<Start>),
 }
 

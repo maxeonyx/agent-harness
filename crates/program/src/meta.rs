@@ -34,7 +34,7 @@ use harness_core::task::{Context, Task};
 use harness_core::value::Bytes;
 use serde_json::{Value, json};
 
-use crate::render::{Values, blocks, call_label, carried, text};
+use crate::render::{Values, blocks, carried, text};
 
 pub const SPAWN: &str = "spawn";
 pub const ADD_SIBLING: &str = "add_sibling";
@@ -357,6 +357,7 @@ fn tool(name: &str, definition: Value) -> Tool {
         name: name.into(),
         definition: definition.to_string(),
         audience: Audience::Agent,
+        held: false,
     }
 }
 
@@ -434,7 +435,7 @@ pub fn attach(state: &State, values: Values, task: &Task, input: &[u8]) -> Resul
         let call = state
             .calls()
             .find(|(id, record)| {
-                record.outcome().is_some() && call_label(*id) == label && under(state, *id, task.id)
+                record.outcome().is_some() && id.label() == label && under(state, *id, task.id)
             })
             .map(|(id, _)| id)
             .ok_or(format!(
@@ -442,7 +443,7 @@ pub fn attach(state: &State, values: Values, task: &Task, input: &[u8]) -> Resul
             ))?;
         said.extend(cut(
             carried(state, values, "[harness] Attached: the", call),
-            &call_label(call),
+            &call.label(),
         ));
     }
     Ok(blocks(&said))
@@ -553,7 +554,7 @@ pub fn owned(state: &State, owner: &Task, input: &[u8]) -> Result<(CallId, Strin
 /// named).
 fn named(state: &State, owner: &Task, name: &str) -> Option<CallId> {
     owner.background.iter().rev().copied().find(|c| {
-        crate::render::call_label(*c) == name
+        c.label() == name
             || state.call(*c).is_some_and(
                 |r| matches!(&r.call.caller, Caller::Background { name: n, .. } if n == name),
             )
@@ -625,7 +626,7 @@ fn settled(state: &State, owner: &Task, name: &str) -> Option<CallId> {
         .filter(|(c, r)| {
             r.settled.is_some()
                 && matches!(&r.call.caller, Caller::Background { task, name: n, .. }
-                    if *task == owner.id && (n == name || call_label(*c) == name))
+                    if *task == owner.id && (n == name || c.label() == name))
         })
         .map(|(c, _)| c)
         .max()
@@ -634,8 +635,8 @@ fn settled(state: &State, owner: &Task, name: &str) -> Option<CallId> {
 /// How a background call is named to its owner: its name and its label.
 fn background_name(state: &State, call: CallId) -> String {
     match state.call(call).map(|r| &r.call.caller) {
-        Some(Caller::Background { name, .. }) => format!("`{name}` (`{}`)", call_label(call)),
-        _ => format!("`{}`", call_label(call)),
+        Some(Caller::Background { name, .. }) => format!("`{name}` (`{}`)", call.label()),
+        _ => format!("`{}`", call.label()),
     }
 }
 

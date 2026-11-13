@@ -25,6 +25,12 @@ use crate::value::Bytes;
 /// directory. A role that holds it gives each of its agents a [`Workdir`].
 pub const WORKSPACE: &str = "workspace";
 
+/// The tool set of a task facing Max: the tools that reach him (its page,
+/// `ask`, `open_chat`) and the instructions for talking with him. The
+/// brain hosts it. No role names it: a task holds it because of its
+/// [`crate::task::Mode`], on top of its role's sets.
+pub const MAX: &str = "max";
+
 /// A limb: a process the harness runs on one machine as one user, so that
 /// agents can do things there; or the brain, which hosts the harness's own
 /// tool sets.
@@ -444,6 +450,13 @@ pub struct Tool {
     /// schema, and whether it is deferred.
     pub definition: String,
     pub audience: Audience,
+    /// Whether an agent's call holds something open for as long as it runs,
+    /// as `tab` holds a browser tab, so it only ever runs in the
+    /// background: called directly, it moves there as soon as its response
+    /// is whole ([`crate::call::CallEvent::Backgrounded`]), named by its
+    /// label ([`CallId::label`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 /// Who may call a tool. Max's face renders his tools as controls; an

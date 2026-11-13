@@ -30,10 +30,20 @@ pub use crate::id::RoleId;
 /// I say meta lim, I think meta role makes more sense. A role can be hosted
 /// in the brain."
 ///
-/// What an agent cannot do is what its role holds no set for. The attention
+/// What an agent cannot do is what it holds no set for: its role's sets are
+/// the minimum every agent in it holds, and facing Max adds the
+/// [`crate::limb::MAX`] set ([`crate::task::Mode`]). The attention
 /// scheduler's role holds only `attention`, so it can reorder the queue and
-/// cannot spawn, read files or speak to Max: there is no permission check
-/// to get wrong. What a task can start fresh is its own role's `starts`,
+/// cannot spawn or read files: there is no permission check to get wrong.
+/// A tool an agent holds always works; a call can fail only because the
+/// world said no or its input means nothing, never because the agent may
+/// not.
+///
+/// Each tool's input holds only what its caller alone knows. What the
+/// harness knows (where the caller works, what it holds, whether its root
+/// is stale) it decides, and what a role should decide (whether its agents
+/// work in a directory, which roles they start) is in the role, so no
+/// agent is asked for it and none gets it wrong. What a task can start fresh is its own role's `starts`,
 /// checked by the brain's fold against the task whose meta call creates it,
 /// so "only the orchestrator launches designers" is the shape of each
 /// one's world, and a member adding a sibling to its scope is held to its
@@ -87,10 +97,11 @@ pub struct Role {
     /// effort, thinking, the output limit. Not part of the context, so a new
     /// version applies from each task's next request.
     pub params: ValueId,
-    /// The tool sets its agents hold, by name, in the order their tools are
-    /// declared: `meta`, `web`, `user`, `workspace`, `browser`, `builds`,
-    /// currently. One that holds [`crate::limb::WORKSPACE`] gives each agent
-    /// a working directory when it is created.
+    /// The tool sets every agent in it holds, by name, in the order their
+    /// tools are declared: `meta`, `web`, `user`, `workspace`, `browser`,
+    /// `builds`, currently. One that holds [`crate::limb::WORKSPACE`] gives
+    /// each agent a working directory when it is created. Never
+    /// [`crate::limb::MAX`], which facing Max adds.
     #[serde(default)]
     pub tools: Vec<String>,
     /// The roles a task in it can start fresh tasks in. A fork of itself can

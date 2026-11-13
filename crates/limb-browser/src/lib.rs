@@ -487,11 +487,13 @@ impl Inner {
         cancel: &Cancel,
         report: &mut Report,
     ) -> Outcome {
-        let Caller::Background { task, name, .. } = &call.caller else {
-            return report.failed(
-                "run `tab` with `background`: its name is the tab's name, and the tab stays open \
-                 while it runs",
-            );
+        // Called directly, it runs in the background named by its label.
+        let (task, name) = match &call.caller {
+            Caller::Background { task, name, .. } => (*task, name.clone()),
+            Caller::Agent { task, .. } => (*task, id.label()),
+            Caller::Max { .. } | Caller::Meta { .. } => {
+                return report.failed("a tab is an agent's: Max opens his own in the browser");
+            }
         };
         let url = input["url"].as_str().unwrap_or("about:blank");
         let opened = self
@@ -505,7 +507,7 @@ impl Inner {
             id,
             Held {
                 name: name.clone(),
-                task: *task,
+                task,
                 owner,
                 target: Some(target.clone()),
             },

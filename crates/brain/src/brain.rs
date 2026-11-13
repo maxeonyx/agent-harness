@@ -1262,7 +1262,7 @@ waited on nothing: answer him, then {}",
         Ok(words(&format!(
             "Opened `{name}` (`{}`) for Max: it is in his queue, and when he marks it done its last message \
 comes to you as a message. `stop` it to close it.",
-            render::call_label(made)
+            made.label()
         )))
     }
 
