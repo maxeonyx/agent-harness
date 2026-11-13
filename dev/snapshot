@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# A copy of a long-lived brain's database, taken while it serves.
+#
+#   dev/snapshot NAME OUT
+#
+# Copies ~/.local/share/agent-harness/NAME/brain.sqlite (NAME is `home`,
+# `dogfood`, ...) to OUT, a new file, as one consistent snapshot: a single
+# read transaction (`VACUUM INTO`), at the lowest CPU and IO priority. It
+# never blocks the brain's writes, and its writes never make it start
+# over, as they make sqlite3's `.backup` do: a `.backup` of the home
+# database ran for 7 minutes, rereading 1.9 GB each time it restarted.
+# Never `.backup` or `cp` a live database; take one snapshot per task and
+# reuse it, since each costs a read and a write of the whole database.
+set -euo pipefail
+[ $# -eq 2 ] || { sed -n '2,13p' "$0" | cut -c3- >&2; exit 2; }
+db=~/.local/share/agent-harness/$1/brain.sqlite
+[ -f "$db" ] || { echo "no database at $db" >&2; exit 1; }
+[ ! -e "$2" ] || { echo "$2 exists: name a new file" >&2; exit 1; }
+out=$(realpath -m "$2")
+exec nice -n 19 ionice -c 3 sqlite3 "file:$db?mode=ro" "VACUUM INTO '${out//\'/\'\'}'"

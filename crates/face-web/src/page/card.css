@@ -102,7 +102,7 @@
   .prose table { border-collapse: collapse; font-size: .92em; display: block; max-width: max-content; overflow-x: auto; overflow-y: hidden; }
   .prose th, .prose td { border: 1px solid var(--line); padding: .3em .6em; text-align: left; overflow-wrap: break-word; }
   .prose a { color: var(--maroon); }
-  .prose img { max-width: 100%; }
+  .prose img, .log img { max-width: 100%; height: auto; }
   .plain { white-space: pre-wrap; }
   .said { display: flex; flex-direction: column; align-items: flex-end; }
   .said .bubble { max-width: 85%; background: #e9e5da; border-radius: 16px 16px 4px 16px; padding: .6em 1em; font: 15px/1.55 var(--sans); white-space: pre-wrap; overflow-wrap: anywhere; }
