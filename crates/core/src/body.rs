@@ -180,8 +180,10 @@ pub type Cell = Vec<Inline>;
 /// is a thin chevron and the summary in small UI type, with no box, rule or
 /// label; open, the body hangs from a hairline under it. Written inline
 /// (`<details><summary>`), right after the sentence it backs, so detail is
-/// one press from its claim and never an appendix. Every new version of a page starts with every fold closed; within one version a
-/// fold he opened stays open. Folds do not nest.
+/// one press from its claim and never an appendix. Its inside is markdown
+/// of the same body, parsed with it. Every new version of a page starts
+/// with every fold closed; within one version a fold he opened stays open.
+/// Folds do not nest.
 ///
 /// Serves: "I can scroll to see more"; "stuff should only come once it's
 /// relevant"; "if I want, I can expand".
@@ -191,7 +193,7 @@ pub struct Fold {
     /// call". "Details", "Show more", a trailing colon, or over 100
     /// characters is listed as a problem.
     pub summary: String,
-    pub body: ValueId,
+    pub body: Vec<Block>,
 }
 
 /// Something in an agent's writing the language draws differently from how
