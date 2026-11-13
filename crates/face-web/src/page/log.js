@@ -1,4 +1,4 @@
-import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
+import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, reduced, scrollEl } from "./base.js";
 import { act, can } from "./tab.js";
 import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
 import { dress, paint, trouble } from "./draw.js";
@@ -30,14 +30,16 @@ export async function renderLog(t) {
   if (s.seen !== seen) {
     s.seen = seen;
     const head = t.head, moved = s.head !== head;
-    const [chain, versions] = await Promise.all([moved && head ? contextOf(head) : [], versionsOf(t.id)]);
+    if (moved && head && s.rendered.length === 0 && !contexts.has(head)) load(t);
+    const versions = versionsOf(t.id), chain = moved && head ? await contextOf(head) : [];
     if (logState !== s || s.seen !== seen) return;
     if (!chain) { s.seen = undefined; return; }
     if (moved) { s.head = head; stick(() => appendChain(s, chain, t)); }
-    s.versions = versions;
-    stick(() => markVersions(s));
+    // Its versions mark it when they come: a context the page holds draws at once.
+    versions.then((v) => { if (logState === s && s.seen === seen) { s.versions = v; stick(() => markVersions(s)); } });
   }
   stick(() => renderTail(s, t));
+  if (pane.classList.contains("loading") && (s.head || !t.head)) settle(t);
   if (s.at && s.head) landAt(s);
 }
 
@@ -817,8 +819,21 @@ function renderTail(s, t) {
 // and a tap goes to the bottom. Where it is and how big is the scroll's alone
 // (`card.css`). While the chat waits on Max a tap also starts dictation, and
 // while he dictates its microphone swells with his voice and a tap stops it.
-const blobSession = session(), dock = $(".pane > .dock", panel);
+const blobSession = session(), dock = $(".pane > .dock", panel), pane = dock.parentElement;
 let blobs, blobBox = null, blobTask = null;
+// While a chat's log loads its blob waits, loading, in the middle of the
+// empty log (`card.css`); once the log is drawn it glides from there to its
+// place below the last entry, and shows the chat's state.
+function load(t) { pane.classList.add("loading"); showBlob(t); }
+// Its acts, hidden while it loads, come down with it.
+function settle(t) {
+  const from = dock.getBoundingClientRect().top;
+  pane.classList.remove("loading");
+  showBlob(t);
+  if (reduced()) return;
+  const glide = [{ translate: `0 ${from - dock.getBoundingClientRect().top}px` }, { translate: "0 0" }];
+  for (const x of [dock, $(".pane > .acts", panel)]) x.animate(glide, { duration: 700, easing: "cubic-bezier(.3, 0, .2, 1)" });
+}
 function showBlob(t) {
   if (blobs === undefined) blobs = layer(dock);
   dock.hidden = !blobs;
@@ -831,7 +846,7 @@ function showBlob(t) {
     };
     dock.append(blobBox);
   }
-  dress(blobSession, t, blobTask !== t.id);
+  dress(blobSession, t, blobTask !== t.id, pane.classList.contains("loading") ? "loading" : undefined);
   blobBox.title = blobSession.state === "max" && can.dictation ? "Go to bottom and dictate" : "Go to bottom";
   blobTask = t.id;
 }
