@@ -1,0 +1,63 @@
+  /* A chat's page, in the plain default theme. A theme (theme.js `wear`)
+     sets these tokens on `.sheet` itself, and the page reads only them. */
+  .sheet {
+    --paper: #fffefb; --ink: #141413; --body: #2b2a27; --muted: #6b6a64; --line: #e3dfd3;
+    --tint: #f4f1e8; --accent: #1d5f8a; --fig-1: #1d6a78; --fig-2: #b4573e; --fig-3: #6b7a2e; --fig-4: #5d6f86;
+    --cover-ink: var(--ink); --cover-body: var(--body);
+    --display: var(--serif); --display-bold: 600; --display-var: normal;
+    max-width: 48rem; margin: 0 auto 2em; padding: 2em 1.6em 1em;
+    background: var(--paper); color: var(--body); border-top: 1px solid var(--line);
+    font: 16.5px/1.6 var(--serif);
+  }
+  .sheet h1 { margin: 0 0 .4em; font: var(--display-bold) 2em/1.15 var(--display); font-variation-settings: var(--display-var); color: var(--cover-ink); text-wrap: balance; }
+  .sheet .lead .hook { margin: 0; font-size: 1.12em; color: var(--cover-body); }
+  .sheet section { margin-top: 1.8em; }
+  .sheet p { margin: 0 0 .7em; }
+  .sheet .says { color: var(--ink); font-size: 1.12em; }
+  .sheet a { color: var(--accent); text-underline-offset: 2px; }
+  .sheet code { font: .88em var(--mono); background: var(--tint); padding: .05em .3em; border-radius: 3px; }
+  .sheet pre { background: var(--tint); padding: .8em 1em; border-radius: 6px; overflow: auto; }
+  .sheet pre code { background: none; padding: 0; }
+  .sheet blockquote { margin: 0 0 .7em; padding-left: 1em; border-left: 3px solid var(--line); color: var(--muted); }
+  .sheet table { border-collapse: collapse; margin: 0 0 .9em; font-size: .94em; }
+  .sheet :is(th, td) { padding: .3em .8em .3em 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .sheet .numeric { text-align: right; font-variant-numeric: tabular-nums; }
+  .sheet figure { margin: 0 0 .9em; }
+  .sheet details > summary { cursor: pointer; color: var(--ink); }
+  /* A task list: what holds already, and what is not true yet. */
+  .sheet li.holds::marker { content: "☑  "; color: var(--fig-1); }
+  .sheet li.fails::marker { content: "☐  "; color: var(--muted); }
+  .sheet .steps { list-style: none; padding: 0; margin: 0; }
+  .sheet .step { padding: .5em 0 .4em 1.8em; position: relative; }
+  .sheet .step + .step { border-top: 1px solid var(--line); }
+  .sheet .step > .head { color: var(--ink); }
+  .sheet .step .mark { position: absolute; left: 0; width: 1.3em; text-align: center; color: var(--muted); }
+  .sheet .step.done .mark { color: var(--fig-1); }
+  .sheet .step.failed .mark, .sheet .step .failed { color: var(--fig-2); }
+  .sheet .step.yours .mark { color: var(--yours); }
+  .sheet .step.working .mark { color: var(--accent); }
+  .sheet .step.done > .head .title { color: var(--muted); }
+  .sheet .step > :not(.head) { margin-top: .3em; }
+  .sheet .ask { margin: .6em 0 .8em; padding: .8em 1em .4em; background: var(--tint); border-left: 3px solid var(--yours); border-radius: 0 6px 6px 0; }
+  .sheet .ask .question { color: var(--ink); font-size: 1.05em; font-weight: 600; }
+  .sheet .ask :is(.now, .why, .otherwise) { color: var(--body); font-size: .94em; }
+  .sheet .ask .otherwise { color: var(--muted); }
+  .sheet .choices { display: flex; flex-wrap: wrap; gap: .5em; margin: 0 0 .7em; font: 14px var(--sans); }
+  .sheet .press.recommended { border-color: var(--ink); }
+  .sheet .press.recommended::after { content: "recommended"; margin-left: .3em; color: var(--muted); font-size: .85em; }
+  .sheet .press.armed.recommended::after { color: inherit; }
+  .sheet .do { align-self: center; }
+  /* While the agent works: the page as one line above its progress. */
+  .sheet-line {
+    position: sticky; top: 0; z-index: 1; display: flex; gap: .6em; align-items: baseline; width: 100%;
+    padding: .55em 1.6em; background: var(--paper); border-bottom: 1px solid var(--line); text-align: left;
+    white-space: nowrap; overflow: hidden;
+  }
+  .sheet-line .title { font-weight: 600; color: var(--ink); }
+  .sheet-line .hook { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .sheet-line:hover { background: var(--hover); }
+  @media (max-width: 760px) {
+    .sheet { padding: 1.4em 1em .6em; font-size: 16px; }
+    .sheet h1 { font-size: 1.7em; }
+    .sheet-line { padding: .55em 1em; }
+  }

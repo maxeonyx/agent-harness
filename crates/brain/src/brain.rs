@@ -41,7 +41,7 @@ use harness_store::Store;
 
 use crate::roles;
 use harness_program::meta::{self, How};
-use harness_program::{history, max, policy, render, web};
+use harness_program::{history, max, page, policy, render, web};
 
 /// How long the loop sleeps when nothing arrives: the resolution of backoff
 /// and fan-out timing.
@@ -1084,6 +1084,7 @@ impl Brain {
             return match call.tool.as_str() {
                 web::USAGE => self.read_usage(id, &call),
                 history::FIND | history::CONTEXT => self.history(id, &call),
+                tool if page::TOOLS.contains(&tool) => self.page(id, &call),
                 _ => self.spawn(id, &call),
             };
         }
@@ -1128,6 +1129,45 @@ impl Brain {
             values: Vec::new(),
             facts: vec![Fact::Call(id, CallEvent::Dispatched)],
         };
+        settle(id, said, &mut batch);
+        self.answer(id, batch)
+    }
+
+    /// Run an agent's page or ask tool, settling it in the batch of its
+    /// dispatch with what it did ([`page::run`]). An ask's own background
+    /// call is only dispatched: it is open until it settles.
+    fn page(&mut self, id: CallId, call: &Call) {
+        let mut batch = Batch {
+            values: Vec::new(),
+            facts: vec![Fact::Call(id, CallEvent::Dispatched)],
+        };
+        let task = match call.caller {
+            Caller::Background { .. } if call.tool == page::ASK => return self.answer(id, batch),
+            Caller::Agent { task, .. } => task,
+            _ => {
+                let said = format!("The harness offers Max no tool `{}`.", call.tool);
+                return self.fail_call(id, &said);
+            }
+        };
+        let task = self.state().task(task).expect("the calling task").clone();
+        let input = self.value(call.input);
+        let next = self.decider.next();
+        let offset = batch.facts.len();
+        let mint = |i: usize| next.event((offset + i) as u32);
+        let said = page::run(
+            self.state(),
+            &|v| self.value(v),
+            &task,
+            id,
+            &call.tool,
+            &input,
+            &mint,
+        )
+        .map(|done| {
+            batch.values.extend(done.values);
+            batch.facts.extend(done.facts);
+            words(&done.said)
+        });
         settle(id, said, &mut batch);
         self.answer(id, batch)
     }

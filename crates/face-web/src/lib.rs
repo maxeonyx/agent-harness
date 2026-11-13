@@ -135,6 +135,7 @@ mod dictation;
 mod find;
 mod http;
 mod live;
+mod sheet;
 mod view;
 
 use std::borrow::Cow;
@@ -1041,6 +1042,7 @@ const DOCUMENT: &[&str] = &[
     "map.css",
     "overlays.css",
     "card.css",
+    "sheet.css",
     "compose.css",
     "phone.css",
     "body.html",

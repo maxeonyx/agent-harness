@@ -6,7 +6,9 @@ license.workspace = true
 description = "A session's program: what its requests render, the harness's tools, and the policy the core leaves open. No I/O; builds for wasm32."
 
 [dependencies]
+harness-body = { path = "../body" }
 harness-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
 # preserve_order: a tool definition reaches the model in the order it is written.
 # Feature unification turns it on for every crate in the workspace.
 serde_json = { version = "1", features = ["preserve_order"] }

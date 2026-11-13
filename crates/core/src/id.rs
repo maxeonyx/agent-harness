@@ -86,6 +86,10 @@ id!(
     RoleId
 );
 id!(
+    /// A [`crate::design::Feedback`]: the event that gave it.
+    FeedbackId
+);
+id!(
     /// A [`crate::limb::Limb`]: the event of its first version. One per
     /// brain, machine and user.
     LimbId

@@ -13,6 +13,7 @@ use crate::fact::{Author, Fact, Rejected, Stated};
 use crate::id::{CallId, DeliveryId, LimbId, ModelCallId, RoleId, TaskId, Timestamp, ValueId};
 use crate::limb::Workdir;
 use crate::model_call::{Ending, ModelCallEvent, Stop};
+use crate::page::Description;
 use crate::resource::{Change, Observation, ResourceKey, Version};
 use crate::role::{Binding, Tuning};
 use crate::state::{Mark, State};
@@ -117,6 +118,8 @@ pub struct Task {
     /// Max's actions in its chat that have not settled. Each settlement
     /// rides into its next request without waking it.
     pub max_actions: Vec<CallId>,
+    /// What its agent says about itself: its title and its plan.
+    pub description: Description,
     pub life: Life,
 }
 
@@ -543,6 +546,27 @@ impl Start {
 /// it as background work and hears its result when he marks it done.
 pub const OPEN_CHAT: &str = "open_chat";
 
+/// The `max` set's tool that shows Max the page and ends the turn on his
+/// move ([`crate::page::PageEvent::Presented`]).
+pub const PRESENT: &str = "present";
+
+/// Whether the round of the response `entry` presented the page: one of its
+/// calls is a `present` that completed, the one settling `now` included.
+fn presented(world: &State, entry: EntryId, now: (CallId, Option<&CallOutcome>)) -> bool {
+    let Some(request) = world.response(entry) else {
+        return false;
+    };
+    request.calls.iter().any(|id| {
+        world.call(*id).is_some_and(|c| {
+            let outcome = match now {
+                (settling, Some(outcome)) if settling == *id => Some(outcome),
+                _ => c.settled.as_ref().map(|s| &s.outcome),
+            };
+            c.call.tool == PRESENT && matches!(outcome, Some(CallOutcome::Completed(_)))
+        })
+    })
+}
+
 /// What the end of a model turn means for this task, and so whether it
 /// faces Max and holds the [`crate::limb::MAX`] tool set.
 ///
@@ -808,6 +832,9 @@ pub enum TaskEvent {
     Created(Box<Created>),
     ModeSet(Mode),
     Renamed(String),
+    /// Its agent's `describe`: what it says about itself, each field given
+    /// replacing only itself ([`Description::and`]).
+    Described(Description),
     /// Max sets the model and effort its next requests run at
     /// ([`Tuning`]), the whole setting at once.
     Tuned(Tuning),
@@ -911,6 +938,7 @@ impl TaskEvent {
             | TaskEvent::Drain(_)
             | TaskEvent::Expired
             | TaskEvent::Pause(_) => {}
+            TaskEvent::Described(description) => description.values(out),
         }
     }
 }
@@ -1175,6 +1203,7 @@ impl Task {
             pending,
             background: Vec::new(),
             max_actions,
+            description: Description::default(),
             life,
         })
     }
@@ -1369,6 +1398,7 @@ impl Task {
                 }
             }
             TaskEvent::Renamed(name) => self.name = name.clone(),
+            TaskEvent::Described(said) => self.description = self.description.and(said),
             TaskEvent::Tuned(tuning) => self.tuning = tuning.clone(),
             TaskEvent::Moved(Move::Root(start)) => {
                 if self.life != Life::Starting {
@@ -1465,7 +1495,7 @@ impl Task {
                 .settled
                 .is_some()
             {
-                self.settled(*call, at, world)?;
+                self.settled(*call, None, at, world)?;
             }
         }
         Ok(())
@@ -1663,7 +1693,7 @@ impl Task {
                 }
                 Ok(())
             }
-            CallEvent::Settled(_) => self.settled(id, at, world),
+            CallEvent::Settled(outcome) => self.settled(id, Some(outcome), at, world),
             CallEvent::Passed { to, .. } => {
                 if let Some(i) = self.background.iter().position(|c| *c == id) {
                     self.background.remove(i);
@@ -1709,16 +1739,30 @@ impl Task {
 
     /// A call this task waits on has settled: one of its round, its
     /// background work, or one of Max's actions in its chat.
-    fn settled(&mut self, call: CallId, at: Timestamp, world: &State) -> Result<(), Rejected> {
+    /// `outcome` is the one settling it now, which the world does not hold
+    /// yet.
+    fn settled(
+        &mut self,
+        call: CallId,
+        outcome: Option<&CallOutcome>,
+        at: Timestamp,
+        world: &State,
+    ) -> Result<(), Rejected> {
         if let Life::Live(live) = &mut self.life
             && let Phase::Acting(step) = &mut live.phase
             && let Some(i) = step.outstanding.iter().position(|c| *c == call)
         {
             step.outstanding.remove(i);
             let done = step.outstanding.is_empty();
+            let response = step.response;
             self.pending.push(Input::Result(call));
             if done {
-                self.drained(at);
+                // A round that presented its page ends the turn on Max's
+                // move, as a response with no tool uses would.
+                match response.filter(|r| presented(world, *r, (call, outcome))) {
+                    Some(entry) if self.drain().is_none() => self.turn_ended(entry, at, world),
+                    _ => self.drained(at),
+                }
             }
             return Ok(());
         }

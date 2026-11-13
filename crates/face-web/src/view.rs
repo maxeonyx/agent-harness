@@ -12,6 +12,7 @@ use harness_core::fact::Fact;
 use harness_core::id::{CallId, LimbId, TaskId, Timestamp, ToolUseId, ValueId};
 use harness_core::limb::{Defined, Host, Prepared, Reach};
 use harness_core::model_call::{Ending, ModelCallEvent, Window};
+use harness_core::page::PageEvent;
 use harness_core::role::{Effort, Role};
 use harness_core::state::{Ended, Hold, State, Waiting};
 use harness_core::task::{
@@ -22,7 +23,7 @@ use harness_provider::Model;
 use serde_json::{Value, json};
 
 /// A stored value as text, for the page: a mandate, a call's input.
-type Text<'a> = &'a dyn Fn(ValueId) -> Option<Vec<u8>>;
+pub(crate) type Text<'a> = &'a dyn Fn(ValueId) -> Option<Vec<u8>>;
 
 fn text(value: Text, id: ValueId) -> Option<String> {
     value(id).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
@@ -77,6 +78,7 @@ pub fn rows(
     for t in state.tasks() {
         let mut row = task(state, value, t, state.last_turn(t.id), now);
         row["turn"] = json!(turns.get(&t.id).map(|id| id.to_string()));
+        row["page"] = json!(crate::sheet::row(state, value, t));
         rows.insert(FaceKey::Task(t.id), FaceRow::Task(row));
     }
     let queue: Vec<Value> = state
@@ -617,6 +619,7 @@ pub fn describe(state: &State, fact: &Fact) -> String {
             }
             TaskEvent::ModeSet(mode) => format!("{} is now {mode:?}", name(*id)),
             TaskEvent::Renamed(new) => format!("{} renamed to {new}", name(*id)),
+            TaskEvent::Described(_) => format!("{} described itself", name(*id)),
             TaskEvent::Tuned(tuning) => format!(
                 "{} tuned to {} at {} effort",
                 name(*id),
@@ -773,6 +776,11 @@ pub fn describe(state: &State, fact: &Fact) -> String {
         }
         Fact::Ranking(r) => format!("queue ranked: {} placed", r.order.len()),
         Fact::Focus(_) => "a face changed focus".into(),
+        Fact::Page(id, PageEvent::Edited { .. }) => format!("{} edited its page", name(*id)),
+        Fact::Page(id, PageEvent::Presented { .. }) => {
+            format!("{} presented its page to Max", name(*id))
+        }
+        Fact::Feedback(_, _) => "feedback for the design keeper".into(),
         Fact::Face(replica) => format!("tab {replica} is Max's"),
         Fact::Seen(at) => format!("as seen at {at}"),
         Fact::Draft(id, event) => {
