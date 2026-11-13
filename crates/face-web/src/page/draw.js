@@ -27,10 +27,11 @@ function sessionOf(n) {
 }
 // What task t's blob shows, on its map node and in its chat's dock alike:
 // its state, hollow with how many it waits on for its letter while its own
-// node is a planned join waiting on its work, and its compactions.
-export function dress(s, t, jump = false) {
+// node is a planned join waiting on its work, and its compactions; or
+// `state` in place of its own.
+export function dress(s, t, jump = false, state = stateFor(t)) {
   const n = graph.nodes.get(t.id);
-  s.set(stateFor(t), jump);
+  s.set(state, jump);
   s.hollow = n?.kind === "planned" && !n.solid;
   s.letter = s.hollow ? String(waitingOn(t).n) : glyph(t);
   s.pips = n?.pips ?? 0;

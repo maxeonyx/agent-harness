@@ -1,4 +1,4 @@
-import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, scrollEl } from "./base.js";
+import { $, clock, el, getJson, gist, icon, ICONS, kTokens, logEl, markdown, panel, parse, reduced, scrollEl } from "./base.js";
 import { act, can } from "./tab.js";
 import { byId, glyph, isDone, look, order, shortName, view } from "./map.js";
 import { dress, paint, trouble } from "./draw.js";
@@ -30,14 +30,16 @@ export async function renderLog(t) {
   if (s.seen !== seen) {
     s.seen = seen;
     const head = t.head, moved = s.head !== head;
-    const [chain, versions] = await Promise.all([moved && head ? contextOf(head) : [], versionsOf(t.id)]);
+    if (moved && head && s.rendered.length === 0 && !contexts.has(head)) load(t);
+    const versions = versionsOf(t.id), chain = moved && head ? await contextOf(head) : [];
     if (logState !== s || s.seen !== seen) return;
     if (!chain) { s.seen = undefined; return; }
     if (moved) { s.head = head; stick(() => appendChain(s, chain, t)); }
-    s.versions = versions;
-    stick(() => markVersions(s));
+    // Its versions mark it when they come: a context the page holds draws at once.
+    versions.then((v) => { if (logState === s && s.seen === seen) { s.versions = v; stick(() => markVersions(s)); } });
   }
   stick(() => renderTail(s, t));
+  if (pane.classList.contains("loading") && (s.head || !t.head)) settle(t);
   if (s.at && s.head) landAt(s);
 }
 
@@ -156,7 +158,7 @@ function entry(s, into, e, index, t, parent, only) {
       if (b.type === "tool_result") { if (only !== "words") result(s, b); return; }
       if (only === "results") return;
       closeGroup(s);
-      if (b.type === "image") { const img = el("img"); img.src = `data:${b.source?.media_type};base64,${b.source?.data}`; img.style.maxWidth = "100%"; into.append(img); return; }
+      if (b.type === "image") { into.append(image(b.source)); return; }
       if (b.type !== "text" || who.by === "label") return;
       const text = b.text || "";
       if (who.by === "max" && carry) {
@@ -705,8 +707,27 @@ function result(s, b) {
   // A spawn's result is its agents' parts, each in its agent's line.
   const byAgent = r.b.name === "spawn" && !b.is_error ? parts(b.content, new Set((r.inner.tasks || []).map((x) => x.name))) : null;
   if (byAgent) { r.results = byAgent; fillMembers(s, b.tool_use_id); return; }
-  for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") { const img = el("img", "res"); img.src = `data:${x.source?.media_type};base64,${x.source?.data}`; img.style.maxWidth = "100%"; detail.append(img); }
+  for (const x of Array.isArray(b.content) ? b.content : []) if (x.type === "image") detail.append(image(x.source, "res", r.row));
   detail.append(out);
+}
+// An image of the log, from where the face serves it, sized before it
+// comes so the log does not move when it does. It is fetched only once it
+// is about to be seen: once `near` (the image itself, or the folded tool
+// call it is in, one tap from showing it) is within a screen of the view.
+// One that fails keeps its room, and is fetched again once the device is
+// back online.
+const soon = new IntersectionObserver((seen) => {
+  for (const s of seen) if (s.isIntersecting) { soon.unobserve(s.target); for (const img of s.target.waiting) img.src = img.dataset.src; s.target.waiting = []; }
+}, { root: scrollEl, rootMargin: "100% 0px" });
+function image(source, cls, near) {
+  const img = el("img", cls);
+  if (source?.width !== undefined) { img.width = source.width; img.height = source.height; img.style.aspectRatio = `${source.width} / ${source.height}`; }
+  img.dataset.src = source?.url ?? "";
+  img.onerror = () => addEventListener("online", () => { img.src = img.dataset.src; }, { once: true });
+  const at = near ?? img;
+  at.waiting = [...(at.waiting ?? []), img];
+  soon.observe(at);
+  return img;
 }
 // A tool's input, or a result that is data, as it reads: each field by its
 // name, an empty one left out; a string as text (an agent's own words as
@@ -798,8 +819,21 @@ function renderTail(s, t) {
 // and a tap goes to the bottom. Where it is and how big is the scroll's alone
 // (`card.css`). While the chat waits on Max a tap also starts dictation, and
 // while he dictates its microphone swells with his voice and a tap stops it.
-const blobSession = session(), dock = $(".pane > .dock", panel);
+const blobSession = session(), dock = $(".pane > .dock", panel), pane = dock.parentElement;
 let blobs, blobBox = null, blobTask = null;
+// While a chat's log loads its blob waits, loading, in the middle of the
+// empty log (`card.css`); once the log is drawn it glides from there to its
+// place below the last entry, and shows the chat's state.
+function load(t) { pane.classList.add("loading"); showBlob(t); }
+// Its acts, hidden while it loads, come down with it.
+function settle(t) {
+  const from = dock.getBoundingClientRect().top;
+  pane.classList.remove("loading");
+  showBlob(t);
+  if (reduced()) return;
+  const glide = [{ translate: `0 ${from - dock.getBoundingClientRect().top}px` }, { translate: "0 0" }];
+  for (const x of [dock, $(".pane > .acts", panel)]) x.animate(glide, { duration: 700, easing: "cubic-bezier(.3, 0, .2, 1)" });
+}
 function showBlob(t) {
   if (blobs === undefined) blobs = layer(dock);
   dock.hidden = !blobs;
@@ -812,7 +846,7 @@ function showBlob(t) {
     };
     dock.append(blobBox);
   }
-  dress(blobSession, t, blobTask !== t.id);
+  dress(blobSession, t, blobTask !== t.id, pane.classList.contains("loading") ? "loading" : undefined);
   blobBox.title = blobSession.state === "max" && can.dictation ? "Go to bottom and dictate" : "Go to bottom";
   blobTask = t.id;
 }
