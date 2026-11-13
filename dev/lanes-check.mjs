@@ -12,14 +12,18 @@ const stub = () => new Proxy(function () {}, { get: (_, k) => (k === Symbol.toPr
 Object.assign(globalThis, { document: stub(), getComputedStyle: () => stub(), window: globalThis });
 const fs = await import("node:fs");
 const map = await import("../crates/face-web/src/page/map.js");
-const { lanes } = await import("../crates/face-web/src/page/layout.js");
+const { lanes, setVariant } = await import("../crates/face-web/src/page/layout.js");
+// SPIKE: VARIANT=name picks layout.js's variant; width is summed over projects.
+if (process.env.VARIANT) setVariant(process.env.VARIANT);
 
 map.takeView(JSON.parse(fs.readFileSync(process.argv[2], "utf8")));
 map.derive(null);
-let forced = 0, bad = 0, lines = 0;
+let forced = 0, bad = 0, lines = 0, width = 0;
 for (const c of map.graph.comps) {
   const ns = map.nodesOf(c), l = lanes(ns), by = new Map(ns.map((n) => [n.id, n]));
   lines += l.edges.length;
+  const xs = [...l.at.values()].map((p) => p.x);
+  width += Math.max(...xs) - Math.min(...xs);
   const name = c.root.name;
   for (const x of l.cuts) {
     if (x.forced) { forced++; continue; }
@@ -39,7 +43,7 @@ for (const c of map.graph.comps) {
     }
   }
 }
-console.log(`${map.graph.comps.length} projects, ${lines} lines: ${forced} forced crossings, ${bad} faults`);
+console.log(`${map.graph.comps.length} projects, ${lines} lines: ${forced} forced crossings, ${bad} faults, width ${Math.round(width)}`);
 process.exit(bad ? 1 : 0);
 
 function dist(p, a, b) {

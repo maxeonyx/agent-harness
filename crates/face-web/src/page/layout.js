@@ -26,16 +26,16 @@
 const PITCH = 20, CLEAR = 8, SPIN = 5;
 // An agent's line is LIFE wide, a tool's (`light`) TOOL. Each runs TUCK
 // under the edge of its dots. A taper runs from TIP up to its line's width
-// over at most TAPER, then keeps it; it narrows to a point over its last
+// over at most variant.taper, then keeps it; it narrows to a point over its last
 // POINT, which stops NGAP short of the dot it starts from or rejoins. A
 // crossing's gap is GAP each side of the line over it, and only where the
-// lines cross at STEEP or more: at a shallower angle they run along each
+// lines cross at variant.steep or more: at a shallower angle they run along each
 // other, and a gap would cut the line under into islands, so the line over
 // simply covers it.
 export const LIFE = 2.2;
 const TOOL = 1.2;
 export const GAP = 1.5;
-const TIP = .5, POINT = 4, NGAP = 1.5, TUCK = -.6, TAPER = 48, STEEP = Math.PI / 6;
+const TIP = .5, POINT = 4, NGAP = 1.5, TUCK = -.6;
 // Ports: the lines out of a node's bottom, and into its top, spread evenly
 // over the WIDE either side of upright, its own lifeline upright in the
 // middle and each other line on the side facing its other end, in the
@@ -52,6 +52,23 @@ const TURN = 48;
 // A big node's half width, for where lines meet it.
 const BIG_HALF = 13;
 
+// SPIKE (MC-graph-options): switchable parts, each a decision in the
+// options doc. `place`: layered (5a5c9c0's), lanes (main's), lanes243
+// (#243's column rule), short (#243, a one-dot child's lane held only on
+// its dot's row). `curve`: orig (5a5c9c0's: through the gaps, rounded),
+// bend (#243, over the whole height), end (#255, bent only near its slant
+// end). `ports`: none (every line at its dot's middle), fixed (#240's
+// 36-66-82 degrees), even (#243's, over 120 degrees), pizza (left and
+// right slices reserved, even over the top and bottom sectors at most
+// `gap` degrees apart, same-context lines innermost). `parallel`: overlap
+// (string-pulled lines share a corner), side (lines through one gap keep
+// their order, LIFE apart), fan (lines keep their hidden points' x).
+// `taper`: its cap in px. `steep`: the angle in degrees a crossing needs
+// for a gap.
+const DEFAULT = { place: "layered", curve: "orig", ports: "pizza", gap: 20, parallel: "overlap", taper: 48, steep: 30 };
+let variant = DEFAULT;
+export function setVariant(v) { variant = { ...DEFAULT, ...v }; }
+
 // One project laid out: each node's centre, x about its first lane and
 // y = 0 on the present row, and each edge's line; and every crossing.
 export function lanes(nodes) {
@@ -62,16 +79,17 @@ export function lanes(nodes) {
   const edges = [];
   for (const v of V) for (const d of v.deps) edges.push({ v, d: by.get(d) });
   const L = lanesOf(V, edges);
-  columns(L);
-  spindles(L);
-  across(L);
+  let layers = null;
+  if (variant.place === "layered") layers = layered(V, edges);
+  else { columns(L); spindles(L); across(L); }
   // Down: each row as tall as its tallest node plus 17, the present row at
   // y = 0.
   const tall = [], ys = [0];
   for (const v of V) tall[v.rank] = Math.max(tall[v.rank] ?? 0, v.n.along);
   for (let r = 1; r < tall.length; r++) ys[r] = ys[r - 1] + (tall[r - 1] ?? 0) / 2 + (tall[r] ?? 0) / 2 + 17;
-  for (const v of V) { v.y = ys[v.rank] - ys[P]; v.x = v.lane.spin ? v.lane.from.lane.x + v.lane.off : v.lane.x; }
-  const sides = ports(edges);
+  for (const v of V) { v.y = ys[v.rank] - ys[P]; if (!layers) v.x = v.lane.spin ? v.lane.from.lane.x + v.lane.off : v.lane.x; }
+  if (layers) gapsOf(layers, ys, P);
+  const sides = variant.ports !== "none" ? ports(edges) : [];
   const at = [];
   for (const v of V) (at[v.rank] ??= []).push(v);
   const drawn = new Map();
@@ -83,14 +101,14 @@ export function lanes(nodes) {
     const y = h[0].v.y + h[0].side * Math.min(...h.map((p) => Math.abs(p.far.y - p.v.y)));
     const out = (p) => Math.abs((xAt(p.e, y) ?? p.far.x) - p.v.x);
     const was = [...h];
-    h.sort((a, b) => out(a) - out(b));
+    h.sort((a, b) => fork(a) - fork(b) || out(a) - out(b));
     if (h.every((p, i) => p === was[i])) continue;
     place(h, step);
     for (const p of h) { drawn.delete(p.e); route(p.e, at, drawn); }
   }
   const cuts = crossings(edges);
   const key = (e) => `${e.v.id}>${e.d.id}`;
-  const gaps = edges.map((e, i) => cuts.filter((c) => c.under === i && c.angle >= STEEP).map((c) => ({ over: key(edges[c.over]), ...near(edges[c.over], c) })));
+  const gaps = edges.map((e, i) => cuts.filter((c) => c.under === i && c.angle >= steep()).map((c) => ({ over: key(edges[c.over]), ...near(edges[c.over], c) })));
   const sheet = sheets(edges, gaps);
   return { at: new Map(V.map((v) => [v.id, { x: v.x, y: v.y }])), cuts, edges: edges.map((e, i) => ({ from: e.v.id, to: e.d.id, kind: e.kind, P: e.P, W: e.W, sheet: sheet[i], gaps: gaps[i] })) };
 }
@@ -198,6 +216,7 @@ function lanesOf(V, edges) {
     l.spin = l.nodes.length === 1 && !!l.from && !v.n.old && (!l.reader || l.reader === l.from.lane) && v.fan === (l.reader ? 2 : 1)
       && !l.from.lane.nodes.some((u) => l.r0 < u.rank && u.rank < l.r1);
     if (l.spin) l.from.lane.spins.push(l);
+    else if (variant.place === "short" && l.nodes.length === 1 && l.from && !v.n.old) l.r0 = l.r1 = v.rank;
   }
   return [...L.values()].sort((a, b) => a.r0 - b.r0 || a.nodes[0].key - b.nodes[0].key);
 }
@@ -216,7 +235,8 @@ function lanesOf(V, edges) {
 function columns(L) {
   const held = new Map();
   const end = (l) => (l.reader ? l.r1 - 1 : l.r1);
-  const free = (s, l) => !(held.get(s) || []).some((h) => h.a <= end(l) + 1 && l.a <= end(h) + 1);
+  const free = variant.place === "lanes243" ? (s, l) => !(held.get(s) || []).some((h) => h.r0 <= l.r1 && l.r0 <= h.r1)
+    : (s, l) => !(held.get(s) || []).some((h) => h.a <= end(l) + 1 && l.a <= end(h) + 1);
   const next = (s, side, l) => { while (!free(s, l)) s += side; return s; };
   // The lines a line of `l` from `m` to slot `s` would cross on row `r`,
   // below it for a start (`down`), above it for a result: not a lane that
@@ -316,6 +336,194 @@ function across(L) {
   }
 }
 
+// ─── Layered placement (5a5c9c0's) ─────────────────────────────────────────
+// The standard layered layout Graphviz `dot` uses: a long edge passes
+// through a hidden point in each row it crosses; rows ordered by barycentre
+// sweeps; then across, each line a spring pulling its ends together, each
+// row placed as near its neighbours as the gaps allow (PAVA). A long edge's
+// hidden points are a much stiffer spring, so it keeps one lane; every node
+// is pulled a little to the centre line. Sets each node's x; each edge's
+// hidden points, top down, as `mid`. Returns the rows.
+function layered(V, edges) {
+  const layers = [];
+  const put = (v) => (layers[v.rank] ??= []).push(v);
+  for (const v of V) { Object.assign(v, { up: [], down: [], lo: v.n.lo, hi: v.n.hi, along: v.n.along }); put(v); }
+  for (const e of edges) {
+    const { v, d } = e, chain = [v];
+    for (let r = v.rank - 1; r > d.rank; r--) {
+      const x = { dummy: true, rank: r, key: d.key + .5, up: [], down: [], lo: 1, hi: 1, along: 0 };
+      put(x);
+      chain.push(x);
+    }
+    chain.push(d);
+    for (let i = 0; i < chain.length - 1; i++) { chain[i].up.push(chain[i + 1]); chain[i + 1].down.push(chain[i]); }
+    e.mid = chain.slice(1, -1).reverse();
+  }
+  for (let r = 0; r < layers.length; r++) layers[r] ??= [];
+  for (const L of layers) { L.sort((a, b) => a.key - b.key); L.forEach((v, i) => (v.pos = i)); }
+  for (let it = 0; it < 9; it++) {
+    const down = it % 2 === 0;
+    for (const L of down ? layers.slice(1) : layers.slice(0, -1).reverse()) {
+      for (const v of L) {
+        const nb = down ? v.up : v.down;
+        v.bary = nb.length ? nb.reduce((s, u) => s + u.pos, 0) / nb.length : v.pos;
+      }
+      L.sort((a, b) => a.bary - b.bary || a.pos - b.pos);
+      L.forEach((v, i) => (v.pos = i));
+    }
+  }
+  const sep = (a, b) => a.hi + b.lo + (a.dummy || b.dummy ? 4 : 8);
+  const CENTRE = 1;
+  const stiff = (a, b) => (a.dummy && b.dummy ? 40 : a.dummy || b.dummy ? 2 : 1);
+  const gaps = layers.map((L) => L.slice(1).map((v, i) => sep(L[i], v)));
+  for (const [r, L] of layers.entries()) {
+    let x = 0;
+    L.forEach((v, i) => { if (i) x += gaps[r][i - 1]; v.x = x; });
+    for (const v of L) v.x -= x / 2;
+  }
+  for (const L of layers) for (const v of L) v.nb = [...v.up, ...v.down];
+  const most = layers.reduce((m, L) => Math.max(m, L.length), 0);
+  const t = new Float64Array(most), w = new Float64Array(most);
+  for (let it = 0; it < 24; it++) {
+    const down = it % 2 === 0, both = it >= 10;
+    for (let j = 0; j < layers.length; j++) {
+      const r = down ? j : layers.length - 1 - j, L = layers[r];
+      if (!L.length) continue;
+      for (let i = 0; i < L.length; i++) {
+        const v = L[i], nb = both ? v.nb : down ? v.up : v.down;
+        if (!nb.length) { t[i] = v.x; w[i] = .02; }
+        // A chain of single links stays straight.
+        else if (both && !v.dummy && v.up.length === 1 && v.up[0].down.length === 1 && !v.up[0].dummy) { t[i] = v.up[0].x; w[i] = 1; }
+        else if (both && !v.dummy && v.down.length === 1 && v.down[0].up.length === 1 && !v.down[0].dummy) { t[i] = v.down[0].x; w[i] = 1; }
+        else {
+          let sx = 0, sw = 0;
+          for (const u of nb) { const k = stiff(u, v); sx += k * u.x; sw += k; }
+          t[i] = sx / sw; w[i] = sw;
+        }
+        t[i] = (t[i] * w[i]) / (w[i] + CENTRE); w[i] += CENTRE;
+      }
+      pava(L, t, w, gaps[r]);
+    }
+  }
+  // A long edge's hidden points go to the one x nearest their mean that
+  // keeps every row's gaps; one crossed by another keeps its bends.
+  for (const e of edges) {
+    if (e.mid.length < 2) continue;
+    let lo = -Infinity, hi = Infinity, sum = 0;
+    for (const u of e.mid) {
+      const L = layers[u.rank], i = u.pos;
+      if (i > 0) lo = Math.max(lo, L[i - 1].x + sep(L[i - 1], u));
+      if (i < L.length - 1) hi = Math.min(hi, L[i + 1].x - sep(u, L[i + 1]));
+      sum += u.x;
+    }
+    if (lo > hi) continue;
+    const x = Math.min(hi, Math.max(lo, sum / e.mid.length));
+    for (const u of e.mid) u.x = x;
+  }
+  return layers;
+}
+// The room each hidden point has in its row, from the nearest real node on
+// its left to the nearest on its right, less 4 px: its line passes anywhere
+// in it, drawn taut (funnel()).
+function gapsOf(layers, ys, P) {
+  for (const [r, L] of layers.entries()) {
+    let lo = -Infinity;
+    for (const u of L) { u.y = ys[r] - ys[P]; if (u.dummy) u.gap = [lo, Infinity]; else lo = u.x + u.hi + 4; }
+    let hi = Infinity;
+    for (let i = L.length - 1; i >= 0; i--) if (L[i].dummy) L[i].gap[1] = hi; else hi = L[i].x - L[i].lo - 4;
+    if (variant.parallel === "fan") for (const u of L) if (u.dummy) u.gap = [u.x, u.x];
+    // Side by side: the hidden points in one gap keep their order, each
+    // ROOM inside the next, so lines pulled to one corner lie LIFE apart.
+    if (variant.parallel === "side") {
+      const ROOM = LIFE + .4;
+      for (let i = 0; i < L.length;) {
+        if (!L[i].dummy) { i++; continue; }
+        let j = i;
+        while (j < L.length && L[j].dummy) j++;
+        for (let k = i; k < j; k++) {
+          const g = L[k].gap;
+          g[0] += (k - i) * ROOM; g[1] -= (j - 1 - k) * ROOM;
+          if (g[0] > g[1]) g[0] = g[1] = (g[0] + g[1]) / 2;
+        }
+        i = j;
+      }
+    }
+  }
+}
+// Isotonic regression with minimum gaps: each node of row L as near its
+// target t[i] (weighted w[i]) as it can be, in order, each at least gap[i]
+// right of the one before.
+function pava(L, t, w, gap) {
+  const n = L.length, OFF = [0], BS = [], BW = [], BN = [];
+  for (let i = 1; i < n; i++) OFF[i] = OFF[i - 1] + gap[i - 1];
+  let k = 0;
+  for (let i = 0; i < n; i++) {
+    BS[k] = w[i] * (t[i] - OFF[i]); BW[k] = w[i]; BN[k] = 1; k++;
+    while (k > 1 && BS[k - 2] / BW[k - 2] > BS[k - 1] / BW[k - 1]) { BS[k - 2] += BS[k - 1]; BW[k - 2] += BW[k - 1]; BN[k - 2] += BN[k - 1]; k--; }
+  }
+  for (let b = 0, i = 0; b < k; b++) {
+    const m = BS[b] / BW[b];
+    for (let j = 0; j < BN[b]; j++, i++) L[i].x = m + OFF[i];
+  }
+}
+// The shortest line from P0 down to P1 through the gaps its hidden points
+// leave in the rows it crosses (a funnel, as in string pulling): its turns.
+function funnel(P0, P1, mid) {
+  const gaps = mid.map((u) => [u.gap[0], u.gap[1], u.y]);
+  gaps.push([P1[0], P1[0], P1[1]]);
+  let a = P0, k = 0;
+  const path = [a];
+  while (k < gaps.length - 1) {
+    let lo = -Infinity, hi = Infinity, loK = -1, hiK = -1, turn = null;
+    for (let j = k; j < gaps.length; j++) {
+      const [l, h, y] = gaps[j], dy = y - a[1] || 1e-9;
+      const sl = (l - a[0]) / dy, sh = (h - a[0]) / dy;
+      if (sl > hi) { turn = [hiK, 1]; break; }
+      if (sh < lo) { turn = [loK, 0]; break; }
+      if (sl > lo) { lo = sl; loK = j; }
+      if (sh < hi) { hi = sh; hiK = j; }
+    }
+    if (!turn || turn[0] === gaps.length - 1) break;
+    const [j, side] = turn;
+    a = [gaps[j][side], gaps[j][2]];
+    path.push(a);
+    k = j + 1;
+  }
+  path.push(P1);
+  return path;
+}
+// 5a5c9c0's curve through turns: it leaves and arrives along k0 and k1
+// (dx/dy) and rounds each turn, a cubic a stretch whose handles lie along
+// the chord of the turn's neighbours (Catmull-Rom), at most BEND long, so a
+// straight stretch stays straight. Sampled each 6 px or so.
+const BEND = 22;
+function rounded(p, k0, k1) {
+  const n = p.length - 1, unit = (x, y) => { const l = Math.hypot(x, y) || 1; return [x / l, y / l]; };
+  const dir = p.map((_, i) => (i === 0 ? unit(k0, 1) : i === n ? unit(k1, 1) : unit(p[i + 1][0] - p[i - 1][0], p[i + 1][1] - p[i - 1][1])));
+  const P = [];
+  for (let i = 0; i < n; i++) {
+    const a = p[i], b = p[i + 1];
+    const end = Math.max(0, Math.min((b[1] - a[1]) * .55, BEND));
+    const mid = Math.min(Math.hypot(b[0] - a[0], b[1] - a[1]) / 3, BEND);
+    const h0 = i === 0 ? end : mid, h1 = i + 1 === n ? end : mid;
+    const c = [a[0] + dir[i][0] * h0, a[1] + dir[i][1] * h0], d = [b[0] - dir[i + 1][0] * h1, b[1] - dir[i + 1][1] * h1];
+    const S = Math.max(2, Math.ceil((Math.hypot(c[0] - a[0], c[1] - a[1]) + Math.hypot(d[0] - c[0], d[1] - c[1]) + Math.hypot(b[0] - d[0], b[1] - d[1])) / 6));
+    for (let j = i ? 1 : 0; j <= S; j++) {
+      const t = j / S, u = 1 - t;
+      P.push([0, 1].map((k) => u * u * u * a[k] + 3 * u * u * t * c[k] + 3 * u * t * t * d[k] + t * t * t * b[k]));
+    }
+  }
+  return P;
+}
+// #243's bend through turns: each stretch bent over its height, leaving
+// and arriving along the chord of the turn's neighbours.
+function through(p, k0, k1) {
+  const n = p.length - 1, P = [];
+  const k = (i) => (i === 0 ? k0 : i === n ? k1 : (p[i + 1][0] - p[i - 1][0]) / (p[i + 1][1] - p[i - 1][1] || 1e-9));
+  for (let i = 0; i < n; i++) bend(P, p[i][0], p[i][1], k(i), p[i + 1][0], p[i + 1][1], k(i + 1));
+  return P;
+}
+
 // ─── Lines ─────────────────────────────────────────────────────────────────
 // Where a ray from node v's middle, along unit u, leaves it, plus gap.
 function edge(v, u, gap) {
@@ -345,16 +553,24 @@ function ports(edges) {
   // ports, as { h, step }.
   const across = (p) => Math.abs(p.far.x - p.v.x), down = (p) => Math.abs(p.far.y - p.v.y), sides = [];
   for (const here of at.values()) {
-    const halves = [-1, 1].map((s) => here.filter((p) => p.s === s).sort((a, b) => across(a) - across(b) || down(a) - down(b)));
-    const step = 2 * WIDE / (2 * Math.max(...halves.map((h) => h.length)) + 1);
+    const halves = [-1, 1].map((s) => here.filter((p) => p.s === s).sort((a, b) => fork(a) - fork(b) || across(a) - across(b) || down(a) - down(b)));
+    let step = 2 * WIDE / (2 * Math.max(...halves.map((h) => h.length)) + 1);
+    if (variant.ports === "pizza") step = Math.min(step, (variant.gap * Math.PI) / 180);
     for (const h of halves) { place(h, step); sides.push({ h, step }); }
   }
   return sides;
 }
+// Under pizza ports, a fork's line (its maker carrying on) goes innermost.
+const fork = (p) => (variant.ports === "pizza" && p.e.kind === "grow" && p.e.v.n.fork ? 0 : 1);
+// #240's ports: this far round from upright, innermost first.
+const SLOTS = [36, 66, 82].map((d) => (d * Math.PI) / 180);
+const slotsFor = (n) => (n <= SLOTS.length ? SLOTS : Array.from({ length: n }, (_, i) => SLOTS[0] + ((SLOTS[2] - SLOTS[0]) * i) / (n - 1)));
+const steep = () => (variant.steep * Math.PI) / 180;
 // Ports in order out from upright, `step` apart.
 function place(h, step) {
+  const fixed = variant.ports === "fixed" && slotsFor(h.length);
   h.forEach((p, i) => {
-    const g = step * (i + 1);
+    const g = fixed ? fixed[i] : step * (i + 1);
     p.p = edge(p.v, [p.s * Math.sin(g), p.side * Math.cos(g)], p.gap);
     p.k = p.s * Math.tan(g * LEAN) * p.side;
   });
@@ -383,12 +599,12 @@ function bend(P, x0, y0, k0, x1, y1, k1, late = 1) {
   return P;
 }
 // A taper's width s from its thin end: TIP to w along a smootherstep over
-// TAPER (or all of a shorter line), so the outline too meets the lifeline
+// variant.taper (or all of a shorter line), so the outline too meets the lifeline
 // with no change, then w; and over the last POINT eased down to nothing,
 // so the end is a point.
 function taper(s, L, w) {
   const t = Math.min(1, s / POINT);
-  return TIP * t * (2 - t) + (w - TIP) * smooth(Math.min(1, s / Math.min(L, TAPER)));
+  return TIP * t * (2 - t) + (w - TIP) * smooth(Math.min(1, s / Math.min(L, variant.taper)));
 }
 // An edge's ends, its points, and its widths if it tapers or is a tool's.
 // A life's own line runs upright between its dots; a spawn bends from its
@@ -399,18 +615,24 @@ function taper(s, L, w) {
 // most.
 function route(e, onRow, drawn) {
   const { v, d } = e;
-  const P0 = e.a ? e.a.p : edge(d, [0, 1], TUCK), P1 = e.b ? e.b.p : edge(v, [0, -1], TUCK);
-  let P = [P0, P1];
-  if (e.kind !== "life") {
+  // Without ports, a taper's thin end stops NGAP short of its dot.
+  const P0 = e.a ? e.a.p : edge(d, [0, 1], e.kind === "port" || (e.kind === "grow" && !v.n.fork) ? NGAP : TUCK);
+  const P1 = e.b ? e.b.p : edge(v, [0, -1], e.kind === "fade" || e.kind === "port" ? NGAP : TUCK);
+  const k0 = e.a?.k ?? 0, k1 = e.b?.k ?? 0, pts = e.mid ? funnel(P0, P1, e.mid) : [P0, P1];
+  let P = pts;
+  if (pts.length === 2 && P0[0] === P1[0] && !k0 && !k1) P = pts;
+  else if (variant.curve === "orig") P = rounded(pts, k0, k1);
+  else if (pts.length > 2) P = through(pts, k0, k1);
+  else {
     const x0 = Math.min(P0[0], P1[0]), x1 = Math.max(P0[0], P1[0]);
-    const turn = Math.max(TURN, x1 - x0), long = e.kind !== "port" && P1[1] - P0[1] > turn, fade = e.kind === "fade";
+    const turn = Math.max(TURN, x1 - x0), long = variant.curve === "end" && e.kind !== "port" && P1[1] - P0[1] > turn, fade = e.kind === "fade";
     const B0 = long && fade ? [P0[0], P1[1] - turn] : P0, B1 = long && !fade ? [P1[0], P0[1] + turn] : P1;
     const between = [];
     for (let r = d.rank; r <= v.rank; r++) for (const u of onRow[r] ?? []) if (u !== v && u !== d && u.x > x0 - 12 && u.x < x1 + 12) between.push(u);
     const near = [...drawn.values()].filter((o) => o.x0 <= x1 && x0 <= o.x1 && o.P[0][1] <= P1[1] && P0[1] <= o.P.at(-1)[1]);
     let fewest = Infinity;
     for (const late of [1, 2, 4, .5, .25]) {
-      const B = bend([], B0[0], B0[1], e.a?.k ?? 0, B1[0], B1[1], e.b?.k ?? 0, late);
+      const B = bend([], B0[0], B0[1], k0, B1[0], B1[1], k1, late);
       const Q = !long ? B : fade ? [P0, ...B] : [...B, P1];
       let n = 0;
       for (const u of between) if (over(Q, u)) n += 100;
@@ -552,10 +774,11 @@ function meet(p, q, r, s) {
 // along it each way. The page erases that band, GAP wider than it each
 // side, from the line under it, so the gap follows both lines and touches
 // nothing else. Two lines LIFE wide clear each other's gap once LIFE + GAP
-// apart, within (LIFE + GAP) / sin(STEEP) of a crossing at STEEP, the
+// apart, within (LIFE + GAP) / sin(steep) of a crossing at steep, the
 // shallowest that has a gap; SPAN is twice that, room for them to bend.
-const SPAN = 2 * (LIFE + GAP) / Math.sin(STEEP);
 function near(e, { at, seg }) {
+  // A gap at every crossing still takes 15 degrees' band, not an endless one.
+  const SPAN = 2 * (LIFE + GAP) / Math.sin(Math.max(steep(), Math.PI / 12));
   const w = (i) => e.W?.[i] ?? LIFE, [a, b] = [e.P[seg - 1], e.P[seg]];
   const t = Math.hypot(at[0] - a[0], at[1] - a[1]) / (Math.hypot(b[0] - a[0], b[1] - a[1]) || 1);
   const mid = [...at, w(seg - 1) + t * (w(seg) - w(seg - 1))];
