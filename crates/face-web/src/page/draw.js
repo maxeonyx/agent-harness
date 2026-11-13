@@ -9,6 +9,7 @@ import { renderBuilds } from "./builds.js";
 import { go, goStaying, moving, NEW, openId, renderPanel } from "./card.js";
 import { renderOthers, syncCompose } from "./compose.js";
 import { finding, found } from "./newchat.js";
+import { paintRegions } from "./regions.js";
 
 // ─── Drawing the map ───────────────────────────────────────────────────────
 // Three layers, moved by the camera together: the lines, in one SVG under
@@ -342,6 +343,7 @@ export function refresh() {
 
 export function render() {
   if (!view) return;
+  paintRegions();
   $("#empty").hidden = view.tasks.length > 0 || !!openId;
   renderUsage();
   renderBuilds();

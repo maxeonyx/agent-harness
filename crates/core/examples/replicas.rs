@@ -402,7 +402,13 @@ fn main() {
     let clock = hub.tick();
     let pc_send = pc.act(clock, |_| Batch {
         values: vec![words(&words_of[&pc_text]).1],
-        facts: vec![Fact::Draft(draft, DraftEvent::Send { text: pc_text })],
+        facts: vec![Fact::Draft(
+            draft,
+            DraftEvent::Send {
+                text: pc_text,
+                presses: Vec::new(),
+            },
+        )],
     });
     let clock = hub.tick();
     phone.act(clock, |_| Batch {
@@ -412,7 +418,13 @@ fn main() {
     let clock = hub.tick();
     let phone_send = phone.act(clock, |_| Batch {
         values: vec![phone_bytes],
-        facts: vec![Fact::Draft(draft, DraftEvent::Send { text: phone_text })],
+        facts: vec![Fact::Draft(
+            draft,
+            DraftEvent::Send {
+                text: phone_text,
+                presses: Vec::new(),
+            },
+        )],
     });
     println!(
         "  before syncing: pc's Send {}, phone's Send {}",
@@ -498,7 +510,10 @@ fn main() {
         values: vec![words(&words_of[&phone_text]).1],
         facts: vec![Fact::Draft(
             successor,
-            DraftEvent::Send { text: phone_text },
+            DraftEvent::Send {
+                text: phone_text,
+                presses: Vec::new(),
+            },
         )],
     });
     hub.sync(&mut phone);

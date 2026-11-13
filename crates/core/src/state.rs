@@ -7,6 +7,7 @@ use imbl::{OrdMap, OrdSet};
 
 mod legs;
 
+use crate::ask::{ASK, Press, Verdict};
 use crate::attention::{Queued, Ranking};
 use crate::call::{Call, CallEvent, Caller, Outcome as CallOutcome, Owner, Wait};
 use crate::context::{Entry, EntryId, Legs, Note, Rendered, Span};
@@ -14,7 +15,7 @@ use crate::delivery::{Content, Delivery, Prompt};
 use harness_substrate::{Durability, Folding, Schema};
 
 use crate::build::{BuildId, Launch, Launched};
-use crate::design::FeedbackEvent;
+use crate::design::{FeedbackEvent, Identity, Look, THEMES};
 use crate::draft::{Draft, DraftEvent, Fate, Sent, Typed};
 use crate::fact::{Author, Fact, Refusal, Rejected, Stated};
 use crate::id::{
@@ -198,6 +199,9 @@ struct Open {
     unblocked: OrdSet<TaskId>,
     /// The last model call to report the quota.
     quota: Option<ModelCallId>,
+    /// Open asks Max answered by pressing, with the words that carried each
+    /// press: [`Todo::Pressed`] until the ask settles.
+    pressed: OrdMap<CallId, (DeliveryId, Verdict)>,
 }
 
 /// What a path Max moved a task off changed in the world
@@ -558,6 +562,9 @@ pub enum Todo {
     /// The task parked, or was asked to, and Max has resumed it: deliver
     /// [`Prompt::Resume`].
     Resume(TaskId),
+    /// Max pressed an answer to this open ask and sent it: settle it as
+    /// [`crate::ask::Settled::Answered`] ([`State::pressed`]).
+    Pressed(CallId),
     /// A call the brain runs, which ends on something else, is due to
     /// settle: a spawn every member of whose scope is done, with their
     /// outcomes; or a wait ([`CallEvent::Waits`]) whose calls have settled
@@ -576,6 +583,10 @@ pub enum Todo {
     /// An autonomous task ended its turn with background work running and
     /// has not been told what that means: deliver [`Prompt::Lingering`].
     Linger(TaskId),
+    /// A task wearing a look of its own has none yet: give it
+    /// [`State::look_for`]'s ([`TaskEvent::Looked`]). Listed for each live
+    /// task's wearer, and for the top of its area first.
+    Look(TaskId),
 }
 
 impl State {
@@ -786,7 +797,7 @@ impl State {
                 });
                 draft.discarded = false;
             }
-            DraftEvent::Send { text } => {
+            DraftEvent::Send { text, presses } => {
                 let mut draft = self.drafts.get(&id).ok_or(Rejected::Unknown)?.clone();
                 match &draft.sent {
                     Some(sent) if sent.text == *text => {}
@@ -829,6 +840,7 @@ impl State {
                                     text: *text,
                                     at: Mark::of(record),
                                 });
+                                self.press(id, draft.session, presses);
                             }
                             Err(why) => draft.held = Some(why),
                         }
@@ -1021,11 +1033,7 @@ impl State {
                 if !self.tasks.contains_key(task) {
                     return Err(Rejected::Unknown);
                 }
-                let mut page = self.pages.get(task).cloned().unwrap_or(Page {
-                    task: *task,
-                    stage: None,
-                    versions: Vec::new(),
-                });
+                let mut page = (self.pages.get(task).cloned()).unwrap_or_else(|| Page::new(*task));
                 page.apply(event, record.at).ok_or(Rejected::NotForTask)?;
                 self.pages.insert(*task, page);
             }
@@ -1162,7 +1170,7 @@ impl State {
                     ),
                     TaskEvent::Expired => false,
                     TaskEvent::Moved(movement) => matches!(movement, Move::Back { .. }),
-                    TaskEvent::Described(_) => false,
+                    TaskEvent::Described(_) | TaskEvent::Looked(_) => false,
                     TaskEvent::ModeSet(_)
                     | TaskEvent::Renamed(_)
                     | TaskEvent::Tuned(_)
@@ -2199,6 +2207,25 @@ impl State {
         Ok(())
     }
 
+    /// Keep each of Max's `presses`, sent in `delivery` to `to`, that
+    /// answers an open ask on `to`'s page: one asked by `to` or a fork of
+    /// it. A press on an ask that has settled, or another page's, answers
+    /// nothing: his words still go.
+    fn press(&mut self, delivery: DeliveryId, to: TaskId, presses: &[Press]) {
+        for press in presses {
+            let asker = match self.calls.get(&press.ask) {
+                Some(r) if r.settled.is_none() && r.call.tool == ASK => match r.call.caller {
+                    Caller::Background { task, .. } => task,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            if self.page_of(asker) == to {
+                (self.open.pressed).insert(press.ask, (delivery, press.verdict.clone()));
+            }
+        }
+    }
+
     fn settle(
         &mut self,
         id: CallId,
@@ -2206,6 +2233,7 @@ impl State {
         record: &Stated,
     ) -> Result<(), Rejected> {
         let made = self.calls.get(&id).ok_or(Rejected::Unknown)?;
+        self.open.pressed.remove(&id);
         let late = match &made.settled {
             None => false,
             Some(first) if first.outcome == CallOutcome::Unknown && made.late.is_none() => true,
@@ -2290,7 +2318,14 @@ impl State {
         self.put(task);
         let mark = Mark::of(record);
         match &delivery.content {
-            Content::Words(words) => self.say(*words, delivery.to, mark),
+            Content::Words(words) => {
+                self.say(*words, delivery.to, mark);
+                // His reply to a page agrees with where it ends, unless the
+                // agent changes that after it.
+                if let Some(page) = self.pages.get_mut(&delivery.to) {
+                    page.agree();
+                }
+            }
             Content::Prompt(Prompt::Lingering) => {
                 self.open.lingered.insert(delivery.to);
             }
@@ -2792,9 +2827,153 @@ impl State {
         self.faces.contains(&replica)
     }
 
+    /// The task whose page `task` works on: its nearest ancestor that is
+    /// not a fork, since a fork is its source doing a step.
+    pub fn page_of(&self, task: TaskId) -> TaskId {
+        let mut at = task;
+        while let Some(Origin::Fork { from }) = self.tasks.get(&at).map(|t| &t.origin) {
+            if !self.tasks.contains_key(from) {
+                break;
+            }
+            at = *from;
+        }
+        at
+    }
+
+    /// The answer Max pressed for an open ask, and the words that carried
+    /// it, until the ask settles.
+    pub fn pressed(&self, call: CallId) -> Option<&(DeliveryId, Verdict)> {
+        self.open.pressed.get(&call)
+    }
+
     /// A task's page, once it has one.
     pub fn page(&self, task: TaskId) -> Option<&Page> {
         self.pages.get(&task)
+    }
+
+    /// What `task` wears: its wearer's look, once it has been given one.
+    pub fn look(&self, task: TaskId) -> Option<&Look> {
+        self.tasks.get(&self.wearer(task))?.look.as_ref()
+    }
+
+    /// The task whose look `task` wears: itself, or for a fork, a resume or
+    /// an aside, its source's, since each carries on its source's context.
+    fn wearer(&self, mut task: TaskId) -> TaskId {
+        loop {
+            match self.tasks.get(&task).map(|t| &t.origin) {
+                Some(Origin::Fork { from } | Origin::Resume { from } | Origin::Aside { from }) => {
+                    task = *from
+                }
+                _ => return task,
+            }
+        }
+    }
+
+    /// The wearer above `task` in its area: its owner's.
+    fn wears_under(&self, task: TaskId) -> Option<TaskId> {
+        self.owner(task).map(|o| self.wearer(o))
+    }
+
+    /// The wearers from `task` up to the top of its area, `task` first.
+    fn area_line(&self, task: TaskId) -> Vec<TaskId> {
+        let mut line = vec![task];
+        while let Some(up) = self.wears_under(line[line.len() - 1]) {
+            if line.contains(&up) {
+                break;
+            }
+            line.push(up);
+        }
+        line
+    }
+
+    /// The look the harness gives `task`, a wearer with none yet; `None`
+    /// while the top of its area has none.
+    ///
+    /// An area is a chat Max started and everything under it. Its top is
+    /// given the theme no live area wears, else the one worn least
+    /// recently, so areas look as unlike each other as the themes allow;
+    /// everything under it wears the same theme. Each takes the lowest
+    /// identity slot no live task wearing that theme holds, so the agents
+    /// on the map at once wear the slots the art made most distinct.
+    pub fn look_for(&self, task: TaskId) -> Option<Look> {
+        let up = self.area_line(task);
+        let top = *up.last().expect("a line holds its task");
+        let theme = match top == task {
+            true => self.least_worn(),
+            false => self.look(top)?.theme.clone(),
+        };
+        let held: BTreeSet<u8> = (self.live_wearers().into_iter())
+            .filter_map(|w| self.tasks.get(&w)?.look.as_ref())
+            .filter(|l| l.theme == theme)
+            .map(|l| l.identity.slot)
+            .collect();
+        let slot = (0..=u8::MAX).find(|s| !held.contains(s)).unwrap_or(0);
+        // Each step down, the child's place among its siblings by creation.
+        let line = (up.windows(2).rev())
+            .map(|pair| {
+                let (child, parent) = (pair[0], pair[1]);
+                let mut siblings: Vec<&Task> = (self.tasks.values())
+                    .filter(|t| matches!(t.origin, Origin::Fresh { .. }))
+                    .filter(|t| self.wears_under(t.id) == Some(parent))
+                    .collect();
+                siblings.sort_by_key(|t| t.created.seq);
+                siblings.iter().position(|t| t.id == child).unwrap_or(0) as u32
+            })
+            .collect();
+        Some(Look {
+            theme,
+            identity: Identity {
+                slot,
+                seed: task,
+                root: top,
+                line,
+            },
+        })
+    }
+
+    /// The theme for a new area: one no live task wears, else the one worn
+    /// least recently; the earlier in [`THEMES`] on a tie.
+    fn least_worn(&self) -> String {
+        let live = self.live_wearers();
+        let mut worn: BTreeMap<&str, (i64, usize)> = BTreeMap::new();
+        for t in self.tasks.values() {
+            let Some(look) = &t.look else { continue };
+            let e = worn.entry(look.theme.as_str()).or_default();
+            match live.contains(&t.id) {
+                false => e.0 = e.0.max(t.since.0),
+                true => (e.0, e.1) = (i64::MAX, e.1 + 1),
+            }
+        }
+        let at = |name: &str| worn.get(name).copied().unwrap_or_default();
+        let pick = (THEMES.iter().enumerate()).min_by_key(|(i, name)| (at(name), *i));
+        pick.expect("there are themes").1.to_string()
+    }
+
+    /// The wearers of the live tasks: a finished chat whose resume runs
+    /// still wears its look on the map.
+    fn live_wearers(&self) -> BTreeSet<TaskId> {
+        self.live().map(|t| self.wearer(t.id)).collect()
+    }
+
+    /// The looks the brain should give now: each live task's wearer that
+    /// has none, or the top of its area while that has none.
+    fn looks_due(&self) -> BTreeSet<TaskId> {
+        let mut due = BTreeSet::new();
+        for t in self.live() {
+            let w = self.wearer(t.id);
+            let Some(wearer) = self.tasks.get(&w) else {
+                continue;
+            };
+            if wearer.look.is_some() || !matches!(wearer.origin, Origin::Fresh { .. }) {
+                continue;
+            }
+            let top = *self.area_line(w).last().expect("a line holds its task");
+            due.insert(match self.look(top) {
+                Some(_) => w,
+                None => top,
+            });
+        }
+        due
     }
 
     /// What reached the design keeper, each with what has happened to it.
@@ -3253,6 +3432,9 @@ impl State {
         if self.signed_out.is_some() {
             todo.push(Todo::SignIn);
         }
+        // Before the asker's next request, so it wakes once, to his words
+        // and his answers together.
+        todo.extend(self.open.pressed.keys().map(|call| Todo::Pressed(*call)));
         let mut readers: BTreeMap<CallId, Vec<&Task>> = BTreeMap::new();
         let mut needed: BTreeSet<LimbId> = BTreeSet::new();
         let mut starting = Vec::new();
@@ -3387,6 +3569,7 @@ impl State {
             .filter(|l| self.runs(*l) == Some(Runs::Process) && self.connected(*l).is_none());
         todo.extend(connect.map(Todo::Connect));
         todo.extend(starting);
+        todo.extend(self.looks_due().into_iter().map(Todo::Look));
         // A brain shutting down starts nothing, and cuts what it has not
         // been able to finish by its deadline.
         if let Some(deadline) = self.shutdown {

@@ -1,4 +1,6 @@
-import { $, diagram, el, panel, scrollEl } from "./base.js";
+import { $, clock, diagram, el, panel, scrollEl } from "./base.js";
+import { answer, answered } from "./compose.js";
+import { load, paintInto, wear } from "./theme.js";
 
 // ─── A chat's page: what its agent presented to Max, drawn by the theme ───
 // The brain parses every body (harness-body) and the row carries what it
@@ -12,7 +14,7 @@ import { $, diagram, el, panel, scrollEl } from "./base.js";
 // works, its progress is the card's reading and the page is one line at the
 // top, which opens it.
 const sheetEl = $(".sheet", panel), lineEl = $(".sheet-line", panel);
-let opened = null, landed = null;
+let opened = null, landed = null, unfolded = null;
 
 // Draws `t`'s page, and says whether the card should open at its top
 // (then `sheetSeen`): the first time this tab shows this version in full.
@@ -24,13 +26,44 @@ export function renderSheet(t) {
   lineEl.hidden = full;
   sheetEl.hidden = !full;
   if (!full) { line(p, t); return false; }
-  const key = `${t.id} ${p.version} ${JSON.stringify(p.plan.map((s) => [s.state, s.asks.map((a) => a.call)]))}`;
-  if (sheetEl.drawn !== key) { sheetEl.drawn = key; sheetEl.replaceChildren(...page(p)); }
-  return landed !== `${t.id} ${p.version}`;
+  const key = JSON.stringify([t.id, p, t.look, unfolded]);
+  if (sheetEl.drawn !== key) { sheetEl.drawn = key; sheetEl.replaceChildren(...page(p, t)); dress(t); }
+  return landed !== shown(t);
 }
-export const sheetSeen = (t) => { landed = `${t.id} ${t.page.version}`; };
-// Where the page starts in the card's scroll, while it shows whole.
-export const sheetTop = () => sheetEl.hidden ? null : scrollEl.scrollTop + sheetEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top;
+// Each present is landed on once: a new version, or one presented again.
+const shown = (t) => `${t.id} ${t.page.version} ${t.page.held}`;
+export const sheetSeen = (t) => { landed = shown(t); };
+// Where the card lands on the page while it shows: its top, or with a quick
+// answer, the chat's line above it, the page folded below it.
+export function sheetTop() {
+  if (sheetEl.hidden) return null;
+  const top = scrollEl.scrollTop + sheetEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top;
+  return sheetEl.classList.contains("folded") ? Math.max(0, top + sheetEl.offsetHeight - scrollEl.clientHeight) : top;
+}
+
+// The page wears its task's look: the theme's tokens, and its ground
+// painted behind the lead, once per task and width. A task with none wears
+// sheet.css's plain default.
+const grounds = new Map();
+async function dress(t) {
+  const lead = $(".lead", sheetEl);
+  if (!t.look) { sheetEl.removeAttribute("style"); lineEl.removeAttribute("style"); return; }
+  const theme = await load(t.look.theme);
+  await wear(sheetEl, theme);
+  await wear(lineEl, theme);
+  if (!lead?.isConnected) return;
+  const at = `${t.id} ${lead.clientWidth} ${lead.clientHeight}`;
+  let ground = grounds.get(t.id);
+  if (ground?.at !== at) {
+    ground = el("canvas", "ground");
+    ground.at = at;
+    grounds.set(t.id, ground);
+    lead.prepend(ground);
+    const h = $("h1", lead).getBoundingClientRect(), box = lead.getBoundingClientRect();
+    paintInto(ground, theme, t.look, { x: h.left - box.left, y: h.top - box.top, w: h.width, h: h.height });
+  } else lead.prepend(ground);
+}
+const redraw = () => sheetEl.dispatchEvent(new CustomEvent("sheet", { bubbles: true }));
 
 function line(p, t) {
   lineEl.replaceChildren(el("span", "title", p.lead.title), ...(p.lead.hook ? [el("span", "hook", p.lead.hook)] : []));
@@ -38,14 +71,26 @@ function line(p, t) {
 }
 
 // The parts in the one order Max reads them, none of them named: each
-// claim frames its part in its own words.
-function page(p) {
-  const lead = el("header", "lead");
+// claim frames its part in its own words. Presented again unchanged with a
+// quick answer, the answer is the chat's line above the page, which folds to
+// its lead, saying when it was checked; a press opens the rest. A lead new
+// to this tab fills the first screen; once seen, it is a short band.
+function page(p, t) {
+  const held = p.quick && p.held > p.at;
+  const lead = el("header", `lead${landed === shown(t) ? "" : " new"}`);
   lead.append(el("h1", null, p.lead.title));
   if (p.lead.hook) lead.append(el("p", "hook", p.lead.hook));
-  const out = [lead, claim("end", p.end), claim("now", p.now)];
-  if (p.asks.length) out.push(part("asks", p.asks.map(ask)));
-  if (p.plan.length) out.push(part("plan", [plan(p.plan)]));
+  if (held) lead.append(el("p", "checked", `Still holds, checked ${clock(p.held)}`));
+  const out = [lead];
+  const at = `${t.id} ${p.held}`;
+  sheetEl.classList.toggle("folded", held && unfolded !== at);
+  if (held && unfolded !== at) {
+    lead.onclick = () => { unfolded = at; redraw(); };
+    return out;
+  }
+  out.push(end(p.end), claim("now", p.now));
+  if (p.asks.length) out.push(part("asks", p.asks.map((a) => ask(a, t.id))));
+  if (p.plan.length) out.push(part("plan", [plan(p.plan, t.id)]));
   if (p.why) out.push(part("why", blocks(p.why.blocks)));
   return out;
 }
@@ -55,9 +100,21 @@ function part(cls, children) {
   return s;
 }
 const claim = (cls, c) => part(cls, [el("p", "says", c.says), ...(c.shows ? blocks(c.shows.blocks) : [])]);
+// Where this ends: folded to its claim once Max has agreed with it, and
+// marked in the gutter when it changed since.
+function end(e) {
+  if (!e.agreed) {
+    const s = claim("end", e);
+    s.classList.toggle("changed", e.changed);
+    return s;
+  }
+  const d = el("details");
+  d.append(el("summary", "says", e.says), ...(e.shows ? blocks(e.shows.blocks) : []));
+  return part("end agreed", [d]);
+}
 
 const MARK = { done: "✓", failed: "✕", yours: "●", working: "◐", planned: "○" };
-function plan(steps) {
+function plan(steps, key) {
   const ol = el("ol", "steps");
   for (const s of steps) {
     const li = el("li", `step ${s.state}`);
@@ -66,51 +123,57 @@ function plan(steps) {
     li.append(head);
     if (s.failed) li.append(el("p", "failed", s.failed));
     if (s.body) li.append(...blocks(s.body.blocks));
-    li.append(...s.asks.map(ask));
+    li.append(...s.asks.map((a) => ask(a, key)));
     ol.append(li);
   }
   return ol;
 }
 
 // An ask: the question, what answering it needs, and what happens without
-// an answer. Its presses are held in the reply until Max sends it, beside
-// what he types or dictates; pressing again takes one back.
-function ask(a) {
+// an answer. A press is held with what he types or dictates until he sends
+// it, which carries both; pressing again takes it back. "Wrong question"
+// is always last.
+function ask(a, key) {
   const box = el("div", "ask");
   box.append(el("p", "question", a.question));
+  // Settled, it stays where it was, quiet, saying how it settled.
+  if (a.settled != null) {
+    box.classList.add("settled");
+    box.append(el("p", "how", a.settled));
+    return box;
+  }
   const said = [...(a.now?.length ? [inlines(a.now, "p", "now")] : []), ...(a.why?.length ? [inlines(a.why, "p", "why")] : [])];
   box.append(...said);
   if (a.shows) box.append(...blocks(a.shows.blocks));
   const want = a.want;
   const choices = el("div", "choices");
-  if (want === "Go") choices.append(press(a, "Go"));
-  else if (want.Choose) for (const o of want.Choose.options) choices.append(press(a, o.label, o.key === want.Choose.recommended, o.means));
+  const press = (label, verdict, recommended, means) => pill(key, a, label, verdict, recommended, means);
+  if (want === "Go") choices.append(press("Go", "Yes"));
+  else if (want.Choose) for (const o of want.Choose.options) choices.append(press(o.label, { Chose: o.key }, o.key === want.Choose.recommended, o.means));
   else if (want.Do) {
     if (want.Do.link) { const l = el("a", "do", want.Do.link.label); l.href = want.Do.link.url; l.target = "_blank"; l.rel = "noopener"; choices.append(l); }
     if (want.Do.paste) box.append(code(null, want.Do.paste));
-    choices.append(press(a, "Done"));
+    choices.append(press("Done", "Yes"));
   }
-  if (choices.childElementCount) box.append(choices);
+  choices.append(press("Wrong question", "Reject"));
+  box.append(choices);
   if (a.otherwise) box.append(el("p", "otherwise", `Otherwise: ${a.otherwise}`));
   return box;
 }
-function press(a, label, recommended, means) {
+// One answer's pill: armed while its press is held. One press per ask, so
+// arming one disarms the others.
+function pill(key, a, label, verdict, recommended, means) {
   const b = el("button", `btn press${recommended ? " recommended" : ""}`, label);
   b.type = "button";
   if (means) b.title = means;
-  const words = `${a.question} ${label}.`;
+  const mine = JSON.stringify(verdict);
+  b.dataset.verdict = mine;
+  b.classList.toggle("armed", JSON.stringify(answered(key, a.call)) === mine);
   b.onclick = () => {
-    const box = $(".compose textarea", panel);
-    if (!box) return;
-    const lines = box.value ? box.value.split("\n") : [];
-    const at = lines.indexOf(words);
-    if (at >= 0) lines.splice(at, 1); else lines.push(words);
-    box.value = lines.join("\n");
-    b.classList.toggle("armed", at < 0);
-    box.dispatchEvent(new Event("input", { bubbles: true }));
+    answer(key, a.call, verdict);
+    const now = JSON.stringify(answered(key, a.call));
+    for (const o of b.parentElement.querySelectorAll(".press")) o.classList.toggle("armed", o.dataset.verdict === now);
   };
-  const box = $(".compose textarea", panel);
-  b.classList.toggle("armed", !!box?.value.split("\n").includes(words));
   return b;
 }
 

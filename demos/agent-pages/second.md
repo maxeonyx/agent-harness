@@ -1,0 +1,4 @@
+A second area: a page of its own, in its own theme.
+tool describe {"title": "Phone dictation that never drops", "plan": [{"key": "probe", "title": "Every drop logged for a week", "said": "done", "body": "`dev/uptime-probe` logged 14 drops, all while a build ran."}, {"key": "yield", "title": "Builds yield to the brain", "said": "doing"}]}
+tool page_write {"lead": {"title": "Dictation drops only while a build runs", "hook": "Every drop in a week of logs came while an agent was compiling."}, "end": {"says": "When this is done, dictation on your phone never drops, whatever the agents build.", "shows": "- [x] Every drop is logged\n- [ ] Builds yield CPU to the brain\n- [ ] A week passes with no drop"}, "now": {"says": "Today, 14 drops in seven days, every one during a build.", "shows": "| Day | Drops | During a build |\n|---|---:|---:|\n| Mon | 3 | 3 |\n| Tue | 5 | 5 |\n| Wed | 6 | 6 |"}}
+tool present {}

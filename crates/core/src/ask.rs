@@ -16,6 +16,9 @@ use crate::id::{CallId, DeliveryId, TaskId, Timestamp, ValueId};
 use crate::page::Ref;
 use crate::source::Whose;
 
+/// The tool an ask is a call of.
+pub const ASK: &str = "ask";
+
 /// One thing an agent needs from Max: the input of an `ask` call.
 ///
 /// **Concept.** What Max acts on, as data the harness can rank, route and

@@ -4,11 +4,12 @@
 //! steps and the asks inside them.
 
 use harness_core::ask::Ask;
+use harness_core::context::Entry;
 use harness_core::id::ValueId;
 use harness_core::page::{Ref, Said, Step};
 use harness_core::state::State;
 use harness_core::task::{Phase, Task};
-use harness_program::page::{ASK, KINDS};
+use harness_program::page::KINDS;
 use serde_json::{Value, json};
 
 use crate::view::Text;
@@ -22,14 +23,16 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
         Some(harness_body::body(&String::from_utf8_lossy(&text), KINDS).0)
     };
     let inline = |text: &str| harness_body::inline(text, KINDS).0;
-    // Its open asks, oldest first: the task's own background work, rather
-    // than every call the harness has made, since rows are derived on
-    // every fold.
-    let asks: Vec<(String, Value)> = (t.background.iter())
+    // Its asks, oldest first, open or settled: its own and its forks'.
+    // One that settled is drawn quietly where it was, with how it settled.
+    let asks: Vec<(String, Value)> = (page.asks.iter())
         .filter_map(|id| Some((*id, state.call(*id)?)))
-        .filter(|(_, r)| r.call.tool == ASK)
         .filter_map(|(id, r)| {
             let ask: Ask = serde_json::from_slice(&value(r.call.input)?).ok()?;
+            let settled = r.outcome().map(|o| match o.output() {
+                Some(out) => value(out.model).map_or_else(String::new, |b| texts(&b)),
+                None => "No longer asked: its agent stopped.".to_owned(),
+            });
             let row = json!({
                 "call": id.to_string(),
                 "label": id.label(),
@@ -41,6 +44,7 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
                 "shows": body(ask.shows),
                 "want": ask.want,
                 "otherwise": ask.otherwise.map(|o| o.then),
+                "settled": settled,
             });
             Some((ask.step.unwrap_or_default(), row))
         })
@@ -72,7 +76,7 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
                 .filter(|(k, _)| *k == s.key)
                 .map(|(_, a)| a)
                 .collect();
-            let yours = !asks.is_empty();
+            let yours = asks.iter().any(|a| a["settled"].is_null());
             json!({
                 "key": s.key,
                 "title": title(state, s),
@@ -84,13 +88,29 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
         })
         .collect();
     let current = matches!(t.phase(), Some(Phase::AwaitingMax)) && newest.held >= t.since;
+    // A quick answer: the response that last presented said something,
+    // which the chat shows as a line above the page.
+    let quick = (page.presented)
+        .and_then(|call| match state.entry(state.origin(call)?)? {
+            Entry::Message { message, .. } => value(message.content),
+            Entry::Root(_) => None,
+        })
+        .is_some_and(|content| !texts(&content).trim().is_empty());
+    let agreed = page.agreed.as_ref();
     Some(json!({
         "version": newest.n,
         "at": newest.at.0,
         "held": newest.held.0,
         "current": current,
         "lead": newest.sheet.lead,
-        "end": { "says": newest.sheet.end.says, "shows": body(newest.sheet.end.shows) },
+        "quick": quick,
+        "end": {
+            "says": newest.sheet.end.says,
+            "shows": body(newest.sheet.end.shows),
+            // Agreed, it folds to its claim; changed since, it opens, marked.
+            "agreed": agreed == Some(&newest.sheet.end),
+            "changed": agreed.is_some_and(|a| *a != newest.sheet.end),
+        },
         "now": { "says": newest.sheet.now.says, "shows": body(newest.sheet.now.shows) },
         "plan": steps,
         "asks": loose,
@@ -119,4 +139,13 @@ fn state_of(step: &Step, yours: bool) -> &'static str {
         (Said::Doing, false) => "working",
         (Said::Planned, false) => "planned",
     }
+}
+
+/// The text of a list of content blocks, its text blocks joined.
+fn texts(blocks: &[u8]) -> String {
+    let blocks: Vec<Value> = serde_json::from_slice(blocks).unwrap_or_default();
+    (blocks.iter())
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }

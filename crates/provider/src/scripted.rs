@@ -29,7 +29,9 @@
 //! A verb may follow `slow MS` (MS before each streamed piece),
 //! `flaky STATUS` (the first time this client sees the request, it is
 //! refused with STATUS; a retry gets the step) and `think "TEXT"` (the
-//! response opens with a thinking block of TEXT, a JSON string):
+//! response opens with a thinking block of TEXT, a JSON string), and
+//! `text "TEXT"` (then a text block of TEXT, as a reply that also uses a
+//! tool says something first):
 //! `flaky 529 slow 200 think "Greeting." say hi`.
 //! Text without a verb is echoed. Once the script is used up, the reply
 //! quotes the tool results it was sent, and the turn ends.
@@ -95,6 +97,9 @@ pub(crate) fn respond(body: &[u8], cancel: &Cancel, seen: &Mutex<HashMap<u64, u3
     let mut events = Events::new(body.len());
     if let Some(thought) = &step.thought {
         events.thinking_block(thought);
+    }
+    if let Some(text) = &step.text {
+        events.text_block(text, " ");
     }
     if let Some(last) = messages.last() {
         let notices = notices(last);
@@ -174,6 +179,8 @@ struct Step {
     flaky: Option<u16>,
     /// The thinking the response opens with.
     thought: Option<String>,
+    /// The text it says before its verb's blocks.
+    text: Option<String>,
     /// The verb and what follows it; for a reply with no verb, its text.
     act: String,
 }
@@ -209,6 +216,7 @@ fn step(messages: &[Value]) -> Step {
         slow: Duration::ZERO,
         flaky: None,
         thought: None,
+        text: None,
         act,
     };
     let script = messages.iter().enumerate().rev().find_map(|(i, m)| {
@@ -260,6 +268,7 @@ fn parse(line: &str) -> Option<Step> {
         slow: Duration::ZERO,
         flaky: None,
         thought: None,
+        text: None,
         act: String::new(),
     };
     let mut rest = line.trim();
@@ -274,10 +283,14 @@ fn parse(line: &str) -> Option<Step> {
                 }
                 rest = after.trim();
             }
-            "think" => {
+            "think" | "text" => {
                 let after = after.trim_start();
                 let mut values = serde_json::Deserializer::from_str(after).into_iter::<String>();
-                step.thought = Some(values.next()?.ok()?);
+                let said = Some(values.next()?.ok()?);
+                match word {
+                    "think" => step.thought = said,
+                    _ => step.text = said,
+                }
                 rest = after[values.byte_offset()..].trim();
             }
             verb if VERBS.contains(&verb) => {
