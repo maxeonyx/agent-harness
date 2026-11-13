@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # An agent facing Max answers him with a page, in its area's theme. Two
 # scripted chats are two areas, each given its own theme by the harness.
-# The first describes its plan, writes its page, asks a choice in the plan's
-# CI step and asks again in the docs step, withdraws that, and presents: the
+# The first describes its plan (each step what will be true, and where it
+# stands now), writes its lead and facts, asks a choice in the plan's CI
+# step and asks again in the docs step, withdraws that, and presents: the
 # withdrawn ask stays where it was, with why. Max presses an answer, which
 # is held until he sends it with his words; the agent's answer is a quick
-# line above its page, which still holds, folded to its lead. Then the agent
-# changes its page: where it ends, which Max's reply agreed with, folds to
-# its claim. Last, the map: each area faint on its theme's ground.
+# line above its page, folded to its lead, with no line about the page.
+# Max's reply agreed with the plan, so when the agent then retitles a step,
+# that step carries the change bar. Last, the map: each area faint on its
+# theme's ground.
 # Screenshots wide and on a phone into
 # demos/agent-pages/shots.ignore. Scripted: no model call. Leaves the
 # brain up.
@@ -45,19 +47,20 @@ page open "$a" wait ".sheet:not([hidden]) h1" sleep 1000 \
   click ".sheet .press" sleep 500 \
   eval "[...document.querySelectorAll('.sheet .press')].map((b) => b.textContent + (b.classList.contains('armed') ? ' (held)' : '')).join(' | ')" \
   shot "$shots/press-held.png" \
-  type ".compose textarea" "text \"Going with GitHub's cache. The page still holds.\" tool present {}" \
-  click ".compose .send" sleep 500 click ".compose .send" reply wait ".sheet.folded .checked" sleep 1000 \
-  eval "document.querySelector('.sheet.folded .checked')?.textContent" \
+  type ".compose textarea" "text \"Going with GitHub's cache.\" tool present {}" \
+  click ".compose .send" sleep 500 click ".compose .send" reply wait ".sheet.folded" sleep 1000 \
+  eval "document.querySelector('.sheet.folded').innerText" \
   shot "$shots/quick-wide.png"
 page --size phone open "$a" wait ".sheet.folded" sleep 1500 shot "$shots/quick-phone.png"
 drive log "$a" | grep -A2 "has settled" | tail -3
 echo
-echo "== the agent changes where it stands: the end Max's reply agreed with stays folded"
-drive say "$a" 'tool page_edit {"edits": [{"old": "| 52 s |", "new": "| 50 s |"}]} tool present {}' >/dev/null
+echo "== the agent retitles a step of the plan Max's reply agreed with: it carries the change bar"
+retitled=$(sed -n 's/^tool describe //p' demos/agent-pages/mandate.md | jq -c '.plan[3].title = "AGENTS.md alone says how to build" | { plan }')
+drive say "$a" "tool describe $retitled tool present {}" >/dev/null
 drive settle "$a" >/dev/null
-view "$a" '.page | { version, held, end: (.end | { says, agreed, changed }) }'
-page open "$a" wait ".sheet .end.agreed" sleep 1500 shot "$shots/agreed-wide.png"
-page --size phone open "$a" wait ".sheet .end.agreed" sleep 1500 shot "$shots/agreed-phone.png"
+view "$a" '[.page.plan[] | { key, title, changed }]'
+page open "$a" wait ".sheet .step.changed" sleep 1500 shot "$shots/changed-wide.png"
+page --size phone open "$a" wait ".sheet .step.changed" sleep 1500 shot "$shots/changed-phone.png"
 echo
 echo "== the map: each area on its ground, faint behind its part"
 page sleep 3000 shot "$shots/map-wide.png"

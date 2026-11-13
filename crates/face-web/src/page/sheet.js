@@ -73,12 +73,12 @@ function line(p, t) {
 // The parts in the one order Max reads them, none of them named, and no
 // line about the page itself: the lead, the plan (or the asks, with no
 // plan), the facts that back them, why. Presented again unchanged with a
-// quick answer, the answer is the chat's line above the page, which folds
-// to its lead; a press opens the rest. A lead new to this tab stands taller,
-// with the plan still starting on the first screen; once seen, it is a
-// short band.
+// quick answer and no step changed since Max agreed with the plan, the
+// answer is the chat's line above the page, which folds to its lead; a press
+// opens the rest. A lead new to this tab stands taller, with the plan still
+// starting on the first screen; once seen, it is a short band.
 function page(p, t) {
-  const held = p.quick && p.held > p.at;
+  const held = p.quick && p.held > p.at && !p.plan.some((s) => s.changed);
   const lead = el("header", `lead${landed === shown(t) ? "" : " new"}`);
   lead.append(el("h1", null, p.lead));
   const out = [lead];
