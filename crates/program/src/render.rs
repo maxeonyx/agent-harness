@@ -659,7 +659,7 @@ pub fn carried(state: &State, values: Values, whose: &str, call: CallId) -> Vec<
 
 /// How an agent names one of its calls, or one its agents attached, to
 /// `attach` it: shown with the call's result.
-pub(crate) fn call_label(call: CallId) -> String {
+pub fn call_label(call: CallId) -> String {
     let digest = Digest::of(call.to_string().as_bytes()).to_string();
     format!("call-{}", &digest[..6])
 }
