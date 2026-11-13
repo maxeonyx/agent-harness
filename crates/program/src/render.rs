@@ -342,16 +342,16 @@ pub fn turn(
     if !stale.is_empty() {
         // A role and a limb's instructions are in the root: they change
         // only when a fresh root is made.
-        let in_root = |s: &&Stale| s.resource.kind == "role" || s.resource.kind == "instructions";
+        let in_root = |s: &&Stale| crate::policy::rooted(&s.resource);
         let (rooted, names): (Vec<_>, Vec<_>) = stale.iter().partition(in_root);
         let mut said = Vec::new();
         if rooted.iter().any(|s| s.resource.kind == "role") {
             said.push(text(
                 "[harness] Your role's definition changed. Your request parameters follow it now; \
-its prompt and tools take effect when you next compact with `fresh: true`.",
+its prompt and tools take effect when you next compact.",
             ));
         }
-        let limbs: Vec<_> = rooted
+        let mut limbs: Vec<_> = rooted
             .iter()
             .filter(|s| s.resource.kind == "instructions")
             .map(|s| {
@@ -360,9 +360,11 @@ its prompt and tools take effect when you next compact with `fresh: true`.",
                     .map_or_else(|| s.resource.limb.to_string(), |l| format!("`{}`", l.name))
             })
             .collect();
+        limbs.sort();
+        limbs.dedup();
         if !limbs.is_empty() {
             said.push(text(&format!(
-                "[harness] The instructions of {} changed. They take effect when you next compact with `fresh: true`.",
+                "[harness] The instructions of {} changed. They take effect when you next compact.",
                 limbs.join(", ")
             )));
         }
@@ -441,11 +443,22 @@ fn clock(state: &State, task: &Task, now: &Now) -> (String, bool) {
                 .is_some_and(|h| state.compacted(h).is_some() || state.reported(h))
         })
         .map(|u| u.input + u.cache_read + u.cache_write_short + u.cache_write_long + u.output);
+    let rerooting = match crate::policy::reroot(state, task, now.window) {
+        None => "",
+        Some(crate::policy::Reroot::Stale) => {
+            " Your role, your instructions or your model have changed, so your next compaction starts a new \
+context from your role, your mandate, Max's words and what you carry: carry everything else you need."
+        }
+        Some(crate::policy::Reroot::Long) => {
+            " What your checkpoints keep has grown long, so your next compaction starts a new context from your \
+role, your mandate, Max's words and what you carry: carry everything else you need."
+        }
+    };
     let Some(used) = used else {
-        return (format!("[harness] {}.", now.time), false);
+        return (format!("[harness] {}.{rerooting}", now.time), false);
     };
     let mut said = format!(
-        "[harness] {}. Your context: {} of {} tokens.",
+        "[harness] {}. Your context: {} of {} tokens.{rerooting}",
         now.time,
         tokens(used),
         tokens(now.window)

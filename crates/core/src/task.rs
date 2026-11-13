@@ -1070,9 +1070,15 @@ pub enum Move {
 /// is stale and how long the kept checkpoints are, and the agent knows
 /// neither. When its next compaction will start a fresh root, every turn's
 /// opening line says so before the agent writes its carry, so the carry
-/// holds what it needs. **Not built yet:** today the agent chooses, with
-/// `fresh: true`, and a notice asks it to; 6 of 455 compactions on the home
-/// brain did, against 80 such notices.
+/// holds what it needs. It starts one when the root is stale (the role, an
+/// instructions resource or the model moved since it was rendered) or when
+/// what the checkpoints keep is past half the context limit: a new root
+/// costs about what keeping the checkpoint does, since the new context is
+/// short and the root's own prefix is shared by every agent of the role,
+/// and a busy agent's cache never goes cold, so its compaction is where a
+/// change reaches it. **Not built yet:** an idle agent whose cache has gone
+/// cold re-rooted in place, its messages kept under a new root, which the
+/// provider accepts at no extra cost; it needs a record of its own.
 ///
 /// **Vision.** "The agent can be considered the same despite the
 /// compaction" (Max, 2026-10-17): the carry is the agent's own note, never
