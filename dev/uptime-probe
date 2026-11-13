@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# The standing uptime probe: every 10 s it appends one line to
+# ~/.local/state/agent-harness/uptime.log saying whether Max's harness is
+# up, as he would reach it, and what the machine was doing.
+#
+#   dev/uptime-probe install   install it as the user timer harness-uptime.timer
+#   dev/uptime-probe           probe once, appending a line (what the timer runs)
+#   dev/uptime-probe outages   print each run of failed probes in the log
+#
+# install copies this script to ~/.local/share/agent-harness/uptime-probe,
+# so the timer runs no clone's copy; run install again after changing it.
+# Stop it with: systemctl --user disable --now harness-uptime.timer
+#
+# A line, in NZ time:
+#   2026-11-13 20:45:01 NZDT face=200/3ms dictation=true tunnel=302/116ms cloudflared=0 io=2.57/2.57 memory=0.00/0.00
+# face: the home brain's /wiring on :4320, status and latency (000 is no
+# answer within 5 s); dictation: whether that face can dictate; tunnel:
+# https://harness.maxeonyx.com through cloudflared (Cloudflare Access's 302
+# is up); cloudflared: its ERR and WRN lines since the last probe;
+# io, memory: /proc/pressure avg10, some/full.
+set -euo pipefail
+
+state=~/.local/state/agent-harness
+log=$state/uptime.log
+installed=~/.local/share/agent-harness/uptime-probe
+units=~/.config/systemd/user
+
+# Status and milliseconds of a GET of $1, and its body in the file $2.
+get() {
+  curl -sk --max-time 5 -o "$2" -w '%{http_code} %{time_total}' "$1" | {
+    read -r code seconds
+    echo "$code/$(awk -v s="$seconds" 'BEGIN { printf "%d", s * 1000 }')ms"
+  }
+}
+
+# avg10 of some and full in /proc/pressure/$1, as some/full.
+pressure() {
+  awk '{ sub("avg10=", "", $2); v[$1] = $2 } END { print v["some"] "/" v["full"] }' "/proc/pressure/$1"
+}
+
+probe() {
+  mkdir -p "$state"
+  local body
+  body=$(mktemp "$state/wiring.XXXXXX")
+  local face tunnel dictation errors
+  face=$(get https://localhost:4320/wiring "$body" || true)
+  dictation=$(jq -r '.dictation // "unknown"' "$body" 2>/dev/null || echo unknown)
+  rm -f "$body"
+  tunnel=$(get https://harness.maxeonyx.com/ /dev/null || true)
+  local since=()
+  [ -e "$state/cloudflared.cursor" ] || since=(--since now)
+  errors=$(journalctl -u cloudflared.service --cursor-file="$state/cloudflared.cursor" "${since[@]}" \
+    --no-pager -q -o cat | grep -cE ' (ERR|WRN) ' || true)
+  echo "$(TZ=Pacific/Auckland date '+%F %T %Z') face=$face dictation=$dictation tunnel=$tunnel" \
+    "cloudflared=$errors io=$(pressure io) memory=$(pressure memory)" >>"$log"
+}
+
+# A probe failed when the face doesn't answer 200 with dictation, or the
+# tunnel doesn't answer 200 or 302.
+outages() {
+  awk '
+    function up() { return $4 ~ /^face=200\// && $5 == "dictation=true" && $6 ~ /^tunnel=(200|302)\// }
+    function flush() { if (n) print from " to " last ", " n " probes: " why; n = 0 }
+    { stamp = $1 " " $2 }
+    up() { flush(); next }
+    { if (!n) { from = stamp; why = $4 " " $5 " " $6 } n++; last = stamp }
+    END { flush() }
+  ' "$log"
+}
+
+install() {
+  mkdir -p "$(dirname "$installed")" "$units"
+  cp "$0" "$installed"
+  cat >"$units/harness-uptime.service" <<EOF
+[Unit]
+Description=Probe whether the harness is up, into $log
+
+[Service]
+Type=oneshot
+ExecStart=$installed
+EOF
+  cat >"$units/harness-uptime.timer" <<EOF
+[Unit]
+Description=Probe whether the harness is up every 10 s
+
+[Timer]
+OnActiveSec=0
+OnUnitActiveSec=10s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user enable --now harness-uptime.timer
+}
+
+case ${1:-probe} in
+  probe) probe ;;
+  outages) outages ;;
+  install) install ;;
+  *) echo "usage: $0 [install|outages]" >&2; exit 2 ;;
+esac
