@@ -5,6 +5,7 @@ import { onFrame } from "./blobs.js";
 import { hideTip } from "./hover.js";
 import { closeNode, go, NEW, openId, saved } from "./card.js";
 import { glideCut, glideNote } from "./glidelog.js";
+import { zoomed } from "./regions.js";
 
 // ─── The camera ────────────────────────────────────────────────────────────
 const map = $("#map"), world = $("#world"), under = $("#under"), grid = $("#grid");
@@ -28,6 +29,7 @@ function applyCamera() {
   if (grid.style.backgroundSize !== size) grid.style.backgroundSize = size;
   grid.style.transform = `translate(${(x % g + g) % g - g}px, ${(y % g + g) % g - g}px)`;
   placeMarks();
+  zoomed();
   coverCheck();
   sleepCheck();
 }
