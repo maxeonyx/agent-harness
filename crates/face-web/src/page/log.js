@@ -31,12 +31,12 @@ export async function renderLog(t) {
     s.seen = seen;
     const head = t.head, moved = s.head !== head;
     if (moved && head && s.rendered.length === 0 && !contexts.has(head)) load(t);
-    const [chain, versions] = await Promise.all([moved && head ? contextOf(head) : [], versionsOf(t.id)]);
+    const versions = versionsOf(t.id), chain = moved && head ? await contextOf(head) : [];
     if (logState !== s || s.seen !== seen) return;
     if (!chain) { s.seen = undefined; return; }
     if (moved) { s.head = head; stick(() => appendChain(s, chain, t)); }
-    s.versions = versions;
-    stick(() => markVersions(s));
+    // Its versions mark it when they come: a context the page holds draws at once.
+    versions.then((v) => { if (logState === s && s.seen === seen) { s.versions = v; stick(() => markVersions(s)); } });
   }
   stick(() => renderTail(s, t));
   if (pane.classList.contains("loading") && (s.head || !t.head)) settle(t);
