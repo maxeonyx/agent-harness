@@ -1,5 +1,5 @@
-//! Relaunching a brain's service onto the commit of a clone: the procedure
-//! the `relaunch` tool and the command line share.
+//! Relaunching a brain's service onto a target build: the procedure the
+//! `relaunch` tool and the command line share.
 //!
 //! A brain runs as the durable systemd user unit `harness-NAME.service`
 //! (see [`start`]), from an installed build:
@@ -10,7 +10,15 @@
 //! same command line in another build's directory. `NAME/build` beside
 //! the database links to the build a restart or a reboot runs: the last
 //! one to open the database. `NAME/previous` links to the one it took over
-//! from, the target of a `back` relaunch.
+//! from: the target `previous`.
+//!
+//! A target is `main`, `previous` or a commit ([`target`]). A commit is
+//! built in `NAME/source`, the brain's own clone of the harness's
+//! repository ([`UPSTREAM`], cloned there on its first relaunch), with a
+//! target directory of its own, after fetching every branch: so an
+//! unmerged commit can be relaunched once it is pushed, as long as it
+//! contains all of `main`. Nothing merged is undone, except by going back
+//! to `previous` on purpose.
 //!
 //! The relaunch from the running build A onto a new build B
 //! ([`relaunch`]), each stage judged by A's code and by what any build
@@ -143,13 +151,18 @@ impl Running {
     }
 }
 
-/// What a relaunch call asks besides its clone.
-#[derive(Clone, Copy, Debug, Default)]
+/// The repository a brain's source clone is made from, on its first
+/// relaunch. A clone already at `NAME/source` is used as it is, whatever
+/// its `origin`.
+pub const UPSTREAM: &str = "https://github.com/maxeonyx/agent-harness.git";
+
+/// What a relaunch call asks.
+#[derive(Clone, Debug)]
 pub struct Asked {
-    /// Allow a commit that does not descend from the running one.
-    pub back: bool,
-    /// Allow a one-way relaunch: one the running build could not go back
-    /// from without skipping what the new one writes.
+    /// `main`, `previous` or a commit ([`target`]).
+    pub target: String,
+    /// Go ahead with a one-way relaunch: one the running build could not
+    /// go back from without skipping what the new one writes.
     pub one_way: bool,
 }
 
@@ -187,19 +200,13 @@ impl Ended {
     }
 }
 
-/// Relaunch `unit` onto the commit `clone` has checked out, for the call
-/// `by` if one asked: rehearse it beside the running build, then start it
-/// as a candidate on the live database, then watch it for a window and go
-/// back if its process ends. Returns once, after the window or at the
-/// stage that ended it.
-pub fn relaunch(
-    unit: &str,
-    clone: &Path,
-    asked: Asked,
-    by: Option<CallId>,
-    say: &dyn Fn(&str),
-) -> Ended {
-    let (_lock, old, build, one_way) = match prepare(unit, clone, asked, say) {
+/// Relaunch `unit` onto the build `asked` targets, for the call `by` if
+/// one asked: rehearse it beside the running build, then start it as a
+/// candidate on the live database, then watch it for a window and go back
+/// if its process ends. Returns once, after the window or at the stage
+/// that ended it.
+pub fn relaunch(unit: &str, asked: &Asked, by: Option<CallId>, say: &dyn Fn(&str)) -> Ended {
+    let (_lock, old, build, one_way) = match prepare(unit, asked, say) {
         Ok(prepared) => prepared,
         Err(why) => {
             return Ended::Refused(format!("{why}\nNothing changed: {unit} was never stopped."));
@@ -258,22 +265,14 @@ pub fn relaunch(
 /// one-way relaunch it was asked to make.
 fn prepare(
     unit: &str,
-    clone: &Path,
-    asked: Asked,
+    asked: &Asked,
     say: &dyn Fn(&str),
 ) -> Result<(File, Running, PathBuf, String), String> {
     let old = Running::of(unit)?;
     let lock = lock(&old.data().join("relaunch.lock"))?
         .ok_or_else(|| format!("a relaunch of {unit} is under way; wait for it to end"))?;
-    let commit = clean_commit(clone)?;
-    if !asked.back && !descends(clone, &old.commit, &commit)? {
-        return Err(format!(
-            "{commit} does not descend from {}, which {unit} runs: relaunching would undo commits. \
-             Merge it first, or say `back` to go back on purpose",
-            old.commit
-        ));
-    }
-    let build = install(clone, say)?;
+    let build = target(&old, &asked.target, say)?;
+    let commit = name(&build);
     let help = run(Command::new(build.join("bin/harness-brain")).arg("--help"))?;
     if !help.contains(Start::FLAG) {
         return Err(format!(
@@ -293,9 +292,10 @@ fn prepare(
                 return Err(format!(
                     "this relaunch would be one-way: {} could not read what {commit} wrote in the \
                      rehearsal ({unread}), so going back after {commit} opens would skip those \
-                     records and may run a call a second time. Call `relaunch` again with \
-                     `one_way: true` to go ahead",
-                    old.commit
+                     records and may run a call a second time. That is risky: don't deploy it. Go \
+                     back to the design and make the change one {} can read back. Only if one-way \
+                     cannot be avoided, call `relaunch` again with `one_way: true`",
+                    old.commit, old.commit
                 ));
             }
             format!(
@@ -748,6 +748,60 @@ fn clean_commit(clone: &Path) -> Result<String, String> {
         ));
     }
     git(clone, &["rev-parse", "--short=12", "HEAD"])
+}
+
+/// The installed build `target` names for the brain `old` runs: `main`,
+/// the latest commit of its source's `main`; `previous`, the build it ran
+/// before this one; or a commit of any branch of its source that contains
+/// all of `main`, as a hash or anything else `git rev-parse` reads.
+fn target(old: &Running, target: &str, say: &dyn Fn(&str)) -> Result<PathBuf, String> {
+    if target == "previous" {
+        return std::fs::canonicalize(old.data().join("previous"))
+            .map_err(|_| format!("{} has run no build before {}", old.unit, old.commit));
+    }
+    let source = source(old, say)?;
+    let main = git(&source, &["rev-parse", "--short=12", "origin/main"])?;
+    let commit = match target {
+        "main" => main.clone(),
+        _ => git(
+            &source,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--short=12",
+                &format!("{target}^{{commit}}"),
+            ],
+        )
+        .map_err(|_| {
+            format!(
+                "no branch of {} has the commit {target}: push it first",
+                git(&source, &["remote", "get-url", "origin"]).unwrap_or_default()
+            )
+        })?,
+    };
+    if !descends(&source, &main, &commit)? {
+        return Err(format!(
+            "{commit} does not contain all of main, which is at {main}: relaunching it would undo \
+             merged work. Merge main into it and push it, or target `main`"
+        ));
+    }
+    git(&source, &["checkout", "-q", "--detach", "--force", &commit])?;
+    install(&source, say)
+}
+
+/// The brain's source clone, `NAME/source` beside its database, cloned from
+/// [`UPSTREAM`] if it has none, with every branch of its `origin` fetched.
+fn source(old: &Running, say: &dyn Fn(&str)) -> Result<PathBuf, String> {
+    let dir = old.data().join("source");
+    if !dir.join(".git").exists() {
+        say(&format!("cloning {UPSTREAM} into {}", dir.display()));
+        run(Command::new("git")
+            .args(["clone", "-q", "--filter=blob:none", UPSTREAM])
+            .arg(&dir))?;
+    }
+    git(&dir, &["fetch", "-q", "--prune", "origin"])?;
+    Ok(dir)
 }
 
 fn descends(clone: &Path, ancestor: &str, commit: &str) -> Result<bool, String> {
