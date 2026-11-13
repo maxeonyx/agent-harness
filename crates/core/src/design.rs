@@ -55,8 +55,8 @@ use crate::resource::Observation;
 ///   Agents' markdown has no headings, bold or italic.
 /// - Measure and space. One column, 640 px; figures and tables that need
 ///   it break out to 820 px on a desktop, and scroll in their own frame on
-///   a phone. Space separates: 72 px between parts (56 on a phone), 44
-///   between the end and the now, which are a pair, 28 between blocks.
+///   a phone. Space separates: 72 px between parts (56 on a phone), 28
+///   between blocks.
 /// - No cards. Nothing is boxed but literal text (code, a prepared call),
 ///   on the theme's tint. Hairlines separate the rows of a table and
 ///   nothing else.

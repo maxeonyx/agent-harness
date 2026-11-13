@@ -256,7 +256,7 @@ fn listed(said: &str, found: Vec<Spotted>) -> String {
         for Spotted { at, line, problem } in found {
             let at = match line {
                 Some(line) => format!("{}, line {line}", spot_name(&at)),
-                None => spot_name(&at).to_string(),
+                None => spot_name(&at),
             };
             said.push_str(&format!("\n- {at}: {}", explain(&problem)));
         }
@@ -293,13 +293,13 @@ fn told(body: &Body) -> bool {
     !body.blocks.iter().any(shown) && body.blocks.iter().map(words).sum::<usize>() > 80
 }
 
-fn spot_name(spot: &Spot) -> &'static str {
+fn spot_name(spot: &Spot) -> String {
     match spot {
-        Spot::Lead => "The lead",
-        Spot::Facts => "The facts",
-        Spot::Step(_) => "A step",
-        Spot::Ask(_) => "An ask",
-        Spot::Why => "Why this route",
+        Spot::Lead => "The lead".into(),
+        Spot::Facts => "The facts".into(),
+        Spot::Step(key) => format!("The step `{key}`"),
+        Spot::Ask(_) => "An ask".into(),
+        Spot::Why => "Why this route".into(),
     }
 }
 
