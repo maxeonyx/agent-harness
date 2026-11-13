@@ -28,8 +28,8 @@
 //! flowchart TD
 //!   R["Rehearsal, beside A, which serves on:<br/>B --check on a copy (gate: lines),<br/>its page, served read-only, loaded in headless Chrome:<br/>no uncaught exception;<br/>sign-in read alike by A and B;<br/>two scratch brains of B, through A's limb and B's own:<br/>spawn, a bash token, a copy A checks;<br/>A folds what they wrote (readback)"]
 //!   R -->|"a pathway fails, or one-way without one_way"| Refused["Refused: A never stopped"]
-//!   R --> T["Takeover: A drains and stops;<br/>B starts with --candidate"]
-//!   T -->|"its process ends, or 3 min pass (killed)"| Failed["Failed: the unit restarts the link, A,<br/>on the bytes A left"]
+//!   R --> T["Takeover: A drains and stops writing;<br/>B starts with --candidate as A's child, on A's listener;<br/>A serves read-only until B has opened, then exits<br/>once its dictations end (a build before handovers:<br/>A stops, then B starts)"]
+//!   T -->|"B's process ends, or 3 min pass (killed)"| Failed["Failed: the unit restarts the link, A,<br/>on the bytes A left"]
 //!   T -->|"the link names B"| W["Opened: watched for 3 min"]
 //!   W -->|"B's process ends"| Back["Went back: the link is A again,<br/>and A starts, skipping and logging<br/>what it cannot read"]
 //!   W -->|"B outlives the window"| Opened["Opened"]
@@ -64,6 +64,10 @@ use serde_json::json;
 /// killed: its gate's pathways take a few seconds, and retry provider
 /// trouble for a minute.
 const OPENING: Duration = Duration::from_secs(3 * 60);
+/// How long a handover gets, from the signal to the candidate opening: the
+/// running brain's drain, as long as its unit's stop allows, then
+/// [`OPENING`].
+const HANDING_OVER: Duration = Duration::from_secs(330 + 3 * 60);
 /// How long an opened build is watched, so that its process ending goes
 /// back to the build before.
 const WINDOW: Duration = Duration::from_secs(3 * 60);
@@ -94,6 +98,11 @@ pub struct Running {
     pub build: PathBuf,
     pub commit: String,
     db: PathBuf,
+    pid: u32,
+    /// Whether it hands over ([`Start::HANDOVER`]): its build says so in
+    /// its `--help`, and its unit gave it a socket to say who its main
+    /// process is.
+    hands_over: bool,
 }
 
 impl Running {
@@ -125,12 +134,21 @@ impl Running {
             .iter()
             .map(|a| rebase(a, &link.to_string_lossy(), &build.to_string_lossy()))
             .collect();
+        let notifies = std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|env| {
+            env.split(|b| *b == 0)
+                .any(|v| v.starts_with(b"NOTIFY_SOCKET="))
+        });
+        let hands_over = notifies
+            && run(Command::new(build.join("bin/harness-brain")).arg("--help"))
+                .is_ok_and(|help| help.contains("SIGUSR2"));
         Ok(Running {
             unit: unit.into(),
             argv,
             build,
             commit,
             db,
+            pid,
+            hands_over,
         })
     }
 
@@ -213,25 +231,35 @@ pub fn relaunch(unit: &str, asked: &Asked, by: Option<CallId>, say: &dyn Fn(&str
         }
     };
     let commit = name(&build);
-    say(&format!(
-        "stopping {unit} on {}: its requests in flight drain first",
-        old.commit
-    ));
-    if let Err(why) = stop(unit) {
-        return Ended::Failed(format!("{unit} would not stop: {why}"));
-    }
     let since = SystemTime::now();
-    say(&format!("starting {commit} on {unit} as a candidate"));
     let mut candidate = old.on(&build);
     candidate.push(Start::FLAG.into());
-    if let Err(why) = start(unit, &candidate, by) {
-        let again = match start(unit, &old.argv, by) {
-            Ok(()) => format!("{unit} runs {} again", old.commit),
-            Err(e) => format!("nor would {} start again: {e}", old.commit),
-        };
-        return Ended::Failed(format!("{commit} would not start ({why}); {again}."));
-    }
-    let pid = match open(unit, &old, &build, since) {
+    let opened = if old.hands_over {
+        say(&format!(
+            "handing {unit} over from {} to {commit}: its requests in flight drain, then \
+             {commit} gates on its listener, and the face serves throughout",
+            old.commit
+        ));
+        hand_over(unit, &old, &build, &candidate, by, since)
+    } else {
+        say(&format!(
+            "stopping {unit} on {}: its requests in flight drain first",
+            old.commit
+        ));
+        if let Err(why) = stop(unit) {
+            return Ended::Failed(format!("{unit} would not stop: {why}"));
+        }
+        say(&format!("starting {commit} on {unit} as a candidate"));
+        if let Err(why) = start(unit, &candidate, by) {
+            let again = match start(unit, &old.argv, by) {
+                Ok(()) => format!("{unit} runs {} again", old.commit),
+                Err(e) => format!("nor would {} start again: {e}", old.commit),
+            };
+            return Ended::Failed(format!("{commit} would not start ({why}); {again}."));
+        }
+        open(unit, &old, &build, since)
+    };
+    let pid = match opened {
         Ok(pid) => pid,
         Err(why) => {
             return Ended::Failed(format!(
@@ -681,6 +709,52 @@ fn open(unit: &str, old: &Running, build: &Path, since: SystemTime) -> Result<u3
     }
 }
 
+/// Hand `unit` over from `old` to the `candidate` command line in `build`:
+/// name it in [`Start::HANDOVER`] and signal the running brain, which
+/// drains and starts it. Then wait as [`open`] does: the candidate's
+/// process, which the unit names its main once it has opened, or why it
+/// did not open: the brain before ended, as it does once the candidate
+/// has, or [`HANDING_OVER`] passed and it was killed.
+fn hand_over(
+    unit: &str,
+    old: &Running,
+    build: &Path,
+    candidate: &[String],
+    by: Option<CallId>,
+    since: SystemTime,
+) -> Result<u32, String> {
+    let asked = json!({ "argv": candidate, "by": by.map(|c| c.to_string()) });
+    write(&old.data().join(Start::HANDOVER), &asked.to_string())?;
+    systemctl(&["kill", "--kill-whom=main", "-s", "SIGUSR2", unit])?;
+    let link = old.data().join("build");
+    let opened = || std::fs::canonicalize(&link).is_ok_and(|to| to == build);
+    let until = Instant::now() + HANDING_OVER;
+    loop {
+        if opened() {
+            return match started(unit, &build.join("bin/harness-brain")) {
+                0 => Err("it opened, but the unit never named it its main process".into()),
+                pid => Ok(pid),
+            };
+        }
+        // The candidate links itself before it names itself the main
+        // process, so a main process that changed since the look above
+        // is the candidate's only if the link names it now.
+        if main_pid(unit).is_ok_and(|now| now != Some(old.pid)) && !opened() {
+            return Err(format!("its process ended{}", last_words(unit, since)));
+        }
+        if Instant::now() > until {
+            let _ = systemctl(&["kill", "--kill-whom=main", "-s", "SIGKILL", unit]);
+            return Err(format!(
+                "it had not opened {}s after the handover began, so the brain before was \
+                 killed{}",
+                HANDING_OVER.as_secs(),
+                last_words(unit, since)
+            ));
+        }
+        thread::sleep(EVERY);
+    }
+}
+
 /// Once a candidate has ended unopened, the unit's restart runs the
 /// installed link, still the build before: whether it did.
 fn restarted(unit: &str, old: &Running) -> String {
@@ -975,7 +1049,8 @@ fn remove(dir: &Path) {
 ///
 /// Its stop sends SIGTERM to the brain alone, which ends its links to
 /// limbs itself (the limbs run in units of their own), and gives it 330 s
-/// to drain.
+/// to drain. Any process in it may say which is its main one, as a
+/// candidate a brain hands over to does ([`Start::HANDOVER`]).
 pub fn start(unit: &str, argv: &[String], by: Option<CallId>) -> Result<(), String> {
     let build = Path::new(argv.first().ok_or("nothing to start")?)
         .parent()
@@ -1006,7 +1081,8 @@ pub fn start(unit: &str, argv: &[String], by: Option<CallId>) -> Result<(), Stri
         &format!(
             "[Unit]\nDescription=agent-harness brain {name}\n\n\
              [Service]\nWorkingDirectory={}\nExecStart={}\n\
-             KillMode=mixed\nTimeoutStopSec=330\nRestart=always\nRestartSec=5\n\n\
+             KillMode=mixed\nTimeoutStopSec=330\nRestart=always\nRestartSec=5\n\
+             NotifyAccess=all\n\n\
              [Install]\nWantedBy=default.target\n",
             data.to_string_lossy().replace('%', "%%"),
             exec_line(&linked),

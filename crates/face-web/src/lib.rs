@@ -143,6 +143,7 @@ use std::fmt;
 use std::io::{self, ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard};
 use std::thread;
@@ -239,6 +240,10 @@ pub struct Face<S> {
     shown: Mutex<Option<Arc<Shown>>>,
     /// Where each tab's records go once the brain opens ([`Face::open`]).
     include: OnceLock<Include>,
+    /// Whether another brain serves now ([`Face::close`]).
+    closed: AtomicBool,
+    /// The dictations being relayed.
+    dictating: AtomicUsize,
 }
 
 /// Where a tab's records go: the brain, which states that the tab is Max's
@@ -271,7 +276,21 @@ impl<S: Source> Face<S> {
             state: RwLock::new(State::default()),
             shown: Mutex::new(None),
             include: OnceLock::new(),
+            closed: AtomicBool::new(false),
+            dictating: AtomicUsize::new(0),
         })
+    }
+
+    /// Another brain serves now: each link ends, so its tab reconnects to
+    /// it, and [`serve`] takes no connection after the next. Each dictation
+    /// being relayed runs on to its end.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+
+    /// How many dictations are being relayed.
+    pub fn dictating(&self) -> usize {
+        self.dictating.load(Ordering::SeqCst)
     }
 
     /// The brain has opened: each tab's records go to `include` from now
@@ -520,7 +539,7 @@ impl<S: Source> Face<S> {
         let mut shipped = Instant::now();
         let read_only = self.include.get().is_none();
         loop {
-            if read_only && self.include.get().is_some() {
+            if read_only && self.include.get().is_some() || self.closed.load(Ordering::SeqCst) {
                 return Ok(());
             }
             match tab.read() {
@@ -591,7 +610,9 @@ impl<S: Source> Face<S> {
         http::accept_websocket(&mut stream, key)?;
         let mut page =
             WebSocket::from_raw_socket(stream, tungstenite::protocol::Role::Server, None);
+        self.dictating.fetch_add(1, Ordering::SeqCst);
         dictation.relay(&mut page, rate, request.query("sample").is_some());
+        self.dictating.fetch_sub(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -1067,8 +1088,9 @@ pub fn tls(cert: &Path, key: &Path) -> io::Result<Arc<rustls::ServerConfig>> {
 }
 
 /// Serve the face over HTTPS, a thread per connection, until the listener
-/// fails; then return once every open connection has ended. Only this host
-/// and the peers `allow` admits may connect.
+/// fails or the face is closed ([`Face::close`]); then return once every
+/// open connection has ended. Only this host and the peers `allow` admits
+/// may connect.
 pub fn serve<S: Source>(
     face: &Face<S>,
     listener: TcpListener,
@@ -1096,6 +1118,10 @@ pub fn serve<S: Source>(
                     let _ = stream.flush();
                 }
             });
+            // The listener may be another brain's too: it takes the rest.
+            if face.closed.load(Ordering::SeqCst) {
+                return Ok(());
+            }
         }
     })
 }

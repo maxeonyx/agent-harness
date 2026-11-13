@@ -259,6 +259,13 @@ impl Start {
     /// The word on a brain's command line that makes its start a
     /// candidate's.
     pub const FLAG: &str = "--candidate";
+
+    /// The file beside the database that names the candidate a running
+    /// brain hands over to, as JSON: `{"argv": [...], "by": CALL}`. A
+    /// relaunch writes it, then signals the brain, which drains, starts
+    /// the candidate as its child on its own listener, and serves on until
+    /// the candidate has opened, so the face never drops.
+    pub const HANDOVER: &str = "handover";
 }
 
 /// One way a new build is shown to work before any real session runs on
