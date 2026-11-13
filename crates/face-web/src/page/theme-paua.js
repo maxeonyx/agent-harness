@@ -61,6 +61,7 @@ function identity(at) { return toHex(shellAt(at).sig); }
 const FRAG = `
 precision highp float;
 uniform vec2 u_res;
+uniform float u_unit;
 uniform vec2 u_apex;
 uniform vec4 u_quiet;
 uniform vec2 u_light;
@@ -145,7 +146,7 @@ vec3 terrace(float i, float fr, float base, float z, float sharp){
 }
 
 void main(){
-  vec2 uv = gl_FragCoord.xy / u_res.y;
+  vec2 uv = gl_FragCoord.xy / u_unit;
   vec2 g = growth(uv);
   float e = 0.006;
   vec2 q = warpAt(g);
@@ -175,7 +176,7 @@ void main(){
   float rag = 0.035 * snoise(vec2(g.x * 9.0, g.y * 2.5) + u_seed) + 0.012 * snoise(vec2(g.x * 31.0, g.y * 7.0) - u_seed);
   float T = h0 * u_bands * 3.0 + rag;
   float idx = floor(T), fr = T - idx;
-  float px = length(slope) * u_bands * 3.0 / u_res.y;
+  float px = length(slope) * u_bands * 3.0 / u_unit;
   float sharp = smoothstep(0.05, 0.6, lobe);
   float soft = mix(0.6, max(px * 1.2, 0.012), sharp);
   float base = tilt * 1.6 + u_hue;
@@ -191,7 +192,7 @@ void main(){
   col *= 1.0 - 0.65 * organic;
 
   // The satin, along the growth, each striation faded out before it is finer than a few pixels.
-  float gpx = u_tight / (length(uv - u_apex) * u_res.y);
+  float gpx = u_tight / (length(uv - u_apex) * u_unit);
   float a1 = smoothstep(0.22, 0.08, 90.0 * gpx / 6.2831853), a2 = smoothstep(0.22, 0.08, 34.0 * gpx / 6.2831853);
   float s1 = 0.5 + 0.5 * sin(g.y * 90.0 + h0 * 14.0 + g.x * 2.0);
   float s2 = 0.5 + 0.5 * sin(g.y * 34.0 + h0 * 6.0 + hd * 9.0);
@@ -215,7 +216,7 @@ void main(){
   vec2 rel = uv - u_light;
   float gp = dot(rel, gd) + 0.42 * dot(n.xy, gd) / max(n.z, 0.2);
   float gs = dot(rel, gq) + 0.42 * dot(n.xy, gq) / max(n.z, 0.2);
-  float ew = 1.5 / u_res.y;
+  float ew = 1.5 / u_unit;
   float pane = smoothstep(-0.045 - ew, -0.045, gp) * (1.0 - smoothstep(0.045, 0.045 + ew, gp));
   pane *= 1.0 - (smoothstep(-0.005 - ew, -0.005, gp) * (1.0 - smoothstep(0.005, 0.005 + ew, gp)));
   float reach = exp(-pow(gs / (u_light_r * 0.9), 2.0)) * exp(-pow(length(rel) / (u_light_r * 1.25), 2.0));
@@ -239,13 +240,15 @@ export default {
   slots: [0, 5 / 8, 2 / 8, 7 / 8, 4 / 8, 1 / 8, 6 / 8, 3 / 8],
   map: { tone: "#1d6a78", duo: 0.5, below: 0.68, chroma: 0.6 },
   identity,
-  paint(ctx, { w, h, dpr, at, stream, quiet, kit }) {
-    const aspect = w / h;
+  paint(ctx, { w, h, screen = h, dpr, at, stream, quiet, kit }) {
+    // In units of the screen: a page painted as a hanging scroll is h / screen screens long, its first
+    // screen the cover, the shell running on below it in the light's falloff.
+    const S = screen, aspect = w / S, top = h / S - 1;
     // Where the shell grew from and where the light falls: in units of the height, y up, the apex
     // beyond a lower corner, the light low on that side.
     const place = stream("light"), right = place() < 0.5;
-    const apex = [right ? aspect + place.range(0.35, 0.7) : -place.range(0.35, 0.7), -place.range(0.3, 0.6)];
-    const light = [right ? aspect * place.range(0.66, 0.95) : aspect * place.range(0.05, 0.34), place.range(0.08, 0.26)];
+    const apex = [right ? aspect + place.range(0.35, 0.7) : -place.range(0.35, 0.7), top - place.range(0.3, 0.6)];
+    const light = [right ? aspect * place.range(0.66, 0.95) : aspect * place.range(0.05, 0.34), top + place.range(0.08, 0.26)];
     const lightR = place.range(0.4, 0.56);
     const layers = stream("layers"), gloss = stream("gloss"), flash = stream("flash"), zones = stream("zones");
     // The agent's shell, from its place; its second colouring a shell or so round the ring, so a painting
@@ -254,7 +257,7 @@ export default {
     const q = quiet || { x: w * 0.2, y: h * 0.2, w: w * 0.6, h: h * 0.3 };
     const u = {
       u_apex: apex, u_light: light, u_light_r: lightR,
-      u_quiet: [q.x / h, (h - q.y - q.h) / h, (q.x + q.w) / h, (h - q.y) / h],
+      u_quiet: [q.x / S, (h - q.y - q.h) / S, (q.x + q.w) / S, (h - q.y) / S],
       u_seed: layers.range(0, 100), u_tight: layers.range(2.2, 3.0), u_bands: layers.range(0.75, 1.1), u_hue: layers.range(0, 0.15),
       u_gloss: gloss.range(0.5, 1.1) * (right ? -1 : 1), u_warm: flash() < 0.4 ? flash.range(0.15, 0.3) : 0,
       u_zone: zones.range(0, 100), u_zone_amt: zones.range(0.55, 0.8),
@@ -263,13 +266,14 @@ export default {
     B.stops.forEach((c, j) => { u[`u_b${j}`] = c; });
     // At most about two thirds of a megapixel, scaled up smoothly: the nacre is soft except at the
     // lit terraces' steps, and a phone's paint stays under the design's budget.
-    const k = Math.min(dpr, Math.sqrt(0.65e6 / (w * h)));
+    const k = Math.min(dpr, Math.sqrt(0.65e6 / (w * S)));
+    u.u_unit = Math.round(S * k);
     const img = kit.shader(FRAG, w * k, h * k, u);
     if (img) ctx.drawImage(img, 0, 0, w, h);
     else {
       // Without WebGL: the same light as a glow of the shell's colours on its shadow.
       ctx.fillStyle = "#08151c"; ctx.fillRect(0, 0, w, h);
-      const x = light[0] * h, y = h - light[1] * h, r = lightR * h * 1.6;
+      const x = light[0] * S, y = h - light[1] * S, r = lightR * S * 1.6;
       const glow = ctx.createRadialGradient(x, y, 0, x, y, r), [c1, c2] = [A.stops[2], A.stops[1]].map((c) => c.map((v) => Math.round(v * 255)).join(","));
       glow.addColorStop(0, `rgba(${c1},.7)`); glow.addColorStop(0.45, `rgba(${c2},.35)`); glow.addColorStop(1, "rgba(8,21,28,0)");
       ctx.fillStyle = glow; ctx.fillRect(0, 0, w, h);

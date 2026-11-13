@@ -207,13 +207,14 @@ export const kit = { hash, rng, noise, grain, shader, rgb, mix, alpha, oklch, fr
 export function paintInto(canvas, theme, who, quiet, size = null) {
   const { slot, seed, root = seed, line = [] } = who;
   const w = size?.w ?? canvas.clientWidth, h = size?.h ?? canvas.clientHeight, dpr = size?.dpr ?? Math.min(2, window.devicePixelRatio || 1);
+  const screen = size?.screen ?? h;
   canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   quiet ??= { x: w * 0.25, y: h * 0.2, w: w * 0.5, h: h * 0.3 };
   const t0 = performance.now();
   const stream = (part) => rng(`${theme.name}:${seed}:${part}`);
-  theme.paint(ctx, { w, h, dpr, seed, slot, at: placeOf(theme, slot), line, root, rng: rng(`${theme.name}:${seed}`), stream, noise: noise(`${theme.name}:${seed}`), quiet, kit });
+  theme.paint(ctx, { w, h, screen, dpr, seed, slot, at: placeOf(theme, slot), line, root, rng: rng(`${theme.name}:${seed}`), stream, noise: noise(`${theme.name}:${seed}`), quiet, kit });
   return performance.now() - t0;
 }
 
@@ -353,6 +354,75 @@ void main() {
   lab.x = floor_ + (u_top - floor_) * t;
   // A dark painting's shadows take the theme's tone as they lift, rather than going grey.
   lab.yz = mix(lab.yz * mix(u_chroma_above, u_chroma, below), u_tone.yz * (1.0 - t), u_duo);
+  vec3 m = mat3(1.0, 1.0, 1.0, 0.3963377774, -0.1055613458, -0.0894841775, 0.2158037573, -0.0638541728, -1.2914855480) * lab;
+  vec3 o = mat3(4.0767416621, -1.2684380046, -0.0041960863, -3.3077115913, 2.6097574011, -0.7034186147, 0.2309699292, -0.3413193965, 1.7076147010) * (m * m * m);
+  gl_FragColor = vec4(gam(clamp(o, 0.0, 1.0)), 1.0);
+}`;
+
+// ─── A page as a hanging scroll (study) ───────────────────────────────────
+// The ground painted for the whole page, the window's width by the page's length: its first `screen`
+// composed as the cover, the rest running on down the page, the nearest ground at its foot. The page's
+// words are read over it: under each block of text the painting is pressed (OKLab lightness into a
+// band at the paper's end, hue kept) to the ink's bar, and the rest of the text column more lightly,
+// so the picture shows whole at the margins, between the parts and at the foot. Painting and words
+// scroll together, so the press follows the words exactly and nothing runs as Max scrolls.
+//   L = { w, h, screen,          the sheet's width and height, the window's height
+//         quiet,                 the lead's box
+//         blocks: [{ x, y, w, h }]   each block of text below the lead
+//         col: [x0, x1], below   the text column, and where the lead ends
+//         dark }                 the theme's paper is dark: ink light, the press goes down
+// Returns the ms on the page's thread.
+export function paintScroll(canvas, theme, who, L) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const t0 = performance.now();
+  const art = document.createElement("canvas");
+  paintInto(art, theme, who, L.quiet, { w: L.w, h: L.h, dpr, screen: L.screen });
+  const k = 0.25, mw = Math.ceil(L.w * k), mh = Math.ceil(L.h * k);
+  const mask = document.createElement("canvas");
+  mask.width = mw; mask.height = mh;
+  const mc = mask.getContext("2d");
+  mc.fillStyle = "#000"; mc.fillRect(0, 0, mw, mh);
+  mc.filter = `blur(${28 * k}px)`;
+  mc.fillStyle = "#fff";
+  for (const b of L.blocks) { mc.beginPath(); mc.roundRect((b.x - 40) * k, (b.y - 26) * k, (b.w + 80) * k, (b.h + 52) * k, 26 * k); mc.fill(); }
+  const paperL = oklch(theme.palette.paper)[0];
+  // Under the words, the lightness at which the theme's body ink keeps 7:1 (and a little to spare).
+  const Y = (hex) => rgb(hex).map((v) => lin(v / 255)).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i], 0);
+  const yb = L.dark ? (Y(theme.palette.body) + 0.05) / 7.3 - 0.05 : 7.3 * (Y(theme.palette.body) + 0.05) - 0.05;
+  const textL = Math.min(1, Math.cbrt(Math.max(0, yb))) + (L.dark ? -0.01 : 0.01);
+  const out = shader(PRESS, art.width, art.height, {
+    u_img: art, u_mask: mask, u_dark: L.dark ? 1 : 0, u_paper: paperL,
+    u_text: textL, u_base: L.dark ? SCROLL.darkBase : SCROLL.base,
+    u_col: [L.col[0] / L.w, L.col[1] / L.w, L.below / L.h, SCROLL.ramp / L.h], u_soft: SCROLL.soft / L.w,
+  });
+  canvas.width = art.width; canvas.height = art.height;
+  canvas.getContext("2d").drawImage(out || art, 0, 0);
+  return performance.now() - t0;
+}
+// Under text the press goes to where the body ink keeps 7:1 (paintScroll works it out from the
+// palette); elsewhere in the column, light pages no darker than `base` (OKLab L), dark ones no lighter
+// than `darkBase`. The column's press eases in over `soft` px at its sides and `ramp` px under the lead.
+const SCROLL = { base: 0.68, darkBase: 0.46, soft: 120, ramp: 90 };
+const PRESS = `precision highp float;
+uniform sampler2D u_img, u_mask; uniform vec2 u_res;
+uniform float u_dark, u_paper, u_text, u_base, u_soft; uniform vec4 u_col;
+vec3 lin(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
+vec3 gam(vec3 c) { return mix(12.92 * c, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
+void main() {
+  vec2 uv = vec2(gl_FragCoord.x / u_res.x, 1.0 - gl_FragCoord.y / u_res.y);
+  vec3 c = lin(texture2D(u_img, uv).rgb);
+  vec3 lms = pow(max(mat3(0.4122214708, 0.2119034982, 0.0883024619, 0.5363325363, 0.6806995451, 0.2817188376, 0.0514459929, 0.1073969566, 0.6299787005) * c, 0.0), vec3(1.0 / 3.0));
+  vec3 lab = mat3(0.2104542553, 1.9779984951, 0.0259040371, 0.7936177850, -2.4285922050, 0.7827717662, -0.0040720468, 0.4505937099, -0.8086757660) * lms;
+  float below = smoothstep(u_col.z, u_col.z + u_col.w, uv.y);
+  float col = smoothstep(u_col.x - u_soft, u_col.x + u_soft, uv.x) * (1.0 - smoothstep(u_col.y - u_soft, u_col.y + u_soft, uv.x)) * below;
+  float text = texture2D(u_mask, uv).r;
+  float L = clamp(lab.x, 0.0, 1.0);
+  // Light: lightness pressed up into [floor, the paper's]; dark: down into [the paper's, ceiling].
+  float base = u_dark > 0.5 ? u_paper + (u_base - u_paper) * L : u_base + (u_paper - u_base) * L;
+  float txt = u_dark > 0.5 ? u_paper + (u_text - u_paper) * L : u_text + (u_paper - u_text) * L;
+  float L1 = mix(L, base, col), L2 = mix(L1, txt, text);
+  float keep = mix(1.0, 0.75, col) * mix(1.0, 0.7, text);
+  lab = vec3(L2, lab.yz * keep);
   vec3 m = mat3(1.0, 1.0, 1.0, 0.3963377774, -0.1055613458, -0.0894841775, 0.2158037573, -0.0638541728, -1.2914855480) * lab;
   vec3 o = mat3(4.0767416621, -1.2684380046, -0.0041960863, -3.3077115913, 2.6097574011, -0.7034186147, 0.2309699292, -0.3413193965, 1.7076147010) * (m * m * m);
   gl_FragColor = vec4(gam(clamp(o, 0.0, 1.0)), 1.0);

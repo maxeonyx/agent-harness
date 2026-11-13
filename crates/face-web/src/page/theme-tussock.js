@@ -332,10 +332,13 @@ export default {
   slots: [0, 3 / 6, 1 / 6, 4 / 6, 2 / 6, 5 / 6],
   // The colour this agent is told apart by: the colour its light is named by.
   identity(at) { return lightAt(at).id; },
-  paint(ctx, { w, h, at, stream, noise, quiet, kit }) {
+  paint(ctx, { w, h, screen = h, at, stream, noise, quiet, kit }) {
+    // A page painted as a hanging scroll is `h` long; its first `screen` is composed as the cover
+    // (the sky, the ranges, the horizon under the lead), and the land runs on down the rest of it.
+    const S = screen;
     // Without a lead (a thumbnail, a swatch), keep the upper sky clear as if one sat there.
-    quiet ||= { x: w / 2, y: 0, w: 0, h: h * 0.42 };
-    const portrait = h > w, m = Math.min(w, h);
+    quiet ||= { x: w / 2, y: 0, w: 0, h: S * 0.42 };
+    const portrait = S > w, m = Math.min(w, S);
     const qb = quiet.y + quiet.h, qx0 = quiet.x, qx1 = quiet.x + quiet.w;
 
     // The light comes from the agent's place; everything else, from its seed, a stream per part.
@@ -344,8 +347,8 @@ export default {
     const side = fr() < 0.5 ? -1 : 1;
     const wind = (fr() < 0.7 ? -side : side) * fr.range(0.25, 0.55);
     // The horizon sits under the lead, closer or further: a big sky or a big land.
-    const H0 = clamp(qb + h * fr.range(portrait ? 0.05 : 0.04, portrait ? 0.14 : 0.2), h * 0.5, h * (portrait ? 0.8 : 0.78));
-    const space = h - H0;
+    const H0 = S < h ? qb + S * fr.range(0.03, 0.08) : clamp(qb + h * fr.range(portrait ? 0.05 : 0.04, portrait ? 0.14 : 0.2), h * 0.5, h * (portrait ? 0.8 : 0.78));
+    const space = Math.max(S - H0, S * 0.3);
     const off = fr() * 100;
     const step = Math.max(2, w / 600);
 
@@ -378,7 +381,7 @@ export default {
     }
     if (!found) { sunX = side < 0 ? -w * 0.05 : w * 1.05; sunY = Math.max(H0 - space * 0.08, qb + gap); }
     const sunDir = Math.sign(sunX - w / 2) || 1;
-    const glowR = Math.max(w, h) * 0.7;
+    const glowR = Math.max(w, S) * 0.7;
     let g = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, glowR);
     g.addColorStop(0, rgba(P.glow, 0.95 * P.glowA)); g.addColorStop(0.12, rgba(P.glow, 0.6 * P.glowA)); g.addColorStop(0.4, rgba(P.glow, 0.16 * P.glowA)); g.addColorStop(1, rgba(P.glow, 0));
     ctx.fillStyle = g;
@@ -448,7 +451,7 @@ export default {
       peaks = [{ x: rg.range(0.02, 0.18) * w, a: rg.range(0.8, 1), s: w * rg.range(0.08, 0.13) * wide }, { x: rg.range(0.82, 0.98) * w, a: rg.range(0.8, 1), s: w * rg.range(0.08, 0.13) * wide }];
       sharp = 2.0;
     }
-    const farAmp = (portrait ? space * 0.45 : Math.max(space * 0.5, H0 - qb + h * 0.1)) * rg.range(0.8, 1.12) * (form === "massif" ? 1.15 : form === "chain" ? 0.8 : 1);
+    const farAmp = (portrait ? space * 0.45 : Math.max(space * 0.5, H0 - qb + S * 0.1)) * rg.range(0.8, 1.12) * (form === "massif" ? 1.15 : form === "chain" ? 0.8 : 1);
     const floorY = qb + 10;
     const far = ridgeline(noise, w, step, H0, farAmp, peaks, quiet, floorY, off, sharp);
     relief(ctx, { w, pts: far, base: H0, noise, sunDir, cell: 1.5, off, spread: 0.9, hazeFrom: 0.35, haze: P.haze, rough: 0.45, edge: 0.4,
@@ -508,6 +511,8 @@ export default {
 
     // The land: one plane from the horizon or the shore to the foot, hazy far off, darker near.
     const spaceL = h - landTop;
+    // Sizes go by the land a screen holds, so a long page's land runs on rather than looming.
+    const spaceZ = Math.min(spaceL, Math.max(S - landTop, S * 0.35) * 1.4), longer = spaceL / spaceZ;
     const lgr = ctx.createLinearGradient(0, landTop, 0, h);
     lgr.addColorStop(0, mixc(P.plainFar, P.haze, 0.5)); lgr.addColorStop(0.2, P.plainFar); lgr.addColorStop(0.5, P.plain); lgr.addColorStop(1, P.ground);
     tracePath(ctx, shore, h + 10, w);
@@ -558,8 +563,8 @@ export default {
     };
     // Sometimes a second, nearer and lower, rising from the other side, warmer and darker.
     const hs = stream("hills"), hills = [];
-    if (hs() < 0.85) hills.push({ base: landTop + spaceL * 0.16, amp: spaceL * hs.range(0.22, 0.36), tilt: -sunDir * hs.range(0.8, 1.4), warm: 0 });
-    if (hs() < 0.45) hills.push({ base: landTop + spaceL * hs.range(0.3, 0.38), amp: spaceL * hs.range(0.14, 0.22), tilt: sunDir * hs.range(0.9, 1.5), warm: 0.35 });
+    if (hs() < 0.85) hills.push({ base: landTop + spaceZ * 0.16, amp: spaceZ * hs.range(0.22, 0.36), tilt: -sunDir * hs.range(0.8, 1.4), warm: 0 });
+    if (hs() < 0.45) hills.push({ base: landTop + spaceZ * hs.range(0.3, 0.38), amp: spaceZ * hs.range(0.14, 0.22), tilt: sunDir * hs.range(0.9, 1.5), warm: 0.35 });
     hills.forEach((hl, i) => {
       const pts = hillRidge(hl.base, hl.amp, off + 3 + i * 17, 1 / 420, hl.tilt);
       const c1 = mixc(P.hill1, P.hill2, 0.2 + hl.warm), c2 = mixc(P.hill2, P.hill3, 0.2 + hl.warm);
@@ -598,7 +603,7 @@ export default {
     // Cloud shadows: big soft patches of shade drifting over the land.
     const cs = stream("shadows");
     for (let i = 0; i < 3; i++) {
-      const cx = cs() * w, cy = landTop + spaceL * cs.range(0.22, 0.75), rw = w * cs.range(0.15, 0.4), rh = spaceL * cs.range(0.05, 0.12);
+      const cx = cs() * w, cy = landTop + spaceL * cs.range(0.22, 0.75), rw = w * cs.range(0.15, 0.4), rh = spaceZ * cs.range(0.05, 0.12);
       ctx.save();
       ctx.translate(cx, cy); ctx.scale(1, rh / rw);
       const cg = ctx.createRadialGradient(0, 0, 0, 0, 0, rw);
@@ -615,7 +620,9 @@ export default {
     const dens = (x, y) => {
       const mm = Math.max(...mass.map((c) => Math.exp(-((x / w - c) ** 2) / 0.06)));
       const patch = smooth(-0.35, 0.35, noise.fbm(x / 260 + off, y / 90, 3));
-      return 0.12 + 0.88 * (0.45 * mm + 0.55 * patch);
+      // Down a long page the clumps keep to the margins, out from under the words.
+      const edge = y > S ? 0.25 + 0.75 * smooth(0.32, 0.12, Math.min(x, w - x) / w) : 1;
+      return (0.12 + 0.88 * (0.45 * mm + 0.55 * patch)) * edge;
     };
     const area = w / 1000;
     const tiers = [
@@ -628,7 +635,7 @@ export default {
     // Red tussock comes with the light: everywhere under the rust light, a little elsewhere.
     const copperShare = clamp(P.red + cl.range(-0.1, 0.15), 0, 0.92), copperAt = (c) => smooth(0.15, 0.45, noise.fbm(c.x / 300 - off, c.y / 120 + 7, 2)) * copperShare;
     for (const t of tiers) {
-      const list = scatter(cl, w, landTop + spaceL * t.y0, landTop + spaceL * t.y1, spaceL * t.s0 * big, spaceL * t.s1 * big, Math.round(t.n * thick), dens);
+      const list = scatter(cl, w, landTop + spaceL * t.y0, landTop + spaceL * t.y1, spaceZ * t.s0 * big, spaceZ * t.s1 * big, Math.round(t.n * thick * longer), dens);
       clumps(ctx, list, { wind, sunX, tone: {}, scale: t.scale, noise, shadow: rgba(mixc(P.core, P.haze, t.haze), 0.22), shadowOnly: true });
       const groups = { gold: [], copper: [], straw: [] };
       for (const c of list) { const u = c.r(); groups[u < copperAt(c) ? "copper" : u > 0.85 ? "straw" : "gold"].push(c); }
@@ -641,7 +648,7 @@ export default {
 
     // Big clumps against the light at the foot's corners, to give the picture its near edge.
     const cn = stream("corners"), corner = [];
-    for (const cx of [cn.range(-0.04, 0.14), cn.range(0.86, 1.04)]) if (cn() < 0.85) corner.push({ x: cx * w, y: h * 0.99, s: spaceL * cn.range(0.4, 0.55), r: cn.fork(`c${cx}`) });
+    for (const cx of [cn.range(-0.04, 0.14), cn.range(0.86, 1.04)]) if (cn() < 0.85) corner.push({ x: cx * w, y: h * 0.99, s: spaceZ * cn.range(0.4, 0.55), r: cn.fork(`c${cx}`) });
     clumps(ctx, corner, { wind, sunX, tone: { core: P.core, shade: P.core, mid: mixc(P.core, P.shade, 0.5), tip: P.mid2, tipLit: P.tip }, scale: 1.5, noise });
 
     // The low sun washes over everything on its side.

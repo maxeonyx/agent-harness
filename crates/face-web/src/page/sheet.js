@@ -1,6 +1,6 @@
 import { $, clock, diagram, el, panel, scrollEl } from "./base.js";
 import { answer, answered } from "./compose.js";
-import { load, paintInto, wear } from "./theme.js";
+import { load, oklch, paintScroll, wear } from "./theme.js";
 
 // ─── A chat's page: what its agent presented to Max, drawn by the theme ───
 // The brain parses every body (harness-body) and the row carries what it
@@ -41,27 +41,37 @@ export function sheetTop() {
   return sheetEl.classList.contains("folded") ? Math.max(0, top + sheetEl.offsetHeight - scrollEl.clientHeight) : top;
 }
 
-// The page wears its task's look: the theme's tokens, and its ground
-// painted behind the lead, once per task and width. A task with none wears
+// The page wears its task's look: the theme's tokens, and its ground painted down the whole page as
+// a hanging scroll (theme.js `paintScroll`), once per task, width and layout. A task with none wears
 // sheet.css's plain default.
 const grounds = new Map();
 async function dress(t) {
-  const lead = $(".lead", sheetEl);
   if (!t.look) { sheetEl.removeAttribute("style"); lineEl.removeAttribute("style"); return; }
   const theme = await load(t.look.theme);
   await wear(sheetEl, theme);
   await wear(lineEl, theme);
+  const lead = $(".lead", sheetEl);
   if (!lead?.isConnected) return;
-  const at = `${t.id} ${lead.clientWidth} ${lead.clientHeight}`;
+  // After the browser has laid the page out and drawn it with its paper: the painting never holds it up.
+  await new Promise((ok) => requestAnimationFrame(() => setTimeout(ok)));
+  if (!lead.isConnected) return;
+  const scroller = sheetEl.closest(".scroll"), box = sheetEl.getBoundingClientRect();
+  const rel = (r) => ({ x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height });
+  const h1 = rel($("h1", lead).getBoundingClientRect());
+  const blocks = [...sheetEl.querySelectorAll(":scope > section :is(p, li, table, pre, figure, blockquote, summary, .ask, .head)")].map((e) => rel(e.getBoundingClientRect())).filter((b) => b.w && b.h);
+  const colEl = $(":scope > section", sheetEl) || lead, cs = getComputedStyle(colEl), c = colEl.getBoundingClientRect();
+  const col = [c.left - box.left + parseFloat(cs.paddingLeft), c.right - box.left - parseFloat(cs.paddingRight)];
+  const L = { w: Math.round(box.width), h: Math.round(sheetEl.scrollHeight), screen: scroller?.clientHeight || innerHeight, quiet: h1, blocks, col, below: rel(lead.getBoundingClientRect()).y + rel(lead.getBoundingClientRect()).h - 10, dark: oklch(theme.palette.paper)[0] < 0.5 };
+  const at = JSON.stringify([t.id, L.w, L.h, L.screen, blocks.length]);
   let ground = grounds.get(t.id);
   if (ground?.at !== at) {
-    ground = el("canvas", "ground");
+    ground = el("canvas", "art");
     ground.at = at;
+    ground.style.height = `${L.h}px`;
+    ground.ms = paintScroll(ground, theme, t.look, L);
     grounds.set(t.id, ground);
-    lead.prepend(ground);
-    const h = $("h1", lead).getBoundingClientRect(), box = lead.getBoundingClientRect();
-    paintInto(ground, theme, t.look, { x: h.left - box.left, y: h.top - box.top, w: h.width, h: h.height });
-  } else lead.prepend(ground);
+  }
+  sheetEl.prepend(ground);
 }
 const redraw = () => sheetEl.dispatchEvent(new CustomEvent("sheet", { bubbles: true }));
 

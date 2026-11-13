@@ -33,6 +33,7 @@ import { fromOklch } from "./theme.js";
 
 const FRAG = `precision highp float;
 uniform vec2 u_res;
+uniform float u_unit;
 uniform float u_hz, u_mx, u_my, u_mr, u_seed, u_phase, u_tilt, u_veil, u_haloK, u_glassy, u_maxLand, u_bankTop, u_vis;
 uniform vec3 u_sky0, u_sky1, u_mist, u_sea0, u_sea1, u_halo, u_moon, u_farc, u_near;
 uniform vec4 u_l0, u_l1, u_l2, u_far, u_bank, u_c0, u_c1, u_c2;
@@ -116,8 +117,8 @@ vec3 cloud(vec3 col, vec4 c, float x, float y, float asp, float lit){
   return col;
 }
 void main(){
-  float asp = u_res.x / u_res.y, px = 1. / u_res.y;
-  float x = gl_FragCoord.x / u_res.x, y = 1. - gl_FragCoord.y / u_res.y;
+  float asp = u_res.x / u_unit, px = 1. / u_unit;
+  float x = gl_FragCoord.x / u_res.x, y = (u_res.y - gl_FragCoord.y) / u_unit;
   float dx = (x - u_mx) * asp;
   float lit = .5 + .5 * cos(u_phase);
   float glow = .35 + .65 * lit;
@@ -174,7 +175,7 @@ void main(){
       col += u_halo * rim * glow * .45;
     }
   } else {
-    float d = y - u_hz, t = d / (1. - u_hz);
+    float d = y - u_hz, t = min(d / (1. - u_hz), 1.5);
     col = mix(u_sea0, u_sea1, pow(t, .5));
     col = mix(col, u_mist * .8, (1. - smoothstep(0., .05, t)) * .35);
     // The moon's light on the water: a long soft column under it, narrower on glassy water.
@@ -226,12 +227,15 @@ export default {
   slots: [0, 1, 1 / 2, 1 / 4, 3 / 4],
   map: { tone: "#41507f", duo: 0.6 },
   identity,
-  paint(ctx, { w, h, dpr, at, stream, noise, quiet, kit }) {
+  paint(ctx, { w, h, screen = h, dpr, at, stream, noise, quiet, kit }) {
+    // In units of the screen: a page painted as a hanging scroll runs on below its first screen, the
+    // cover, as the water coming nearer.
+    const S = screen;
     const N = night(at);
-    const portrait = h > w;
+    const portrait = S > w;
     // A thumbnail has no lead: compose as if one sat where a page puts it.
-    const q = quiet || (portrait ? { x: w * 0.04, y: h * 0.2, w: w * 0.92, h: h * 0.38 } : { x: w * 0.27, y: h * 0.2, w: w * 0.46, h: h * 0.3 });
-    const qb = (q.y + q.h) / h;
+    const q = quiet || (portrait ? { x: w * 0.04, y: S * 0.2, w: w * 0.92, h: S * 0.38 } : { x: w * 0.27, y: S * 0.2, w: w * 0.46, h: S * 0.3 });
+    const qb = (q.y + q.h) / S;
     // The horizon sits clear below the lead, so the moon and its haze never reach the text.
     const hr = stream("horizon");
     const hz = Math.min(0.86, Math.max(qb + (portrait ? 0.12 : 0.09), portrait ? hr.range(0.62, 0.74) : hr.range(0.6, 0.84)));
@@ -240,7 +244,9 @@ export default {
     // below it; never beside the lead. Its place across is free, since it is always below the text.
     const mo = stream("moon");
     const right = mo.chance(0.5);
-    const mr = mo.range(0.017, 0.029) * (portrait ? 0.8 : 1);
+    // Down a hanging scroll the words run under the lead, so the moon stands in the margin beside them.
+    const scroll = S < h;
+    const mr = Math.min(mo.range(0.017, 0.029) * (portrait ? 0.8 : 1), scroll ? (0.3 * q.x) / S : 1);
     const floor = qb + (portrait ? 0.035 : 0.07) + mr;   // the highest the moon may stand: clear below the lead
     const pose = mo();
     let mx = portrait ? (right ? mo.range(0.6, 0.78) : mo.range(0.22, 0.4)) : (right ? mo.range(0.58, 0.85) : mo.range(0.15, 0.42));
@@ -248,7 +254,8 @@ export default {
     if (pose < 0.4) my = hz - mr * mo.range(-0.35, 0.7);
     else if (pose < 0.72 || hz - floor < mr * 6) my = Math.max(floor, hz - mr * mo.range(1.6, 4.5));
     else my = mo.range(floor, hz - mr * 5);
-    my = Math.min(my, hz + mr * 0.35);      // never set: at least two thirds of the disc above the horizon
+    my = Math.min(my, hz + mr * 0.35);
+    if (scroll) mx = right ? 1 - (0.5 * q.x) / w : (0.5 * q.x) / w;      // never set: at least two thirds of the disc above the horizon
     const phaseDraw = mo(), phaseRange = mo.range(0.45, 1.35), tiltSign = mo.chance(0.5) ? 1 : -1, tiltK = mo.range(0.25, 1.1);
     const hideDraw = mo();
 
@@ -320,7 +327,7 @@ export default {
     // It never stands in front of a low moon: it moves to the side it was nearer.
     const island = (x0, width) => {
       if (x0 < mx + 0.05 && x0 + width > mx - 0.05) x0 = x0 + width / 2 < mx ? mx - 0.05 - width : mx + 0.05;
-      lands.push([x0, x0 + width, width * (w / h) * sh.range(0.09, 0.16), 0]);
+      lands.push([x0, x0 + width, width * (w / S) * sh.range(0.09, 0.16), 0]);
     };
     const shore = sh();
     if (shore < 0.22) {
@@ -350,8 +357,9 @@ export default {
 
     // At most about half a megapixel, scaled up smoothly: the sky and the water are soft, the
     // ripples and stars are drawn after at full resolution, and a phone's paint stays under budget.
-    const res = Math.min(dpr, Math.sqrt(0.45e6 / (w * h)));
+    const res = Math.min(dpr, Math.sqrt(0.45e6 / (w * S)));
     const g = kit.shader(FRAG, w * res, h * res, {
+      u_unit: Math.round(S * res),
       u_hz: hz, u_mx: mx, u_my: my, u_mr: mr, u_seed: wa() * 10, u_phase: phase, u_tilt: tilt, u_veil: veil, u_haloK: 1,
       u_glassy: glassy, u_maxLand: maxLand, u_bankTop: bankTop, u_vis: vis,
       u_sky0: hex3(N.sky0), u_sky1: hex3(N.sky1), u_mist: hex3(N.mist), u_sea0: hex3(N.sea0), u_sea1: hex3("#02050b"),
@@ -368,7 +376,7 @@ export default {
       ctx.fillStyle = sea; ctx.fillRect(0, hz * h, w, h - hz * h);
     }
 
-    const H0 = hz * h, cx = mx * w, cy = my * h, span = Math.max(w, h * 0.8);
+    const H0 = hz * S, cx = mx * w, cy = my * S, span = Math.max(w, S * 0.8);
     // Strokes are sized to the picture, so a thumbnail reads like the full piece.
     const k = Math.min(1.2, Math.max(0.25, span / 1200));
     const glint = "#f2f0e8", bright = (0.35 + 0.65 * lit) * (1 - 0.45 * veil) * vis;
@@ -382,7 +390,7 @@ export default {
     ctx.strokeStyle = N.ripple;
     let y = H0 + 2;
     while (y < h) {
-      const t = (y - H0) / (h - H0);
+      const t = Math.min(1.5, (y - H0) / (S - H0));
       const n = Math.round((w / ((60 + 140 * t) * k)) * (1 - 0.55 * glassy));
       const rows = [new Path2D(), new Path2D(), new Path2D()];
       for (let i = 0; i < n; i++) {
@@ -402,7 +410,7 @@ export default {
     const width = (1.45 - 0.95 * glassy) * (1 + Math.min(1, Math.max(0, hz - my) / 0.25) * 0.5);
     y = H0 + 1.5;
     while (bright > 0.05 && y < h) {
-      const t = (y - H0) / (h - H0);
+      const t = Math.min(1.5, (y - H0) / (S - H0));
       const spreadX = (0.006 + 0.085 * t) * span * width;
       const n = Math.round((8 + 20 * (1 - t) + 16 * t * gl()) * (0.8 + 0.4 * width));
       for (let i = 0; i < n; i++) {
@@ -430,7 +438,7 @@ export default {
     ctx.globalAlpha = 1;
     // A few stars, faint and high, away from the moon, and none behind the lead.
     const st = stream("stars");
-    for (let i = 0; i < Math.round((w * h) / 16000); i++) {
+    for (let i = 0; i < Math.round((w * S) / 16000); i++) {
       const x = st() * w, sy = st() ** 1.3 * H0 * 0.8, m = st() ** 3;
       if (x > q.x - 8 && x < q.x + q.w + 8 && sy > q.y - 8 && sy < q.y + q.h + 8) continue;
       const away = Math.min(1, Math.hypot((x - cx) / span, (sy - cy) / span) * 2.2);

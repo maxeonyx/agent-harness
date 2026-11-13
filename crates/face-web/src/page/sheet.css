@@ -80,3 +80,17 @@
     .sheet.folded .lead { padding: 2em 1em 1.4em; }
     .sheet-line { padding: .55em 1em; }
   }
+  /* Study (hanging scroll): the sheet spans the card and its painting runs the page's length, the
+     column 48rem wide in the middle; the lead is short, the facts start under it (the report guide's
+     shape), and the page ends on the painting's foot. */
+  .sheet { max-width: none; margin: 0; padding: 0 0 26vh; position: relative; isolation: isolate; border-top: 0; }
+  .sheet > :not(.art) { box-sizing: border-box; max-width: 48rem; margin-left: auto; margin-right: auto; padding-left: 1.6em; padding-right: 1.6em; }
+  .sheet > .lead, .sheet > .lead.new { margin-top: 0; min-height: 0; padding-top: 6.5em; padding-bottom: 1.2em; }
+  .sheet > .lead .hook { display: none; }
+  .sheet > .art { position: absolute; left: 0; top: 0; width: 100%; z-index: -1; pointer-events: none; }
+  .sheet > section:first-of-type { margin-top: .6em; }
+  @media (max-width: 760px) {
+    .sheet { padding: 0 0 20vh; }
+    .sheet > :not(.art) { padding-left: 1em; padding-right: 1em; }
+    .sheet > .lead, .sheet > .lead.new { padding-top: 5.5em; }
+  }
