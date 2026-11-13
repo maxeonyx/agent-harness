@@ -80,6 +80,10 @@ id!(
     AskId
 );
 id!(
+    /// A [`crate::design::Area`]: the event that began it.
+    AreaId
+);
+id!(
     /// A [`crate::design::Feedback`]: the event that gave it.
     FeedbackId
 );

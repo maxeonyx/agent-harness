@@ -3,7 +3,7 @@
 //! **Concept.** A task's page is its standing report to Max. A task has one
 //! when it holds the user plugin: the tool set that faces Max (the tool
 //! review's model), which a task holds when it has him, and which holds the
-//! page tools, `ask`, `open_chat`, `choose_theme` and `pass_on_style`. The
+//! page tools, `ask`, `open_chat` and `pass_on_style`. The
 //! page is what opens when he clicks the task, read top to bottom: the
 //! vision's "an agent answers with a page", and "a question is a page plus a
 //! node, answered by talking".
@@ -60,24 +60,25 @@
 //! a write over a part another task changed since this one saw it, or an
 //! edit whose text is not in the body. Everything else is made impossible
 //! to get wrong. Every `page_write` states the end and where we are, so a
-//! page can't lack them. A theme is chosen from a list of the offered ones. A
-//! heading, bold, or a link to a kind that does not exist is drawn as plain
-//! text and listed as a problem. A task with no title or theme yet is drawn
-//! with its role's name, in its area's first offered theme.
+//! page can't lack them. A heading, bold, or a link to a kind that does not
+//! exist is drawn as plain text and listed as a problem. A task with no
+//! title yet is drawn with its role's name. Its look is its area's theme in
+//! its own identity, from the moment it starts, with nothing to choose.
 //!
 //! **Not yet folded.** These types are the model. The facts that carry
 //! them are the build's to wire: `Fact::Page(TaskId, PageEvent)`,
 //! `Fact::Ask(AskId, AskEvent)`, `Fact::Kind(SourceKind)`,
 //! `Fact::Design(Design)`, `TaskEvent::Described(Description)`,
-//! `TaskEvent::Themed(String, Identity)` (locked: folded only for a task
-//! with no theme; its [`crate::design::Identity`] planned as it chooses), `Phase::AwaitingMax` carrying an `Option<Presented>`,
+//! `Fact::Area(AreaId, AreaEvent)`, `TaskEvent::InArea(AreaId)` for a task
+//! Max starts, `TaskEvent::Identified(Identity)` (its
+//! [`crate::design::Identity`], planned as it starts), `Phase::AwaitingMax` carrying an `Option<Presented>`,
 //! `Prompt::Present`, `Content::Answer(Answer)`,
 //! `Fact::Feedback(FeedbackId, FeedbackEvent)`, Max's words carrying the
 //! [`crate::design::Screen`] he was looking at, its [`Spot`] included, a
 //! `says` on `resource::Change`, and `attention::Ranked` naming an
 //! [`crate::ask::Owed`]. The tools that make them are `describe` in the
 //! meta tool set, for every task, and `page_read`, `page_write`,
-//! `page_edit`, `page_publish`, `ask`, `choose_theme` and `pass_on_style`
+//! `page_edit`, `page_publish`, `ask` and `pass_on_style`
 //! in the user plugin. Those are declared only to a task that has Max, so
 //! no call is refused for not having him.
 
@@ -292,17 +293,13 @@ pub enum Spot {
 /// is the page's [`Now::point`], and what a machine knows comes from the
 /// harness.
 ///
-/// The theme is not here either. It is chosen once, with `choose_theme`
-/// from the offered ones, folded as `TaskEvent::Themed` with the identity
-/// the harness plans for it then ([`crate::design::Identity`]), and locked:
-/// the tool
-/// is declared only while the task has no theme, and a second choice in the
-/// same context leaves the first, as its result says. An agent's look is
-/// how Max finds it again, so it never changes under him.
+/// The look is not here either, and the agent has no say in it: the task
+/// wears its area's theme ([`crate::design::Area`]) in the identity the
+/// harness planned as it started ([`crate::design::Identity`]). An agent's
+/// look is how Max finds it again, so it never changes under him.
 ///
 /// Serves: chats that start alike no longer look alike; "easy for me to see
-/// whereabouts I'm at"; "maybe they get to choose from a set of themes
-/// initially, but they of course have to lock it in".
+/// whereabouts I'm at"; "agents don't design their own themes".
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Description {
     /// What the work does: "Retry budget for the ingest worker". A name Max

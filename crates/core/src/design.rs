@@ -7,21 +7,24 @@
 //!   x -->|pass_on_style| f[("Feedback, open")]
 //!   tab["His tab"] -->|"a ground failed"| f
 //!   f -->|wakes| k["Keeper"]
+//!   area["Max begins an area"] -->|"takes the spare"| d
+//!   d -->|"no spare left: wakes"| a
 //!   k -->|"the art"| a["Art agent"]
 //!   a --> m["Artists"]
-//!   m --> c["Critic, then max-advocate"]
-//!   k -->|"merged, Answered"| d[("Design")]
+//!   m --> c["Critic, the check, then max-advocate"]
+//!   c -->|"passed"| k
+//!   k -->|"published, Answered"| d[("Design")]
 //!   d --> pages["Every page wearing it, from its next open"]
-//!   k -->|"before and after, proposals"| kp["Keeper's page"]
+//!   k -->|"before and after, new themes"| kp["Keeper's page: keep, or not this"]
 //! ```
 //!
 //! Not yet folded: `Fact::Feedback(FeedbackId, FeedbackEvent)`, the open
-//! feedback a keeper wakes on, Max's words carrying a [`Screen`], and the
-//! rest listed in [`crate::page`].
+//! feedback a keeper wakes on, `Fact::Area(AreaId, AreaEvent)`, Max's words
+//! carrying a [`Screen`], and the rest listed in [`crate::page`].
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{AskId, DeliveryId, RoleId, TaskId, ValueId};
+use crate::id::{AskId, DeliveryId, RoleId, TaskId, Timestamp, ValueId};
 use crate::page::Spot;
 use crate::resource::Observation;
 
@@ -32,7 +35,7 @@ use crate::resource::Observation;
 /// by one agent ([`Design::keeper`]), read from files in the repo and
 /// versioned as a role is. Agents never style: they give typed parts and
 /// short markdown ([`crate::page::Sheet`], [`crate::ask::Ask`]), and the
-/// face draws them in the language, dressed in the task's theme. A change
+/// face draws them in the language, dressed in the task's area's theme. A change
 /// here reaches every page, old versions included, from its next open: a
 /// page open on Max's screen is never redrawn under him.
 ///
@@ -64,11 +67,11 @@ pub struct Design {
     /// The language: the stylesheet every theme shares, written against the
     /// tokens a theme's style sets, and nothing else.
     pub language: ValueId,
-    /// The themes offered to agents, and those proposed to Max.
+    /// The set: every finished theme, each worn by one area or spare
+    /// ([`Design::spares`]).
     pub themes: Vec<Theme>,
     pub components: Vec<Component>,
-    /// What a task holding the user plugin is told: choose your theme first;
-    /// the end is the world when the work is done, a state and not a plan; the point is the update in one sentence; then
+    /// What a task holding the user plugin is told: the end is the world when the work is done, a state and not a plan; the point is the update in one sentence; then
     /// show it, a figure first; ask with `ask`, each ask with its own end,
     /// now and why, and never retell it on the page; name live things
     /// instead of retyping their state; write no colours, typefaces, bold or
@@ -95,7 +98,22 @@ pub struct Design {
     /// design system's files beside the art, never only in an agent's
     /// context. He sees a change on the keeper's own page: before and after
     /// at the size he saw it, painted live by the ground figure.
+    ///
+    /// The keeper and its art agent are woken by state, not by a message
+    /// someone must remember to send: open [`Feedback`] (his words, or a
+    /// device's [`Fault`]), or a set holding fewer than [`Design::spares`]
+    /// themes an area could take. A keeper that wakes fresh finds the same
+    /// work waiting. Fixes to themes being worn come first, and a spare is
+    /// never urgent, so making one waits while his usage is low.
     pub keeper: RoleId,
+    /// How many finished themes the set keeps that no area wears: one. A
+    /// new area takes one at once, so its first page is painted, and the
+    /// art agent makes the next without a deadline, which is how the first
+    /// five reached Max's bar: several directions, a critic, rounds of fixes.
+    /// One, since he begins areas rarely and an unworn theme is usage spent
+    /// ahead; a second area begun before the next is ready starts on plain
+    /// paper.
+    pub spares: u8,
     /// How long the face waits for a ground, on Max's own device, before it
     /// gives up, keeps the paper and reports a [`Fault`]. The page never
     /// waits for its ground: he opens pages on his phone between other
@@ -109,7 +127,8 @@ pub struct Design {
     pub source: Option<Observation>,
 }
 
-/// A look an agent wears: what makes its page and chat window its own.
+/// A look an area wears: what makes its agents' pages and chat windows
+/// their own.
 ///
 /// **Concept.** A finished piece of design, made with care in the design
 /// system's files by the keeper's art agent ([`Design::keeper`]), and never
@@ -139,13 +158,15 @@ pub struct Design {
 /// box so text sits on calm ground, and leaves with the cover as Max
 /// scrolls, its foot dissolving into the theme's paper. An agent's figures use the palette's tokens, never colours,
 /// so a figure redraws in any theme. The state tones ([`Tone`]) are never a
-/// theme's. An agent chooses its theme's name once and keeps it
-/// ([`crate::page::Description`]); a revised theme reaches it from its
-/// page's next open, so a fix shows on the page Max complained on.
+/// theme's. An agent wears its [`Area`]'s theme, and a revised theme
+/// reaches it from its page's next open, so a fix shows on the page Max
+/// complained on.
 ///
 /// Serves: Max's "really elegant and artistic [...] beautiful backgrounds,
 /// UI themes, design systems, etc. that can be swapped between to make an
 /// agent and its page unique"; "easy for me to see whereabouts I'm at";
+/// every area "can have some kind of like color or pattern, and each agent
+/// within that can again have variant color and patterns";
 /// "agents don't design their own themes"; Harbour and Kauri "need to be a
 /// little bit visually more distinguished"; backgrounds "5 times better",
 /// not "10% better".
@@ -153,8 +174,9 @@ pub struct Design {
 pub struct Theme {
     /// `harbour`.
     pub name: String,
-    /// What an agent chooses it by, in `choose_theme`'s list: "A hand-engraved
-    /// chart of a harbour: soundings, depth contours, shallows tinted blue."
+    /// What it depicts, in a line, under its paintings on the keeper's page
+    /// and the set's sheet: "A hand-coloured chart of a harbour under a low
+    /// sun."
     pub about: String,
     /// Its palette and display face: a stylesheet setting the language's
     /// tokens, with the font files it names.
@@ -163,9 +185,8 @@ pub struct Theme {
     /// canvas, given the canvas's size, the task's id as its seed, its
     /// [`Identity`], and the box the page's lead sits in, which it keeps
     /// calm. It also names the colour each identity paints in. The map
-    /// paints each project (Max's root task and all under it) with its
-    /// root's ground, faint behind the graph and fullest below the now
-    /// line, each live agent in a pool of its identity's colour, repainted
+    /// paints each area's region with its theme's ground, faint and nearly
+    /// grey behind the streams he reads and fullest below the now line, each live agent in a pool of its identity's colour, repainted
     /// only when the zoom passes a step and never while he pans. It is deterministic in its seed, identity and
     /// size, so the same agent looks the same in every face,
     /// no other agent looks quite like it, and the keeper can paint again
@@ -187,33 +208,107 @@ pub struct Theme {
     /// 4.5:1, since he reads it every day; a thumbnail that reads as its
     /// theme, since that is how he finds where he is; thumbnails of
     /// identities planned one after another told apart at a glance, since
-    /// that is how he tells its agents apart; the same pixels when
+    /// that is how he tells its agents apart; names on the map at 7:1 over
+    /// its region, since the map is how he gets around; every state mark on
+    /// the map keeping 90% of the contrast it has on bare paper, with the
+    /// region's chroma there under half the mark's, so a state is the
+    /// strongest colour where it stands and orange is only ever his move
+    /// (the painting clears a little paper around each live agent's node;
+    /// whether a tone reads on bare paper is the language's bar); the same
+    /// pixels when
     /// painted twice. It reports the time to a finished canvas on a phone at
     /// a quarter of desktop speed, rastered on the CPU, as the slow case: a
-    /// ground slower than its peers there is the one to make cheaper.
+    /// ground slower than its peers there is the one to make cheaper. It
+    /// draws the whole set side by side, pages and map regions, for the
+    /// critic, since whether a theme reads as itself and nothing like the
+    /// others is judged by eye.
     pub ground: ValueId,
-    /// Shown to Max on the keeper's page and never offered to
-    /// `choose_theme`: a new theme waits for his choice, so no agent can
-    /// lock in one he then rejects. One he rejects is deleted, and his words
-    /// go in the design system's files.
-    pub proposed: bool,
+    /// Who has passed it, which says whether an area may wear it.
+    pub standing: Standing,
+    /// When it joined the set: an area takes the oldest spare.
+    pub joined: Timestamp,
 }
 
-/// Who an agent is among the agents wearing its theme, as its painting
-/// shows it.
+/// Who has passed a [`Theme`].
+///
+/// **Concept.** A theme joins the set once its critic, the check and
+/// `max-advocate` pass it, so one Max hasn't seen may be worn: an area he
+/// begins never waits for him. His own word ranks above theirs, since he
+/// has overruled the critic before (Pāua), so a theme the critic turned
+/// down that the advocate thinks he may love is shown to him instead of
+/// deleted. The keeper's page asks him about each theme he hasn't kept.
+/// "Not this" deletes it, puts his words in the set's taste file, and
+/// moves any area wearing it to the next spare from its pages' next open.
+///
+/// Serves: "I did override a critic".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Standing {
+    /// The critic turned it down and `max-advocate` thinks Max may overrule
+    /// it. Worn only once he keeps it.
+    Contested,
+    /// Its critic, the check and `max-advocate` passed it.
+    Passed,
+    /// Max said "keep". An area takes one of these before a `Passed` one.
+    Kept,
+}
+
+/// One of the areas of Max's life the map is divided into, as the design
+/// sees it: the theme its agents wear.
+///
+/// **Concept.** The theme says where Max is, so it belongs to the area,
+/// not to an agent: every agent in an area wears its theme, each in its
+/// own [`Identity`], and no two areas wear the same one. Max begins an
+/// area, which is rare and deliberate (home, life admin, Kibra's study,
+/// work), and it takes the oldest spare he kept, else the oldest that
+/// passed, at once; with none spare it is drawn on plain paper until the
+/// art agent's next one joins the set. Its theme changes only when he
+/// says "not this" or asks for one made for it, and then from its pages'
+/// next open. An area that ends gives its theme back to the set, offered
+/// after every other spare, since its old pages still wear it.
+///
+/// A task is in its parent's area, and a task Max starts himself is in
+/// the area he starts it in: the one he is looking at on the map unless
+/// he picks another. What else an area is (its main agent, its domain) is
+/// the ownership model's; the look needs only this.
+///
+/// Serves: "can we repeat it? For additional themes and things like that.
+/// As we add additional areas. And how exactly should that happen
+/// automatically?"
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Area {
+    /// "Home".
+    pub name: String,
+    /// The theme's name, or none while the set has no spare.
+    pub theme: Option<String>,
+}
+
+/// What happens to an [`Area`], as `Fact::Area(AreaId, AreaEvent)`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AreaEvent {
+    /// Max began it.
+    Begun { name: String },
+    /// It wears this theme from its pages' next open: the spare it took as
+    /// it began or once one joined the set, or one made for it.
+    Wears(String),
+    /// Max ended it; its theme is spare again.
+    Ended,
+}
+
+/// Who an agent is among the agents of its area, as its painting shows it.
 ///
 /// **Concept.** Planned by the harness, not left to the seed: with six
 /// colours and four agents, a random pick gives two of them the same colour
-/// 72% of the time. When a task chooses its theme, `at` is set to the
-/// middle of the widest gap left by the unfinished tasks already wearing
-/// it, so the agents on the map at once sit as far apart in the theme's
-/// range of colour as they can; with none, it comes from the task's id.
-/// It is then fixed with the theme, since an agent's look is how Max finds
-/// it again. A resume carries its source on, so it carries its source's
-/// theme and identity, seed included.
+/// 72% of the time. When a task starts, `at` is set to the middle of the
+/// widest gap left by the unfinished tasks already in its [`Area`], so
+/// the agents on the map at once sit as far apart in the theme's range of
+/// colour as they can; with none, it comes from the task's id. It is then
+/// fixed, since an agent's look is how Max finds it again. It is a place
+/// in a range, not a colour, so it holds when the area's theme changes. A
+/// resume carries its source on, so it carries its source's identity,
+/// seed included.
 ///
-/// `root` and `line` place the task among its ancestors wearing the same
-/// theme, for a ground whose picture nests: Harbour paints the whole chain
+/// `root` and `line` place the task among its ancestors in the same area,
+/// for a ground whose picture nests: Harbour paints the whole chain
 /// from `root`'s chart, each child a closer look at a region of its
 /// parent's, so who started whom shows in the paintings.
 ///
@@ -229,8 +324,8 @@ pub struct Identity {
     /// Whose id seeds the painting: the task's own, or for a resume its
     /// source's.
     pub seed: TaskId,
-    /// The furthest ancestor reached through parents wearing the same
-    /// theme: the task itself when its parent wears another or it has none.
+    /// The furthest ancestor reached through parents in the same area: the
+    /// task itself when its parent is in another or it has none.
     pub root: TaskId,
     /// The child numbers from `root` down to the task, each its place among
     /// its siblings by creation; empty for `root` itself.
