@@ -537,12 +537,19 @@ impl Start {
     }
 }
 
+/// The meta tool by which an agent facing Max ([`crate::state::State::faces_max`])
+/// opens a user-facing chat for him: a fresh agent in a role its own role
+/// starts, the one member of a background call's scope, so its opener owns
+/// it as background work and hears its result when he marks it done.
+pub const OPEN_CHAT: &str = "open_chat";
+
 /// What the end of a model turn means for this task.
 ///
 /// The one difference between an autonomous subagent, a chat with Max, and
-/// a standing agent such as the attention scheduler. Only Max makes a task
-/// user-facing: his chats and asides are; what an agent starts, a fork
-/// included, is autonomous. Marking a task done does not change its mode:
+/// a standing agent such as the attention scheduler. His chats and asides
+/// are user-facing, and so is a chat an agent facing him opens for him
+/// with [`OPEN_CHAT`]; anything else an agent starts, a fork included, is
+/// autonomous. Marking a task done does not change its mode:
 /// it asks for one last turn ([`Live::closing`]), which writes the result
 /// (with [`crate::delivery::Prompt::Done`], so the model has seen it before
 /// it does). So the mode of a finished task says who may continue it: Max
