@@ -9,7 +9,7 @@ import { renderBuilds } from "./builds.js";
 import { go, goStaying, moving, NEW, openId, renderPanel } from "./card.js";
 import { renderOthers, syncCompose } from "./compose.js";
 import { finding, found } from "./newchat.js";
-import { paintRegions } from "./regions.js";
+import { paintRegions, placeRegions } from "./regions.js";
 
 // ─── Drawing the map ───────────────────────────────────────────────────────
 // Three layers, moved by the camera together: the lines, in one SVG under
@@ -124,8 +124,8 @@ function elOf(id) {
   return p?.card ? "card" : n?.big ? "big" : n?.kind === "chip" && n.running ? "work" : null;
 }
 
-// Every node where it is shown now: the elements moved, the blobs placed
-// and the marks written for the canvas.
+// Every node where it is shown now: the elements moved, the blobs placed,
+// the marks written for the canvas, and the areas' grounds under them.
 let marks = new Float32Array(0);
 const rgb = (r, g, b) => [r / 255, g / 255, b / 255];
 const INK = rgb(20, 20, 19), PAPER = rgb(250, 249, 245), STRETCH = rgb(131, 129, 123), OLD = rgb(196, 194, 186), RUNNING = rgb(58, 109, 176);
@@ -165,6 +165,7 @@ export function drawNodes() {
     }
   }
   blobs?.marks(marks, k);
+  placeRegions();
 }
 
 // The small node at a point on the screen, if any: within 12 px of it.
