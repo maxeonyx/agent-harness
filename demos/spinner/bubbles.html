@@ -1,0 +1,241 @@
+<!doctype html>
+<!-- Spike S1, take "bubbles": a session's spinner as one bubble per thing it
+     can wait on (the model, its tool calls, Max, the brain). The one it waits
+     on now is big and moves; the others are small and still. Open the file:
+     no build, no brain. ?state=NAME shows one state, still; #auto plays a session. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spinner: bubbles</title>
+<style>
+  :root {
+    --ground: #f0eee6; --paper: #faf9f5; --line: #e3dfd3; --ink: #141413;
+    --muted: #6b6a64; --faint: #a19f96; --maroon: #7a1f22; --green: #4f8a55; --red: #b3352c; --blue: #3b6ea8;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --ease: cubic-bezier(.2, .8, .2, 1);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans);
+    background-image: radial-gradient(circle, rgba(20, 20, 19, .10) 1px, transparent 1.3px); background-size: 22px 22px; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; display: grid; gap: 22px; }
+  h1 { margin: 0; font: 600 22px/1.2 var(--serif); }
+  p { margin: 0; color: var(--muted); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; }
+  .controls button { padding: .3em .75em; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); }
+  .controls button.on { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .now { font: 600 15px/1.3 var(--serif); min-height: 1.3em; }
+  .stage { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 560px) { .stage { grid-template-columns: 1fr; } }
+  .frame { background: rgba(250, 249, 245, .55); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+  .frame > small { color: var(--faint); }
+
+  /* The map node: the spinner is the node. */
+  .mapnode { display: grid; justify-items: center; gap: 6px; padding: 18px 0 6px; }
+  .mapnode .name { font: 600 13px/1.2 var(--serif); }
+
+  /* The chat header: the spinner sits where the mini dot sits. */
+  .bar { display: flex; align-items: center; gap: .6em; padding: .5em .8em; min-height: 2.9em; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+  .bar .title { flex: 1; font: 600 16.5px/1.3 var(--serif); }
+
+  /* The spinner. Every bubble is a circle with its icon; --s is its size.
+     .cluster (map node): the waited-on bubble at the centre, the others
+     parked small around it, each always in its own corner.
+     .row (chat header): the bubbles in a line, in the order a step runs. */
+  .spin { position: relative; flex: none; }
+  .spin.cluster { --big: 40px; --small: 13px; width: 66px; height: 66px; }
+  .spin.row { --big: 22px; --small: 9px; display: flex; align-items: center; gap: 4px; height: 24px; }
+  .b { --s: var(--small); position: relative; width: var(--s); height: var(--s); border-radius: 50%; flex: none;
+    display: grid; place-items: center; background: var(--paper); border: 1.5px solid rgba(20, 20, 19, .35); color: rgba(20, 20, 19, .5);
+    transition: width .35s var(--ease), height .35s var(--ease), left .35s var(--ease), top .35s var(--ease), border-color .3s, background .3s, color .3s; }
+  .b svg { width: 62%; height: 62%; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; transition: opacity .2s; }
+  .b:not(.on) svg { opacity: 0; }
+  .spin.cluster .b:not(.on) { border-width: 1.2px; }
+  .b.on { --s: var(--big); border-color: var(--ink); color: var(--ink); z-index: 1; }
+  .b.on svg { opacity: 1; }
+  /* Small bubbles still say which they are: by colour, and in the cluster by place. */
+  .b.model { border-color: rgba(59, 110, 168, .55); }
+  .b.tools { border-color: rgba(20, 20, 19, .4); border-radius: 30%; }
+  .b.max { border-color: rgba(122, 31, 34, .5); }
+  .b.brain { border-style: dotted; }
+
+  .cluster .b { position: absolute; left: calc(var(--x) - var(--s) / 2); top: calc(var(--y) - var(--s) / 2); }
+  .cluster .b.model { --x: 58px; --y: 9px; }
+  .cluster .b.tools { --x: 58px; --y: 57px; }
+  .cluster .b.max   { --x: 8px;  --y: 57px; }
+  .cluster .b.brain { --x: 8px;  --y: 9px; }
+  .cluster .b.on { --x: 33px; --y: 33px; }
+
+  /* The model: blue. Waiting for its first byte, a ripple goes out and does
+     not come back; streaming, dots flow round it like a fork edge that is awaited. */
+  .b.model.on { border-color: var(--blue); color: var(--blue); }
+  .b.model.on::after { content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 1.5px solid var(--blue); opacity: 0; }
+  .b.model.on.first::after { animation: ripple 1.6s var(--ease) infinite; }
+  .b.model.on.streaming { background: rgba(59, 110, 168, .08); }
+  .b.model.on.streaming::after { inset: -5px; opacity: 1; border: 2px dotted var(--blue); animation: turn 1.1s linear infinite; }
+  .b.model.on.held { border-color: var(--red); color: var(--red); }
+  .b.model.on.held::after { display: none; }
+  @keyframes ripple { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(1.7); opacity: 0; } }
+  @keyframes turn { to { transform: rotate(360deg); } }
+
+  /* Tool calls: the wrench works; on background work only, it works slowly. */
+  .b.tools.on { border-radius: 30%; }
+  .b.tools.on svg { animation: work .9s ease-in-out infinite alternate; transform-origin: 50% 50%; }
+  .b.tools.on.background { border-style: dashed; }
+  .b.tools.on.background svg { animation-duration: 2.6s; }
+  @keyframes work { from { transform: rotate(-22deg); } to { transform: rotate(22deg); } }
+
+  /* The brain: transient, so quick and slight: its dotted rim turns fast. */
+  .b.brain.on { border-style: dotted; border-width: 2px; animation: turn .8s linear infinite; }
+  .b.brain.on svg { animation: turn .8s linear infinite reverse; }
+
+  /* Max: maroon, the move is his. It breathes once per keepalive (JS adds .beat). */
+  .b.max.on { border-color: var(--maroon); color: var(--maroon); background: rgba(122, 31, 34, .06); }
+  .b.max.on.beat { animation: breathe 2.4s ease-in-out; }
+  @keyframes breathe { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(122, 31, 34, 0); } 40% { transform: scale(1.08); box-shadow: 0 0 0 4px rgba(122, 31, 34, .12); } }
+
+  /* Data on the channel: a faint flash on whichever bubble is big. */
+  .b.on.data::before { content: ""; position: absolute; inset: -3px; border-radius: inherit; box-shadow: 0 0 0 2px rgba(20, 20, 19, .18); animation: flash .45s ease-out forwards; }
+  @keyframes flash { from { opacity: 1; } to { opacity: 0; } }
+
+  /* Not waiting on anything that moves: every bubble small and still. */
+  .spin.paused .b { border-color: var(--faint); color: var(--faint); }
+  .spin.done .b { border-color: var(--green); background: rgba(79, 138, 85, .12); }
+  .spin.cluster.idle .b.centre { --s: var(--big); --x: 33px; --y: 33px; display: grid; }
+  .b.centre { display: none; }
+  .spin.done .b.centre { color: var(--green); }
+  .spin.paused .b.centre { color: var(--faint); }
+  .spin.idle .b.centre svg { opacity: 1; }
+  .spin.row.idle .b.centre { display: grid; --s: var(--big); }
+
+  .legend { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; color: var(--muted); }
+  .legend .spin { justify-self: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Spinner: bubbles</h1>
+  <p>One bubble per thing the session can wait on. The one it waits on now is big and moves; the others are small and still.</p>
+  <div class="controls" id="controls"></div>
+  <div class="now" id="now"></div>
+  <div class="stage">
+    <div class="frame"><small>Map node</small><div class="mapnode"><div class="spin cluster" data-spin></div><div class="name">spinner-bubbles</div></div></div>
+    <div class="frame"><small>Chat header</small><div class="bar"><div class="spin row" data-spin></div><div class="title">Spinner that says what it waits on</div></div></div>
+  </div>
+  <div class="frame"><small>Each state at chat-header size</small><div class="legend" id="legend"></div></div>
+</main>
+<script>
+  const icon = {
+    // A spark: the model.
+    model: '<svg viewBox="0 0 24 24"><path d="M12 3c.6 4.6 3.4 7.4 8 9-4.6 1.6-7.4 4.4-8 9-.6-4.6-3.4-7.4-8-9 4.6-1.6 7.4-4.4 8-9z"/></svg>',
+    // A wrench: tool calls.
+    tools: '<svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></svg>',
+    // A person: Max.
+    max: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c1-4 4-5.5 7-5.5s6 1.5 7 5.5"/></svg>',
+    // A cog: the brain.
+    brain: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>',
+    done: '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+    paused: '<svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></svg>',
+  };
+  // Row order: the order a step runs in.
+  const bubbles = ["model", "brain", "tools", "max"];
+  // Every kind of core's Waiting, as a bubble and how it moves.
+  const states = {
+    first:      { label: "Model, first byte", bubble: "model", mod: "first", say: "Waiting on the model's first byte" },
+    streaming:  { label: "Model, streaming", bubble: "model", mod: "streaming", say: "The model is streaming" },
+    brain:      { label: "Brain", bubble: "brain", say: "The brain is working" },
+    calls:      { label: "Tool calls", bubble: "tools", say: "Running 3 tool calls" },
+    listening:  { label: "Background", bubble: "tools", mod: "background", say: "Waiting on background work" },
+    max:        { label: "Max", bubble: "max", say: "Waiting on you" },
+    held:       { label: "Held", bubble: "model", mod: "held", say: "Held by the account: rate limit resets 14:05" },
+    starting:   { label: "Starting", bubble: "brain", say: "Starting: making a clone" },
+    paused:     { label: "Paused", idle: "paused", say: "Paused" },
+    done:       { label: "Done", idle: "done", say: "Done" },
+  };
+
+  function build(el) {
+    el.innerHTML = bubbles.map((b) => `<div class="b ${b}" title="${b}">${icon[b]}</div>`).join("") + '<div class="b centre"></div>';
+  }
+  function show(el, name) {
+    const s = states[name];
+    el.classList.remove("paused", "done", "idle");
+    if (s.idle) el.classList.add("idle", s.idle);
+    el.querySelector(".centre").innerHTML = s.idle ? icon[s.idle] : "";
+    for (const b of bubbles) {
+      const e = el.querySelector("." + b);
+      e.className = `b ${b}` + (s.bubble === b ? " on" + (s.mod ? " " + s.mod : "") : "");
+    }
+  }
+
+  const spins = [...document.querySelectorAll("[data-spin]")];
+  spins.forEach(build);
+  let current = "max";
+  function set(name) {
+    current = name;
+    spins.forEach((el) => show(el, name));
+    document.getElementById("now").textContent = states[name].say;
+    for (const b of document.querySelectorAll("#controls [data-state]")) b.classList.toggle("on", b.dataset.state === name);
+    lastData = Date.now();
+  }
+
+  // Liveness. The brain sends a keepalive only when the channel would otherwise
+  // be idle (here every 4 s of quiet); any message counts as data, and the big
+  // bubble flashes for it at most every 0.3 s. Max's bubble breathes on each keepalive.
+  let lastData = Date.now(), lastFlash = 0;
+  function data() {
+    lastData = Date.now();
+    if (lastData - lastFlash < 300) return;
+    lastFlash = lastData;
+    for (const e of document.querySelectorAll("[data-spin] .b.on")) { e.classList.remove("data"); void e.offsetWidth; e.classList.add("data"); }
+  }
+  function keepalive() {
+    data();
+    for (const e of document.querySelectorAll("[data-spin] .b.max.on")) { e.classList.remove("beat"); void e.offsetWidth; e.classList.add("beat"); }
+  }
+  setInterval(() => { if (Date.now() - lastData >= 4000) keepalive(); }, 250);
+
+  // A realistic session: each step its state, how long it lasts, and how often data arrives.
+  const session = [
+    ["first", 1800, 0], ["streaming", 3200, 60], ["brain", 350, 0], ["calls", 2600, 900],
+    ["brain", 250, 0], ["first", 1200, 0], ["streaming", 2400, 60], ["brain", 300, 0],
+    ["listening", 4200, 0], ["brain", 300, 0], ["first", 900, 0], ["streaming", 2800, 60],
+    ["brain", 300, 0], ["max", 13000, 0],
+  ];
+  let auto = null;
+  function play(i = 0) {
+    clearTimeout(auto?.next); clearInterval(auto?.feed);
+    const [name, ms, every] = session[i % session.length];
+    set(name); data();
+    auto = { next: setTimeout(() => play(i + 1), ms), feed: every ? setInterval(data, every) : null };
+    document.getElementById("autoplay").classList.add("on");
+  }
+  function stopAuto() {
+    if (!auto) return;
+    clearTimeout(auto.next); clearInterval(auto.feed); auto = null;
+    document.getElementById("autoplay").classList.remove("on");
+  }
+
+  const controls = document.getElementById("controls");
+  controls.innerHTML = '<button id="autoplay">Auto-play</button>' +
+    Object.entries(states).map(([k, s]) => `<button data-state="${k}">${s.label}</button>`).join("") +
+    '<button id="data">Data</button>';
+  controls.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button"); if (!b) return;
+    if (b.id === "autoplay") return auto ? stopAuto() : play();
+    if (b.id === "data") return data();
+    stopAuto(); set(b.dataset.state);
+  });
+
+  const legend = document.getElementById("legend");
+  for (const [k, s] of Object.entries(states)) {
+    const el = document.createElement("div"); el.className = "spin row"; build(el); show(el, k);
+    legend.append(el, Object.assign(document.createElement("span"), { textContent: s.say }));
+  }
+
+  const want = new URLSearchParams(location.search).get("state");
+  if (want && states[want]) set(want); else if (location.hash === "#auto") play(); else set("max");
+</script>
+</body>
+</html>
