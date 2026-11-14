@@ -93,7 +93,9 @@
 //! forever: the build is a hash of the page's files and the wasm, so a
 //! change to any of them is a new path, and a module's relative imports all
 //! come from the build the document named. A build that is not the one
-//! served now is not found. Only what the browser itself holds an identity
+//! served now is not found, so `/wiring` names the build served now, and a
+//! tab on another reloads onto it once that loses nothing (`page/tab.js`).
+//! Only what the browser itself holds an identity
 //! by keeps a fixed path, unstored: the service worker (`/page/sw.js`), the
 //! web app manifest (`/page/manifest.webmanifest`) and its icon
 //! (`/icon.png`).
@@ -416,6 +418,7 @@ impl<S: Source> Face<S> {
                 let dictation = self.wiring.dictation.as_ref();
                 let checking = self.include.get().is_none().then_some(&self.wiring.source);
                 let can = json!({
+                    "build": self.build().ok(),
                     "checking": checking,
                     "dictation": dictation.is_some(),
                     "sample": dictation.is_some_and(Dictation::has_sample),

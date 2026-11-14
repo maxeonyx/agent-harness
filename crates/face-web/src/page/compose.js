@@ -26,6 +26,9 @@ export const compose = $(".compose", panel);
 // the verdict pressed. Held with what he writes until he sends, which
 // carries them; pressing again takes one back.
 const answers = new Map();
+// Whether this tab holds what a reload would lose or cut off: dictation
+// under way, a change not yet saved, or answers pressed and not yet sent.
+export const holding = () => !!dictation || saving.size > 0 || [...answers.values()].some((m) => m.size > 0);
 export const answered = (key, call) => answers.get(key)?.get(call);
 export function answer(key, call, verdict) {
   const held = answers.get(key) ?? new Map();

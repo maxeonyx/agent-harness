@@ -1,4 +1,4 @@
-import { $, diagram, el, panel, scrollEl } from "./base.js";
+import { $, diagram, el, fail, panel, scrollEl } from "./base.js";
 import { answer, answered } from "./compose.js";
 import { load, paintInto, wear } from "./theme.js";
 
@@ -27,7 +27,14 @@ export function renderSheet(t) {
   sheetEl.hidden = !full;
   if (!full) { line(p, t); return false; }
   const key = JSON.stringify([t.id, p, t.look, unfolded]);
-  if (sheetEl.drawn !== key) { sheetEl.drawn = key; sheetEl.replaceChildren(...page(p, t)); dress(t); }
+  if (sheetEl.drawn !== key) {
+    sheetEl.drawn = key;
+    try { sheetEl.replaceChildren(...page(p, t)); dress(t); }
+    catch (e) {
+      sheetEl.replaceChildren(el("p", "", "This page could not be drawn."));
+      fail(`drawing ${t.name}'s page`, e);
+    }
+  }
   return landed !== shown(t);
 }
 // Each present is landed on once: a new version, or one presented again.

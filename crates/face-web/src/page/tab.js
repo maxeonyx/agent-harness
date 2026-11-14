@@ -1,7 +1,7 @@
 import { fail } from "./base.js";
 import { render } from "./draw.js";
 import { liveArrived } from "./log.js";
-import { restoreLocal } from "./compose.js";
+import { holding, restoreLocal } from "./compose.js";
 import { viewArrived } from "./main.js";
 import * as liveness from "./liveness.js";
 
@@ -12,10 +12,32 @@ import * as liveness from "./liveness.js";
 // IndexedDB. Whatever the tab says is parsed into core's facts by the wasm,
 // stored, and only then shipped; what became of it is read off the tab's
 // standing in a later view, so a refusal shows here, where it was made.
-// Read again each time the tab links, since a brain that was checking a
-// build (`checking`, its commit) holds what Max sends until one opens.
-export let can = { dictation: false, sample: false, checking: null };
-const wire = () => fetch("/wiring", { cache: "no-store" }).then((r) => r.json()).then((c) => { can = c; render(); });
+
+// The build this tab runs, `/page/<build>/`: the one its document named,
+// which a relaunch onto a new build does not change, and whose scripts no
+// longer read the rows the new one sends. The face says which build it
+// serves (`can.build`); a tab on another reloads onto it once nothing would
+// be lost or cut off: nothing `holding` in the box, every record the brain's,
+// and Max not typing (a key in the last 10 s), or not looking. A focused box
+// alone is no reason to wait: an open card focuses it, and the card and the
+// words in it come back after the reload.
+const build = new URL(".", import.meta.url).pathname.split("/").at(-2);
+let stale = null;
+let typedAt = 0;
+addEventListener("input", () => { typedAt = Date.now(); }, true);
+function reloadIfIdle() {
+  const typing = !document.hidden && Date.now() - typedAt < 10_000;
+  if (!typing && !holding() && tab?.settled()) location.reload();
+}
+
+// The face's wiring. Read again each time the tab links, since a brain that
+// was checking a build (`checking`, its commit) holds what Max sends until one opens.
+export let can = { dictation: false, sample: false, checking: null, build: null };
+const wire = () => fetch("/wiring", { cache: "no-store" }).then((r) => r.json()).then((c) => {
+  can = c;
+  if (c.build && c.build !== build) stale ??= setInterval(reloadIfIdle, 2000);
+  render();
+});
 wire();
 
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -169,8 +191,10 @@ export async function boot() {
 // links afresh rather than trust it.
 let hiddenAt = 0;
 addEventListener("visibilitychange", () => {
-  if (document.hidden) hiddenAt = Date.now();
-  else if (tab?.ws && Date.now() - hiddenAt > 30_000) tab.relink();
+  if (document.hidden) {
+    hiddenAt = Date.now();
+    if (stale) reloadIfIdle();
+  } else if (tab?.ws && Date.now() - hiddenAt > 30_000) tab.relink();
 });
 // A closed tab's replica, whose lock is free: ship what it had not, then
 // forget it, so nothing typed in a tab that was closed offline is lost.
