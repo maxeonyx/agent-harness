@@ -1,32 +1,18 @@
-// The areas' grounds, painted off the page's thread: regions.js sends each
-// painting's spec here and gets its picture back as an ImageBitmap, so the
-// map never waits on a theme's paint. A theme makes its working canvases
-// with document.createElement, which a worker has not: here each one is an
-// OffscreenCanvas, which draws, reads back and feeds a shader the same way.
-import { load, paintRegion } from "./theme.js";
+// The areas on the map, drawn off the page's thread: regions.js sends the
+// map's areas (each its theme, its nodes' and names' boxes) and its lines
+// here, and gets back each area's territory (territories.js) as SVG in the
+// map's units and a small picture of its wash, as an ImageBitmap, so the map
+// never waits on a theme's chart.
+import { load } from "./theme.js";
+import { territories } from "./territories.js";
 
-globalThis.document = { createElement: () => new OffscreenCanvas(1, 1) };
-
-const faces = new Set();
-
-// A ground that letters (Harbour's soundings) paints in its display face,
-// loaded here as the page's wear loads it there.
-async function face(theme) {
-  const d = theme.display;
-  if (faces.has(d.family)) return;
-  faces.add(d.family);
-  const loading = d.files.map((file) => new FontFace(d.family, `url(${new URL(`./${file}`, import.meta.url)})`, { weight: d.weights }).load());
-  // A face that fails to load leaves the fallback.
-  for (const f of await Promise.allSettled(loading)) if (f.status === "fulfilled") self.fonts.add(f.value);
-}
-
-self.onmessage = async ({ data: { id, key, theme, who, spec } }) => {
+self.onmessage = async ({ data: { key, areas, lines, paper } }) => {
   try {
-    const ground = await load(theme);
-    await face(ground);
-    const bitmap = paintRegion(ground, who, spec).transferToImageBitmap();
-    self.postMessage({ id, key, bitmap }, [bitmap]);
+    const themes = await Promise.all(areas.map((a) => load(a.theme)));
+    const out = territories(areas.map((a, i) => ({ ...a, theme: themes[i] })), lines, paper).areas
+      .map(({ id, box, svg, tint }) => ({ id, box, svg, tint: tint.transferToImageBitmap() }));
+    self.postMessage({ key, areas: out }, out.map((a) => a.tint));
   } catch (e) {
-    self.postMessage({ id, key, error: `painting the ${theme} ground: ${e.message}` });
+    self.postMessage({ key, error: `drawing the map's areas: ${e.message}` });
   }
 };

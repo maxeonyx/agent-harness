@@ -168,10 +168,14 @@ pub struct Theme {
     /// from its own stream of the seed, so revising one part leaves the
     /// rest of every agent's painting where it was. Painted once when the
     /// window opens, never animated. It fills the cover behind the lead and
-    /// dissolves into the paper as Max scrolls. The map paints each area
-    /// with its ground, faint behind the graph, each live agent in a pool
-    /// of its identity's colour, repainted only when the zoom passes a
-    /// step.
+    /// dissolves into the paper as Max scrolls. On the map the same module
+    /// draws the area as an old map would: each area is a territory, the
+    /// land round its nodes and streams, bordered where it meets its
+    /// neighbours and washed faintly in the theme's map hue, and inside it
+    /// the module's `chart` draws the theme's subject as a map in one ink
+    /// (Harbour's a nautical chart, Tussock's a topographic sheet), as
+    /// vectors, sharp at every zoom, drawn again only when the map's layout
+    /// changes.
     ///
     /// The face runs only grounds a version of the design system declared,
     /// since a ground is a program and a page body may hold none. Before a

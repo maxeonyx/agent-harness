@@ -224,7 +224,8 @@ export default {
   },
   // The night's hue, from teal to plum (hueOf): the two ends, then the middles.
   slots: [0, 1, 1 / 2, 1 / 4, 3 / 4],
-  map: { tone: "#41507f", duo: 0.6 },
+  map: { hue: 274 },
+  chart,
   identity,
   paint(ctx, { w, h, dpr, at, stream, noise, quiet, kit }) {
     const N = night(at);
@@ -441,3 +442,67 @@ export default {
     kit.grain(ctx, w, h, 0.05, "marama-grain");
   },
 };
+
+// On the map: a star atlas. A graticule round a pole beyond the area, the Milky Way a pale band
+// outlined in dotted lines and full of faint stars, stars by magnitude as hairline crosses, a few
+// figures joined, and the moon's path along the ecliptic with its phases.
+function chart(ctx, s) {
+  const { w, h, mass, calm, n } = s, { grid, iso, chains, within, lines, scatter, dots, tint, ok, okRgb } = s.kit;
+  const INK = [0.44, 0.06, 278], r = s.stream("sky");
+  const SKY = okRgb(0.958, 0.014, 285), WAY = okRgb(0.94, 0.022, 285);
+  // The Milky Way: a broad band across the area, wandering, its density uneven.
+  const wa = r.range(0.5, 1.1) * (r.chance(0.5) ? 1 : -1), wx = w * r.range(0.3, 0.7), wy = h * r.range(0.3, 0.7);
+  const way = grid(w, h, 6, (x, y) => {
+    const d = (x - wx) * Math.sin(wa) - (y - wy) * Math.cos(wa) + 70 * n.fbm(x * 0.003, y * 0.003, 3);
+    return Math.exp(-((d / 110) ** 2)) * (0.55 + 0.45 * (0.5 + 0.5 * n.fbm(x * 0.008 + 5, y * 0.008, 3)));
+  });
+  tint(s.under, w, h, 4, (x, y) => { const m = mass(x, y); return m < 0.02 ? null : [...(way.at(x, y) > 0.42 ? WAY : SKY), Math.round(210 * Math.min(1, m * 1.3))]; });
+  lines(ctx, chains(iso(way, 0.42)), ok(...INK, 0.36), 0.38, [0.35, 1.6], 30);
+  lines(ctx, chains(iso(way, 0.66)), ok(...INK, 0.3), 0.35, [0.35, 1.6], 30);
+  dots(ctx, scatter(s.stream("dust"), w, h, 3.2, (x, y) => way.at(x, y) * 0.7 * calm(x, y)).map(([x, y]) => [x, y, 0.28]), ok(...INK, 0.4));
+  // The graticule: circles of declination round a pole beyond the area, and hour lines from it.
+  const px = w * r.range(0.3, 0.7), py = r.chance(0.5) ? h + r.range(500, 900) : -r.range(500, 900);
+  const corners = [[0, 0], [w, 0], [0, h], [w, h]], reach = Math.max(...corners.map(([x, y]) => Math.hypot(x - px, y - py)));
+  const near = Math.min(...[...corners, [px, py < 0 ? 0 : h]].map(([x, y]) => Math.hypot(x - px, y - py)));
+  ctx.beginPath();
+  for (let rad = Math.ceil(near / 80) * 80; rad < reach; rad += 80) { ctx.moveTo(px + rad, py); ctx.arc(px, py, rad, 0, 6.283); }
+  const span = Math.asin(Math.min(1, Math.hypot(w, h) / (2 * near))) * 2 + 0.2, base = Math.atan2(h / 2 - py, w / 2 - px);
+  for (let a = base - span; a <= base + span; a += Math.PI / 36) { ctx.moveTo(px + Math.cos(a) * near, py + Math.sin(a) * near); ctx.lineTo(px + Math.cos(a) * reach, py + Math.sin(a) * reach); }
+  ctx.strokeStyle = ok(...INK, 0.3); ctx.lineWidth = 0.35; ctx.setLineDash([0.6, 2.2]); ctx.stroke(); ctx.setLineDash([]);
+  // Stars by magnitude, each a hairline cross its arms by magnitude, the brightest ringed.
+  const sr = s.stream("stars"), stars = [];
+  for (const [x, y] of scatter(sr, w, h, 11, (x, y) => mass(x, y) * 0.8)) stars.push([x, y, sr() ** 5]);
+  ctx.beginPath();
+  for (const [x, y, m] of stars.filter(([x, y, m]) => m > 0.05 || calm(x, y) > 0.4)) { const a = 0.7 + 1.6 * m; ctx.moveTo(x - a, y); ctx.lineTo(x + a, y); ctx.moveTo(x, y - a); ctx.lineTo(x, y + a); }
+  ctx.strokeStyle = ok(...INK, 0.62); ctx.lineWidth = 0.3; ctx.stroke();
+  ctx.beginPath();
+  for (const [x, y, m] of stars) if (m > 0.5) { const q = 1.2 + 1.1 * m; ctx.moveTo(x + q, y); ctx.arc(x, y, q, 0, 6.283); }
+  ctx.strokeStyle = ok(...INK, 0.4); ctx.lineWidth = 0.25; ctx.stroke();
+  // Figures: each bright star joined to its nearest bright neighbour.
+  const bright = stars.filter((st) => st[2] > 0.18);
+  ctx.beginPath();
+  for (const a of bright) {
+    let best = null, bd = 70;
+    for (const b of bright) { const d = Math.hypot(a[0] - b[0], a[1] - b[1]); if (b !== a && d < bd) { bd = d; best = b; } }
+    if (best) { ctx.moveTo(a[0], a[1]); ctx.lineTo(best[0], best[1]); }
+  }
+  ctx.strokeStyle = ok(...INK, 0.42); ctx.lineWidth = 0.38; ctx.stroke();
+  // The ecliptic, dashed, and the moon's phases along it where nothing is read.
+  const ea = r.range(-0.5, 0.5), ey = h * r.range(0.2, 0.8), eph = r.range(0, 6.28), ep = [];
+  for (let x = -10; x <= w + 10; x += 4) ep.push(x, ey + Math.tan(ea) * (x - w / 2) + 40 * Math.sin(x * 0.004 + eph));
+  lines(ctx, within([ep], (x, y) => mass(x, y) > 0.05), ok(...INK, 0.45), 0.45, [3, 2]);
+  let phase = 0;
+  for (let i = 0; i < ep.length; i += 2 * 11) { const [x, y] = [ep[i], ep[i + 1]]; if (calm(x, y) > 0.7 && mass(x, y) > 0.4) moon(ctx, x, y, 2.8, (phase++ % 8) / 8, ok(...INK, 0.75)); }
+}
+// The moon at a phase (0 new, 0.5 full), as an almanac draws it: its disc outlined, its dark part
+// filled in ink. The dark part is the half disc away from the light, and the terminator back across.
+function moon(ctx, x, y, r, phase, ink) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 6.283);
+  ctx.strokeStyle = ink; ctx.lineWidth = 0.35; ctx.stroke();
+  const side = phase < 0.5 ? 1 : -1, c = Math.cos(2 * Math.PI * (phase < 0.5 ? phase : 1 - phase));
+  if (c < -0.97) return;
+  ctx.beginPath();
+  for (let i = 0; i <= 16; i++) { const t = -Math.PI / 2 - (Math.PI * i) / 16; ctx.lineTo(x + side * r * Math.cos(t), y + r * Math.sin(t)); }
+  for (let i = 0; i <= 16; i++) { const u = Math.PI / 2 - (Math.PI * i) / 16; ctx.lineTo(x + side * r * c * Math.cos(u), y + r * Math.sin(u)); }
+  ctx.closePath(); ctx.fillStyle = ink; ctx.fill();
+}

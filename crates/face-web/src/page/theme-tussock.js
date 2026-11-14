@@ -331,6 +331,8 @@ export default {
   // The six lights round the ring, each next one as far round from those before as the ring allows.
   slots: [0, 3 / 6, 1 / 6, 4 / 6, 2 / 6, 5 / 6],
   // The colour this agent is told apart by: the colour its light is named by.
+  map: { hue: 102 },
+  chart,
   identity(at) { return lightAt(at).id; },
   paint(ctx, { w, h, at, stream, noise, quiet, kit }) {
     // Without a lead (a thumbnail, a swatch), keep the upper sky clear as if one sat there.
@@ -656,3 +658,53 @@ export default {
     kit.grain(ctx, w, h, 0.07, "tussock");
   },
 };
+
+// On the map: a topographic sheet of the high country. Brown contours, every fifth heavier; hachures
+// down the steep faces; tussock tufts on the flats; braided shingle rivers down the valleys; the high
+// ground in a pale straw.
+function chart(ctx, s) {
+  const { w, h, mass, calm, n } = s, { grid, iso, chains, within, lines, scatter, dots, tint, ok, okRgb, ease } = s.kit;
+  const INK = [0.5, 0.045, 68], RIVER = [0.56, 0.035, 232];
+  // The rivers run where a slow field crosses zero; the land falls into a valley round each.
+  const riv = grid(w, h, 4, (x, y) => n.fbm(x * 0.0017 + 40, y * 0.0012 - 13, 3));
+  const land = grid(w, h, 4, (x, y) => {
+    const ridges = 1 - Math.abs(n.fbm(x * 0.0026 + 11, y * 0.0036 - 5, 3));
+    const valley = Math.exp(-((riv.at(x, y) / 0.07) ** 2));
+    return mass(x, y) * (0.15 + 0.85 * ridges * ridges) * (1 - 0.85 * valley);
+  });
+  const HIGH = okRgb(0.948, 0.015, 95), TOP = okRgb(0.93, 0.018, 90);
+  tint(s.under, w, h, 2, (x, y) => { const v = land.at(x, y); return v > 0.56 ? [...TOP, 230] : v > 0.32 ? [...HIGH, Math.round(220 * ease((v - 0.32) / 0.03))] : null; });
+  for (let k = 1; k < 12; k++) {
+    const heavy = k % 5 === 0;
+    lines(ctx, chains(iso(land, k * 0.08)), ok(...INK, heavy ? 0.7 : 0.36), heavy ? 0.8 : 0.45, null, 10);
+  }
+  // Hachures: short strokes downhill where the face is steep, as a sheet shades its ranges.
+  ctx.beginPath();
+  for (const [x, y] of scatter(s.stream("hachure"), w, h, 6, () => 1)) {
+    const [gx, gy] = land.grad(x, y), g = Math.hypot(gx, gy), v = land.at(x, y);
+    if (g < 0.006 || v < 0.2) continue;
+    const len = Math.min(4, 600 * g), ux = -gx / g, uy = -gy / g;
+    ctx.moveTo(x, y); ctx.lineTo(x + ux * len, y + uy * len);
+  }
+  ctx.strokeStyle = ok(...INK, 0.3); ctx.lineWidth = 0.38; ctx.lineCap = "round"; ctx.stroke();
+  // The rivers: three or four channels that wander apart and cross, shingle stippled between them.
+  const rv = s.stream("river"), K = rv.int(3, 4), spread = rv.range(0.009, 0.013), band = spread * (K / 2) + 0.008;
+  dots(ctx, scatter(s.stream("shingle"), w, h, 2.4, (x, y) => (Math.abs(riv.at(x, y)) < band && mass(x, y) > 0.05 ? 0.5 : 0)).map(([x, y]) => [x, y, 0.32]), ok(...INK, 0.3));
+  for (let c = 0; c < K; c++) {
+    const off = (c - (K - 1) / 2) * spread;
+    const ch = grid(w, h, 3, (x, y) => riv.at(x, y) + off * (1 + 1.2 * n.fbm(x * 0.006, y * 0.006 + c * 7.1, 3)) + 0.005 * n.fbm(x * 0.02, y * 0.02 + c * 3.3, 2));
+    lines(ctx, within(chains(iso(ch, 0)), (x, y) => mass(x, y) > 0.03), ok(...RIVER, 0.75), 0.75, null, 12);
+  }
+  // Tussock tufts on the flats, away from the rivers and the steep faces.
+  ctx.beginPath();
+  for (const [x, y] of scatter(s.stream("tufts"), w, h, 15, (x, y) => {
+    if (Math.abs(riv.at(x, y)) < band + 0.01) return 0;
+    const g = Math.hypot(...land.grad(x, y));
+    return mass(x, y) * calm(x, y) * (g < 0.003 ? 0.85 : 0.15) * (0.6 + 0.4 * n.n2(x * 0.02, y * 0.02));
+  })) {
+    const k = 0.9 + 0.3 * Math.sin(x * 7.3 + y), b = 1.8 * k;
+    ctx.moveTo(x - b, y); ctx.lineTo(x + b, y);
+    for (const [dx, hh] of [[-1.3, 2.4], [0, 3.4], [1.3, 2.4]]) { ctx.moveTo(x + dx * 0.4 * k, y); ctx.lineTo(x + dx * k, y - hh * k); }
+  }
+  ctx.strokeStyle = ok(0.5, 0.04, 105, 0.6); ctx.lineWidth = 0.42; ctx.stroke();
+}

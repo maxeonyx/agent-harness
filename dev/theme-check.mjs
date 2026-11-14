@@ -10,12 +10,14 @@
 // - deterministic: the same identity at the same size painted twice gives the same pixels;
 // - paint time: the script and the raster after it, on a phone (390x844 at 2x, the CPU slowed 4x,
 //   as a mid-range phone), under PAINT_MS;
-// - state marks: the theme's map region with live agents' pools of colour, each state tone at a
-//   live agent's node keeping 90% of the contrast it has on bare paper, and the region round it
-//   under half the tone's colour (OKLCh chroma, 95th percentile);
+// - the map: the theme's area as a territory beside a neighbour wearing it too, with its chart, drawn
+//   as the map draws it (territories.js): each state tone at a live agent's node keeping 90% of the
+//   contrast it has on bare paper; the names' ink at 14:1 or better for 95% of each name's box; and
+//   little colour, as an old map has: the land's OKLCh chroma at most MAP_CHROMA at its median and
+//   at its 99th percentile;
 // - by eye: DIR/<theme>/slots.png, every slot's painting as a thumbnail in order, for telling
 //   agents apart at a glance and the theme at thumbnail size; the phone and desktop covers of slot 0
-//   and 1; and region.png, the map region.
+//   and 1; and region.png, the map.
 // Prints a row per render and the bars it missed, and exits 1 if any was missed.
 // Chromium is $CHROME, or the newest in ~/.cache/ms-playwright. DIR defaults to theme-check.ignore/.
 import { spawn } from "node:child_process";
@@ -34,7 +36,10 @@ const SIZES = {
 };
 // The state tones (the language's): never a theme's.
 const TONES = { yours: "#d4621c", working: "#3b78d4", others: "#8c7fa6", done: "#3c9259", failed: "#c63f36", quiet: "#a39e95" };
-const MAP_PAPER = "#f0eee6";
+const MAP_PAPER = "#f0eee6", NAME_INK = "#141413";
+// The map's land's colour, at its median and its 99th percentile (OKLCh chroma): an old map's faded
+// wash, under the state tones' colour so they stay the strongest colour where they stand.
+const MAP_CHROMA = [0.015, 0.04];
 const SEEDS = ["retry-budget", "harness-features", "art-lead", "nightly-reconcile", "docs-pass", "dependency-sweep", "tool-review", "power-bill"];
 
 const args = process.argv.slice(2);
@@ -59,10 +64,11 @@ p { margin: 0; font: 17.5px/1.62 Georgia, serif; color: var(--cover-body); }
 <div class="cover"><canvas></canvas><div class="lead"><h1>Should the art for every theme go to one standing agent?</h1>
 <p>Your words about how a page looks go from its agent to the keeper of the design system, which hands them to the art.</p></div></div>
 <script type="module">
-import { load, wear, paintInto, paintRegion, settle, oklch } from "/page/theme.js";
+import { load, wear, paintInto, settle, oklch } from "/page/theme.js";
+import { territories } from "/page/territories.js";
 const q = new URLSearchParams(location.search), theme = await load(q.get("theme"));
 await wear(document.documentElement, theme);
-window.__check = { theme, paintInto, paintRegion, settle, oklch };
+window.__check = { theme, paintInto, territories, settle, oklch };
 window.__ready = true;
 </script>`;
 
@@ -176,26 +182,52 @@ const SHEET = (seeds) => `(() => {
   return theme.slots.length;
 })()`;
 
-// In the page: the theme's map region with a few live agents, and each state tone at their nodes.
-const REGION = `(() => {
-  const { theme, paintRegion, oklch } = window.__check;
+// In the page: the theme's area on the map beside a neighbour wearing it too, each a few live agents
+// on the now line with their history above them, drawn as the map draws it, with the state tones at
+// the live agents' nodes and their names' boxes.
+const REGION = `(async () => {
+  const { theme, territories, oklch } = window.__check;
   document.querySelector(".cover").remove();
-  const w = 1200, h = 900, now = 520, pools = [0, 1, 2, 3].map((slot) => ({ x: 180 + slot * 280, y: now, r: 130, slot }));
-  const art = paintRegion(theme, { slot: 0, seed: "harness-features" }, { w, h, now, scale: 1, paper: "${MAP_PAPER}", pools });
+  const X = 0, Y = -1000, w = 1500, h = 1300, live = [], names = [], lines = [];
+  const area = (id, cols) => {
+    const marks = [];
+    for (const x of cols) {
+      const chain = [];
+      for (let y = 0; y > -900; y -= 120) { marks.push([x - 32, y - 32, x + 32, y + 32]); chain.push([x, y]); }
+      lines.push(chain);
+      live.push({ x, y: 0 });
+      const name = [x + 24, -9, x + 150, 9];
+      marks.push(name); names.push(name);
+    }
+    lines.push(cols.map((x) => [x, -840]));
+    return { id, theme, seed: id, name: id, marks };
+  };
+  const t0 = performance.now();
+  const drawn = territories([area("harness-features", [200, 470, 740]), area("retry-budget", [1110, 1330])], lines, "${MAP_PAPER}");
+  const ms = performance.now() - t0;
   const view = document.createElement("canvas"); view.width = w; view.height = h;
-  const v = view.getContext("2d"); v.fillStyle = "${MAP_PAPER}"; v.fillRect(0, 0, w, h); v.drawImage(art, 0, 0, w, h);
+  const v = view.getContext("2d"); v.fillStyle = "${MAP_PAPER}"; v.fillRect(0, 0, w, h);
+  let paths = 0;
+  for (const a of drawn.areas) {
+    v.drawImage(a.tint, a.box.x - X, a.box.y - Y, a.box.w, a.box.h);
+    const img = new Image();
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(a.svg);
+    await img.decode();
+    v.drawImage(img, a.box.x - X, a.box.y - Y, a.box.w, a.box.h);
+    paths += (a.svg.match(/<path/g) || []).length;
+  }
   view.style.cssText = "display:block;width:" + w + "px;height:" + h + "px"; document.body.append(view);
   const hex = (r, g, b) => "#" + [r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("");
   const lum = (c) => { const n = parseInt(c.slice(1), 16), f = (x) => (x /= 255) <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; return 0.2126 * f(n >> 16) + 0.7152 * f((n >> 8) & 255) + 0.0722 * f(n & 255); };
   const contrast = (a, b) => { const A = lum(a), B = lum(b); return (Math.max(A, B) + 0.05) / (Math.min(A, B) + 0.05); };
-  const R = 8, out = [];
-  for (const p of pools) {
-    const d = v.getImageData(p.x - 3 * R, p.y - 3 * R, 6 * R, 6 * R).data, cols = [], chroma = [];
-    for (let i = 0; i < d.length; i += 4) { const c = hex(d[i], d[i + 1], d[i + 2]); cols.push([lum(c), c]); chroma.push(oklch(c)[1]); }
-    cols.sort((a, b) => a[0] - b[0]); chroma.sort((a, b) => a - b);
-    out.push({ slot: p.slot, median: cols[cols.length >> 1][1], chroma: chroma[Math.floor(chroma.length * 0.95)] });
-  }
-  return { out, tones: Object.fromEntries(Object.entries(${JSON.stringify(TONES)}).map(([k, c]) => [k, { paper: contrast(c, "${MAP_PAPER}"), chroma: oklch(c)[1], at: out.map((o) => contrast(c, o.median)) }])) };
+  const pixels = (x0, y0, x1, y1) => { const d = v.getImageData(x0 - X, y0 - Y, x1 - x0, y1 - y0).data, out = []; for (let i = 0; i < d.length; i += 4) out.push(hex(d[i], d[i + 1], d[i + 2])); return out; };
+  const R = 8, at = live.map((p) => { const cs = pixels(p.x - 3 * R, p.y - 3 * R, p.x + 3 * R, p.y + 3 * R).sort((a, b) => lum(a) - lum(b)); return cs[cs.length >> 1]; });
+  const nameP5 = Math.min(...names.map((b) => { const cs = pixels(...b).map((c) => contrast("${NAME_INK}", c)).sort((a, b) => a - b); return cs[Math.floor(cs.length * 0.05)]; }));
+  const all = v.getImageData(0, 0, w, h).data, chroma = [];
+  for (let i = 0; i < all.length; i += 4 * 3) { const c = hex(all[i], all[i + 1], all[i + 2]); if (c !== "${MAP_PAPER}") chroma.push(oklch(c)[1]); }
+  chroma.sort((a, b) => a - b);
+  return { ms, paths, nameP5, unknown: drawn.unknown, chroma: [chroma[chroma.length >> 1] ?? 0, chroma[Math.floor(chroma.length * 0.99)] ?? 0],
+    tones: Object.fromEntries(Object.entries(${JSON.stringify(TONES)}).map(([k, c]) => [k, { paper: contrast(c, "${MAP_PAPER}"), at: at.map((m) => contrast(c, m)) }])) };
 })()`;
 
 const missed = [];
@@ -225,18 +257,19 @@ try {
     await sheet.evaluate(SHEET(SEEDS));
     await sheet.shot(path.join(dir, "slots.png"));
     await sheet.close();
-    const region = await tab(name, { width: 1200, height: 900, dpr: 1, throttle: 1 });
+    const region = await tab(name, { width: 1500, height: 1300, dpr: 1, throttle: 1 });
     const m = await region.evaluate(REGION);
     await region.shot(path.join(dir, "region.png"));
     await region.close();
-    console.log(`  state marks at live agents' nodes on its map region: contrast there / on paper, worst of ${m.out.length}; region chroma p95 there ${m.out.map((o) => o.chroma.toFixed(3)).join(" ")}`);
-    const worst = Math.max(...m.out.map((o) => o.chroma));
+    let mapBars = "";
+    if (m.nameP5 < 14) mapBars += miss(`${name} map: names' ink ${m.nameP5.toFixed(1)}:1 in 5% of a name's box`);
+    if (m.chroma[0] > MAP_CHROMA[0] || m.chroma[1] > MAP_CHROMA[1]) mapBars += miss(`${name} map: land chroma ${m.chroma.map((c) => c.toFixed(3)).join(" / ")} over ${MAP_CHROMA.join(" / ")}`);
+    if (m.unknown.length) mapBars += miss(`${name} map: its chart used ${m.unknown.join(", ")}, which the map's context lacks`);
+    console.log(`  map: drawn in ${Math.round(m.ms)} ms, ${m.paths} paths; names' ink ${m.nameP5.toFixed(1)}:1 (5th pct); land chroma ${m.chroma.map((c) => c.toFixed(3)).join(" / ")} (median / 99th)${mapBars}`);
     for (const [tone, t] of Object.entries(m.tones)) {
       const keep = Math.min(...t.at) / t.paper;
-      let bars = keep < 0.9 ? miss(`${name} map: ${tone} keeps ${Math.round(keep * 100)}% of its contrast`) : "";
-      // A grey tone's colour is not what tells it: only a coloured one is held to the chroma bar.
-      if (t.chroma > 0.05 && worst >= t.chroma / 2) bars += miss(`${name} map: region chroma ${worst.toFixed(3)} not under half ${tone}'s ${t.chroma.toFixed(3)}`);
-      console.log(`    ${tone.padEnd(8)} ${Math.round(keep * 100)}% (${Math.min(...t.at).toFixed(2)} / ${t.paper.toFixed(2)}), chroma ${t.chroma.toFixed(3)}${bars}`);
+      const bars = keep < 0.9 ? miss(`${name} map: ${tone} keeps ${Math.round(keep * 100)}% of its contrast`) : "";
+      console.log(`    ${tone.padEnd(8)} keeps ${Math.round(keep * 100)}% of its contrast at a live node (${Math.min(...t.at).toFixed(2)} / ${t.paper.toFixed(2)})${bars}`);
     }
     console.log(`  by eye: ${dir}/slots.png, region.png, {phone,desktop}-{0,1}.png`);
   }

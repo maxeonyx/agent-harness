@@ -77,6 +77,8 @@ export default {
   },
   // The glazes' hues round the colour wheel (glazeHue), each next as far from those before as it allows.
   slots: [0, 1 / 2, 1 / 4, 3 / 4, 1 / 8, 5 / 8],
+  map: { hue: 214 },
+  chart,
   identity,
   paint,
 };
@@ -957,5 +959,25 @@ function oklchHex(L, Cc, hDeg) {
     const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
     const v = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s];
     if (c === 0 || v.every((x) => x >= -1e-4 && x <= 1.0001)) return "#" + v.map((x) => Math.round(255 * gam(Math.min(1, Math.max(0, x)))).toString(16).padStart(2, "0")).join("");
+  }
+}
+
+// On the map: a nautical chart. Land in a cool sand behind a fine coast, three water lines engraved
+// off it, a pale shallows band, dotted depth lines, soundings in the channels.
+function chart(ctx, s) {
+  const { w, h, mass, calm, n } = s, { grid, iso, chains, lines, scatter, tint, ok, okRgb, ease } = s.kit;
+  const INK = [0.45, 0.045, 228], COAST = 0.6;
+  const depth = grid(w, h, 3, (x, y) => mass(x, y) * (0.12 + 0.88 * (0.5 + 0.5 * n.fbm(x * 0.0062 + 3, y * 0.0072 + 8, 5))));
+  const LAND = okRgb(0.94, 0.014, 112), SHOAL = okRgb(0.94, 0.022, 215);
+  tint(s.under, w, h, 2, (x, y) => { const d = depth.at(x, y); return d > COAST ? [...LAND, 235] : d > COAST - 0.08 ? [...SHOAL, Math.round(200 * ease((d - (COAST - 0.08)) / 0.03))] : null; });
+  for (const [k, dd] of [[0, 0.014], [1, 0.03], [2, 0.05]]) lines(ctx, chains(iso(depth, COAST - dd)), ok(...INK, [0.42, 0.3, 0.2][k]), 0.38, null, 8);
+  for (const lv of [COAST - 0.1, COAST - 0.17]) lines(ctx, chains(iso(depth, lv)), ok(...INK, 0.4), 0.42, [0.4, 2.2], 30);
+  lines(ctx, chains(iso(depth, COAST)), ok(...INK, 0.85), 0.85, null, 6);
+  // Soundings: depths in the water, kept off the streams.
+  ctx.fillStyle = ok(...INK, 0.42); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const [x, y] of scatter(s.stream("soundings"), w, h, 34, (x, y) => (depth.at(x, y) < COAST - 0.025 ? mass(x, y) * 1.4 * calm(x, y) ** 2 : 0))) {
+    const d = (COAST - depth.at(x, y)) * 90, whole = Math.max(1, Math.floor(d)), frac = Math.floor((d % 1) * 10);
+    ctx.font = "4.2px Georgia, serif"; ctx.fillText(String(whole), x, y);
+    if (whole < 10) { ctx.font = "3px Georgia, serif"; ctx.fillText(String(frac), x + 2.4, y + 1.2); }
   }
 }

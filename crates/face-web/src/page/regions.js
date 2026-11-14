@@ -1,142 +1,142 @@
 import { $, fail } from "./base.js";
-import { centre, graph, isDone, positions, shown } from "./map.js";
-import { cam } from "./camera.js";
+import { centre, CHIP_FONT, graph, label, LABEL_FONT, positions, routes, shown } from "./map.js";
 
-// ─── Each area's ground, faint behind its part of the map ─────────────────
+// ─── Each area as a territory on the map, drawn as its theme's chart ──────
 // An area is a chat Max started and everything under it, and every task in
-// it wears its theme (the row's `look`). Its project on the map stands on
-// that theme's painting (theme.js `paintRegion`), each live agent in a pool
-// of its own colour. A painting is a canvas in #under, behind the lines, in
-// the map's units, of the project as laid out; it is painted again only
-// when the project's shape or its live agents move, or the zoom passes a
-// step. It is painted in a worker (regions-paint.js), one at a time, so the
-// map never waits for it, and shown in one step when it lands, over the
-// one before. Every frame the nodes are drawn, each painting is stretched
-// over where its project is drawn now (`placeRegions`), so it moves with
-// them while they glide. A project with no look stands on the bare ground,
-// and so does every project where a worker cannot paint, or once it fails.
+// it wears its theme (the row's `look`). On the map each area is a
+// territory: the land round its nodes, names and streams, bordered where it
+// meets its neighbours, washed in its theme's colour and charted in its
+// theme's ink (territories.js). A worker (regions-paint.js) draws the whole
+// map at once, since each border is shared, so the map never waits for it;
+// each area comes back as SVG in the map's units and a small picture of its
+// wash, put in a box in #under, behind the lines, which the camera moves and
+// the browser draws sharp at every zoom. The map is drawn again only when
+// its layout or an area's look changes, never as the camera moves, one
+// drawing at a time, and shown in one step when it lands. Every frame the
+// nodes are drawn, each area's box is stretched over where its nodes are
+// drawn now (`placeRegions`), so it moves with them while they glide. An
+// area with no look has no territory, and every area stands on the bare
+// ground where a worker cannot draw, or once it fails.
 const under = $("#under"), edges = $("#edges"), map = $("#map");
-const painted = new Map();  // an area's top -> { key, r, canvas }: r is the box it was painted for
-const failed = new Set();   // the keys of paintings the worker could not paint
-// Room around a project's nodes: at its sides (more at its right, for the
-// names), above into its history, and below the present row, where the
-// painting is fullest.
-const SIDE = 70, NAMES = 170, ABOVE = 60, BELOW = 170, POOL = 90;
-// A painting's longest side, in bitmap pixels: the largest texture every
-// GPU takes, phones' included; and its most pixels, so a few paintings
-// fit in a phone's memory. A project larger than that at the zoom's step
-// is painted coarser rather than not at all.
-const MAXPX = 4096, MOST = 4e6;
+const drawn = new Map();   // an area's top -> { el, r, t }: r its nodes' box when drawn, t its drawing's box
 let worker = typeof OffscreenCanvas === "function" ? new Worker(new URL("./regions-paint.js", import.meta.url), { type: "module" }) : null;
-let queued = false, painting = 0, inflight = null;
+let queued = false, inflight = null, shownKey = "", failedKey = "";
 
-// Paint what has changed, after this frame.
+// Draw what has changed, after this frame.
 export function paintRegions() {
   if (!worker || queued) return;
   queued = true;
   requestAnimationFrame(() => { queued = false; if (!inflight) next(); });
 }
 
-// The camera moved: paint again only if the zoom passed a step, once it
-// has rested there a moment, so a pinch or a fly paints only where it ends.
-let zooming = 0;
-export function zoomed() {
-  clearTimeout(zooming);
-  zooming = setTimeout(() => { if (step() !== painting) paintRegions(); }, 250);
-}
-
-// Bitmap pixels per map unit: the zoom's power of two, at up to 2.
-const step = () => Math.min(2, Math.max(0.25, 2 ** Math.round(Math.log2(cam.k * Math.min(2, devicePixelRatio || 1)))));
-
 const topOf = (c) => c.tasks.find((t) => t.look && t.look.root === t.look.seed) ?? c.root;
 
-// A project's painting's box, with its nodes where `at` has them.
+// An area's nodes' box, with its nodes where `at` has them.
 function box(c, at) {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = 0;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const n of c.nodes) {
     const p = at.get(n.id);
     if (!p) continue;
     x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x + p.w); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y + p.h);
   }
-  if (x0 === Infinity) return null;
-  const r = { x: Math.round(x0 - SIDE), y: Math.round(Math.min(y0, 0) - ABOVE) };
-  r.w = Math.round(x1 + NAMES) - r.x; r.h = Math.round(y1 + BELOW) - r.y;
-  return r;
+  return x0 === Infinity ? null : { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
 }
 
-// Each painting over where its project's nodes are drawn now: on the box it
-// was painted for once they rest there, and stretched by the compositor
-// while they glide, or while its next painting is still to come.
+// Each area's drawing over where its nodes are drawn now: as drawn once they
+// rest where it was drawn for, and stretched by the compositor while they
+// glide, or while its next drawing is still to come.
 export function placeRegions() {
-  if (!painted.size) return;
+  if (!drawn.size) return;
   for (const c of graph.comps) {
-    const p = painted.get(topOf(c).id), now = p && box(c, shown);
+    const d = drawn.get(topOf(c).id), now = d && box(c, shown);
     if (!now) continue;
-    const { r } = p, t = now.x === r.x && now.y === r.y && now.w === r.w && now.h === r.h ? ""
-      : `translate(${now.x - r.x}px, ${now.y - r.y}px) scale(${now.w / r.w}, ${now.h / r.h})`;
-    if (p.canvas.style.transform !== t) p.canvas.style.transform = t;
+    const { r, t } = d, sx = now.w / r.w, sy = now.h / r.h;
+    const tr = now.x === r.x && now.y === r.y && now.w === r.w && now.h === r.h ? ""
+      : `translate(${now.x - r.x + (t.x - r.x) * (sx - 1)}px, ${now.y - r.y + (t.y - r.y) * (sy - 1)}px) scale(${sx}, ${sy})`;
+    if (d.el.style.transform !== tr) d.el.style.transform = tr;
   }
 }
 
+// What the map's areas are now: each with a look, its nodes' and names'
+// boxes, and the map's lines, which the territories follow.
+const measure = document.createElement("canvas").getContext("2d"), widths = new Map();
+function width(text, font) {
+  const k = `${font}|${text}`;
+  if (!widths.has(k)) { measure.font = font; widths.set(k, measure.measureText(text).width); }
+  return widths.get(k);
+}
 function wanted() {
-  const out = new Map();
+  const areas = [];
   for (const c of graph.comps) {
     const top = topOf(c);
     if (c.folded || !top.look) continue;
     const r = box(c, positions);
     if (!r) continue;
-    const pools = c.nodes.filter((n) => n.big && !isDone(n.t) && n.t.look && positions.has(n.id)).map((n) => {
-      const q = centre(positions.get(n.id));
-      return { x: Math.round(q.x - r.x), y: Math.round(q.y - r.y), r: POOL, slot: n.t.look.slot };
-    });
-    const scale = Math.min(step(), MAXPX / r.w, MAXPX / r.h, Math.sqrt(MOST / (r.w * r.h)));
-    out.set(top.id, { look: top.look, r, pools, scale, key: JSON.stringify([top.look, r, pools, scale]) });
-  }
-  return out;
-}
-
-// Ask the worker for the first painting that is out of date.
-function next() {
-  const want = wanted();
-  for (const [id, p] of painted) if (!want.has(id)) { p.canvas.remove(); painted.delete(id); }
-  const [id, w] = [...want].find(([id, w]) => painted.get(id)?.key !== w.key && !failed.has(w.key)) ?? [];
-  if (!w) return;
-  inflight = { id, key: w.key, r: w.r };
-  painting = step();
-  const paper = getComputedStyle(map).getPropertyValue("--ground").trim();
-  const { theme, slot, seed, root, line } = w.look;
-  worker.postMessage({ id, key: w.key, theme, who: { slot, seed, root, line }, spec: { w: w.r.w, h: w.r.h, now: -w.r.y, scale: w.scale, paper, pools: w.pools } });
-}
-
-// A painting has landed: show it, if its project still wants it, and ask for the next.
-worker?.addEventListener("message", ({ data: { id, key, bitmap, error } }) => {
-  const { r } = inflight;
-  inflight = null;
-  if (error) { fail("painting an area's ground, which stays bare", error); failed.add(key); }
-  else if (wanted().get(id)?.key === key) {
-    let p = painted.get(id);
-    if (!p) {
-      const canvas = document.createElement("canvas");
-      canvas.style.cssText = "position: absolute; pointer-events: none; transform-origin: 0 0";
-      under.insertBefore(canvas, edges);
-      p = { canvas };
-      painted.set(id, p);
+    const marks = [];
+    for (const n of c.nodes) {
+      const p = positions.get(n.id), l = p && label(n);
+      if (!p) continue;
+      marks.push([p.x, p.y, p.x + p.w, p.y + p.h].map(Math.round));
+      if (l) { const q = centre(p), x = q.x + (n.big ? 24 : 10); marks.push([x, q.y - 9, x + width(l, n.big ? LABEL_FONT : CHIP_FONT) + 6, q.y + 9].map(Math.round)); }
     }
-    Object.assign(p.canvas, { width: bitmap.width, height: bitmap.height });
-    p.canvas.getContext("bitmaprenderer").transferFromImageBitmap(bitmap);
-    Object.assign(p.canvas.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
-    Object.assign(p, { key, r });
-    placeRegions();
-  } else bitmap?.close();
+    const { theme, slot, seed, root, line } = top.look;
+    areas.push({ id: top.id, theme, seed, who: { slot, seed, root, line }, name: c.root.name ?? "", marks, r });
+  }
+  const lines = [...routes.values()].map((e) => e.P.map(([x, y]) => [Math.round(x), Math.round(y)]));
+  return { areas, lines, key: JSON.stringify([areas.map(({ r, ...a }) => a), lines]) };
+}
+
+// Ask the worker for the map as it is now, if that is not what is shown.
+function next() {
+  const w = wanted();
+  if (w.key === shownKey || w.key === failedKey) return;
+  inflight = { key: w.key, rs: new Map(w.areas.map((a) => [a.id, a.r])) };
+  const paper = getComputedStyle(map).getPropertyValue("--ground").trim();
+  worker.postMessage({ key: w.key, areas: w.areas.map(({ r, ...a }) => a), lines: w.lines, paper });
+}
+
+// The map has been drawn: show it, if the map is still as it was drawn for,
+// and ask for the next.
+worker?.addEventListener("message", ({ data: { key, areas, error } }) => {
+  const { rs } = inflight;
+  inflight = null;
+  if (error) { fail("drawing the areas on the map, which stay bare", error); failedKey = key; }
+  else if (wanted().key === key) show(areas, rs, key);
+  else for (const a of areas) a.tint.close();
   next();
 });
 
-// The worker could not load, or died: every project stands on the bare ground.
+function show(areas, rs, key) {
+  const now = new Set(areas.map((a) => a.id));
+  for (const [id, d] of drawn) if (!now.has(id)) { d.el.remove(); drawn.delete(id); }
+  for (const { id, box: t, svg, tint } of areas) {
+    let d = drawn.get(id);
+    if (!d) {
+      const el = document.createElement("div");
+      el.style.cssText = "position: absolute; pointer-events: none; transform-origin: 0 0";
+      under.insertBefore(el, edges);
+      d = { el };
+      drawn.set(id, d);
+    }
+    const canvas = document.createElement("canvas");
+    Object.assign(canvas, { width: tint.width, height: tint.height });
+    canvas.style.cssText = "position: absolute; left: 0; top: 0; width: 100%; height: 100%";
+    canvas.getContext("bitmaprenderer").transferFromImageBitmap(tint);
+    d.el.replaceChildren(canvas);
+    d.el.insertAdjacentHTML("beforeend", svg);
+    Object.assign(d.el.style, { left: `${t.x}px`, top: `${t.y}px`, width: `${t.w}px`, height: `${t.h}px` });
+    Object.assign(d, { r: rs.get(id), t });
+  }
+  shownKey = key;
+  placeRegions();
+}
+
+// The worker could not load, or died: every area stands on the bare ground.
 worker?.addEventListener("error", (e) => {
-  fail("painting the areas' grounds, which stay bare", e.message ?? "the worker failed");
+  fail("drawing the areas on the map, which stay bare", e.message ?? "the worker failed");
   worker.terminate();
   worker = null;
   inflight = null;
-  for (const p of painted.values()) p.canvas.remove();
-  painted.clear();
+  for (const d of drawn.values()) d.el.remove();
+  drawn.clear();
 });

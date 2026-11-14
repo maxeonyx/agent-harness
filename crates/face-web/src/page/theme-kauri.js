@@ -202,7 +202,8 @@ export default {
   },
   // The five hours of light, each next as far round the ring from those before as it allows.
   slots: [0, 2 / 5, 4 / 5, 1 / 5, 3 / 5],
-  map: { tone: "#3f6b45", duo: 0.85 },
+  map: { hue: 152 },
+  chart,
   identity,
 
   paint(ctx, { w, h, dpr, at, stream, quiet, kit }) {
@@ -485,4 +486,60 @@ function blade(x0, y0, a, len, curl, N = 10) {
   for (const [px, py] of R.reverse()) p.lineTo(px, py);
   p.closePath();
   return p;
+}
+
+// On the map: a forest survey, as a surveyor draws one. Each stand of bush outlined, its type told by
+// its texture: kauri stands a close field of small round crowns, podocarp-hardwood a crown stipple,
+// and mānuka scrub sparse dots on the margins inside a dotted line. The giant kauri each drawn to
+// scale, their crown outlined round a numbered trunk. A track winds through on the dry ground.
+function chart(ctx, s) {
+  const { w, h, mass, calm, n } = s, { grid, iso, chains, within, poly, lines, length, scatter, dots, tint, ok, okRgb, ease } = s.kit;
+  const INK = [0.44, 0.045, 150];
+  const forest = grid(w, h, 4, (x, y) => mass(x, y) * (0.5 + 0.5 * n.fbm(x * 0.0055 + 2, y * 0.007 - 1, 4)));
+  const kind = grid(w, h, 6, (x, y) => n.fbm(x * 0.0042 - 7, y * 0.0052 + 3, 3));
+  const EDGE = 0.36, SCRUB = EDGE - 0.1, KAURI = 0.1;
+  const isKauri = (x, y) => kind.at(x, y) > KAURI;
+  // The bush in a pale sage, its kauri stands a step deeper.
+  const BUSH = okRgb(0.952, 0.02, 140), KST = okRgb(0.938, 0.026, 148);
+  tint(s.under, w, h, 2, (x, y) => {
+    const f = forest.at(x, y);
+    return f <= EDGE ? null : [...(isKauri(x, y) ? KST : BUSH), Math.round(215 * ease((f - EDGE) / 0.03))];
+  });
+  // The giant kauri first, so nothing else is drawn inside their crowns.
+  const gr = s.stream("giants"), giants = [];
+  for (const [x, y] of scatter(gr, w, h, 70, (x, y) => (forest.at(x, y) > EDGE + 0.07 && kind.at(x, y) > KAURI + 0.06 ? 0.6 * calm(x, y) : 0))) {
+    const r = gr.range(7.5, 11.5), k = gr.int(10, 13), ph = gr.range(0, 6.28), p = [];
+    for (let i = 0; i <= k; i++) { const a = ph + (i / k) * 6.283, q = r * (0.8 + 0.28 * n.n2(x * 0.3 + Math.cos(a), y * 0.3 + Math.sin(a))); p.push(x + Math.cos(a) * q, y + Math.sin(a) * q); }
+    giants.push({ x, y, r, p });
+  }
+  const inGiant = (x, y) => giants.some((g) => Math.hypot(g.x - x, g.y - y) < g.r * 1.1);
+  // Crowns, kept off the streams and away from the nodes: kauri stands a field of small open rings,
+  // the rest of the bush a stipple of crowns.
+  const rings = [], stip = [], pick = s.stream("crownkind");
+  for (const [x, y] of scatter(s.stream("canopy"), w, h, 3.3, (x, y) => (forest.at(x, y) > EDGE + 0.012 ? 0.8 * calm(x, y) : 0))) {
+    if (inGiant(x, y)) continue;
+    const r = pick();
+    if (isKauri(x, y)) { if (r < 0.7) rings.push([x, y, 0.85 + 0.5 * pick()]); }
+    else stip.push([x, y, 0.28 + 0.42 * r * r]);
+  }
+  dots(ctx, stip, ok(...INK, 0.5));
+  ctx.beginPath();
+  for (const [x, y, r] of rings) { ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 6.283); }
+  ctx.strokeStyle = ok(...INK, 0.5); ctx.lineWidth = 0.3; ctx.stroke();
+  // Scrub: sparse dots between the scrub line and the bush.
+  dots(ctx, scatter(s.stream("scrub"), w, h, 5, (x, y) => { const f = forest.at(x, y); return f > SCRUB && f < EDGE ? 0.5 * calm(x, y) : 0; }).map(([x, y]) => [x, y, 0.32]), ok(...INK, 0.42));
+  // The boundaries: the bush's edge solid, the scrub's dotted, a kauri stand's dashed within the bush.
+  lines(ctx, chains(iso(forest, EDGE)), ok(...INK, 0.62), 0.5, null, 14);
+  lines(ctx, chains(iso(forest, SCRUB)), ok(...INK, 0.4), 0.4, [0.35, 1.8], 24);
+  lines(ctx, within(chains(iso(kind, KAURI)), (x, y) => forest.at(x, y) > EDGE + 0.03), ok(...INK, 0.45), 0.4, [1.6, 1.3], 12);
+  // The giants: crown outlines round a trunk dot, each numbered as a survey of notable trees lists them.
+  ctx.beginPath();
+  for (const g of giants) poly(ctx, g.p);
+  ctx.strokeStyle = ok(...INK, 0.66); ctx.lineWidth = 0.5; ctx.stroke();
+  dots(ctx, giants.map((g) => [g.x, g.y, 0.9]), ok(...INK, 0.75));
+  ctx.fillStyle = ok(...INK, 0.66); ctx.font = "4.6px Georgia, serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  giants.forEach((g, i) => { if (calm(g.x + g.r + 4, g.y) > 0.6) ctx.fillText(String(i + 1), g.x + g.r + 1.5, g.y - g.r * 0.45); });
+  // A track along the dry ground: the longest runs of one slow field's zero line, dashed.
+  const tf = grid(w, h, 5, (x, y) => n.fbm(x * 0.0021 + 21, y * 0.0016 - 4, 2));
+  lines(ctx, within(chains(iso(tf, 0)), (x, y) => mass(x, y) > 0.25 && !inGiant(x, y)).filter((p) => length(p) > 120), ok(...INK, 0.62), 0.55, [2.6, 1.5]);
 }

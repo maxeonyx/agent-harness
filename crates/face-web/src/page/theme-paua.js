@@ -237,7 +237,8 @@ export default {
   // The eight shells, each about three round the ring from the one before: blue, gold, purple, teal,
   // copper, indigo, emerald, rose.
   slots: [0, 5 / 8, 2 / 8, 7 / 8, 4 / 8, 1 / 8, 6 / 8, 3 / 8],
-  map: { tone: "#1d6a78", duo: 0.5, below: 0.68, chroma: 0.6 },
+  map: { hue: 318 },
+  chart,
   identity,
   paint(ctx, { w, h, dpr, at, stream, quiet, kit }) {
     const aspect = w / h;
@@ -277,3 +278,99 @@ export default {
     kit.grain(ctx, w, h, 0.05, "paua-grain");
   },
 };
+
+// On the map: a geological map of a polished shell. Its growth layers ring the apex, eccentric as
+// the shell's ear; a run of layers forms one stratum, its boundary drawn heavier and its body filled
+// with one pattern from a geologist's legend (fine hatching that turns from stratum to stratum, as
+// the nacre's sheen turns; stipple; dashes along the layers; or plain). The tight spiral of the apex,
+// and the row of respiratory pores along one side, sealed toward the apex and open toward the lip.
+// One ink, and one pale tint on the hatched strata.
+function chart(ctx, s) {
+  const { w, h, mass, calm, n } = s, { grid, lines, within, scatter, dots, ok } = s.kit;
+  const INK = [0.42, 0.045, 214], r = s.stream("shell");
+  const ax = w * r.range(0.22, 0.78), ay = h * r.range(0.4, 0.85), rot = r.range(-0.6, 0.6), asp = r.range(1.25, 1.5), ecc = r.range(0.14, 0.24), phi = r.range(0, 6.283);
+  // A growth layer at distance rho from the apex: an ear-shaped ring, its wobble the shell's own.
+  const at = (rho, th) => {
+    const q = rho * (1 + ecc * Math.sin(th - phi)) * (1 + 0.035 * n.n2(Math.cos(th) * 1.3 + rho * 0.003, Math.sin(th) * 1.3));
+    const x = Math.cos(th) * q * asp, y = Math.sin(th) * q;
+    return [ax + x * Math.cos(rot) - y * Math.sin(rot), ay + x * Math.sin(rot) + y * Math.cos(rot)];
+  };
+  const far = Math.max(...[[0, 0], [w, 0], [0, h], [w, h]].map(([x, y]) => Math.hypot(x - ax, y - ay))) / (1 - ecc);
+  const TH = [];
+  for (let th = 0; th <= 6.2832 + 1e-6; th += 0.01) TH.push(th);
+  const ring = (rho) => { const p = []; for (const th of TH) p.push(...at(rho, th)); return p; };
+  // Growth layers, closer near the apex, every season's heavier.
+  const layers = [];
+  for (let rho = 16, k = 0; rho < far; k++) { layers.push(rho); rho += 2 * ((2.2 + 2.6 * Math.sqrt(rho / 300)) * (0.75 + 0.5 * (0.5 + 0.5 * Math.sin(k * 0.9))) + r.range(0, 1.2)); }
+  // Strata: runs of four to nine layers, each with its pattern.
+  const PATTERNS = ["plain", "hatch", "plain", "stipple", "dash", "hatch", "plain", "stipple"], strata = [];
+  for (let k = 0; k < layers.length - 1;) { const len = r.int(4, 9); strata.push({ a: k, b: Math.min(layers.length - 1, k + len), kind: PATTERNS[r.int(0, PATTERNS.length - 1)], angle: r.range(0, 3.14) }); k += len; }
+  // Each point's layer distance (at()'s rho, inverted), so a stratum's patterns stay inside it.
+  const ca = Math.cos(rot), sa = Math.sin(rot);
+  const rhoAt = grid(w, h, 2, (x, y) => {
+    const dx = x - ax, dy = y - ay, u = (dx * ca + dy * sa) / asp, v = -dx * sa + dy * ca, th = Math.atan2(v, u), q = Math.hypot(u, v);
+    return q / ((1 + ecc * Math.sin(th - phi)) * (1 + 0.035 * n.n2(Math.cos(th) * 1.3 + q * 0.003, Math.sin(th) * 1.3)));
+  });
+  const stratumOf = (x, y) => {
+    const q = rhoAt.at(x, y);
+    let lo = 0, hi = layers.length - 1;
+    if (q < layers[0] || q >= layers[hi]) return null;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (layers[m] <= q) lo = m; else hi = m; }
+    return strata.find((st) => lo >= st.a && lo < st.b);
+  };
+  const TINT = ok(0.955, 0.009, 205, 0.7);
+  for (const st of strata) {
+    if (st.kind === "plain") continue;
+    const o = ring(layers[st.b]), inner = ring(layers[st.a]);
+    if (st.kind === "hatch") {
+      // The pale tint, outer ring round and the inner back, so the inside stays a hole.
+      const u = s.under;
+      u.beginPath(); u.moveTo(o[0], o[1]); for (let k = 2; k < o.length; k += 2) u.lineTo(o[k], o[k + 1]); u.closePath();
+      u.moveTo(inner[inner.length - 2], inner[inner.length - 1]); for (let k = inner.length - 4; k >= 0; k -= 2) u.lineTo(inner[k], inner[k + 1]); u.closePath();
+      u.fillStyle = TINT; u.fill();
+      // Hatching at the stratum's own angle, cut to the runs inside it.
+      let x0 = w, y0 = h, x1 = 0, y1 = 0;
+      for (let k = 0; k < o.length; k += 2) { x0 = Math.min(x0, o[k]); x1 = Math.max(x1, o[k]); y0 = Math.min(y0, o[k + 1]); y1 = Math.max(y1, o[k + 1]); }
+      x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(w, x1); y1 = Math.min(h, y1);
+      if (x1 <= x0 || y1 <= y0) continue;
+      const c = Math.cos(st.angle), sn = Math.sin(st.angle), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, half = Math.hypot(x1 - x0, y1 - y0) / 2, hatch = [];
+      for (let d = -half; d < half; d += 4) {
+        const p = [];
+        for (let t = -half; t <= half; t += 1.5) { const x = cx + c * d - sn * t, y = cy + sn * d + c * t; if (x >= x0 - 2 && x <= x1 + 2 && y >= y0 - 2 && y <= y1 + 2) p.push(x, y); }
+        hatch.push(p);
+      }
+      lines(ctx, within(hatch, (x, y) => stratumOf(x, y) === st && mass(x, y) > 0.03), ok(...INK, 0.32), 0.3);
+    } else if (st.kind === "dash") {
+      // Dashes along the layers: short strokes following each ring between the stratum's bounds.
+      ctx.beginPath();
+      for (let k = st.a; k < st.b; k++) {
+        const mid = (layers[k] + layers[k + 1]) / 2;
+        for (let i = 0; i < TH.length - 1; i += 3) { if ((i / 3 + k) % 2) continue; const [xa, ya] = at(mid, TH[i]), [xb, yb] = at(mid, TH[i + 1]); ctx.moveTo(xa, ya); ctx.lineTo(xb, yb); }
+      }
+      ctx.strokeStyle = ok(...INK, 0.32); ctx.lineWidth = 0.32; ctx.stroke();
+    }
+  }
+  // Stipple in its strata, in one pass.
+  dots(ctx, scatter(s.stream("stipple"), w, h, 2.6, (x, y) => (mass(x, y) > 0.03 && stratumOf(x, y)?.kind === "stipple" ? 0.7 * (0.3 + 0.7 * calm(x, y)) : 0)).map(([x, y]) => [x, y, 0.3]), ok(...INK, 0.4));
+  const bounds = new Set(strata.map((st) => st.a));
+  lines(ctx, layers.filter((_, k) => !bounds.has(k)).map(ring), ok(...INK, 0.34), 0.32);
+  lines(ctx, layers.filter((_, k) => bounds.has(k)).map(ring), ok(...INK, 0.56), 0.5);
+  // The apex: a tight spiral, three turns, the shell's first growth.
+  const sp = [];
+  for (let t = 0; t < 6.283 * 3; t += 0.05) { const q = 15 * Math.exp(((t - 6.283 * 3) / 6.283) * 1.1); sp.push(ax + Math.cos(t + rot) * q * asp * 0.9, ay + Math.sin(t + rot) * q); }
+  lines(ctx, [sp], ok(...INK, 0.7), 0.55);
+  // The pores, along a spiral line out from the apex: growing as the shell grew, the last ones open.
+  const th0 = r.range(0, 6.283), turn = r.chance(0.5) ? 1 : -1, pores = [];
+  for (let i = 0, rho = 40; rho < far * 0.95; i++) { pores.push([rho, th0 + turn * i * 0.16]); rho += 8 + rho * 0.06; }
+  const open = Math.max(5, Math.min(8, pores.length >> 2));
+  pores.forEach(([rho, th], i) => {
+    const [x, y] = at(rho, th), rr = Math.min(8, 1.2 + rho * 0.008), live = i >= pores.length - open;
+    if (mass(x, y) < 0.05) return;
+    ctx.beginPath(); ctx.ellipse(x, y, rr * 1.3, rr, rot + th, 0, 6.283);
+    if (live) {
+      const u = s.under;
+      u.save(); u.beginPath(); u.ellipse(x, y, rr * 1.3, rr, rot + th, 0, 6.283); u.fillStyle = s.paper; u.fill(); u.restore();
+      ctx.strokeStyle = ok(...INK, 0.56); ctx.lineWidth = 0.5; ctx.stroke();
+    } else { ctx.fillStyle = ok(...INK, 0.1); ctx.fill(); ctx.strokeStyle = ok(...INK, 0.4); ctx.lineWidth = 0.35; ctx.stroke(); }
+  });
+}

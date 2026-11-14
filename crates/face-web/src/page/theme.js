@@ -1,15 +1,13 @@
-// The themes an area wears (`Theme` in crates/core/src/design.rs), the kit their grounds are painted
-// with, and how the face dresses a page in one and paints its ground.
+// The themes an area wears (`Theme` in crates/core/src/design.rs), the kit their grounds and charts
+// are drawn with, and how the face dresses a page in one and paints its ground.
 //
 // A theme is the module theme-<name>.js, whose default export is
-//   { name, about, palette, display, slots, identity(at), map, paint(ctx, scene) }
+//   { name, about, palette, display, slots, identity(at), map: { hue }, paint(ctx, scene), chart(ctx, scene) }
 // palette holds design.rs's `Palette` fields as hex colours (figure: four); display its `Face`
 // ({ family, files, weights, bold, axes }), its files served beside this module as page files; slots the identities'
 // places in the theme's range of colour, in [0, 1), in the order checked by eye: slot 0 the area's
 // main agent, then each next agent as far from those before as the art allows. identity(at) is the
-// colour an agent is told apart by, for its node on the map. map says how a dark ground's shadows
-// lift as the map fades it (paintRegion): they take the colour `tone` in the share `duo`; a loud one
-// may set `below`, a higher floor under the now line, and `chroma`, its own colour gain.
+// colour an agent is told apart by, for its node on the map.
 //
 // paint draws into a 2D context already scaled to CSS pixels, given
 //   scene = { w, h, dpr, seed, slot, at, line, root, rng, stream, noise, quiet, kit }
@@ -26,6 +24,26 @@
 // ancestor's seed, which such a ground paints the whole line's picture from.
 // paint is synchronous and deterministic in the identity and size, never animated, and may use only
 // fonts the page has already loaded (wear waits for the display face).
+//
+// On the map an area is a territory (territories.js), tinted in a faded wash of the theme's map.hue
+// (OKLCH degrees; never 35-75, since orange on the map is Max's alone), and inside it chart draws the
+// theme's subject as an old map would: Harbour's a nautical chart, Tussock's a topographic sheet. It
+// is the theme's art seen as a map, not its painting faded. chart draws in map units on a recording
+// context (strokes, fills, text, transforms, setLineDash, drawImage), given
+//   scene = { w, h, now, scale, paper, mass(x, y), calm(x, y), n, stream, under, kit }
+// its box (now is the now line's height in it, with history above), the wash it draws on as `paper`,
+// mass the territory (1 inside it, 0 outside, so the chart fills whatever shape it is given and
+// never anchors itself to the now line), calm 1 where nothing is read and toward 0 on the streams and
+// round each node and name, n a noise and stream(part) a random source of the area's own, under a
+// context for its pale tints, and kit this module's kit, with the chart helpers (grid, iso, chains,
+// within, lines, scatter, dots, tint, ok). The rules that keep the map a map Max reads:
+// - One ink, mid-dark and low in chroma, and at most one pale tint, drawn on `under`: lines, not
+//   paintings. Strokes and dark fills become vectors, sharp at every zoom; pale fills a small picture.
+// - No Path2D, getImageData or clip: the context records, it has no pixels.
+// - Symbols and lettering keep where calm is high. The context itself thins the ink where calm is
+//   low and fades it up the history, so line work may run anywhere.
+// - Deterministic in the area and its shape, and quick: the whole map is drawn again on every change
+//   to its layout.
 
 // FNV-1a over the seed string, so an agent's id always gives the same number.
 export function hash(str) {
@@ -199,7 +217,151 @@ export function placeOf(theme, slot) { return theme.slots[slot % theme.slots.len
 // The colour that says which agent this is among the others wearing its theme, for its node on the map.
 export function identity(theme, slot) { return theme.identity(placeOf(theme, slot)); }
 
-export const kit = { hash, rng, noise, grain, shader, rgb, mix, alpha, oklch, fromOklch };
+export const kit = { hash, rng, noise, grain, shader, rgb, mix, alpha, oklch, fromOklch, ease, grid, iso, chains, within, poly, lines, length, midway, tint, scatter, dots, ok, okRgb };
+
+// ─── The charts' helpers ─────────────────────────────────────────────────────────────────────────
+function ease(t) { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); }
+// An OKLCH colour as a canvas colour with an alpha, and as [r, g, b].
+function ok(L, C, h, a = 1) { return alpha(fromOklch(L, C, h), a); }
+function okRgb(L, C, h) { return rgb(fromOklch(L, C, h)); }
+
+// A field f(x, y) sampled every `cell` units over w x h, with bilinear reads (at) and its gradient.
+function grid(w, h, cell, f) {
+  const nx = Math.ceil(w / cell) + 1, ny = Math.ceil(h / cell) + 1, v = new Float32Array(nx * ny);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) v[j * nx + i] = f(i * cell, j * cell);
+  const at = (x, y) => {
+    const gx = Math.min(nx - 1.001, Math.max(0, x / cell)), gy = Math.min(ny - 1.001, Math.max(0, y / cell));
+    const i = Math.floor(gx), j = Math.floor(gy), fx = gx - i, fy = gy - j, k = j * nx + i;
+    return (v[k] * (1 - fx) + v[k + 1] * fx) * (1 - fy) + (v[k + nx] * (1 - fx) + v[k + nx + 1] * fx) * fy;
+  };
+  const grad = (x, y) => [(at(x + cell, y) - at(x - cell, y)) / (2 * cell), (at(x, y + cell) - at(x, y - cell)) / (2 * cell)];
+  return { nx, ny, cell, v, at, grad };
+}
+
+// A grid's iso-line at `level`, as segments [x0, y0, x1, y1, ...] (marching squares).
+function iso(g, level) {
+  const { nx, ny, cell, v } = g, out = [];
+  for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+    const k = j * nx + i, a = v[k], b = v[k + 1], c = v[k + nx + 1], d = v[k + nx];
+    const idx = (a > level ? 8 : 0) | (b > level ? 4 : 0) | (c > level ? 2 : 0) | (d > level ? 1 : 0);
+    if (idx === 0 || idx === 15) continue;
+    const x = i * cell, y = j * cell, t = (p, q) => (level - p) / (q - p);
+    const T = [x + cell * t(a, b), y], R = [x + cell, y + cell * t(b, c)], B = [x + cell * t(d, c), y + cell], L = [x, y + cell * t(a, d)];
+    const seg = (p, q) => out.push(p[0], p[1], q[0], q[1]);
+    const mid = (a + b + c + d) / 4 > level;
+    switch (idx) {
+      case 1: case 14: seg(L, B); break;
+      case 2: case 13: seg(B, R); break;
+      case 3: case 12: seg(L, R); break;
+      case 4: case 11: seg(T, R); break;
+      case 6: case 9: seg(T, B); break;
+      case 7: case 8: seg(L, T); break;
+      case 5: if (mid) { seg(L, T); seg(B, R); } else { seg(L, B); seg(T, R); } break;
+      case 10: if (mid) { seg(T, R); seg(L, B); } else { seg(L, T); seg(B, R); } break;
+    }
+  }
+  return out;
+}
+
+// Segments joined end to end into polylines [x, y, x, y, ...], so a line can be smoothed and dashed.
+function chains(segs) {
+  const key = (x, y) => `${Math.round(x * 32)},${Math.round(y * 32)}`;
+  const n = segs.length / 4, used = new Uint8Array(n), ends = new Map();
+  const add = (k, i) => { const l = ends.get(k); if (l) l.push(i); else ends.set(k, [i]); };
+  for (let i = 0; i < n; i++) { add(key(segs[4 * i], segs[4 * i + 1]), i); add(key(segs[4 * i + 2], segs[4 * i + 3]), i); }
+  const out = [];
+  for (let s = 0; s < n; s++) {
+    if (used[s]) continue;
+    used[s] = 1;
+    const head = [segs[4 * s], segs[4 * s + 1]], tail = [segs[4 * s + 2], segs[4 * s + 3]], fwd = [], back = [];
+    for (const [arr, start] of [[fwd, tail], [back, head]]) {
+      let [x, y] = start;
+      for (;;) {
+        const next = (ends.get(key(x, y)) || []).find((i) => !used[i]);
+        if (next === undefined) break;
+        used[next] = 1;
+        const ax = segs[4 * next], ay = segs[4 * next + 1], bx = segs[4 * next + 2], by = segs[4 * next + 3];
+        [x, y] = key(ax, ay) === key(x, y) ? [bx, by] : [ax, ay];
+        arr.push(x, y);
+      }
+    }
+    const line = [];
+    for (let i = back.length - 2; i >= 0; i -= 2) line.push(back[i], back[i + 1]);
+    line.push(...head, ...tail, ...fwd);
+    out.push(line);
+  }
+  return out;
+}
+
+// Polylines cut to the runs where test(x, y) holds.
+function within(list, test) {
+  const out = [];
+  for (const p of list) {
+    let cur = [];
+    for (let i = 0; i < p.length; i += 2) {
+      if (test(p[i], p[i + 1])) cur.push(p[i], p[i + 1]);
+      else { if (cur.length >= 4) out.push(cur); cur = []; }
+    }
+    if (cur.length >= 4) out.push(cur);
+  }
+  return out;
+}
+
+// A polyline added to the path, smoothed through its midpoints.
+function poly(ctx, p) {
+  ctx.moveTo(p[0], p[1]);
+  for (let i = 2; i < p.length - 2; i += 2) ctx.quadraticCurveTo(p[i], p[i + 1], (p[i] + p[i + 2]) / 2, (p[i + 1] + p[i + 3]) / 2);
+  ctx.lineTo(p[p.length - 2], p[p.length - 1]);
+}
+// Polylines stroked in one path, those shorter than `min` left out.
+function lines(ctx, list, colour, width, dash = null, min = 0) {
+  ctx.beginPath();
+  for (const p of list) if (p.length >= 4 && length(p) >= min) poly(ctx, p);
+  ctx.strokeStyle = colour; ctx.lineWidth = width; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]);
+}
+function length(p) { let s = 0; for (let i = 2; i < p.length; i += 2) s += Math.hypot(p[i] - p[i - 2], p[i + 1] - p[i - 1]); return s; }
+// The point `at` of the way along a polyline, and the line's direction there.
+function midway(p, at = 0.5) {
+  const want = length(p) * at;
+  let run = 0;
+  for (let i = 2; i < p.length; i += 2) {
+    const d = Math.hypot(p[i] - p[i - 2], p[i + 1] - p[i - 1]);
+    if (run + d >= want) return [p[i], p[i + 1], Math.atan2(p[i + 1] - p[i - 1], p[i] - p[i - 2])];
+    run += d;
+  }
+  return [p[p.length - 2], p[p.length - 1], 0];
+}
+
+// A soft tint, f(x, y) giving [r, g, b, a] or null every `cell` units, drawn smooth over w x h: the
+// lines over it carry the sharp edges.
+function tint(ctx, w, h, cell, f) {
+  const cw = Math.ceil(w / cell), ch = Math.ceil(h / cell), c = new OffscreenCanvas(cw, ch);
+  const cc = c.getContext("2d"), img = cc.createImageData(cw, ch), d = img.data;
+  for (let j = 0, i = 0; j < ch; j++) for (let k = 0; k < cw; k++, i += 4) {
+    const v = f((k + 0.5) * cell, (j + 0.5) * cell);
+    if (v) { d[i] = v[0]; d[i + 1] = v[1]; d[i + 2] = v[2]; d[i + 3] = v[3]; }
+  }
+  cc.putImageData(img, 0, 0);
+  ctx.save(); ctx.imageSmoothingEnabled = true; ctx.drawImage(c, 0, 0, cw * cell, ch * cell); ctx.restore();
+}
+
+// Points on a jittered grid over w x h, each kept with probability keep(x, y).
+function scatter(r, w, h, step, keep) {
+  const out = [];
+  for (let y = step / 2; y < h; y += step) for (let x = step / 2; x < w; x += step) {
+    const px = x + (r() - 0.5) * step * 0.9, py = y + (r() - 0.5) * step * 0.9;
+    if (r() < keep(px, py)) out.push([px, py]);
+  }
+  return out;
+}
+
+// Small round marks [x, y, r], all in one path.
+function dots(ctx, pts, colour) {
+  ctx.beginPath();
+  for (const [x, y, r] of pts) { ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 6.283); }
+  ctx.fillStyle = colour; ctx.fill();
+}
 
 // Paint a theme's ground into a canvas sized to its element, at up to 2x device pixels, for a task's
 // identity ({ slot, seed, root, line }, as `Identity` in crates/core/src/design.rs).
@@ -249,113 +411,3 @@ export function settle(canvas) {
   canvas.getContext("2d").getImageData(0, 0, 1, 1);
   return performance.now() - t0;
 }
-
-// A theme's painting as an area of the map: a frieze along the map's now line, where its agents stand.
-// The present row is the horizon: the painting is fullest just below it, where the map has nothing to
-// read, fades back toward the map's paper above it, where the lines and names are, and dissolves into
-// the history above and into its neighbours at its sides. Each live agent stands in a pool of its
-// identity colour on the ground below it, wide enough to hold its live children's. In the map's units:
-//   spec = { w, h, now,             the region, and the now line's height in it
-//            scale,                 bitmap pixels per map unit
-//            paper,                 the map's paper
-//            pools: [{ x, y, r, slot }] }     each live agent's node, reach and identity slot
-// It fades as WASH says. A dark ground says how its shadows should lift, in `map: { tone, duo }`:
-// they take the colour `tone` in the share `duo` (0-1), so a night or a forest fades to a tinted
-// print instead of grey. A loud one may set `map.below`, a higher floor for the ground under the now
-// line, and `map.chroma`, its own colour gain.
-// Pools change hue alone ("color" blending), so what is read over them keeps its contrast. Each live
-// agent's node stands in a small clearing of paper, so its state mark keeps the contrast it has on
-// bare paper: the state is the strongest colour where it stands.
-export function paintRegion(ground, who, spec) {
-  const { w, h, now, scale, paper, pools = [] } = spec;
-  const chroma = ground.map?.chroma ?? WASH.chroma;
-  const art = document.createElement("canvas");
-  paintInto(art, ground, who, null, { w, h, dpr: scale });
-  const ac = art.getContext("2d");
-  ac.setTransform(scale, 0, 0, scale, 0, 0);
-  // Faded toward the paper: most above the now line, least below it.
-  // Its lightness pressed up into a band that ends at the paper's (OKLab, so hues keep their colour):
-  // above the now line no darker than names can be read on at 7:1, below it freer.
-  const faded = shader(FADE, art.width, art.height, {
-    u_img: art, u_now: (now + 70) / h, u_soft: 90 / h, u_top: oklch(paper)[0],
-    u_above: WASH.above, u_below: ground.map?.below ?? WASH.below, u_chroma: chroma,
-    u_chroma_above: (chroma * WASH.chromaAbove) / WASH.chroma,
-    u_tone: ground.map?.tone ? labOf(ground.map.tone) : [0, 0, 0], u_duo: ground.map?.duo ?? 0,
-  });
-  if (faded) { ac.save(); ac.setTransform(1, 0, 0, 1, 0, 0); ac.globalCompositeOperation = "copy"; ac.drawImage(faded, 0, 0); ac.restore(); }
-  else {
-    const veil = ac.createLinearGradient(0, 0, 0, h);
-    veil.addColorStop(0, alpha(paper, 0.6)); veil.addColorStop(1, alpha(paper, 0.35));
-    ac.fillStyle = veil; ac.fillRect(0, 0, w, h);
-  }
-  ac.globalCompositeOperation = "color";
-  for (const p of [...pools].sort((a, b) => b.r - a.r)) {
-    const c = identity(ground, p.slot), y = now + 30;
-    ac.save(); ac.translate(p.x, y); ac.scale(1, 0.62);
-    const g = ac.createRadialGradient(0, 0, 0, 0, 0, p.r);
-    g.addColorStop(0, alpha(c, 0.62 * WASH.pool)); g.addColorStop(0.45, alpha(c, 0.42 * WASH.pool)); g.addColorStop(1, alpha(c, 0));
-    ac.fillStyle = g; ac.fillRect(-p.r, -p.r, 2 * p.r, 2 * p.r);
-    ac.restore();
-  }
-  ac.globalCompositeOperation = "source-over";
-  for (const p of pools) {
-    const g = ac.createRadialGradient(p.x, p.y, 0, p.x, p.y, CLEARING);
-    g.addColorStop(0, alpha(paper, 0.97)); g.addColorStop(0.55, alpha(paper, 0.85)); g.addColorStop(1, alpha(paper, 0));
-    ac.fillStyle = g; ac.fillRect(p.x - CLEARING, p.y - CLEARING, 2 * CLEARING, 2 * CLEARING);
-  }
-  // The edges: up into history, down to nothing, and out at the sides, ragged like a wash's, and
-  // clear at the canvas's own edges however the rag falls.
-  const cell = 8, cw = Math.max(2, Math.ceil(w / cell)), ch = Math.max(2, Math.ceil(h / cell));
-  const edge = document.createElement("canvas");
-  edge.width = cw; edge.height = ch;
-  const ec = edge.getContext("2d"), img = ec.createImageData(cw, ch), d = img.data, n = noise(`${ground.name}:${who.seed}:edge`);
-  const ease = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
-  const side = Math.min(130, w * 0.22), top = now - 40, foot = h - now;
-  for (let j = 0, i = 0; j < ch; j++) for (let k = 0; k < cw; k++, i += 4) {
-    const x = k * cell, y = j * cell, wob = n.fbm(x * 0.006, y * 0.006, 4);
-    const rise = ease((y + 90 * (wob - 1)) / top);
-    const a = ease((Math.min(x, w - x) + 46 * (wob - 1)) / side) * rise * rise * ease((h - y + 50 * (wob - 1)) / (foot * 0.75));
-    d[i + 3] = Math.round(255 * a);
-  }
-  ec.putImageData(img, 0, 0);
-  ac.globalCompositeOperation = "destination-in";
-  ac.setTransform(1, 0, 0, 1, 0, 0);
-  ac.drawImage(edge, 0, 0, art.width, art.height);
-  ac.globalCompositeOperation = "source-over";
-  return art;
-}
-
-// How the map fades a region. Above the now line, behind the streams Max reads, the painting keeps
-// lightness no lower than `above` (OKLab) and `chromaAbove` of its colour, faded more than below
-// it, so the streams read over it; below it, where nothing is read,
-// `below` and `chroma`. Each live agent's pool of colour at `pool` strength.
-const WASH = { above: 0.9, below: 0.56, chroma: 1.1, chromaAbove: 0.35, pool: 0.5 };
-
-// How far a live agent's clearing reaches, in map units: past its mark and onto its name's start.
-const CLEARING = 50;
-
-// A hex colour as OKLab [L, a, b].
-function labOf(hex) { const [L, C, h] = oklch(hex), r = (h * Math.PI) / 180; return [L, C * Math.cos(r), C * Math.sin(r)]; }
-
-// The map's fade: each pixel's OKLab lightness pressed into [floor, the paper's], the floor u_above
-// above the now line (u_now, from the top) and u_below beneath it, its colour scaled by u_chroma.
-const FADE = `precision highp float;
-uniform sampler2D u_img; uniform vec2 u_res;
-uniform float u_now, u_soft, u_top, u_above, u_below, u_chroma, u_chroma_above, u_duo;
-uniform vec3 u_tone;
-vec3 lin(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
-vec3 gam(vec3 c) { return mix(12.92 * c, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
-void main() {
-  vec2 uv = vec2(gl_FragCoord.x / u_res.x, 1.0 - gl_FragCoord.y / u_res.y);
-  vec3 c = lin(texture2D(u_img, uv).rgb);
-  vec3 lms = pow(max(mat3(0.4122214708, 0.2119034982, 0.0883024619, 0.5363325363, 0.6806995451, 0.2817188376, 0.0514459929, 0.1073969566, 0.6299787005) * c, 0.0), vec3(1.0 / 3.0));
-  vec3 lab = mat3(0.2104542553, 1.9779984951, 0.0259040371, 0.7936177850, -2.4285922050, 0.7827717662, -0.0040720468, 0.4505937099, -0.8086757660) * lms;
-  float below = smoothstep(u_now - u_soft, u_now + u_soft, uv.y);
-  float floor_ = mix(u_above, u_below, below), t = clamp(lab.x, 0.0, 1.0);
-  lab.x = floor_ + (u_top - floor_) * t;
-  // A dark painting's shadows take the theme's tone as they lift, rather than going grey.
-  lab.yz = mix(lab.yz * mix(u_chroma_above, u_chroma, below), u_tone.yz * (1.0 - t), u_duo);
-  vec3 m = mat3(1.0, 1.0, 1.0, 0.3963377774, -0.1055613458, -0.0894841775, 0.2158037573, -0.0638541728, -1.2914855480) * lab;
-  vec3 o = mat3(4.0767416621, -1.2684380046, -0.0041960863, -3.3077115913, 2.6097574011, -0.7034186147, 0.2309699292, -0.3413193965, 1.7076147010) * (m * m * m);
-  gl_FragColor = vec4(gam(clamp(o, 0.0, 1.0)), 1.0);
-}`;
