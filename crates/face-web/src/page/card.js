@@ -13,7 +13,8 @@ import { buildNew } from "./newchat.js";
 // The URL names the open node, so back closes it and a middle click opens a
 // node in a tab of its own. Going from one card to another replaces the
 // entry, so back always goes to the map. `#TASK` opens a chat at its end;
-// `#TASK@ENTRY` opens it at that entry of its log (`landAt`, log.js).
+// `#TASK@ENTRY` opens it at that entry of its log, and `#TASK@CALL` at the
+// ask that call made, on its page (`land`, log.js).
 export let openId = null, saved = null, moving = Promise.resolve();
 let stay = false;
 // The card's id for a chat not started yet.
@@ -44,8 +45,8 @@ export function closeNode() {
   if (history.state?.node && history.state.doc === DOC) history.back();
   else { history.replaceState(null, "", location.pathname); route(); }
 }
+// A new hash fires popstate, then hashchange: routing on both opened it twice.
 addEventListener("popstate", route);
-addEventListener("hashchange", route);
 
 export function route() {
   const { task: id, at } = hashed();
@@ -127,6 +128,7 @@ title.after(up);
 up.onclick = () => { const p = parentOf(byId[openId] || {}); if (p) go(p); };
 function buildPanel(id, at) {
   logState = { id, at, head: undefined, rendered: [], rows: new Map(), group: null, exact: false, follow: true };
+  // The page goes with the rest; renderLog's `placeSheet` puts it back.
   logEl.replaceChildren();
   logEl.classList.remove("exact");
   $(".viewer", panel).hidden = true;

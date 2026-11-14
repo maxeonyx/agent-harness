@@ -9,6 +9,9 @@
     background: var(--paper); color: var(--body); border-top: 1px solid var(--line);
     font: 16.5px/1.6 var(--serif);
   }
+  /* In the log, it spans the log's width, past its padding: --log-pad is a
+     length, so it holds the log's own em, not the page's. */
+  .log > .sheet { max-width: none; margin: 1.4em calc(-1 * var(--log-pad)) 2em; }
   /* The lead on the task's painted ground, which dissolves into the paper. */
   .sheet .lead { position: relative; isolation: isolate; margin: -2em -1.6em 0; padding: 3.2em 1.6em 2.4em; display: flex; flex-direction: column; justify-content: flex-end; }
   .sheet .lead.new { min-height: 30vh; padding-top: 4.5em; }
@@ -82,14 +85,6 @@
   .sheet .press.recommended::after { content: "recommended"; margin-left: .3em; color: var(--muted); font-size: .85em; }
   .sheet .press.armed.recommended::after { color: inherit; }
   .sheet .do { align-self: center; }
-  /* While the agent works: the page as one line above its progress. */
-  .sheet-line {
-    position: sticky; top: 0; z-index: 1; display: flex; gap: .6em; align-items: baseline; width: 100%;
-    padding: .55em 1.6em; background: var(--paper); border-bottom: 1px solid var(--line); text-align: left;
-    white-space: nowrap; overflow: hidden;
-  }
-  .sheet-line .title { font-weight: 600; color: var(--ink); }
-  .sheet-line:hover { background: var(--hover); }
   @media (max-width: 760px) {
     .sheet { padding: 1.4em 1em .6em; font-size: 16px; }
     .sheet h1 { font-size: 1.7em; }
@@ -99,5 +94,4 @@
     .sheet section + section { margin-top: 56px; }
     .sheet .use { grid-template-columns: minmax(0, 1fr); padding: .35em 0; }
     .sheet.folded .lead { padding: 2em 1em 1.4em; }
-    .sheet-line { padding: .55em 1em; }
   }

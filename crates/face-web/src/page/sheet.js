@@ -1,4 +1,4 @@
-import { $, diagram, el, fail, panel, scrollEl } from "./base.js";
+import { $, diagram, el, fail, logEl, panel, scrollEl } from "./base.js";
 import { answer, answered } from "./compose.js";
 import { load, paintInto, wear } from "./theme.js";
 
@@ -9,23 +9,22 @@ import { load, paintInto, wear } from "./theme.js";
 // tokens on `.sheet` (theme.js `wear` sets them; sheet.css has the plain
 // default).
 //
-// Facing Max (`page.current`), the page is the card's reading: it follows
-// the chat, which scrolling up shows, and opens at its top. While the agent
-// works, its progress is the card's reading and the page is one line at the
-// top, which opens it.
-const sheetEl = $(".sheet", panel), lineEl = $(".sheet-line", panel);
-let opened = null, landed = null, unfolded = null;
+// A chat with a page shows it whole, the agent working or not, in the log
+// where it was presented (`placeSheet`): what came after it, down to what
+// streams now, follows it. The card opens at its top until this tab has
+// landed on that version, then at the live end; or at one of its asks
+// (`askTop`).
+const sheetEl = $(".sheet", panel);
+let unfolded = null;
+// The versions this tab has landed on, one key each (`shown`).
+const landed = new Set();
 
 // Draws `t`'s page, and says whether the card should open at its top
 // (then `sheetSeen`): the first time this tab shows this version in full.
 export function renderSheet(t) {
   const p = t.page;
-  if (opened && opened !== t.id) opened = null;
-  if (!p) { sheetEl.hidden = lineEl.hidden = true; sheetEl.drawn = null; return false; }
-  const full = p.current || opened === t.id;
-  lineEl.hidden = full;
-  sheetEl.hidden = !full;
-  if (!full) { line(p, t); return false; }
+  sheetEl.hidden = !p;
+  if (!p) { sheetEl.drawn = null; return false; }
   const key = JSON.stringify([t.id, p, t.look, unfolded]);
   if (sheetEl.drawn !== key) {
     sheetEl.drawn = key;
@@ -35,11 +34,23 @@ export function renderSheet(t) {
       fail(`drawing ${t.name}'s page`, e);
     }
   }
-  return landed !== shown(t);
+  return !landed.has(shown(t));
 }
 // Each present is landed on once: a new version, or one presented again.
 const shown = (t) => `${t.id} ${t.page.version} ${t.page.held}`;
-export const sheetSeen = (t) => { landed = shown(t); };
+export const sheetSeen = (t) => { landed.add(shown(t)); };
+export const sheetUnseen = (t) => !!t?.page && !landed.has(shown(t));
+// Puts the page in the log just after `after`, the chunk of the response
+// that presented it; at the log's start for one the log does not draw (a
+// context compacted away), or with `after` null, at its end (a page stored
+// before pages said where they were presented, or a log still loading).
+export function placeSheet(after) {
+  const tail = $(".tail", logEl);
+  if (after === "start") { if (logEl.firstElementChild !== sheetEl) logEl.prepend(sheetEl); }
+  else if (after) { if (after.nextElementSibling !== sheetEl) after.after(sheetEl); }
+  else if (!tail) { if (logEl.lastElementChild !== sheetEl) logEl.append(sheetEl); }
+  else if (tail.previousElementSibling !== sheetEl) tail.before(sheetEl);
+}
 // Where the card lands on the page while it shows: its top, or with a quick
 // answer, the chat's line above it, the page folded below it.
 export function sheetTop() {
@@ -47,6 +58,16 @@ export function sheetTop() {
   const top = scrollEl.scrollTop + sheetEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top;
   return sheetEl.classList.contains("folded") ? Math.max(0, top + sheetEl.offsetHeight - scrollEl.clientHeight) : top;
 }
+// Where the card lands on the ask the call `call` made, unfolding the page
+// to reach it: its question at the top. Null when the page holds no such ask.
+export function askTop(t, call) {
+  if (sheetEl.hidden || !asksOf(t.page).includes(call)) return null;
+  if (sheetEl.classList.contains("folded")) { unfolded = `${t.id} ${t.page.held}`; renderSheet(t); }
+  const box = [...sheetEl.querySelectorAll(".ask")].find((a) => a.dataset.call === call);
+  return !box ? null : scrollEl.scrollTop + box.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top - 16;
+}
+
+const asksOf = (p) => [...p.plan.flatMap((s) => s.asks), ...p.asks].map((a) => a.call);
 
 // The page wears its task's look: the theme's tokens, and its ground
 // painted behind the lead, once per task and width. A task with none wears
@@ -54,10 +75,9 @@ export function sheetTop() {
 const grounds = new Map();
 async function dress(t) {
   const lead = $(".lead", sheetEl);
-  if (!t.look) { sheetEl.removeAttribute("style"); lineEl.removeAttribute("style"); return; }
+  if (!t.look) { sheetEl.removeAttribute("style"); return; }
   const theme = await load(t.look.theme);
   await wear(sheetEl, theme);
-  await wear(lineEl, theme);
   if (!lead?.isConnected) return;
   const at = `${t.id} ${lead.clientWidth} ${lead.clientHeight}`;
   let ground = grounds.get(t.id);
@@ -72,11 +92,6 @@ async function dress(t) {
 }
 const redraw = () => sheetEl.dispatchEvent(new CustomEvent("sheet", { bubbles: true }));
 
-function line(p, t) {
-  lineEl.replaceChildren(el("span", "title", p.lead));
-  lineEl.onclick = () => { opened = t.id; landed = null; lineEl.dispatchEvent(new CustomEvent("sheet", { bubbles: true })); };
-}
-
 // The parts in the one order Max reads them, none of them named, and no
 // line about the page itself: the lead, the end, the now, the plan with
 // its asks (and asks no step holds), why. Presented again unchanged with a
@@ -88,7 +103,7 @@ function page(p, t) {
   const e = p.end;
   const moved = e != null && (e.goal_changed || e.shows_changed || e.uses.some((u) => u.changed));
   const held = p.quick && p.held > p.at && !moved;
-  const lead = el("header", `lead${landed === shown(t) ? "" : " new"}`);
+  const lead = el("header", `lead${landed.has(shown(t)) ? "" : " new"}`);
   lead.append(el("h1", null, p.lead));
   const out = [lead];
   const at = `${t.id} ${p.held}`;
@@ -160,6 +175,7 @@ function plan(steps, key) {
 // is always last.
 function ask(a, key) {
   const box = el("div", "ask");
+  box.dataset.call = a.call;
   box.append(el("p", "question", a.question));
   // Settled, it stays where it was, quiet, saying how it settled.
   if (a.settled != null) {

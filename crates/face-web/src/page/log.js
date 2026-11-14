@@ -5,7 +5,7 @@ import { dress, paint, trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { dictate, dictation, editMessage, modelName, readOnly, say, sending } from "./compose.js";
 import { layer, session } from "./blobs.js";
-import { renderSheet, sheetSeen, sheetTop } from "./sheet.js";
+import { askTop, placeSheet, renderSheet, sheetSeen, sheetTop, sheetUnseen } from "./sheet.js";
 
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
 const contexts = new Map();
@@ -41,9 +41,33 @@ export async function renderLog(t) {
   }
   stick(() => renderTail(s, t));
   if (pane.classList.contains("loading") && (s.head || !t.head)) settle(t);
-  if (s.at && s.head) landAt(s);
-  // A page shown whole opens at its top once its chat is drawn above it.
-  else if (renderSheet(t) && (s.head || !t.head)) { pinned = false; s.follow = false; scrollTo(sheetTop()); sheetSeen(t); }
+  const fresh = renderSheet(t);
+  if (t.page) stick(() => placeSheet(presentedIn(s, t)));
+  if (s.at && s.head) land(s, t);
+  // A page opens at its top once its chat is drawn above it.
+  else if (fresh && (s.head || !t.head)) { pinned = false; s.follow = false; scrollTo(sheetTop()); sheetSeen(t); }
+}
+// The chunk of the response that presented the page: "start" when the log
+// does not draw it, null when not known yet (`placeSheet`).
+function presentedIn(s, t) {
+  const at = t.page.entry;
+  if (!at || !s.head) return null;
+  return s.rendered.find((r) => r.id === at)?.el ?? "start";
+}
+// Opened at an ask (`#TASK@CALL`, the ask's call): the page, at its
+// question, or for an ask the page does not hold, the entry that made the
+// call. Otherwise at an entry of the log.
+function land(s, t) {
+  if (t.page) sheetSeen(t);
+  const top = askTop(t, s.at);
+  if (top == null) {
+    const w = t.work?.find((w) => w.call === s.at);
+    if (w) s.at = w.at;
+    return landAt(s);
+  }
+  s.at = null;
+  s.follow = pinned = false;
+  scrollTo(top);
 }
 panel.addEventListener("sheet", () => { if (logState && byId[logState.id]) renderLog(byId[logState.id]); });
 
@@ -523,6 +547,12 @@ function toolRow(s, b, t) {
     const open = icon("open", "open-file", "Open"); open.onclick = (e) => { e.stopPropagation(); viewFile(path, inner.content); };
     line.insertBefore(open, line.lastChild);
   }
+  // A present: the page it put in front of Max, as it stands now.
+  if (b.name === "present" && t.page) {
+    const open = icon("open", "open-file", "Open the page");
+    open.onclick = (e) => { e.stopPropagation(); s.follow = pinned = false; scrollTo(sheetTop()); };
+    line.insertBefore(open, line.lastChild);
+  }
   // What a spawn or add_sibling started, under its parameters.
   if (b.name === "spawn" || b.name === "add_sibling" || (b.name === "background" && input.tool === "spawn")) {
     row.members = el("div", "members");
@@ -894,8 +924,9 @@ function following() {
 function stick(change) {
   const atBottom = following() || logState?.follow;
   change();
-  // Followed to where its reading starts: a page shown whole, at its top.
-  const top = logState?.follow ? sheetTop() : null;
+  // Followed to where its reading starts: a page not yet landed on, at its
+  // top; otherwise the live end.
+  const top = logState?.follow && sheetUnseen(byId[logState.id]) ? sheetTop() : null;
   if (top != null) pinned = false;
   if (atBottom) { scrollTo(top ?? scrollEl.scrollHeight); if (logState) logState.follow = false; }
 }
