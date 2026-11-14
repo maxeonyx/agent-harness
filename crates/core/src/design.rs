@@ -126,7 +126,7 @@ pub struct Design {
 
 /// The themes the harness gives areas, by [`Theme::name`], in the order a
 /// new area takes them when none is worn more recently than another.
-pub const THEMES: [&str; 5] = ["tussock", "harbour", "kauri", "paua", "marama"];
+pub const THEMES: &[&str] = &["tussock", "harbour", "kauri", "paua", "marama", "puawai"];
 
 /// An art direction an agent's page wears.
 ///
@@ -142,7 +142,8 @@ pub const THEMES: [&str; 5] = ["tussock", "harbour", "kauri", "paua", "marama"];
 /// has no variants. Themes differ from each other in what they look at and
 /// how they are made, not only in colour: Tussock looks across a
 /// landscape, Harbour down on a chart, Kauri up through a forest, Pāua
-/// into shell, Marama at the moon over the sea.
+/// into shell, Marama at the moon over the sea, Puāwai close in on a plant
+/// in flower. How a new one is made: `docs/themes.md`.
 ///
 /// Serves: Max's "really elegant and artistic [...] beautiful backgrounds,
 /// UI themes, design systems, etc. that can be swapped between to make an
@@ -253,7 +254,7 @@ pub struct Face {
 /// an agent, and fixed for the task's life, since an agent's look is how
 /// Max finds it again. A new area (a task Max starts) is given the theme
 /// no live area wears, or else the one worn least recently, so areas look
-/// as unlike each other as five themes allow. Every task under it wears
+/// as unlike each other as the themes allow. Every task under it wears
 /// the area's theme, with its own [`Identity`], so where Max is shows at a
 /// glance and who is still its own. Only Max changes an area's theme, from
 /// its page or the map, and its tasks redraw. A fork or a resume carries

@@ -4,7 +4,7 @@ Each runs with `demos/NAME/run.sh` unless its README says otherwise, and its REA
 
 | Demo | What it shows | Model | Cost, time |
 |---|---|---|---|
-| themes | the five themes (Tussock, Harbour, Kauri, Pāua, Marama) held to the design's bars: every agent slot's ground behind a lead at phone and desktop size, its ink at 7:1, painted twice to the same pixels, a phone's paint time, and the state marks on its map region; pictures of each theme's agents side by side | none | free, 4 min |
+| themes | every theme (Tussock, Harbour, Kauri, Pāua, Marama, Puāwai) held to the design's bars: every agent slot's ground behind a lead at phone and desktop size, its ink at 7:1, painted twice to the same pixels, a phone's paint time, and the state marks on its map region; pictures of each theme's agents side by side | none | free, 5 min |
 | brain | an orchestrator, a fork and an engineer build a small repo; the brain is killed -9 mid-command and relaunched, and carries on with the same limbs | scripted (`MODEL=sonnet/low`: real agents) | free, 30 s (Sonnet: a few dozen requests, 2 min) |
 | history | Max tells one chat what the boat's hull should be; a max-advocate in another `find`s his words, labelled `max-…` with when and the chat he said them to, reads that chat with `context`, and quotes him by label; leaves the brain up | Sonnet low | 4 requests, under 1 min |
 | attach | a fork attaches its `bash` call to its report, and the chat receives the real output after the fork's words | Sonnet low | 4 requests, under 1 min |
