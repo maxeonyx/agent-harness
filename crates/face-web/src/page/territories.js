@@ -386,10 +386,17 @@ class Rec {
     if (this.mode === "tint" || pale || this.globalCompositeOperation !== "source-over") return this.raster(how, rgb, alpha);
     const { quiet, levels, ink } = this.sink;
     if (how === "fill") {
-      let sx = 0, sy = 0, n = 0, d = "";
-      for (const s of this.subs) { if (!s.segs.length) continue; d += move(s.start); let prev = s.start; for (const g of s.segs) { d += seg(g, prev); prev = g[1]; sx += g[1][0]; sy += g[1][1]; n++; } d += "Z"; }
-      const lv = n ? level(quiet(sx / n, sy / n), levels) : -1;
-      if (lv >= 0) this.put(attrs({ fill: rgb, "fill-opacity": f3(alpha * levels[lv] * ink) }), d);
+      // Each shape at the quiet of where it lies, so one call filling many small shapes (dots, leaves)
+      // thins each where it is rather than all of them at their mean.
+      const shapes = levels.map(() => "");
+      for (const s of this.subs) {
+        if (!s.segs.length) continue;
+        let d = move(s.start), prev = s.start, sx = 0, sy = 0;
+        for (const g of s.segs) { d += seg(g, prev); prev = g[1]; sx += g[1][0]; sy += g[1][1]; }
+        const lv = level(quiet(sx / s.segs.length, sy / s.segs.length), levels);
+        if (lv >= 0) shapes[lv] += d + "Z";
+      }
+      shapes.forEach((d, lv) => { if (d) this.put(attrs({ fill: rgb, "fill-opacity": f3(alpha * levels[lv] * ink) }), d); });
       return;
     }
     const buckets = levels.map(() => ({ d: "", last: null }));
