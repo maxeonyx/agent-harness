@@ -332,7 +332,7 @@ export default {
   slots: [0, 3 / 6, 1 / 6, 4 / 6, 2 / 6, 5 / 6],
   // The colour this agent is told apart by: the colour its light is named by.
   identity(at) { return lightAt(at).id; },
-  paint(ctx, { w, h, at, stream, noise, quiet, column, kit }) {
+  paint(ctx, { w, h, at, stream, noise, quiet, column, veil, kit }) {
     // Without a lead (a thumbnail, a swatch), keep the upper sky clear as if one sat there.
     quiet ||= { x: w / 2, y: 0, w: 0, h: h * 0.42 };
     const portrait = h > w, m = Math.min(w, h);
@@ -354,7 +354,9 @@ export default {
     const step = Math.max(2, w / 600);
 
     // Sky: bokashi from a pale steel zenith to the warm low sky.
-    const sky = ctx.createLinearGradient(0, 0, 0, H0);
+    // On a page with gutters the zenith sits above the window, so the column's top is no darker than
+    // the text's veil.
+    const sky = ctx.createLinearGradient(0, tb?.wide ? -H0 * 0.3 : 0, 0, H0);
     sky.addColorStop(0, P.zenith); sky.addColorStop(0.2, P.upper); sky.addColorStop(0.55, P.mid); sky.addColorStop(1, P.low);
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, h);
@@ -646,9 +648,30 @@ export default {
       }
     }
 
-    // Big clumps against the light at the foot's corners, to give the picture its near edge.
+    // On a page with gutters the text's veil, passing down the column as the page scrolls, would
+    // flatten the land under it into a pale band that slides over it. So the plain lies in the low
+    // sun's haze, already as light as the veil makes it: hazed (screen), so its tussock keeps its
+    // texture, then lifted (lighten) to the veil's lightness. The veil then changes nothing as it
+    // passes, and the haze lies over the whole plain, so it reads as weather, not as a column.
+    if (veil && tb?.wide) {
+      const [vL] = kit.oklch(veil.colour), [, gC, gh] = kit.oklch(P.glow);
+      const lift = kit.fromOklch(Math.min(0.98, vL + 0.03), Math.min(gC, 0.04), gh);
+      const haze = kit.fromOklch(Math.min(0.98, vL - 0.22), Math.min(gC, 0.04), gh);
+      ctx.save();
+      for (const [op, colour, y0] of [["screen", haze, landTop - space * 0.05], ["lighten", lift, Math.max(0, H0 - farAmp * 1.25)]]) {
+        ctx.globalCompositeOperation = op;
+        const lg = ctx.createLinearGradient(0, y0, 0, y0 + 40);
+        lg.addColorStop(0, rgba(colour, 0)); lg.addColorStop(1, rgba(colour, 1));
+        ctx.fillStyle = lg;
+        ctx.fillRect(0, y0, w, h - y0);
+      }
+      ctx.restore();
+    }
+
+    // Big clumps against the light at the foot's corners, to give the picture its near edge. A page with
+    // gutters has none: its plain lies in haze, and a dark clump would only show as a stray mark.
     const cn = stream("corners"), corner = [];
-    for (const cx of [cn.range(-0.04, 0.14), cn.range(0.86, 1.04)]) if (cn() < 0.85) corner.push({ x: cx * w, y: h * 0.99, s: spaceL * cn.range(0.4, 0.55), r: cn.fork(`c${cx}`) });
+    for (const cx of [cn.range(-0.04, 0.14), cn.range(0.86, 1.04)]) if (cn() < 0.85 && !tb?.wide) corner.push({ x: cx * w, y: h * 0.99, s: spaceL * cn.range(0.4, 0.55), r: cn.fork(`c${cx}`) });
     clumps(ctx, corner, { wind, sunX, tone: { core: P.core, shade: P.core, mid: mixc(P.core, P.shade, 0.5), tip: P.mid2, tipLit: P.tip }, scale: 1.5, noise });
 
     // The low sun washes over everything on its side.
