@@ -1,30 +1,30 @@
 # Making a theme
 
-You make the next theme for my agent pages and the map, or take one further. A theme is one area's art: every agent in the area gets its own painting of it, and the map paints the area faintly in it. There are more areas than themes, so I want to spin up new ones at will, each as good as the first five I loved.
+You make the next theme for Max's agent pages and the map, or take one further. A theme is one area's art: every agent in the area gets its own painting of it, and the map paints the area faintly in it. There are more areas than themes, and Max wants "to be able to spin up additional themes at will", each as good as the set he called "Absolute beast. I love it."
 
 The contract is the top comment of `crates/face-web/src/page/theme.js`, the concept is `Theme` in `crates/core/src/design.rs`, and the bars are in `dev/theme-check.mjs`. The set is every `theme-*.js`: each opens with what it depicts, who each agent is, its technique, and what was tried and dropped and why. Read them all, and look at the whole set side by side before choosing a direction.
 
-## What I want
+## What a theme must be
 
-A picture I'd hang, not a decoration or a stock effect: depth, light, material, composition, a restrained palette, made with real generative technique. "5 times better", not "10% better". Calm where text sits, since I read over it all day; the ground sits behind whole pages of text, so its drama can't come from deep darks where text runs. Distinct from every theme in the set in what it looks at and how it's made, not only colour, so it reads as itself at thumbnail size. Agents in one area told apart at a glance by colour as well as composition.
+A picture worth hanging, not a decoration or a stock effect: depth, light, material, composition, a restrained palette, made with real generative technique. Max asked for art that is "really elegant and artistic", and of a round that fell short: "They're like 10% better, where I wanted like 5 times better." Calm where text sits: the ground sits behind whole pages of text, so its drama can't come from deep darks where text runs. Distinct from every theme in the set in what it looks at and how it's made, not only colour, so it reads as itself at thumbnail size (of the first set: "Harbor and Cowrie seem very similar right now"). Agents in one area told apart at a glance by colour as well as composition: of Pāua, "it needs inner variation in colour and identity, not just layout, so that individual agents within an area are distinguishable at a glance."
 
 Tried and not taken, so start somewhere else:
 
-- Riso, a risograph print: I didn't much like it.
-- Ledger, graph paper: "a bit busy". Anything ruled across the whole page reads the same way.
-- Nocturne, a night sky: "a bit much as a background".
-- Kapua, only sky as an oil sketch: it read as a paint filter, and sat too close to Tussock's sky.
+- Riso, a risograph print: "Maybe I don't really like Riso very much".
+- Ledger, graph paper: "Ledger is a bit busy". Anything ruled across the whole page reads the same way.
+- Nocturne, a night sky: "Nocturne is a bit much as a background."
+- Kapua, only sky as an oil sketch: the critic found it read as a paint filter, and sat too close to Tussock's sky.
 - Bach, the sunlit weatherboard wall of a bach: its beauty was strong sun against dark shade, and lifting the shade enough to read text over it took the light with it. Waiting on my call as at 14 Nov 2026, so don't remake it.
 
 ## How a theme gets made
 
 Nobody judges their own work: an artist's eye on its own piece is a conflict of interest.
 
-1. Studies. Two or three artists (fresh `designer` agents), each on a materially different direction from the others and from the set. Give each this file, the contract, the set's renders side by side, my words on the art, and "How to design this" verbatim. Each makes a working `theme-<name>.js` that meets every bar: a study, not a sketch. Artists don't commit.
-2. Rounds. A critic that made none of them judges them all beside the set, against my words, and picks one or none, with ranked findings an artist can act on in a round. Resume the artist that made the pick (it knows its code) with the findings, and have the critic judge again. A study the critic turns down twice is dropped, unless max-advocate thinks I might love it anyway (I overruled the critic on Pāua): then it comes to me as contested, and nothing wears it until I say.
+1. Studies. Two or three artists (fresh `designer` agents), each on a materially different direction from the others and from the set. Give each this file, the contract, the set's renders side by side, Max's words on the art (find them with `find`, and paste them in verbatim, since a `spawn` quote carries only words heard directly), and "How to design this" verbatim. Each makes a working `theme-<name>.js` that meets every bar: a study, not a sketch. Artists don't commit.
+2. Rounds. A critic that made none of them judges them all beside the set, against Max's words, and picks one or none, with ranked findings an artist can act on in a round. Resume the artist that made the pick (it knows its code) with the findings, and have the critic judge again. A study the critic turns down twice is dropped, unless max-advocate thinks Max might love it anyway: then it comes to him as contested, and nothing wears it until he says. His eye can differ from a critic's: of Pāua, unfinished, he said "I actually like paua a lot".
 3. The check, then max-advocate: "What would Max say about this?", with the renders described in words, since it can't see images. Act on it.
 4. A PR adding `theme-<name>.js`, its display face, and its name to `THEMES` in `crates/core/src/design.rs`, the one list of themes. A theme nobody has worn is the one the next new area takes. Another agent reviews it, and on its clean verdict the agent that opened it merges.
-5. A page for me under `~/agent-harness-workspace/pages/`: the theme painted full-screen behind a real page, six agents of one area, and its map region beside the others'. Show the paintings, not the process.
+5. A page for Max under `~/agent-harness-workspace/pages/`: the theme painted full-screen behind a real page, six agents of one area, and its map region beside the others'. Show the paintings, not the process.
 
 ## Bars and practicalities
 
