@@ -12,9 +12,19 @@
 // may set `below`, a higher floor under the now line, and `chroma`, its own colour gain.
 //
 // paint draws into a 2D context already scaled to CSS pixels, given
-//   scene = { w, h, dpr, seed, slot, at, line, root, rng, stream, noise, quiet, kit }
-// where quiet is the box the page lead sits in ({ x, y, w, h }, CSS px), which the art keeps calm.
-// A picture with no lead (a thumbnail, the map) gets a small box in the upper middle, so it is
+//   scene = { w, h, dpr, seed, slot, at, line, root, rng, stream, noise, quiet, column, kit }
+// where quiet is the box the page lead sits in ({ x, y, w, h }, CSS px), which the art keeps calm,
+// and column ({ x, w }) the text column across the window's whole height. The window is any shape
+// from a phone's (about 0.45 wide to high) to a desktop chat card's (about 1.05) and wider, and the
+// painting is composed for the one it is given. It stays still
+// while the page's text scrolls over it, so on a long page the column below the lead's top ends up
+// under text: the art keeps it open (sea, sky, plain ground) and puts its subject in the window's
+// free space, which kit.textBox(scene) gives as the box to keep open. A window with gutters a subject
+// fits in keeps its subject in them, or above the lead; a narrow one (a phone) at its foot, which
+// shows after the page's last part. Each block's press eases to nothing across the gutters, so a
+// subject in the gutter's outer part stays nearly whole as text passes beside it; on a narrow
+// window it runs off both edges. A picture with no
+// page (a thumbnail, the map) gets a small quiet box in the upper middle and no column, so it is
 // composed as a cover would be. dpr is the device pixels per CSS pixel, for shaders and hairlines.
 // seed, slot, root and line are the task's `Identity`; at is its slot's place (slots[slot], round
 // again past the last), which the ground maps onto its own colour. stream(part) is a random source of
@@ -199,13 +209,92 @@ export function placeOf(theme, slot) { return theme.slots[slot % theme.slots.len
 // The colour that says which agent this is among the others wearing its theme, for its node on the map.
 export function identity(theme, slot) { return theme.identity(placeOf(theme, slot)); }
 
-export const kit = { hash, rng, noise, grain, shader, rgb, mix, alpha, oklch, fromOklch };
+// The box the page's text covers, which the art keeps open (see the header): the column from the
+// lead's top to the window's foot when each gutter is at least 9% of the width, otherwise the whole
+// width from the lead's top to 76% of the height, leaving the foot to the subject.
+export function textBox({ w, h, quiet, column: c }) {
+  if (!c) return null;
+  if (Math.min(c.x, w - c.x - c.w) >= 0.09 * w) return { x: c.x, y: quiet.y, w: c.w, h: h - quiet.y, wide: true };
+  return { x: 0, y: quiet.y, w, h: Math.max(quiet.h, 0.76 * h - quiet.y), wide: false };
+}
+
+export const kit = { hash, rng, noise, grain, shader, rgb, mix, alpha, oklch, fromOklch, textBox };
+
+// Where the lead and the first facts land as a page opens, which the art keeps calm: across the text's
+// column, from 4% of the window's height down 60% of it (68% on a window taller than wide, where the
+// first facts reach further). A property of the window alone, never of the page's content, so a
+// painting depends only on the task's identity and the window it is painted for.
+export function quietOf({ w, h }, column) {
+  return { x: column.x, y: h * 0.04, w: column.w, h: h * (h > w ? 0.68 : 0.6) };
+}
+
+// The press: what lies under each block of text on the page's painting, so the text keeps its
+// contrast on every pixel by construction while the painting shows at full strength everywhere else.
+// `inks` are [colour, the contrast it must keep] pairs, the first the strongest. Under dark inks the
+// painting is lightened to `colour`, the darkest colour from the paper toward the first ink on which
+// every ink keeps its contrast: "lighten" takes each channel's larger value, so no pixel under the
+// text is darker than that colour, and a pixel lighter already is left as it is. Under light inks (a
+// dark page) it is darkened to the lightest such colour from the paper toward white, the same way.
+// Either is idempotent, so presses that overlap don't compound. Returns { colour, blend }, as CSS values.
+export function pressOf(paper, inks, tint = null) {
+  const light = lum(inks[0][0]) > lum(paper);
+  const ok = (c) => inks.every(([i, k]) => contrast(i, c) >= k);
+  // Toward the inks from the paper, at the painting's own hue (`tint`, its mean colour where the text
+  // runs) and a little of its colour, so a flattened patch reads as the painting's, not as grey.
+  const [L0] = oklch(paper), [, C, h] = tint ? oklch(tint) : [0, 0, 0];
+  let colour = paper;
+  for (let L = L0; L >= 0 && L <= 1; L += light ? 0.004 : -0.004) {
+    const c = tint ? fromOklch(L, Math.min(C, 0.05), h) : mix(paper, light ? "#ffffff" : inks[0][0], Math.abs(L - L0));
+    if (!ok(c)) break;
+    colour = c;
+  }
+  return { colour, blend: light ? "darken" : "lighten" };
+}
+// The page's presses over a painting whose mean colour where the text runs is `tint`: under the
+// body, its ink at 7:1 and what is quieter (the palette's body ink, which the page sets quiet text in
+// on a painting) at 5:1, a step above the 4.5 floor since quiet lines carry an ask's fallback; and
+// under the lead, the cover ink at 7:1.
+export function pagePresses(p, tint) {
+  return { body: pressOf(p.paper, [[p.ink, 7], [p.body, 5]], tint), head: pressOf(p.paper, [[p.cover_ink, 7]], tint) };
+}
+// A painting's mean colour inside a box (its own pixels), from a small copy.
+export function meanColour(canvas, box) {
+  const n = 16, c = document.createElement("canvas");
+  c.width = c.height = n;
+  const x = c.getContext("2d", { willReadFrequently: true });
+  x.drawImage(canvas, box.x, box.y, box.w, box.h, 0, 0, n, n);
+  const d = x.getImageData(0, 0, n, n).data, sum = [0, 0, 0];
+  for (let i = 0; i < d.length; i += 4) for (let j = 0; j < 3; j++) sum[j] += lin(d[i + j] / 255);
+  return "#" + sum.map((v) => Math.round(255 * gam(v / (n * n))).toString(16).padStart(2, "0")).join("");
+}
+// Row by row down a painting, the share of each row a press of `colour` with `blend` would
+// flatten: darker than the colour under a lighten, lighter under a darken.
+export function beyond(canvas, colour, blend, rows = 24) {
+  const cols = 32, c = document.createElement("canvas");
+  c.width = cols; c.height = rows;
+  const x = c.getContext("2d", { willReadFrequently: true });
+  x.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, cols, rows);
+  const d = x.getImageData(0, 0, cols, rows).data, L = lum(colour), out = [];
+  for (let r = 0; r < rows; r++) {
+    let n = 0;
+    for (let i = r * cols * 4; i < (r + 1) * cols * 4; i += 4) {
+      const y = 0.2126 * lin(d[i] / 255) + 0.7152 * lin(d[i + 1] / 255) + 0.0722 * lin(d[i + 2] / 255);
+      if (blend === "lighten" ? y < L * 0.92 : y > L * 1.1 + 0.005) n++;
+    }
+    out.push(n / cols);
+  }
+  return out;
+}
+// Relative luminance and WCAG contrast of hex colours.
+function lum(hex) { return rgb(hex).map((v) => lin(v / 255)).reduce((s, c, i) => s + c * [0.2126, 0.7152, 0.0722][i], 0); }
+export function contrast(a, b) { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
 
 // Paint a theme's ground into a canvas sized to its element, at up to 2x device pixels, for a task's
 // identity ({ slot, seed, root, line }, as `Identity` in crates/core/src/design.rs).
-// size ({ w, h, dpr }) paints a canvas that is not on the page, at that size.
+// size ({ w, h, dpr }) paints a canvas that is not on the page, at that size; column ({ x, w }) is
+// the page's text column, none for a picture with no page.
 // Returns how long the paint took, in ms.
-export function paintInto(canvas, theme, who, quiet, size = null) {
+export function paintInto(canvas, theme, who, quiet, size = null, column = null) {
   const { slot, seed, root = seed, line = [] } = who;
   const w = size?.w ?? canvas.clientWidth, h = size?.h ?? canvas.clientHeight, dpr = size?.dpr ?? Math.min(2, window.devicePixelRatio || 1);
   canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
@@ -214,7 +303,7 @@ export function paintInto(canvas, theme, who, quiet, size = null) {
   quiet ??= { x: w * 0.25, y: h * 0.2, w: w * 0.5, h: h * 0.3 };
   const t0 = performance.now();
   const stream = (part) => rng(`${theme.name}:${seed}:${part}`);
-  theme.paint(ctx, { w, h, dpr, seed, slot, at: placeOf(theme, slot), line, root, rng: rng(`${theme.name}:${seed}`), stream, noise: noise(`${theme.name}:${seed}`), quiet, kit });
+  theme.paint(ctx, { w, h, dpr, seed, slot, at: placeOf(theme, slot), line, root, rng: rng(`${theme.name}:${seed}`), stream, noise: noise(`${theme.name}:${seed}`), quiet, column, kit });
   return performance.now() - t0;
 }
 
