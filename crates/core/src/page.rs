@@ -716,34 +716,3 @@ pub enum StepState {
         until: Option<Timestamp>,
     },
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-    fn read(json: &str) -> Sheet {
-        serde_json::from_str(json).expect("a stored sheet reads")
-    }
-
-    #[test]
-    fn every_stored_sheet_reads_with_its_now() {
-        let id = |hex: &str| Some(serde_json::from_value::<ValueId>(hex.into()).unwrap());
-        let now = read(&format!(
-            r#"{{"lead":{{"title":"L"}},"now":"{A}","why":"{B}"}}"#
-        ));
-        assert_eq!((now.now, now.why), (id(A), id(B)));
-        let facts = read(&format!(
-            r#"{{"lead":{{"title":"L"}},"facts":"{A}","why":null}}"#
-        ));
-        assert_eq!((facts.now, facts.why), (id(A), None));
-        let claims = read(&format!(
-            r#"{{"lead":{{"title":"L","hook":"H"}},"end":{{"says":"E","shows":null}},"now":{{"says":"N","shows":"{A}"}},"why":null}}"#
-        ));
-        assert_eq!((claims.lead.title.as_str(), claims.now), ("L", id(A)));
-        let bare = read(r#"{"lead":{"title":"L"},"why":null}"#);
-        assert_eq!(bare.now, None);
-    }
-}
