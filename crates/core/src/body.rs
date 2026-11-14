@@ -243,8 +243,8 @@ pub enum Problem {
     /// An image with no alt.
     NoAlt,
     /// An image that can't be drawn as a picture: it names no call whose
-    /// result showed the agent one, or it sits amid text. Drawn as its
-    /// alt's words, or a link in them to an image on the web.
+    /// result showed the agent one, or it sits amid text or in a table.
+    /// Drawn as its alt's words, or a link in them to an image on the web.
     Picture { why: String },
     /// Words given as Max's that are not in the delivery named.
     Misquoted,

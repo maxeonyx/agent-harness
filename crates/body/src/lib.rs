@@ -409,6 +409,12 @@ impl<'m, 'k> Reader<'m, 'k> {
             match event {
                 Event::Start(Tag::TableCell) => {
                     let pieces = self.inlines();
+                    for piece in &pieces {
+                        if let Piece::Image { line, .. } = piece {
+                            let why = "it sits in a table".to_owned();
+                            self.spot(*line, Problem::Picture { why });
+                        }
+                    }
                     let cell = pieces.into_iter().map(as_inline).collect();
                     cells.push(merged(cell));
                 }
