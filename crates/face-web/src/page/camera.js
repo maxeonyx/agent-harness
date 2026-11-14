@@ -60,7 +60,7 @@ export function framing() {
   if (!big.some((n) => n.id === focus)) focus = latest(big);
   const p = focus && positions.get(focus);
   const bar = $("#bottom").getBoundingClientRect();
-  const w = innerWidth, h = bar.height ? bar.top : innerHeight, m = phone() ? 6 : 16;
+  const w = innerWidth, h = bar.top, m = phone() ? 6 : 16;
   // The camera along one axis that puts `at` there, kept to the map from a to b.
   const keep = (at, a, b, room) => b - a <= room - 2 * m ? (room - a - b) / 2 : Math.min(m - a, Math.max(room - m - b, at));
   return {
@@ -69,8 +69,9 @@ export function framing() {
     y: Math.round(keep(p ? h * 2 / 3 : Infinity, b.y0, b.y1, h)),
   };
 }
-// What is drawn has grown without the layout changing (an area's ground has
-// landed): a camera following the map frames it again.
+// What is drawn, or the room for it, has changed without the layout changing
+// (an area's ground has landed, the window resized): a camera following the
+// map frames it again.
 export function refit() {
   if (framed && !openId) fit(true, true);
 }
@@ -353,7 +354,7 @@ export function coverCheck() {
 
 // The card fits the window it is in, a phone's keyboard opening shrinks it,
 // and a new chat's card grows and shrinks with what it holds.
-addEventListener("resize", () => { reseat(); refresh(); });
+addEventListener("resize", () => { reseat(); refresh().then(refit); });
 new ResizeObserver(reseat).observe($(".compose", panel));
 function reseat() {
   const next = openId && seam && seamFor(openId);

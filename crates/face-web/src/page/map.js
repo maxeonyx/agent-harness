@@ -385,8 +385,12 @@ export function layout() {
     let l = was.get(p.sig);
     if (!l) {
       l = layOut(p.ns);
-      l.x0 = Infinity; l.x1 = -Infinity; l.y1 = 0;
-      for (const n of p.ns) { const q = l.at.get(n.id); l.x0 = Math.min(l.x0, q.x - n.lo); l.x1 = Math.max(l.x1, q.x + n.hi); l.y1 = Math.max(l.y1, q.y + n.along / 2); }
+      // What it covers: each node from its dot to the end of its label.
+      l.x0 = l.y0 = Infinity; l.x1 = l.y1 = -Infinity;
+      for (const n of p.ns) {
+        const q = l.at.get(n.id);
+        l.x0 = Math.min(l.x0, q.x - n.lo); l.x1 = Math.max(l.x1, q.x + n.hi); l.y0 = Math.min(l.y0, q.y - n.top); l.y1 = Math.max(l.y1, q.y + n.foot);
+      }
     }
     laid.set(p.sig, l);
     // Its boxes and lines where it sits, kept while it sits there, so
@@ -407,8 +411,7 @@ export function layout() {
       l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { P: at(e.P), W: e.W, sheet: e.sheet, gaps: e.gaps.map((g) => ({ ...g, P: at(g.P) })), dashed: dashed(e), colour: colour(e) }]);
     }
     for (const [id, b] of l.boxes) positions.set(id, b);
-    // A box spans a node's dot; its label runs on to its right.
-    for (const n of p.ns) { const q = l.at.get(n.id); cover(q.x + dx - n.lo, q.y - n.top, q.x + dx + n.hi, q.y + n.foot); }
+    cover(x, l.y0, l.x1 + dx, l.y1);
     for (const [k, r] of l.lines) routes.set(k, r);
     y1 = Math.max(y1, l.y1);
     x = l.x1 + dx + PROJECT;
@@ -416,8 +419,8 @@ export function layout() {
   // The archive: its cards, most recently finished first, on shelves below.
   const cards = parts.filter((p) => p.c.folded).sort((a, b) => b.c.last - a.c.last);
   const room = Math.max(360, innerWidth - 40);
-  // Shelved just below the fold of a framing that puts the present row two thirds down.
-  let cx = 0, cy = Math.max(y1 + 80, innerHeight / 3 + 40);
+  // Shelved under the projects, and framed with them.
+  let cx = 0, cy = y1 + 80;
   for (const p of cards) {
     if (cx && cx + p.w > room) { cx = 0; cy += CARD_H + 14; }
     positions.set(p.c.root.id, { x: cx, y: cy, w: p.w, h: CARD_H, top: CARD_H / 2, card: true });
