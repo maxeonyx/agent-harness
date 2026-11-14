@@ -10,8 +10,7 @@
 // Identity and layout. The agent's place `at` (among the agents wearing Tussock, planned by the
 // harness) picks its light from six on a ring: late-afternoon gold, red tussock under an apricot
 // evening, rose dusk, lilac after sunset, a winter blue hour, a silver-green morning. Agents
-// on screen together wear lights far apart, so they are told apart at a glance;
-// `identity(at)` is that light's colour, for the agent's map node and accents. The seed (the
+// on screen together wear lights far apart, so they are told apart at a glance. The seed (the
 // agent's id) chooses the layout, each part from its own stream: how high the horizon sits under
 // the lead, the form of the ranges (one great massif, an uneven chain, or two massifs framing the
 // sky), the lake and its shore (long low spits, a shingle line that comes and goes), the foothills,
@@ -53,7 +52,7 @@ const GOLD = {
   plain: "#bd8f40", plainFar: "#d4ae6a", ground: "#7a5726", core: "#4e3417", mid2: "#a06d2c", tip: "#f6d48a", tipLit: "#fff1c8", shade: "#7a5626", straw: "#d9bf86",
   cCore: "#4a2414", cShade: "#7d3f1f", cMid: "#a75a2c", cTip: "#e9a46a",
   cloudShade: "#6e5a52", lake: "#7fbcb8", lakeFar: "#c3d6c8", shingle: "#c9c2ae",
-  id: "#c08a2c", red: 0.15, disc: 1, glowA: 1,
+  red: 0.15, disc: 1, glowA: 1,
 };
 const RUST = {
   zenith: "#b4b8c8", upper: "#ecd6c4", mid: "#f8d4b0", low: "#f2b07c", sun: "#fff0d6", glow: "#f6b277",
@@ -62,7 +61,7 @@ const RUST = {
   plain: "#a5552e", plainFar: "#c7825a", ground: "#5c2e18", core: "#45200f", mid2: "#9b522c", tip: "#eba068", tipLit: "#ffe0bc", shade: "#73361c", straw: "#d9a878",
   cCore: "#3d170d", cShade: "#6f2a18", cMid: "#9f4226", cTip: "#e88a5e",
   cloudShade: "#5d4040", lake: "#7aaeb0", lakeFar: "#d2d2c4", shingle: "#c6b8a8",
-  id: "#a8522b", red: 0.85, disc: 1, glowA: 1,
+  red: 0.85, disc: 1, glowA: 1,
 };
 const ROSE = {
   zenith: "#aca5c8", upper: "#e6d6df", mid: "#f7ddd8", low: "#f2b9a8", sun: "#fff0e6", glow: "#f2a28e",
@@ -71,7 +70,7 @@ const ROSE = {
   plain: "#bb8264", plainFar: "#d6a892", ground: "#6c4234", core: "#482822", mid2: "#9f644e", tip: "#f2bea0", tipLit: "#ffe6da", shade: "#764636", straw: "#dcb3a0",
   cCore: "#44201c", cShade: "#78342e", cMid: "#a44c46", cTip: "#ec988a",
   cloudShade: "#5f4c5e", lake: "#93a9be", lakeFar: "#dccbd2", shingle: "#cdbcbc",
-  id: "#c06e62", red: 0.3, disc: 1, glowA: 0.95,
+  red: 0.3, disc: 1, glowA: 0.95,
 };
 const LILAC = {
   zenith: "#9d9dc6", upper: "#dad5e8", mid: "#ecdfe8", low: "#e9c6cf", sun: "#fbeef0", glow: "#dcaac6",
@@ -80,7 +79,7 @@ const LILAC = {
   plain: "#a08078", plainFar: "#bfa2a3", ground: "#53373c", core: "#3b2530", mid2: "#87606b", tip: "#dab4b8", tipLit: "#f6e2ec", shade: "#62414c", straw: "#c9aeb6",
   cCore: "#391d26", cShade: "#672f40", cMid: "#8e495a", cTip: "#d68b9c",
   cloudShade: "#4e4560", lake: "#9099c4", lakeFar: "#d4cde2", shingle: "#bdb4c4",
-  id: "#8d6fa8", red: 0.2, disc: 0, glowA: 0.7,
+  red: 0.2, disc: 0, glowA: 0.7,
 };
 const BLUE = {
   zenith: "#87a2c8", upper: "#c8d5e8", mid: "#e1e7ef", low: "#eedac8", sun: "#f8f3ec", glow: "#cdd8ee",
@@ -89,7 +88,7 @@ const BLUE = {
   plain: "#a99a78", plainFar: "#c1b9a8", ground: "#4e4a46", core: "#34333a", mid2: "#88806b", tip: "#ded5bd", tipLit: "#f4f1e8", shade: "#615c55", straw: "#ccc5b3",
   cCore: "#3a2a2a", cShade: "#694842", cMid: "#8e685a", cTip: "#c9a090",
   cloudShade: "#4b5470", lake: "#8fb0cf", lakeFar: "#d0dbe7", shingle: "#b8bcc4",
-  id: "#5d7eb2", red: 0.1, disc: 0, glowA: 0.55,
+  red: 0.1, disc: 0, glowA: 0.55,
 };
 const SAGE = {
   zenith: "#93adc2", upper: "#d6e1e1", mid: "#eef1e6", low: "#efead2", sun: "#fffdf2", glow: "#eef0c8",
@@ -98,7 +97,7 @@ const SAGE = {
   plain: "#aaa374", plainFar: "#c8c4a2", ground: "#5e5a3c", core: "#3d3b26", mid2: "#8b8659", tip: "#e4e0bd", tipLit: "#f9f9e8", shade: "#65613f", straw: "#d6d2b2",
   cCore: "#4a3018", cShade: "#7a5028", cMid: "#a07040", cTip: "#d8b080",
   cloudShade: "#55605a", lake: "#72b4b0", lakeFar: "#c5ddd5", shingle: "#c2c6bc",
-  id: "#8c9460", red: 0.12, disc: 1, glowA: 0.9,
+  red: 0.12, disc: 1, glowA: 0.9,
 };
 const RING = [GOLD, RUST, ROSE, LILAC, BLUE, SAGE];
 function lightAt(u) {
@@ -333,7 +332,6 @@ export default {
   // The colour this agent is told apart by: the colour its light is named by.
   map: { hue: 102 },
   chart,
-  identity(at) { return lightAt(at).id; },
   paint(ctx, { w, h, at, stream, noise, quiet, kit }) {
     // Without a lead (a thumbnail, a swatch), keep the upper sky clear as if one sat there.
     quiet ||= { x: w / 2, y: 0, w: 0, h: h * 0.42 };

@@ -13,9 +13,11 @@
 // - the map contract: a chart, and a map.hue outside 35-75 (orange, Max's on the map);
 // - the map: the theme's area as a territory beside a neighbour wearing it too, with its chart, drawn
 //   as the map draws it (territories.js): each state tone at a live agent's node keeping 90% of the
-//   contrast it has on bare paper; the names' ink at 14:1 or better for 95% of each name's box; and
-//   little colour, as an old map has: the land's OKLCh chroma at most MAP_CHROMA at its median and
-//   at its 99th percentile;
+//   contrast it has on bare paper; the names' ink at 14:1 or better for 95% of each name's box on
+//   the wash (the chart's ink under a name is covered by its own halo); the chart's ink near the
+//   streams at most NEAR_INK of its weight away from them, as Max asked the background behind the
+//   streams to be fainter; and little colour, as an old map has: the land's OKLCh chroma at most
+//   MAP_CHROMA at its median and at its 99th percentile;
 // - by eye: DIR/<theme>/slots.png, every slot's painting as a thumbnail in order, for telling
 //   agents apart at a glance and the theme at thumbnail size; the phone and desktop covers of slot 0
 //   and 1; and region.png, the map.
@@ -41,6 +43,9 @@ const MAP_PAPER = "#f0eee6", NAME_INK = "#141413";
 // The map's land's colour, at its median and its 99th percentile (OKLCh chroma): an old map's faded
 // wash, under the state tones' colour so they stay the strongest colour where they stand.
 const MAP_CHROMA = [0.015, 0.04];
+// How much the chart's ink darkens the wash just beyond a stream's gap, as a share of how much it does
+// away from the streams.
+const NEAR_INK = 0.75;
 const SEEDS = ["retry-budget", "harness-features", "art-lead", "nightly-reconcile", "docs-pass", "dependency-sweep", "tool-review", "power-bill"];
 
 const args = process.argv.slice(2);
@@ -66,10 +71,10 @@ p { margin: 0; font: 17.5px/1.62 Georgia, serif; color: var(--cover-body); }
 <p>Your words about how a page looks go from its agent to the keeper of the design system, which hands them to the art.</p></div></div>
 <script type="module">
 import { load, wear, paintInto, settle, oklch } from "/page/theme.js";
-import { territories } from "/page/territories.js";
+import { render, territories } from "/page/territories.js";
 const q = new URLSearchParams(location.search), theme = await load(q.get("theme"));
 await wear(document.documentElement, theme);
-window.__check = { theme, paintInto, territories, settle, oklch };
+window.__check = { theme, paintInto, territories, render, settle, oklch };
 window.__ready = true;
 </script>`;
 
@@ -187,47 +192,53 @@ const SHEET = (seeds) => `(() => {
 // on the now line with their history above them, drawn as the map draws it, with the state tones at
 // the live agents' nodes and their names' boxes.
 const REGION = `(async () => {
-  const { theme, territories, oklch } = window.__check;
+  const { theme, territories, render, oklch } = window.__check;
   document.querySelector(".cover").remove();
   const X = 0, Y = -1000, w = 1500, h = 1300, live = [], names = [], lines = [];
   const area = (id, cols) => {
-    const marks = [];
+    const marks = [], labels = [];
     for (const x of cols) {
       const chain = [];
-      for (let y = 0; y > -900; y -= 120) { marks.push([x - 32, y - 32, x + 32, y + 32]); chain.push([x, y]); }
+      for (let y = 0; y > -900; y -= 120) { marks.push([x - 32, y - 32, x + 32, y + 32]); chain.push([x, y, 1.1]); }
       lines.push(chain);
       live.push({ x, y: 0 });
       const name = [x + 24, -9, x + 150, 9];
-      marks.push(name); names.push(name);
+      labels.push(name); names.push(name);
     }
-    lines.push(cols.map((x) => [x, -840]));
-    return { id, theme, seed: id, name: id, marks };
+    lines.push(cols.map((x) => [x, -840, 1.1]));
+    return { id, theme, seed: id, name: id, marks, labels };
   };
   const t0 = performance.now();
   const drawn = territories([area("harness-features", [200, 470, 740]), area("retry-budget", [1110, 1330])], lines, "${MAP_PAPER}");
-  const ms = performance.now() - t0;
+  const t1 = performance.now(), rect = { x: X, y: Y, w, h }, full = render(drawn, rect, w, h), ms = [t1 - t0, performance.now() - t1];
+  const ground = (pic) => { const c = new OffscreenCanvas(w, h), x = c.getContext("2d"); x.fillStyle = "${MAP_PAPER}"; x.fillRect(0, 0, w, h); x.drawImage(pic, 0, 0); return x.getImageData(0, 0, w, h).data; };
   const view = document.createElement("canvas"); view.width = w; view.height = h;
-  const v = view.getContext("2d"); v.fillStyle = "${MAP_PAPER}"; v.fillRect(0, 0, w, h);
-  let paths = 0;
-  for (const a of drawn.areas) {
-    v.drawImage(a.tint, a.box.x - X, a.box.y - Y, a.box.w, a.box.h);
-    const img = new Image();
-    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(a.svg);
-    await img.decode();
-    v.drawImage(img, a.box.x - X, a.box.y - Y, a.box.w, a.box.h);
-    paths += (a.svg.match(/<path/g) || []).length;
-  }
+  const v = view.getContext("2d"); v.fillStyle = "${MAP_PAPER}"; v.fillRect(0, 0, w, h); v.drawImage(full, 0, 0);
   view.style.cssText = "display:block;width:" + w + "px;height:" + h + "px"; document.body.append(view);
-  const hex = (r, g, b) => "#" + [r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  const all = v.getImageData(0, 0, w, h).data, wash = ground(render(drawn, rect, w, h, { washOnly: true }));
+  const hex = (d, i) => "#" + [d[i], d[i + 1], d[i + 2]].map((x) => x.toString(16).padStart(2, "0")).join("");
   const lum = (c) => { const n = parseInt(c.slice(1), 16), f = (x) => (x /= 255) <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; return 0.2126 * f(n >> 16) + 0.7152 * f((n >> 8) & 255) + 0.0722 * f(n & 255); };
   const contrast = (a, b) => { const A = lum(a), B = lum(b); return (Math.max(A, B) + 0.05) / (Math.min(A, B) + 0.05); };
-  const pixels = (x0, y0, x1, y1) => { const d = v.getImageData(x0 - X, y0 - Y, x1 - x0, y1 - y0).data, out = []; for (let i = 0; i < d.length; i += 4) out.push(hex(d[i], d[i + 1], d[i + 2])); return out; };
-  const R = 8, at = live.map((p) => { const cs = pixels(p.x - 3 * R, p.y - 3 * R, p.x + 3 * R, p.y + 3 * R).sort((a, b) => lum(a) - lum(b)); return cs[cs.length >> 1]; });
-  const nameP5 = Math.min(...names.map((b) => { const cs = pixels(...b).map((c) => contrast("${NAME_INK}", c)).sort((a, b) => a - b); return cs[Math.floor(cs.length * 0.05)]; }));
-  const all = v.getImageData(0, 0, w, h).data, chroma = [];
-  for (let i = 0; i < all.length; i += 4 * 3) { const c = hex(all[i], all[i + 1], all[i + 2]); if (c !== "${MAP_PAPER}") chroma.push(oklch(c)[1]); }
+  const pixels = (d, x0, y0, x1, y1) => { const out = []; for (let y = y0 - Y; y < y1 - Y; y++) for (let x = x0 - X; x < x1 - X; x++) out.push(hex(d, (y * w + x) * 4)); return out; };
+  const R = 8, at = live.map((p) => { const cs = pixels(all, p.x - 3 * R, p.y - 3 * R, p.x + 3 * R, p.y + 3 * R).sort((a, b) => lum(a) - lum(b)); return cs[cs.length >> 1]; });
+  // A name stands on the wash: the ink under it is covered by its own halo (map.css).
+  const nameP5 = Math.min(...names.map((b) => { const cs = pixels(wash, ...b).map((c) => contrast("${NAME_INK}", c)).sort((a, b) => a - b); return cs[Math.floor(cs.length * 0.05)]; }));
+  const chroma = [];
+  for (let i = 0; i < all.length; i += 4 * 3) { const c = hex(all, i); if (c !== "${MAP_PAPER}") chroma.push(oklch(c)[1]); }
   chroma.sort((a, b) => a - b);
-  return { ms, paths, nameP5, unknown: drawn.unknown, chroma: [chroma[chroma.length >> 1] ?? 0, chroma[Math.floor(chroma.length * 0.99)] ?? 0],
+  // The chart's ink, as how much it darkens the wash, within 12 units beyond the streams' gap and
+  // more than 60 units from any stream, in the land round the present row.
+  const segs = lines.flatMap((P) => P.slice(1).map((q, i) => [P[i][0], P[i][1], q[0], q[1]]));
+  const far = (x, y) => Math.min(...segs.map(([ax, ay, bx, by]) => { const vx = bx - ax, vy = by - ay, L = vx * vx + vy * vy, t = L ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / L)) : 0; return Math.hypot(x - ax - t * vx, y - ay - t * vy); }));
+  let near = [0, 0], away = [0, 0];
+  for (let y = Y + 300; y < Y + h; y += 3) for (let x = X; x < X + w; x += 3) {
+    const i = ((y - Y) * w + (x - X)) * 4, inked = Math.max(0, lum(hex(wash, i)) - lum(hex(all, i)));
+    if (all[i + 3] === 0 || hex(wash, i) === "${MAP_PAPER}") continue;
+    const d = far(x, y);
+    if (d > 1.1 + 4 && d < 1.1 + 16) { near[0] += inked; near[1]++; } else if (d > 60) { away[0] += inked; away[1]++; }
+  }
+  return { ms, ops: drawn.areas.reduce((n, a) => n + a.ink.length + a.texts.length, 0), nameP5, unknown: drawn.unknown, chroma: [chroma[chroma.length >> 1] ?? 0, chroma[Math.floor(chroma.length * 0.99)] ?? 0],
+    nearInk: near[1] && away[1] && away[0] ? (near[0] / near[1]) / (away[0] / away[1]) : 0,
     tones: Object.fromEntries(Object.entries(${JSON.stringify(TONES)}).map(([k, c]) => [k, { paper: contrast(c, "${MAP_PAPER}"), at: at.map((m) => contrast(c, m)) }])) };
 })()`;
 
@@ -267,9 +278,10 @@ try {
     await region.close();
     let mapBars = "";
     if (m.nameP5 < 14) mapBars += miss(`${name} map: names' ink ${m.nameP5.toFixed(1)}:1 in 5% of a name's box`);
+    if (!(m.nearInk <= NEAR_INK)) mapBars += miss(`${name} map: the ink near the streams is ${Math.round(m.nearInk * 100)}% of its weight away from them, over ${NEAR_INK * 100}%`);
     if (m.chroma[0] > MAP_CHROMA[0] || m.chroma[1] > MAP_CHROMA[1]) mapBars += miss(`${name} map: land chroma ${m.chroma.map((c) => c.toFixed(3)).join(" / ")} over ${MAP_CHROMA.join(" / ")}`);
     if (m.unknown.length) mapBars += miss(`${name} map: its chart used ${m.unknown.join(", ")}, which the map's context lacks`);
-    console.log(`  map: drawn in ${Math.round(m.ms)} ms, ${m.paths} paths; names' ink ${m.nameP5.toFixed(1)}:1 (5th pct); land chroma ${m.chroma.map((c) => c.toFixed(3)).join(" / ")} (median / 99th)${mapBars}`);
+    console.log(`  map: worked out in ${Math.round(m.ms[0])} ms and drawn in ${Math.round(m.ms[1])} ms, ${m.ops} paths and words; ink near the streams ${Math.round(m.nearInk * 100)}% of away; names' ink ${m.nameP5.toFixed(1)}:1 (5th pct); land chroma ${m.chroma.map((c) => c.toFixed(3)).join(" / ")} (median / 99th)${mapBars}`);
     for (const [tone, t] of Object.entries(m.tones)) {
       const keep = Math.min(...t.at) / t.paper;
       const bars = keep < 0.9 ? miss(`${name} map: ${tone} keeps ${Math.round(keep * 100)}% of its contrast`) : "";

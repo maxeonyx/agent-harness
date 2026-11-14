@@ -2,12 +2,11 @@
 // are drawn with, and how the face dresses a page in one and paints its ground.
 //
 // A theme is the module theme-<name>.js, whose default export is
-//   { name, about, palette, display, slots, identity(at), map: { hue }, paint(ctx, scene), chart(ctx, scene) }
+//   { name, about, palette, display, slots, map: { hue, chroma }, paint(ctx, scene), chart(ctx, scene) }
 // palette holds design.rs's `Palette` fields as hex colours (figure: four); display its `Face`
 // ({ family, files, weights, bold, axes }), its files served beside this module as page files; slots the identities'
 // places in the theme's range of colour, in [0, 1), in the order checked by eye: slot 0 the area's
-// main agent, then each next agent as far from those before as the art allows. identity(at) is the
-// colour an agent is told apart by, for its node on the map.
+// main agent, then each next agent as far from those before as the art allows.
 //
 // paint draws into a 2D context already scaled to CSS pixels, given
 //   scene = { w, h, dpr, seed, slot, at, line, root, rng, stream, noise, quiet, kit }
@@ -26,24 +25,29 @@
 // fonts the page has already loaded (wear waits for the display face).
 //
 // On the map an area is a territory (territories.js), tinted in a faded wash of the theme's map.hue
-// (OKLCH degrees; never 35-75, since orange on the map is Max's alone), and inside it chart draws the
+// (OKLCH degrees; never 35-75, since orange on the map is Max's alone; an old map's buff, sage, sea
+// green, grey-blue, slate), at map.chroma (optional: a share of the wash's usual chroma, for a hue
+// that reads too strong at it), and inside it chart draws the
 // theme's subject as an old map would: Harbour's a nautical chart, Tussock's a topographic sheet. It
 // is the theme's art seen as a map, not its painting faded. chart draws in map units on a recording
-// context (strokes, fills, text, transforms, setLineDash, drawImage), given
+// context (strokes, fills, arcs, text, transforms, setLineDash, drawImage), given
 //   scene = { w, h, now, scale, paper, mass(x, y), calm(x, y), n, stream, under, kit }
 // its box (now is the now line's height in it, with history above), the wash it draws on as `paper`,
 // mass the territory (1 inside it, 0 outside, so the chart fills whatever shape it is given and
-// never anchors itself to the now line), calm 1 where nothing is read and toward 0 on the streams and
-// round each node and name, n a noise and stream(part) a random source of the area's own, under a
+// never anchors itself to the now line), calm 1 everywhere but 0 within a hair of every stream and
+// node (the map's names carry their own halo), n a noise and stream(part) a random source of the area's own, under a
 // context for its pale tints, and kit this module's kit, with the chart helpers (grid, iso, chains,
 // within, lines, scatter, dots, tint, ok). The rules that keep the map a map Max reads:
-// - One ink, mid-dark and low in chroma, and at most one pale tint, drawn on `under`: lines, not
-//   paintings. Strokes and dark fills become vectors, sharp at every zoom; pale fills a small picture.
+// - Inks mid-dark and low in chroma, as a printed map's plates are, and water may have a blue of its
+//   own; pale tints drawn on `under`: lines, not paintings. Strokes, dark fills and words are kept
+//   as paths in map units, drawn sharp at whatever zoom the map rests at; pale fills go to a small
+//   picture.
 // - No Path2D, getImageData or clip: the context records, it has no pixels.
-// - Symbols and lettering keep where calm is high. The context itself thins the ink where calm is
-//   low and fades it up the history, so line work may run anywhere.
-// - Deterministic in the area and its shape, and quick: the whole map is drawn again on every change
-//   to its layout.
+// - Line work may run anywhere: the map knocks the graph out of the ink, a gap round every stream
+//   and node, thins the ink near the streams and fades it up the history; a word that would touch
+//   the gap is left out whole. Keep symbols off the graph with calm, so they are not cut.
+// - Deterministic in the area and its shape, and quick: the whole map is worked out again on every
+//   change to its layout.
 
 // FNV-1a over the seed string, so an agent's id always gives the same number.
 export function hash(str) {
@@ -213,9 +217,6 @@ export function fromOklch(L, C, h) {
 
 // An identity's place in its theme's range: its slot's, past the theme's slots round again.
 export function placeOf(theme, slot) { return theme.slots[slot % theme.slots.length]; }
-
-// The colour that says which agent this is among the others wearing its theme, for its node on the map.
-export function identity(theme, slot) { return theme.identity(placeOf(theme, slot)); }
 
 export const kit = { hash, rng, noise, grain, shader, rgb, mix, alpha, oklch, fromOklch, ease, grid, iso, chains, within, poly, lines, length, midway, tint, scatter, dots, ok, okRgb };
 

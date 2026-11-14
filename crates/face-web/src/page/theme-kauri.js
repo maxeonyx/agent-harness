@@ -6,7 +6,7 @@
 //
 // Who the agent is: its place `at`, planned by the harness, picks the light on a ring of the forest's
 // hours: amber evening, dawn gold, green noon, silver rain, blue mist, and back. Agents on screen
-// together stand in clearly different light. identity(at) is that light, for the map. The seed picks
+// together stand in clearly different light. The seed picks
 // the rest, each part from its own stream: the arrangement (a colonnade, one giant close by, a
 // clearing, or a grove looking up), the light's direction, the trunks, the undergrowth and the ferns.
 //
@@ -20,7 +20,6 @@
 // behind it is far enough off to be pale.
 // No rings and no contour lines, so it never looks like Harbour.
 
-import { oklch, fromOklch } from "./theme.js";
 
 const MAX_TRUNKS = 18;
 
@@ -183,12 +182,6 @@ function hourAt(t) {
 }
 const hex = (c) => "#" + c.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, "0")).join("");
 
-// The agent's own colour, for its node on the map: its light, deep enough to read as a colour.
-function identity(at) {
-  const [, C, H] = oklch(hex(hourAt(at).light));
-  return fromOklch(0.72, Math.max(C * 1.3, 0.07), H);
-}
-
 export default {
   name: "kauri",
   about: "Inside the kauri forest: great grey trunks at every distance in lit mist, light falling through the canopy.",
@@ -202,9 +195,8 @@ export default {
   },
   // The five hours of light, each next as far round the ring from those before as it allows.
   slots: [0, 2 / 5, 4 / 5, 1 / 5, 3 / 5],
-  map: { hue: 152 },
+  map: { hue: 140 },
   chart,
-  identity,
 
   paint(ctx, { w, h, dpr, at, stream, quiet, kit }) {
     const U = Math.sqrt(w * h) / 1000;

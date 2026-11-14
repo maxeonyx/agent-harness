@@ -18,7 +18,7 @@
 //
 // Who the agent is: its place `at`, planned by the harness, sets the night's hue, from deep teal
 // through prussian, ultramarine and indigo to plum, so agents on screen together wear clearly
-// different nights; identity(at) is that hue as the agent's colour on the map.
+// different nights.
 // Its seed sets the rest, each part from its own stream: the moon's place (rising through the horizon,
 // low over it, high in the sky below the lead, or breaking through a bank of cloud), its size and phase, the sky
 // (clear, stratus, a bank on the horizon, or a veil over the moon), the shore (open sea, a headland,
@@ -209,7 +209,6 @@ function night(at) {
   return { sky0: c(0.13, 0.022), sky1: c(0.33, 0.092), mist: c(0.42, 0.09), sea0: c(0.29, 0.082), halo: c(0.8, 0.058), ripple: c(0.53, 0.095) };
 }
 // The agent's colour on the map: its night's hue, light enough to read on the map's paper.
-function identity(at) { return fromOklch(0.6, 0.12, hueOf(at)); }
 
 const hex3 = (h) => { const n = parseInt(h.slice(1), 16); return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; };
 const OFF = [0, 0, 0, -1];
@@ -224,9 +223,8 @@ export default {
   },
   // The night's hue, from teal to plum (hueOf): the two ends, then the middles.
   slots: [0, 1, 1 / 2, 1 / 4, 3 / 4],
-  map: { hue: 274 },
+  map: { hue: 240, chroma: 0.55 },
   chart,
-  identity,
   paint(ctx, { w, h, dpr, at, stream, noise, quiet, kit }) {
     const N = night(at);
     const portrait = h > w;
@@ -449,8 +447,8 @@ export default {
 // path along the ecliptic with its phases.
 function chart(ctx, s) {
   const { w, h, mass, calm, n } = s, { grid, iso, chains, within, lines, scatter, dots, tint, ok, okRgb, ease } = s.kit;
-  const INK = [0.44, 0.06, 278], r = s.stream("sky");
-  const SKY = okRgb(0.958, 0.014, 285), WAY = okRgb(0.94, 0.022, 285);
+  const INK = [0.44, 0.04, 258], r = s.stream("sky");
+  const SKY = okRgb(0.958, 0.01, 245), WAY = okRgb(0.938, 0.016, 245);
   // The Milky Way: a broad band across the area, wandering, its density uneven.
   const wa = r.range(0.5, 1.1) * (r.chance(0.5) ? 1 : -1), wx = w * r.range(0.3, 0.7), wy = h * r.range(0.3, 0.7);
   const way = grid(w, h, 6, (x, y) => {
@@ -503,7 +501,7 @@ function chart(ctx, s) {
   for (let x = -10; x <= w + 10; x += 4) ep.push(x, ey + Math.tan(ea) * (x - w / 2) + 40 * Math.sin(x * 0.004 + eph));
   lines(ctx, within([ep], (x, y) => mass(x, y) > 0.05), ok(...INK, 0.45), 0.45, [3, 2]);
   let phase = 0;
-  for (let i = 0; i < ep.length; i += 2 * 11) { const [x, y] = [ep[i], ep[i + 1]]; if (calm(x, y) > 0.7 && mass(x, y) > 0.4) moon(ctx, x, y, 2.8, (phase++ % 8) / 8, ok(...INK, 0.75)); }
+  for (let i = 0; i < ep.length; i += 2 * 11) { const [x, y] = [ep[i], ep[i + 1]]; if ([[0, 0], [8, 0], [-8, 0], [0, 8], [0, -8]].every(([a, b]) => calm(x + a, y + b)) && mass(x, y) > 0.4) moon(ctx, x, y, 2.8, (phase++ % 8) / 8, ok(...INK, 0.75)); }
 }
 // The moon at a phase (0 new, 0.5 full), as an almanac draws it: its disc outlined, its dark part
 // filled in ink. The dark part is the half disc away from the light, and the terminator back across.

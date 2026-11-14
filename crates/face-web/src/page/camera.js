@@ -5,6 +5,7 @@ import { onFrame } from "./blobs.js";
 import { hideTip } from "./hover.js";
 import { closeNode, go, NEW, openId, saved } from "./card.js";
 import { glideCut, glideNote } from "./glidelog.js";
+import { rest } from "./regions.js";
 
 // ─── The camera ────────────────────────────────────────────────────────────
 const map = $("#map"), world = $("#world"), under = $("#under"), grid = $("#grid");
@@ -14,7 +15,7 @@ export let framed = true;  // follows the map's growth until Max moves it himsel
 // While the map moves it is a layer of its own, so the browser moves a
 // picture instead of drawing every frame. A layer keeps the zoom it was
 // drawn at, so at rest it goes, and the open card's text is drawn again at
-// the zoom it is read at, sharp.
+// the zoom it is read at, sharp, and so are the map's areas (regions.js).
 let resting = 0;
 function applyCamera() {
   // Whole pixels, so the open card's text stays sharp.
@@ -23,7 +24,7 @@ function applyCamera() {
   blobs?.camera(x, y, cam.k);
   map.classList.add("moving");
   clearTimeout(resting);
-  resting = setTimeout(() => map.classList.remove("moving"), 150);
+  resting = setTimeout(() => { map.classList.remove("moving"); rest(cam); }, 150);
   const g = 24 * cam.k, size = `${g}px ${g}px`;
   if (grid.style.backgroundSize !== size) grid.style.backgroundSize = size;
   grid.style.transform = `translate(${(x % g + g) % g - g}px, ${(y % g + g) % g - g}px)`;

@@ -79,14 +79,8 @@ export default {
   slots: [0, 1 / 2, 1 / 4, 3 / 4, 1 / 8, 5 / 8],
   map: { hue: 214 },
   chart,
-  identity,
   paint,
 };
-
-// The agent's colour for its node on the map: its glazes' hue, strong enough to read as a dot.
-function identity(at) {
-  return oklchHex(0.66, 0.1, glazeHue(at));
-}
 
 function paint(ctx, { w, h, dpr = 1, root, line = [], at = 0, stream, quiet, kit }) {
   const S = Math.max(w, h);
@@ -951,7 +945,7 @@ function drawRose(ctx, F, r, S, w, h) {
 }
 
 // OKLCH to hex, lowering the chroma until the colour fits in sRGB (as the kit's fromOklch does), so
-// a ground's identity needs no kit to be worked out.
+// a colour needs no kit to be worked out.
 function oklchHex(L, Cc, hDeg) {
   const rad = (hDeg * Math.PI) / 180, gam = (x) => (x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055);
   for (let c = Cc; ; c = Math.max(0, c - 0.005)) {
