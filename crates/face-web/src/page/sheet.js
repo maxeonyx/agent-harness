@@ -110,25 +110,26 @@ function part(cls, children) {
   return s;
 }
 // The end: what Max wants it for, the system as it will be, and what he
-// does with it, each use one line drawn as a step is: its mark, what he
-// does, and where it stands today. What moved since he agreed with it
-// carries the gutter bar.
+// does with it. A use reads aim first, unlike a step: what he does, then
+// its mark and where it stands today, so the uses read as the end and not
+// as the plan's first steps. What moved since he agreed with it carries
+// the gutter bar.
 const MARK = { done: "✓", failed: "✕", yours: "●", working: "◐", planned: "○", unknown: "?" };
 const bar = (cls, changed) => `${cls}${changed ? " changed" : ""}`;
 function ends(e) {
   const out = [el("p", bar("goal", e.goal_changed), e.goal)];
   if (e.shows) { const s = el("div", bar("shows", e.shows_changed)); s.append(...blocks(e.shows.blocks)); out.push(s); }
   if (e.uses.length) {
-    const ol = el("ol", "steps uses");
+    const ul = el("ul", "uses");
     for (const u of e.uses) {
-      const li = el("li", bar(`step use ${u.state}`, u.changed));
-      const head = el("div", "head");
-      head.append(el("span", "mark", MARK[u.state] ?? "○"), el("span", "title", u.does));
-      if (u.now != null) head.append(inlines(u.now, "span", "now"));
-      li.append(head);
-      ol.append(li);
+      const li = el("li", bar(`use ${u.state}`, u.changed));
+      const stands = el("span", "stands");
+      stands.append(el("span", "mark", MARK[u.state] ?? "○"));
+      if (u.now != null) stands.append(inlines(u.now, "span", "now"));
+      li.append(el("span", "does", u.does), stands);
+      ul.append(li);
     }
-    out.push(ol);
+    out.push(ul);
   }
   return out;
 }
