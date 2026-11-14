@@ -240,12 +240,22 @@ pub enum Problem {
     Nested,
     /// A fold's summary that is a label, not what is inside.
     Summary,
-    /// A lead over 70 characters, or the task's title again.
+    /// A lead over 70 characters, or the task's title or the end's goal
+    /// again.
     Lead,
-    /// Facts told rather than shown: over about 80 words of paragraphs,
+    /// A body told rather than shown: over about 80 words of paragraphs,
     /// with no table, figure, code or quote.
     Told,
-    /// A step's now over about fifteen words: it is where the thing
-    /// stands, in a few words, and the detail goes in the step's body.
-    Now,
+    /// No end, or an end that shows no figure: Max can't see what the work
+    /// is aimed at.
+    Unseen,
+    /// A goal over about twenty words, or a use or a now over about
+    /// fifteen: the detail goes in a body.
+    Wordy,
+    /// A use that doesn't work yet, or a step done or in progress and bound
+    /// to nothing, with no now: where it stands is what Max reads it for.
+    NoNow,
+    /// Line breaks that arrived as the two characters `\n`, so the body
+    /// draws as one paragraph: it was escaped twice.
+    Escaped,
 }

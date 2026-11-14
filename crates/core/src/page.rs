@@ -20,42 +20,40 @@
 //! Nothing on it refers to what is below it, asks him for something in
 //! prose (that is an ask), talks about the page or the agent's turn, or
 //! names a part. The form is built so that the parts hold facts: the only
-//! sentence it requires is the lead, and everything else is shown or is a
-//! few words in a typed place.
+//! sentences it requires are the lead and the end's goal, and everything
+//! else is shown or is a few words in a typed place.
 //!
 //! **Always the same order.** A page brings Max's picture of the work level
-//! with the agent's: where the work is going (his to agree with), where it
-//! stands (the agent's to report, and his to believe), and how it gets from
-//! one to the other (the agent's to propose, his to redirect). Set out by
-//! the harness, not the agent:
+//! with the agent's, in the order he needs it: where the work is going,
+//! which he must agree with before anything else matters; where it stands
+//! now; and only then the plan for getting from one to the other, with what
+//! he must answer inside it. Set out by the harness, not the agent:
 //!
 //! ```mermaid
 //! flowchart TB
-//!   lead["The lead: the question of an ask, or the fact he most needs"] --> p["The plan: each step what will be true, and where it stands now; each open ask inside the step it unblocks"]
-//!   p --> f["The facts, shown"]
-//!   f --> w["Why this route"]
+//!   lead["The lead: the question of an ask, or the fact he most needs"] --> e["The end: his goal, the system as it will be, and what he does with it, each use marked with whether it works today"]
+//!   e --> n["The now: how things are, shown"]
+//!   n --> p["The plan: the steps, each with where it stands, and the open asks inside them"]
+//!   p --> w["Why this route"]
 //! ```
 //!
 //! 1. The lead ([`Lead`]): why he is reading this now, in one line.
-//! 2. The plan ([`Step`]), which is most of a page, and is where the work
-//!    ends, starting on his first screen under the lead: each step is
-//!    titled by what will be true, beside where that stands now, so the
-//!    rail reads as the eventual state and the current one in a single
-//!    list he can agree with or reject at a glance, end first in each
-//!    line. Each open ask ([`crate::ask::Ask`]) is drawn whole inside the
-//!    step it unblocks, after the steps' ends have been read. Steps and
-//!    asks are values of their own ([`Description::plan`]), drawn as they
-//!    stand now, never retold on the page. If he doesn't agree with where
-//!    the steps end, he says so, and nothing else on the page matters
-//!    until the agent changes them.
-//! 3. The facts ([`Sheet::facts`]): what backs the lead and the steps'
-//!    nows, shown.
-//! 4. Why this route ([`Sheet::why`]), after the route it argues for.
+//! 2. The end ([`End`]): the eventual state, stepped back far enough that
+//!    he can tell the work is aimed at the right thing. If he doesn't agree
+//!    with it, he says so, and nothing below matters until the agent
+//!    changes it.
+//! 3. The now ([`Sheet::now`]): how things stand, shown.
+//! 4. The plan ([`Step`]): the work from the now to the end, each step with
+//!    where it stands in a few words, and each open ask
+//!    ([`crate::ask::Ask`]) drawn whole inside the step it unblocks. Last,
+//!    since a route means nothing until he shares where it starts and ends.
+//! 5. Why this route ([`Sheet::why`]), after the route it argues for.
 //!
-//! A part Max is done with shrinks: a lead he has read takes a short band,
-//! steps behind him are one line each, and a step whose title changed
-//! since he agreed with the plan ([`Page::agreed`]) carries a bar in the
-//! left gutter.
+//! The end and the plan are the task's own ([`Description`]), drawn as
+//! they stand now and never retold. A part Max is done with shrinks: a lead
+//! he has read takes a short band, and steps behind him are one line each.
+//! What of the end changed since he agreed with it ([`Page::agreed`])
+//! carries a bar in the left gutter.
 //!
 //! **The agent writes content; the design system draws it.** The agent
 //! gives typed parts, and short markdown inside them ([`crate::body`]). It
@@ -101,7 +99,7 @@
 //! reading, a `says` on `resource::Change`, and `attention::Ranked`
 //! naming an [`crate::ask::Owed`].
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::id::{CallId, TaskId, Timestamp, ValueId};
 use crate::source::{ItemKey, Whose};
@@ -140,23 +138,16 @@ pub struct Page {
     /// The `present` call that last showed him the page: the response that
     /// made it holds the quick answer, the line above the page.
     pub presented: Option<CallId>,
-    /// Where the work ends, as Max last agreed with it: each step of the
-    /// plan by its key and title, when his words last reached the task
-    /// ([`Page::agree`]). A reply that disputes it leaves the agent to
-    /// change the plan, and a step whose title is no longer the one he
-    /// agreed with, or that is new since, carries the change bar. A step's
-    /// progress is not a change: it is drawn by its mark.
-    pub agreed: Option<Vec<Agreed>>,
+    /// The end as Max last agreed with it, copied when his words reach the
+    /// task after it has shown him a page ([`Page::agree`]). A reply that
+    /// disputes it leaves the agent to change the end. Its goal, its figure,
+    /// or a use that is no longer as he agreed with it or is new since,
+    /// carries the change bar ([`Page::changed`]). A use's mark or now
+    /// moving is progress, not a change.
+    pub agreed: Option<End>,
     /// The asks drawn on it, oldest first: the task's own and its forks',
     /// open or settled, each a call of `ask` ([`crate::ask`]).
     pub asks: Vec<CallId>,
-}
-
-/// One step of the plan as Max agreed with it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Agreed {
-    pub key: String,
-    pub title: Option<String>,
 }
 
 /// The page the agent is working on.
@@ -198,48 +189,65 @@ pub struct Version {
     pub by: CallId,
 }
 
-/// What the agent writes on its page: the lead, the facts, and why this
+/// What the agent writes on its page: the lead, the now, and why this
 /// route.
 ///
 /// **Concept.** The written half of a page, in parts the harness sets out
 /// in a fixed order, so every page reads the same way and the agent spends
 /// its words on content, never on arrangement, labels or emphasis. The
-/// other half is live and never written here: the plan's steps, which say
-/// where the work ends and where each part of it stands
-/// ([`Description::plan`]), the asks, and the state of everything a
-/// [`Ref`] names. There is no section of detail: detail folds beside the
-/// sentence it backs ([`crate::body::Fold`]), so the why behind anything he
-/// reads is one press from it.
+/// other half is the task's own and drawn as it stands: the end
+/// ([`Description::end`]), the plan's steps ([`Description::plan`]), the
+/// asks, and the state of everything a [`Ref`] names. There is no section
+/// of detail: detail folds beside the sentence it backs
+/// ([`crate::body::Fold`]), so the why behind anything he reads is one
+/// press from it.
 ///
 /// Serves: "I like the hero question, if it's a question. But then, we need
 /// facts. Just start with facts"; "information is best presented visually,
-/// not verbally"; "I want to see that we agree on the eventual state. Then
-/// I want to see where we are. And then finally, I'm ready for my asks";
-/// "most of the pages should be about the third part, the plan"; "the
+/// not verbally"; "Then the current state ... Where are we now? What does
+/// the harness look like now? What does the things look like now?"; "the
 /// agent should be given quite a structured way to put its information
 /// in"; "more content, less noise".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sheet {
     pub lead: Lead,
-    /// What backs the lead and the steps' nows, shown: the real log line,
+    /// How things stand now, shown: the thing as it is today (a
+    /// screenshot, the page as it draws, the output), the real log line,
     /// the count and where it was counted, the table of what the agent
-    /// checked and what each showed, the before and after, a screenshot,
-    /// one figure of the system with what is to come drawn dashed. What
-    /// the agent couldn't find out is a fact too. Not the plan again, and
-    /// not the children's state, which the plan draws live. Body markdown;
-    /// facts told in paragraphs where a table or figure would show them are
-    /// listed as a problem. `None`: the lead and the plan say it all, as
-    /// for an orchestrator whose children's steps are the news.
+    /// checked and what each showed, the before and after. What backs the
+    /// lead and the uses' marks; what the agent couldn't find out is a fact
+    /// too. Not the end again, and not the plan, whose steps are drawn with
+    /// their state. Body markdown; told in paragraphs where a table or
+    /// figure would show it is listed as a problem. `None`: the uses' marks
+    /// and the plan say it all.
     ///
-    /// `default`: versions presented before the facts existed have none.
-    #[serde(default)]
-    pub facts: Option<ValueId>,
+    /// Read from a version stored before it: its `facts`, or the body of
+    /// its `now` claim, the claim's sentence dropped.
+    #[serde(default, alias = "facts", deserialize_with = "stored_body")]
+    pub now: Option<ValueId>,
     /// Why this route, drawn after the steps it argues for: what Max might
     /// overturn. The routes he would think of and why not, the calls the
-    /// agent made for him, and where the plan stops short of where he
-    /// wants to go, and what that costs; a table where they line up. Body
-    /// markdown. `None`: nothing to overturn.
+    /// agent made for him, and where the plan stops short of the end, and
+    /// what that costs; a table where they line up. Body markdown. `None`:
+    /// nothing to overturn.
     pub why: Option<ValueId>,
+}
+
+/// A body as a version stored it: its value, or a claim, a sentence and
+/// the body showing it, of which the body is kept.
+fn stored_body<'de, D: Deserializer<'de>>(stored: D) -> Result<Option<ValueId>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Body(ValueId),
+        Claim { shows: Option<ValueId> },
+    }
+    Ok(
+        Option::<Stored>::deserialize(stored)?.and_then(|s| match s {
+            Stored::Body(body) => Some(body),
+            Stored::Claim { shows } => shows,
+        }),
+    )
 }
 
 /// The lead: the one line Max reads first.
@@ -251,11 +259,12 @@ pub struct Sheet {
 /// text in Literata, Inter and Plex Mono"), bad news first. If his last
 /// words asked something, it answers them. Never a question with no ask
 /// behind it, since an open question asks him to do the agent's work;
-/// never a request, the task's title, a label, a count of what is below,
-/// or "nothing needs you": the harness says that, from the asks.
+/// never a request, the task's title, the end's goal, a label, a count of
+/// what is below, or "nothing needs you": the harness says that, from the
+/// asks.
 ///
 /// Drawn in the theme's display face at the lead size, upright and
-/// readable, on the ground, with the plan starting on the same first
+/// readable, on the ground, with the end starting on the same first
 /// screen; a short band once he has seen it. Bold while something on the
 /// page is his move; regular once nothing is, as on a finished task's page.
 /// It is also what the map's node and his queue say for the task, and what
@@ -269,9 +278,97 @@ pub struct Sheet {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lead {
     /// Plain text, one line on a desktop, two on a phone. Over 70
-    /// characters, or the task's title again, is drawn and listed as a
-    /// problem.
+    /// characters, or the task's title or the end's goal again, is drawn
+    /// and listed as a problem.
     pub title: String,
+}
+
+/// Where the work ends: the eventual state Max agrees with before anything
+/// else on the page matters.
+///
+/// **Concept.** The destination, stepped back far enough that he can tell
+/// the work is aimed at the right thing, seen from where he stands: what he
+/// wants it for ([`End::goal`]), the system as it will be, as a figure
+/// ([`End::shows`]), and what he does with it once it's done
+/// ([`End::uses`]). It is the agent's concrete model of what he asked for,
+/// so he can point at the wrong part; where it departs from his words, it
+/// quotes them and says why, so he sees that before he agrees. Not the
+/// steps that get there: a list of changes can't show the system they add
+/// up to, so the plan is drawn last. Each use carries whether it works
+/// today, so the end also reads as the current state from his side, and
+/// the now below only has to show the things themselves.
+///
+/// The task's own ([`Description::end`]), stated with `describe` and drawn
+/// as it stands, like the plan: a use that starts working shows so without
+/// a new version. An area's chat keeps one end for the area and changes it
+/// when the aim moves, which the change bar shows him ([`Page::agreed`]).
+/// An ask on the page is a step towards it, so a question whose end he
+/// rejects he rejects with it.
+///
+/// Serves: "First thing should be eventual state. Like, what is the system
+/// we're building? The diagram that explains the system we're building,
+/// right? A list of use cases that we're aiming towards. What does Max want
+/// to do? What's his ultimate goal? And as a user, what's he need to do?";
+/// "Really step back so that I know we're aiming at the right thing"; "I
+/// want to see that we agree on the eventual state"; "if I don't agree with
+/// eventual state ... I'm going to reject the question".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct End {
+    /// What Max wants it for, in a line: the reason the system exists, as
+    /// the agent understands it ("Every agent's page puts you level with it
+    /// in a minute's reading"). Drawn first, in the display face. Plain
+    /// text; over about twenty words is listed as a problem.
+    pub goal: String,
+    /// The system as it will be, shown: a figure of its parts, how they
+    /// connect and where he is in it, with what doesn't exist yet drawn
+    /// dashed (`planned`), what is broken `failed` and what goes `gone`, or
+    /// the mockup itself; then where it departs from his words, quoting
+    /// them, with why. Body markdown. An end without a figure is listed as
+    /// a problem.
+    pub shows: Option<ValueId>,
+    /// What he, or whoever uses it, does with it once it's done, most
+    /// important first.
+    pub uses: Vec<Use>,
+}
+
+/// One thing Max does with the system once the work is done.
+///
+/// **Concept.** A use case from the user's side: who does what, and what
+/// happens ("You pan the map on your phone and it keeps up"), concretely
+/// enough that he could say "that's not what I want". With where it stands
+/// today, so the uses are both the end and, from his side, the now. Drawn
+/// as one line, as a step is: its mark, what he does, where it stands.
+///
+/// Serves: "A list of use cases that we're aiming towards"; "as a user,
+/// what's he need to do?"; "Then the current state, right? Could be
+/// incorporated into the same diagrams".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Use {
+    /// The agent's name for it, unique in the end: how the change bar knows
+    /// a use across a new end. Never drawn.
+    pub key: String,
+    /// Who does what, and what happens, in their nouns: "You tap an area
+    /// and its page opens on the news". Plain text; over about fifteen
+    /// words is listed as a problem.
+    pub does: String,
+    pub stands: Stands,
+    /// Where it stands, in a few words, the concrete thing first: "only in
+    /// the mockups", "4 failures since 11:55", "unknown: no bank data after
+    /// 3 Sep". Inline markdown. A use that doesn't work yet and has none is
+    /// listed as a problem.
+    pub now: Option<String>,
+}
+
+/// Whether a use works today: its mark, drawn in the tone of the step state
+/// it matches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Stands {
+    Works,
+    Partly,
+    NotYet,
+    Broken,
+    /// No one knows yet: its now says what couldn't be found out.
+    Unknown,
 }
 
 /// What happens to a page, stated by the brain in the batch that settles
@@ -308,28 +405,18 @@ impl Page {
         }
     }
 
-    /// Max's words reached the task: he agrees with where its `plan` ends,
-    /// once it has shown him a page.
-    pub fn agree(&mut self, plan: &[Step]) {
-        if self.versions.is_empty() {
-            return;
+    /// Max's words reached the task: he agrees with its `end`, once it has
+    /// shown him a page.
+    pub fn agree(&mut self, end: Option<&End>) {
+        if let (false, Some(end)) = (self.versions.is_empty(), end) {
+            self.agreed = Some(end.clone());
         }
-        self.agreed = Some(
-            (plan.iter())
-                .map(|s| Agreed {
-                    key: s.key.clone(),
-                    title: s.title.clone(),
-                })
-                .collect(),
-        );
     }
 
-    /// Whether `step` carries the change bar: Max agreed with a plan, and
-    /// this step was not in it as it is titled now.
-    pub fn changed(&self, step: &Step) -> bool {
-        self.agreed.as_ref().is_some_and(|agreed| {
-            !(agreed.iter()).any(|a| a.key == step.key && a.title == step.title)
-        })
+    /// Whether a part of the end carries the change bar: Max agreed with an
+    /// end, and `same` does not find the part in it as it is now.
+    pub fn changed(&self, same: impl Fn(&End) -> bool) -> bool {
+        self.agreed.as_ref().is_some_and(|agreed| !same(agreed))
     }
 
     /// The page after `event`, at `at`; `None` when it makes no sense: a
@@ -374,12 +461,8 @@ impl PageEvent {
     /// The values it names.
     pub fn values(&self, out: &mut Vec<ValueId>) {
         if let PageEvent::Edited { sheet, by: _ } = self {
-            let Sheet {
-                lead: _,
-                facts,
-                why,
-            } = &**sheet;
-            out.extend(facts.iter().chain(why));
+            let Sheet { lead: _, now, why } = &**sheet;
+            out.extend(now.iter().chain(why));
         }
     }
 }
@@ -387,6 +470,7 @@ impl PageEvent {
 impl Description {
     /// The values it names.
     pub fn values(&self, out: &mut Vec<ValueId>) {
+        out.extend(self.end.iter().filter_map(|e| e.shows));
         out.extend(self.plan.iter().flatten().filter_map(|s| s.body));
     }
 
@@ -395,6 +479,7 @@ impl Description {
     pub fn and(&self, newer: &Description) -> Description {
         Description {
             title: newer.title.clone().or_else(|| self.title.clone()),
+            end: newer.end.clone().or_else(|| self.end.clone()),
             plan: newer.plan.clone().or_else(|| self.plan.clone()),
         }
     }
@@ -475,7 +560,11 @@ pub enum Ref {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Spot {
     Lead,
-    Facts,
+    /// The end's goal or figure.
+    End,
+    /// One of the end's uses, by its key.
+    Use(String),
+    Now,
     /// A plan step, by its key.
     Step(String),
     /// An ask, by its call.
@@ -483,7 +572,7 @@ pub enum Spot {
     Why,
 }
 
-/// What a task says about itself: its name and its plan.
+/// What a task says about itself: its name, where it ends, and its plan.
 ///
 /// **Concept.** The task's metadata, chosen by its own agent (Max: "the
 /// metadata of a chat and a stream and stuff should be chosen by the
@@ -502,8 +591,12 @@ pub struct Description {
     /// (`TaskEvent::Renamed`) is shown over it, and `describe`'s result says
     /// so. The window's header, not the page's lead.
     pub title: Option<String>,
-    /// Where the work ends, and the route there: the steps that make it
-    /// true, done steps included, so the route reads whole. Replaced whole:
+    /// Where the work ends ([`End`]). Replaced whole. `describe` given a
+    /// plan for a task with no end lists that as a problem.
+    #[serde(default)]
+    pub end: Option<End>,
+    /// The route from the now to the end: the steps that make it true,
+    /// done steps included, so the route reads whole. Replaced whole:
     /// a step left out is gone, and its node on the map with it. An open
     /// ask that named it moves to the first step not behind him, and
     /// `describe`'s result says so, for the agent to revise or withdraw it:
@@ -511,16 +604,16 @@ pub struct Description {
     pub plan: Option<Vec<Step>>,
 }
 
-/// One step of a task's plan: a part of where the work ends, and where it
-/// stands now.
+/// One step of a task's plan: a piece of the work from the now to the end,
+/// and where it stands.
 ///
 /// **Concept.** A thing the task does or produces on the way to its end,
 /// the size Max would recognise: a PR, a child task, a piece of the
 /// agent's own work that changes something he would notice. Titled by
-/// what will be true once it is done, so the plan's titles are the eventual
-/// state, and beside it where that stands now ([`Step::now`]), so the plan
-/// is also the current state, and there is no separate list of either to
-/// say each thing twice. One value, drawn twice: as a node on the map
+/// what it makes true once it is done, beside where it stands now
+/// ([`Step::now`]), so the plan reads as a checklist at a glance. The end
+/// it adds up to is not in the steps: it is [`End`], drawn first, since a
+/// list of changes can't show the system it builds. One value, drawn twice: as a node on the map
 /// (planned ones dashed, as everything that will exist is), and as a line
 /// on the page's plan rail, with the asks it waits on inside it. A step
 /// bound to a live thing ([`Step::of`]) takes its state from it
@@ -540,8 +633,8 @@ pub struct Description {
 /// behind him are that line alone, and more than three fold into one line
 /// of their titles.
 ///
-/// Serves: "I want to see that we agree on the eventual state. Then I want
-/// to see where we are"; "then the plan, the current plan on how to get
+/// Serves: "And then finally, yes, we can do checklist and plan and things
+/// on how to get there"; "then the plan, the current plan on how to get
 /// from A to B, and including then asks"; "less is more"; the vision's
 /// "planned pull requests, planned design agents, planned user questions"
 /// as provisional nodes; "dependency diagrams, essentially, on actions for
@@ -552,9 +645,9 @@ pub struct Step {
     /// step it sits in ([`crate::ask::Ask::step`]), how `after` names it,
     /// and how a new plan keeps a step's node on the map. Never drawn.
     pub key: String,
-    /// What will be true once it is done, in Max's nouns, concretely
+    /// What it makes true once it is done, in Max's nouns, concretely
     /// enough that he could point at it and say "no", and short enough for
-    /// a node: "Every page opens on facts", not "T6" or "Rewrite the
+    /// a node: "Pages open on the end", not "T6" or "Rewrite the
     /// guide". His words where they set it. `None`: the name of what it is
     /// bound to, so a child task's step shows the child's own title,
     /// renamed or not.
@@ -572,7 +665,8 @@ pub struct Step {
     /// "unknown: the agent browser isn't signed in". A done step's is its
     /// proof. Inline markdown, naming live things ([`Ref`]). A step bound
     /// to a live thing that has a reading shows that instead. Over about
-    /// fifteen words is listed as a problem: the detail goes in the body.
+    /// fifteen words is listed as a problem: the detail goes in the body;
+    /// and so is none, on a step done or in progress and bound to nothing.
     ///
     /// `default`: plans described before steps had one have none.
     #[serde(default)]
@@ -621,4 +715,35 @@ pub enum StepState {
     Planned {
         until: Option<Timestamp>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn read(json: &str) -> Sheet {
+        serde_json::from_str(json).expect("a stored sheet reads")
+    }
+
+    #[test]
+    fn every_stored_sheet_reads_with_its_now() {
+        let id = |hex: &str| Some(serde_json::from_value::<ValueId>(hex.into()).unwrap());
+        let now = read(&format!(
+            r#"{{"lead":{{"title":"L"}},"now":"{A}","why":"{B}"}}"#
+        ));
+        assert_eq!((now.now, now.why), (id(A), id(B)));
+        let facts = read(&format!(
+            r#"{{"lead":{{"title":"L"}},"facts":"{A}","why":null}}"#
+        ));
+        assert_eq!((facts.now, facts.why), (id(A), None));
+        let claims = read(&format!(
+            r#"{{"lead":{{"title":"L","hook":"H"}},"end":{{"says":"E","shows":null}},"now":{{"says":"N","shows":"{A}"}},"why":null}}"#
+        ));
+        assert_eq!((claims.lead.title.as_str(), claims.now), ("L", id(A)));
+        let bare = read(r#"{"lead":{"title":"L"},"why":null}"#);
+        assert_eq!(bare.now, None);
+    }
 }

@@ -38,12 +38,12 @@ use crate::resource::Observation;
 ///
 /// **The language is the same on every page.** It is what Max learns once,
 /// so that on any agent's page he knows where to look:
-/// - Order. The lead, the plan with the asks in its steps, the facts, why
-///   this route ([`crate::page`]). Nothing names a part: no headings over
+/// - Order. The lead, the end, the now, the plan with the asks in its
+///   steps, why this route ([`crate::page`]). Nothing names a part: no headings over
 ///   parts, no small labels above them, no cues to scroll, and no line
 ///   about the page itself, such as whether it still holds.
-/// - Faces. The theme's display face for what is said once (the lead, a
-///   step's title, a question); one reading face for prose;
+/// - Faces. The theme's display face for what is said once (the lead, the
+///   end's goal, a step's title, a question); one reading face for prose;
 ///   one UI face for small text and data; one mono face for literal text.
 ///   Only the display face varies by theme.
 /// - Sizes. Four, on one scale: the lead (34 px on a desktop, 28 on a
