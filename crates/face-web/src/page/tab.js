@@ -18,16 +18,20 @@ import * as liveness from "./liveness.js";
 // longer read the rows the new one sends. The face says which build it
 // serves (`can.build`); a tab on another reloads onto it once nothing would
 // be lost or cut off: nothing `holding` in the box, every record the brain's,
-// and Max not typing, or not looking.
+// and Max not typing (a key in the last 10 s), or not looking. A focused box
+// alone is no reason to wait: an open card focuses it, and the card and the
+// words in it come back after the reload.
 const build = new URL(".", import.meta.url).pathname.split("/").at(-2);
 let stale = null;
+let typedAt = 0;
+addEventListener("input", () => { typedAt = Date.now(); }, true);
 function reloadIfIdle() {
-  const typing = !document.hidden && document.activeElement?.matches("input, textarea, [contenteditable]");
+  const typing = !document.hidden && Date.now() - typedAt < 10_000;
   if (!typing && !holding() && tab?.settled()) location.reload();
 }
 
-// The face's wiring. Read again each time the tab links, since a brain that was checking a
-// build (`checking`, its commit) holds what Max sends until one opens.
+// The face's wiring. Read again each time the tab links, since a brain that
+// was checking a build (`checking`, its commit) holds what Max sends until one opens.
 export let can = { dictation: false, sample: false, checking: null, build: null };
 const wire = () => fetch("/wiring", { cache: "no-store" }).then((r) => r.json()).then((c) => {
   can = c;
@@ -187,9 +191,10 @@ export async function boot() {
 // links afresh rather than trust it.
 let hiddenAt = 0;
 addEventListener("visibilitychange", () => {
-  if (document.hidden) hiddenAt = Date.now();
-  if (document.hidden && stale) reloadIfIdle();
-  else if (tab?.ws && Date.now() - hiddenAt > 30_000) tab.relink();
+  if (document.hidden) {
+    hiddenAt = Date.now();
+    if (stale) reloadIfIdle();
+  } else if (tab?.ws && Date.now() - hiddenAt > 30_000) tab.relink();
 });
 // A closed tab's replica, whose lock is free: ship what it had not, then
 // forget it, so nothing typed in a tab that was closed offline is lost.

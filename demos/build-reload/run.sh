@@ -1,14 +1,14 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # A tab open across a relaunch onto a new build reloads onto it, once that
 # loses nothing. On a fresh test brain (scripted, free): one browser opens a
-# chat's card and types half a thought into its box, leaving it focused.
-# Meanwhile sheet.js changes on disk and the brain restarts, as a deploy
-# relaunches it onto a new build. The tab relinks and learns the face serves
-# another build (`/wiring`), but stays on its own while Max is typing; once
-# the box loses focus it reloads, onto the new build, with the card still
-# open and the half thought still in the box. sheet.js is put back as it was.
+# chat's card, as on a desktop, which focuses its box, and types half a
+# thought into it. Meanwhile sheet.js changes on disk and the brain restarts,
+# as a deploy relaunches it onto a new build. The tab relinks and learns the
+# face serves another build (`/wiring`); with no key pressed for 10 s, it
+# reloads onto the new build with the box still focused, the card still open
+# and the half thought still in the box. sheet.js is put back as it was.
 # Fails if the tab is still on its old build at the end.
-set -eu
+set -euo pipefail
 cd "$(dirname "$0")/../.."
 node dev/drive.mjs down --brain build-reload --wipe
 node dev/drive.mjs up --brain build-reload
@@ -21,12 +21,10 @@ trap 'cp .drive.ignore/build-reload/sheet.js "$page"' EXIT
 
 state='JSON.stringify({ build: document.querySelector("script[type=module]").src.split("/")[4], card: location.hash, box: document.querySelector(".compose textarea")?.value ?? null, focused: document.activeElement?.tagName })'
 node dev/drive.mjs page --brain build-reload \
-  chat orchestrator "$PWD/.drive.ignore/build-reload" "Say hello" reply \
+  chat orchestrator "$PWD/.drive.ignore/build-reload" "Say hello" reply sleep 2000 \
   eval "sessionStorage.setItem('firstBuild', document.querySelector('script[type=module]').src.split('/')[4]); $state" \
-  type ".compose textarea" "half a thought" \
-  sleep 30000 eval "$state" \
-  eval "document.activeElement.blur(), 'the box loses focus'" \
-  sleep 5000 eval "$state" \
+  type ".compose textarea" "half a thought" eval "$state" \
+  sleep 35000 eval "$state" \
   shot .drive.ignore/build-reload/after.png \
   eval "(() => { const was = sessionStorage.getItem('firstBuild'), now = document.querySelector('script[type=module]').src.split('/')[4]; if (was === now) throw new Error('still on build ' + now); return 'reloaded from ' + was + ' onto ' + now; })()" \
   2>&1 | grep --line-buffered -v '^  warning'

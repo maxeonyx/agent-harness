@@ -32,7 +32,7 @@ export function renderSheet(t) {
     try { sheetEl.replaceChildren(...page(p, t)); dress(t); }
     catch (e) {
       sheetEl.replaceChildren(el("p", "", "This page could not be drawn."));
-      fail(`drawing ${t.name}'s page, which says it could not be drawn`, e);
+      fail(`drawing ${t.name}'s page`, e);
     }
   }
   return landed !== shown(t);
@@ -239,4 +239,3 @@ function inlines(list, tag, cls) {
   }
   return e;
 }
-// a new build
