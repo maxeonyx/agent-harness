@@ -1,6 +1,6 @@
 import { $, diagram, el, fail, panel, scrollEl } from "./base.js";
 import { answer, answered } from "./compose.js";
-import { beyond, hash, load, meanColour, mix, pagePresses, paintInto, quietOf, wear } from "./theme.js";
+import { beyond, hash, load, meanColour, mix, pageTones, pageVeil, paintInto, quietOf, wear } from "./theme.js";
 
 // ─── A chat's page: what its agent presented to Max, drawn by the theme ───
 // The brain parses every body (harness-body) and the row carries what it
@@ -51,9 +51,9 @@ export function sheetTop() {
 // The page wears its task's look: the theme's tokens, and its ground painted
 // for the window the page is read in, behind the whole page. The painting
 // holds still while the page scrolls over it (`.window`, sticky in the
-// sheet), at full strength wherever there is no text; each block of text
-// stands on a press of the painting that keeps its ink at 7:1 on every pixel
-// (theme.js `pagePresses`, sheet.css). Painted once per task and window size, after
+// sheet), at full strength wherever there is no text; each block on the page
+// stands on a veil of the painting that keeps its ink at 7:1 on every pixel
+// (theme.js `pageVeil`, sheet.css). Painted once per task and window size, after
 // the page has drawn, so the page never waits for it, and again when the
 // window settles at another size. The reply box under the page wears the
 // theme's paper, so a dark painting doesn't end on a cream band. A task with
@@ -62,11 +62,15 @@ export function sheetTop() {
 // The last few paintings are kept, so going back to a task shows its
 // painting at once; each is a window-sized canvas, a few MB.
 const grounds = new Map(), KEEP = 4;
-// How far the soft press goes toward the clamp's colour (0: the clamp alone).
+// How far the soft veil goes toward the clamp's colour (0: the clamp alone).
 const SOFT = 0.85;
 // The task the page wears now, and the latest dress, which alone may seat
 // what it painted.
 let dressed = null, dressing = 0;
+// The window the page was last painted for. The same width with less height
+// is a phone's keyboard coming up (the page resizes its content): the painting
+// keeps its height, its foot under the keyboard, rather than recompose.
+let painted = { w: 0, h: 0 };
 async function dress(t) {
   const mine = ++dressing;
   dressed = t;
@@ -76,12 +80,15 @@ async function dress(t) {
   await wear(lineEl, theme);
   // On the painting, the page's text is set one step stronger than on
   // paper: its body in the ink, and what is quieter in the body's ink, so
-  // the press under it can stay as near the painting as the contrast allows.
+  // the veil under it can stay as near the painting as the contrast allows.
   const p = theme.palette, sp = sheetEl.style;
   sp.setProperty("--body", p.ink); sp.setProperty("--muted", p.body); sp.setProperty("--cover-body", p.cover_ink);
+  sp.removeProperty("--yours");
   if (!sheetEl.isConnected || sheetEl.hidden) return;
   wearBox(p);
-  const W = scrollEl.clientWidth, V = scrollEl.clientHeight, dpr = Math.min(2, devicePixelRatio || 1);
+  const W = scrollEl.clientWidth, V = W === painted.w ? Math.max(painted.h, scrollEl.clientHeight) : scrollEl.clientHeight;
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  painted = { w: W, h: V };
   sp.setProperty("--win-w", `${W}px`);
   sp.setProperty("--win-h", `${V}px`);
   const at = JSON.stringify([t.id, t.look, W, V, dpr]);
@@ -97,13 +104,13 @@ async function dress(t) {
       const column = { x: sheetEl.getBoundingClientRect().left - scrollEl.getBoundingClientRect().left + pl, w: sheetEl.clientWidth - pl - pr };
       const canvas = el("canvas"), t0 = performance.now();
       paintInto(canvas, theme, t.look, quietOf({ w: W, h: V }, column), { w: W, h: V, dpr }, column);
-      // The press, at the painting's own hue where the text runs.
+      // The veil, at the painting's own hue where the text runs.
       const tint = meanColour(canvas, { x: column.x * dpr, y: 0, w: column.w * dpr, h: canvas.height });
-      const { body, head } = pagePresses(p, tint);
-      // Where down the window the press would flatten the painting, for the soft press.
-      const rows = beyond(canvas, body.colour, body.blend);
+      const veil = pageVeil(p, tint);
+      // Where down the window the veil would flatten the painting, for the soft veil.
+      const rows = beyond(canvas, veil.colour, veil.blend);
       performance.measure(`ground ${theme.name} ${W}x${V}@${dpr}`, { start: t0 });
-      Object.assign(g, { canvas, x: column.x, body, head, rows });
+      Object.assign(g, { canvas, x: column.x, veil, rows });
     })().catch((e) => { grounds.delete(at); fail(`painting ${t.name}'s ground`, e); });
   }
   grounds.set(at, g);
@@ -111,20 +118,22 @@ async function dress(t) {
   await g.ready;
   // A painting that failed leaves the page on its paper.
   if (mine !== dressing || sheetEl.hidden || !g.canvas) return;
-  // Each block's press runs the window's full width, from its edge, fading
+  // Each block's veil runs the window's full width, from its edge, fading
   // across gutters wide enough to fade in (a phone's are not: there it has no sides).
-  sp.setProperty("--press-l", `${g.x}px`);
-  sp.setProperty("--press-g", `${g.x >= 48 ? g.x : 0}px`);
-  sp.setProperty("--press", g.body.colour); sp.setProperty("--press-blend", g.body.blend);
-  sp.setProperty("--press-lead", g.head.colour); sp.setProperty("--press-lead-blend", g.head.blend);
+  sp.setProperty("--veil-l", `${g.x}px`);
+  sp.setProperty("--veil-g", `${g.x >= 48 ? g.x : 0}px`);
+  sp.setProperty("--veil", g.veil.colour); sp.setProperty("--veil-blend", g.veil.blend);
+  // The marks (a step's state, a use's, a link) step darker (lighter on a
+  // dark page) at their own hue, as far as holding against the veil asks.
+  const tones = pageTones(p, g.veil, getComputedStyle(document.documentElement).getPropertyValue("--yours").trim());
+  for (const [k, c] of Object.entries(tones)) sp.setProperty(`--${k}`, c);
   // Under the clamp, a screen (or multiply) toward the same colour lifts the
   // painting's darks (or dims its lights) most of the way, keeping their
   // texture, so what is left for the clamp to flatten is small.
-  const soft = (c) => c.blend === "lighten" ? [mix("#000000", c.colour, SOFT), "screen"] : [mix("#ffffff", c.colour, SOFT), "multiply"];
-  const [bs, bb] = soft(g.body), [hs, hb] = soft(g.head);
-  sp.setProperty("--press-soft", bs); sp.setProperty("--press-soft-blend", bb);
-  sp.setProperty("--press-lead-soft", hs); sp.setProperty("--press-lead-soft-blend", hb);
-  // The soft press shows only where it has something to keep: a block's
+  const lighten = g.veil.blend === "lighten";
+  sp.setProperty("--veil-soft", mix(lighten ? "#000000" : "#ffffff", g.veil.colour, SOFT));
+  sp.setProperty("--veil-soft-blend", lighten ? "screen" : "multiply");
+  // The soft veil shows only where it has something to keep: a block's
   // place in the window as it scrolls (its view timeline, run by the
   // compositor) sets how strong it is, from how much of the painting at that
   // height the clamp would flatten. A property of the painting and the
@@ -142,7 +151,7 @@ async function dress(t) {
   sp.setProperty("--soft-frames", name);
   seat(g);
 }
-// What dress seated for this task (its painting and its soft press's
+// What dress seated for this task (its painting and its soft veil's
 // frames), kept through a redraw: dress seats it again only after awaiting
 // the theme, so a page without it would show a frame of bare paper.
 function seated(t) {
@@ -154,7 +163,8 @@ function seat(g) {
   if (win.firstChild !== g.canvas) win.replaceChildren(g.canvas);
 }
 // The window settling at another size (a desktop window dragged, a phone
-// turned) paints the page again for it, once the size has held a moment.
+// turned) paints the page again for it, once the size has held a moment;
+// a keyboard coming up keeps the painting (`painted`).
 let settling;
 new ResizeObserver(() => {
   clearTimeout(settling);

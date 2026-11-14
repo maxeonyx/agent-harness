@@ -169,7 +169,7 @@ pub struct Theme {
     /// revising one part leaves the rest of every agent's painting where it
     /// was. Painted once for the chat window a page is read in, never animated:
     /// it fills the window behind the whole page and holds still while the text
-    /// scrolls over it, each block of text on a press of the painting that
+    /// scrolls over it, each block of text on a veil over the painting that
     /// keeps its ink at 7:1. The map paints each area with its ground, faint
     /// behind the graph, each live agent in a pool of its identity's colour,
     /// repainted only when the zoom passes a step.
@@ -180,7 +180,7 @@ pub struct Theme {
     /// desktop and thumbnail sizes for a set of identities, and holds it to
     /// its bars: the lead's ink on the ground in the lead's box at 7:1 for
     /// 95% of it and never under 4.5:1; the body's ink at 7:1 over the box
-    /// the text covers, with its press; a thumbnail that reads as its
+    /// the text covers, with its veil; a thumbnail that reads as its
     /// theme; identities planned one after another told apart at a glance;
     /// the same pixels painted twice; and a phone's paint time.
     pub ground: ValueId,

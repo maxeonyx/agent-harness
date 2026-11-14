@@ -21,7 +21,7 @@
 // under text: the art keeps it open (sea, sky, plain ground) and puts its subject in the window's
 // free space, which kit.textBox(scene) gives as the box to keep open. A window with gutters a subject
 // fits in keeps its subject in them, or above the lead; a narrow one (a phone) at its foot, which
-// shows after the page's last part. Each block's press eases to nothing across the gutters, so a
+// shows after the page's last part. Each block's veil eases to nothing across the gutters, so a
 // subject in the gutter's outer part stays nearly whole as text passes beside it; on a narrow
 // window it runs off both edges. A picture with no
 // page (a thumbnail, the map) gets a small quiet box in the upper middle and no column, so it is
@@ -228,15 +228,15 @@ export function quietOf({ w, h }, column) {
   return { x: column.x, y: h * 0.04, w: column.w, h: h * (h > w ? 0.68 : 0.6) };
 }
 
-// The press: what lies under each block of text on the page's painting, so the text keeps its
+// The veil: what lies under each block of text on the page's painting, so the text keeps its
 // contrast on every pixel by construction while the painting shows at full strength everywhere else.
 // `inks` are [colour, the contrast it must keep] pairs, the first the strongest. Under dark inks the
 // painting is lightened to `colour`, the darkest colour from the paper toward the first ink on which
 // every ink keeps its contrast: "lighten" takes each channel's larger value, so no pixel under the
 // text is darker than that colour, and a pixel lighter already is left as it is. Under light inks (a
 // dark page) it is darkened to the lightest such colour from the paper toward white, the same way.
-// Either is idempotent, so presses that overlap don't compound. Returns { colour, blend }, as CSS values.
-export function pressOf(paper, inks, tint = null) {
+// Either is idempotent, so veils that overlap don't compound. Returns { colour, blend }, as CSS values.
+export function veilOf(paper, inks, tint = null) {
   const light = lum(inks[0][0]) > lum(paper);
   const ok = (c) => inks.every(([i, k]) => contrast(i, c) >= k);
   // Toward the inks from the paper, at the painting's own hue (`tint`, its mean colour where the text
@@ -250,12 +250,32 @@ export function pressOf(paper, inks, tint = null) {
   }
   return { colour, blend: light ? "darken" : "lighten" };
 }
-// The page's presses over a painting whose mean colour where the text runs is `tint`: under the
-// body, its ink at 7:1 and what is quieter (the palette's body ink, which the page sets quiet text in
-// on a painting) at 5:1, a step above the 4.5 floor since quiet lines carry an ask's fallback; and
-// under the lead, the cover ink at 7:1.
-export function pagePresses(p, tint) {
-  return { body: pressOf(p.paper, [[p.ink, 7], [p.body, 5]], tint), head: pressOf(p.paper, [[p.cover_ink, 7]], tint) };
+// The page's veil over a painting whose mean colour where the text runs is `tint`, one for every
+// block: the ink (body text) and the cover ink (titles) at 7:1, and what is quieter (the palette's
+// body ink, which the page sets quiet text in on a painting) at 5:1, a step above the 4.5 floor since
+// quiet lines carry an ask's fallback.
+export function pageVeil(p, tint) {
+  return veilOf(p.paper, [[p.ink, 7], [p.cover_ink, 7], [p.body, 5]], tint);
+}
+// A colour held to `k`:1 against `ground`: stepped darker (lighter against a dark ground) at its own
+// hue and chroma, only as far as the bar asks, so it keeps its tone.
+export function holdOn(colour, ground, k) {
+  const darker = lum(ground) > lum(colour), [L0, C, h] = oklch(colour);
+  for (let L = L0; L >= 0 && L <= 1; L += darker ? -0.004 : 0.004) {
+    const c = fromOklch(L, C, h);
+    if (contrast(c, ground) >= k) return c;
+  }
+  return darker ? "#000000" : "#ffffff";
+}
+// The tones the page marks with, held against the page's veil (`veil`, pageVeil's): each figure tone
+// (a done or failed state, a figure's nodes) and Max's own (`yours`, the language's) at 3:1, as marks,
+// and the accent, which sets links and the working state, at 4.5:1, as text. Every pixel under a
+// block is at least as far from the inks as the veil's colour, so a tone that holds against it holds
+// over the whole block. As CSS custom properties: { "fig-1": colour, ..., accent, yours }.
+export function pageTones(p, veil, yours) {
+  const out = { accent: holdOn(p.accent, veil.colour, 4.5), yours: holdOn(yours, veil.colour, 3) };
+  p.figure.forEach((c, i) => (out[`fig-${i + 1}`] = holdOn(c, veil.colour, 3)));
+  return out;
 }
 // A painting's mean colour inside a box (its own pixels), from a small copy.
 export function meanColour(canvas, box) {
@@ -267,7 +287,7 @@ export function meanColour(canvas, box) {
   for (let i = 0; i < d.length; i += 4) for (let j = 0; j < 3; j++) sum[j] += lin(d[i + j] / 255);
   return "#" + sum.map((v) => Math.round(255 * gam(v / (n * n))).toString(16).padStart(2, "0")).join("");
 }
-// Row by row down a painting, the share of each row a press of `colour` with `blend` would
+// Row by row down a painting, the share of each row a veil of `colour` with `blend` would
 // flatten: darker than the colour under a lighten, lighter under a darken.
 export function beyond(canvas, colour, blend, rows = 24) {
   const cols = 32, c = document.createElement("canvas");

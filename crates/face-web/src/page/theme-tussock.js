@@ -620,7 +620,7 @@ export default {
     const dens = (x, y) => {
       const mm = Math.max(...mass.map((c) => Math.exp(-((x / w - c) ** 2) / 0.06)));
       const patch = smooth(-0.35, 0.35, noise.fbm(x / 260 + off, y / 90, 3));
-      // Under a page's column the clumps thin out, so the text's press has little to flatten.
+      // Under a page's column the clumps thin out, so the text's veil has little to flatten.
       const open = tb?.wide ? 1 - 0.75 * smooth(tb.x - 60, tb.x + 30, x) * (1 - smooth(tb.x + tb.w - 30, tb.x + tb.w + 60, x)) : 1;
       return (0.12 + 0.88 * (0.45 * mm + 0.55 * patch)) * open;
     };

@@ -242,9 +242,10 @@
      beside the big blob and 29 docked. One armed keeps its place, so a
      second tap at the same spot confirms it, and shows its word above it.
      A tap anywhere on the blob is the blob's. */
-  #panel { timeline-scope: --end; }
+  /* --end-room: the room at the scroll's foot the blob docks in, also the page's (sheet.css). */
+  #panel { timeline-scope: --end; --end-room: 72px; }
   .pane > .scroll { scroll-timeline: --end y; }
-  .scroll > .end { height: 72px; }
+  .scroll > .end { height: var(--end-room); }
   .pane:not(:has(> .dock[hidden])) .log { padding-bottom: 0; }
   .pane:has(> .dock[hidden]) > .scroll > .end { display: none; }
   .pane > .dock {
@@ -267,9 +268,9 @@
   .pane > .acts .act:not(.armed):hover { background: var(--hover); color: var(--ink); }
   .pane > .acts .act svg { width: 18px; height: 18px; }
   @supports (animation-timeline: scroll()) {
-    .pane > .dock { animation: dock linear both; animation-timeline: --end; animation-range: calc(100% - 72px) 100%; }
-    .pane > .acts { animation: acts linear both; animation-timeline: --end; animation-range: calc(100% - 72px) 100%; }
-    .pane > .acts .act { animation: act linear both; animation-timeline: --end; animation-range: calc(100% - 72px) 100%; }
+    .pane > .dock { animation: dock linear both; animation-timeline: --end; animation-range: calc(100% - var(--end-room)) 100%; }
+    .pane > .acts { animation: acts linear both; animation-timeline: --end; animation-range: calc(100% - var(--end-room)) 100%; }
+    .pane > .acts .act { animation: act linear both; animation-timeline: --end; animation-range: calc(100% - var(--end-room)) 100%; }
   }
   @keyframes dock { from { transform: translateY(calc(50% - 22px)) scale(calc(72 / 128)); } }
   @keyframes acts { from { transform: translateY(calc(50% - 22px)); } }
