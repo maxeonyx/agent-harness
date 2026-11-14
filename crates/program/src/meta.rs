@@ -22,6 +22,8 @@
 //! in the same batch as the `Dispatched`, so a crash leaves both or
 //! neither, and a restart never spawns twice.
 
+use std::collections::{HashMap, HashSet};
+
 use harness_core::call::{Call, Caller, Owner, Until, Wait};
 use harness_core::context::Rendered;
 use harness_core::delivery::Content;
@@ -444,17 +446,12 @@ pub fn attach(state: &State, values: Values, task: &Task, input: &[u8]) -> Resul
         .filter(|c| !c.is_empty())
         .and_then(|c| c.iter().map(Value::as_str).collect())
         .ok_or("`calls` must be a non-empty list of labels")?;
+    let found = labelled(state, &[task.id], &labels.iter().copied().collect());
     let mut said = Vec::new();
     for label in labels {
-        let call = state
-            .calls()
-            .find(|(id, record)| {
-                record.outcome().is_some() && id.label() == label && under(state, *id, task.id)
-            })
-            .map(|(id, _)| id)
-            .ok_or(format!(
-                "none of your settled calls, or your agents' attached ones, is labelled `{label}`"
-            ))?;
+        let call = *found.get(label).ok_or(format!(
+            "none of your settled calls, or your agents' attached ones, is labelled `{label}`"
+        ))?;
         said.extend(cut(
             carried(state, values, "[harness] Attached: the", call),
             &call.label(),
@@ -463,16 +460,35 @@ pub fn attach(state: &State, values: Values, task: &Task, input: &[u8]) -> Resul
     Ok(blocks(&said))
 }
 
-/// Whether `call` is owned by `task` or by an agent under it.
-pub(crate) fn under(state: &State, call: CallId, task: TaskId) -> bool {
-    let mut owner = state.call_owner(call);
-    while let Some(t) = owner {
-        if t == task {
-            return true;
-        }
-        owner = state.owner(t);
+/// The settled call each of `labels` names, among those owned by one of
+/// `tops` or by an agent under one: what `attach` and a page's pictures
+/// cite. One pass over the calls however many labels, checking whose call
+/// it is before its label, which costs a digest.
+pub(crate) fn labelled(
+    state: &State,
+    tops: &[TaskId],
+    labels: &HashSet<&str>,
+) -> HashMap<String, CallId> {
+    let mut found = HashMap::new();
+    if labels.is_empty() {
+        return found;
     }
-    false
+    let mine: HashSet<TaskId> = (state.tasks())
+        .map(|t| t.id)
+        .filter(|t| std::iter::successors(Some(*t), |t| state.owner(*t)).any(|t| tops.contains(&t)))
+        .collect();
+    for (id, record) in state.calls() {
+        if found.len() == labels.len() {
+            break;
+        }
+        if record.outcome().is_some() && state.call_owner(id).is_some_and(|t| mine.contains(&t)) {
+            let label = id.label();
+            if labels.contains(label.as_str()) {
+                found.entry(label).or_insert(id);
+            }
+        }
+    }
+    found
 }
 
 /// An attached call's blocks with their text cut to [`ATTACHED`]: its head

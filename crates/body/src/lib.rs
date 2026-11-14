@@ -81,8 +81,9 @@ fn read(markdown: &str, kinds: &[&str]) -> (Body, Vec<Found>) {
 /// what it gives: how the brain keeps a picture cited by the call that
 /// showed it (`![alt](call-3fa2c1)`) as that result's value
 /// (`value:<id>`), the one form [`body`] draws as a picture. Any other
-/// destination stays as written.
-pub fn cited(markdown: &str, cite: impl Fn(&str) -> Option<String>) -> String {
+/// destination stays as written. `cite` sees each image's destination in
+/// turn, so it can also gather them.
+pub fn cited(markdown: &str, mut cite: impl FnMut(&str) -> Option<String>) -> String {
     let mut out = String::with_capacity(markdown.len());
     let mut from = 0;
     for (event, range) in Parser::new_ext(markdown, options()).into_offset_iter() {

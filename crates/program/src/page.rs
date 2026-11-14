@@ -13,6 +13,8 @@
 //! `ask` call returns at once, and the background call it makes stays open
 //! until it settles, its result reaching the agent as a message.
 
+use std::collections::{HashMap, HashSet};
+
 use harness_core::ask::{Ask, Choice, Link, Otherwise, Verdict, Want};
 use harness_core::body::{Block, Body, Inline, Problem, Spotted};
 use harness_core::call::{Call, CallEvent, Caller, Outcome, Output};
@@ -31,7 +33,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::meta;
-use crate::meta::under;
 use crate::render::{Values, blocks, text};
 
 pub use harness_core::task::PRESENT;
@@ -80,11 +81,8 @@ pub fn run(
     let input = input_of(input)?;
     let owner = owner(state, task);
     let text_of = |v: ValueId| Some(String::from_utf8_lossy(&values(v)).into_owned());
-    let cite = |markdown: String| {
-        harness_body::cited(&markdown, |label| {
-            picture(state, values, task.id, owner, label)
-        })
-    };
+    let pictures = pictures(state, values, &[task.id, owner], &labels(&input));
+    let cite = |markdown: String| harness_body::cited(&markdown, |d| pictures.get(d).cloned());
     match tool {
         PAGE_WRITE => write(state, owner, call, input, &cite),
         PAGE_EDIT => edit(state, owner, call, input, &text_of, &cite),
@@ -108,30 +106,48 @@ fn input_of(input: &[u8]) -> Result<Value, String> {
 /// ([`harness_body::cited`]).
 type Cite<'a> = &'a dyn Fn(String) -> String;
 
-/// The value a picture cited by `label` is kept as
+/// Every call label an image in `input`'s text cites (`![alt](call-3fa2c1)`),
+/// in whichever of the tool's fields it sits, `page_edit`'s `old` included.
+fn labels(input: &Value) -> HashSet<String> {
+    fn gather(v: &Value, out: &mut HashSet<String>) {
+        match v {
+            Value::String(s) if s.contains("call-") => {
+                harness_body::cited(s, |d| {
+                    d.starts_with("call-").then(|| out.insert(d.to_owned()));
+                    None
+                });
+            }
+            Value::Array(a) => a.iter().for_each(|v| gather(v, out)),
+            Value::Object(o) => o.values().for_each(|v| gather(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = HashSet::new();
+    gather(input, &mut out);
+    out
+}
+
+/// The value each of `labels` keeps its picture as
 /// ([`harness_core::body::Image`]): the result of the settled call of that
-/// label that showed exactly one image, made by `task` or under the page's
-/// `owner` (a fork's source, or an agent of its), as `attach` finds them.
-/// `None` for any other label, which the body's parser then lists.
-fn picture(
+/// label, made under one of `tasks` (the caller, and the page's owner: a
+/// fork's source and its agents) as `attach` finds them, when it completed
+/// showing exactly one image. A label it lacks is one the body's parser
+/// then lists.
+fn pictures(
     state: &State,
     values: Values,
-    task: TaskId,
-    owner: TaskId,
-    label: &str,
-) -> Option<String> {
-    if !label.starts_with("call-") {
-        return None;
-    }
-    let (_, record) = state.calls().find(|(id, record)| {
-        id.label() == label
-            && record.outcome().is_some()
-            && (under(state, *id, task) || under(state, *id, owner))
-    })?;
-    let Some(Outcome::Completed(output)) = record.outcome() else {
-        return None;
-    };
-    (images(&values(output.model)) == 1).then(|| format!("value:{}", output.model))
+    tasks: &[TaskId],
+    labels: &HashSet<String>,
+) -> HashMap<String, String> {
+    let labels = labels.iter().map(String::as_str).collect();
+    (meta::labelled(state, tasks, &labels).into_iter())
+        .filter_map(|(label, call)| {
+            let Some(Outcome::Completed(output)) = state.call(call)?.outcome() else {
+                return None;
+            };
+            (images(&values(output.model)) == 1).then(|| (label, format!("value:{}", output.model)))
+        })
+        .collect()
 }
 
 /// How many images a result's content blocks hold, at any depth.
