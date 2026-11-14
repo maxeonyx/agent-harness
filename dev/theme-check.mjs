@@ -10,6 +10,7 @@
 // - deterministic: the same identity at the same size painted twice gives the same pixels;
 // - paint time: the script and the raster after it, on a phone (390x844 at 2x, the CPU slowed 4x,
 //   as a mid-range phone), under PAINT_MS;
+// - the map contract: a chart, and a map.hue outside 35-75 (orange, Max's on the map);
 // - the map: the theme's area as a territory beside a neighbour wearing it too, with its chart, drawn
 //   as the map draws it (territories.js): each state tone at a live agent's node keeping 90% of the
 //   contrast it has on bare paper; the names' ink at 14:1 or better for 95% of each name's box; and
@@ -239,7 +240,10 @@ try {
     console.log(`${name}: paint ms (script / settled), the lead ink's contrast in its box (min / 5th pct), painted twice`);
     const probe = await tab(name, SIZES.desktop);
     const slots = await probe.evaluate("window.__check.theme.slots.length");
+    const { chart, hue } = await probe.evaluate("({ chart: typeof window.__check.theme.chart, hue: window.__check.theme.map?.hue })");
     await probe.close();
+    if (chart !== "function") console.log(`  no chart(ctx, scene): the map would draw its territory as a bare wash${miss(`${name}: no chart`)}`);
+    if (typeof hue !== "number" || (hue >= 35 && hue <= 75)) console.log(`  map.hue ${hue}: not an OKLCH hue outside 35-75, which is orange, Max's on the map${miss(`${name}: map.hue ${hue}`)}`);
     for (const [size, spec] of Object.entries(SIZES)) {
       for (let slot = 0; slot < slots; slot++) {
         const seed = SEEDS[slot % SEEDS.length], t = await tab(name, spec);
