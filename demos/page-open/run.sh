@@ -8,7 +8,8 @@
 # on the map opens the page with the question on screen; and the present
 # call's row in the chat has a link that scrolls to the page; and the page
 # sits in the log where it was presented, so the bash's live output streams
-# below it and tapping the blob (Go to bottom) puts that on screen. Fails at the
+# below it and tapping the blob (Go to bottom) puts that on screen; once Max
+# has seen the page, coming back to the chat lands at that live end. Fails at the
 # first of those that doesn't hold. Screenshots into
 # demos/page-open/shots.ignore. Scripted: no model call. Leaves the brain up.
 set -euo pipefail
@@ -34,6 +35,8 @@ seen="(s) => { const e = document.querySelector(s), v = document.querySelector('
 need() { echo "(() => { const seen = $seen; if (!seen('$1')) throw new Error('not on screen: $2'); return 'on screen: $2'; })()"; }
 echo "== Max opens the chat"
 page open "$a" sleep 3000 shot "$shots/open.png" eval "$(need '.sheet .lead h1' 'the page lead')"
+echo "== Max comes back to the chat after seeing its page"
+page open "$a" sleep 3000 open "" sleep 1000 open "$a" sleep 3000 shot "$shots/back.png" eval "$(need '.row.live .res' 'the live output')"
 echo "== Max taps the ask's orange card on the map"
 page sleep 6000 click ".node.work.yours" sleep 3000 shot "$shots/ask.png" eval "$(need '.sheet .ask .question' 'the ask question')"
 echo "== Max taps the present row's link"

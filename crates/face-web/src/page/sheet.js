@@ -11,10 +11,13 @@ import { load, paintInto, wear } from "./theme.js";
 //
 // A chat with a page shows it whole, the agent working or not, in the log
 // where it was presented (`placeSheet`): what came after it, down to what
-// streams now, follows it. The card opens at its top, or at one of its asks
+// streams now, follows it. The card opens at its top until this tab has
+// landed on that version, then at the live end; or at one of its asks
 // (`askTop`).
 const sheetEl = $(".sheet", panel);
-let landed = null, unfolded = null;
+let unfolded = null;
+// The versions this tab has landed on, one key each (`shown`).
+const landed = new Set();
 
 // Draws `t`'s page, and says whether the card should open at its top
 // (then `sheetSeen`): the first time this tab shows this version in full.
@@ -31,11 +34,12 @@ export function renderSheet(t) {
       fail(`drawing ${t.name}'s page`, e);
     }
   }
-  return landed !== shown(t);
+  return !landed.has(shown(t));
 }
 // Each present is landed on once: a new version, or one presented again.
 const shown = (t) => `${t.id} ${t.page.version} ${t.page.held}`;
-export const sheetSeen = (t) => { landed = shown(t); };
+export const sheetSeen = (t) => { landed.add(shown(t)); };
+export const sheetUnseen = (t) => !!t?.page && !landed.has(shown(t));
 // Puts the page in the log just after `after`, the chunk of the response
 // that presented it; at the log's start for one the log does not draw (a
 // context compacted away), or with `after` null, at its end (a page stored
@@ -99,7 +103,7 @@ function page(p, t) {
   const e = p.end;
   const moved = e != null && (e.goal_changed || e.shows_changed || e.uses.some((u) => u.changed));
   const held = p.quick && p.held > p.at && !moved;
-  const lead = el("header", `lead${landed === shown(t) ? "" : " new"}`);
+  const lead = el("header", `lead${landed.has(shown(t)) ? "" : " new"}`);
   lead.append(el("h1", null, p.lead));
   const out = [lead];
   const at = `${t.id} ${p.held}`;

@@ -45,8 +45,8 @@ export function closeNode() {
   if (history.state?.node && history.state.doc === DOC) history.back();
   else { history.replaceState(null, "", location.pathname); route(); }
 }
+// A new hash fires popstate, then hashchange: routing on both opened it twice.
 addEventListener("popstate", route);
-addEventListener("hashchange", route);
 
 export function route() {
   const { task: id, at } = hashed();
@@ -128,6 +128,7 @@ title.after(up);
 up.onclick = () => { const p = parentOf(byId[openId] || {}); if (p) go(p); };
 function buildPanel(id, at) {
   logState = { id, at, head: undefined, rendered: [], rows: new Map(), group: null, exact: false, follow: true };
+  // The page goes with the rest; renderLog's `placeSheet` puts it back.
   logEl.replaceChildren();
   logEl.classList.remove("exact");
   $(".viewer", panel).hidden = true;

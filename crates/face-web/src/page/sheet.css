@@ -9,8 +9,9 @@
     background: var(--paper); color: var(--body); border-top: 1px solid var(--line);
     font: 16.5px/1.6 var(--serif);
   }
-  /* In the log, it spans the log's width, past its padding. */
-  .log > .sheet { margin: 1.4em -1.6em 2em; }
+  /* In the log, it spans the log's width, past its padding: --log-pad is a
+     length, so it holds the log's own em, not the page's. */
+  .log > .sheet { max-width: none; margin: 1.4em calc(-1 * var(--log-pad)) 2em; }
   /* The lead on the task's painted ground, which dissolves into the paper. */
   .sheet .lead { position: relative; isolation: isolate; margin: -2em -1.6em 0; padding: 3.2em 1.6em 2.4em; display: flex; flex-direction: column; justify-content: flex-end; }
   .sheet .lead.new { min-height: 30vh; padding-top: 4.5em; }

@@ -58,7 +58,10 @@
      height, its blob waiting in the middle. */
   .pane:not(.loading, :has(> .dock[hidden])) { align-self: flex-start; max-height: 100%; }
   .scroll { flex: 1; overflow: auto; overscroll-behavior: contain; scroll-padding-bottom: 2em; touch-action: pan-y; }
-  .log { max-width: 48rem; margin: 0 auto; padding: 1.4em 1.6em 2.5em; }
+  /* Registered, so it computes in the log's font and the page inherits the
+     length (sheet.css). */
+  @property --log-pad { syntax: "<length>"; inherits: true; initial-value: 0px; }
+  .log { --log-pad: 1.6em; max-width: 48rem; margin: 0 auto; padding: 1.4em var(--log-pad) 2.5em; }
   .viewer { flex: 1; min-width: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; background: var(--white); }
   .viewer header { display: flex; align-items: center; gap: .6em; padding: .5em .8em; border-bottom: 1px solid var(--line); font-size: 13px; }
   .viewer header .path { font-family: var(--mono); font-size: 12.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

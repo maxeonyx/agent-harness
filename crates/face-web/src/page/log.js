@@ -5,7 +5,7 @@ import { dress, paint, trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { dictate, dictation, editMessage, modelName, readOnly, say, sending } from "./compose.js";
 import { layer, session } from "./blobs.js";
-import { askTop, placeSheet, renderSheet, sheetSeen, sheetTop } from "./sheet.js";
+import { askTop, placeSheet, renderSheet, sheetSeen, sheetTop, sheetUnseen } from "./sheet.js";
 
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
 const contexts = new Map();
@@ -924,8 +924,9 @@ function following() {
 function stick(change) {
   const atBottom = following() || logState?.follow;
   change();
-  // Followed to where its reading starts: a page shown whole, at its top.
-  const top = logState?.follow ? sheetTop() : null;
+  // Followed to where its reading starts: a page not yet landed on, at its
+  // top; otherwise the live end.
+  const top = logState?.follow && sheetUnseen(byId[logState.id]) ? sheetTop() : null;
   if (top != null) pinned = false;
   if (atBottom) { scrollTo(top ?? scrollEl.scrollHeight); if (logState) logState.follow = false; }
 }
