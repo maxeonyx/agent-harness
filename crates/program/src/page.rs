@@ -277,7 +277,7 @@ fn listed(said: &str, found: Vec<Spotted>) -> String {
     said
 }
 
-/// Whether facts are told rather than shown: over about 80 words of
+/// Whether a body is told rather than shown: over about 80 words of
 /// paragraphs, with nothing visual (a table, figure, code, quote or Max's
 /// own words) anywhere in them.
 fn told(body: &Body) -> bool {
@@ -989,7 +989,7 @@ pub fn tools() -> Vec<Tool> {
                         "description": "Where the work is going, stepped back far enough that Max can tell you're aiming at the right thing: his goal, the system as it will be, and what he does with it. Replaces the end whole.",
                         "properties": {
                             "goal": { "type": "string", "description": "What he wants it for, in a line: the reason the system exists, as you understand it: \"Every agent's page puts you level with it in a minute's reading\"." },
-                            "shows": markdown("The system as it will be, as a figure: a ```mermaid block of its parts, how they connect and where he is in it, with what doesn't exist yet `planned`, or the mockup. Then where your end departs from his words: quote them and say why, in a table. Body markdown."),
+                            "shows": markdown("The system as it will be, as a figure: a ```mermaid block drawn top to bottom (`flowchart TB`, so it reads on a phone) of its parts, how they connect and where he is in it, with what doesn't exist yet `planned`, or the mockup. Then where your end departs from his words: quote them and say why, in a table. Body markdown."),
                             "uses": {
                                 "type": "array",
                                 "description": "What he does with it once it's done, most important first.",

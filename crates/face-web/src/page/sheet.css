@@ -29,6 +29,10 @@
   .sheet :is(th, td) { padding: .3em .8em .3em 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
   .sheet .numeric { text-align: right; font-variant-numeric: tabular-nums; }
   .sheet figure { margin: 0 0 .9em; }
+  /* A figure's node classes, in the theme's tones (base.js names them). */
+  .sheet .diagram .node:is(.failed, .yours, .working, .f1, .f2, .f3, .f4) > :is(rect, circle, polygon, path) { stroke: var(--tone) !important; }
+  .sheet .diagram .node.failed { --tone: var(--fig-2); } .sheet .diagram .node.yours { --tone: var(--yours); } .sheet .diagram .node.working { --tone: var(--accent); }
+  .sheet .diagram .node.f1 { --tone: var(--fig-1); } .sheet .diagram .node.f2 { --tone: var(--fig-2); } .sheet .diagram .node.f3 { --tone: var(--fig-3); } .sheet .diagram .node.f4 { --tone: var(--fig-4); }
   .sheet details > summary { cursor: pointer; color: var(--ink); }
   /* A task list: what holds already, and what is not true yet. */
   .sheet li.holds::marker { content: "☑  "; color: var(--fig-1); }

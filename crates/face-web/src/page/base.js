@@ -99,11 +99,21 @@ export function markdown(text) {
 // A mermaid diagram where its source was. The library loads the first time
 // one is shown; a source it cannot draw stays as written.
 let mermaidLib = null, diagrams = 0;
+// The node classes the page guide names, on every flowchart: what doesn't
+// exist yet dashed, what goes faint, and a heavier line for the states and
+// kinds sheet.css colours in the theme's tones (mermaid takes no CSS
+// variables).
+const CLASSES = [
+  "classDef planned stroke-dasharray:6 4",
+  "classDef gone stroke-dasharray:2 3,opacity:0.45",
+  ...["failed", "yours", "working", "f1", "f2", "f3", "f4"].map((c) => `classDef ${c} stroke-width:2px`),
+].join("\n");
+const classed = (source) => /^\s*(flowchart|graph)\b/.test(source) ? `${source}\n${CLASSES}` : source;
 export async function diagram(pre, source) {
   try {
     mermaidLib ||= import("https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs")
       .then((m) => { m.default.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict", htmlLabels: false, flowchart: { htmlLabels: false } }); return m.default; });
-    const { svg } = await (await mermaidLib).render(`mermaid-${++diagrams}`, source);
+    const { svg } = await (await mermaidLib).render(`mermaid-${++diagrams}`, classed(source));
     const fig = el("div", "diagram");
     fig.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true } });
     pre.replaceWith(fig);
