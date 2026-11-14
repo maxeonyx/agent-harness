@@ -14,7 +14,7 @@ Tried and not taken, so start somewhere else:
 - Ledger, graph paper: "Ledger is a bit busy". Anything ruled across the whole page reads the same way.
 - Nocturne, a night sky: "Nocturne is a bit much as a background."
 - Kapua, only sky as an oil sketch: the critic found it read as a paint filter, and sat too close to Tussock's sky.
-- Bach, the sunlit weatherboard wall of a bach: its beauty was strong sun against dark shade, and lifting the shade enough to read text over it took the light with it. Waiting on my call as at 14 Nov 2026, so don't remake it.
+- Bach, the sunlit weatherboard wall of a bach, is contested: its beauty was strong sun against dark shade, and lifting the shade enough to read text over it took the light with it. Whether it ships is one of Max's open questions in [plan.md](plan.md#questions-only-max-can-answer), with where its study lives, so don't remake it.
 
 ## How a theme gets made
 
