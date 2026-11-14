@@ -503,6 +503,9 @@ impl<S: Source> Face<S> {
                 if let Some(at) = path.strip_prefix("/image/") {
                     return self.image(&mut stream, at);
                 }
+                if let Some(at) = path.strip_prefix("/picture/") {
+                    return self.picture(&mut stream, at);
+                }
                 if let Some(at) = path.strip_prefix("/context/") {
                     if let Ok(head) = at.parse() {
                         return self.context(&mut stream, head, true);
@@ -686,6 +689,33 @@ impl<S: Source> Face<S> {
     /// `/image/ENTRY/N`: the `N`th image of entry ENTRY's content, as
     /// [`by_reference`] numbers them; stored by the browser forever, since
     /// an entry is its bytes.
+    /// A page's picture ([`harness_core::body::Image`]): the one image in
+    /// the value of the call result that showed it. A value never changes,
+    /// so it is cached for good.
+    fn picture(&self, stream: &mut impl Write, at: &str) -> io::Result<()> {
+        let blocks = (at.parse::<ValueId>().ok())
+            .and_then(|v| self.source.value(v))
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+        let Some(mut blocks) = blocks else {
+            return http::not_found(stream);
+        };
+        let mut found = None;
+        image::each_image(&mut blocks, &mut |source| {
+            if found.is_none() {
+                let kind = source["media_type"]
+                    .as_str()
+                    .filter(|k| k.starts_with("image/"))
+                    .unwrap_or("application/octet-stream")
+                    .to_owned();
+                found = image::decoded(source).map(|bytes| (kind, bytes));
+            }
+        });
+        match found {
+            Some((kind, bytes)) => http::respond(stream, &kind, &bytes, true),
+            None => http::not_found(stream),
+        }
+    }
+
     fn image(&self, stream: &mut impl Write, at: &str) -> io::Result<()> {
         let at = at.split_once('/');
         let entry =
