@@ -4,8 +4,8 @@
 # than a patch of the ground's colour painted over it. On the scripted
 # test brain `chat-erase`, Root spawns seven agents, which
 # work for ten minutes, so each is a named node. The layout keeps
-# names clear of lines, so the demo slides the last of them sideways, as
-# a glide does, until its name lies over another's line. It finds every
+# names clear of lines, so the demo slides the last of them, as
+# a glide does, until its name lies over a line, clear of the other names. It finds every
 # point inside a name where the lines' geometry passes, hides the names
 # (whatever they paint goes with them), and screenshots the map with the lines shown and
 # with them hidden: at each of those points the two must match, since the
@@ -45,7 +45,13 @@ find="(async () => { $mods
   const on = (x, y) => { pt.x = x; pt.y = y; return paths.some((p) => (p.getAttribute(\"fill\") !== \"none\" && p.isPointInFill(pt)) || (p.getAttribute(\"stroke\") && p.isPointInStroke(pt))); };
   const [id, a] = [...D.nodeEls].find(([id]) => M.label(M.graph.nodes.get(id)) === \"check-7\");
   const s = M.shown.get(id), c = M.centre(s), w = a.querySelector(\".name\").offsetWidth;
-  for (let x = c.x - 40; x > c.x - 2000; x--) if (on(x, c.y)) { s.x += x - (c.x + 26 + w / 2); break; }
+  // Slid, as a glide does, until its name's middle sits on a line, clear of
+  // every other name.
+  const boxes = [...document.querySelectorAll(\".node:not(.archived) .name\")].filter((e) => e !== a.querySelector(\".name\")).map((e) => e.getBoundingClientRect()).map((b) => ({ l: (b.left - cam.x) / cam.k, r: (b.right - cam.x) / cam.k, t: (b.top - cam.y) / cam.k, b: (b.bottom - cam.y) / cam.k }));
+  const clear = (l, y) => boxes.every((o) => o.r < l - 8 || o.l > l + w + 8 || o.b < y - 17 || o.t > y + 17);
+  slide: for (let y = c.y + 20; y < c.y + 200; y += 3) for (let x = c.x - 40; x > c.x - 2000; x -= 2) {
+    if (on(x, y) && clear(x - w / 2, y)) { s.x += x - (c.x + 26 + w / 2); s.y += y - c.y; break slide; }
+  }
   D.drawNodes(); D.drawEdges();
   for (const e of document.querySelectorAll(\".node:not(.archived) .name\")) {
     const b = e.getBoundingClientRect();

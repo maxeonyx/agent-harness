@@ -73,7 +73,7 @@ export function drawMap() {
       const from = n?.deps.map((d) => shown.get(d)).find(Boolean);
       shown.set(id, from && !p.card ? { ...p, x: from.x + from.w / 2 - p.w / 2, y: from.y + from.top - p.top } : { ...p });
     }
-    const faded = finding && !found.has(n?.t.id ?? id) ? " unmatched" : "";
+    const faded = unmatched(n, id) ? " unmatched" : "";
     if (n?.big && !p.card) {
       const s = sessionOf(n);
       if (!handles.has(id) && blobs) handles.set(id, blobs.put(BIG, s));
@@ -141,7 +141,7 @@ export function drawNodes() {
     if (h) { h.at(c.x, c.y); h.hide(id === openId); }
     // A finished call is a gear (drawEdges), and Max's running one a card.
     if (!n || n.big || s.card || (n.kind === "chip" && (!n.running || n.yours))) continue;
-    const dim = finding && !found.has(n.t.id) ? .12 : 1;
+    const dim = unmatched(n, id) ? .12 : 1;
     const m = k++ * MARK;
     marks[m] = c.x; marks[m + 1] = c.y; marks[m + 2] = radius(n);
     marks[m + 3] = 0; marks[m + 11] = 0; marks[m + 12] = 0;
@@ -169,25 +169,35 @@ export function drawNodes() {
   placeRegions();
 }
 
-// Behind each name the lines are erased, softly, in the name's own shape a
-// few px wider, so the ground under them shows and the name reads over
-// crossing lines on any ground: its text in the lines' mask, set where the
-// name is and as it is (map.css `.erase`). A name not shown (its card is
-// open) or faded by a search erases nothing.
+// A node a search doesn't match, so faded.
+function unmatched(n, id) { return finding && !found.has(n?.t.id ?? id); }
+
+// Behind each name the lines are erased, softly, a few px past its box, so
+// the ground under them shows and the name reads over crossing lines on any
+// ground: a rounded rect in the lines' mask, the name's box measured only
+// when its text changes. A rect, not the text again: the mask's text would
+// be laid out anew on every zoom frame. A name not shown (its card is open)
+// erases nothing; one faded by a search fades its erase with it (map.css).
+const PAD = 3;
 const erased = new Map();
 function eraseNames() {
   begin();
-  for (const [id, t] of erased) if (!nodeEls.has(id)) { t.remove(); erased.delete(id); }
+  for (const [id, r] of erased) if (!nodeEls.has(id)) { r.remove(); erased.delete(id); }
   for (const [id, a] of nodeEls) {
     const s = shown.get(id), n = graph.nodes.get(id);
-    const off = !s || s.card || !n || id === openId || (finding && !found.has(n.t.id));
-    let t = erased.get(id);
-    if (off) { t?.remove(); erased.delete(id); continue; }
-    if (!t) { erased.set(id, t = svgEl("text")); t.at = ""; nameMask.append(t); }
-    const c = centre(s), at = `${f2(c.x)},${f2(c.y)}`, text = label(n), cls = n.big ? "big" : "work";
-    if (t.textContent !== text) t.textContent = text;
-    if (t.getAttribute("class") !== cls) t.setAttribute("class", cls);
-    if (t.at !== at) { t.at = at; t.setAttribute("x", f2(c.x)); t.setAttribute("y", f2(c.y)); }
+    let r = erased.get(id);
+    if (!s || s.card || !n || id === openId) { r?.remove(); erased.delete(id); continue; }
+    if (!r) { erased.set(id, r = svgEl("rect")); r.setAttribute("rx", 6); r.text = r.at = ""; nameMask.append(r); }
+    const name = $(".name", a);
+    if (r.text !== name.textContent) {
+      r.text = name.textContent;
+      r.box = { x: name.offsetLeft - PAD, y: name.offsetTop - PAD };
+      r.setAttribute("width", name.offsetWidth + 2 * PAD);
+      r.setAttribute("height", name.offsetHeight + 2 * PAD);
+    }
+    r.classList.toggle("unmatched", unmatched(n, id));
+    const c = centre(s), at = `${f2(c.x + r.box.x)},${f2(c.y + r.box.y)}`;
+    if (r.at !== at) { r.at = at; r.setAttribute("x", f2(c.x + r.box.x)); r.setAttribute("y", f2(c.y + r.box.y)); }
   }
 }
 
@@ -379,7 +389,7 @@ export function refresh() {
   return running;
 }
 // A face that arrives after the labels were measured changes their widths.
-document.fonts.addEventListener("loadingdone", () => { remeasure(); refresh(); });
+document.fonts.addEventListener("loadingdone", () => { remeasure(); for (const r of erased.values()) r.text = ""; refresh(); });
 
 export function render() {
   if (!view) return;
