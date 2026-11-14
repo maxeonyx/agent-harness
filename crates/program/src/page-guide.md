@@ -23,6 +23,7 @@ Nothing names a part: no headings, no labels above things, no cues to scroll.
 ## Writing the bodies
 
 - Paragraphs, lists, task lists, quotes, code, tables (GFM pipes, for facts that line up), and figures: a ```mermaid block, with node classes `planned`, `gone`, `yours`, `failed`, `working`, `f1` to `f4` for state and kind. The sentence after a figure says what it shows; there are no captions or titles.
+- A picture (a screenshot, a render): `read` the image file, or take the screenshot, so you see what he will, then cite that call's label alone in a paragraph: `![what it shows](call-3fa2c1)`. Several in one paragraph share rows, each named by its alt; he taps one to see it full size.
 - Detail goes in a fold right after the sentence it backs: `<details><summary>The 8.2 s stop, call by call</summary>` … `</details>`. The summary says what is inside, never "Details". Folds don't nest. There is no appendix.
 - No headings, bold, italic, colours, HTML or styles: bold is the harness's, for what Max must answer, and nothing is italic because it is harder to read. What you write outside this is drawn plain, and the call's result lists it with how to write it instead.
 - Link a task you started as `[its words](task:<id>)`; a link out as a normal markdown link.
