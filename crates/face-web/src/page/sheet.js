@@ -78,14 +78,16 @@ function line(p, t) {
 }
 
 // The parts in the one order Max reads them, none of them named, and no
-// line about the page itself: the lead, the plan (or the asks, with no
-// plan), the facts that back them, why. Presented again unchanged with a
-// quick answer and no step changed since Max agreed with the plan, the
+// line about the page itself: the lead, the end, the now, the plan with
+// its asks (and asks no step holds), why. Presented again unchanged with a
+// quick answer and nothing in the end moved since Max agreed with it, the
 // answer is the chat's line above the page, which folds to its lead; a press
-// opens the rest. A lead new to this tab stands taller, with the plan still
+// opens the rest. A lead new to this tab stands taller, with the end still
 // starting on the first screen; once seen, it is a short band.
 function page(p, t) {
-  const held = p.quick && p.held > p.at && !p.plan.some((s) => s.changed);
+  const e = p.end;
+  const moved = e != null && (e.goal_changed || e.shows_changed || e.uses.some((u) => u.changed));
+  const held = p.quick && p.held > p.at && !moved;
   const lead = el("header", `lead${landed === shown(t) ? "" : " new"}`);
   lead.append(el("h1", null, p.lead));
   const out = [lead];
@@ -95,9 +97,10 @@ function page(p, t) {
     lead.onclick = () => { unfolded = at; redraw(); };
     return out;
   }
-  if (p.asks.length) out.push(part("asks", p.asks.map((a) => ask(a, t.id))));
+  if (e != null) out.push(part("end", ends(e)));
+  if (p.now != null) out.push(part("now", blocks(p.now.blocks)));
   if (p.plan.length) out.push(part("plan", [plan(p.plan, t.id)]));
-  if (p.facts != null) out.push(part("facts", blocks(p.facts.blocks)));
+  if (p.asks.length) out.push(part("asks", p.asks.map((a) => ask(a, t.id))));
   if (p.why) out.push(part("why", blocks(p.why.blocks)));
   return out;
 }
@@ -106,15 +109,36 @@ function part(cls, children) {
   s.append(...children);
   return s;
 }
-// The plan: each step one line, its mark, what will be true and where it
-// stands now, so the rail is the end and the now at once. A step in play
-// or ahead adds its body; a step behind him is its line alone. A step
-// whose title changed since Max agreed with the plan carries the gutter bar.
-const MARK = { done: "✓", failed: "✕", yours: "●", working: "◐", planned: "○" };
+// The end: what Max wants it for, the system as it will be, and what he
+// does with it, each use one line drawn as a step is: its mark, what he
+// does, and where it stands today. What moved since he agreed with it
+// carries the gutter bar.
+const MARK = { done: "✓", failed: "✕", yours: "●", working: "◐", planned: "○", unknown: "?" };
+const bar = (cls, changed) => `${cls}${changed ? " changed" : ""}`;
+function ends(e) {
+  const out = [el("p", bar("goal", e.goal_changed), e.goal)];
+  if (e.shows) { const s = el("div", bar("shows", e.shows_changed)); s.append(...blocks(e.shows.blocks)); out.push(s); }
+  if (e.uses.length) {
+    const ol = el("ol", "steps uses");
+    for (const u of e.uses) {
+      const li = el("li", bar(`step use ${u.state}`, u.changed));
+      const head = el("div", "head");
+      head.append(el("span", "mark", MARK[u.state] ?? "○"), el("span", "title", u.does));
+      if (u.now != null) head.append(inlines(u.now, "span", "now"));
+      li.append(head);
+      ol.append(li);
+    }
+    out.push(ol);
+  }
+  return out;
+}
+// The plan: each step one line, its mark, what it makes true and where it
+// stands now, so it reads as a checklist. A step in play or ahead adds its
+// body; a step behind him is its line alone.
 function plan(steps, key) {
   const ol = el("ol", "steps");
   for (const s of steps) {
-    const li = el("li", `step ${s.state}${s.changed ? " changed" : ""}`);
+    const li = el("li", `step ${s.state}`);
     const head = el("div", "head");
     head.append(el("span", "mark", MARK[s.state] ?? "○"), el("span", "title", s.title ?? s.key));
     if (s.now != null) head.append(inlines(s.now, "span", "now"));

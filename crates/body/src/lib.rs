@@ -32,6 +32,18 @@ pub struct Found {
 /// A body's blocks, and its problems. `kinds` are the item kinds a live
 /// name may have (`github.pr`).
 pub fn body(markdown: &str, kinds: &[&str]) -> (Body, Vec<Found>) {
+    let (body, mut found) = read(markdown, kinds);
+    // A body escaped twice: its line breaks came as the two characters.
+    if markdown.contains("\\n") && !markdown.contains('\n') {
+        found.push(Found {
+            line: None,
+            problem: Problem::Escaped,
+        });
+    }
+    (body, found)
+}
+
+fn read(markdown: &str, kinds: &[&str]) -> (Body, Vec<Found>) {
     let mut reader = Reader::new(markdown, kinds);
     let blocks = reader.blocks(false);
     (Body { blocks }, reader.found)
@@ -40,7 +52,7 @@ pub fn body(markdown: &str, kinds: &[&str]) -> (Body, Vec<Found>) {
 /// One paragraph's inlines, for a field that holds a line rather than a
 /// body: blocks past the first are flattened into it after a break.
 pub fn inline(markdown: &str, kinds: &[&str]) -> (Vec<Inline>, Vec<Found>) {
-    let (body, found) = body(markdown, kinds);
+    let (body, found) = read(markdown, kinds);
     let mut out = Vec::new();
     for block in &body.blocks {
         if !out.is_empty() {

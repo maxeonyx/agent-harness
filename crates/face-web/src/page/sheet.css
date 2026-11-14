@@ -33,6 +33,9 @@
   /* A task list: what holds already, and what is not true yet. */
   .sheet li.holds::marker { content: "☑  "; color: var(--fig-1); }
   .sheet li.fails::marker { content: "☐  "; color: var(--muted); }
+  /* The end's goal: said once, in the display face, at a step's size. */
+  .sheet .goal { margin: 0 0 .8em; font: 1.25em/1.3 var(--display); font-variation-settings: var(--display-var); color: var(--ink); }
+  .sheet .uses { margin-top: .4em; }
   .sheet .steps { list-style: none; padding: 0; margin: 0; }
   .sheet .step { padding: .5em 0 .4em 1.8em; position: relative; }
   .sheet .step + .step { border-top: 1px solid var(--line); }

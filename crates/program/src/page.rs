@@ -20,7 +20,9 @@ use harness_core::design::{Feedback, FeedbackEvent};
 use harness_core::fact::Fact;
 use harness_core::id::{CallId, DeliveryId, EventId, FeedbackId, TaskId, ValueId};
 use harness_core::limb::{Audience, Tool};
-use harness_core::page::{Description, Lead, PageEvent, Ref, Said, Sheet, Spot, Step};
+use harness_core::page::{
+    Description, End, Lead, PageEvent, Ref, Said, Sheet, Spot, Stands, Step, Use,
+};
 use harness_core::source::ItemKey;
 use harness_core::state::State;
 use harness_core::task::{Task, TaskEvent};
@@ -81,7 +83,7 @@ pub fn run(
         PAGE_WRITE => write(state, owner, call, input),
         PAGE_EDIT => edit(state, owner, call, input, &text_of),
         PRESENT => present(state, owner, call),
-        DESCRIBE => describe(owner, input),
+        DESCRIBE => describe(state, owner, input),
         ASK => ask(state, task, call, input, mint),
         WITHDRAW | CITE => settle(state, task, tool, input),
         PASS_ON => pass_on(state, task, input, mint),
@@ -112,17 +114,17 @@ fn parse<T: for<'de> Deserialize<'de>>(input: Value) -> Result<T, String> {
 #[serde(deny_unknown_fields)]
 struct Write {
     lead: String,
-    facts: Option<String>,
+    now: Option<String>,
     why: Option<String>,
 }
 
 fn write(state: &State, owner: TaskId, call: CallId, input: Value) -> Result<Done, String> {
-    let Write { lead, facts, why } = parse(input)?;
+    let Write { lead, now, why } = parse(input)?;
     let mut values = Vec::new();
     let mut body = |markdown: Option<String>| markdown.map(|m| stash(&mut values, m));
     let sheet = Sheet {
         lead: Lead { title: lead },
-        facts: body(facts),
+        now: body(now),
         why: body(why),
     };
     let read = |v: ValueId| {
@@ -175,7 +177,7 @@ fn edit(
     // The parts an edit can reach, as text: the lead and the bodies.
     let mut parts: Vec<String> = vec![
         sheet.lead.title.clone(),
-        body_text(sheet.facts, text_of),
+        body_text(sheet.now, text_of),
         body_text(sheet.why, text_of),
     ];
     for Replace { old, new } in &edits {
@@ -196,9 +198,9 @@ fn edit(
             }
         }
     }
-    let [lead, facts, why] = <[String; 3]>::try_from(parts).expect("three parts");
+    let [lead, now, why] = <[String; 3]>::try_from(parts).expect("three parts");
     let lift = |t: String| Some(t).filter(|t| !t.is_empty());
-    let written = json!({ "lead": lead, "facts": lift(facts), "why": lift(why) });
+    let written = json!({ "lead": lead, "now": lift(now), "why": lift(why) });
     write(state, owner, call, written)
 }
 
@@ -215,22 +217,33 @@ fn staged(
     text_of: &dyn Fn(ValueId) -> Option<String>,
 ) -> String {
     let mut found: Vec<Spotted> = Vec::new();
-    let title = state
-        .task(owner)
-        .map(|t| t.description.title.clone().unwrap_or(t.name.clone()));
-    if sheet.lead.title.chars().count() > 70 || Some(&sheet.lead.title) == title.as_ref() {
+    let task = state.task(owner);
+    let title = task.map(|t| t.description.title.clone().unwrap_or(t.name.clone()));
+    let end = task.and_then(|t| t.description.end.as_ref());
+    let lead = &sheet.lead.title;
+    if lead.chars().count() > 70
+        || Some(lead) == title.as_ref()
+        || end.is_some_and(|e| &e.goal == lead)
+    {
         found.push(Spotted {
             at: Spot::Lead,
             line: None,
             problem: Problem::Lead,
         });
     }
-    for (spot, body) in [(Spot::Facts, sheet.facts), (Spot::Why, sheet.why)] {
+    if end.is_none() {
+        found.push(Spotted {
+            at: Spot::End,
+            line: None,
+            problem: Problem::Unseen,
+        });
+    }
+    for (spot, body) in [(Spot::Now, sheet.now), (Spot::Why, sheet.why)] {
         if let Some(markdown) = body.and_then(text_of) {
             let (body, problems) = harness_body::body(&markdown, KINDS);
-            if spot == Spot::Facts && told(&body) {
+            if told(&body) {
                 found.push(Spotted {
-                    at: Spot::Facts,
+                    at: spot.clone(),
                     line: None,
                     problem: Problem::Told,
                 });
@@ -293,10 +306,47 @@ fn told(body: &Body) -> bool {
     !body.blocks.iter().any(shown) && body.blocks.iter().map(words).sum::<usize>() > 80
 }
 
+/// Whether `blocks` hold a figure anywhere: a list's items and a fold's
+/// body count, since the figure is still drawn there.
+fn pictured(blocks: &[Block]) -> bool {
+    blocks.iter().any(|b| match b {
+        Block::Figure(_) => true,
+        Block::List { items, .. } => items.iter().any(|i| pictured(&i.blocks)),
+        Block::Fold(fold) => pictured(&fold.body),
+        Block::Quote(quoted) => pictured(quoted),
+        _ => false,
+    })
+}
+
+fn words(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+
+/// A now, as a use or a step writes it: over about fifteen words, and the
+/// inline problems in it.
+fn check_now(now: Option<&str>, at: &Spot, found: &mut Vec<Spotted>) {
+    let Some(now) = now else { return };
+    if words(now) > 15 {
+        found.push(Spotted {
+            at: at.clone(),
+            line: None,
+            problem: Problem::Wordy,
+        });
+    }
+    let (_, problems) = harness_body::inline(now, KINDS);
+    found.extend(problems.into_iter().map(|f| Spotted {
+        at: at.clone(),
+        line: None,
+        problem: f.problem,
+    }));
+}
+
 fn spot_name(spot: &Spot) -> String {
     match spot {
         Spot::Lead => "The lead".into(),
-        Spot::Facts => "The facts".into(),
+        Spot::End => "The end".into(),
+        Spot::Use(key) => format!("The use `{key}`"),
+        Spot::Now => "The now".into(),
         Spot::Step(key) => format!("The step `{key}`"),
         Spot::Ask(_) => "An ask".into(),
         Spot::Why => "Why this route".into(),
@@ -319,9 +369,12 @@ pub fn explain(problem: &Problem) -> String {
         Problem::Table { why } => format!("a table that reads badly: {why}."),
         Problem::Nested => "nested too deep, drawn as its text: folds do not nest, and nothing nests past 16 levels.".into(),
         Problem::Summary => "a fold's summary that is a label: say what is inside, in under 100 characters.".into(),
-        Problem::Lead => "over 70 characters, or the task's title again: the lead is the question of an ask on your page, or else the one fact Max most needs, in a line.".into(),
-        Problem::Told => "told rather than shown: over 80 words of paragraphs with no table, figure, code or quote. Put the facts that line up in a table, the system in a figure, the log line as code, and keep only the sentences a picture can't carry.".into(),
-        Problem::Now => "over about fifteen words: a step's now is where its thing stands, in a few words (\"#284, live since 10:14\"); put the detail in its body.".into(),
+        Problem::Lead => "over 70 characters, or the task's title or the end's goal again: the lead is the question of an ask on your page, or else the one fact Max most needs, in a line.".into(),
+        Problem::Told => "told rather than shown: over 80 words of paragraphs with no table, figure, code or quote. Put what lines up in a table, the system in a figure, the log line as code, and keep only the sentences a picture can't carry.".into(),
+        Problem::Unseen => "no end, or an end with no figure: `describe` the `end`: the goal in a line, the system as it will be as a ```mermaid figure (what doesn't exist yet `planned`) or the mockup, and the uses, so Max can check you're aiming at the right thing before he reads where it stands.".into(),
+        Problem::Wordy => "too long to read at a glance: a goal is a line of about twenty words, and a use or a now a few words (\"You pan the map on your phone and it keeps up\", \"#284, live since 10:14\"); put the detail in a body.".into(),
+        Problem::NoNow => "no `now`: say where it stands in a few words (\"in review\", \"only in the mockups\", \"#284, live since 10:14\"); a done step's now is its proof, not its body.".into(),
+        Problem::Escaped => "line breaks that arrived as the two characters `\\n`, so it draws as one paragraph: send real line breaks.".into(),
     }
 }
 
@@ -351,7 +404,36 @@ fn present(state: &State, owner: TaskId, call: CallId) -> Result<Done, String> {
 #[serde(deny_unknown_fields)]
 struct DescribeIn {
     title: Option<String>,
+    end: Option<EndIn>,
     plan: Option<Vec<StepIn>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EndIn {
+    goal: String,
+    shows: Option<String>,
+    #[serde(default)]
+    uses: Vec<UseIn>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UseIn {
+    key: String,
+    does: String,
+    stands: StandsIn,
+    now: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StandsIn {
+    Works,
+    Partly,
+    NotYet,
+    Broken,
+    Unknown,
 }
 
 #[derive(Deserialize)]
@@ -378,10 +460,77 @@ enum SaidIn {
     Failed,
 }
 
-fn describe(owner: TaskId, input: Value) -> Result<Done, String> {
-    let DescribeIn { title, plan } = parse(input)?;
+/// The end as `describe` gives it, its problems listed in `found`.
+fn end_of(given: EndIn, values: &mut Vec<Bytes>, found: &mut Vec<Spotted>) -> Result<End, String> {
+    let EndIn { goal, shows, uses } = given;
+    let spot = |found: &mut Vec<Spotted>, at: &Spot, problem: Problem, line: Option<u32>| {
+        found.push(Spotted {
+            at: at.clone(),
+            line,
+            problem,
+        })
+    };
+    if words(&goal) > 20 {
+        spot(found, &Spot::End, Problem::Wordy, None);
+    }
+    let shows = match shows {
+        Some(markdown) => {
+            let (body, problems) = harness_body::body(&markdown, KINDS);
+            if !pictured(&body.blocks) {
+                spot(found, &Spot::End, Problem::Unseen, None);
+            }
+            for f in problems {
+                spot(found, &Spot::End, f.problem, f.line);
+            }
+            Some(stash(values, markdown))
+        }
+        None => {
+            spot(found, &Spot::End, Problem::Unseen, None);
+            None
+        }
+    };
+    let mut out: Vec<Use> = Vec::new();
+    for u in uses {
+        if out.iter().any(|o| o.key == u.key) {
+            return Err(format!("two uses have the key `{}`", u.key));
+        }
+        let at = Spot::Use(u.key.clone());
+        if words(&u.does) > 15 {
+            spot(found, &at, Problem::Wordy, None);
+        }
+        let stands = match u.stands {
+            StandsIn::Works => Stands::Works,
+            StandsIn::Partly => Stands::Partly,
+            StandsIn::NotYet => Stands::NotYet,
+            StandsIn::Broken => Stands::Broken,
+            StandsIn::Unknown => Stands::Unknown,
+        };
+        let now = u.now.filter(|n| !n.trim().is_empty());
+        if stands != Stands::Works && now.is_none() {
+            spot(found, &at, Problem::NoNow, None);
+        }
+        check_now(now.as_deref(), &at, found);
+        out.push(Use {
+            key: u.key,
+            does: u.does,
+            stands,
+            now,
+        });
+    }
+    Ok(End {
+        goal,
+        shows,
+        uses: out,
+    })
+}
+
+fn describe(state: &State, owner: TaskId, input: Value) -> Result<Done, String> {
+    let DescribeIn { title, end, plan } = parse(input)?;
     let mut values = Vec::new();
     let mut found: Vec<Spotted> = Vec::new();
+    let end = end
+        .map(|e| end_of(e, &mut values, &mut found))
+        .transpose()?;
     let plan = match plan {
         None => None,
         Some(steps) => {
@@ -399,21 +548,15 @@ fn describe(owner: TaskId, input: Value) -> Result<Done, String> {
                     },
                 };
                 let at = Spot::Step(s.key.clone());
-                if (s.now.as_deref()).is_some_and(|n| n.split_whitespace().count() > 15) {
+                let now = s.now.filter(|n| !n.trim().is_empty());
+                if matches!(said, Said::Done | Said::Doing) && s.of.is_none() && now.is_none() {
                     found.push(Spotted {
                         at: at.clone(),
                         line: None,
-                        problem: Problem::Now,
+                        problem: Problem::NoNow,
                     });
                 }
-                for text in s.now.iter() {
-                    let (_, problems) = harness_body::inline(text, KINDS);
-                    found.extend(problems.into_iter().map(|f| Spotted {
-                        at: at.clone(),
-                        line: None,
-                        problem: f.problem,
-                    }));
-                }
+                check_now(now.as_deref(), &at, &mut found);
                 for markdown in s.body.iter() {
                     let (_, problems) = harness_body::body(markdown, KINDS);
                     found.extend(problems.into_iter().map(|f| Spotted {
@@ -429,7 +572,7 @@ fn describe(owner: TaskId, input: Value) -> Result<Done, String> {
                     after: s.after,
                     of: s.of.as_deref().map(reference).transpose()?,
                     said,
-                    now: s.now,
+                    now,
                     body,
                 });
             }
@@ -446,19 +589,36 @@ fn describe(owner: TaskId, input: Value) -> Result<Done, String> {
             Some(out)
         }
     };
-    let said = match (&title, &plan) {
-        (_, Some(plan)) => listed(
-            &format!("Described: a plan of {} steps.", plan.len()),
-            found,
-        ),
-        (Some(_), None) => "Described: the title is set.".to_string(),
-        (None, None) => "Nothing to describe: give a `title`, a `plan`, or both.".to_string(),
+    // A plan with no end to go with it, given now or before.
+    let had = state.task(owner).and_then(|t| t.description.end.as_ref());
+    if plan.is_some() && end.is_none() && had.is_none() {
+        found.push(Spotted {
+            at: Spot::End,
+            line: None,
+            problem: Problem::Unseen,
+        });
+    }
+    let mut parts = Vec::new();
+    if title.is_some() {
+        parts.push("the title".to_string());
+    }
+    if let Some(end) = &end {
+        parts.push(format!("an end of {} uses", end.uses.len()));
+    }
+    if let Some(plan) = &plan {
+        parts.push(format!("a plan of {} steps", plan.len()));
+    }
+    let said = match parts.is_empty() {
+        true => {
+            "Nothing to describe: give a `title`, an `end`, a `plan`, or any of them.".to_string()
+        }
+        false => listed(&format!("Described: {}.", parts.join(", ")), found),
     };
     Ok(Done {
         values,
         facts: vec![Fact::Task(
             owner,
-            TaskEvent::Described(Description { title, plan }),
+            TaskEvent::Described(Description { title, end, plan }),
         )],
         said,
     })
@@ -780,13 +940,13 @@ pub fn tools() -> Vec<Tool> {
     let definitions = [
         json!({
             "name": PAGE_WRITE,
-            "description": "Stage your whole page: the lead, the facts and why this route. Your plan, from `describe`, is drawn between the lead and the facts. Max sees it when you `present` it.",
+            "description": "Stage your page's written parts: the lead, the now and why this route. The harness draws the end from `describe` under the lead, then the now, then your plan with its asks, then why. Max sees it when you `present` it.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "lead": { "type": "string", "description": "The question of an ask on this page, or else the fact Max most needs: the problem or the news, bad news first. Under 70 characters; never a request." },
-                    "facts": markdown("What backs the lead and the steps' nows, shown: the log line, the table of what you checked, the before and after, a figure. Body markdown."),
-                    "why": markdown("What he might overturn: the routes he'd think of and why not, the calls you made for him, where the plan stops short. Body markdown; a table where they line up.")
+                    "lead": { "type": "string", "description": "The question of an ask on this page, or else the fact Max most needs: the problem or the news, bad news first. Under 70 characters; never a request, and never the end's goal again." },
+                    "now": markdown("How things are today, shown: a screenshot, the output, the log line, the table of what you checked and what each showed. What backs the lead and the uses' marks; not the end or the plan again. Body markdown."),
+                    "why": markdown("What he might overturn: the routes he'd think of and why not, the calls you made for him, where the plan stops short of the end. Body markdown; a table where they line up.")
                 },
                 "required": ["lead"],
                 "additionalProperties": false
@@ -819,24 +979,49 @@ pub fn tools() -> Vec<Tool> {
         }),
         json!({
             "name": DESCRIBE,
-            "description": "Say your title, your plan, or both: each replaces only itself. The plan is where your work ends and where each part of it stands, drawn on your page with your asks inside their steps.",
+            "description": "Say your title, where your work ends, your plan, or any of them: each replaces only itself. Max reads your end right under your page's lead, before anything else, and your plan last, with your asks inside their steps.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "title": { "type": "string", "description": "What the work does, in Max's nouns." },
+                    "end": {
+                        "type": "object",
+                        "description": "Where the work is going, stepped back far enough that Max can tell you're aiming at the right thing: his goal, the system as it will be, and what he does with it. Replaces the end whole.",
+                        "properties": {
+                            "goal": { "type": "string", "description": "What he wants it for, in a line: the reason the system exists, as you understand it: \"Every agent's page puts you level with it in a minute's reading\"." },
+                            "shows": markdown("The system as it will be, as a figure: a ```mermaid block of its parts, how they connect and where he is in it, with what doesn't exist yet `planned`, or the mockup. Then where your end departs from his words: quote them and say why, in a table. Body markdown."),
+                            "uses": {
+                                "type": "array",
+                                "description": "What he does with it once it's done, most important first.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "key": { "type": "string", "description": "Your name for it, unique in the end; never shown." },
+                                        "does": { "type": "string", "description": "Who does what, and what happens, in a line: \"You pan the map on your phone and it keeps up\"." },
+                                        "stands": { "type": "string", "enum": ["works", "partly", "not_yet", "broken", "unknown"], "description": "Whether it works today." },
+                                        "now": { "type": "string", "description": "Unless it works, where it stands, in a few words: \"only in the mockups\". Inline markdown." }
+                                    },
+                                    "required": ["key", "does", "stands"],
+                                    "additionalProperties": false
+                                }
+                            }
+                        },
+                        "required": ["goal", "uses"],
+                        "additionalProperties": false
+                    },
                     "plan": {
                         "type": "array",
-                        "description": "Every step, done ones included, in order. Replaces the plan whole.",
+                        "description": "The work from the now to the end, drawn last: every step, done ones included, in order. Replaces the plan whole.",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "key": { "type": "string", "description": "Your name for it, unique in the plan; never shown." },
-                                "title": { "type": "string", "description": "What will be true once it's done, in Max's nouns, short enough for a node." },
+                                "title": { "type": "string", "description": "What it makes true once done, in Max's nouns, short enough for a node." },
                                 "after": { "type": "array", "items": { "type": "string" }, "description": "The keys of the steps it waits on. Default: the step before it." },
                                 "of": { "type": "string", "description": "The live thing it is, once there is one: `task:<id>`." },
                                 "said": { "type": "string", "enum": ["planned", "doing", "done", "failed"] },
                                 "failed": { "type": "string", "description": "Why, when it failed." },
-                                "now": { "type": "string", "description": "Where what the title names stands today, in a few words; a done step's is its proof. Inline markdown." },
+                                "now": { "type": "string", "description": "Where it stands today, in a few words: \"in review\", \"#284, live since 10:14\". A done step's is its proof. Needed on a step done or doing. Inline markdown." },
                                 "body": markdown("Body markdown: what the step changes and how, and why it is there if it is your own addition.")
                             },
                             "required": ["key", "title"],
@@ -855,7 +1040,7 @@ pub fn tools() -> Vec<Tool> {
                 "properties": {
                     "key": { "type": "string", "description": "Your name for it. Asking again under an open ask's key revises it." },
                     "question": { "type": "string", "description": "What he is asked, in words he can answer by talking." },
-                    "end": { "type": "string", "description": "What is true once it is answered and acted on, in a few words." },
+                    "end": { "type": "string", "description": "What is true once it is answered and acted on, in a few words: a part of your end." },
                     "now": { "type": "string", "description": "Where that stands now, in a few words: inline markdown." },
                     "why": { "type": "string", "description": "Why the answer gets from now to the end, and why it is his to give: inline markdown." },
                     "shows": markdown("Body markdown that shows the choice: the options as a table, a figure."),

@@ -1,12 +1,14 @@
 //! A task's page as a tab draws it: the newest version Max was shown, its
 //! bodies parsed by the one parser the brain checked them with
-//! ([`harness_body`]), and the live half drawn as it stands now: the plan's
-//! steps, each with where it stands, and the asks inside them.
+//! ([`harness_body`]), and the task's own half drawn as it stands now: the
+//! end, each use with whether it works today and what moved since Max
+//! agreed with it, and the plan's steps, each with where it stands, with
+//! the asks inside them.
 
 use harness_core::ask::Ask;
 use harness_core::context::Entry;
 use harness_core::id::ValueId;
-use harness_core::page::{Ref, Said, Step};
+use harness_core::page::{Ref, Said, Stands, Step};
 use harness_core::state::State;
 use harness_core::task::{Phase, Task};
 use harness_program::page::KINDS;
@@ -84,11 +86,31 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
                 "state": state_of(s, yours),
                 "failed": match &s.said { Said::Failed { why } => Some(why), _ => None },
                 "body": body(s.body),
-                "changed": page.changed(s),
                 "asks": asks,
             })
         })
         .collect();
+    // The end, and what of it moved since Max agreed with it.
+    let end = t.description.end.as_ref().map(|end| {
+        let uses: Vec<Value> = (end.uses.iter())
+            .map(|u| {
+                json!({
+                    "key": u.key,
+                    "does": u.does,
+                    "state": mark(u.stands),
+                    "now": u.now.as_deref().map(inline),
+                    "changed": page.changed(|a| a.uses.iter().any(|x| x.key == u.key && x.does == u.does)),
+                })
+            })
+            .collect();
+        json!({
+            "goal": end.goal,
+            "goal_changed": page.changed(|a| a.goal == end.goal),
+            "shows": body(end.shows),
+            "shows_changed": page.changed(|a| a.shows == end.shows),
+            "uses": uses,
+        })
+    });
     let current = matches!(t.phase(), Some(Phase::AwaitingMax)) && newest.held >= t.since;
     // A quick answer: the response that last presented said something,
     // which the chat shows as a line above the page.
@@ -105,7 +127,8 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
         "current": current,
         "lead": newest.sheet.lead.title,
         "quick": quick,
-        "facts": body(newest.sheet.facts),
+        "end": end,
+        "now": body(newest.sheet.now),
         "plan": steps,
         "asks": loose,
         "why": body(newest.sheet.why),
@@ -133,6 +156,17 @@ fn now(state: &State, step: &Step) -> Option<String> {
         _ => None,
     };
     bound.or_else(|| step.now.clone())
+}
+
+/// A use's mark, in the step state whose tone it shares.
+fn mark(stands: Stands) -> &'static str {
+    match stands {
+        Stands::Works => "done",
+        Stands::Partly => "working",
+        Stands::NotYet => "planned",
+        Stands::Broken => "failed",
+        Stands::Unknown => "unknown",
+    }
 }
 
 /// A step's mark: what the agent said, unless an open ask in it makes it
