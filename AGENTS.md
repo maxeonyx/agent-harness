@@ -12,6 +12,7 @@ The repo was reset on 2026-10-16 (NZT). The earlier attempt is the unconnected t
 - [`docs/glossary.md`](docs/glossary.md): read when a word in the vision, the plan or Max's messages is unfamiliar, or when naming something in code.
 - [`docs/underview-stories.html`](docs/underview-stories.html): read before designing the graph, questions, user actions, the attention scheduler or anything else that decides what reaches Max. The needs behind Underview, his work dashboard and its agents, as user stories with the episode that showed each need; its last section lists the tensions a design has to settle.
 - [`docs/opencode-fork.md`](docs/opencode-fork.md): read before building a feature his OpenCode fork had, so the behaviour matches.
+- [`docs/themes.md`](docs/themes.md): read before making a new theme (the art an area's pages and map region wear) or changing one: how a theme gets made and judged, and what was tried and not taken.
 
 ## What is settled
 
