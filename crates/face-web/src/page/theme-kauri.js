@@ -494,7 +494,7 @@ function blade(x0, y0, a, len, curl, N = 10) {
 // scale, their crown outlined round a numbered trunk. A track winds through on the dry ground.
 function chart(ctx, s) {
   const { w, h, mass, calm, n } = s, { grid, iso, chains, within, poly, lines, length, scatter, dots, tint, ok, okRgb, ease } = s.kit;
-  const INK = [0.44, 0.045, 150];
+  const INK = [0.5, 0.035, 150];
   const forest = grid(w, h, 4, (x, y) => mass(x, y) * (0.5 + 0.5 * n.fbm(x * 0.0055 + 2, y * 0.007 - 1, 4)));
   const kind = grid(w, h, 6, (x, y) => n.fbm(x * 0.0042 - 7, y * 0.0052 + 3, 3));
   const EDGE = 0.36, SCRUB = EDGE - 0.1, KAURI = 0.1;
@@ -516,13 +516,13 @@ function chart(ctx, s) {
   // Crowns, kept off the streams and away from the nodes: kauri stands a field of small open rings,
   // the rest of the bush a stipple of crowns.
   const rings = [], stip = [], pick = s.stream("crownkind");
-  for (const [x, y] of scatter(s.stream("canopy"), w, h, 3.3, (x, y) => (forest.at(x, y) > EDGE + 0.012 ? 0.8 * calm(x, y) : 0))) {
+  for (const [x, y] of scatter(s.stream("canopy"), w, h, 3.9, (x, y) => (forest.at(x, y) > EDGE + 0.012 ? 0.8 * calm(x, y) : 0))) {
     if (inGiant(x, y)) continue;
     const r = pick();
-    if (isKauri(x, y)) { if (r < 0.7) rings.push([x, y, 0.85 + 0.5 * pick()]); }
+    if (isKauri(x, y)) { if (r < 0.45) rings.push([x, y, 0.85 + 0.5 * pick()]); }
     else stip.push([x, y, 0.28 + 0.42 * r * r]);
   }
-  dots(ctx, stip, ok(...INK, 0.5));
+  dots(ctx, stip, ok(...INK, 0.46));
   ctx.beginPath();
   for (const [x, y, r] of rings) { ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 6.283); }
   ctx.strokeStyle = ok(...INK, 0.5); ctx.lineWidth = 0.3; ctx.stroke();

@@ -3,19 +3,22 @@
 //
 // What it depicts: an old atlas, hand-tinted. Every area is a territory, the land within `reach` of
 // its nodes, names and streams; where two areas come near each other the land between is shared out
-// down the middle, so neighbours meet at one border and no paper bay is left between them. Each is
-// tinted in a faded watercolour wash of its theme's hue (`map.hue`), darker where the wash dried at its
-// edge, grainy where the pigment settled, and paler up its history. Inside it, its theme draws its
-// subject as a map in one ink (`chart(ctx, scene)`): Harbour's as a nautical chart, Tussock's as a
-// topographic sheet. The chart is fullest round the present row and fades up the history; it is
-// quieter over the streams, and gone round every node and name, as a map clears its linework round a
-// label. Up its history a territory is its wash, its border and its name, lettered in spaced capitals.
+// down the middle, so the areas make one landmass with one coast, cut into territories by seams that
+// run to the coast. Each is tinted in a faded watercolour wash of its theme's hue (`map.hue`), darker
+// where the wash dried at its edge, grainy where the pigment settled, and paler up its history; the
+// land hides the map's dot grid. Inside it, its theme draws its subject as a map in one ink
+// (`chart(ctx, scene)`): Harbour's as a nautical chart, Tussock's as a topographic sheet. The chart is
+// fullest round the present row and fades up the history, and clears a narrow margin round every
+// stream, node and name, as a map clears its linework round a label. Up its history a territory is
+// its wash, its border and its name, lettered in spaced capitals.
 //
 // Technique. One distance field per area on a grid of `cell` map units (Felzenszwalb's transform,
-// seeded with its node and name boxes and the points of its streams), wobbled by low noise of its own;
-// f = min(max(reach - d, (2 reach + corridor - d - d_other) / 2), (d_other - d) / 2) is each area's
-// signed distance to its border, smoothed, and traced by marching squares into rings. The whole map is
-// drawn at once, since every border is shared. A chart draws on a recording context: every stroke,
+// seeded with its node and name boxes and the points of its streams), wobbled by low noise of its own.
+// Each area claims max(reach - d, (2 reach + corridor - d - d_other) / 2): the highest claim is the
+// land, and its zero line the coast. Each area's cell is (d_other - d) / 2, positive where it is the
+// nearest; the cell's edge inside the land is a seam, the same midline traced from either side. A
+// territory is its cell clipped by the land, so a seam meets the coast in a clean T. The whole map is drawn at once, since every border is shared.
+// A chart draws on a recording context: every stroke,
 // dark fill and letter becomes SVG in map units, so the browser draws it sharp at every zoom and
 // nothing is drawn again as the camera moves; every pale fill and picture goes to the area's wash, a
 // small picture at `tintScale` pixels per map unit. Each stroke is cut into pieces by how quiet the
@@ -34,8 +37,9 @@ const LOOK = {
   clear: 34,       // no border nearer a node or a name than this
   bridge: 40,      // a sliver of paper narrower than about twice this between two territories is closed
   ribbon: [2.5, 4, 0.22], // the band of tint just inside the border: inset, width, opacity
-  coast: [1.3, 0.85], // the coast's line: width and opacity; a seam is lighter
-  waterlines: [[5, 0.34], [11, 0.22], [19, 0.12]], // the lines round a coast, out on the paper, as an old chart draws its shores: distance and opacity
+  coast: 1.15,     // the coast's line, in map units; a seam is lighter and finer
+  seam: 0.8,
+  waterlines: [[5, 0.34], [11, 0.22], [19, 0.12]], // the lines round the coast, out on the paper, as an old chart draws its shores: distance and strength
   wash: 0.55,      // the wash's body, as opacity over the map's ground
   wet: 0.42,       // and its dried edge, at the coast, fading over `wetIn` map units inside it
   wetIn: 7,
@@ -47,10 +51,10 @@ const LOOK = {
   tintScale: 0.5,  // the wash, in pixels per map unit
   levels: [0.22, 0.42, 0.62, 0.82, 1], // the ink levels a stroke's pieces are sorted into
 };
-// An area's hue as its wash's body and dried edge, its border, and its lettering.
-const inks = (hue) => ({ fill: fromOklch(0.965, 0.016, hue), wet: fromOklch(0.83, 0.038, hue), band: fromOklch(0.8, 0.05, hue), line: fromOklch(0.5, 0.035, hue) });
-// The seam between two territories belongs to both: one neutral ink.
-const SEAM = fromOklch(0.52, 0.012, 80);
+// An area's hue as its wash's body and dried edge, the band inside its border, and its lettering.
+const inks = (hue) => ({ fill: fromOklch(0.965, 0.013, hue), wet: fromOklch(0.83, 0.03, hue), band: fromOklch(0.8, 0.04, hue), line: fromOklch(0.5, 0.035, hue) });
+// The coast, the seams and the water lines belong to the whole map: one neutral ink.
+const COAST = fromOklch(0.46, 0.014, 80), SEAM = fromOklch(0.56, 0.012, 80);
 const ss = (a, b, t) => { t = Math.min(1, Math.max(0, (t - a) / (b - a))); return t * t * (3 - 2 * t); };
 const f1 = (v) => (Math.round(v * 10) / 10).toString();
 const f3 = (v) => (Math.round(v * 1000) / 1000).toString();
@@ -122,87 +126,94 @@ export function territories(areas, lines, paper, look = LOOK) {
     if (k < 0) continue;
     for (let m = 0; m < areas.length; m++) if (m !== k && dist[m][c] < dist[k][c] + 2 * (look.clear - best)) dist[m][c] = dist[k][c] + 2 * (look.clear - best);
   }
-  // Each area's signed distance to its border: its own reach, or the corridor it shares with its
-  // nearest neighbour, cut down the middle.
-  const field = areas.map((_, k) => {
-    let f = new Float32Array(N);
+  // Each area's claim on the land: its own reach, or the corridor it shares with its nearest
+  // neighbour; and its cell, how much nearer it is than that neighbour, halved (the midline between
+  // them is the seam). Each smoothed, which rounds the corners where claims meet.
+  const claims = [], cells = [], across = areas.map(() => new Int16Array(N));
+  areas.forEach((_, k) => {
+    let claim = new Float32Array(N), cellK = new Float32Array(N);
     const dk = dist[k];
     for (let c = 0; c < N; c++) {
-      let other = Infinity;
-      for (let m = 0; m < areas.length; m++) if (m !== k && dist[m][c] < other) other = dist[m][c];
-      const claim = other === Infinity ? reach - dk[c] : Math.max(reach - dk[c], (2 * reach + look.corridor - dk[c] - other) / 2);
-      f[c] = Math.min(claim, (other - dk[c]) / 2);
+      let other = Infinity, om = -1;
+      for (let m = 0; m < areas.length; m++) if (m !== k && dist[m][c] < other) { other = dist[m][c]; om = m; }
+      across[k][c] = om;
+      claim[c] = other === Infinity ? reach - dk[c] : Math.max(reach - dk[c], (2 * reach + look.corridor - dk[c] - other) / 2);
+      cellK[c] = other === Infinity ? 1e6 : (other - dk[c]) / 2;
     }
-    for (let p = 0; p < look.smooth; p++) f = blur(f, nx, ny);
-    return f;
+    for (let p = 0; p < look.smooth; p++) { claim = blur(claim, nx, ny); cellK = blur(cellK, nx, ny); }
+    claims.push(claim); cells.push(cellK);
   });
-  // Close the slivers of paper where two territories nearly meet: lift every field there by the same
-  // amount, so the seam between them stays where it was and only the coast moves out.
+  // Sea at the grid's edge, so every line traced closes.
+  const sea = (f) => { for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) if (!i || !j || i === nx - 1 || j === ny - 1) f[j * nx + i] = Math.min(f[j * nx + i], -1); return f; };
+  // All the land, one landmass: positive inside the coast, negative out on the paper. Where two
+  // claims nearly meet, the land is lifted, so no sliver of paper is left between them.
+  const land = new Float32Array(N);
   for (let c = 0; c < N; c++) {
     let a = -Infinity, b = -Infinity;
-    for (let m = 0; m < areas.length; m++) { const v = field[m][c]; if (v > a) { b = a; a = v; } else if (v > b) b = v; }
-    const lift = look.bridge * ss(-look.bridge, 0, b);
-    if (lift > 0) for (let m = 0; m < areas.length; m++) field[m][c] += lift;
+    for (const f of claims) { const v = f[c]; if (v > a) { b = a; a = v; } else if (v > b) b = v; }
+    land[c] = a + look.bridge * ss(-look.bridge, 0, b);
   }
-  // One partition of the land: each territory's `part` is positive inside it and zero on its coast and
-  // on each seam, which it shares exactly with its neighbour (both are traced from the same
-  // difference), so a seam is one line.
-  const other = areas.map(() => new Float32Array(N)), across = areas.map(() => new Int16Array(N));
-  for (let c = 0; c < N; c++) for (let k = 0; k < areas.length; k++) {
-    let o = -Infinity, om = -1;
-    for (let m = 0; m < areas.length; m++) if (m !== k && field[m][c] > o) { o = field[m][c]; om = m; }
-    other[k][c] = o; across[k][c] = om;
-  }
-  const part = field.map((fk, k) => fk.map((v, c) => Math.min(v, other[k][c] === -Infinity ? Infinity : (v - other[k][c]) / 2)));
-  // Sea at the grid's edge, so every border is a closed ring.
-  for (const f of part) for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) if (!i || !j || i === nx - 1 || j === ny - 1) f[j * nx + i] = Math.min(f[j * nx + i], -1);
-  // All the land: how far inside the nearest coast, negative out on the paper.
-  const land = new Float32Array(N).fill(-Infinity);
-  for (const f of part) for (let c = 0; c < N; c++) if (f[c] > land[c]) land[c] = f[c];
+  sea(land);
+  cells.forEach(sea);
+  // Each territory: how far inside it, to its coast or to a seam, which it shares exactly with its
+  // neighbour (both are traced from the same midline), so a seam is one line.
+  const part = cells.map((ck) => sea(ck.map((v, c) => Math.min(v, land[c]))));
+  const trace = (f) => contour(f, nx, ny, gx, gy).map((r) => simplify(smooth(smooth(smooth(r))), 0.15));
+  // The water lines round the coast, each run drawn by the area whose cell it lies in.
+  const shores = look.waterlines.map(([off, op]) => [trace(sea(land.map((v) => v + off))), op]);
   const sample = (g, x, y) => {
     const fi = Math.min(nx - 1.001, Math.max(0, (x - X0) / cell)), fj = Math.min(ny - 1.001, Math.max(0, (y - Y0) / cell)), i = Math.floor(fi), j = Math.floor(fj), u = fi - i, v = fj - j, c = j * nx + i;
     return (g[c] * (1 - u) + g[c + 1] * u) * (1 - v) + (g[c + nx] * (1 - u) + g[c + nx + 1] * u) * v;
   };
-  // How much ink the map lets a chart put down: less over the streams, none round a node or a name,
-  // and, up its history, fading out.
-  const calm = (x, y) => (0.2 + 0.8 * ss(4, 34, sample(lineD, x, y))) * ss(22, 40, sample(near, x, y));
+  // How much ink the map lets a chart put down: none in a narrow margin round every stream, node and
+  // name, all of it a few units out, and, up its history, fading out.
+  const calm = (x, y) => ss(2.5, 6, sample(lineD, x, y)) * ss(4, 9, sample(near, x, y));
   const hist = (y) => (y > -30 ? 1 : 0.5 + 0.5 * ss(-360, -30, y)) * ss(-look.rise, -look.rise + 600, y);
   const grain = grainTile();
 
-  const unknown = new Set(), out = [];
+  const unknown = new Set(), out = [], ground = rgb(paper);
+  const border = { fill: "none", "stroke-linejoin": "round", "stroke-linecap": "round" };
   areas.forEach((a, k) => {
-    const c = inks(a.theme.map?.hue ?? 90), fk = part[k];
-    const rings = contour(fk, nx, ny, gx, gy).map((r) => simplify(smooth(smooth(smooth(r))), 0.35));
-    if (!rings.length) return;
-    let bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity;
-    for (const r of rings) for (const [x, y] of r) { bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x); by0 = Math.min(by0, y); by1 = Math.max(by1, y); }
-    const box = { x: Math.floor(bx0) - 4, y: Math.floor(by0) - 4 };
-    box.w = Math.ceil(bx1) + 4 - box.x; box.h = Math.ceil(by1) + 4 - box.y;
-    const clip = `territory-${String(a.id).replace(/[^\w-]/g, "_")}`;
+    const c = inks(a.theme.map?.hue ?? 90), fk = part[k], ck = cells[k];
+    // Its box: its territory, and a margin.
+    let i0 = nx, i1 = -1, j0 = ny, j1 = -1;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (land[j * nx + i] > -1 && ck[j * nx + i] > -1) { i0 = Math.min(i0, i); i1 = Math.max(i1, i); j0 = Math.min(j0, j); j1 = Math.max(j1, j); }
+    if (i1 < 0) return;
+    const box = { x: gx(i0) - 2 * cell, y: gy(j0) - 2 * cell, w: (i1 - i0 + 4) * cell, h: (j1 - j0 + 4) * cell };
+    const inBox = (x, y) => Math.min(x - box.x, box.x + box.w - x, y - box.y, box.y + box.h - y);
+    const boxF = new Float32Array(N);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) boxF[j * nx + i] = inBox(gx(i), gy(j));
+    // The land and its cell within the box, as rings: the territory is the one clipped by the other.
+    const shore = trace(land.map((v, q) => Math.min(v, boxF[q]))), cellRings = trace(ck.map((v, q) => Math.min(v, boxF[q])));
+    if (!shore.length || !cellRings.length) return;
+    const id = String(a.id).replace(/[^\w-]/g, "_"), L = `land-${id}`, T = `cell-${id}`;
     const svg = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${box.x} ${box.y} ${box.w} ${box.h}" width="${box.w}" height="${box.h}" style="position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none">`,
-      `<defs><clipPath id="${clip}"><path d="${rings2d(rings)}"/></clipPath></defs>`];
+      `<defs><clipPath id="${L}"><path clip-rule="evenodd" d="${rings2d(shore)}"/></clipPath><clipPath id="${T}"><path clip-rule="evenodd" d="${rings2d(cellRings)}"/></clipPath></defs>`,
+      `<g clip-path="url(#${L})"><g clip-path="url(#${T})">`];
 
-    // Its wash: the body faintly uneven, darker where it dried at the coast, grainy, paler up its
-    // history, and stopping a little short of the border line here and there, as a hand-laid wash does.
+    // Its wash, laid over the map's ground so the land hides the dot grid: the body faintly uneven,
+    // darker where it dried at its border, grainy, paler up its history, and stopping a little short
+    // of the border here and there, as a hand-laid wash does. It reaches a little past its seams, under
+    // its neighbour's, so no ground shows between them.
     const ts = Math.min(look.tintScale, 4096 / box.w, 4096 / box.h), W = Math.max(1, Math.ceil(box.w * ts)), H = Math.max(1, Math.ceil(box.h * ts));
     const tint = new OffscreenCanvas(W, H), tctx = tint.getContext("2d"), img = tctx.createImageData(W, H), px = img.data;
     const fill = rgb(c.fill), wet = rgb(c.wet), bloom = blooms[k], n = noise(`wash:${a.seed}`);
     for (let j = 0, i = 0; j < H; j++) for (let q = 0; q < W; q++, i += 4) {
-      const x = box.x + (q + 0.5) / ts, y = box.y + (j + 0.5) / ts, f = sample(fk, x, y);
-      if (f < -1) continue;
-      const short = f < 6 ? 1.2 + 1.2 * n.n2(x / 40, y / 40) : 0, inside = ss(-0.8, 0.8, f - short);
-      if (inside <= 0) continue;
+      const x = box.x + (q + 0.5) / ts, y = box.y + (j + 0.5) / ts;
+      const cover = ss(-0.8, 0.8, sample(land, x, y)) * ss(-0.8, 0.8, sample(ck, x, y) + 3);
+      if (cover <= 0) continue;
+      const f = sample(fk, x, y), short = f < 6 ? 1.2 + 1.2 * n.n2(x / 40, y / 40) : 0, inside = ss(-0.8, 0.8, f - short);
       const body = look.wash * (0.82 + 0.18 * bloom((x - X0) / cell, (y - Y0) / cell)), edge = look.wet * Math.exp(-Math.max(0, f - short) / look.wetIn);
       const A = Math.min(1, (body + edge * (1 - body)) * (1 + look.grain * grain[(q & 63) + 64 * (j & 63)]) * (0.55 + 0.45 * ss(-1800, -150, y)) * inside);
       const e = edge / (body + edge);
-      for (let ch = 0; ch < 3; ch++) px[i + ch] = Math.round(fill[ch] * (1 - e) + wet[ch] * e);
-      px[i + 3] = Math.round(255 * A);
+      for (let ch = 0; ch < 3; ch++) px[i + ch] = Math.round(ground[ch] * (1 - A) + (fill[ch] * (1 - e) + wet[ch] * e) * A);
+      px[i + 3] = Math.round(255 * cover);
     }
     tctx.putImageData(img, 0, 0);
 
     // The band of tint inside the border.
     const [inset, width, op] = look.ribbon;
-    const inner = contour(fk.map((v) => v - inset), nx, ny, gx, gy).map((r) => simplify(smooth(smooth(smooth(r))), 0.35));
+    const inner = trace(fk.map((v) => v - inset));
     if (inner.length) svg.push(`<path${attrs({ d: rings2d(inner), fill: "none", stroke: c.band, "stroke-width": width, "stroke-opacity": op, "stroke-linejoin": "round" })}/>`);
 
     // Its chart, in the box from `rise` above the now line to the territory's foot, clipped to it.
@@ -217,14 +228,14 @@ export function territories(areas, lines, paper, look = LOOK) {
         calm: (x, y) => calm(x + cx0, y + cy0),
         n: noise(seed), stream: (p) => rng(`${seed}:${p}`), under: tinted, kit,
       });
-      svg.push(`<g clip-path="url(#${clip})">`);
       for (const [style, d] of sink.paths) svg.push(`<path d="${d}"${style}/>`);
-      svg.push(...sink.texts, "</g>");
-      // The chart's own tints, inside the territory, fading up its history faster than its ink.
+      svg.push(...sink.texts);
+      // The chart's own tints, inside the territory, fading up its history faster than its ink, and
+      // clear of the nodes and names as its ink is.
       const mask = uctx.createImageData(under.width, under.height), md = mask.data;
       for (let j = 0, i = 0; j < under.height; j++) for (let q = 0; q < under.width; q++, i += 4) {
         const x = cx0 + (q + 0.5) / ts, y = cy0 + (j + 0.5) / ts;
-        md[i + 3] = Math.round(255 * ss(-1.5, 1.5, sample(fk, x, y)) * hist(y) ** 2);
+        md[i + 3] = Math.round(255 * ss(-1.5, 1.5, sample(fk, x, y)) * hist(y) ** 2 * ss(4, 9, sample(near, x, y)));
       }
       const mc = new OffscreenCanvas(under.width, under.height);
       mc.getContext("2d").putImageData(mask, 0, 0);
@@ -233,20 +244,19 @@ export function territories(areas, lines, paper, look = LOOK) {
       uctx.drawImage(mc, 0, 0);
       tctx.drawImage(under, (cx0 - box.x) * ts, (cy0 - box.y) * ts);
     }
+    svg.push("</g>");
 
-    // Its border: the coast in its own ink, and each seam once, drawn by the territory listed first,
-    // in the seam's neutral ink.
-    const seamAt = ([x, y]) => sample(field[k], x, y) - sample(other[k], x, y) < cell * 1.5;
-    const mine = ([x, y]) => { const c2 = cellOf(x, y); return c2 < 0 || across[k][c2] > k; };
-    const coast = rings.flatMap((r) => runs(r, (p) => !seamAt(p))), seams = rings.flatMap((r) => runs(r, (p) => seamAt(p) && mine(p)));
-    const border = { fill: "none", "stroke-linejoin": "round", "stroke-linecap": "round" };
-    if (coast.length) svg.push(`<path${attrs({ d: runs2d(coast), stroke: c.line, "stroke-width": look.coast[0], "stroke-opacity": look.coast[1], ...border })}/>`);
-    if (seams.length) svg.push(`<path${attrs({ d: runs2d(seams), stroke: SEAM, "stroke-width": 0.9, "stroke-opacity": 0.7, ...border })}/>`);
-    // The water lines off its coast: the stretches of each where this territory is the nearest land.
-    for (const [off, op] of look.waterlines) {
-      const shore = contour(fk.map((v) => v + off), nx, ny, gx, gy).map((r) => simplify(smooth(smooth(smooth(r))), 0.35))
-        .flatMap((r) => runs(r, ([x, y]) => sample(land, x, y) < sample(fk, x, y) + 0.5));
-      if (shore.length) svg.push(`<path${attrs({ d: runs2d(shore), stroke: c.line, "stroke-width": 0.6, "stroke-opacity": op, ...border })}/>`);
+    // Its seams, each drawn once, by the territory of the two listed later, within the land so each
+    // ends on the coast; then its stretches of the coast, and of the water lines off it.
+    const mine = (x, y) => inBox(x, y) > 1 && sample(ck, x, y) >= 0;
+    const seams = cellRings.flatMap((r) => runs(r, ([x, y]) => { const q = cellOf(x, y); return inBox(x, y) > 1 && sample(land, x, y) > -3 && q >= 0 && across[k][q] < k; }));
+    if (seams.length) svg.push(`<path${attrs({ d: runs2d(seams), stroke: SEAM, "stroke-width": look.seam, ...border })}/>`);
+    svg.push("</g>");
+    const coast = shore.flatMap((r) => runs(r, ([x, y]) => mine(x, y)));
+    if (coast.length) svg.push(`<path${attrs({ d: runs2d(coast), stroke: COAST, "stroke-width": look.coast, ...border })}/>`);
+    for (const [rings, op] of shores) {
+      const lines = rings.flatMap((r) => runs(r, ([x, y]) => sample(ck, x, y) >= 0));
+      if (lines.length) svg.push(`<path${attrs({ d: runs2d(lines), stroke: mix(paper, COAST, op * 1.25), "stroke-width": 0.6, ...border })}/>`);
     }
 
     // Its name, lettered up its history where it is clear of the streams and the border: above the

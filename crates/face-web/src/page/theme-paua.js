@@ -280,11 +280,11 @@ export default {
 };
 
 // On the map: a geological map of a polished shell. Its growth layers ring the apex, eccentric as
-// the shell's ear; a run of layers forms one stratum, its boundary drawn heavier and its body filled
-// with one pattern from a geologist's legend (fine hatching that turns from stratum to stratum, as
-// the nacre's sheen turns; stipple; dashes along the layers; or plain). The tight spiral of the apex,
-// and the row of respiratory pores along one side, sealed toward the apex and open toward the lip.
-// One ink, and one pale tint on the hatched strata.
+// the shell's ear; every five layers make one stratum, its boundary a heavier key line, and the
+// strata are hatched and plain by turns (the hatching turning from stratum to stratum, as the
+// nacre's sheen turns; now and then a stipple instead). The tight spiral of the apex, and the row of
+// respiratory pores along one side, sealed toward the apex and open toward the lip. One ink, and one
+// pale tint on the hatched strata.
 function chart(ctx, s) {
   const { w, h, mass, calm, n } = s, { grid, lines, within, scatter, dots, ok } = s.kit;
   const INK = [0.42, 0.045, 214], r = s.stream("shell");
@@ -299,12 +299,12 @@ function chart(ctx, s) {
   const TH = [];
   for (let th = 0; th <= 6.2832 + 1e-6; th += 0.01) TH.push(th);
   const ring = (rho) => { const p = []; for (const th of TH) p.push(...at(rho, th)); return p; };
-  // Growth layers, closer near the apex, every season's heavier.
+  // Growth layers, closer near the apex.
   const layers = [];
-  for (let rho = 16, k = 0; rho < far; k++) { layers.push(rho); rho += 2 * ((2.2 + 2.6 * Math.sqrt(rho / 300)) * (0.75 + 0.5 * (0.5 + 0.5 * Math.sin(k * 0.9))) + r.range(0, 1.2)); }
-  // Strata: runs of four to nine layers, each with its pattern.
-  const PATTERNS = ["plain", "hatch", "plain", "stipple", "dash", "hatch", "plain", "stipple"], strata = [];
-  for (let k = 0; k < layers.length - 1;) { const len = r.int(4, 9); strata.push({ a: k, b: Math.min(layers.length - 1, k + len), kind: PATTERNS[r.int(0, PATTERNS.length - 1)], angle: r.range(0, 3.14) }); k += len; }
+  for (let rho = 16, k = 0; rho < far; k++) { layers.push(rho); rho += 2.8 * ((2.2 + 2.6 * Math.sqrt(rho / 300)) * (0.8 + 0.4 * (0.5 + 0.5 * Math.sin(k * 0.9))) + r.range(0, 1)); }
+  // Strata: five layers each, hatched and plain by turns, now and then stippled.
+  const strata = [];
+  for (let k = 0, i = r.int(0, 1); k < layers.length - 1; k += 5, i++) strata.push({ a: k, b: Math.min(layers.length - 1, k + 5), kind: i % 2 ? (i % 6 === 3 ? "stipple" : "hatch") : "plain", angle: r.range(0, 3.14) });
   // Each point's layer distance (at()'s rho, inverted), so a stratum's patterns stay inside it.
   const ca = Math.cos(rot), sa = Math.sin(rot);
   const rhoAt = grid(w, h, 2, (x, y) => {
@@ -334,27 +334,19 @@ function chart(ctx, s) {
       x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(w, x1); y1 = Math.min(h, y1);
       if (x1 <= x0 || y1 <= y0) continue;
       const c = Math.cos(st.angle), sn = Math.sin(st.angle), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, half = Math.hypot(x1 - x0, y1 - y0) / 2, hatch = [];
-      for (let d = -half; d < half; d += 4) {
+      for (let d = -half; d < half; d += 3.2) {
         const p = [];
         for (let t = -half; t <= half; t += 1.5) { const x = cx + c * d - sn * t, y = cy + sn * d + c * t; if (x >= x0 - 2 && x <= x1 + 2 && y >= y0 - 2 && y <= y1 + 2) p.push(x, y); }
         hatch.push(p);
       }
-      lines(ctx, within(hatch, (x, y) => stratumOf(x, y) === st && mass(x, y) > 0.03), ok(...INK, 0.32), 0.3);
-    } else if (st.kind === "dash") {
-      // Dashes along the layers: short strokes following each ring between the stratum's bounds.
-      ctx.beginPath();
-      for (let k = st.a; k < st.b; k++) {
-        const mid = (layers[k] + layers[k + 1]) / 2;
-        for (let i = 0; i < TH.length - 1; i += 3) { if ((i / 3 + k) % 2) continue; const [xa, ya] = at(mid, TH[i]), [xb, yb] = at(mid, TH[i + 1]); ctx.moveTo(xa, ya); ctx.lineTo(xb, yb); }
-      }
-      ctx.strokeStyle = ok(...INK, 0.32); ctx.lineWidth = 0.32; ctx.stroke();
+      lines(ctx, within(hatch, (x, y) => stratumOf(x, y) === st && mass(x, y) > 0.03), ok(...INK, 0.4), 0.32);
     }
   }
   // Stipple in its strata, in one pass.
-  dots(ctx, scatter(s.stream("stipple"), w, h, 2.6, (x, y) => (mass(x, y) > 0.03 && stratumOf(x, y)?.kind === "stipple" ? 0.7 * (0.3 + 0.7 * calm(x, y)) : 0)).map(([x, y]) => [x, y, 0.3]), ok(...INK, 0.4));
+  dots(ctx, scatter(s.stream("stipple"), w, h, 2.6, (x, y) => (mass(x, y) > 0.03 && stratumOf(x, y)?.kind === "stipple" ? 0.7 * calm(x, y) : 0)).map(([x, y]) => [x, y, 0.34]), ok(...INK, 0.48));
   const bounds = new Set(strata.map((st) => st.a));
-  lines(ctx, layers.filter((_, k) => !bounds.has(k)).map(ring), ok(...INK, 0.34), 0.32);
-  lines(ctx, layers.filter((_, k) => bounds.has(k)).map(ring), ok(...INK, 0.56), 0.5);
+  lines(ctx, layers.filter((_, k) => !bounds.has(k)).map(ring), ok(...INK, 0.42), 0.34);
+  lines(ctx, layers.filter((_, k) => bounds.has(k)).map(ring), ok(...INK, 0.66), 0.6);
   // The apex: a tight spiral, three turns, the shell's first growth.
   const sp = [];
   for (let t = 0; t < 6.283 * 3; t += 0.05) { const q = 15 * Math.exp(((t - 6.283 * 3) / 6.283) * 1.1); sp.push(ax + Math.cos(t + rot) * q * asp * 0.9, ay + Math.sin(t + rot) * q); }

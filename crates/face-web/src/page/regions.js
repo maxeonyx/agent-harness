@@ -9,8 +9,9 @@ import { centre, CHIP_FONT, graph, label, LABEL_FONT, positions, routes, shown }
 // theme's ink (territories.js). A worker (regions-paint.js) draws the whole
 // map at once, since each border is shared, so the map never waits for it;
 // each area comes back as SVG in the map's units and a small picture of its
-// wash, put in a box in #under, behind the lines, which the camera moves and
-// the browser draws sharp at every zoom. The map is drawn again only when
+// wash, put in two boxes in #under, behind the lines, which the camera moves
+// and the browser draws sharp at every zoom: every wash at the bottom, and
+// every area's ink above all of them, so no wash covers a neighbour's border. The map is drawn again only when
 // its layout or an area's look changes, never as the camera moves, one
 // drawing at a time, and shown in one step when it lands. Every frame the
 // nodes are drawn, each area's box is stretched over where its nodes are
@@ -18,7 +19,7 @@ import { centre, CHIP_FONT, graph, label, LABEL_FONT, positions, routes, shown }
 // area with no look has no territory, and every area stands on the bare
 // ground where a worker cannot draw, or once it fails.
 const under = $("#under"), edges = $("#edges"), map = $("#map");
-const drawn = new Map();   // an area's top -> { el, r, t }: r its nodes' box when drawn, t its drawing's box
+const drawn = new Map();   // an area's top -> { els: [wash, ink], r, t }: r its nodes' box when drawn, t its drawing's box
 let worker = typeof OffscreenCanvas === "function" ? new Worker(new URL("./regions-paint.js", import.meta.url), { type: "module" }) : null;
 let queued = false, inflight = null, shownKey = "", failedKey = "";
 
@@ -53,7 +54,7 @@ export function placeRegions() {
     const { r, t } = d, sx = now.w / r.w, sy = now.h / r.h;
     const tr = now.x === r.x && now.y === r.y && now.w === r.w && now.h === r.h ? ""
       : `translate(${now.x - r.x + (t.x - r.x) * (sx - 1)}px, ${now.y - r.y + (t.y - r.y) * (sy - 1)}px) scale(${sx}, ${sy})`;
-    if (d.el.style.transform !== tr) d.el.style.transform = tr;
+    for (const el of d.els) if (el.style.transform !== tr) el.style.transform = tr;
   }
 }
 
@@ -108,23 +109,25 @@ worker?.addEventListener("message", ({ data: { key, areas, error } }) => {
 
 function show(areas, rs, key) {
   const now = new Set(areas.map((a) => a.id));
-  for (const [id, d] of drawn) if (!now.has(id)) { d.el.remove(); drawn.delete(id); }
+  for (const [id, d] of drawn) if (!now.has(id)) { for (const el of d.els) el.remove(); drawn.delete(id); }
   for (const { id, box: t, svg, tint } of areas) {
     let d = drawn.get(id);
     if (!d) {
-      const el = document.createElement("div");
-      el.style.cssText = "position: absolute; pointer-events: none; transform-origin: 0 0";
-      under.insertBefore(el, edges);
-      d = { el };
+      const els = [under.firstChild, edges].map((before) => {
+        const el = document.createElement("div");
+        el.style.cssText = "position: absolute; pointer-events: none; transform-origin: 0 0";
+        return under.insertBefore(el, before);
+      });
+      d = { els };
       drawn.set(id, d);
     }
-    const canvas = document.createElement("canvas");
+    const [wash, ink] = d.els, canvas = document.createElement("canvas");
     Object.assign(canvas, { width: tint.width, height: tint.height });
     canvas.style.cssText = "position: absolute; left: 0; top: 0; width: 100%; height: 100%";
     canvas.getContext("bitmaprenderer").transferFromImageBitmap(tint);
-    d.el.replaceChildren(canvas);
-    d.el.insertAdjacentHTML("beforeend", svg);
-    Object.assign(d.el.style, { left: `${t.x}px`, top: `${t.y}px`, width: `${t.w}px`, height: `${t.h}px` });
+    wash.replaceChildren(canvas);
+    ink.innerHTML = svg;
+    for (const el of d.els) Object.assign(el.style, { left: `${t.x}px`, top: `${t.y}px`, width: `${t.w}px`, height: `${t.h}px` });
     Object.assign(d, { r: rs.get(id), t });
   }
   shownKey = key;
@@ -137,6 +140,6 @@ worker?.addEventListener("error", (e) => {
   worker.terminate();
   worker = null;
   inflight = null;
-  for (const d of drawn.values()) d.el.remove();
+  for (const d of drawn.values()) for (const el of d.els) el.remove();
   drawn.clear();
 });

@@ -443,11 +443,12 @@ export default {
   },
 };
 
-// On the map: a star atlas. A graticule round a pole beyond the area, the Milky Way a pale band
-// outlined in dotted lines and full of faint stars, stars by magnitude as hairline crosses, a few
-// figures joined, and the moon's path along the ecliptic with its phases.
+// On the map: a star atlas. A faint graticule round a pole beyond the area, the Milky Way a pale band
+// outlined in dotted lines and full of faint stars, stars graded by magnitude (many pinpricks, a few
+// crosses, the brightest ringed) with open sky between, a few long figures joined, and the moon's
+// path along the ecliptic with its phases.
 function chart(ctx, s) {
-  const { w, h, mass, calm, n } = s, { grid, iso, chains, within, lines, scatter, dots, tint, ok, okRgb } = s.kit;
+  const { w, h, mass, calm, n } = s, { grid, iso, chains, within, lines, scatter, dots, tint, ok, okRgb, ease } = s.kit;
   const INK = [0.44, 0.06, 278], r = s.stream("sky");
   const SKY = okRgb(0.958, 0.014, 285), WAY = okRgb(0.94, 0.022, 285);
   // The Milky Way: a broad band across the area, wandering, its density uneven.
@@ -459,7 +460,7 @@ function chart(ctx, s) {
   tint(s.under, w, h, 4, (x, y) => { const m = mass(x, y); return m < 0.02 ? null : [...(way.at(x, y) > 0.42 ? WAY : SKY), Math.round(210 * Math.min(1, m * 1.3))]; });
   lines(ctx, chains(iso(way, 0.42)), ok(...INK, 0.36), 0.38, [0.35, 1.6], 30);
   lines(ctx, chains(iso(way, 0.66)), ok(...INK, 0.3), 0.35, [0.35, 1.6], 30);
-  dots(ctx, scatter(s.stream("dust"), w, h, 3.2, (x, y) => way.at(x, y) * 0.7 * calm(x, y)).map(([x, y]) => [x, y, 0.28]), ok(...INK, 0.4));
+  dots(ctx, scatter(s.stream("dust"), w, h, 4.2, (x, y) => (way.at(x, y) > 0.5 ? way.at(x, y) * 0.7 * calm(x, y) : 0)).map(([x, y]) => [x, y, 0.26]), ok(...INK, 0.38));
   // The graticule: circles of declination round a pole beyond the area, and hour lines from it.
   const px = w * r.range(0.3, 0.7), py = r.chance(0.5) ? h + r.range(500, 900) : -r.range(500, 900);
   const corners = [[0, 0], [w, 0], [0, h], [w, h]], reach = Math.max(...corners.map(([x, y]) => Math.hypot(x - px, y - py)));
@@ -468,25 +469,35 @@ function chart(ctx, s) {
   for (let rad = Math.ceil(near / 80) * 80; rad < reach; rad += 80) { ctx.moveTo(px + rad, py); ctx.arc(px, py, rad, 0, 6.283); }
   const span = Math.asin(Math.min(1, Math.hypot(w, h) / (2 * near))) * 2 + 0.2, base = Math.atan2(h / 2 - py, w / 2 - px);
   for (let a = base - span; a <= base + span; a += Math.PI / 36) { ctx.moveTo(px + Math.cos(a) * near, py + Math.sin(a) * near); ctx.lineTo(px + Math.cos(a) * reach, py + Math.sin(a) * reach); }
-  ctx.strokeStyle = ok(...INK, 0.3); ctx.lineWidth = 0.35; ctx.setLineDash([0.6, 2.2]); ctx.stroke(); ctx.setLineDash([]);
-  // Stars by magnitude, each a hairline cross its arms by magnitude, the brightest ringed.
+  ctx.strokeStyle = ok(...INK, 0.2); ctx.lineWidth = 0.28; ctx.stroke();
+  // Stars graded by magnitude: most a pinprick, the brighter a hairline cross its arms by magnitude,
+  // the brightest ringed; in patches, with open sky between.
   const sr = s.stream("stars"), stars = [];
-  for (const [x, y] of scatter(sr, w, h, 11, (x, y) => mass(x, y) * 0.8)) stars.push([x, y, sr() ** 5]);
+  for (const [x, y] of scatter(sr, w, h, 12, (x, y) => mass(x, y) * (0.25 + 0.75 * ease((n.fbm(x * 0.006 - 9, y * 0.006 + 4, 2) + 0.1) / 0.45)))) stars.push([x, y, sr() ** 4]);
+  dots(ctx, stars.filter(([, , m]) => m <= 0.12).map(([x, y, m]) => [x, y, 0.25 + 1.5 * m]), ok(...INK, 0.6));
   ctx.beginPath();
-  for (const [x, y, m] of stars.filter(([x, y, m]) => m > 0.05 || calm(x, y) > 0.4)) { const a = 0.7 + 1.6 * m; ctx.moveTo(x - a, y); ctx.lineTo(x + a, y); ctx.moveTo(x, y - a); ctx.lineTo(x, y + a); }
-  ctx.strokeStyle = ok(...INK, 0.62); ctx.lineWidth = 0.3; ctx.stroke();
+  for (const [x, y, m] of stars) if (m > 0.12) { const a = 0.8 + 2.8 * m; ctx.moveTo(x - a, y); ctx.lineTo(x + a, y); ctx.moveTo(x, y - a); ctx.lineTo(x, y + a); }
+  ctx.strokeStyle = ok(...INK, 0.66); ctx.lineWidth = 0.32; ctx.stroke();
+  dots(ctx, stars.filter(([, , m]) => m > 0.12).map(([x, y, m]) => [x, y, 0.35 + 0.6 * m]), ok(...INK, 0.7));
   ctx.beginPath();
-  for (const [x, y, m] of stars) if (m > 0.5) { const q = 1.2 + 1.1 * m; ctx.moveTo(x + q, y); ctx.arc(x, y, q, 0, 6.283); }
-  ctx.strokeStyle = ok(...INK, 0.4); ctx.lineWidth = 0.25; ctx.stroke();
-  // Figures: each bright star joined to its nearest bright neighbour.
-  const bright = stars.filter((st) => st[2] > 0.18);
+  for (const [x, y, m] of stars) if (m > 0.55) { const q = 1.4 + 1.6 * m; ctx.moveTo(x + q, y); ctx.arc(x, y, q, 0, 6.283); }
+  ctx.strokeStyle = ok(...INK, 0.45); ctx.lineWidth = 0.28; ctx.stroke();
+  // Figures: a few long chains, each from a bright star to its nearest unjoined bright neighbour,
+  // and on, four to seven stars.
+  const bright = stars.filter((st) => st[2] > 0.2), joined = new Set(), fr = s.stream("figures");
   ctx.beginPath();
   for (const a of bright) {
-    let best = null, bd = 70;
-    for (const b of bright) { const d = Math.hypot(a[0] - b[0], a[1] - b[1]); if (b !== a && d < bd) { bd = d; best = b; } }
-    if (best) { ctx.moveTo(a[0], a[1]); ctx.lineTo(best[0], best[1]); }
+    if (joined.has(a) || !fr.chance(0.2)) continue;
+    let cur = a;
+    joined.add(a); ctx.moveTo(a[0], a[1]);
+    for (let left = fr.int(3, 6); left > 0; left--) {
+      let best = null, bd = 120;
+      for (const b of bright) { const d = Math.hypot(cur[0] - b[0], cur[1] - b[1]); if (!joined.has(b) && d < bd) { bd = d; best = b; } }
+      if (!best) break;
+      joined.add(best); ctx.lineTo(best[0], best[1]); cur = best;
+    }
   }
-  ctx.strokeStyle = ok(...INK, 0.42); ctx.lineWidth = 0.38; ctx.stroke();
+  ctx.strokeStyle = ok(...INK, 0.44); ctx.lineWidth = 0.38; ctx.stroke();
   // The ecliptic, dashed, and the moon's phases along it where nothing is read.
   const ea = r.range(-0.5, 0.5), ey = h * r.range(0.2, 0.8), eph = r.range(0, 6.28), ep = [];
   for (let x = -10; x <= w + 10; x += 4) ep.push(x, ey + Math.tan(ea) * (x - w / 2) + 40 * Math.sin(x * 0.004 + eph));
