@@ -194,14 +194,16 @@ export function derive(openId) {
       // An ask is Max's from the start, as work handed to him is from
       // when it was: his line throughout, and while it runs his card.
       const ask = w.tool === "ask", his = ask || w.holder === "max";
+      // An ask opens on the page, at its question; other work at its call.
+      const open = ask ? w.call : w.at;
       let before = w.leg;
       (w.passed || []).forEach((p, i) => {
         const id = `${life}:${i}`;
-        add({ id, kind: "ring", t, life, line: ask || (i && w.passed[i - 1].to === "max") ? "max" : "tool", time: [p.at, p.at], open: w.at, deps: [before] });
+        add({ id, kind: "ring", t, life, line: ask || (i && w.passed[i - 1].to === "max") ? "max" : "tool", time: [p.at, p.at], open, deps: [before] });
         before = id;
       });
       add({ id: life, kind: "chip", t, life, line: his ? "max" : "tool", end: w.running ? null : w.failed ? "red" : "green",
-        work: w, running: w.running, yours: his && w.running, open: w.at, deps: [before] });
+        work: w, running: w.running, yours: his && w.running, open, deps: [before] });
     }
   }
   // A planned join under each live task with work out: members and calls

@@ -182,7 +182,7 @@ export function hitAt(sx, sy) {
 }
 // A node opens its task's chat: its own node at the end, any other where
 // its stretch begins: a leg at its first entry, a chip at the call that
-// started its work.
+// started its work, an ask's chip on the page at its question.
 export function openAt(n) {
   if (!n) return;
   go(n.t.id, n.id === n.t.id ? null : n.open || null);
