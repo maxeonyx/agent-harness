@@ -218,8 +218,7 @@ export function paintInto(canvas, theme, who, quiet, size = null) {
   return performance.now() - t0;
 }
 
-// The themes, by name: each `theme-<name>.js`, whose default export is the theme.
-export const THEMES = ["tussock", "harbour", "kauri", "paua", "marama"];
+// A theme by name (the themes are `THEMES` in crates/core/src/design.rs): theme-<name>.js's default export.
 export async function load(name) { return (await import(`./theme-${name}.js`)).default; }
 
 // Dress an element (the page's root) in a theme: its tokens as the language's CSS custom properties,

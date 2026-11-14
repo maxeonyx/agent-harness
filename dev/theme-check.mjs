@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The themes' check: every theme's ground painted the way Max sees it, held to the design's bars.
 //
-//   node dev/theme-check.mjs [THEME...] [--out DIR]
+//   node dev/theme-check.mjs [THEME...] [--out DIR] [--size WxH]...
 //
 // For each theme (default: all of them, from crates/face-web/src/page/theme-*.js), in a headless
 // Chromium with shaders and 2D canvas on the CPU (SwiftShader: the slow case):
@@ -16,6 +16,9 @@
 // - by eye: DIR/<theme>/slots.png, every slot's painting as a thumbnail in order, for telling
 //   agents apart at a glance and the theme at thumbnail size; the phone and desktop covers of slot 0
 //   and 1; and region.png, the map region.
+// Run on the whole set (no THEME given), it first holds THEMES in crates/core/src/design.rs, the one
+// list of themes, to the theme-*.js files: a name with no file breaks the page of any area wearing
+// it, and a file with no name is never worn. A study checked by name before it is listed passes.
 // Prints a row per render and the bars it missed, and exits 1 if any was missed.
 // Chromium is $CHROME, or the newest in ~/.cache/ms-playwright. DIR defaults to theme-check.ignore/.
 import { spawn } from "node:child_process";
@@ -40,8 +43,27 @@ const SEEDS = ["retry-budget", "harness-features", "art-lead", "nightly-reconcil
 const args = process.argv.slice(2);
 const outAt = args.indexOf("--out");
 const OUT = path.resolve(outAt >= 0 ? args.splice(outAt, 2)[1] : path.join(ROOT, "theme-check.ignore"));
+// --size WxH, as often as wanted: every slot also painted at that window size (a narrow panel, a
+// tall page), held to the ink bar and shot as WxH-<slot>.png.
+const extra = [];
+for (let at; (at = args.indexOf("--size")) >= 0; ) {
+  const given = args.splice(at, 2)[1], wh = /^(\d+)x(\d+)$/.exec(given ?? "");
+  if (!wh) { console.error(`--size takes WxH in CSS px, such as 400x880, not ${given ?? "nothing"}`); process.exit(2); }
+  const [width, height] = [Number(wh[1]), Number(wh[2])];
+  extra.push([`${width}x${height}`, { width, height, dpr: 1, throttle: 1 }]);
+}
 const all = fs.readdirSync(PAGE).map((f) => /^theme-(.+)\.js$/.exec(f)?.[1]).filter(Boolean);
 const themes = args.length ? args : all;
+if (!args.length) {
+  const design = path.join(ROOT, "crates/core/src/design.rs");
+  const list = /pub const THEMES: &\[&str\] = &\[([^\]]*)\]/.exec(fs.readFileSync(design, "utf8"));
+  if (!list) { console.error(`no THEMES list in ${design}`); process.exit(2); }
+  const named = [...list[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  const unfiled = named.filter((n) => !all.includes(n)), unnamed = all.filter((n) => !named.includes(n));
+  if (unfiled.length) console.log(`THEMES names ${unfiled.join(", ")} with no theme-<name>.js in ${path.relative(ROOT, PAGE)}`);
+  if (unnamed.length) console.log(`theme-${unnamed.join(".js, theme-")}.js not named in THEMES in ${path.relative(ROOT, design)}, so never worn`);
+  if (unfiled.length || unnamed.length) process.exit(1);
+}
 
 // The page every render runs in: the theme's ground behind a lead, as a page's cover is drawn.
 const VIEW = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -208,11 +230,11 @@ try {
     const probe = await tab(name, SIZES.desktop);
     const slots = await probe.evaluate("window.__check.theme.slots.length");
     await probe.close();
-    for (const [size, spec] of Object.entries(SIZES)) {
+    for (const [size, spec] of [...Object.entries(SIZES), ...extra]) {
       for (let slot = 0; slot < slots; slot++) {
         const seed = SEEDS[slot % SEEDS.length], t = await tab(name, spec);
         const r = await t.evaluate(COVER({ slot, seed }));
-        if (slot < 2) await t.shot(path.join(dir, `${size}-${slot}.png`));
+        if (slot < 2 || !(size in SIZES)) await t.shot(path.join(dir, `${size}-${slot}.png`));
         await t.close();
         let bars = "";
         if (r.p5 < 7 || r.min < 4.5) bars += miss(`${name} ${size} slot ${slot}: ink ${r.min.toFixed(1)} / ${r.p5.toFixed(1)}`);

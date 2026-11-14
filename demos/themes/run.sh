@@ -1,5 +1,5 @@
 #!/bin/sh
-# The five themes an area wears, held to the design's bars by their check:
+# Every theme an area wears, held to the design's bars by their check:
 # every identity slot's ground painted behind a page lead at phone and
 # desktop size, timed, measured and painted twice, and each theme's map
 # region with live agents' state marks. No brain and no model: it serves
