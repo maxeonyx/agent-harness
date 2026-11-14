@@ -44,7 +44,9 @@ const OUT = path.resolve(outAt >= 0 ? args.splice(outAt, 2)[1] : path.join(ROOT,
 // tall page), held to the ink bar and shot as WxH-<slot>.png.
 const extra = [];
 for (let at; (at = args.indexOf("--size")) >= 0; ) {
-  const [width, height] = args.splice(at, 2)[1].split("x").map(Number);
+  const given = args.splice(at, 2)[1], wh = /^(\d+)x(\d+)$/.exec(given ?? "");
+  if (!wh) { console.error(`--size takes WxH in CSS px, such as 400x880, not ${given ?? "nothing"}`); process.exit(2); }
+  const [width, height] = [Number(wh[1]), Number(wh[2])];
   extra.push([`${width}x${height}`, { width, height, dpr: 1, throttle: 1 }]);
 }
 const all = fs.readdirSync(PAGE).map((f) => /^theme-(.+)\.js$/.exec(f)?.[1]).filter(Boolean);
