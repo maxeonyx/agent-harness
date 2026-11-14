@@ -307,11 +307,37 @@ function within(list, test) {
   return out;
 }
 
-// A polyline added to the path, smoothed through its midpoints.
-function poly(ctx, p) {
+// A polyline added to the path, smoothed through its midpoints, its nearly straight runs thinned a
+// stretch of at most `span` units at a time (a chart on the map is recorded as SVG, so every point
+// costs).
+function poly(ctx, p, tol = 0.15, span = 12) {
+  const pts = [[p[0], p[1]]], kept = [];
+  let length = 0;
+  const flush = () => { for (const q of simplify(pts, tol).slice(kept.length ? 1 : 0)) kept.push(q[0], q[1]); };
+  for (let i = 2; i < p.length; i += 2) {
+    length += Math.hypot(p[i] - p[i - 2], p[i + 1] - p[i - 1]);
+    pts.push([p[i], p[i + 1]]);
+    if (length > span) { flush(); pts.splice(0, pts.length - 1); length = 0; }
+  }
+  if (pts.length > 1) flush();
+  p = kept;
   ctx.moveTo(p[0], p[1]);
   for (let i = 2; i < p.length - 2; i += 2) ctx.quadraticCurveTo(p[i], p[i + 1], (p[i] + p[i + 2]) / 2, (p[i + 1] + p[i + 3]) / 2);
   ctx.lineTo(p[p.length - 2], p[p.length - 1]);
+}
+// A polyline's points, [[x, y], ...], with each run nearer than `tol` to a straight line cut to its
+// ends (Douglas and Peucker's algorithm).
+export function simplify(r, tol) {
+  if (r.length < 8) return r;
+  const keep = new Uint8Array(r.length); keep[0] = keep[r.length - 1] = 1;
+  const stack = [[0, r.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop(), [ax, ay] = r[a], [bx, by] = r[b], dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1;
+    let far = -1, best = tol;
+    for (let i = a + 1; i < b; i++) { const e = Math.abs((r[i][0] - ax) * dy - (r[i][1] - ay) * dx) / L; if (e > best) { best = e; far = i; } }
+    if (far > 0) { keep[far] = 1; stack.push([a, far], [far, b]); }
+  }
+  return r.filter((_, i) => keep[i]);
 }
 // Polylines stroked in one path, those shorter than `min` left out.
 function lines(ctx, list, colour, width, dash = null, min = 0) {

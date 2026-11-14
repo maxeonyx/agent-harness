@@ -21,7 +21,7 @@
 // small picture at `tintScale` pixels per map unit. Each stroke is cut into pieces by how quiet the
 // map is where it runs, a few levels of ink, and the pieces of one style become one SVG path, so an
 // area is a few dozen paths however much its chart draws.
-import { noise, rng, fromOklch, oklch, kit } from "./theme.js";
+import { noise, rng, fromOklch, oklch, kit, simplify } from "./theme.js";
 
 const LOOK = {
   reach: 170,      // map units of land round an area's nodes, names and streams
@@ -387,7 +387,7 @@ class Rec {
     const { quiet, levels, ink } = this.sink;
     if (how === "fill") {
       let sx = 0, sy = 0, n = 0, d = "";
-      for (const s of this.subs) { if (!s.segs.length) continue; d += `M${f1(s.start[0])} ${f1(s.start[1])}`; for (const g of s.segs) { d += seg(g); sx += g[1][0]; sy += g[1][1]; n++; } d += "Z"; }
+      for (const s of this.subs) { if (!s.segs.length) continue; d += move(s.start); let prev = s.start; for (const g of s.segs) { d += seg(g, prev); prev = g[1]; sx += g[1][0]; sy += g[1][1]; n++; } d += "Z"; }
       const lv = n ? level(quiet(sx / n, sy / n), levels) : -1;
       if (lv >= 0) this.put(attrs({ fill: rgb, "fill-opacity": f3(alpha * levels[lv] * ink) }), d);
       return;
@@ -395,13 +395,13 @@ class Rec {
     const buckets = levels.map(() => ({ d: "", last: null }));
     for (const s of this.subs) {
       let prev = s.start;
-      for (const g of s.segs) {
+      for (const g of thin(s)) {
         const end = g[1], mx = g[0] === "Q" ? (prev[0] + 2 * g[2][0] + end[0]) / 4 : (prev[0] + end[0]) / 2, my = g[0] === "Q" ? (prev[1] + 2 * g[2][1] + end[1]) / 4 : (prev[1] + end[1]) / 2;
         const lv = level(quiet(mx, my), levels);
         if (lv >= 0) {
           const b = buckets[lv];
-          if (!b.last || b.last[0] !== prev[0] || b.last[1] !== prev[1]) b.d += `M${f1(prev[0])} ${f1(prev[1])}`;
-          b.d += seg(g); b.last = end;
+          if (!b.last || b.last[0] !== prev[0] || b.last[1] !== prev[1]) b.d += move(prev);
+          b.d += seg(g, prev); b.last = end;
         }
         prev = end;
       }
@@ -471,11 +471,19 @@ const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 const rgb = hexRgb;
 const mix = (a, b, t) => toHex(...hexRgb(a).map((v, i) => v + (hexRgb(b)[i] - v) * t));
 const level = (q, levels) => { if (q < 0.1) return -1; let best = 0; for (let i = 1; i < levels.length; i++) if (Math.abs(levels[i] - q) < Math.abs(levels[best] - q)) best = i; return best; };
-const seg = (g) => (g[0] === "Q" ? `Q${f1(g[2][0])} ${f1(g[2][1])} ${f1(g[1][0])} ${f1(g[1][1])}` : `L${f1(g[1][0])} ${f1(g[1][1])}`);
+// Path data, short: each piece starts at an absolute point and goes on by steps from it, each step
+// taken between rounded points so that the rounding never adds up along a line.
+const r1 = (v) => Math.round(v * 10) / 10;
+const num = (v) => r1(v).toString().replace(/^(-?)0\./, "$1.");
+const nums = (vs) => vs.map(num).reduce((d, t, i) => d + (i && t[0] !== "-" ? " " : "") + t, "");
+const move = (p) => "M" + nums(p);
+const step = (to, from) => [r1(to[0]) - r1(from[0]), r1(to[1]) - r1(from[1])];
+const seg = (g, from) => (g[0] === "Q" ? "q" + nums([...step(g[2], from), ...step(g[1], from)]) : "l" + nums(step(g[1], from)));
+const line = (r) => move(r[0]) + r.slice(1).map((p, i) => "l" + nums(step(p, r[i]))).join("");
 const invert = ([a, b, c, d, e, f]) => { const k = a * d - b * c; return [d / k, -b / k, -c / k, a / k, (c * f - d * e) / k, (b * e - a * f) / k]; };
 const apply = (m, [x, y]) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
-const rings2d = (rings) => rings.map((r) => "M" + r.map(([x, y]) => `${f1(x)} ${f1(y)}`).join("L") + "Z").join("");
-const runs2d = (list) => list.map((r) => "M" + r.map(([x, y]) => `${f1(x)} ${f1(y)}`).join("L") + (r.closed ? "Z" : "")).join("");
+const rings2d = (rings) => rings.map((r) => line(r) + "Z").join("");
+const runs2d = (list) => list.map((r) => line(r) + (r.closed ? "Z" : "")).join("");
 // A ring cut into the runs of points that keep(p); a ring kept whole stays closed, and a run that
 // wraps past the ring's start is joined to the run it continues.
 function runs(ring, keep) {
@@ -565,15 +573,18 @@ function smooth(r) {
   return out;
 }
 // Ramer-Douglas-Peucker: drop the points within `tol` map units of the line through their neighbours.
-function simplify(r, tol) {
-  if (r.length < 8) return r;
-  const keep = new Uint8Array(r.length); keep[0] = keep[r.length - 1] = 1;
-  const stack = [[0, r.length - 1]];
-  while (stack.length) {
-    const [a, b] = stack.pop(), [ax, ay] = r[a], [bx, by] = r[b], dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1;
-    let far = -1, best = tol;
-    for (let i = a + 1; i < b; i++) { const e = Math.abs((r[i][0] - ax) * dy - (r[i][1] - ay) * dx) / L; if (e > best) { best = e; far = i; } }
-    if (far > 0) { keep[far] = 1; stack.push([a, far], [far, b]); }
+// A stroke's segments with its nearly straight runs of lines thinned, a stretch of at most `span` map
+// units at a time, so a thinned segment is never long enough to cross a clearing at one level of ink.
+function thin(s, tol = 0.12, span = 10) {
+  const out = [];
+  let run = [s.start], length = 0;
+  const flush = () => { if (run.length > 1) for (const p of simplify(run, tol).slice(1)) out.push(["L", p]); };
+  for (const g of s.segs) {
+    if (g[0] !== "L") { flush(); out.push(g); run = [g[1]]; length = 0; continue; }
+    length += Math.hypot(g[1][0] - run.at(-1)[0], g[1][1] - run.at(-1)[1]);
+    run.push(g[1]);
+    if (length > span) { flush(); run = [g[1]]; length = 0; }
   }
-  return r.filter((_, i) => keep[i]);
+  flush();
+  return out;
 }
