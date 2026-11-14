@@ -173,7 +173,9 @@ fn decide(
         let now = now();
         state.todo(now);
         let value = |id| decider.storage().value(id).ok().flatten();
-        harness_face_web::rows(&state, &value, &[], crate::SOURCE, now);
+        // Pictures' sizes are read from their images by the face as it
+        // draws; the copy needs none to show the view derives.
+        harness_face_web::rows(&state, &value, &|_| None, &[], crate::SOURCE, now);
         Ok(opening)
     })
     .and_then(|decided| decided)

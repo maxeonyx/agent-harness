@@ -248,6 +248,9 @@ pub struct Face<S> {
     closed: AtomicBool,
     /// The dictations being relayed.
     dictating: AtomicUsize,
+    /// Each page picture's width and height ([`Face::size`]), read from its
+    /// image's header once, since a value never changes.
+    sizes: Mutex<HashMap<ValueId, Option<(u32, u32)>>>,
 }
 
 /// Where a tab's records go: the brain, which states that the tab is Max's
@@ -282,6 +285,7 @@ impl<S: Source> Face<S> {
             include: OnceLock::new(),
             closed: AtomicBool::new(false),
             dictating: AtomicUsize::new(0),
+            sizes: Mutex::new(HashMap::new()),
         })
     }
 
@@ -311,9 +315,11 @@ impl<S: Source> Face<S> {
                 folded = last;
             }
             let value = |id| self.source.value(id);
+            let size = |id| self.size(id);
             let rows = view::rows(
                 &folded.state,
                 &value,
+                &size,
                 &self.wiring.models,
                 &self.wiring.source,
                 now(),
@@ -699,6 +705,22 @@ impl<S: Source> Face<S> {
         }
     }
 
+    /// A page picture's width and height: those of the one image in the
+    /// value `/picture/VALUE` serves, so the page keeps its room before it
+    /// comes. Read once per value, as the follower draws each page.
+    fn size(&self, picture: ValueId) -> Option<(u32, u32)> {
+        let sizes = || self.sizes.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(size) = sizes().get(&picture) {
+            return *size;
+        }
+        let size = (self.source.value(picture))
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|blocks| nth(blocks, 0))
+            .and_then(|(_, bytes)| image::dimensions(&bytes));
+        sizes().insert(picture, size);
+        size
+    }
+
     /// `/image/ENTRY/N`: the `N`th image of entry ENTRY's content, as
     /// [`by_reference`] numbers them; stored by the browser forever, since
     /// an entry is its bytes.
@@ -723,7 +745,15 @@ impl<S: Source> Face<S> {
 
 /// The `n`th image at any depth of `blocks`, content blocks that are
 /// immutable bytes, so the browser keeps it forever.
-fn nth_image(stream: &mut impl Write, mut blocks: Value, n: usize) -> io::Result<()> {
+fn nth_image(stream: &mut impl Write, blocks: Value, n: usize) -> io::Result<()> {
+    match nth(blocks, n) {
+        Some((kind, bytes)) => http::respond(stream, &kind, &bytes, true),
+        None => http::not_found(stream),
+    }
+}
+
+/// The `n`th image at any depth of `blocks`: its media type and its bytes.
+fn nth(mut blocks: Value, n: usize) -> Option<(String, Vec<u8>)> {
     let (mut i, mut found) = (0, None);
     image::each_image(&mut blocks, &mut |source| {
         if i == n {
@@ -735,10 +765,7 @@ fn nth_image(stream: &mut impl Write, mut blocks: Value, n: usize) -> io::Result
         }
         i += 1;
     });
-    match found {
-        Some((kind, bytes)) => http::respond(stream, &kind, &bytes, true),
-        None => http::not_found(stream),
-    }
+    found
 }
 
 /// A message's content as the page reads it: its JSON blocks as text, with

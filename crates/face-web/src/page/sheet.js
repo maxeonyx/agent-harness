@@ -255,14 +255,23 @@ function pictures(list) {
     const img = el("img");
     img.src = a.href;
     img.alt = i.alt;
+    img.loading = "lazy";
     a.append(img);
+    // Its size holds its room before it comes; a picture of unknown size
+    // takes the stylesheet's.
+    const shape = i.width && i.height ? i.width / i.height : 0;
+    if (shape) {
+      img.width = i.width;
+      img.height = i.height;
+    }
+    if (one && shape) img.style.width = `min(100%, ${80 * shape}vh)`;
     if (!one) {
       a.append(el("span", "alt", i.alt));
-      img.addEventListener("load", () => {
-        const shape = img.naturalWidth / img.naturalHeight, row = Math.min(180, box.clientWidth / 3);
-        a.style.flex = `${shape} 1 ${shape * row}px`;
-        a.style.maxWidth = `${shape * row * 2}px`;
-      }, { once: true });
+      // Rows at one height: about three to a phone's row, 180px on a desktop.
+      if (shape) {
+        a.style.flex = `${shape} 1 calc(${shape} * min(180px, 30vw))`;
+        a.style.maxWidth = `calc(${shape} * min(360px, 60vw))`;
+      }
     }
     box.append(a);
   }

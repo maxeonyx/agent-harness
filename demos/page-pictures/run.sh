@@ -9,7 +9,9 @@
 # options' pictures above them. A label that showed no picture is drawn as
 # its alt's words, and page_write says why. Then the files are deleted,
 # and the page still shows every picture: the page version holds each as
-# the value the `read` returned. Screenshots wide and on a phone into
+# the value the `read` returned. Each picture holds its room before it
+# loads, and each loads once scrolled to: the demo fails on a picture
+# with no room or one that drew 0x0. Screenshots wide and on a phone into
 # demos/page-pictures/shots.ignore. Scripted: no model call. Leaves the
 # brain up.
 set -euo pipefail
@@ -22,7 +24,12 @@ shots=$PWD/demos/page-pictures/shots.ignore
 mkdir -p "$dir" "$shots"
 drive() { node dev/drive.mjs "$1" --brain $b "${@:2}"; }
 page() { drive page "$@" 2>&1 | grep -v "WebGL"; }
-sizes="[...document.querySelectorAll('.sheet img')].map((i) => i.naturalWidth + 'x' + i.naturalHeight).join(' ')"
+# Each picture's room as first drawn, before any has loaded, then each
+# scrolled to and loaded, as its natural size.
+room="'room ' + [...document.querySelectorAll('.sheet img')].map((i) => Math.round(i.getBoundingClientRect().width) + 'x' + Math.round(i.getBoundingClientRect().height)).join(' ')"
+sizes="(async () => { const out = []; for (const i of document.querySelectorAll('.sheet img')) { i.scrollIntoView({ block: 'center' }); await i.decode().catch(() => {}); out.push(i.naturalWidth + 'x' + i.naturalHeight); } scrollTo(0, 0); return 'loaded ' + out.join(' '); })()"
+# Fails the demo on a picture with no room, or one that drew nothing.
+drew() { echo "$1"; if grep -qE '(room|loaded)( [0-9]+x[0-9]+)* (0x[0-9]+|[0-9]+x0)\b' <<<"$1"; then echo "a picture had no room or drew 0x0" >&2; exit 1; fi; }
 at() { echo "document.querySelector('$1').scrollIntoView({ block: 'start' }), scrollBy(0, -40), 1"; }
 
 first=$(jq -cn '{ lead: "What the page looks like", now: "| Shot | Taken |\n|---|---|\n| desktop | next |" }')
@@ -65,14 +72,14 @@ drive say "$a" "tool page_write $second tool ask $ask tool present {}" >/dev/nul
 drive settle "$a" >/dev/null
 
 echo "== the page with its pictures, wide and on a phone"
-page open "$a" wait ".sheet .picture img" sleep 2500 eval "$sizes" shot "$shots/page-wide.png"
+drew "$(page open "$a" wait ".sheet .picture img" eval "$room" eval "$sizes" sleep 500 shot "$shots/page-wide.png")"
 page --size phone open "$a" wait ".sheet .picture img" sleep 2500 shot "$shots/page-phone.png"
 page --size phone open "$a" wait ".sheet .pictures img" sleep 2500 eval "$(at '.sheet .now .pictures')" sleep 800 shot "$shots/rows-phone.png"
 page open "$a" wait ".sheet .ask .pictures img" sleep 2500 eval "$(at '.sheet .ask .pictures')" sleep 800 shot "$shots/ask-wide.png"
 
 echo "== the files deleted: the page still shows every picture"
 rm "$dir"/*.png
-page --size phone open "$a" wait ".sheet .picture img" sleep 2500 eval "$sizes" shot "$shots/after-delete-phone.png"
+drew "$(page --size phone open "$a" wait ".sheet .picture img" eval "$room" eval "$sizes" sleep 500 shot "$shots/after-delete-phone.png")"
 ls "$shots"/*.png
 echo "== what page_write said of the label that showed no picture"
 drive say "$a" "ok" >/dev/null # the log shows a turn's results once the next request carries them; the quick answer folds the page, so this comes last
