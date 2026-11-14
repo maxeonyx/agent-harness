@@ -7,7 +7,7 @@
   /* Over the open card none of it floats: the usage and the build sit in
      the card's bottom bar instead. */
   body.covered #bottom { display: none; }
-  #corner { display: inline-flex; gap: .9em; align-items: center; }
+  #corner { display: inline-flex; gap: .9em; align-items: center; min-height: 2.15em; box-sizing: border-box; padding: 0 .9em; border-radius: 999px; background: rgba(250, 249, 245, .88); backdrop-filter: blur(6px); border: 1px solid var(--line); }
   .spacer { flex: 1; pointer-events: none !important; }
   #bottom .icon { background: rgba(250, 249, 245, .88); backdrop-filter: blur(6px); border: 1px solid var(--line); }
   #bottom #new { width: 2.7em; height: 2.7em; background: var(--ink); border-color: var(--ink); color: var(--paper); }

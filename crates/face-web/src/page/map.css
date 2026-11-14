@@ -20,11 +20,12 @@
   #empty { position: fixed; inset: 0; display: grid; place-content: center; color: var(--faint); font: 16px var(--serif); pointer-events: none; }
 
   /* A big node or a running chip: its blob or mark is drawn on the canvas
-     (blobs.js); this is where it is pressed, and its name to its right. */
+     (blobs.js); this is where it is pressed, and its name to its right,
+     haloed crisply in the ground's colour, as a map letters over its linework. */
   .node { position: absolute; left: 0; top: 0; color: var(--ink); text-decoration: none; transition: opacity .25s; }
   .node .hit { position: absolute; left: -22px; top: -18px; width: 44px; height: 34px; border-radius: 50%; }
   .node .name { position: absolute; left: 26px; top: -9px; white-space: nowrap; font: 600 12.5px/18px var(--serif);
-    text-shadow: 0 0 2px var(--ground), 0 0 2px var(--ground), 0 0 3px var(--ground), 0 0 4px var(--ground); }
+    paint-order: stroke fill; -webkit-text-stroke: 3px var(--ground); }
   .node.work .hit { left: -10px; top: -10px; width: 20px; height: 20px; }
   .node.work .name { left: 12.5px; font: 12px/18px var(--sans); color: var(--muted); }
   .node.work.yours .name { color: var(--ink); }
@@ -38,7 +39,7 @@
   .node.archived { display: flex; flex-direction: column; align-items: flex-start; text-align: left; justify-content: center; height: 34px; padding: 0 1.7em 0 .75em; border: 1px solid var(--line); border-radius: 10px; background: rgba(250, 249, 245, .7); }
   .node.archived::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--st); opacity: .6; }
   .node.archived:hover { background: var(--paper); }
-  .node.archived .name { position: static; margin: 0; font: 500 13px/1.2 var(--serif); color: var(--muted); text-shadow: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .node.archived .name { position: static; margin: 0; font: 500 13px/1.2 var(--serif); color: var(--muted); -webkit-text-stroke: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .node.archived .more { position: absolute; right: .25em; top: 50%; transform: translateY(-50%); margin: 0; font-size: 11px; color: var(--muted); border-radius: 9px; padding: 0 .5em; }
   @keyframes halo { 0% { transform: scale(1); opacity: .7; } 70% { transform: scale(1.55); opacity: 0; } 100% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .35; } }
