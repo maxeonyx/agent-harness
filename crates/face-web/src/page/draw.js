@@ -165,7 +165,30 @@ export function drawNodes() {
     }
   }
   blobs?.marks(marks, k);
+  eraseNames();
   placeRegions();
+}
+
+// Behind each name the lines are erased, softly, in the name's own shape a
+// few px wider, so the ground under them shows and the name reads over
+// crossing lines on any ground: its text in the lines' mask, set where the
+// name is and as it is (map.css `.erase`). A name not shown (its card is
+// open) or faded by a search erases nothing.
+const erased = new Map();
+function eraseNames() {
+  begin();
+  for (const [id, t] of erased) if (!nodeEls.has(id)) { t.remove(); erased.delete(id); }
+  for (const [id, a] of nodeEls) {
+    const s = shown.get(id), n = graph.nodes.get(id);
+    const off = !s || s.card || !n || id === openId || (finding && !found.has(n.t.id));
+    let t = erased.get(id);
+    if (off) { t?.remove(); erased.delete(id); continue; }
+    if (!t) { erased.set(id, t = svgEl("text")); t.at = ""; nameMask.append(t); }
+    const c = centre(s), at = `${f2(c.x)},${f2(c.y)}`, text = label(n), cls = n.big ? "big" : "work";
+    if (t.textContent !== text) t.textContent = text;
+    if (t.getAttribute("class") !== cls) t.setAttribute("class", cls);
+    if (t.at !== at) { t.at = at; t.setAttribute("x", f2(c.x)); t.setAttribute("y", f2(c.y)); }
+  }
 }
 
 // The small node at a point on the screen, if any: within 12 px of it.
@@ -196,7 +219,8 @@ export function openAt(n) {
 // lines that pass under others are drawn first, by their sheet (layout.js),
 // each sheet through one mask that erases from it a band GAP wider each
 // side than each line over one of them, near where they cross. Then each
-// finished call's gear.
+// finished call's gear. All of it is under one mask more, which erases it
+// behind the names (`eraseNames`).
 function bend(key) {
   const [from, to] = key.split(">"), r = routes.get(key);
   const move = (id) => { const p = positions.get(id), s = shown.get(id); return s && p ? [s.x - p.x, s.y - p.y] : [0, 0]; };
@@ -221,8 +245,8 @@ function line(key, r) {
   return out;
 }
 const paths = new Map(), sheets = [];
-let dashes = null;
-function pathFor(k, attrs, parent = edgesLayer) {
+let dashes = null, lines = null, nameMask = null;
+function pathFor(k, attrs, parent = lines) {
   let p = paths.get(k);
   if (!p) {
     p = svgEl("path");
@@ -256,15 +280,25 @@ function sheet(n) {
   }
   return sheets[n];
 }
+// The lines' SVG, made once: the mask of dashes, the mask of names (white
+// but for the names, blurred), and the group of everything under it.
+function begin() {
+  if (dashes) return;
+  const all = 'maskUnits="userSpaceOnUse" x="-1e5" y="-1e5" width="2e5" height="2e5"';
+  edgesLayer.innerHTML = `<defs><mask id="dashes" ${all}><path fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="3.5 3"/></mask>`
+    + `<filter id="soft" x="-.2" y="-1" width="1.4" height="3"><feGaussianBlur stdDeviation="1.5"/></filter>`
+    + `<mask id="names" ${all}><rect fill="#fff" x="-1e5" y="-1e5" width="2e5" height="2e5"/><g class="erase" filter="url(#soft)"></g></mask></defs>`
+    + '<g mask="url(#names)"><g mask="url(#dashes)"></g></g>';
+  dashes = { mask: edgesLayer.querySelector("#dashes path"), g: edgesLayer.querySelector('[mask="url(#dashes)"]'), d: "" };
+  lines = edgesLayer.querySelector('[mask="url(#names)"]');
+  nameMask = edgesLayer.querySelector(".erase");
+  // Stacked in this order: the sheets, fills, strokes, gears.
+  for (const c of Object.values(LINE)) pathFor(`f${c}`, { fill: c });
+  for (const c of Object.values(LINE)) pathFor(`s${c}`, { fill: "none", stroke: c, "stroke-width": LIFE, "stroke-linejoin": "round" });
+  for (const c of Object.values(GEAR)) pathFor(`g${c}`, { fill: c, "fill-rule": "evenodd" });
+}
 export function drawEdges() {
-  if (!dashes) {
-    edgesLayer.innerHTML = '<defs><mask id="dashes" maskUnits="userSpaceOnUse" x="-1e5" y="-1e5" width="2e5" height="2e5"><path fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="3.5 3"/></mask></defs><g mask="url(#dashes)"></g>';
-    dashes = { mask: edgesLayer.querySelector("mask path"), g: edgesLayer.querySelector("g"), d: "" };
-    // Stacked in this order: the sheets, fills, strokes, gears.
-    for (const c of Object.values(LINE)) pathFor(`f${c}`, { fill: c });
-    for (const c of Object.values(LINE)) pathFor(`s${c}`, { fill: "none", stroke: c, "stroke-width": LIFE, "stroke-linejoin": "round" });
-    for (const c of Object.values(GEAR)) pathFor(`g${c}`, { fill: c, "fill-rule": "evenodd" });
-  }
+  begin();
   const ds = new Map(), add = (k, d) => { if (d) (ds.get(k) ?? ds.set(k, []).get(k)).push(d); };
   let mask = "";
   for (const [key, r] of routes) {
