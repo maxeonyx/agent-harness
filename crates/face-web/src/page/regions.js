@@ -1,6 +1,6 @@
 import { $, fail } from "./base.js";
 import { centre, graph, isDone, positions, shown } from "./map.js";
-import { cam } from "./camera.js";
+import { cam, refit } from "./camera.js";
 
 // ─── Each area's ground, faint behind its part of the map ─────────────────
 // An area is a chat Max started and everything under it, and every task in
@@ -78,6 +78,17 @@ export function placeRegions() {
   }
 }
 
+// The ground the paintings cover, {x0, y0, x1, y1}, with their projects where
+// the layout puts them: the camera frames it with the nodes.
+export function land() {
+  let g = null;
+  for (const c of graph.comps) {
+    const r = painted.has(topOf(c).id) && box(c, positions);
+    if (r) g = g ? { x0: Math.min(g.x0, r.x), y0: Math.min(g.y0, r.y), x1: Math.max(g.x1, r.x + r.w), y1: Math.max(g.y1, r.y + r.h) } : { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h };
+  }
+  return g;
+}
+
 function wanted() {
   const out = new Map();
   for (const c of graph.comps) {
@@ -127,6 +138,7 @@ worker?.addEventListener("message", ({ data: { id, key, bitmap, error } }) => {
     Object.assign(p.canvas.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
     Object.assign(p, { key, r });
     placeRegions();
+    refit();
   } else bitmap?.close();
   next();
 });
