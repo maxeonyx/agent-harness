@@ -44,7 +44,8 @@ const SIZES = {
   phone: { width: 376, height: 634, dpr: 2, throttle: 4, mobile: true },
 };
 // The most of the text's box the veil may flatten: what a reader sees change under the text as it
-// scrolls over the painting.
+// scrolls over the painting. The five's worst is 4.5% (Tussock on a phone, its foot under the
+// last lines); the others stay under 1.5%.
 const PAGE_CHANGED = 0.05;
 // Each kind of text on a painting, by the custom property it is set in, and the contrast it keeps.
 const BARS = { "--cover-ink": 7, "--ink": 7, "--body": 7, "--muted": 5, "--accent": 4.5, "--fig-1": 3, "--fig-2": 3, "--fig-3": 3, "--fig-4": 3, "--yours": 3 };
