@@ -73,7 +73,7 @@ export function drawMap() {
       const from = n?.deps.map((d) => shown.get(d)).find(Boolean);
       shown.set(id, from && !p.card ? { ...p, x: from.x + from.w / 2 - p.w / 2, y: from.y + from.top - p.top } : { ...p });
     }
-    const faded = finding && !found.has(n?.t.id ?? id) ? " unmatched" : "";
+    const faded = unmatched(n, id) ? " unmatched" : "";
     if (n?.big && !p.card) {
       const s = sessionOf(n);
       if (!handles.has(id) && blobs) handles.set(id, blobs.put(BIG, s));
@@ -141,7 +141,7 @@ export function drawNodes() {
     if (h) { h.at(c.x, c.y); h.hide(id === openId); }
     // A finished call is a gear (drawEdges), and Max's running one a card.
     if (!n || n.big || s.card || (n.kind === "chip" && (!n.running || n.yours))) continue;
-    const dim = finding && !found.has(n.t.id) ? .12 : 1;
+    const dim = unmatched(n, id) ? .12 : 1;
     const m = k++ * MARK;
     marks[m] = c.x; marks[m + 1] = c.y; marks[m + 2] = radius(n);
     marks[m + 3] = 0; marks[m + 11] = 0; marks[m + 12] = 0;
@@ -165,7 +165,50 @@ export function drawNodes() {
     }
   }
   blobs?.marks(marks, k);
+  eraseNames();
   placeRegions();
+}
+
+// A node a search doesn't match, so faded.
+function unmatched(n, id) { return finding && !found.has(n?.t.id ?? id); }
+
+// Behind each name the lines are erased, softly, a few px past its box, so
+// the ground under them shows and the name reads over crossing lines on any
+// ground: a rounded rect in the lines' mask, the name's box measured only
+// when its text changes. A rect, not the text again: the mask's text would
+// be laid out anew on every zoom frame. A name not shown (its card is open)
+// erases nothing; one faded by a search fades its erase with it (map.css).
+const PAD = 3;
+const erased = new Map();
+function eraseNames() {
+  begin();
+  // Every changed name's box is read first, with no write between, so the
+  // page lays out once rather than once per read.
+  const boxes = new Map();
+  for (const [id, a] of nodeEls) {
+    const s = shown.get(id), name = $(".name", a);
+    if (!s || s.card || !graph.nodes.has(id) || id === openId) continue;
+    if (erased.get(id)?.text === name.textContent) continue;
+    boxes.set(id, { text: name.textContent, x: name.offsetLeft - PAD, y: name.offsetTop - PAD,
+      w: name.offsetWidth + 2 * PAD, h: name.offsetHeight + 2 * PAD });
+  }
+  for (const [id, r] of erased) if (!nodeEls.has(id)) { r.remove(); erased.delete(id); }
+  for (const id of nodeEls.keys()) {
+    const s = shown.get(id), n = graph.nodes.get(id);
+    let r = erased.get(id);
+    if (!s || s.card || !n || id === openId) { r?.remove(); erased.delete(id); continue; }
+    if (!r) { erased.set(id, r = svgEl("rect")); r.setAttribute("rx", 6); r.at = ""; nameMask.append(r); }
+    const b = boxes.get(id);
+    if (b) {
+      r.text = b.text;
+      r.box = { x: b.x, y: b.y };
+      r.setAttribute("width", b.w);
+      r.setAttribute("height", b.h);
+    }
+    r.classList.toggle("unmatched", unmatched(n, id));
+    const c = centre(s), at = `${f2(c.x + r.box.x)},${f2(c.y + r.box.y)}`;
+    if (r.at !== at) { r.at = at; r.setAttribute("x", f2(c.x + r.box.x)); r.setAttribute("y", f2(c.y + r.box.y)); }
+  }
 }
 
 // The small node at a point on the screen, if any: within 12 px of it.
@@ -196,7 +239,8 @@ export function openAt(n) {
 // lines that pass under others are drawn first, by their sheet (layout.js),
 // each sheet through one mask that erases from it a band GAP wider each
 // side than each line over one of them, near where they cross. Then each
-// finished call's gear.
+// finished call's gear. All of it is under one mask more, which erases it
+// behind the names (`eraseNames`).
 function bend(key) {
   const [from, to] = key.split(">"), r = routes.get(key);
   const move = (id) => { const p = positions.get(id), s = shown.get(id); return s && p ? [s.x - p.x, s.y - p.y] : [0, 0]; };
@@ -221,8 +265,8 @@ function line(key, r) {
   return out;
 }
 const paths = new Map(), sheets = [];
-let dashes = null;
-function pathFor(k, attrs, parent = edgesLayer) {
+let dashes = null, lines = null, nameMask = null;
+function pathFor(k, attrs, parent = lines) {
   let p = paths.get(k);
   if (!p) {
     p = svgEl("path");
@@ -256,15 +300,25 @@ function sheet(n) {
   }
   return sheets[n];
 }
+// The lines' SVG, made once: the mask of dashes, the mask of names (white
+// but for the names, blurred), and the group of everything under it.
+function begin() {
+  if (dashes) return;
+  const all = 'maskUnits="userSpaceOnUse" x="-1e5" y="-1e5" width="2e5" height="2e5"';
+  edgesLayer.innerHTML = `<defs><mask id="dashes" ${all}><path fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="3.5 3"/></mask>`
+    + `<filter id="soft" x="-.2" y="-1" width="1.4" height="3"><feGaussianBlur stdDeviation="1.5"/></filter>`
+    + `<mask id="names" ${all}><rect fill="#fff" x="-1e5" y="-1e5" width="2e5" height="2e5"/><g class="erase" filter="url(#soft)"></g></mask></defs>`
+    + '<g mask="url(#names)"><g mask="url(#dashes)"></g></g>';
+  dashes = { mask: edgesLayer.querySelector("#dashes path"), g: edgesLayer.querySelector('[mask="url(#dashes)"]'), d: "" };
+  lines = edgesLayer.querySelector('[mask="url(#names)"]');
+  nameMask = edgesLayer.querySelector(".erase");
+  // Stacked in this order: the sheets, fills, strokes, gears.
+  for (const c of Object.values(LINE)) pathFor(`f${c}`, { fill: c });
+  for (const c of Object.values(LINE)) pathFor(`s${c}`, { fill: "none", stroke: c, "stroke-width": LIFE, "stroke-linejoin": "round" });
+  for (const c of Object.values(GEAR)) pathFor(`g${c}`, { fill: c, "fill-rule": "evenodd" });
+}
 export function drawEdges() {
-  if (!dashes) {
-    edgesLayer.innerHTML = '<defs><mask id="dashes" maskUnits="userSpaceOnUse" x="-1e5" y="-1e5" width="2e5" height="2e5"><path fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="3.5 3"/></mask></defs><g mask="url(#dashes)"></g>';
-    dashes = { mask: edgesLayer.querySelector("mask path"), g: edgesLayer.querySelector("g"), d: "" };
-    // Stacked in this order: the sheets, fills, strokes, gears.
-    for (const c of Object.values(LINE)) pathFor(`f${c}`, { fill: c });
-    for (const c of Object.values(LINE)) pathFor(`s${c}`, { fill: "none", stroke: c, "stroke-width": LIFE, "stroke-linejoin": "round" });
-    for (const c of Object.values(GEAR)) pathFor(`g${c}`, { fill: c, "fill-rule": "evenodd" });
-  }
+  begin();
   const ds = new Map(), add = (k, d) => { if (d) (ds.get(k) ?? ds.set(k, []).get(k)).push(d); };
   let mask = "";
   for (const [key, r] of routes) {
@@ -345,7 +399,7 @@ export function refresh() {
   return running;
 }
 // A face that arrives after the labels were measured changes their widths.
-document.fonts.addEventListener("loadingdone", () => { remeasure(); refresh(); });
+document.fonts.addEventListener("loadingdone", () => { remeasure(); for (const r of erased.values()) r.text = ""; refresh(); });
 
 export function render() {
   if (!view) return;
