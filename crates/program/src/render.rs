@@ -715,7 +715,7 @@ fn label_block(tool: &str, call: CallId) -> Option<Value> {
 }
 
 /// What a compaction keeps verbatim: Max's words, and the messages of the
-/// task's owner, which amend its mandate.
+/// task's owner to it, which amend its mandate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kept {
     Words(ValueId),
@@ -728,7 +728,8 @@ pub enum Kept {
 /// compactions there carried. Everything
 /// up to `since` is kept, and his words with it; with no `since` (a new
 /// root) nothing is, back to the chain's root, through the context a fork
-/// or a resumed chat began with.
+/// or a resumed chat began with. There the messages were told to the task
+/// it continues, amending that task's mandate, not this one's: they go.
 pub fn kept(state: &State, task: &Task, since: Option<EntryId>) -> Vec<Kept> {
     let Some(head) = task.head() else {
         return Vec::new();
@@ -757,9 +758,10 @@ pub fn kept(state: &State, task: &Task, since: Option<EntryId>) -> Vec<Kept> {
                 {
                     Content::Words(words) => Some(Kept::Words(*words)),
                     Content::Message(_)
-                        if state
-                            .teller(delivered)
-                            .is_some_and(|(_, k)| k == Kin::Owner) =>
+                        if delivered.delivery.to == task.id
+                            && state
+                                .teller(delivered)
+                                .is_some_and(|(_, k)| k == Kin::Owner) =>
                     {
                         Some(Kept::Told(*d))
                     }
