@@ -35,7 +35,7 @@ need() { echo "(() => { const seen = $seen; if (!seen('$1')) throw new Error('no
 echo "== Max opens the chat"
 page open "$a" sleep 3000 shot "$shots/open.png" eval "$(need '.sheet .lead h1' 'the page lead')"
 echo "== Max taps the ask's orange card on the map"
-page sleep 3000 click ".node.work.yours" sleep 3000 shot "$shots/ask.png" eval "$(need '.sheet .ask .question' 'the ask question')"
+page sleep 6000 click ".node.work.yours" sleep 3000 shot "$shots/ask.png" eval "$(need '.sheet .ask .question' 'the ask question')"
 echo "== Max taps the present row's link"
 page open "$a" sleep 3000 eval "document.querySelector(\".open-file[title='Open the page']\").scrollIntoView({ block: 'center' }), 1" sleep 500 \
   click ".open-file[title='Open the page']" sleep 1000 shot "$shots/present.png" eval "$(need '.sheet .lead h1' 'the page lead')"
