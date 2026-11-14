@@ -4,18 +4,25 @@
 //   node dev/theme-check.mjs [THEME...] [--out DIR]
 //
 // For each theme (default: all of them, from crates/face-web/src/page/theme-*.js), in a headless
-// Chromium with shaders and 2D canvas on the CPU (SwiftShader: the slow case):
+// Chromium with shaders and 2D canvas on the CPU (SwiftShader: the slow case), painted for the chat
+// window a page is read in, laid out as the page lays out its lead and text column:
 // - the lead's ink: the cover ink against every pixel of the ground behind the lead's box, at phone
 //   and desktop size, for every identity slot: 7:1 or better for 95% of it, never under 4.5:1;
+// - the page: the painting stays still while the text scrolls over all of kit.textBox, the box the
+//   text covers, so the share of that box under 4.5:1 for the ink body text is set in (the palette's
+//   ink) is how much of the art each block's press must flatten. Over PAGE_UNDER of it misses: the
+//   art is loud where the text runs, and pressed flat, the page reads as a wash. And with its press
+//   (theme.js pagePresses) laid over it, the same box keeps the ink at 7:1 on every pixel: what keeps
+//   the text easy to read, held by construction, and checked here;
 // - deterministic: the same identity at the same size painted twice gives the same pixels;
-// - paint time: the script and the raster after it, on a phone (390x844 at 2x, the CPU slowed 4x,
-//   as a mid-range phone), under PAINT_MS;
+// - paint time: the script and the raster after it, on a phone (its chat window at 2x, the CPU
+//   slowed 4x, as a mid-range phone), under PAINT_MS;
 // - state marks: the theme's map region with live agents' pools of colour, each state tone at a
 //   live agent's node keeping 90% of the contrast it has on bare paper, and the region round it
 //   under half the tone's colour (OKLCh chroma, 95th percentile);
 // - by eye: DIR/<theme>/slots.png, every slot's painting as a thumbnail in order, for telling
-//   agents apart at a glance and the theme at thumbnail size; the phone and desktop covers of slot 0
-//   and 1; and region.png, the map region.
+//   agents apart at a glance and the theme at thumbnail size; the phone and desktop windows of slot
+//   0 and 1; and region.png, the map region.
 // Prints a row per render and the bars it missed, and exits 1 if any was missed.
 // Chromium is $CHROME, or the newest in ~/.cache/ms-playwright. DIR defaults to theme-check.ignore/.
 import { spawn } from "node:child_process";
@@ -28,10 +35,18 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const PAGE = path.join(ROOT, "crates/face-web/src/page");
 // The phone's paint budget in the slow case, in ms.
 const PAINT_MS = 500;
+// The chat window's scroll area, which a page's painting fills: the card on a 1920x1080 desktop, and
+// a 390x844 phone's screen less the card's header and reply box.
 const SIZES = {
-  desktop: { width: 1440, height: 900, dpr: 1, throttle: 1 },
-  phone: { width: 390, height: 844, dpr: 2, throttle: 4, mobile: true },
+  desktop: { width: 878, height: 850, dpr: 1, throttle: 1 },
+  phone: { width: 376, height: 634, dpr: 2, throttle: 4, mobile: true },
 };
+// The most of the text's box a theme's painting may leave under 4.5:1 for the page's body ink, bare:
+// the five themes' worst slot is 11.0% (Tussock's land at the foot of a desktop window, which
+// reads well pressed), and a margin for a new seed. Not a few percent: the press keeps the text at
+// 7:1 whatever lies under it, so this bar only stops a painting so loud under the text that its
+// press would leave the page a wash.
+const PAGE_UNDER = 0.2;
 // The state tones (the language's): never a theme's.
 const TONES = { yours: "#d4621c", working: "#3b78d4", others: "#8c7fa6", done: "#3c9259", failed: "#c63f36", quiet: "#a39e95" };
 const MAP_PAPER = "#f0eee6";
@@ -43,26 +58,28 @@ const OUT = path.resolve(outAt >= 0 ? args.splice(outAt, 2)[1] : path.join(ROOT,
 const all = fs.readdirSync(PAGE).map((f) => /^theme-(.+)\.js$/.exec(f)?.[1]).filter(Boolean);
 const themes = args.length ? args : all;
 
-// The page every render runs in: the theme's ground behind a lead, as a page's cover is drawn.
+// The page every render runs in: the theme's ground filling the window behind a lead, laid out as a
+// page's sheet lays out its lead and text column (sheet.css).
 const VIEW = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-html, body { margin: 0; background: var(--paper); }
+html, body { margin: 0; background: var(--paper); font-size: 16px; }
 .cover { position: relative; height: 100vh; overflow: hidden; }
 canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.lead { position: relative; max-width: 640px; margin: 0 auto; padding: clamp(96px, 24vh, 230px) 28px 0; }
-h1 { margin: 0 0 18px; font: var(--display-bold) 34px/1.16 var(--display); font-variation-settings: var(--display-var); color: var(--cover-ink); letter-spacing: -0.01em; text-wrap: balance; }
-p { margin: 0; font: 17.5px/1.62 Georgia, serif; color: var(--cover-body); }
-@media (max-width: 600px) { .lead { padding-left: 20px; padding-right: 20px; } h1 { font-size: 28px; } p { font-size: 17px; } }
+.page { position: relative; max-width: 44rem; margin: 0 auto; padding: 0 1.6em; box-sizing: border-box; font: 16.5px/1.6 Georgia, serif; }
+.lead { padding-top: 2.8em; min-height: 30vh; box-sizing: border-box; display: flex; flex-direction: column; justify-content: flex-end; }
+h1 { margin: 0 0 .4em; font: var(--display-bold) 2em/1.15 var(--display); font-variation-settings: var(--display-var); color: var(--cover-ink); text-wrap: balance; }
+p { margin: 0; color: var(--cover-body); }
+@media (max-width: 760px) { .page { padding: 0 1em; font-size: 16px; } h1 { font-size: 1.7em; } .lead { min-height: 24vh; } }
 .sheet { display: grid; grid-template-columns: repeat(4, 300px); gap: 6px; padding: 6px; background: #888; }
 .sheet canvas { position: static; width: 300px; height: 200px; }
 </style>
-<div class="cover"><canvas></canvas><div class="lead"><h1>Should the art for every theme go to one standing agent?</h1>
-<p>Your words about how a page looks go from its agent to the keeper of the design system, which hands them to the art.</p></div></div>
+<div class="cover"><canvas></canvas><div class="page"><div class="lead"><h1>Should the art for every theme go to one standing agent?</h1>
+<p>Your words about how a page looks go from its agent to the keeper of the design system, which hands them to the art.</p></div></div></div>
 <script type="module">
-import { load, wear, paintInto, paintRegion, settle, oklch } from "/page/theme.js";
+import { load, wear, paintInto, paintRegion, settle, oklch, quietOf, textBox, pagePresses, meanColour } from "/page/theme.js";
 const q = new URLSearchParams(location.search), theme = await load(q.get("theme"));
 await wear(document.documentElement, theme);
-window.__check = { theme, paintInto, paintRegion, settle, oklch };
+window.__check = { theme, paintInto, paintRegion, settle, oklch, quietOf, textBox, pagePresses, meanColour };
 window.__ready = true;
 </script>`;
 
@@ -140,31 +157,45 @@ async function tab(theme, size) {
   return { evaluate, shot, close: () => send("Target.closeTarget", { targetId }) };
 }
 
-// In the page: paint one identity behind the lead, time it, measure the lead's ink against the
-// ground in its box, and paint it again to compare.
+// In the page: paint one identity for the window, time it, measure the lead's ink against the
+// ground in its box and the body ink over the box the text covers, bare and pressed, and paint it
+// again to compare.
 const COVER = (who) => `(() => {
-  const { theme, paintInto, settle } = window.__check;
-  const canvas = document.querySelector(".cover canvas"), lead = document.querySelector(".lead");
+  const { theme, paintInto, settle, quietOf, textBox, pagePresses, meanColour } = window.__check;
+  const p = theme.palette, canvas = document.querySelector(".cover canvas"), page = document.querySelector(".page"), lead = document.querySelector(".lead");
   const b = [...lead.children].reduce((r, el) => { const e = el.getBoundingClientRect(); return { l: Math.min(r.l, e.left), t: Math.min(r.t, e.top), r: Math.max(r.r, e.right), b: Math.max(r.b, e.bottom) }; }, { l: 1e9, t: 1e9, r: 0, b: 0 });
-  const quiet = { x: b.l - 32, y: b.t - 28, w: b.r - b.l + 64, h: b.b - b.t + 56 };
+  const cs = getComputedStyle(page), pl = parseFloat(cs.paddingLeft), pr = parseFloat(cs.paddingRight);
+  const column = { x: page.getBoundingClientRect().left + pl, w: page.clientWidth - pl - pr };
+  const w = innerWidth, h = innerHeight, quiet = quietOf({ w, h }, column);
   const who = ${JSON.stringify(who)};
-  const script = paintInto(canvas, theme, who, quiet);
+  const script = paintInto(canvas, theme, who, quiet, null, column);
   const ms = script + settle(canvas);
   const dpr = canvas.width / canvas.clientWidth, ctx = canvas.getContext("2d");
-  const img = ctx.getImageData(Math.round(b.l * dpr), Math.round(b.t * dpr), Math.round((b.r - b.l) * dpr), Math.round((b.b - b.t) * dpr)).data;
-  const lum = (r, g, bl) => { const f = (c) => (c /= 255) <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(bl); };
-  const n = parseInt(theme.palette.cover_ink.slice(1), 16), ink = lum(n >> 16, (n >> 8) & 255, n & 255);
-  const cs = [];
-  for (let i = 0; i < img.length; i += 16) { const L = lum(img[i], img[i + 1], img[i + 2]); cs.push((Math.max(L, ink) + 0.05) / (Math.min(L, ink) + 0.05)); }
-  cs.sort((x, y) => x - y);
+  const lin = (c) => (c /= 255) <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  const lum = (r, g, bl) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(bl);
+  const hex = (c) => { const n = parseInt(c.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+  const ratio = (L, M) => (Math.max(L, M) + 0.05) / (Math.min(L, M) + 0.05);
+  const pixels = (x, y, bw, bh) => ctx.getImageData(Math.round(x * dpr), Math.round(y * dpr), Math.round(bw * dpr), Math.round(bh * dpr)).data;
+  const ink = lum(...hex(p.cover_ink)), img = pixels(b.l, b.t, b.r - b.l, b.b - b.t), lead5 = [];
+  for (let i = 0; i < img.length; i += 16) lead5.push(ratio(lum(img[i], img[i + 1], img[i + 2]), ink));
+  lead5.sort((x, y) => x - y);
+  // Where the text runs: the column, down the box the art keeps open.
+  const tb = textBox({ w, h, quiet, column }), text = pixels(column.x, tb.y, column.w, tb.h), body = lum(...hex(p.ink));
+  const tint = meanColour(canvas, { x: column.x * dpr, y: 0, w: column.w * dpr, h: canvas.height });
+  const pr2 = pagePresses(p, tint).body, pc = hex(pr2.colour), pick = pr2.blend === "lighten" ? Math.max : Math.min;
+  let under = 0, n = 0, pressed = Infinity;
+  for (let i = 0; i < text.length; i += 16, n++) {
+    if (ratio(lum(text[i], text[i + 1], text[i + 2]), body) < 4.5) under++;
+    pressed = Math.min(pressed, ratio(lum(pick(text[i], pc[0]), pick(text[i + 1], pc[1]), pick(text[i + 2], pc[2])), body));
+  }
   const digest = (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let h = 2166136261; for (let i = 0; i < d.length; i++) h = Math.imul(h ^ d[i], 16777619); return h >>> 0; };
   const first = digest(canvas), again = document.createElement("canvas");
   again.style.cssText = "position:absolute;left:0;top:0;width:" + canvas.clientWidth + "px;height:" + canvas.clientHeight + "px;visibility:hidden";
   document.body.append(again);
-  paintInto(again, theme, who, quiet);
+  paintInto(again, theme, who, quiet, null, column);
   const same = first === digest(again);
   again.remove();
-  return { script, ms, min: cs[0], p5: cs[Math.floor(cs.length * 0.05)], same };
+  return { script, ms, min: lead5[0], p5: lead5[Math.floor(lead5.length * 0.05)], under: under / n, pressed, same };
 })()`;
 
 // In the page: every slot's painting as a thumbnail, in order.
@@ -204,7 +235,7 @@ try {
   for (const name of themes) {
     const dir = path.join(OUT, name);
     fs.mkdirSync(dir, { recursive: true });
-    console.log(`${name}: paint ms (script / settled), the lead ink's contrast in its box (min / 5th pct), painted twice`);
+    console.log(`${name}: paint ms (script / settled), the lead ink's contrast in its box (min / 5th pct), the text's box under 4.5:1 bare / its worst pressed, painted twice`);
     const probe = await tab(name, SIZES.desktop);
     const slots = await probe.evaluate("window.__check.theme.slots.length");
     await probe.close();
@@ -216,9 +247,11 @@ try {
         await t.close();
         let bars = "";
         if (r.p5 < 7 || r.min < 4.5) bars += miss(`${name} ${size} slot ${slot}: ink ${r.min.toFixed(1)} / ${r.p5.toFixed(1)}`);
+        if (r.under > PAGE_UNDER) bars += miss(`${name} ${size} slot ${slot}: ${(r.under * 100).toFixed(1)}% of the text's box under 4.5:1, over ${PAGE_UNDER * 100}%`);
+        if (r.pressed < 7) bars += miss(`${name} ${size} slot ${slot}: pressed, the body ink falls to ${r.pressed.toFixed(2)}:1`);
         if (!r.same) bars += miss(`${name} ${size} slot ${slot}: painted twice, different pixels`);
         if (size === "phone" && r.ms > PAINT_MS) bars += miss(`${name} phone slot ${slot}: ${Math.round(r.ms)} ms, over ${PAINT_MS}`);
-        console.log(`  ${size.padEnd(7)} slot ${slot} ${seed.padEnd(18)} ${String(Math.round(r.script)).padStart(4)} / ${String(Math.round(r.ms)).padStart(4)} ms   contrast ${r.min.toFixed(1).padStart(5)} / ${r.p5.toFixed(1).padStart(5)}   ${r.same ? "same" : "DIFFERENT"}${bars}`);
+        console.log(`  ${size.padEnd(7)} slot ${slot} ${seed.padEnd(18)} ${String(Math.round(r.script)).padStart(4)} / ${String(Math.round(r.ms)).padStart(4)} ms   contrast ${r.min.toFixed(1).padStart(5)} / ${r.p5.toFixed(1).padStart(5)}   text ${(r.under * 100).toFixed(1).padStart(5)}% / ${r.pressed.toFixed(1).padStart(4)}   ${r.same ? "same" : "DIFFERENT"}${bars}`);
       }
     }
     const sheet = await tab(name, { width: 1236, height: 6 + Math.ceil(slots / 4) * 206, dpr: 1, throttle: 1 });
