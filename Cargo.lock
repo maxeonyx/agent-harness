@@ -383,6 +383,7 @@ dependencies = [
  "harness-substrate",
  "imbl",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
