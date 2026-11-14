@@ -337,7 +337,9 @@ pub struct End {
 /// happens ("You pan the map on your phone and it keeps up"), concretely
 /// enough that he could say "that's not what I want". With where it stands
 /// today, so the uses are both the end and, from his side, the now. Drawn
-/// as one line, as a step is: its mark, what he does, where it stands.
+/// aim first, unlike a step: what he does at full ink, then its mark and
+/// where it stands in a column of their own, so the uses read as the end
+/// and not as the first of the plan's steps.
 ///
 /// Serves: "A list of use cases that we're aiming towards"; "as a user,
 /// what's he need to do?"; "Then the current state, right? Could be
@@ -592,8 +594,11 @@ pub struct Description {
     /// (`TaskEvent::Renamed`) is shown over it, and `describe`'s result says
     /// so. The window's header, not the page's lead.
     pub title: Option<String>,
-    /// Where the work ends ([`End`]). Replaced whole. `describe` given a
-    /// plan for a task with no end lists that as a problem.
+    /// Where the work ends ([`End`]). Replaced whole. It is there so Max
+    /// can check the aim before he reads a plan: `describe` given a plan,
+    /// or `page_write` on a task with one, lists a missing end as a
+    /// problem, and a page with no plan, such as a one-off answer, needs
+    /// none.
     #[serde(default)]
     pub end: Option<End>,
     /// The route from the now to the end: the steps that make it true,
@@ -665,9 +670,11 @@ pub struct Step {
     /// thing first: "opens on a request", "#284, live since 10:14",
     /// "unknown: the agent browser isn't signed in". A done step's is its
     /// proof. Inline markdown, naming live things ([`Ref`]). A step bound
-    /// to a live thing that has a reading shows that instead. Over about
-    /// fifteen words is listed as a problem: the detail goes in the body;
-    /// and so is none, on a step done or in progress and bound to nothing.
+    /// to a live thing that has a reading shows that instead. About the
+    /// step's own work: a use already says where Max stands, so the same
+    /// words as a use's now are listed as a problem. Over about fifteen
+    /// words is listed as a problem: the detail goes in the body; and so is
+    /// none, on a step done or in progress and bound to nothing.
     ///
     /// `default`: plans described before steps had one have none.
     #[serde(default)]

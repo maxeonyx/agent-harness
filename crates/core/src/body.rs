@@ -256,6 +256,10 @@ pub enum Problem {
     /// to nothing, with no now: where it stands is what Max reads it for.
     NoNow,
     /// Line breaks that arrived as the two characters `\n`, so the body
-    /// draws as one paragraph: it was escaped twice.
+    /// draws as one paragraph: it was escaped twice. Read in its prose
+    /// only, since `\n` inside code is literal text.
     Escaped,
+    /// A step's now in the same words as a use's now: the use already says
+    /// where Max stands, so the step says where its own work stands.
+    Repeated,
 }

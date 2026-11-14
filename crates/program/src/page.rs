@@ -231,7 +231,10 @@ fn staged(
             problem: Problem::Lead,
         });
     }
-    if end.is_none() {
+    // The end is there so Max can check the aim before he reads a plan: a
+    // page with no plan, such as a one-off answer, needs none.
+    let planned = (task.and_then(|t| t.description.plan.as_ref())).is_some_and(|p| !p.is_empty());
+    if planned && end.is_none() {
         found.push(Spotted {
             at: Spot::End,
             line: None,
@@ -375,6 +378,7 @@ pub fn explain(problem: &Problem) -> String {
         Problem::Wordy => "too long to read at a glance: a goal is a line of about twenty words, and a use or a now a few words (\"You pan the map on your phone and it keeps up\", \"#284, live since 10:14\"); put the detail in a body.".into(),
         Problem::NoNow => "no `now`: say where it stands in a few words (\"in review\", \"only in the mockups\", \"#284, live since 10:14\"); a done step's now is its proof, not its body.".into(),
         Problem::Escaped => "line breaks that arrived as the two characters `\\n`, so it draws as one paragraph: send real line breaks.".into(),
+        Problem::Repeated => "the same words as a use's now: the use already says where Max stands, so say where this step's own work stands (\"in review\", \"1 of 4 clones points at it\").".into(),
     }
 }
 
@@ -589,9 +593,31 @@ fn describe(state: &State, owner: TaskId, input: Value) -> Result<Done, String> 
             Some(out)
         }
     };
-    // A plan with no end to go with it, given now or before.
+    // A step's now that says again what a use's now says, in the end and
+    // plan given now or before.
     let had = state.task(owner).and_then(|t| t.description.end.as_ref());
-    if plan.is_some() && end.is_none() && had.is_none() {
+    let uses = end.as_ref().or(had).map_or(&[][..], |e| &e.uses[..]);
+    let steps = plan
+        .as_ref()
+        .or(state.task(owner).and_then(|t| t.description.plan.as_ref()));
+    for step in steps.into_iter().flatten() {
+        let Some(now) = step.now.as_deref().map(str::trim) else {
+            continue;
+        };
+        if uses.iter().any(|u| {
+            u.now
+                .as_deref()
+                .is_some_and(|n| n.trim().eq_ignore_ascii_case(now))
+        }) {
+            found.push(Spotted {
+                at: Spot::Step(step.key.clone()),
+                line: None,
+                problem: Problem::Repeated,
+            });
+        }
+    }
+    // A plan with no end to go with it, given now or before.
+    if plan.as_ref().is_some_and(|p| !p.is_empty()) && end.is_none() && had.is_none() {
         found.push(Spotted {
             at: Spot::End,
             line: None,
@@ -1021,7 +1047,7 @@ pub fn tools() -> Vec<Tool> {
                                 "of": { "type": "string", "description": "The live thing it is, once there is one: `task:<id>`." },
                                 "said": { "type": "string", "enum": ["planned", "doing", "done", "failed"] },
                                 "failed": { "type": "string", "description": "Why, when it failed." },
-                                "now": { "type": "string", "description": "Where it stands today, in a few words: \"in review\", \"#284, live since 10:14\". A done step's is its proof. Needed on a step done or doing. Inline markdown." },
+                                "now": { "type": "string", "description": "Where its own work stands today, in a few words: \"in review\", \"#284, live since 10:14\"; not its use's now again. A done step's is its proof. Needed on a step done or doing. Inline markdown." },
                                 "body": markdown("Body markdown: what the step changes and how, and why it is there if it is your own addition.")
                             },
                             "required": ["key", "title"],
