@@ -441,6 +441,8 @@ fn work(state: &State, legs: &Legs) -> Value {
                     Caller::Background { name, .. } => Some(name),
                     _ => None,
                 }),
+                // The tool it is a call of: `ask` makes it Max's.
+                "tool": record.map(|r| r.call.tool.as_str()),
                 "leg": w.leg.to_string(),
                 "at": w.at.to_string(),
                 "running": record.is_some_and(|r| r.settled.is_none()),
