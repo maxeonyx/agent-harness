@@ -182,18 +182,28 @@ const PAD = 3;
 const erased = new Map();
 function eraseNames() {
   begin();
-  for (const [id, r] of erased) if (!nodeEls.has(id)) { r.remove(); erased.delete(id); }
+  // Every changed name's box is read first, with no write between, so the
+  // page lays out once rather than once per read.
+  const boxes = new Map();
   for (const [id, a] of nodeEls) {
+    const s = shown.get(id), name = $(".name", a);
+    if (!s || s.card || !graph.nodes.has(id) || id === openId) continue;
+    if (erased.get(id)?.text === name.textContent) continue;
+    boxes.set(id, { text: name.textContent, x: name.offsetLeft - PAD, y: name.offsetTop - PAD,
+      w: name.offsetWidth + 2 * PAD, h: name.offsetHeight + 2 * PAD });
+  }
+  for (const [id, r] of erased) if (!nodeEls.has(id)) { r.remove(); erased.delete(id); }
+  for (const id of nodeEls.keys()) {
     const s = shown.get(id), n = graph.nodes.get(id);
     let r = erased.get(id);
     if (!s || s.card || !n || id === openId) { r?.remove(); erased.delete(id); continue; }
-    if (!r) { erased.set(id, r = svgEl("rect")); r.setAttribute("rx", 6); r.text = r.at = ""; nameMask.append(r); }
-    const name = $(".name", a);
-    if (r.text !== name.textContent) {
-      r.text = name.textContent;
-      r.box = { x: name.offsetLeft - PAD, y: name.offsetTop - PAD };
-      r.setAttribute("width", name.offsetWidth + 2 * PAD);
-      r.setAttribute("height", name.offsetHeight + 2 * PAD);
+    if (!r) { erased.set(id, r = svgEl("rect")); r.setAttribute("rx", 6); r.at = ""; nameMask.append(r); }
+    const b = boxes.get(id);
+    if (b) {
+      r.text = b.text;
+      r.box = { x: b.x, y: b.y };
+      r.setAttribute("width", b.w);
+      r.setAttribute("height", b.h);
     }
     r.classList.toggle("unmatched", unmatched(n, id));
     const c = centre(s), at = `${f2(c.x + r.box.x)},${f2(c.y + r.box.y)}`;
