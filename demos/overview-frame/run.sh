@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The map's framing fits what is drawn, on the scripted test brain
-# `overview-frame`: one chat, so the whole map is one node, opened on a
+# `overview-frame`: one chat, so the whole map is one node and its area's ground, opened on a
 # phone (390x844) and a desktop (1440x900), and framed again by Fit (F)
 # after a wheel moves it away. Each time it prints how much empty paper
 # lies above the map and below it, down to the bottom bar, and fails
@@ -18,9 +18,10 @@ mkdir -p "$at/w"
 chat=$(drive chat chat "$PWD/$at/w" "Hello there")
 drive settle "$chat" >/dev/null
 
-# Empty paper above the drawn nodes and below them, to the bottom bar.
+# Empty paper above what is drawn (the nodes and the areas' ground under
+# them) and below it, to the bottom bar.
 gaps='(() => {
-  const r = [...document.querySelectorAll("#nodes .node .hit, #nodes .node .name")].map((e) => e.getBoundingClientRect()).filter((b) => b.height);
+  const r = [...document.querySelectorAll("#nodes .node .hit, #nodes .node .name, #under > canvas, #under > div")].map((e) => e.getBoundingClientRect()).filter((b) => b.height);
   const top = Math.min(...r.map((b) => b.top)), bottom = Math.max(...r.map((b) => b.bottom));
   const room = document.querySelector("#bottom").getBoundingClientRect().top;
   return `${Math.round(top)} ${Math.round(room - bottom)}`;
