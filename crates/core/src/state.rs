@@ -1545,7 +1545,7 @@ impl State {
         let context = task.context().ok_or(Rejected::Starting)?;
         if let Some(call) = compaction.by {
             let made = self.calls.get(&call).ok_or(Rejected::Unknown)?;
-            if !matches!(made.call.caller, Caller::Agent { task, .. } if task == id) {
+            if !matches!(made.call.caller, Caller::Agent { task, .. } if self.resumes(id, task)) {
                 return Err(Rejected::NotForTask);
             }
         }
@@ -1567,7 +1567,9 @@ impl State {
                 Rendered::Call(call) => {
                     let made = self.calls.get(call).ok_or(Rejected::Unknown)?;
                     let own = match made.call.caller {
-                        Caller::Agent { task, .. } | Caller::Background { task, .. } => task == id,
+                        Caller::Agent { task, .. } | Caller::Background { task, .. } => {
+                            self.resumes(id, task)
+                        }
                         Caller::Meta { call, .. } => Some(call) == compaction.by,
                         Caller::Max { .. } => false,
                     };
@@ -1594,6 +1596,21 @@ impl State {
             renders: compaction.renders.clone(),
         };
         Ok((compaction.carry_entry(), kept, compaction.report_entry()))
+    }
+
+    /// Whether `task` is `of` or resumes it, at any remove: a resume takes
+    /// on the results its source had yet to take in, a compaction call's
+    /// among them.
+    fn resumes(&self, mut task: TaskId, of: TaskId) -> bool {
+        loop {
+            if task == of {
+                return true;
+            }
+            match self.tasks.get(&task).map(|t| &t.origin) {
+                Some(Origin::Resume { from }) => task = *from,
+                _ => return false,
+            }
+        }
     }
 
     /// The task's latest checkpoint: the last entry on its chain since its
