@@ -491,7 +491,14 @@ impl<'m, 'k> Reader<'m, 'k> {
                 dest_url,
                 ..
             }) => {
-                let words = pieces_text(&self.inlines());
+                let inner = self.inlines();
+                for piece in &inner {
+                    if let Piece::Image { line, .. } = piece {
+                        let why = "it sits inside a link, and a picture is already its own link to full size";
+                        self.spot(*line, Problem::Picture { why: why.into() });
+                    }
+                }
+                let words = pieces_text(&inner);
                 let link = self.link(link_type, &dest_url, words, line);
                 out.push(Piece::Inline(link));
             }
@@ -570,7 +577,12 @@ impl<'m, 'k> Reader<'m, 'k> {
         let values: Option<Vec<ValueId>> = images.iter().map(|(src, _, _)| value(src)).collect();
         for (src, _, line) in &images {
             let why = match value(src) {
-                None => format!("`{src}` names no call whose result showed you a picture"),
+                None if src.starts_with("call-") => format!(
+                    "`{src}` names no call of yours or your agents' whose result showed you one picture"
+                ),
+                None => format!(
+                    "`{src}` is a file or an address, and a page draws only a picture you have seen"
+                ),
                 Some(_) if !alone => "it sits amid text".to_owned(),
                 Some(_) => continue,
             };

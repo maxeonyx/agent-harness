@@ -426,7 +426,7 @@ pub fn explain(problem: &Problem) -> String {
         Problem::Kind { kind, kinds } => format!("`{kind}:` is not a kind the harness reads ({}), drawn as its words.", kinds.join(", ")),
         Problem::NotFound(of) => format!("{of:?} is not known, drawn as its words."),
         Problem::NoAlt => "an image with no alt text: say what it shows.".into(),
-        Problem::Picture { why } => format!("a picture drawn as its alt's words, since {why}. A picture is the label of the call whose result showed it to you (a `read` of the image file, or a screenshot), alone in its paragraph: `![what it shows](call-3fa2c1)`."),
+        Problem::Picture { why } => format!("a picture drawn as its alt's words, since {why}. `read` the image file (or take the screenshot), then cite that call's label alone in its paragraph: `![what it shows](call-3fa2c1)`."),
         Problem::Misquoted => "words given as Max's that he did not say, drawn as a plain quote.".into(),
         Problem::Figure { error } => format!("a figure that would not draw: {error}"),
         Problem::Table { why } => format!("a table that reads badly: {why}."),
@@ -811,8 +811,11 @@ fn ask(
     };
     let mut values = Vec::new();
     let shows = a.shows.map(cite);
+    let lines = [&a.now, &a.why]
+        .into_iter()
+        .flat_map(|l| harness_body::inline(l, KINDS).1);
     let problems = (shows.iter()).flat_map(|m| harness_body::body(m, KINDS).1);
-    let problems: Vec<harness_body::Found> = problems.collect();
+    let problems: Vec<harness_body::Found> = problems.chain(lines).collect();
     let shows = shows.map(|m| stash(&mut values, m));
     let ask = Ask {
         key: a.key.clone(),
