@@ -8,12 +8,14 @@
 // window a page is read in, laid out as the page lays out its lead and text column:
 // - the lead's ink: the cover ink against every pixel of the ground behind the lead's box, at phone
 //   and desktop size, for every identity slot: 7:1 or better for 95% of it, never under 4.5:1;
-// - the page: the painting stays still while the text scrolls over all of kit.textBox, the box the
-//   text covers, so the share of that box under 4.5:1 for the ink body text is set in (the palette's
-//   ink) is how much of the art each block's press must flatten. Over PAGE_UNDER of it misses: the
-//   art is loud where the text runs, and pressed flat, the page reads as a wash. And with its press
-//   (theme.js pagePresses) laid over it, the same box keeps the ink at 7:1 on every pixel: what keeps
-//   the text easy to read, held by construction, and checked here;
+// - the art under the text: the painting stays still while the text scrolls over all of
+//   kit.textBox, the box the text covers, and each block's veil flattens there whatever would break
+//   its ink's bar. Over PAGE_CHANGED of that box flattened misses: the art is loud where the text
+//   runs, and the reader sees a pale band slide over it as he scrolls;
+// - the page as drawn: a sample page (a lead, an end with its uses, facts with a table, a plan with
+//   every state's mark, an ask) laid out by sheet.css on the painting, with the veil theme.js
+//   `veilStyle` sets, scrolled through the window; with its ink hidden, every line of text against
+//   every pixel behind it: titles and body at 7:1, quiet text at 5:1, links at 4.5:1, marks at 3:1;
 // - deterministic: the same identity at the same size painted twice gives the same pixels;
 // - paint time: the script and the raster after it, on a phone (its chat window at 2x, the CPU
 //   slowed 4x, as a mid-range phone), under PAINT_MS;
@@ -41,12 +43,11 @@ const SIZES = {
   desktop: { width: 878, height: 850, dpr: 1, throttle: 1 },
   phone: { width: 376, height: 634, dpr: 2, throttle: 4, mobile: true },
 };
-// The most of the text's box a theme's painting may leave under 4.5:1 for the page's body ink, bare:
-// the five themes' worst slot is 11.0% (Tussock's land at the foot of a desktop window, which
-// reads well pressed), and a margin for a new seed. Not a few percent: the press keeps the text at
-// 7:1 whatever lies under it, so this bar only stops a painting so loud under the text that its
-// press would leave the page a wash.
-const PAGE_UNDER = 0.2;
+// The most of the text's box the veil may flatten: what a reader sees change under the text as it
+// scrolls over the painting.
+const PAGE_CHANGED = 0.05;
+// Each kind of text on a painting, by the custom property it is set in, and the contrast it keeps.
+const BARS = { "--cover-ink": 7, "--ink": 7, "--body": 7, "--muted": 5, "--accent": 4.5, "--fig-1": 3, "--fig-2": 3, "--fig-3": 3, "--fig-4": 3, "--yours": 3 };
 // The state tones (the language's): never a theme's.
 const TONES = { yours: "#d4621c", working: "#3b78d4", others: "#8c7fa6", done: "#3c9259", failed: "#c63f36", quiet: "#a39e95" };
 const MAP_PAPER = "#f0eee6";
@@ -58,28 +59,73 @@ const OUT = path.resolve(outAt >= 0 ? args.splice(outAt, 2)[1] : path.join(ROOT,
 const all = fs.readdirSync(PAGE).map((f) => /^theme-(.+)\.js$/.exec(f)?.[1]).filter(Boolean);
 const themes = args.length ? args : all;
 
-// The page every render runs in: the theme's ground filling the window behind a lead, laid out as a
-// page's sheet lays out its lead and text column (sheet.css).
+// The page every render runs in: a page as the chat window shows it, sheet.css laying out a sample
+// page over the theme's ground, in a scroll the window's size.
+const P = (s) => `<p>${s}</p>`;
+const STEP = (state, mark, title, now, body = "") => `<li class="step ${state}"><div class="head"><span class="mark">${mark}</span><span class="title">${title}</span><span class="now">${now}</span></div>${body}</li>`;
+const USE = (state, mark, what, stands) => `<li class="use ${state}"><span>${what}</span><span class="stands"><span class="mark">${mark}</span><span>${stands}</span></span></li>`;
+const SAMPLE = `<header class="lead new"><h1>A cold build takes 6 minutes; a shared cache makes it 52 s</h1></header>
+<section class="end"><p class="goal">Every clone on the VM builds warm, and CI reads the same cache.</p><ul class="uses">
+${USE("done", "✓", "A new clone builds in under a minute", "one clone on it: 52 s")}${USE("working", "◐", "CI builds read the cache", "half the jobs")}${USE("failed", "✕", "Release builds stay clean", "one cached by mistake")}</ul></section>
+<section class="now">${P("Every clone's cargo points <code>RUSTC_WRAPPER</code> at one sccache, so a new clone builds warm. The cache sits on the VM's disk, 4.1 GB after a week, and <a href=\"#\">its notes</a> say how to clear it.")}
+<table><tr><th>Build</th><th class="numeric">Without cache</th><th class="numeric">With cache</th></tr><tr><td>harness-brain</td><td class="numeric">6 min 12 s</td><td class="numeric">52 s</td></tr><tr><td>face-tab (wasm)</td><td class="numeric">1 min 40 s</td><td class="numeric">18 s</td></tr><tr><td>theme-check</td><td class="numeric">2 min 3 s</td><td class="numeric">31 s</td></tr></table>
+${P("A bigger VM halves the time but costs every month, and every clone still pays it once.")}<blockquote>Measured on the VM at 14:02, three cold builds each.</blockquote></section>
+<section class="plan"><ol class="steps">${STEP("done", "✓", "A cold build's time is known", "6 min 12 s, the slowest of three")}
+${STEP("working", "◐", "The VM's clones share one build cache", "one clone on it", P("Each clone's config points at the one cache; the rest follow as they are next opened."))}
+${STEP("yours", "●", "CI builds read the same cache", "CI builds cold: 6 min", `<div class="ask"><p class="question">Where should CI keep its build cache?</p><p class="now">GitHub's Actions cache holds 10 GB a repo; an S3 bucket costs a little every month.</p><p class="otherwise">Until you answer, I finish the VM side and the docs.</p></div>`)}
+${STEP("failed", "✕", "Release builds skip the cache", "one release build cached")}${STEP("", "○", "AGENTS.md says how to build", "AGENTS.md and the README each say part")}</ol></section>
+<section class="why">${P("Cold builds are most of an agent's first ten minutes in a new clone, and agents make a clone for every task.")}${P("One cache on the VM costs nothing more; CI's cache is the only choice that costs money, so it is yours.")}${P("Release builds stay out of the cache so what ships is built from nothing.")}</section>`;
 const VIEW = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/page/sheet.css">
 <style>
-html, body { margin: 0; background: var(--paper); font-size: 16px; }
-.cover { position: relative; height: 100vh; overflow: hidden; }
-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.page { position: relative; max-width: 44rem; margin: 0 auto; padding: 0 1.6em; box-sizing: border-box; font: 16.5px/1.6 Georgia, serif; }
-.lead { padding-top: 2.8em; min-height: 30vh; box-sizing: border-box; display: flex; flex-direction: column; justify-content: flex-end; }
-h1 { margin: 0 0 .4em; font: var(--display-bold) 2em/1.15 var(--display); font-variation-settings: var(--display-var); color: var(--cover-ink); text-wrap: balance; }
-p { margin: 0; color: var(--cover-body); }
-@media (max-width: 760px) { .page { padding: 0 1em; font-size: 16px; } h1 { font-size: 1.7em; } .lead { min-height: 24vh; } }
-.sheet { display: grid; grid-template-columns: repeat(4, 300px); gap: 6px; padding: 6px; background: #888; }
-.sheet canvas { position: static; width: 300px; height: 200px; }
+html, body { margin: 0; background: var(--paper); font-size: 16px; --serif: Georgia, serif; --sans: system-ui, sans-serif; --mono: monospace; }
+.scroll { position: relative; height: 100vh; overflow: hidden auto; }
+.thumbs { display: grid; grid-template-columns: repeat(4, 300px); gap: 6px; padding: 6px; background: #888; }
+.thumbs canvas { display: block; width: 300px; height: 200px; }
 </style>
-<div class="cover"><canvas></canvas><div class="page"><div class="lead"><h1>Should the art for every theme go to one standing agent?</h1>
-<p>Your words about how a page looks go from its agent to the keeper of the design system, which hands them to the art.</p></div></div></div>
+<div class="scroll"><div class="sheet"><div class="window"><canvas></canvas></div>${SAMPLE}</div></div>
 <script type="module">
-import { load, wear, paintInto, paintRegion, settle, oklch, quietOf, textBox, pagePresses, meanColour } from "/page/theme.js";
+import { load, wear, paintInto, paintRegion, settle, oklch, quietOf, textBox, veilStyle, paintedInks, beyond, pageVeil, meanColour } from "/page/theme.js";
 const q = new URLSearchParams(location.search), theme = await load(q.get("theme"));
 await wear(document.documentElement, theme);
-window.__check = { theme, paintInto, paintRegion, settle, oklch, quietOf, textBox, pagePresses, meanColour };
+const sheet = document.querySelector(".sheet");
+await wear(sheet, theme);
+for (const [k, v] of Object.entries(paintedInks(theme.palette))) sheet.style.setProperty(k, v);
+sheet.style.setProperty("--win-w", innerWidth + "px");
+sheet.style.setProperty("--win-h", innerHeight + "px");
+// Every line of text on the page in the window now: its box, its colour and the bar it keeps.
+const rgbOf = (c) => c.match(/[\\d.]+/g).slice(0, 3).map(Number);
+window.__lines = (bars) => {
+  const probe = document.createElement("i"); document.body.append(probe);
+  const kinds = Object.entries(bars).map(([v, k]) => { probe.style.color = getComputedStyle(sheet).getPropertyValue(v); return [getComputedStyle(probe).color, v, k]; });
+  probe.remove();
+  const out = [], walk = document.createTreeWalker(sheet, NodeFilter.SHOW_TEXT);
+  while (walk.nextNode()) {
+    const n = walk.currentNode; if (!n.textContent.trim()) continue;
+    const colour = getComputedStyle(n.parentElement).color, kind = kinds.find(([c]) => c === colour) ?? [colour, "unknown " + colour, 7];
+    const r = document.createRange(); r.selectNodeContents(n);
+    for (const b of r.getClientRects()) {
+      const t = Math.max(0, b.top), bt = Math.min(innerHeight, b.bottom);
+      if (b.width >= 2 && bt - t >= 2) out.push({ x: b.left, y: t, w: b.width, h: bt - t, rgb: rgbOf(colour), kind: kind[1], bar: kind[2], text: n.textContent.trim().slice(0, 40) });
+    }
+  }
+  return out;
+};
+// A screenshot of the window, with the ink hidden, against each line's colour: each kind's worst.
+window.__measure = async (png, lines) => {
+  const img = new Image(); img.src = "data:image/png;base64," + png; await img.decode();
+  const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+  const x = c.getContext("2d", { willReadFrequently: true }); x.drawImage(img, 0, 0);
+  const d = img.width / innerWidth, lin = (v) => (v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  const lum = (r, g, b) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return lines.map((l) => {
+    const px = x.getImageData(Math.round(l.x * d), Math.round(l.y * d), Math.max(1, Math.round(l.w * d)), Math.max(1, Math.round(l.h * d))).data, L = lum(...l.rgb);
+    let min = Infinity;
+    for (let i = 0; i < px.length; i += 4) { const M = lum(px[i], px[i + 1], px[i + 2]); min = Math.min(min, (Math.max(L, M) + 0.05) / (Math.min(L, M) + 0.05)); }
+    return { ...l, min };
+  });
+};
+window.__check = { theme, sheet, paintInto, paintRegion, settle, oklch, quietOf, textBox, veilStyle, beyond, pageVeil, meanColour };
 window.__ready = true;
 </script>`;
 
@@ -88,7 +134,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/") return res.writeHead(200, { "content-type": "text/html" }).end(VIEW);
   const name = path.basename(url.pathname), file = path.join(PAGE, name);
   if (!url.pathname.startsWith("/page/") || !fs.existsSync(file)) return res.writeHead(404).end();
-  const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".woff2") ? "font/woff2" : "application/octet-stream";
+  const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : file.endsWith(".woff2") ? "font/woff2" : "application/octet-stream";
   res.writeHead(200, { "content-type": type }).end(fs.readFileSync(file));
 });
 await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
@@ -153,19 +199,20 @@ async function tab(theme, size) {
     await new Promise((ok) => setTimeout(ok, 100));
   }
   if (size.throttle > 1) await s("Emulation.setCPUThrottlingRate", { rate: size.throttle });
-  const shot = async (file) => fs.writeFileSync(file, Buffer.from((await s("Page.captureScreenshot", { format: "png" })).data, "base64"));
-  return { evaluate, shot, close: () => send("Target.closeTarget", { targetId }) };
+  const capture = () => s("Page.captureScreenshot", { format: "png" });
+  const shot = async (file) => fs.writeFileSync(file, Buffer.from((await capture()).data, "base64"));
+  return { evaluate, capture, shot, close: () => send("Target.closeTarget", { targetId }) };
 }
 
 // In the page: paint one identity for the window, time it, measure the lead's ink against the
-// ground in its box and the body ink over the box the text covers, bare and pressed, and paint it
-// again to compare.
-const COVER = (who) => `(() => {
-  const { theme, paintInto, settle, quietOf, textBox, pagePresses, meanColour } = window.__check;
-  const p = theme.palette, canvas = document.querySelector(".cover canvas"), page = document.querySelector(".page"), lead = document.querySelector(".lead");
-  const b = [...lead.children].reduce((r, el) => { const e = el.getBoundingClientRect(); return { l: Math.min(r.l, e.left), t: Math.min(r.t, e.top), r: Math.max(r.r, e.right), b: Math.max(r.b, e.bottom) }; }, { l: 1e9, t: 1e9, r: 0, b: 0 });
-  const cs = getComputedStyle(page), pl = parseFloat(cs.paddingLeft), pr = parseFloat(cs.paddingRight);
-  const column = { x: page.getBoundingClientRect().left + pl, w: page.clientWidth - pl - pr };
+// ground in its box and what the veil flattens in the box the text covers, paint it again to
+// compare, then lay the veil over it and hide the page's ink, ready to be measured as drawn.
+const COVER = (who, bars) => `(() => {
+  const { theme, sheet, paintInto, settle, quietOf, textBox, veilStyle, beyond, pageVeil, meanColour } = window.__check;
+  const p = theme.palette, canvas = sheet.querySelector(".window > canvas"), h1 = sheet.querySelector(".lead h1").getBoundingClientRect();
+  const b = { l: h1.left, t: h1.top, r: h1.right, b: h1.bottom };
+  const cs = getComputedStyle(sheet), pl = parseFloat(cs.paddingLeft), pr = parseFloat(cs.paddingRight);
+  const column = { x: sheet.getBoundingClientRect().left + pl, w: sheet.clientWidth - pl - pr };
   const w = innerWidth, h = innerHeight, quiet = quietOf({ w, h }, column);
   const who = ${JSON.stringify(who)};
   const script = paintInto(canvas, theme, who, quiet, null, column);
@@ -179,15 +226,11 @@ const COVER = (who) => `(() => {
   const ink = lum(...hex(p.cover_ink)), img = pixels(b.l, b.t, b.r - b.l, b.b - b.t), lead5 = [];
   for (let i = 0; i < img.length; i += 16) lead5.push(ratio(lum(img[i], img[i + 1], img[i + 2]), ink));
   lead5.sort((x, y) => x - y);
-  // Where the text runs: the column, down the box the art keeps open.
-  const tb = textBox({ w, h, quiet, column }), text = pixels(column.x, tb.y, column.w, tb.h), body = lum(...hex(p.ink));
-  const tint = meanColour(canvas, { x: column.x * dpr, y: 0, w: column.w * dpr, h: canvas.height });
-  const pr2 = pagePresses(p, tint).body, pc = hex(pr2.colour), pick = pr2.blend === "lighten" ? Math.max : Math.min;
-  let under = 0, n = 0, pressed = Infinity;
-  for (let i = 0; i < text.length; i += 16, n++) {
-    if (ratio(lum(text[i], text[i + 1], text[i + 2]), body) < 4.5) under++;
-    pressed = Math.min(pressed, ratio(lum(pick(text[i], pc[0]), pick(text[i + 1], pc[1]), pick(text[i + 2], pc[2])), body));
-  }
+  // Where the text runs: the column, down the box the art keeps open; how much of it the veil flattens.
+  const tb = textBox({ w, h, quiet, column });
+  const veil = pageVeil(p, meanColour(canvas, { x: column.x * dpr, y: 0, w: column.w * dpr, h: canvas.height }));
+  const rows = beyond(canvas, veil.colour, veil.blend, { rows: 64, cols: 64, box: { x: column.x * dpr, y: tb.y * dpr, w: column.w * dpr, h: tb.h * dpr } });
+  const changed = rows.reduce((s, r) => s + r, 0) / rows.length;
   const digest = (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let h = 2166136261; for (let i = 0; i < d.length; i++) h = Math.imul(h ^ d[i], 16777619); return h >>> 0; };
   const first = digest(canvas), again = document.createElement("canvas");
   again.style.cssText = "position:absolute;left:0;top:0;width:" + canvas.clientWidth + "px;height:" + canvas.clientHeight + "px;visibility:hidden";
@@ -195,22 +238,42 @@ const COVER = (who) => `(() => {
   paintInto(again, theme, who, quiet, null, column);
   const same = first === digest(again);
   again.remove();
-  return { script, ms, min: lead5[0], p5: lead5[Math.floor(lead5.length * 0.05)], under: under / n, pressed, same };
+  const yours = getComputedStyle(document.documentElement).getPropertyValue("--yours").trim() || "#d4691c";
+  const style = veilStyle({ palette: p, canvas, dpr, column, yours, name: "soft" });
+  for (const [k, v] of Object.entries(style.vars)) sheet.style.setProperty(k, v);
+  const frames = document.createElement("style"); frames.textContent = style.frames; document.head.append(frames);
+  const lines = window.__lines(${JSON.stringify(bars)});
+  const hide = document.createElement("style"); hide.className = "hide-ink";
+  hide.textContent = ".sheet, .sheet * { color: transparent !important; -webkit-text-fill-color: transparent !important; text-decoration-color: transparent !important; border-color: transparent !important }";
+  document.head.append(hide);
+  hide.disabled = true;
+  const s = document.querySelector(".scroll");
+  return { script, ms, min: lead5[0], p5: lead5[Math.floor(lead5.length * 0.05)], changed, same, scroll: s.scrollHeight - s.clientHeight, lines: lines.length };
+})()`;
+// In the page: scrolled to y, every line of text in the window, once the soft veils have caught up.
+const LINES = (y, bars) => `(async () => {
+  document.querySelector(".hide-ink").disabled = true;
+  document.querySelector(".scroll").scrollTop = ${y};
+  await new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)));
+  const lines = window.__lines(${JSON.stringify(bars)});
+  document.querySelector(".hide-ink").disabled = false;
+  await new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)));
+  return lines;
 })()`;
 
 // In the page: every slot's painting as a thumbnail, in order.
 const SHEET = (seeds) => `(() => {
   const { theme, paintInto } = window.__check;
-  document.querySelector(".cover").remove();
-  const sheet = document.createElement("div"); sheet.className = "sheet"; document.body.append(sheet);
-  theme.slots.forEach((_, slot) => { const c = document.createElement("canvas"); sheet.append(c); paintInto(c, theme, { slot, seed: ${JSON.stringify(seeds)}[slot % ${seeds.length}] }, null); });
+  document.querySelector(".scroll").remove();
+  const thumbs = document.createElement("div"); thumbs.className = "thumbs"; document.body.append(thumbs);
+  theme.slots.forEach((_, slot) => { const c = document.createElement("canvas"); thumbs.append(c); paintInto(c, theme, { slot, seed: ${JSON.stringify(seeds)}[slot % ${seeds.length}] }, null); });
   return theme.slots.length;
 })()`;
 
 // In the page: the theme's map region with a few live agents, and each state tone at their nodes.
 const REGION = `(() => {
   const { theme, paintRegion, oklch } = window.__check;
-  document.querySelector(".cover").remove();
+  document.querySelector(".scroll").remove();
   const w = 1200, h = 900, now = 520, pools = [0, 1, 2, 3].map((slot) => ({ x: 180 + slot * 280, y: now, r: 130, slot }));
   const art = paintRegion(theme, { slot: 0, seed: "harness-features" }, { w, h, now, scale: 1, paper: "${MAP_PAPER}", pools });
   const view = document.createElement("canvas"); view.width = w; view.height = h;
@@ -235,23 +298,36 @@ try {
   for (const name of themes) {
     const dir = path.join(OUT, name);
     fs.mkdirSync(dir, { recursive: true });
-    console.log(`${name}: paint ms (script / settled), the lead ink's contrast in its box (min / 5th pct), the text's box under 4.5:1 bare / its worst pressed, painted twice`);
+    console.log(`${name}: paint ms (script / settled), the lead ink's contrast in its box (min / 5th pct), the text's box the veil flattens, the page as drawn (worst line: titles and body / quiet / links / marks), painted twice`);
     const probe = await tab(name, SIZES.desktop);
     const slots = await probe.evaluate("window.__check.theme.slots.length");
     await probe.close();
     for (const [size, spec] of Object.entries(SIZES)) {
       for (let slot = 0; slot < slots; slot++) {
         const seed = SEEDS[slot % SEEDS.length], t = await tab(name, spec);
-        const r = await t.evaluate(COVER({ slot, seed }));
+        const r = await t.evaluate(COVER({ slot, seed }, BARS));
         if (slot < 2) await t.shot(path.join(dir, `${size}-${slot}.png`));
+        // The page scrolled through the window, a little over half a window at a time.
+        const worst = {};
+        for (let y = 0; ; y = Math.min(r.scroll, y + Math.round(spec.height * 0.55))) {
+          const lines = await t.evaluate(LINES(y, BARS));
+          const png = (await t.capture()).data;
+          for (const l of await t.evaluate(`window.__measure(${JSON.stringify(png)}, ${JSON.stringify(lines)})`)) {
+            const k = l.bar === 7 ? "ink" : l.bar === 5 ? "quiet" : l.bar === 4.5 ? "links" : "marks";
+            if (!worst[k] || l.min < worst[k].min) worst[k] = { ...l, y };
+            if (l.kind.startsWith("unknown")) worst.unknown = l;
+          }
+          if (y >= r.scroll) break;
+        }
         await t.close();
         let bars = "";
         if (r.p5 < 7 || r.min < 4.5) bars += miss(`${name} ${size} slot ${slot}: ink ${r.min.toFixed(1)} / ${r.p5.toFixed(1)}`);
-        if (r.under > PAGE_UNDER) bars += miss(`${name} ${size} slot ${slot}: ${(r.under * 100).toFixed(1)}% of the text's box under 4.5:1, over ${PAGE_UNDER * 100}%`);
-        if (r.pressed < 7) bars += miss(`${name} ${size} slot ${slot}: pressed, the body ink falls to ${r.pressed.toFixed(2)}:1`);
+        if (r.changed > PAGE_CHANGED) bars += miss(`${name} ${size} slot ${slot}: the veil flattens ${(r.changed * 100).toFixed(1)}% of the text's box, over ${PAGE_CHANGED * 100}%`);
+        for (const [k, l] of Object.entries(worst)) if (l.min < l.bar) bars += miss(`${name} ${size} slot ${slot}: ${k} "${l.text}" (${l.kind}) at ${l.min.toFixed(2)}:1 scrolled ${l.y}px, under ${l.bar}:1`);
         if (!r.same) bars += miss(`${name} ${size} slot ${slot}: painted twice, different pixels`);
         if (size === "phone" && r.ms > PAINT_MS) bars += miss(`${name} phone slot ${slot}: ${Math.round(r.ms)} ms, over ${PAINT_MS}`);
-        console.log(`  ${size.padEnd(7)} slot ${slot} ${seed.padEnd(18)} ${String(Math.round(r.script)).padStart(4)} / ${String(Math.round(r.ms)).padStart(4)} ms   contrast ${r.min.toFixed(1).padStart(5)} / ${r.p5.toFixed(1).padStart(5)}   text ${(r.under * 100).toFixed(1).padStart(5)}% / ${r.pressed.toFixed(1).padStart(4)}   ${r.same ? "same" : "DIFFERENT"}${bars}`);
+        const page = ["ink", "quiet", "links", "marks"].map((k) => (worst[k] ? worst[k].min.toFixed(1) : "-").padStart(5)).join(" /");
+        console.log(`  ${size.padEnd(7)} slot ${slot} ${seed.padEnd(18)} ${String(Math.round(r.script)).padStart(4)} / ${String(Math.round(r.ms)).padStart(4)} ms   contrast ${r.min.toFixed(1).padStart(5)} / ${r.p5.toFixed(1).padStart(5)}   flattened ${(r.changed * 100).toFixed(1).padStart(5)}%   page ${page}   ${r.same ? "same" : "DIFFERENT"}${bars}`);
       }
     }
     const sheet = await tab(name, { width: 1236, height: 6 + Math.ceil(slots / 4) * 206, dpr: 1, throttle: 1 });

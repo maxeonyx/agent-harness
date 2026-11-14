@@ -12,7 +12,7 @@
 // may set `below`, a higher floor under the now line, and `chroma`, its own colour gain.
 //
 // paint draws into a 2D context already scaled to CSS pixels, given
-//   scene = { w, h, dpr, seed, slot, at, line, root, rng, stream, noise, quiet, column, kit }
+//   scene = { w, h, dpr, seed, slot, at, line, root, rng, stream, noise, quiet, column, veil, kit }
 // where quiet is the box the page lead sits in ({ x, y, w, h }, CSS px), which the art keeps calm,
 // and column ({ x, w }) the text column across the window's whole height. The window is any shape
 // from a phone's (about 0.45 wide to high) to a desktop chat card's (about 1.05) and wider, and the
@@ -23,7 +23,10 @@
 // fits in keeps its subject in them, or above the lead; a narrow one (a phone) at its foot, which
 // shows after the page's last part. Each block's veil eases to nothing across the gutters, so a
 // subject in the gutter's outer part stays nearly whole as text passes beside it; on a narrow
-// window it runs off both edges. A picture with no
+// window it runs off both edges. veil ({ colour, blend }, CSS values) is what a block's veil brings
+// the art under the text to: a ground that keeps its column at least that light (that dark, on a
+// dark page) is left as it is when text scrolls over it, so no pale band slides over its subject.
+// A picture with no
 // page (a thumbnail, the map) gets a small quiet box in the upper middle and no column, so it is
 // composed as a cover would be. dpr is the device pixels per CSS pixel, for shaders and hairlines.
 // seed, slot, root and line are the task's `Identity`; at is its slot's place (slots[slot], round
@@ -277,6 +280,42 @@ export function pageTones(p, veil, yours) {
   p.figure.forEach((c, i) => (out[`fig-${i + 1}`] = holdOn(c, veil.colour, 3)));
   return out;
 }
+// On a painting the page's text is set one step stronger than on paper: its body in the ink, and what
+// is quieter in the body's ink, so the veil under it can stay as near the painting as the contrast
+// allows. As CSS custom properties.
+export function paintedInks(p) {
+  return { "--body": p.ink, "--muted": p.body, "--cover-body": p.cover_ink };
+}
+// How far the soft veil goes toward the veil's colour (0: the clamp alone).
+const SOFT = 0.85;
+// Everything the page sets for its blocks' veils over a painting (sheet.css reads it), so the page and
+// theme-check draw the same thing: the veil at the painting's own hue where the text runs; where it
+// starts and how far it fades (`--veil-l`, the column's distance from the window's left; `--veil-g`,
+// the gutter it fades across, none under 48 px, where it runs off the window's edges instead); the
+// marks' tones held against it; and the soft veil under it, a screen (or multiply) toward the same
+// colour that lifts the painting's darks (or dims its lights) most of the way while keeping their
+// texture. The soft veil shows only where it has something to keep: a block's place in the window as
+// it scrolls (its view timeline, run by the compositor) sets its strength, from how much of the
+// painting at that height the clamp would flatten, as keyframes named `name`. A property of the
+// painting and the window, never of the page. `canvas` is painted at `dpr` device px per CSS px;
+// `column` is in CSS px; `yours` is the language's tone for Max. Returns { vars, frames }.
+export function veilStyle({ palette: p, canvas, dpr, column, yours, name }) {
+  const tint = meanColour(canvas, { x: column.x * dpr, y: 0, w: column.w * dpr, h: canvas.height });
+  const veil = pageVeil(p, tint), lighten = veil.blend === "lighten";
+  const vars = {
+    "--veil-l": `${column.x}px`, "--veil-g": `${column.x >= 48 ? column.x : 0}px`,
+    "--veil": veil.colour, "--veil-blend": veil.blend,
+    "--veil-soft": mix(lighten ? "#000000" : "#ffffff", veil.colour, SOFT), "--veil-soft-blend": lighten ? "screen" : "multiply",
+    "--soft-frames": name,
+  };
+  for (const [k, c] of Object.entries(pageTones(p, veil, yours))) vars[`--${k}`] = c;
+  const rows = beyond(canvas, veil.colour, veil.blend), n = rows.length, frames = [];
+  for (let i = 0; i <= 20; i++) {
+    const r = Math.round((1 - i / 20) * (n - 1)), near = rows.slice(Math.max(0, r - 2), r + 3);
+    frames.push(`${i * 5}% { opacity: ${Math.min(1, 1.6 * Math.max(...near)).toFixed(2)} }`);
+  }
+  return { vars, frames: `@keyframes ${name} { ${frames.join(" ")} }` };
+}
 // A painting's mean colour inside a box (its own pixels), from a small copy.
 export function meanColour(canvas, box) {
   const n = 16, c = document.createElement("canvas");
@@ -287,13 +326,13 @@ export function meanColour(canvas, box) {
   for (let i = 0; i < d.length; i += 4) for (let j = 0; j < 3; j++) sum[j] += lin(d[i + j] / 255);
   return "#" + sum.map((v) => Math.round(255 * gam(v / (n * n))).toString(16).padStart(2, "0")).join("");
 }
-// Row by row down a painting, the share of each row a veil of `colour` with `blend` would
-// flatten: darker than the colour under a lighten, lighter under a darken.
-export function beyond(canvas, colour, blend, rows = 24) {
-  const cols = 32, c = document.createElement("canvas");
+// Row by row down a painting (or a `box` of it, in its own pixels), the share of each row a veil of
+// `colour` with `blend` would flatten: darker than the colour under a lighten, lighter under a darken.
+export function beyond(canvas, colour, blend, { rows = 24, cols = 32, box = { x: 0, y: 0, w: canvas.width, h: canvas.height } } = {}) {
+  const c = document.createElement("canvas");
   c.width = cols; c.height = rows;
   const x = c.getContext("2d", { willReadFrequently: true });
-  x.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, cols, rows);
+  x.drawImage(canvas, box.x, box.y, box.w, box.h, 0, 0, cols, rows);
   const d = x.getImageData(0, 0, cols, rows).data, L = lum(colour), out = [];
   for (let r = 0; r < rows; r++) {
     let n = 0;
@@ -323,7 +362,7 @@ export function paintInto(canvas, theme, who, quiet, size = null, column = null)
   quiet ??= { x: w * 0.25, y: h * 0.2, w: w * 0.5, h: h * 0.3 };
   const t0 = performance.now();
   const stream = (part) => rng(`${theme.name}:${seed}:${part}`);
-  theme.paint(ctx, { w, h, dpr, seed, slot, at: placeOf(theme, slot), line, root, rng: rng(`${theme.name}:${seed}`), stream, noise: noise(`${theme.name}:${seed}`), quiet, column, kit });
+  theme.paint(ctx, { w, h, dpr, seed, slot, at: placeOf(theme, slot), line, root, rng: rng(`${theme.name}:${seed}`), stream, noise: noise(`${theme.name}:${seed}`), quiet, column, veil: column ? pageVeil(theme.palette, theme.palette.paper) : null, kit });
   return performance.now() - t0;
 }
 

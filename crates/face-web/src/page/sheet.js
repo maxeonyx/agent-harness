@@ -1,6 +1,6 @@
 import { $, diagram, el, fail, panel, scrollEl } from "./base.js";
 import { answer, answered } from "./compose.js";
-import { beyond, hash, load, meanColour, mix, pageTones, pageVeil, paintInto, quietOf, wear } from "./theme.js";
+import { hash, load, paintedInks, paintInto, quietOf, veilStyle, wear } from "./theme.js";
 
 // ─── A chat's page: what its agent presented to Max, drawn by the theme ───
 // The brain parses every body (harness-body) and the row carries what it
@@ -53,7 +53,7 @@ export function sheetTop() {
 // holds still while the page scrolls over it (`.window`, sticky in the
 // sheet), at full strength wherever there is no text; each block on the page
 // stands on a veil of the painting that keeps its ink at 7:1 on every pixel
-// (theme.js `pageVeil`, sheet.css). Painted once per task and window size, after
+// (theme.js `veilStyle`, sheet.css). Painted once per task and window size, after
 // the page has drawn, so the page never waits for it, and again when the
 // window settles at another size. The reply box under the page wears the
 // theme's paper, so a dark painting doesn't end on a cream band. A task with
@@ -62,8 +62,6 @@ export function sheetTop() {
 // The last few paintings are kept, so going back to a task shows its
 // painting at once; each is a window-sized canvas, a few MB.
 const grounds = new Map(), KEEP = 4;
-// How far the soft veil goes toward the clamp's colour (0: the clamp alone).
-const SOFT = 0.85;
 // The task the page wears now, and the latest dress, which alone may seat
 // what it painted.
 let dressed = null, dressing = 0;
@@ -78,11 +76,8 @@ async function dress(t) {
   const theme = await load(t.look.theme);
   await wear(sheetEl, theme);
   await wear(lineEl, theme);
-  // On the painting, the page's text is set one step stronger than on
-  // paper: its body in the ink, and what is quieter in the body's ink, so
-  // the veil under it can stay as near the painting as the contrast allows.
   const p = theme.palette, sp = sheetEl.style;
-  sp.setProperty("--body", p.ink); sp.setProperty("--muted", p.body); sp.setProperty("--cover-body", p.cover_ink);
+  for (const [k, v] of Object.entries(paintedInks(p))) sp.setProperty(k, v);
   sp.removeProperty("--yours");
   if (!sheetEl.isConnected || sheetEl.hidden) return;
   wearBox(p);
@@ -104,13 +99,10 @@ async function dress(t) {
       const column = { x: sheetEl.getBoundingClientRect().left - scrollEl.getBoundingClientRect().left + pl, w: sheetEl.clientWidth - pl - pr };
       const canvas = el("canvas"), t0 = performance.now();
       paintInto(canvas, theme, t.look, quietOf({ w: W, h: V }, column), { w: W, h: V, dpr }, column);
-      // The veil, at the painting's own hue where the text runs.
-      const tint = meanColour(canvas, { x: column.x * dpr, y: 0, w: column.w * dpr, h: canvas.height });
-      const veil = pageVeil(p, tint);
-      // Where down the window the veil would flatten the painting, for the soft veil.
-      const rows = beyond(canvas, veil.colour, veil.blend);
+      const yours = getComputedStyle(document.documentElement).getPropertyValue("--yours").trim();
+      const style = veilStyle({ palette: p, canvas, dpr, column, yours, name: `soft-${hash(at)}` });
       performance.measure(`ground ${theme.name} ${W}x${V}@${dpr}`, { start: t0 });
-      Object.assign(g, { canvas, x: column.x, veil, rows });
+      Object.assign(g, { canvas, style });
     })().catch((e) => { grounds.delete(at); fail(`painting ${t.name}'s ground`, e); });
   }
   grounds.set(at, g);
@@ -118,37 +110,12 @@ async function dress(t) {
   await g.ready;
   // A painting that failed leaves the page on its paper.
   if (mine !== dressing || sheetEl.hidden || !g.canvas) return;
-  // Each block's veil runs the window's full width, from its edge, fading
-  // across gutters wide enough to fade in (a phone's are not: there it has no sides).
-  sp.setProperty("--veil-l", `${g.x}px`);
-  sp.setProperty("--veil-g", `${g.x >= 48 ? g.x : 0}px`);
-  sp.setProperty("--veil", g.veil.colour); sp.setProperty("--veil-blend", g.veil.blend);
-  // The marks (a step's state, a use's, a link) step darker (lighter on a
-  // dark page) at their own hue, as far as holding against the veil asks.
-  const tones = pageTones(p, g.veil, getComputedStyle(document.documentElement).getPropertyValue("--yours").trim());
-  for (const [k, c] of Object.entries(tones)) sp.setProperty(`--${k}`, c);
-  // Under the clamp, a screen (or multiply) toward the same colour lifts the
-  // painting's darks (or dims its lights) most of the way, keeping their
-  // texture, so what is left for the clamp to flatten is small.
-  const lighten = g.veil.blend === "lighten";
-  sp.setProperty("--veil-soft", mix(lighten ? "#000000" : "#ffffff", g.veil.colour, SOFT));
-  sp.setProperty("--veil-soft-blend", lighten ? "screen" : "multiply");
-  // The soft veil shows only where it has something to keep: a block's
-  // place in the window as it scrolls (its view timeline, run by the
-  // compositor) sets how strong it is, from how much of the painting at that
-  // height the clamp would flatten. A property of the painting and the
-  // window, never of the page.
-  const name = `soft-${hash(g.at)}`;
+  // The blocks' veils, the marks' tones held against them, and the soft
+  // veil's strength down the window.
+  for (const [k, v] of Object.entries(g.style.vars)) sp.setProperty(k, v);
   let style = $("style.soft", sheetEl);
   if (!style) { style = el("style", "soft"); sheetEl.append(style); }
-  const n = g.rows.length, frames = [];
-  for (let i = 0; i <= 20; i++) {
-    const at = (1 - i / 20) * (n - 1), r = Math.round(at);
-    const near = g.rows.slice(Math.max(0, r - 2), r + 3);
-    frames.push(`${i * 5}% { opacity: ${Math.min(1, 1.6 * Math.max(...near)).toFixed(2)} }`);
-  }
-  style.textContent = `@keyframes ${name} { ${frames.join(" ")} }`;
-  sp.setProperty("--soft-frames", name);
+  style.textContent = g.style.frames;
   seat(g);
 }
 // What dress seated for this task (its painting and its soft veil's
