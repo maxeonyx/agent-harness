@@ -44,8 +44,7 @@
 // crosses it is laid pale, as the far branches are (the shader's veil, its edges ragged as mist's).
 // So the dark strokes and the blooms keep to the margins beside the column and to the foot. A tall
 // page is painted at the scale of about one screen, so the plant stays near and the rest is bare
-// dyed sheet. Every canvas comes from one helper in paint(), the kit's when it gives one, so the
-// painting can run in a worker.
+// dyed sheet. Every canvas it makes is an OffscreenCanvas, so the painting can run in a worker.
 //
 // On the map, were a theme to draw its subject there as a chart in one ink, Puāwai's would be a
 // plate from a painting manual, as the Mustard Seed Garden Manual teaches a branch: each area's
@@ -126,9 +125,8 @@ export default {
 
 function paint(ctx, { w, h, dpr, at, stream, noise, quiet, kit }) {
   const plant = plantAt(at ?? 0);
-  // Every canvas the painting makes comes from here: the kit's, when it gives one (a worker has no
-  // document), or else an OffscreenCanvas.
-  const canvas = (cw, ch) => kit.canvas?.(cw, ch) ?? new OffscreenCanvas(cw, ch);
+  // Every canvas the painting makes: an OffscreenCanvas, which a worker has as well as a page.
+  const canvas = (cw, ch) => new OffscreenCanvas(cw, ch);
   // The brush's scale, from the page's area, a tall page counted as at most a screen and a bit.
   const S = Math.max(0.25, Math.sqrt(w * Math.min(h, 2.2 * w)) / 1000) * 1.45;
   const q = quiet || { x: w * 0.25, y: h * 0.2, w: w * 0.5, h: h * 0.3 };
