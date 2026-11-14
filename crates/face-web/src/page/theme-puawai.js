@@ -73,17 +73,17 @@
 // sea-green sheet. Its flowers laid as opaque white discs with hard dark eyes, and its buds as
 // flat pink circles, read at full size as stickers on barbed wire, and crowded the foot: half as
 // many now, the petals thin white over the sheet, the cup a soft wash, the buds dabs of wash, and
-// the wood left bare behind each flower so the white never lies grey over ink. Koromiko with narrow leaves and spotted
-// spikes on straight stems read as lavender, and solid violet cones as seed pods; the spikes are
-// soft white over a lilac wash, furred with stamens. Small red pōhutukawa flowers could read as
-// the failed state's dot; its flowers are large airy bursts of stamens, at the shoots' ends, on
-// wood that spreads low rather than hooking up. Its leaves drawn as fans of narrow leaflets from
-// one point read as cannabis, and were wrong besides: they are single ellipses crowding the end of
-// the shoot. A plant painted dark across the middle of a tall page crossed the lines of text over
-// it; hence the column and its veil. A pale branch reaching up the page's edge for its whole
-// height was considered for tall pages and left out: the bare dyed sheet above the plant is
-// calmer. A red seal was the obvious signature, but its vermilion reads as Max's orange or the
-// failed red, so there is none. One cream sheet for every plant left identity to small accents,
+// the wood left bare behind each flower so the white never lies grey over ink. Koromiko with narrow
+// leaves and spotted spikes on straight stems read as lavender, and solid violet cones as seed
+// pods; the spikes are soft white over a lilac wash, furred with stamens. Small red pōhutukawa
+// flowers could read as the failed state's dot; its flowers are large airy bursts of stamens, at
+// the shoots' ends, on wood that spreads low rather than hooking up. Its leaves drawn as fans of
+// narrow leaflets from one point read as cannabis, and were wrong besides: they are single ellipses
+// crowding the end of the shoot. A plant painted dark across the middle of a tall page crossed the
+// lines of text over it; hence the column and its veil. A pale branch reaching up the page's edge
+// for its whole height was considered for tall pages and left out: the bare dyed sheet above the
+// plant is calmer. A red seal was the obvious signature, but its vermilion reads as Max's orange or
+// the failed red, so there is none. One cream sheet for every plant left identity to small accents,
 // hence the dyed sheets.
 
 import { fromOklch } from "./theme.js";
