@@ -16,6 +16,9 @@
 // - by eye: DIR/<theme>/slots.png, every slot's painting as a thumbnail in order, for telling
 //   agents apart at a glance and the theme at thumbnail size; the phone and desktop covers of slot 0
 //   and 1; and region.png, the map region.
+// Run on the whole set (no THEME given), it first holds THEMES in crates/core/src/design.rs, the one
+// list of themes, to the theme-*.js files: a name with no file breaks the page of any area wearing
+// it, and a file with no name is never worn. A study checked by name before it is listed passes.
 // Prints a row per render and the bars it missed, and exits 1 if any was missed.
 // Chromium is $CHROME, or the newest in ~/.cache/ms-playwright. DIR defaults to theme-check.ignore/.
 import { spawn } from "node:child_process";
@@ -51,6 +54,16 @@ for (let at; (at = args.indexOf("--size")) >= 0; ) {
 }
 const all = fs.readdirSync(PAGE).map((f) => /^theme-(.+)\.js$/.exec(f)?.[1]).filter(Boolean);
 const themes = args.length ? args : all;
+if (!args.length) {
+  const design = path.join(ROOT, "crates/core/src/design.rs");
+  const list = /pub const THEMES: &\[&str\] = &\[([^\]]*)\]/.exec(fs.readFileSync(design, "utf8"));
+  if (!list) { console.error(`no THEMES list in ${design}`); process.exit(2); }
+  const named = [...list[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  const unfiled = named.filter((n) => !all.includes(n)), unnamed = all.filter((n) => !named.includes(n));
+  if (unfiled.length) console.log(`THEMES names ${unfiled.join(", ")} with no theme-<name>.js in ${path.relative(ROOT, PAGE)}`);
+  if (unnamed.length) console.log(`theme-${unnamed.join(".js, theme-")}.js not named in THEMES in ${path.relative(ROOT, design)}, so never worn`);
+  if (unfiled.length || unnamed.length) process.exit(1);
+}
 
 // The page every render runs in: the theme's ground behind a lead, as a page's cover is drawn.
 const VIEW = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
