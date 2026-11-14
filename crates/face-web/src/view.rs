@@ -26,6 +26,9 @@ use serde_json::{Value, json};
 /// A stored value as text, for the page: a mandate, a call's input.
 pub(crate) type Text<'a> = &'a dyn Fn(ValueId) -> Option<Vec<u8>>;
 
+/// A page picture's width and height in pixels, by the value that holds it.
+pub(crate) type Size<'a> = &'a dyn Fn(ValueId) -> Option<(u32, u32)>;
+
 fn text(value: Text, id: ValueId) -> Option<String> {
     value(id).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
@@ -65,6 +68,7 @@ fn tuning(value: Text, t: &Task, role: &Role, last: Option<&Ended>) -> Value {
 pub fn rows(
     state: &State,
     value: Text,
+    size: Size,
     models: &[Model],
     source: &str,
     now: Timestamp,
@@ -79,7 +83,7 @@ pub fn rows(
     for t in state.tasks() {
         let mut row = task(state, value, t, state.last_turn(t.id), now);
         row["turn"] = json!(turns.get(&t.id).map(|id| id.to_string()));
-        row["page"] = json!(crate::sheet::row(state, value, t));
+        row["page"] = json!(crate::sheet::row(state, value, size, t));
         rows.insert(FaceKey::Task(t.id), FaceRow::Task(row));
     }
     let queue: Vec<Value> = state

@@ -14,15 +14,18 @@ use harness_core::task::{Phase, Task};
 use harness_program::page::KINDS;
 use serde_json::{Value, json};
 
-use crate::view::Text;
+use crate::view::{Size, Text};
 
 /// `t`'s page, or `None` when it has never presented one.
-pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
+pub fn row(state: &State, value: Text, size: Size, t: &Task) -> Option<Value> {
     let page = state.page(t.id)?;
     let newest = page.versions.last()?;
     let body = |v: Option<ValueId>| {
         let text = v.and_then(value)?;
-        Some(harness_body::body(&String::from_utf8_lossy(&text), KINDS).0)
+        let body = harness_body::body(&String::from_utf8_lossy(&text), KINDS).0;
+        let mut body = serde_json::to_value(body).ok()?;
+        sized(&mut body, size);
+        Some(body)
     };
     let inline = |text: &str| harness_body::inline(text, KINDS).0;
     // Its asks, oldest first, open or settled: its own and its forks'.
@@ -180,6 +183,28 @@ fn state_of(step: &Step, yours: bool) -> &'static str {
         (_, true) => "yours",
         (Said::Doing, false) => "working",
         (Said::Planned, false) => "planned",
+    }
+}
+
+/// Each picture of a body as JSON (a [`harness_core::body::Figure`]'s
+/// `Images`) with its `width` and `height`, so the page keeps its room
+/// before it comes, and lays rows of them out as it draws.
+fn sized(body: &mut Value, size: Size) {
+    match body {
+        Value::Object(o) => {
+            if let Some(Value::Array(images)) = o.get_mut("Images") {
+                for image in images {
+                    let value = image["value"].as_str().and_then(|v| v.parse().ok());
+                    if let Some((width, height)) = value.and_then(size) {
+                        image["width"] = width.into();
+                        image["height"] = height.into();
+                    }
+                }
+            }
+            o.values_mut().for_each(|v| sized(v, size));
+        }
+        Value::Array(a) => a.iter_mut().for_each(|v| sized(v, size)),
+        _ => {}
     }
 }
 
