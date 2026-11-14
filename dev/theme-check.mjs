@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The themes' check: every theme's ground painted the way Max sees it, held to the design's bars.
 //
-//   node dev/theme-check.mjs [THEME...] [--out DIR]
+//   node dev/theme-check.mjs [THEME...] [--out DIR] [--size WxH]...
 //
 // For each theme (default: all of them, from crates/face-web/src/page/theme-*.js), in a headless
 // Chromium with shaders and 2D canvas on the CPU (SwiftShader: the slow case):
@@ -40,6 +40,13 @@ const SEEDS = ["retry-budget", "harness-features", "art-lead", "nightly-reconcil
 const args = process.argv.slice(2);
 const outAt = args.indexOf("--out");
 const OUT = path.resolve(outAt >= 0 ? args.splice(outAt, 2)[1] : path.join(ROOT, "theme-check.ignore"));
+// --size WxH, as often as wanted: every slot also painted at that window size (a narrow panel, a
+// tall page), held to the ink bar and shot as WxH-<slot>.png.
+const extra = [];
+for (let at; (at = args.indexOf("--size")) >= 0; ) {
+  const [width, height] = args.splice(at, 2)[1].split("x").map(Number);
+  extra.push([`${width}x${height}`, { width, height, dpr: 1, throttle: 1 }]);
+}
 const all = fs.readdirSync(PAGE).map((f) => /^theme-(.+)\.js$/.exec(f)?.[1]).filter(Boolean);
 const themes = args.length ? args : all;
 
@@ -208,11 +215,11 @@ try {
     const probe = await tab(name, SIZES.desktop);
     const slots = await probe.evaluate("window.__check.theme.slots.length");
     await probe.close();
-    for (const [size, spec] of Object.entries(SIZES)) {
+    for (const [size, spec] of [...Object.entries(SIZES), ...extra]) {
       for (let slot = 0; slot < slots; slot++) {
         const seed = SEEDS[slot % SEEDS.length], t = await tab(name, spec);
         const r = await t.evaluate(COVER({ slot, seed }));
-        if (slot < 2) await t.shot(path.join(dir, `${size}-${slot}.png`));
+        if (slot < 2 || !(size in SIZES)) await t.shot(path.join(dir, `${size}-${slot}.png`));
         await t.close();
         let bars = "";
         if (r.p5 < 7 || r.min < 4.5) bars += miss(`${name} ${size} slot ${slot}: ink ${r.min.toFixed(1)} / ${r.p5.toFixed(1)}`);
