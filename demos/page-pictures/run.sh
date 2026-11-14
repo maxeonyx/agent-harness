@@ -63,10 +63,6 @@ ask=$(jq -cn --arg shows "![The phone](${l[1]}) ![The desktop](${l[0]})" '{
   options: [{ key: "phone", label: "The phone" }, { key: "desktop", label: "The desktop" }] }')
 drive say "$a" "tool page_write $second tool ask $ask tool present {}" >/dev/null
 drive settle "$a" >/dev/null
-echo "== what page_write said of the label that showed no picture"
-drive say "$a" "ok" >/dev/null # the log shows a turn's results once the next request carries them
-drive settle "$a" >/dev/null
-drive log "$a" --full | grep -m1 -o "a picture drawn as its alt's words, since [^:]*"
 
 echo "== the page with its pictures, wide and on a phone"
 page open "$a" wait ".sheet .picture img" sleep 2500 eval "$sizes" shot "$shots/page-wide.png"
@@ -78,4 +74,8 @@ echo "== the files deleted: the page still shows every picture"
 rm "$dir"/*.png
 page --size phone open "$a" wait ".sheet .picture img" sleep 2500 eval "$sizes" shot "$shots/after-delete-phone.png"
 ls "$shots"/*.png
+echo "== what page_write said of the label that showed no picture"
+drive say "$a" "ok" >/dev/null # the log shows a turn's results once the next request carries them; the quick answer folds the page, so this comes last
+drive settle "$a" >/dev/null
+drive log "$a" --full | grep -m1 -o "a picture drawn as its alt's words, since [^:]*"
 echo "end it with: node dev/drive.mjs down --brain $b"
