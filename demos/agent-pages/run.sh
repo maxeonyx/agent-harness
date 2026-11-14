@@ -60,8 +60,12 @@ reworded=$(sed -n 's/^tool describe //p' demos/agent-pages/mandate.md | jq -c '.
 drive say "$a" "tool describe $reworded tool present {}" >/dev/null
 drive settle "$a" >/dev/null
 view "$a" '[.page.end.uses[] | { key, does, changed }]'
-page open "$a" wait ".sheet .use.changed" sleep 1500 shot "$shots/changed-wide.png"
-page --size phone open "$a" wait ".sheet .use.changed" sleep 1500 shot "$shots/changed-phone.png"
+page open "$a" wait ".sheet .use.changed" sleep 1500 \
+  eval "document.querySelector('.sheet .use.changed').scrollIntoView({ block: 'center' }), 1" \
+  sleep 500 shot "$shots/changed-wide.png"
+page --size phone open "$a" wait ".sheet .use.changed" sleep 1500 \
+  eval "document.querySelector('.sheet .use.changed').scrollIntoView({ block: 'center' }), 1" \
+  sleep 500 shot "$shots/changed-phone.png"
 echo
 echo "== the map: each area on its ground, faint behind its part"
 page sleep 3000 shot "$shots/map-wide.png"
