@@ -205,10 +205,15 @@ export default {
   map: { tone: "#3f6b45", duo: 0.85 },
   identity,
 
-  paint(ctx, { w, h, dpr, at, stream, quiet, kit }) {
+  paint(ctx, { w, h, dpr, at, stream, quiet, column, kit }) {
     const U = Math.sqrt(w * h) / 1000;
     const q = quiet || { x: w * 0.25, y: h * 0.2, w: w * 0.5, h: h * 0.3 };
-    const wide = q.w > w * 0.7;
+    // On a page with gutters the text scrolls down the column over the whole window: the trunks,
+    // the undergrowth and the ferns stand in the gutters, and the column is mist and light. A
+    // narrow window keeps them round the lead, as a thumbnail does.
+    const tb = kit.textBox({ w, h, quiet: q, column });
+    const keep = tb?.wide ? tb : q;
+    const wide = !tb?.wide && q.w > w * 0.7;
     const hour = hourAt(at ?? 0);
     const lay = stream("layout"), lit = stream("light");
     const layout = lay.pick(["colonnade", "colonnade", "colonnade", "giant", "giant", "clearing", "clearing", "grove", "grove"]);
@@ -224,7 +229,7 @@ export default {
     const vp = [w * lay.range(0.38, 0.62), layout === "grove" ? -h * lay.range(1.4, 2.2) : -h * lay.range(5, 9)];
     const floor = Math.max(0.8, below / h + 0.18);
     const calmPx = (wide ? 170 : 90) * U + 30;
-    const trunks = placeTrunks({ w, h, U, q, r: stream("trunks"), vp, layout, giantSide, wide, fx: src[0] });
+    const trunks = placeTrunks({ w, h, U, q: keep, r: stream("trunks"), vp, layout, giantSide, wide, fx: src[0] });
     // The canopy: sometimes open sky through the mist, sometimes full; heavier to one side or level.
     const cr = stream("canopy"), crown = cr.pick(["open", "thin", "full", "full", "side", "side"]);
     const canopy = crown === "open" ? [0, 0, 0, 0]
@@ -234,7 +239,7 @@ export default {
     // Shafts only where the light comes through leaves; a low light or a clear sky gives a glow.
     const beamy = mode !== "low" && crown !== "open" ? lit.range(0.6, 0.9) : mode === "low" ? lit.range(0.3, 0.5) : 0;
     const uni = {
-      u_dpr: 1, u_size: [w, h], u_quiet: [q.x, q.y, q.w, q.h], u_seed: stream("mist")() * 100,
+      u_dpr: 1, u_size: [w, h], u_quiet: [keep.x, keep.y, keep.w, keep.h], u_seed: stream("mist")() * 100,
       u_light: hour.light, u_shade: hour.shade, u_haze: hour.haze, u_bark: hour.bark,
       u_src: [src[0], src[1], Math.cos(ang), Math.sin(ang)], u_beams: [lit.range(2.4, 4), beamy, lit() * 50],
       u_floor: floor, u_vp: vp, u_calm: calmPx, u_n: trunks.length, u_canopy: canopy,
@@ -252,8 +257,8 @@ export default {
       grad.addColorStop(0, hex(hour.haze)); grad.addColorStop(1, hex(hour.haze.map((v) => v * 0.85)));
       ctx.fillStyle = grad; ctx.fillRect(0, 0, w, h);
     }
-    drawUndergrowth(ctx, { w, h, U, r: stream("undergrowth"), q, floor, hour, focus: src, trunks, vp });
-    drawFerns(ctx, { w, h, U, r: stream("ferns"), q, layout, giantSide, focus: src, floor, hour });
+    drawUndergrowth(ctx, { w, h, U, r: stream("undergrowth"), q: keep, floor, hour, focus: src, trunks, vp });
+    drawFerns(ctx, { w, h, U, r: stream("ferns"), q: keep, layout, giantSide, focus: src, floor, hour });
     kit.grain(ctx, w, h, 0.05, `kauri-grain-${uni.u_seed}`);
   },
 };

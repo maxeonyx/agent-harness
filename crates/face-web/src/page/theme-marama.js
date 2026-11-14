@@ -226,7 +226,7 @@ export default {
   slots: [0, 1, 1 / 2, 1 / 4, 3 / 4],
   map: { tone: "#41507f", duo: 0.6 },
   identity,
-  paint(ctx, { w, h, dpr, at, stream, noise, quiet, kit }) {
+  paint(ctx, { w, h, dpr, at, stream, noise, quiet, column, kit }) {
     const N = night(at);
     const portrait = h > w;
     // A thumbnail has no lead: compose as if one sat where a page puts it.
@@ -249,6 +249,16 @@ export default {
     else if (pose < 0.72 || hz - floor < mr * 6) my = Math.max(floor, hz - mr * mo.range(1.6, 4.5));
     else my = mo.range(floor, hz - mr * 5);
     my = Math.min(my, hz + mr * 0.35);      // never set: at least two thirds of the disc above the horizon
+    // On a page, the text scrolls down the column over the painting. A window with gutters keeps the
+    // moon in the gutter on its side, anywhere up the sky, its path down the gutter, and the column
+    // open sky and sea. (A narrow window already has it at the foot, under the lead's floor.)
+    const tb = kit.textBox({ w, h, quiet, column });
+    if (tb?.wide) {
+      const g0 = right ? (tb.x + tb.w) / w : 0, g1 = right ? 1 : tb.x / w, pad = (mr * h * 1.9) / w;
+      const t = Math.min(1, Math.max(0, (mx - (right ? 0.58 : 0.15)) / 0.27));
+      mx = g0 + pad + t * Math.max(0, g1 - g0 - 2 * pad);
+      if (pose >= 0.4) my = 0.08 + mr + ((my - floor) / Math.max(1e-6, hz - floor)) * Math.max(0, hz - mr * 2.5 - 0.08 - mr);
+    }
     const phaseDraw = mo(), phaseRange = mo.range(0.45, 1.35), tiltSign = mo.chance(0.5) ? 1 : -1, tiltK = mo.range(0.25, 1.1);
     const hideDraw = mo();
 
@@ -338,6 +348,20 @@ export default {
       headland(true, Math.max(sh.range(0.7, 0.88), mx + 0.08));
       for (const l of lands) l[2] *= 0.75;
     }
+    // A window with gutters keeps the land in them too: an island over the column moves out to its
+    // nearer side, past the frame if it must, and a headland's foot stops at the column.
+    if (tb?.wide) {
+      const a = tb.x / w, b = (tb.x + tb.w) / w;
+      for (const l of lands) {
+        if (l[3] === 0 && l[1] > a && l[0] < b) {
+          const wd = l[1] - l[0];
+          if (l[0] + wd / 2 < 0.5) { l[1] = a; l[0] = a - wd; } else { l[0] = b; l[1] = b + wd; }
+        } else if (l[3] === 1) l[1] = Math.min(l[1], a);
+        else if (l[3] === 2) l[0] = Math.max(l[0], b);
+      }
+    }
+    // A narrow page's text passes over the whole foot, where the land is: there it lies low.
+    if (tb && !tb.wide) for (const l of lands) l[2] *= 0.5;
     for (const l of lands) l[2] = Math.min(l[2], (hz - qb) * 0.5);
     let far = [0, 0, 0, 0];
     if (sh.chance(0.45)) { const x0 = sh.range(-0.3, 0.5); far = [sh.range(0.007, 0.02) * scale, sh.range(3, 9), x0, x0 + sh.range(0.45, 1.1)]; }

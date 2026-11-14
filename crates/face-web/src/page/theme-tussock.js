@@ -332,7 +332,7 @@ export default {
   slots: [0, 3 / 6, 1 / 6, 4 / 6, 2 / 6, 5 / 6],
   // The colour this agent is told apart by: the colour its light is named by.
   identity(at) { return lightAt(at).id; },
-  paint(ctx, { w, h, at, stream, noise, quiet, kit }) {
+  paint(ctx, { w, h, at, stream, noise, quiet, column, kit }) {
     // Without a lead (a thumbnail, a swatch), keep the upper sky clear as if one sat there.
     quiet ||= { x: w / 2, y: 0, w: 0, h: h * 0.42 };
     const portrait = h > w, m = Math.min(w, h);
@@ -343,8 +343,12 @@ export default {
     const fr = stream("frame");
     const side = fr() < 0.5 ? -1 : 1;
     const wind = (fr() < 0.7 ? -side : side) * fr.range(0.25, 0.55);
-    // The horizon sits under the lead, closer or further: a big sky or a big land.
-    const H0 = clamp(qb + h * fr.range(portrait ? 0.05 : 0.04, portrait ? 0.14 : 0.2), h * 0.5, h * (portrait ? 0.8 : 0.78));
+    // The horizon sits under the lead, closer or further: a big sky or a big land. On a page with
+    // gutters the text scrolls down the column over the whole window, so the land lies low, in the
+    // window's foot, and the sky is the column's.
+    const tb = kit.textBox({ w, h, quiet, column });
+    const lift = fr.range(portrait ? 0.05 : 0.04, portrait ? 0.14 : 0.2);
+    const H0 = tb?.wide ? h * (0.8 + 0.25 * lift) : clamp(qb + h * lift, h * 0.5, h * (portrait ? 0.8 : 0.78));
     const space = h - H0;
     const off = fr() * 100;
     const step = Math.max(2, w / 600);
@@ -448,7 +452,8 @@ export default {
       peaks = [{ x: rg.range(0.02, 0.18) * w, a: rg.range(0.8, 1), s: w * rg.range(0.08, 0.13) * wide }, { x: rg.range(0.82, 0.98) * w, a: rg.range(0.8, 1), s: w * rg.range(0.08, 0.13) * wide }];
       sharp = 2.0;
     }
-    const farAmp = (portrait ? space * 0.45 : Math.max(space * 0.5, H0 - qb + h * 0.1)) * rg.range(0.8, 1.12) * (form === "massif" ? 1.15 : form === "chain" ? 0.8 : 1);
+    // On a page with gutters the ranges stay low, a tenth of the window, so their peaks don't climb into the text.
+    const farAmp = (tb?.wide ? h * 0.1 : portrait ? space * 0.45 : Math.max(space * 0.5, H0 - qb + h * 0.1)) * rg.range(0.8, 1.12) * (form === "massif" ? 1.15 : form === "chain" ? 0.8 : 1);
     const floorY = qb + 10;
     const far = ridgeline(noise, w, step, H0, farAmp, peaks, quiet, floorY, off, sharp);
     relief(ctx, { w, pts: far, base: H0, noise, sunDir, cell: 1.5, off, spread: 0.9, hazeFrom: 0.35, haze: P.haze, rough: 0.45, edge: 0.4,
@@ -615,7 +620,9 @@ export default {
     const dens = (x, y) => {
       const mm = Math.max(...mass.map((c) => Math.exp(-((x / w - c) ** 2) / 0.06)));
       const patch = smooth(-0.35, 0.35, noise.fbm(x / 260 + off, y / 90, 3));
-      return 0.12 + 0.88 * (0.45 * mm + 0.55 * patch);
+      // Under a page's column the clumps thin out, so the text's press has little to flatten.
+      const open = tb?.wide ? 1 - 0.75 * smooth(tb.x - 60, tb.x + 30, x) * (1 - smooth(tb.x + tb.w - 30, tb.x + tb.w + 60, x)) : 1;
+      return (0.12 + 0.88 * (0.45 * mm + 0.55 * patch)) * open;
     };
     const area = w / 1000;
     const tiers = [

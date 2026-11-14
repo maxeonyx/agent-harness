@@ -63,6 +63,7 @@ precision highp float;
 uniform vec2 u_res;
 uniform vec2 u_apex;
 uniform vec4 u_quiet;
+uniform vec4 u_keep;
 uniform vec2 u_light;
 uniform float u_light_r;
 uniform float u_seed;
@@ -160,7 +161,7 @@ void main(){
   // The light, and the calm the lead keeps round it.
   vec3 L = normalize(vec3(u_light - uv, 0.55));
   float lobe = exp(-pow(length(uv - u_light) / u_light_r, 2.0));
-  float calm = smoothstep(0.0, 0.32, box(uv, u_quiet));
+  float calm = min(smoothstep(0.0, 0.32, box(uv, u_quiet)), smoothstep(0.0, 0.2, box(uv, u_keep)));
   float lit = lobe * mix(0.12, 1.0, calm);
   float amb = 0.10 + 0.08 * exp(-pow(length(uv - u_light) / (u_light_r * 2.2), 2.0));
   float diff = max(dot(n, L), 0.0);
@@ -222,6 +223,8 @@ void main(){
   c += vec3(0.62, 0.68, 0.70) * pane * reach * calm * (0.10 + 0.18 * smoothstep(0.3, 0.9, stri)) * (0.4 + 0.6 * nacre);
   // Now and then a warm flash where a fold turns steeply.
   c += vec3(0.55, 0.30, 0.26) * smoothstep(0.10, 0.22, tilt) * lit * u_warm;
+  // Seven tenths of the colour: behind a page of text, the shell burns without shouting.
+  c = mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, 0.7);
   gl_FragColor = vec4(c, 1.0);
 }`;
 
@@ -229,7 +232,7 @@ export default {
   name: "paua",
   about: "Pāua shell, close up: its nacre burns with colour where the light falls, each agent's shell its own, and the page sits in its shadow.",
   // A high-contrast didone for a polished, jewel-like ground; Bodoni Moda is free now Nocturne is gone.
-  display: { family: "Bodoni Moda", files: ["font-bodoni-moda.woff2"], weights: "400 900", bold: 600, axes: null },
+  display: { family: "Bodoni Moda", files: ["font-bodoni-moda.woff2"], weights: "400 900", bold: 700, axes: null },
   palette: {
     paper: "#071219", tint: "#0a1820", ink: "#eef3f1", body: "#b7c8c8", muted: "#7f9799", line: "#183039",
     accent: "#4fc1c0", figure: ["#4fc1c0", "#9a8fe0", "#c9b65a", "#d07aa8"], cover_ink: "#f1f5f3", cover_body: "#c3d3d2",
@@ -239,13 +242,17 @@ export default {
   slots: [0, 5 / 8, 2 / 8, 7 / 8, 4 / 8, 1 / 8, 6 / 8, 3 / 8],
   map: { tone: "#1d6a78", duo: 0.5, below: 0.68, chroma: 0.6 },
   identity,
-  paint(ctx, { w, h, dpr, at, stream, quiet, kit }) {
+  paint(ctx, { w, h, dpr, at, stream, quiet, column, kit }) {
     const aspect = w / h;
     // Where the shell grew from and where the light falls: in units of the height, y up, the apex
-    // beyond a lower corner, the light low on that side.
+    // beyond a lower corner, the light low on that side. On a page the text runs down the column, so
+    // the light keeps out of it: in the gutter on its side when there is one, else low at the foot.
     const place = stream("light"), right = place() < 0.5;
+    const tb = kit.textBox({ w, h, quiet, column });
     const apex = [right ? aspect + place.range(0.35, 0.7) : -place.range(0.35, 0.7), -place.range(0.3, 0.6)];
-    const light = [right ? aspect * place.range(0.66, 0.95) : aspect * place.range(0.05, 0.34), place.range(0.08, 0.26)];
+    const across = tb?.wide ? (right ? (tb.x + tb.w + (w - tb.x - tb.w) * place.range(0.45, 0.9)) / h : (tb.x * place.range(0.1, 0.55)) / h)
+      : (right ? aspect * place.range(0.66, 0.95) : aspect * place.range(0.05, 0.34));
+    const light = [across, tb && !tb.wide ? place.range(0.02, 0.12) : place.range(0.08, 0.26)];
     const lightR = place.range(0.4, 0.56);
     const layers = stream("layers"), gloss = stream("gloss"), flash = stream("flash"), zones = stream("zones");
     // The agent's shell, from its place; its second colouring a shell or so round the ring, so a painting
@@ -255,6 +262,7 @@ export default {
     const u = {
       u_apex: apex, u_light: light, u_light_r: lightR,
       u_quiet: [q.x / h, (h - q.y - q.h) / h, (q.x + q.w) / h, (h - q.y) / h],
+      u_keep: tb ? [tb.x / h, (h - tb.y - tb.h) / h, (tb.x + tb.w) / h, (h - tb.y) / h] : [-9, -9, -8, -8],
       u_seed: layers.range(0, 100), u_tight: layers.range(2.2, 3.0), u_bands: layers.range(0.75, 1.1), u_hue: layers.range(0, 0.15),
       u_gloss: gloss.range(0.5, 1.1) * (right ? -1 : 1), u_warm: flash() < 0.4 ? flash.range(0.15, 0.3) : 0,
       u_zone: zones.range(0, 100), u_zone_amt: zones.range(0.55, 0.8),
