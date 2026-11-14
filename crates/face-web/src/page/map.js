@@ -340,6 +340,7 @@ function time(n) {
 
 export let positions = new Map();   // id -> {x, y, w, h, top}: its box laid out; its centre is (x + w / 2, y + top)
 export let shown = new Map();       // id -> {x, y, w, h, top}: drawn now (tweened)
+export let drawn = null;            // {x0, y0, x1, y1}: all the nodes laid out cover, labels and archive included
 export let routes = new Map();      // "from>to" -> {P, W, sheet, gaps: [{over, P, W}], colour, dashed}: an edge's line, laid out, with its sheet and the pieces of the lines over it where they cross
 export const centre = (p) => ({ x: p.x + p.w / 2, y: p.y + p.top });
 let shape = "";
@@ -374,6 +375,10 @@ export function layout() {
   laid.clear();
   positions = new Map();
   routes = new Map();
+  drawn = null;
+  const cover = (x0, y0, x1, y1) => {
+    drawn = drawn ? { x0: Math.min(drawn.x0, x0), y0: Math.min(drawn.y0, y0), x1: Math.max(drawn.x1, x1), y1: Math.max(drawn.y1, y1) } : { x0, y0, x1, y1 };
+  };
   let x = 0, y1 = 0;
   for (const p of parts) {
     if (p.c.folded) continue;
@@ -402,6 +407,8 @@ export function layout() {
       l.lines = l.edges.map((e) => [`${e.from}>${e.to}`, { P: at(e.P), W: e.W, sheet: e.sheet, gaps: e.gaps.map((g) => ({ ...g, P: at(g.P) })), dashed: dashed(e), colour: colour(e) }]);
     }
     for (const [id, b] of l.boxes) positions.set(id, b);
+    // A box spans a node's dot; its label runs on to its right.
+    for (const n of p.ns) { const q = l.at.get(n.id); cover(q.x + dx - n.lo, q.y - n.top, q.x + dx + n.hi, q.y + n.foot); }
     for (const [k, r] of l.lines) routes.set(k, r);
     y1 = Math.max(y1, l.y1);
     x = l.x1 + dx + PROJECT;
@@ -409,11 +416,12 @@ export function layout() {
   // The archive: its cards, most recently finished first, on shelves below.
   const cards = parts.filter((p) => p.c.folded).sort((a, b) => b.c.last - a.c.last);
   const room = Math.max(360, innerWidth - 40);
-  // Shelved just below the fold of the first framing, which puts the present row two thirds down.
+  // Shelved just below the fold of a framing that puts the present row two thirds down.
   let cx = 0, cy = Math.max(y1 + 80, innerHeight / 3 + 40);
   for (const p of cards) {
     if (cx && cx + p.w > room) { cx = 0; cy += CARD_H + 14; }
     positions.set(p.c.root.id, { x: cx, y: cy, w: p.w, h: CARD_H, top: CARD_H / 2, card: true });
+    cover(cx, cy, cx + p.w, cy + CARD_H);
     cx += p.w + 14;
   }
   return true;
