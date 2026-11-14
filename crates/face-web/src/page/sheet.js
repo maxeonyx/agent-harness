@@ -1,4 +1,4 @@
-import { $, diagram, el, fail, panel, scrollEl } from "./base.js";
+import { $, diagram, el, fail, logEl, panel, scrollEl } from "./base.js";
 import { answer, answered } from "./compose.js";
 import { load, paintInto, wear } from "./theme.js";
 
@@ -9,9 +9,10 @@ import { load, paintInto, wear } from "./theme.js";
 // tokens on `.sheet` (theme.js `wear` sets them; sheet.css has the plain
 // default).
 //
-// A chat with a page shows it whole, the agent working or not: it follows
-// the chat, which scrolling up shows, and the card opens at its top, or at
-// one of its asks (`askTop`).
+// A chat with a page shows it whole, the agent working or not, in the log
+// where it was presented (`placeSheet`): what came after it, down to what
+// streams now, follows it. The card opens at its top, or at one of its asks
+// (`askTop`).
 const sheetEl = $(".sheet", panel);
 let landed = null, unfolded = null;
 
@@ -35,6 +36,17 @@ export function renderSheet(t) {
 // Each present is landed on once: a new version, or one presented again.
 const shown = (t) => `${t.id} ${t.page.version} ${t.page.held}`;
 export const sheetSeen = (t) => { landed = shown(t); };
+// Puts the page in the log just after `after`, the chunk of the response
+// that presented it; at the log's start for one the log does not draw (a
+// context compacted away), or with `after` null, at its end (a page stored
+// before pages said where they were presented, or a log still loading).
+export function placeSheet(after) {
+  const tail = $(".tail", logEl);
+  if (after === "start") { if (logEl.firstElementChild !== sheetEl) logEl.prepend(sheetEl); }
+  else if (after) { if (after.nextElementSibling !== sheetEl) after.after(sheetEl); }
+  else if (!tail) { if (logEl.lastElementChild !== sheetEl) logEl.append(sheetEl); }
+  else if (tail.previousElementSibling !== sheetEl) tail.before(sheetEl);
+}
 // Where the card lands on the page while it shows: its top, or with a quick
 // answer, the chat's line above it, the page folded below it.
 export function sheetTop() {
@@ -45,12 +57,13 @@ export function sheetTop() {
 // Where the card lands on the ask the call `call` made, unfolding the page
 // to reach it: its question at the top. Null when the page holds no such ask.
 export function askTop(t, call) {
-  if (sheetEl.hidden) return null;
+  if (sheetEl.hidden || !asksOf(t.page).includes(call)) return null;
   if (sheetEl.classList.contains("folded")) { unfolded = `${t.id} ${t.page.held}`; renderSheet(t); }
   const box = [...sheetEl.querySelectorAll(".ask")].find((a) => a.dataset.call === call);
-  if (!box) return null;
-  return scrollEl.scrollTop + box.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top - 16;
+  return !box ? null : scrollEl.scrollTop + box.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top - 16;
 }
+
+const asksOf = (p) => [...p.plan.flatMap((s) => s.asks), ...p.asks].map((a) => a.call);
 
 // The page wears its task's look: the theme's tokens, and its ground
 // painted behind the lead, once per task and width. A task with none wears

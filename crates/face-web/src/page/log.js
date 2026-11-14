@@ -5,7 +5,7 @@ import { dress, paint, trouble } from "./draw.js";
 import { go, logState } from "./card.js";
 import { dictate, dictation, editMessage, modelName, readOnly, say, sending } from "./compose.js";
 import { layer, session } from "./blobs.js";
-import { askTop, renderSheet, sheetSeen, sheetTop } from "./sheet.js";
+import { askTop, placeSheet, renderSheet, sheetSeen, sheetTop } from "./sheet.js";
 
 // ─── The log: the context, marked up, or exactly as sent ─────────────────
 const contexts = new Map();
@@ -42,19 +42,32 @@ export async function renderLog(t) {
   stick(() => renderTail(s, t));
   if (pane.classList.contains("loading") && (s.head || !t.head)) settle(t);
   const fresh = renderSheet(t);
+  if (t.page) stick(() => placeSheet(presentedIn(s, t)));
   if (s.at && s.head) land(s, t);
   // A page opens at its top once its chat is drawn above it.
   else if (fresh && (s.head || !t.head)) { pinned = false; s.follow = false; scrollTo(sheetTop()); sheetSeen(t); }
 }
+// The chunk of the response that presented the page: "start" when the log
+// does not draw it, null when not known yet (`placeSheet`).
+function presentedIn(s, t) {
+  const at = t.page.entry;
+  if (!at || !s.head) return null;
+  return s.rendered.find((r) => r.id === at)?.el ?? "start";
+}
 // Opened at an ask (`#TASK@CALL`, the ask's call): the page, at its
-// question. Otherwise at an entry of the log.
+// question, or for an ask the page does not hold, the entry that made the
+// call. Otherwise at an entry of the log.
 function land(s, t) {
+  if (t.page) sheetSeen(t);
   const top = askTop(t, s.at);
-  if (top == null) return landAt(s);
+  if (top == null) {
+    const w = t.work?.find((w) => w.call === s.at);
+    if (w) s.at = w.at;
+    return landAt(s);
+  }
   s.at = null;
   s.follow = pinned = false;
   scrollTo(top);
-  sheetSeen(t);
 }
 panel.addEventListener("sheet", () => { if (logState && byId[logState.id]) renderLog(byId[logState.id]); });
 
@@ -537,7 +550,7 @@ function toolRow(s, b, t) {
   // A present: the page it put in front of Max, as it stands now.
   if (b.name === "present" && t.page) {
     const open = icon("open", "open-file", "Open the page");
-    open.onclick = (e) => { e.stopPropagation(); s.follow = pinned = false; scrollTo(sheetTop() ?? 0); };
+    open.onclick = (e) => { e.stopPropagation(); s.follow = pinned = false; scrollTo(sheetTop()); };
     line.insertBefore(open, line.lastChild);
   }
   // What a spawn or add_sibling started, under its parameters.

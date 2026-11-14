@@ -124,6 +124,8 @@ pub fn row(state: &State, value: Text, t: &Task) -> Option<Value> {
         "version": newest.n,
         "at": newest.at.0,
         "held": newest.held.0,
+        // The response that presented it, so the chat draws the page there.
+        "entry": (page.presented).and_then(|call| state.origin(call)).map(|e| e.to_string()),
         "current": current,
         "lead": newest.sheet.lead.title,
         "quick": quick,

@@ -4,6 +4,7 @@
     /* Too narrow for the build beside the usage, model and effort. */
     .compose .dock .build { display: none; }
     .log { padding: 1em 1em 2em; }
+    .log > .sheet { margin: 1.4em -1em 2em; }
     .prose { font-size: 15.5px; }
     .compose { padding: 0 0 env(safe-area-inset-bottom); }
     .viewer { position: absolute; inset: 0; z-index: 2; border: 0; }
