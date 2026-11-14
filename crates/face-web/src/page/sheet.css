@@ -55,12 +55,16 @@
   }
   .sheet .lead > h1::before { background: var(--press-lead-soft, transparent); mix-blend-mode: var(--press-lead-soft-blend, normal); }
   /* The painting reaches the scroll's foot: the room kept for the dock is the sheet's own. */
-  .scroll:has(> .lane > .sheet:not([hidden])) > .end { margin-top: -72px; }
-  .sheet:not([hidden]) { padding-bottom: calc(4em + 72px); }
+  .scroll:has(> .lane > .sheet:not([hidden], .folded)) > .end { margin-top: -72px; }
+  .sheet:not([hidden], .folded) { padding-bottom: calc(4em + 72px); }
   /* A lead new to this tab stands taller, its title at the band's foot, the plan still on the first screen. */
   .sheet .lead { padding-top: 2.8em; display: flex; flex-direction: column; justify-content: flex-end; }
   .sheet .lead.new { min-height: 30vh; }
   .sheet.folded .lead { cursor: pointer; }
+  /* Folded to its lead, the page is a band under the chat's quick answer, not a window tall, so the answer above it
+     stays in view; the room for the dock stays below it, so landing on it doesn't leave the chat at its end, following it. */
+  .sheet.folded, .sheet.folded .lead { min-height: 0; }
+  .sheet.folded { padding-bottom: 1.6em; }
   /* What changed since Max last looked: a bar in the left gutter. */
   .sheet .changed { position: relative; }
   .sheet .changed::before { content: ""; position: absolute; left: -.9em; top: .2em; bottom: .2em; width: 3px; border-radius: 2px; background: var(--accent); }
