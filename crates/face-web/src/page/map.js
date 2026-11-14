@@ -109,15 +109,16 @@ export function stateOf(t) {
   return "brain";
 }
 // What a task waits on that still runs, as its hollow node's number and in
-// words: its agents, its background tasks (not those passed on) and
-// its other tool calls.
+// words: its agents, its asks, its other background tasks (not those
+// passed on) and its other tool calls.
 export function waitingOn(t) {
   const w = t.waiting || {};
   const agents = view.tasks.filter((m) => m.owner === t.id && m.due && !isDone(m)).length;
-  const background = held(t).filter((b) => b.running && b.due).length;
+  const out = held(t).filter((b) => b.running && b.due);
+  const asks = out.filter((b) => b.tool === "ask").length, background = out.length - asks;
   const tools = w.kind === "calls" ? w.calls.filter((c) => !c.children?.length && c.status !== "settled" && c.tool !== "wait").length : 0;
-  const n = agents + background + tools;
-  const parts = [[agents, "agent"], [background, "background task"], [tools, "tool call"]]
+  const n = agents + asks + background + tools;
+  const parts = [[agents, "agent"], [asks, "ask"], [background, "background task"], [tools, "tool call"]]
     .filter(([k]) => k).map(([k, what]) => `${k} ${what}${k === 1 ? "" : "s"}`);
   return { n, text: !n ? "" : parts.length === 1 ? `Waiting on ${parts[0]}` : `Waiting on ${n}: ${parts.join(", ")}` };
 }
@@ -149,9 +150,10 @@ export const cardStatus = (c) => `Finished ${ago(c.last)} ago`;
 // Each task's legs into nodes, its work into chips, a planned join for
 // work out, the chains of compactions folded, and the projects. Each node
 // knows its life, the colour of its life's line into it (`line`: an
-// agent's ink, an old version's faint, a call's blue, and Max's orange from
-// when it was handed to him), and, at the end of a finished life, how it
-// ended (`end`: green done, red failed, none abandoned).
+// agent's ink, an old version's faint, a call's blue, and Max's orange for
+// an ask and from when work was handed to him), and, at the end of a
+// finished life, how it ended (`end`: green done, red failed, none
+// abandoned).
 const lifeOf = (t) => (chained(t) ? lifeOf(byId[t.from]) : t.id);
 export function derive(openId) {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
@@ -189,14 +191,17 @@ export function derive(openId) {
     if (own && isDone(t)) own.end = { result: "green", failed: "red" }[t.outcome?.kind];
     for (const w of t.work || []) {
       const life = `w:${w.call}`;
+      // An ask is Max's from the start, as work handed to him is from
+      // when it was: his line throughout, and while it runs his card.
+      const ask = w.tool === "ask", his = ask || w.holder === "max";
       let before = w.leg;
       (w.passed || []).forEach((p, i) => {
         const id = `${life}:${i}`;
-        add({ id, kind: "ring", t, life, line: i && w.passed[i - 1].to === "max" ? "max" : "tool", time: [p.at, p.at], open: w.at, deps: [before] });
+        add({ id, kind: "ring", t, life, line: ask || (i && w.passed[i - 1].to === "max") ? "max" : "tool", time: [p.at, p.at], open: w.at, deps: [before] });
         before = id;
       });
-      add({ id: life, kind: "chip", t, life, line: w.holder === "max" ? "max" : "tool", end: w.running ? null : w.failed ? "red" : "green",
-        work: w, running: w.running, open: w.at, deps: [before] });
+      add({ id: life, kind: "chip", t, life, line: his ? "max" : "tool", end: w.running ? null : w.failed ? "red" : "green",
+        work: w, running: w.running, yours: his && w.running, open: w.at, deps: [before] });
     }
   }
   // A planned join under each live task with work out: members and calls
