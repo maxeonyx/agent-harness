@@ -1,11 +1,11 @@
 import { $, el, lerp, panel, phone, reduced } from "./base.js";
-import { byId, centre, graph, look, positions, shown, view } from "./map.js";
+import { byId, centre, drawn, graph, look, positions, shown, view } from "./map.js";
 import { blobs, dot, drawEdges, drawNodes, hitAt, openAt, placeMarks, refresh } from "./draw.js";
 import { onFrame } from "./blobs.js";
 import { hideTip } from "./hover.js";
 import { closeNode, go, NEW, openId, saved } from "./card.js";
 import { glideCut, glideNote } from "./glidelog.js";
-import { zoomed } from "./regions.js";
+import { land, zoomed } from "./regions.js";
 
 // ─── The camera ────────────────────────────────────────────────────────────
 const map = $("#map"), world = $("#world"), under = $("#under"), grid = $("#grid");
@@ -39,22 +39,41 @@ map.addEventListener("scroll", () => { map.scrollTop = 0; map.scrollLeft = 0; })
 function bounds(ids) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const [id, p] of positions) {
-    if (ids && !ids.has(id)) continue;
+    if (!ids.has(id)) continue;
     x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + p.w); y1 = Math.max(y1, p.y + p.h);
   }
   return x0 === Infinity ? null : { x0, y0, x1, y1 };
 }
-// The camera the map opens with: at its own size, the present row a third
-// of the way up from the bottom of the screen, and the most recently active
-// chat in the middle. While it follows the map, it keeps to that chat.
+// The camera the map opens with, and fits to: at its own size, the present
+// row a third of the way up from the bottom of the room the bottom bar
+// leaves, and the most recently active chat in the middle, but never past
+// the edge of what is drawn: across and down, all of the map that fits is
+// centred, and a map bigger than the room fills it, an edge of the map
+// short of the room's edge only where the map ends both ways. What is drawn
+// is the nodes and the areas' ground under them. While it follows the map,
+// it keeps to that chat.
 let focus = null;
 export function framing() {
+  if (!drawn) return null;
+  const g = land(), b = g ? { x0: Math.min(drawn.x0, g.x0), y0: Math.min(drawn.y0, g.y0), x1: Math.max(drawn.x1, g.x1), y1: Math.max(drawn.y1, g.y1) } : drawn;
   const big = [...graph.nodes.values()].filter((n) => n.big && positions.has(n.id));
   if (!big.some((n) => n.id === focus)) focus = latest(big);
   const p = focus && positions.get(focus);
-  if (p) return { k: 1, x: innerWidth / 2 - centre(p).x, y: Math.round(innerHeight * 2 / 3) };
-  const b = bounds(null);
-  return b && { k: 1, x: innerWidth / 2 - (b.x0 + b.x1) / 2, y: innerHeight / 2 - (b.y0 + b.y1) / 2 };
+  const bar = $("#bottom").getBoundingClientRect();
+  const w = innerWidth, h = bar.top, m = phone() ? 6 : 16;
+  // The camera along one axis that puts `at` there, kept to the map from a to b.
+  const keep = (at, a, b, room) => b - a <= room - 2 * m ? (room - a - b) / 2 : Math.min(m - a, Math.max(room - m - b, at));
+  return {
+    k: 1,
+    x: Math.round(keep(p ? w / 2 - centre(p).x : Infinity, b.x0, b.x1, w)),
+    y: Math.round(keep(p ? h * 2 / 3 : Infinity, b.y0, b.y1, h)),
+  };
+}
+// What is drawn, or the room for it, has changed without the layout changing
+// (an area's ground has landed, the window resized): a camera following the
+// map frames it again.
+export function refit() {
+  if (framed && !openId) fit(true, true);
 }
 // The big node of the chat that, itself or through the agents under it, did
 // something last; an agent's only when no chat is live.
@@ -335,7 +354,7 @@ export function coverCheck() {
 
 // The card fits the window it is in, a phone's keyboard opening shrinks it,
 // and a new chat's card grows and shrinks with what it holds.
-addEventListener("resize", () => { reseat(); refresh(); });
+addEventListener("resize", () => { reseat(); refresh().then(refit); });
 new ResizeObserver(reseat).observe($(".compose", panel));
 function reseat() {
   const next = openId && seam && seamFor(openId);

@@ -62,10 +62,13 @@ async function transition(to, entry) {
   hideTip();
   if (!to) {
     // Back to the map as it was: framing all of it, or where Max left it.
+    // The bottom bar comes back first: framing fits the map to the room it leaves.
+    const card = cardShown, dot = dotRect(from);
+    openId = null; setSeam(null);
+    coverCheck();
     const back = saved?.framed ? framing() : saved?.cam;
     setFramed(!!saved?.framed);
-    const card = cardShown, dot = dotRect(from);
-    openId = null; setSeam(null); saved = null;
+    saved = null;
     await fly(back || null, { T: 200, cardFrom: card, cardTo: card && dot, box: card });
     if (!openId) { panel.hidden = true; panel.style.clipPath = ""; panel.style.transform = ""; setCardShown(null); coverCheck(); }
     nodeEls.get(from)?.classList.remove("selected");
