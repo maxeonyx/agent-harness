@@ -29,7 +29,7 @@ export function renderSheet(t) {
   const key = JSON.stringify([t.id, p, t.look, unfolded]);
   if (sheetEl.drawn !== key) {
     sheetEl.drawn = key;
-    try { sheetEl.replaceChildren(...page(p, t)); dress(t); }
+    try { sheetEl.replaceChildren(...seated(t), ...page(p, t)); dress(t); }
     catch (e) {
       sheetEl.replaceChildren(el("p", "", "This page could not be drawn."));
       fail(`drawing ${t.name}'s page`, e);
@@ -141,6 +141,12 @@ async function dress(t) {
   style.textContent = `@keyframes ${name} { ${frames.join(" ")} }`;
   sp.setProperty("--soft-frames", name);
   seat(g);
+}
+// What dress seated for this task (its painting and its soft press's
+// frames), kept through a redraw: dress seats it again only after awaiting
+// the theme, so a page without it would show a frame of bare paper.
+function seated(t) {
+  return dressed?.id === t.id ? sheetEl.querySelectorAll(":scope > .window, :scope > style.soft") : [];
 }
 function seat(g) {
   let win = $(":scope > .window", sheetEl);
