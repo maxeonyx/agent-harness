@@ -564,6 +564,7 @@ pub enum Spot {
     End,
     /// One of the end's uses, by its key.
     Use(String),
+    #[serde(alias = "Facts")]
     Now,
     /// A plan step, by its key.
     Step(String),
