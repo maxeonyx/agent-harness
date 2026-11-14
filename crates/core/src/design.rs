@@ -125,7 +125,8 @@ pub struct Design {
 }
 
 /// The themes the harness gives areas, by [`Theme::name`], in the order a
-/// new area takes them when none is worn more recently than another.
+/// new area takes them when none is worn more recently than another. Each
+/// is the page's `theme-<name>.js`.
 pub const THEMES: &[&str] = &["tussock", "harbour", "kauri", "paua", "marama", "puawai"];
 
 /// An art direction an agent's page wears.
