@@ -32,6 +32,11 @@
   .sheet :is(th, td) { padding: .3em .8em .3em 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
   .sheet .numeric { text-align: right; font-variant-numeric: tabular-nums; }
   .sheet figure { margin: 0 0 .9em; }
+  .sheet .picture img { display: block; max-width: 100%; max-height: 80vh; }
+  .sheet .pictures { display: flex; flex-wrap: wrap; gap: 10px; }
+  .sheet .pictures a { flex: 1 1 120px; text-decoration: none; }
+  .sheet .pictures img { display: block; width: 100%; }
+  .sheet .pictures .alt { display: block; padding-top: .3em; font: 14.5px/1.4 var(--sans); color: var(--muted); }
   /* A figure's node classes, in the theme's tones (base.js names them). */
   .sheet .diagram .node:is(.failed, .yours, .working, .f1, .f2, .f3, .f4) > :is(rect, circle, polygon, path) { stroke: var(--tone) !important; }
   .sheet .diagram .node.failed { --tone: var(--fig-2); } .sheet .diagram .node.yours { --tone: var(--yours); } .sheet .diagram .node.working { --tone: var(--accent); }

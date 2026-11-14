@@ -31,6 +31,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::meta;
+use crate::meta::under;
 use crate::render::{Values, blocks, text};
 
 pub use harness_core::task::PRESENT;
@@ -79,12 +80,17 @@ pub fn run(
     let input = input_of(input)?;
     let owner = owner(state, task);
     let text_of = |v: ValueId| Some(String::from_utf8_lossy(&values(v)).into_owned());
+    let cite = |markdown: String| {
+        harness_body::cited(&markdown, |label| {
+            picture(state, values, task.id, owner, label)
+        })
+    };
     match tool {
-        PAGE_WRITE => write(state, owner, call, input),
-        PAGE_EDIT => edit(state, owner, call, input, &text_of),
+        PAGE_WRITE => write(state, owner, call, input, &cite),
+        PAGE_EDIT => edit(state, owner, call, input, &text_of, &cite),
         PRESENT => present(state, owner, call),
-        DESCRIBE => describe(state, owner, input),
-        ASK => ask(state, task, call, input, mint),
+        DESCRIBE => describe(state, owner, input, &cite),
+        ASK => ask(state, task, call, input, mint, &cite),
         WITHDRAW | CITE => settle(state, task, tool, input),
         PASS_ON => pass_on(state, task, input, mint),
         _ => Err(format!("the harness has no `{tool}`")),
@@ -96,6 +102,49 @@ fn input_of(input: &[u8]) -> Result<Value, String> {
     let value: Value = serde_json::from_slice(input).map_err(|e| format!("invalid input: {e}"))?;
     value.as_object().ok_or("the input must be an object")?;
     Ok(value)
+}
+
+/// A body's markdown with its pictures kept as the values that hold them
+/// ([`harness_body::cited`]).
+type Cite<'a> = &'a dyn Fn(String) -> String;
+
+/// The value a picture cited by `label` is kept as
+/// ([`harness_core::body::Image`]): the result of the settled call of that
+/// label that showed exactly one image, made by `task` or under the page's
+/// `owner` (a fork's source, or an agent of its), as `attach` finds them.
+/// `None` for any other label, which the body's parser then lists.
+fn picture(
+    state: &State,
+    values: Values,
+    task: TaskId,
+    owner: TaskId,
+    label: &str,
+) -> Option<String> {
+    if !label.starts_with("call-") {
+        return None;
+    }
+    let (_, record) = state.calls().find(|(id, record)| {
+        id.label() == label
+            && record.outcome().is_some()
+            && (under(state, *id, task) || under(state, *id, owner))
+    })?;
+    let Some(Outcome::Completed(output)) = record.outcome() else {
+        return None;
+    };
+    (images(&values(output.model)) == 1).then(|| format!("value:{}", output.model))
+}
+
+/// How many images a result's content blocks hold, at any depth.
+fn images(content: &[u8]) -> usize {
+    fn count(v: &Value) -> usize {
+        match v {
+            Value::Object(o) if o.get("type").and_then(Value::as_str) == Some("image") => 1,
+            Value::Object(o) => o.values().map(count).sum(),
+            Value::Array(a) => a.iter().map(count).sum(),
+            _ => 0,
+        }
+    }
+    serde_json::from_slice::<Value>(content).map_or(0, |v| count(&v))
 }
 
 /// Keep `markdown` as a value of the batch, and name it.
@@ -118,10 +167,16 @@ struct Write {
     why: Option<String>,
 }
 
-fn write(state: &State, owner: TaskId, call: CallId, input: Value) -> Result<Done, String> {
+fn write(
+    state: &State,
+    owner: TaskId,
+    call: CallId,
+    input: Value,
+    cite: Cite,
+) -> Result<Done, String> {
     let Write { lead, now, why } = parse(input)?;
     let mut values = Vec::new();
-    let mut body = |markdown: Option<String>| markdown.map(|m| stash(&mut values, m));
+    let mut body = |markdown: Option<String>| markdown.map(|m| stash(&mut values, cite(m)));
     let sheet = Sheet {
         lead: Lead { title: lead },
         now: body(now),
@@ -167,6 +222,7 @@ fn edit(
     call: CallId,
     input: Value,
     text_of: &dyn Fn(ValueId) -> Option<String>,
+    cite: Cite,
 ) -> Result<Done, String> {
     let Edits { edits } = parse(input)?;
     let stage = state
@@ -181,6 +237,9 @@ fn edit(
         body_text(sheet.why, text_of),
     ];
     for Replace { old, new } in &edits {
+        // The stage keeps a picture as its value: an old text citing it by
+        // its call is read the same way.
+        let old = &cite(old.clone());
         let at: Vec<usize> = (parts.iter().enumerate())
             .filter(|(_, p)| !old.is_empty() && p.contains(old.as_str()))
             .map(|(i, _)| i)
@@ -201,7 +260,7 @@ fn edit(
     let [lead, now, why] = <[String; 3]>::try_from(parts).expect("three parts");
     let lift = |t: String| Some(t).filter(|t| !t.is_empty());
     let written = json!({ "lead": lead, "now": lift(now), "why": lift(why) });
-    write(state, owner, call, written)
+    write(state, owner, call, written, cite)
 }
 
 fn body_text(body: Option<ValueId>, text_of: &dyn Fn(ValueId) -> Option<String>) -> String {
@@ -367,6 +426,7 @@ pub fn explain(problem: &Problem) -> String {
         Problem::Kind { kind, kinds } => format!("`{kind}:` is not a kind the harness reads ({}), drawn as its words.", kinds.join(", ")),
         Problem::NotFound(of) => format!("{of:?} is not known, drawn as its words."),
         Problem::NoAlt => "an image with no alt text: say what it shows.".into(),
+        Problem::Picture { why } => format!("a picture drawn as its alt's words, since {why}. A picture is the label of the call whose result showed it to you (a `read` of the image file, or a screenshot), alone in its paragraph: `![what it shows](call-3fa2c1)`."),
         Problem::Misquoted => "words given as Max's that he did not say, drawn as a plain quote.".into(),
         Problem::Figure { error } => format!("a figure that would not draw: {error}"),
         Problem::Table { why } => format!("a table that reads badly: {why}."),
@@ -465,7 +525,12 @@ enum SaidIn {
 }
 
 /// The end as `describe` gives it, its problems listed in `found`.
-fn end_of(given: EndIn, values: &mut Vec<Bytes>, found: &mut Vec<Spotted>) -> Result<End, String> {
+fn end_of(
+    given: EndIn,
+    values: &mut Vec<Bytes>,
+    found: &mut Vec<Spotted>,
+    cite: Cite,
+) -> Result<End, String> {
     let EndIn { goal, shows, uses } = given;
     let spot = |found: &mut Vec<Spotted>, at: &Spot, problem: Problem, line: Option<u32>| {
         found.push(Spotted {
@@ -477,7 +542,7 @@ fn end_of(given: EndIn, values: &mut Vec<Bytes>, found: &mut Vec<Spotted>) -> Re
     if words(&goal) > 20 {
         spot(found, &Spot::End, Problem::Wordy, None);
     }
-    let shows = match shows {
+    let shows = match shows.map(cite) {
         Some(markdown) => {
             let (body, problems) = harness_body::body(&markdown, KINDS);
             if !pictured(&body.blocks) {
@@ -528,12 +593,12 @@ fn end_of(given: EndIn, values: &mut Vec<Bytes>, found: &mut Vec<Spotted>) -> Re
     })
 }
 
-fn describe(state: &State, owner: TaskId, input: Value) -> Result<Done, String> {
+fn describe(state: &State, owner: TaskId, input: Value, cite: Cite) -> Result<Done, String> {
     let DescribeIn { title, end, plan } = parse(input)?;
     let mut values = Vec::new();
     let mut found: Vec<Spotted> = Vec::new();
     let end = end
-        .map(|e| end_of(e, &mut values, &mut found))
+        .map(|e| end_of(e, &mut values, &mut found, cite))
         .transpose()?;
     let plan = match plan {
         None => None,
@@ -561,7 +626,8 @@ fn describe(state: &State, owner: TaskId, input: Value) -> Result<Done, String> 
                     });
                 }
                 check_now(now.as_deref(), &at, &mut found);
-                for markdown in s.body.iter() {
+                let body = s.body.map(cite);
+                for markdown in body.iter() {
                     let (_, problems) = harness_body::body(markdown, KINDS);
                     found.extend(problems.into_iter().map(|f| Spotted {
                         at: at.clone(),
@@ -569,7 +635,7 @@ fn describe(state: &State, owner: TaskId, input: Value) -> Result<Done, String> 
                         problem: f.problem,
                     }));
                 }
-                let body = s.body.map(|m| stash(&mut values, m));
+                let body = body.map(|m| stash(&mut values, m));
                 out.push(Step {
                     key: s.key,
                     title: s.title,
@@ -711,6 +777,7 @@ fn ask(
     call: CallId,
     input: Value,
     mint: &dyn Fn(usize) -> EventId,
+    cite: Cite,
 ) -> Result<Done, String> {
     let a: AskIn = parse(input)?;
     let want = match a.want {
@@ -743,7 +810,10 @@ fn ask(
         },
     };
     let mut values = Vec::new();
-    let shows = a.shows.map(|m| stash(&mut values, m));
+    let shows = a.shows.map(cite);
+    let problems = (shows.iter()).flat_map(|m| harness_body::body(m, KINDS).1);
+    let problems: Vec<harness_body::Found> = problems.collect();
+    let shows = shows.map(|m| stash(&mut values, m));
     let ask = Ask {
         key: a.key.clone(),
         question: a.question,
@@ -807,14 +877,20 @@ fn ask(
     } else {
         "Asked"
     };
+    let said = format!(
+        "{verb} `{}` (`{}`): it is on your page from your next `present`, and Max's answer comes to you as a message when it settles. {then}{step}",
+        a.key,
+        made.label()
+    );
+    let found = (problems.into_iter()).map(|f| Spotted {
+        at: Spot::Ask(made),
+        line: f.line,
+        problem: f.problem,
+    });
     Ok(Done {
         values,
         facts,
-        said: format!(
-            "{verb} `{}` (`{}`): it is on your page from your next `present`, and Max's answer comes to you as a message when it settles. {then}{step}",
-            a.key,
-            made.label()
-        ),
+        said: listed(&said, found.collect()),
     })
 }
 

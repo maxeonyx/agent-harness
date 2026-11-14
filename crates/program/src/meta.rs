@@ -464,7 +464,7 @@ pub fn attach(state: &State, values: Values, task: &Task, input: &[u8]) -> Resul
 }
 
 /// Whether `call` is owned by `task` or by an agent under it.
-fn under(state: &State, call: CallId, task: TaskId) -> bool {
+pub(crate) fn under(state: &State, call: CallId, task: TaskId) -> bool {
     let mut owner = state.call_owner(call);
     while let Some(t) = owner {
         if t == task {

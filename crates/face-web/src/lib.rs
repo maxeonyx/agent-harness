@@ -503,6 +503,9 @@ impl<S: Source> Face<S> {
                 if let Some(at) = path.strip_prefix("/image/") {
                     return self.image(&mut stream, at);
                 }
+                if let Some(at) = path.strip_prefix("/picture/") {
+                    return self.picture(&mut stream, at);
+                }
                 if let Some(at) = path.strip_prefix("/context/") {
                     if let Ok(head) = at.parse() {
                         return self.context(&mut stream, head, true);
@@ -683,6 +686,19 @@ impl<S: Source> Face<S> {
         http::respond(stream, "application/json", &body, forever)
     }
 
+    /// `/picture/VALUE`: a page's picture ([`harness_core::body::Image`]),
+    /// the one image in the value of the call result that showed it; stored
+    /// by the browser forever, since a value is its bytes.
+    fn picture(&self, stream: &mut impl Write, at: &str) -> io::Result<()> {
+        let blocks = (at.parse::<ValueId>().ok())
+            .and_then(|v| self.source.value(v))
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+        match blocks {
+            Some(blocks) => nth_image(stream, blocks, 0),
+            None => http::not_found(stream),
+        }
+    }
+
     /// `/image/ENTRY/N`: the `N`th image of entry ENTRY's content, as
     /// [`by_reference`] numbers them; stored by the browser forever, since
     /// an entry is its bytes.
@@ -698,24 +714,30 @@ impl<S: Source> Face<S> {
             _ => return http::not_found(stream),
         };
         let blocks = self.source.value(content);
-        let Some(mut blocks) = blocks.and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
-            return http::not_found(stream);
-        };
-        let (mut i, mut found) = (0, None);
-        image::each_image(&mut blocks, &mut |source| {
-            if i == n {
-                let kind = source["media_type"]
-                    .as_str()
-                    .filter(|k| k.starts_with("image/"));
-                found = image::decoded(source)
-                    .map(|bytes| (kind.unwrap_or("application/octet-stream").to_owned(), bytes));
-            }
-            i += 1;
-        });
-        match found {
-            Some((kind, bytes)) => http::respond(stream, &kind, &bytes, true),
+        match blocks.and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
+            Some(blocks) => nth_image(stream, blocks, n),
             None => http::not_found(stream),
         }
+    }
+}
+
+/// The `n`th image at any depth of `blocks`, content blocks that are
+/// immutable bytes, so the browser keeps it forever.
+fn nth_image(stream: &mut impl Write, mut blocks: Value, n: usize) -> io::Result<()> {
+    let (mut i, mut found) = (0, None);
+    image::each_image(&mut blocks, &mut |source| {
+        if i == n {
+            let kind = source["media_type"]
+                .as_str()
+                .filter(|k| k.starts_with("image/"));
+            found = image::decoded(source)
+                .map(|bytes| (kind.unwrap_or("application/octet-stream").to_owned(), bytes));
+        }
+        i += 1;
+    });
+    match found {
+        Some((kind, bytes)) => http::respond(stream, &kind, &bytes, true),
+        None => http::not_found(stream),
     }
 }
 

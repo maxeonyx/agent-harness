@@ -237,8 +237,36 @@ function figure(f) {
   const fig = el("figure");
   if (f.Mermaid) { const pre = code("mermaid", f.Mermaid.source); fig.append(pre); diagram(pre, f.Mermaid.source); }
   else if (f.Svg) fig.innerHTML = DOMPurify.sanitize(f.Svg.source, { USE_PROFILES: { svg: true, svgFilters: true } });
-  else if (f.Images) fig.append(...f.Images.map((i) => el("span", "image", i.alt)));
+  else if (f.Images) fig.append(pictures(f.Images));
   return fig;
+}
+// Pictures (body.rs `Image`), each opening at full size when tapped. One
+// spans the column. Two or more share rows at one height, each with its alt
+// under it, since there the alt tells them apart: once a picture's shape is
+// known it takes the row's width in proportion to it, so a phone beside a
+// desktop, or a set of thumbnails, fills each row evenly at any width.
+function pictures(list) {
+  const one = list.length === 1;
+  const box = el("div", one ? "picture" : "pictures");
+  for (const i of list) {
+    const a = el("a");
+    a.href = `/picture/${i.value}`;
+    a.target = "_blank";
+    const img = el("img");
+    img.src = a.href;
+    img.alt = i.alt;
+    a.append(img);
+    if (!one) {
+      a.append(el("span", "alt", i.alt));
+      img.addEventListener("load", () => {
+        const shape = img.naturalWidth / img.naturalHeight, row = Math.min(180, box.clientWidth / 3);
+        a.style.flex = `${shape} 1 ${shape * row}px`;
+        a.style.maxWidth = `${shape * row * 2}px`;
+      }, { once: true });
+    }
+    box.append(a);
+  }
+  return box;
 }
 function table(t) {
   const tb = el("table");

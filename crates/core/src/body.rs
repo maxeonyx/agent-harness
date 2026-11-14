@@ -130,18 +130,32 @@ pub enum Figure {
     /// A fenced ```` ```svg ```` block, for what mermaid can't lay out,
     /// using the same classes.
     Svg { source: String },
-    /// Images alone in a paragraph (`![alt](value:<id>)`): screenshots or
-    /// rendered images. One is drawn at its size with no caption, like any
-    /// figure. Two or more sit side by side at one height, each with its
-    /// alt under it in small type, since there the alt is what tells them
-    /// apart: two screens to choose between, a phone beside a desktop.
+    /// Pictures alone in a paragraph: screenshots or renders. One is drawn
+    /// across the column with no caption, like any figure. Two or more
+    /// share rows at one height, each with its alt under it in small type,
+    /// since there the alt is what tells them apart: two screens to choose
+    /// between, a phone beside a desktop, a set of thumbnails. Max taps one
+    /// to see it at full size.
     Images(Vec<Image>),
 }
 
-/// One image in a figure. The alt is required, since it is what a reader
-/// hears, what an old face shows, and what names it beside another.
+/// **Concept.** A picture on a page: the image a call's result showed the
+/// agent, kept as that result's value, so every version of the page shows
+/// what it showed when written, whatever happens to the file. The agent
+/// cites the call by its label (`![what it shows](call-3fa2c1)`), so it
+/// shows Max only what it has looked at itself; the brain keeps the
+/// citation as the value (`![…](value:<id>)`, which the body's parser
+/// reads).
+///
+/// Serves: "Show me the underlying stuff, not your explanations of it";
+/// "information is best presented visually, not verbally"; of a choice
+/// between themes, "Literally the only information I need ... is a picture".
+///
+/// The alt is required, since it is what a reader hears, what an old face
+/// shows, and what names it beside another.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Image {
+    /// The result that showed it: content blocks holding one image.
     pub value: ValueId,
     pub alt: String,
 }
@@ -228,6 +242,10 @@ pub enum Problem {
     NotFound(Ref),
     /// An image with no alt.
     NoAlt,
+    /// An image that can't be drawn as a picture: it names no call whose
+    /// result showed the agent one, or it sits amid text or in a table.
+    /// Drawn as its alt's words, or a link in them to an image on the web.
+    Picture { why: String },
     /// Words given as Max's that are not in the delivery named.
     Misquoted,
     /// A figure that would not draw, with the drawer's message.

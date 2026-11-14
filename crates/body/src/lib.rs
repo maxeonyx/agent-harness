@@ -77,6 +77,39 @@ fn read(markdown: &str, kinds: &[&str]) -> (Body, Vec<Found>) {
     (Body { blocks }, reader.found)
 }
 
+/// `markdown` with each image's destination that `cite` knows replaced by
+/// what it gives: how the brain keeps a picture cited by the call that
+/// showed it (`![alt](call-3fa2c1)`) as that result's value
+/// (`value:<id>`), the one form [`body`] draws as a picture. Any other
+/// destination stays as written.
+pub fn cited(markdown: &str, cite: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut from = 0;
+    for (event, range) in Parser::new_ext(markdown, options()).into_offset_iter() {
+        let Event::Start(Tag::Image { dest_url, .. }) = event else {
+            continue;
+        };
+        let Some(to) = cite(&dest_url) else {
+            continue;
+        };
+        // The destination comes after the alt, so its last occurrence in
+        // the image is it.
+        let Some(at) = markdown[range.clone()].rfind(&*dest_url) else {
+            continue;
+        };
+        let at = range.start + at;
+        out.push_str(&markdown[from..at]);
+        out.push_str(&to);
+        from = at + dest_url.len();
+    }
+    out.push_str(&markdown[from..]);
+    out
+}
+
+fn options() -> Options {
+    Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH
+}
+
 /// One paragraph's inlines, for a field that holds a line rather than a
 /// body: blocks past the first are flattened into it after a break.
 pub fn inline(markdown: &str, kinds: &[&str]) -> (Vec<Inline>, Vec<Found>) {
@@ -115,9 +148,7 @@ struct Reader<'m, 'k> {
 impl<'m, 'k> Reader<'m, 'k> {
     fn new(markdown: &'m str, kinds: &'k [&'k str]) -> Reader<'m, 'k> {
         let breaks: Vec<usize> = markdown.match_indices('\n').map(|(i, _)| i).collect();
-        let options =
-            Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
-        let events = Parser::new_ext(markdown, options)
+        let events = Parser::new_ext(markdown, options())
             .into_offset_iter()
             .map(|(event, range)| {
                 (
@@ -378,6 +409,12 @@ impl<'m, 'k> Reader<'m, 'k> {
             match event {
                 Event::Start(Tag::TableCell) => {
                     let pieces = self.inlines();
+                    for piece in &pieces {
+                        if let Piece::Image { line, .. } = piece {
+                            let why = "it sits in a table".to_owned();
+                            self.spot(*line, Problem::Picture { why });
+                        }
+                    }
                     let cell = pieces.into_iter().map(as_inline).collect();
                     cells.push(merged(cell));
                 }
@@ -529,9 +566,16 @@ impl<'m, 'k> Reader<'m, 'k> {
             Piece::Inline(Inline::Text(t)) => t.trim().is_empty(),
             Piece::Inline(_) => false,
         });
-        let values: Option<Vec<ValueId>> = (images.iter())
-            .map(|(src, _, _)| src.strip_prefix("value:")?.parse().ok())
-            .collect();
+        let value = |src: &str| src.strip_prefix("value:")?.parse::<ValueId>().ok();
+        let values: Option<Vec<ValueId>> = images.iter().map(|(src, _, _)| value(src)).collect();
+        for (src, _, line) in &images {
+            let why = match value(src) {
+                None => format!("`{src}` names no call whose result showed you a picture"),
+                Some(_) if !alone => "it sits amid text".to_owned(),
+                Some(_) => continue,
+            };
+            self.spot(*line, Problem::Picture { why });
+        }
         if alone
             && !images.is_empty()
             && let Some(values) = values
@@ -578,14 +622,21 @@ fn inline_event(event: &Event) -> bool {
     )
 }
 
-/// An image amid text is a link to it, in its alt's words.
+/// An image that isn't drawn as a picture: a link to it in its alt's words
+/// when it is on the web, or else its alt's words, since a value or a
+/// call's label is nothing to open.
 fn as_inline(piece: Piece) -> Inline {
     match piece {
         Piece::Inline(inline) => inline,
-        Piece::Image { src, alt, .. } => Inline::Link {
-            url: src,
-            words: alt,
-        },
+        Piece::Image { src, alt, .. }
+            if src.starts_with("https://") || src.starts_with("http://") =>
+        {
+            Inline::Link {
+                url: src,
+                words: alt,
+            }
+        }
+        Piece::Image { alt, .. } => Inline::Text(alt),
     }
 }
 
