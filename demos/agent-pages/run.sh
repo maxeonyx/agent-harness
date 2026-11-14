@@ -11,7 +11,8 @@
 # lead, with no line about the page. Max's reply agreed with the end, so
 # when the agent then rewords a use, that use carries the change bar.
 # Last, the map: each area faint on its theme's ground.
-# Screenshots wide and on a phone into
+# Screenshots wide and on a phone, the run from the end's uses to the
+# plan among them, into
 # demos/agent-pages/shots.ignore. Scripted: no model call. Leaves the
 # brain up.
 set -euo pipefail
@@ -41,6 +42,11 @@ page open "$a" wait ".sheet:not([hidden]) h1" sleep 1500 shot "$shots/first-wide
 page --size phone open "$a" wait ".sheet:not([hidden]) h1" sleep 1500 shot "$shots/first-phone.png"
 page open "$c" wait ".sheet:not([hidden]) h1" sleep 1500 shot "$shots/second-wide.png"
 page --size phone open "$c" wait ".sheet:not([hidden]) h1" sleep 1500 shot "$shots/second-phone.png"
+echo
+echo "== the run from the end's uses through the now to the plan, wide and on a phone"
+uses="document.querySelector('.sheet .uses').scrollIntoView({ block: 'start' }), scrollBy(0, -40), 1"
+page open "$a" wait ".sheet:not([hidden]) h1" sleep 1500 eval "$uses" sleep 500 shot "$shots/run-wide.png"
+page --size phone open "$a" wait ".sheet:not([hidden]) h1" sleep 1500 eval "$uses" sleep 500 shot "$shots/run-phone.png"
 echo
 echo "== Max presses an answer: held, then sent with his words"
 page open "$a" wait ".sheet:not([hidden]) h1" sleep 1000 \
