@@ -1164,7 +1164,7 @@ pub fn tools() -> Vec<Tool> {
                     "end": { "type": "string", "description": "What is true once it is answered and acted on, in a few words: a part of your end." },
                     "now": { "type": "string", "description": "Where that stands now, in a few words: inline markdown." },
                     "why": { "type": "string", "description": "Why the answer gets from now to the end, and why it is his to give: inline markdown." },
-                    "shows": markdown("Body markdown that shows the choice: the options as a table, a figure."),
+                    "shows": markdown("Body markdown that shows the choice: the options as a table, a figure, or each option's picture, cited as `![the option](call-3fa2c1)` by the call that showed it to you."),
                     "want": { "type": "string", "enum": ["go", "answer", "choose", "do"], "description": "go: his go before costly, outward or one-way work. answer: his words. choose: one of `options`. do: something only he can do, at `link`." },
                     "options": {
                         "type": "array",
