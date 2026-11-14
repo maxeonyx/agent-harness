@@ -61,7 +61,6 @@
   .sheet :is(.step, .use).failed .mark, .sheet .step .failed { color: var(--fig-2); }
   .sheet .step.yours .mark { color: var(--yours); }
   .sheet :is(.step, .use).working .mark { color: var(--accent); }
-  .sheet .use.unknown .mark { color: var(--fig-4); }
   .sheet .step.done > .head .title { color: var(--muted); }
   .sheet .step > :not(.head) { margin-top: .3em; }
   .sheet .ask { margin: .6em 0 .8em; padding: .8em 1em .4em; background: var(--tint); border-left: 3px solid var(--yours); border-radius: 0 6px 6px 0; }
