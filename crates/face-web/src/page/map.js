@@ -151,8 +151,9 @@ export const cardStatus = (c) => `Finished ${ago(c.last)} ago`;
 // work out, the chains of compactions folded, and the projects. Each node
 // knows its life, the colour of its life's line into it (`line`: an
 // agent's ink, an old version's faint, a call's blue, and Max's orange for
-// an ask and from when work was handed to him), and, at the end of a finished life, how it
-// ended (`end`: green done, red failed, none abandoned).
+// an ask and from when work was handed to him), and, at the end of a
+// finished life, how it ended (`end`: green done, red failed, none
+// abandoned).
 const lifeOf = (t) => (chained(t) ? lifeOf(byId[t.from]) : t.id);
 export function derive(openId) {
   byId = Object.fromEntries(view.tasks.map((t) => [t.id, t]));
@@ -190,15 +191,15 @@ export function derive(openId) {
     if (own && isDone(t)) own.end = { result: "green", failed: "red" }[t.outcome?.kind];
     for (const w of t.work || []) {
       const life = `w:${w.call}`;
+      // An ask is Max's from the start, as work handed to him is from
+      // when it was: his line throughout, and while it runs his card.
+      const ask = w.tool === "ask", his = ask || w.holder === "max";
       let before = w.leg;
       (w.passed || []).forEach((p, i) => {
         const id = `${life}:${i}`;
-        add({ id, kind: "ring", t, life, line: i && w.passed[i - 1].to === "max" ? "max" : "tool", time: [p.at, p.at], open: w.at, deps: [before] });
+        add({ id, kind: "ring", t, life, line: ask || (i && w.passed[i - 1].to === "max") ? "max" : "tool", time: [p.at, p.at], open: w.at, deps: [before] });
         before = id;
       });
-      // An ask is Max's from the start, as work handed to him is from
-      // when it was: his line, and while it runs his card.
-      const his = w.holder === "max" || w.tool === "ask";
       add({ id: life, kind: "chip", t, life, line: his ? "max" : "tool", end: w.running ? null : w.failed ? "red" : "green",
         work: w, running: w.running, yours: his && w.running, open: w.at, deps: [before] });
     }
