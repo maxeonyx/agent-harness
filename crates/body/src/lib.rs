@@ -32,6 +32,46 @@ pub struct Found {
 /// A body's blocks, and its problems. `kinds` are the item kinds a live
 /// name may have (`github.pr`).
 pub fn body(markdown: &str, kinds: &[&str]) -> (Body, Vec<Found>) {
+    let (body, mut found) = read(markdown, kinds);
+    // A body escaped twice: its line breaks came as the two characters,
+    // read in its prose, since `\n` inside code is literal text.
+    if !markdown.contains('\n') && body.blocks.iter().any(|b| prose_has(b, "\\n")) {
+        found.push(Found {
+            line: None,
+            problem: Problem::Escaped,
+        });
+    }
+    (body, found)
+}
+
+/// Whether `block`'s prose, outside code and Max's quoted words, contains
+/// `text`.
+fn prose_has(block: &Block, text: &str) -> bool {
+    let inlines = |list: &[Inline]| {
+        list.iter().any(|i| match i {
+            Inline::Text(t) => t.contains(text),
+            Inline::Link { words, .. } => words.contains(text),
+            _ => false,
+        })
+    };
+    match block {
+        Block::Para(list) => inlines(list),
+        Block::List { items, .. } => items
+            .iter()
+            .flat_map(|i| &i.blocks)
+            .any(|b| prose_has(b, text)),
+        Block::Quote(blocks) => blocks.iter().any(|b| prose_has(b, text)),
+        Block::Table(t) => t
+            .head
+            .iter()
+            .chain(t.rows.iter().flatten())
+            .any(|c| inlines(c)),
+        Block::Fold(f) => f.summary.contains(text) || f.body.iter().any(|b| prose_has(b, text)),
+        Block::Said { .. } | Block::Code { .. } | Block::Figure(_) => false,
+    }
+}
+
+fn read(markdown: &str, kinds: &[&str]) -> (Body, Vec<Found>) {
     let mut reader = Reader::new(markdown, kinds);
     let blocks = reader.blocks(false);
     (Body { blocks }, reader.found)
@@ -40,7 +80,7 @@ pub fn body(markdown: &str, kinds: &[&str]) -> (Body, Vec<Found>) {
 /// One paragraph's inlines, for a field that holds a line rather than a
 /// body: blocks past the first are flattened into it after a break.
 pub fn inline(markdown: &str, kinds: &[&str]) -> (Vec<Inline>, Vec<Found>) {
-    let (body, found) = body(markdown, kinds);
+    let (body, found) = read(markdown, kinds);
     let mut out = Vec::new();
     for block in &body.blocks {
         if !out.is_empty() {
@@ -242,7 +282,21 @@ impl<'m, 'k> Reader<'m, 'k> {
             CodeBlockKind::Indented => None,
         };
         match lang.as_deref() {
-            Some("mermaid") => Block::Figure(Figure::Mermaid { source: text }),
+            Some("mermaid") => {
+                // The face drops a figure's own styling: the theme owns the look.
+                let styled = text.trim_start().starts_with("---")
+                    || text.contains("%%{")
+                    || text.lines().any(|l| {
+                        let l = l.trim_start();
+                        ["style ", "classDef ", "linkStyle "]
+                            .iter()
+                            .any(|k| l.starts_with(k))
+                    });
+                if styled {
+                    self.spot(line, Problem::Styled);
+                }
+                Block::Figure(Figure::Mermaid { source: text })
+            }
             Some("svg") => {
                 let (source, dropped) = html::svg(&text);
                 if dropped {

@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # An agent facing Max answers him with a page, in its area's theme. Two
 # scripted chats are two areas, each given its own theme by the harness.
-# The first describes its plan (each step what will be true, and where it
-# stands now), writes its lead and facts, asks a choice in the plan's CI
-# step and asks again in the docs step, withdraws that, and presents: the
-# withdrawn ask stays where it was, with why. Max presses an answer, which
-# is held until he sends it with his words; the agent's answer is a quick
-# line above its page, folded to its lead, with no line about the page.
-# Max's reply agreed with the plan, so when the agent then retitles a step,
-# that step carries the change bar. Last, the map: each area faint on its
-# theme's ground.
-# Screenshots wide and on a phone into
+# The first describes where its work ends (the goal, a figure of the
+# system, and the uses, each marked with whether it works today) and its
+# plan (each step with where it stands), writes its lead, now and why,
+# asks a choice in the plan's CI step and asks again in the docs step,
+# withdraws that, and presents: the withdrawn ask stays where it was, with
+# why. Max presses an answer, which is held until he sends it with his
+# words; the agent's answer is a quick line above its page, folded to its
+# lead, with no line about the page. Max's reply agreed with the end, so
+# when the agent then rewords a use, that use carries the change bar.
+# Last, the map: each area faint on its theme's ground.
+# Screenshots wide and on a phone, the run from the end's uses to the
+# plan among them, into
 # demos/agent-pages/shots.ignore. Scripted: no model call. Leaves the
 # brain up.
 set -euo pipefail
@@ -41,6 +43,11 @@ page --size phone open "$a" wait ".sheet:not([hidden]) h1" sleep 1500 shot "$sho
 page open "$c" wait ".sheet:not([hidden]) h1" sleep 1500 shot "$shots/second-wide.png"
 page --size phone open "$c" wait ".sheet:not([hidden]) h1" sleep 1500 shot "$shots/second-phone.png"
 echo
+echo "== the run from the end's uses through the now to the plan, wide and on a phone"
+uses="document.querySelector('.sheet .uses').scrollIntoView({ block: 'start' }), scrollBy(0, -40), 1"
+page open "$a" wait ".sheet:not([hidden]) h1" sleep 1500 eval "$uses" sleep 500 shot "$shots/run-wide.png"
+page --size phone open "$a" wait ".sheet:not([hidden]) h1" sleep 1500 eval "$uses" sleep 500 shot "$shots/run-phone.png"
+echo
 echo "== Max presses an answer: held, then sent with his words"
 page open "$a" wait ".sheet:not([hidden]) h1" sleep 1000 \
   eval "document.querySelector('.sheet .press').scrollIntoView({ block: 'center' }), 1" \
@@ -54,13 +61,17 @@ page open "$a" wait ".sheet:not([hidden]) h1" sleep 1000 \
 page --size phone open "$a" wait ".sheet.folded" sleep 1500 shot "$shots/quick-phone.png"
 drive log "$a" | grep -A2 "has settled" | tail -3
 echo
-echo "== the agent retitles a step of the plan Max's reply agreed with: it carries the change bar"
-retitled=$(sed -n 's/^tool describe //p' demos/agent-pages/mandate.md | jq -c '.plan[3].title = "AGENTS.md alone says how to build" | { plan }')
-drive say "$a" "tool describe $retitled tool present {}" >/dev/null
+echo "== the agent rewords a use of the end Max's reply agreed with: it carries the change bar"
+reworded=$(sed -n 's/^tool describe //p' demos/agent-pages/mandate.md | jq -c '.end.uses[2].does = "An agent reads AGENTS.md alone to learn how to build" | { end }')
+drive say "$a" "tool describe $reworded tool present {}" >/dev/null
 drive settle "$a" >/dev/null
-view "$a" '[.page.plan[] | { key, title, changed }]'
-page open "$a" wait ".sheet .step.changed" sleep 1500 shot "$shots/changed-wide.png"
-page --size phone open "$a" wait ".sheet .step.changed" sleep 1500 shot "$shots/changed-phone.png"
+view "$a" '[.page.end.uses[] | { key, does, changed }]'
+page open "$a" wait ".sheet .use.changed" sleep 1500 \
+  eval "document.querySelector('.sheet .use.changed').scrollIntoView({ block: 'center' }), 1" \
+  sleep 500 shot "$shots/changed-wide.png"
+page --size phone open "$a" wait ".sheet .use.changed" sleep 1500 \
+  eval "document.querySelector('.sheet .use.changed').scrollIntoView({ block: 'center' }), 1" \
+  sleep 500 shot "$shots/changed-phone.png"
 echo
 echo "== the map: each area on its ground, faint behind its part"
 page sleep 3000 shot "$shots/map-wide.png"

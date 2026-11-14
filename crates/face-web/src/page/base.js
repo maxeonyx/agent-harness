@@ -99,13 +99,36 @@ export function markdown(text) {
 // A mermaid diagram where its source was. The library loads the first time
 // one is shown; a source it cannot draw stays as written.
 let mermaidLib = null, diagrams = 0;
+// The node classes the page guide names, on every flowchart: what doesn't
+// exist yet dashed, what goes faint, and a heavier line for the states and
+// kinds sheet.css colours in the theme's tones (mermaid takes no CSS
+// variables).
+const CLASSES = [
+  "classDef planned stroke-dasharray:6 4",
+  "classDef gone stroke-dasharray:2 3,opacity:0.45",
+  ...["failed", "yours", "working", "f1", "f2", "f3", "f4"].map((c) => `classDef ${c} stroke-width:2px`),
+].join("\n");
+// An agent's figure keeps its shape and loses its own styling, since the
+// theme owns the look (harness-body lists it as styling): its frontmatter,
+// `%%{init}%%` directives and `style`, `classDef` and `linkStyle` lines.
+const unstyled = (source) => source
+  .replace(/^\s*---\n[\s\S]*?\n---[^\n]*\n/, "")
+  .replace(/%%\{[\s\S]*?\}%%/g, "")
+  .replace(/^[ \t]*(?:style|classDef|linkStyle)\b.*$/gm, "");
+const classed = (source) => {
+  const s = unstyled(source);
+  return /^(?:\s*%%.*\n)*\s*(flowchart|graph)\b/.test(s) ? `${s}\n${CLASSES}` : s;
+};
 export async function diagram(pre, source) {
   try {
     mermaidLib ||= import("https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs")
       .then((m) => { m.default.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict", htmlLabels: false, flowchart: { htmlLabels: false } }); return m.default; });
-    const { svg } = await (await mermaidLib).render(`mermaid-${++diagrams}`, source);
+    const { svg } = await (await mermaidLib).render(`mermaid-${++diagrams}`, classed(source));
+    // Labels drawn as SVG text come escaped twice ("A &amp;amp; B"): undo
+    // the second, so `&` draws as written.
+    const once = svg.replace(/&amp;(amp|lt|gt|quot|#\d+);/g, "&$1;");
     const fig = el("div", "diagram");
-    fig.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true } });
+    fig.innerHTML = DOMPurify.sanitize(once, { USE_PROFILES: { svg: true, svgFilters: true, html: true } });
     pre.replaceWith(fig);
   } catch (e) { fail("drawing a mermaid diagram, which stays as its source", e); }
 }
