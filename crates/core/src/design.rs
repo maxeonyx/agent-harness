@@ -160,25 +160,27 @@ pub struct Theme {
     pub palette: Palette,
     pub display: Face,
     /// Its ground: an ES module whose `paint(ctx, scene)` paints into a 2D
-    /// canvas, given the canvas's size, the task's [`Identity`], and the box
-    /// the page's lead sits in, which it keeps calm. Deterministic in its
-    /// identity and size, so the same agent looks the same in every face
-    /// and the keeper can paint again exactly what Max saw ([`Screen`]).
-    /// Each part of the painting (the sun, the ridges, the coast) draws
-    /// from its own stream of the seed, so revising one part leaves the
-    /// rest of every agent's painting where it was. Painted once when the
-    /// window opens, never animated. It fills the cover behind the lead and
-    /// dissolves into the paper as Max scrolls. The map paints each area
-    /// with its ground, faint behind the graph, each live agent in a pool
-    /// of its identity's colour, repainted only when the zoom passes a
-    /// step.
+    /// canvas, given the canvas's size, the task's [`Identity`], the box the
+    /// page's lead sits in, which it keeps calm, and on a page the text's
+    /// column, which it keeps open. Deterministic in its identity and size, so
+    /// the same agent looks the same in every face and the keeper can paint
+    /// again exactly what Max saw ([`Screen`]). Each part of the painting (the
+    /// sun, the ridges, the coast) draws from its own stream of the seed, so
+    /// revising one part leaves the rest of every agent's painting where it
+    /// was. Painted once for the chat window a page is read in, never animated:
+    /// it fills the window behind the whole page and holds still while the text
+    /// scrolls over it, each block of text on a press of the painting that
+    /// keeps its ink at 7:1. The map paints each area with its ground, faint
+    /// behind the graph, each live agent in a pool of its identity's colour,
+    /// repainted only when the zoom passes a step.
     ///
     /// The face runs only grounds a version of the design system declared,
     /// since a ground is a program and a page body may hold none. Before a
     /// version is merged, its check paints every ground at phone,
     /// desktop and thumbnail sizes for a set of identities, and holds it to
     /// its bars: the lead's ink on the ground in the lead's box at 7:1 for
-    /// 95% of it and never under 4.5:1; a thumbnail that reads as its
+    /// 95% of it and never under 4.5:1; the body's ink at 7:1 over the box
+    /// the text covers, with its press; a thumbnail that reads as its
     /// theme; identities planned one after another told apart at a glance;
     /// the same pixels painted twice; and a phone's paint time.
     pub ground: ValueId,

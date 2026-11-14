@@ -86,11 +86,14 @@ function identity(at) {
   return oklchHex(0.66, 0.1, glazeHue(at));
 }
 
-function paint(ctx, { w, h, dpr = 1, root, line = [], at = 0, stream, quiet, kit }) {
+function paint(ctx, { w, h, dpr = 1, root, line = [], at = 0, stream, quiet, column, kit }) {
   const S = Math.max(w, h);
   const world = makeWorld(kit, root);
-  const view = chooseView(world, kit, root, line, w, h, quiet);
-  const F = buildField(world, view, w, h, S, quiet);
+  // On a page the text scrolls down the column over the chart: the column below the lead's top is
+  // open water, and the land stands in the gutters, or at the foot of a narrow window.
+  const tb = kit.textBox({ w, h, quiet, column }), keep = tb ? { x: tb.x, y: tb.y, w: tb.w, h: tb.h } : quiet;
+  const view = chooseView(world, kit, root, line, w, h, keep);
+  const F = buildField(world, view, w, h, S, keep, !!tb);
   const glaze = glazes(kit, at);
   fillGround(ctx, F, w, h, S, glaze);
   stippleShore(ctx, F, stream("stipple"));
@@ -107,7 +110,8 @@ function paint(ctx, { w, h, dpr = 1, root, line = [], at = 0, stream, quiet, kit
   drawLines(lc, F, S);
   const rs = stream("rose");
   const rose = line.length === 0 && S >= 500 && rs() < 0.4 ? drawRose(lc, F, rs, S, w, h) : null;
-  if (S >= 500) drawSoundings(lc, F, stream("soundings"), S, rose);
+  // A narrow page's text passes over every part of the window, so a sounding there reads as a stray figure in it.
+  if (S >= 500 && !(tb && !tb.wide)) drawSoundings(lc, F, stream("soundings"), S, rose);
   clearRound(lc, F.q, 0.05 * S, w, h);
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(layer, 0, 0); ctx.restore();
 }
@@ -367,14 +371,15 @@ function boxDist(x, y, b) {
 // e: elevation, in units of the relief a window of this size sees, so every chart's land has the
 // same relief (> 0 is land). m: depth of water in metres (land is negative). The grid runs a few cells past the screen,
 // so the distance to land counts land just out of view. delta: the depth step of the isobaths.
-function buildField(Wd, view, w, h, S, quiet) {
+function buildField(Wd, view, w, h, S, quiet, strict = false) {
   const cell = Math.max(7, Math.round(S / 170)), mg = 6;
   const gw = Math.ceil(w / cell) + 2 + 2 * mg, gh = Math.ceil(h / cell) + 2 + 2 * mg, N = gw * gh, ox = -mg * cell;
   const s = view.s, wpp = s / S, cw = cell * wpp; // world units per CSS px, per cell
   const X0 = view.X0 + ox * wpp, Y0 = view.Y0 + ox * wpp;
-  // The lead's box; a thumbnail is nearly all lead, so there it is only a preference.
+  // The lead's box; a thumbnail is nearly all lead, so there it is only a preference. On a page
+  // (strict) it is the box the text covers, kept open water right up to its sides.
   quiet ??= { x: w * 0.25, y: h * 0.2, w: w * 0.5, h: h * 0.3 };
-  const qa = (quiet.w * quiet.h) / (w * h), qk = qa > 0.5 ? Math.max(0.3, 1 - (qa - 0.5) * 2) : 1;
+  const qa = (quiet.w * quiet.h) / (w * h), qk = strict || qa <= 0.5 ? 1 : Math.max(0.3, 1 - (qa - 0.5) * 2);
   const q = { x: quiet.x + quiet.w * (1 - qk) / 2, y: quiet.y + quiet.h * (1 - qk) / 2, w: quiet.w * qk, h: quiet.h * qk };
   const { E, QX, QY } = heightGrid(Wd, X0, Y0, cw, gw, gh, kFor(cw, 2.5), view.looks);
   const e = new Float32Array(N);
@@ -392,12 +397,13 @@ function buildField(Wd, view, w, h, S, quiet) {
   for (let k = 0; k < N; k++) if (e[k] > 0) e[k] += smooth(0, 0.3, e[k]) * 0.04 * R[k];
   // The window keeps the coast's big shapes clear of the lead; the finer octaves can still raise an
   // island under it, so the sea floor sinks there, and land right at the box sinks until none is left
-  // inside it (on a thumbnail, where the box is only a preference, it sinks only a little).
-  const reachS = 0.12 * S, cellAt = (v) => Math.floor((v - ox) / cell);
+  // inside it (on a thumbnail, where the box is only a preference, it sinks only a little). On a page
+  // no land comes within 40 px of the text, where an islet would read as a stray glyph.
+  const reachS = strict ? Math.max(0.04 * S, 64) : 0.12 * S, hug = strict ? Math.max(0.015 * S, 40) : 0.05 * S, cellAt = (v) => Math.floor((v - ox) / cell);
   for (let j = Math.max(0, cellAt(q.y - reachS)); j < Math.min(gh, cellAt(q.y + q.h + reachS) + 1); j++) {
     for (let i = Math.max(0, cellAt(q.x - reachS)); i < Math.min(gw, cellAt(q.x + q.w + reachS) + 1); i++) {
       const d = boxDist(ox + (i + 0.5) * cell, ox + (j + 0.5) * cell, q);
-      if (d < reachS) { const k = j * gw + i; e[k] -= 0.3 * (1 - smooth(0, reachS, d)) + (qk < 1 ? 0 : Math.max(0, e[k]) * (1 - smooth(0, 0.05 * S, d))); }
+      if (d < reachS) { const k = j * gw + i; e[k] -= 0.3 * (1 - smooth(0, reachS, d)) + (qk < 1 ? 0 : Math.max(0, e[k]) * (1 - smooth(0, hug, d))); }
     }
   }
   dropSpecks(e, gw, gh, (0.0004 * S * S) / (cell * cell));

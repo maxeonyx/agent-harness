@@ -1,6 +1,6 @@
 import { $, diagram, el, fail, panel, scrollEl } from "./base.js";
 import { answer, answered } from "./compose.js";
-import { load, paintInto, wear } from "./theme.js";
+import { beyond, hash, load, meanColour, mix, pagePresses, paintInto, quietOf, wear } from "./theme.js";
 
 // ─── A chat's page: what its agent presented to Max, drawn by the theme ───
 // The brain parses every body (harness-body) and the row carries what it
@@ -13,7 +13,7 @@ import { load, paintInto, wear } from "./theme.js";
 // the chat, which scrolling up shows, and opens at its top. While the agent
 // works, its progress is the card's reading and the page is one line at the
 // top, which opens it.
-const sheetEl = $(".sheet", panel), lineEl = $(".sheet-line", panel);
+const sheetEl = $(".sheet", panel), lineEl = $(".sheet-line", panel), composeEl = $(".compose", panel);
 let opened = null, landed = null, unfolded = null;
 
 // Draws `t`'s page, and says whether the card should open at its top
@@ -21,15 +21,15 @@ let opened = null, landed = null, unfolded = null;
 export function renderSheet(t) {
   const p = t.page;
   if (opened && opened !== t.id) opened = null;
-  if (!p) { sheetEl.hidden = lineEl.hidden = true; sheetEl.drawn = null; return false; }
+  if (!p) { sheetEl.hidden = lineEl.hidden = true; sheetEl.drawn = null; dressed = null; wearBox(null); return false; }
   const full = p.current || opened === t.id;
   lineEl.hidden = full;
   sheetEl.hidden = !full;
-  if (!full) { line(p, t); return false; }
+  if (!full) { dressed = null; wearBox(null); line(p, t); return false; }
   const key = JSON.stringify([t.id, p, t.look, unfolded]);
   if (sheetEl.drawn !== key) {
     sheetEl.drawn = key;
-    try { sheetEl.replaceChildren(...page(p, t)); dress(t); }
+    try { sheetEl.replaceChildren(...seated(t), ...page(p, t)); dress(t); }
     catch (e) {
       sheetEl.replaceChildren(el("p", "", "This page could not be drawn."));
       fail(`drawing ${t.name}'s page`, e);
@@ -48,27 +48,125 @@ export function sheetTop() {
   return sheetEl.classList.contains("folded") ? Math.max(0, top + sheetEl.offsetHeight - scrollEl.clientHeight) : top;
 }
 
-// The page wears its task's look: the theme's tokens, and its ground
-// painted behind the lead, once per task and width. A task with none wears
-// sheet.css's plain default.
-const grounds = new Map();
+// The page wears its task's look: the theme's tokens, and its ground painted
+// for the window the page is read in, behind the whole page. The painting
+// holds still while the page scrolls over it (`.window`, sticky in the
+// sheet), at full strength wherever there is no text; each block of text
+// stands on a press of the painting that keeps its ink at 7:1 on every pixel
+// (theme.js `pagePresses`, sheet.css). Painted once per task and window size, after
+// the page has drawn, so the page never waits for it, and again when the
+// window settles at another size. The reply box under the page wears the
+// theme's paper, so a dark painting doesn't end on a cream band. A task with
+// no look wears sheet.css's plain default.
+//
+// The last few paintings are kept, so going back to a task shows its
+// painting at once; each is a window-sized canvas, a few MB.
+const grounds = new Map(), KEEP = 4;
+// How far the soft press goes toward the clamp's colour (0: the clamp alone).
+const SOFT = 0.85;
+// The task the page wears now, and the latest dress, which alone may seat
+// what it painted.
+let dressed = null, dressing = 0;
 async function dress(t) {
-  const lead = $(".lead", sheetEl);
-  if (!t.look) { sheetEl.removeAttribute("style"); lineEl.removeAttribute("style"); return; }
+  const mine = ++dressing;
+  dressed = t;
+  if (!t.look) { sheetEl.removeAttribute("style"); lineEl.removeAttribute("style"); wearBox(null); return; }
   const theme = await load(t.look.theme);
   await wear(sheetEl, theme);
   await wear(lineEl, theme);
-  if (!lead?.isConnected) return;
-  const at = `${t.id} ${lead.clientWidth} ${lead.clientHeight}`;
-  let ground = grounds.get(t.id);
-  if (ground?.at !== at) {
-    ground = el("canvas", "ground");
-    ground.at = at;
-    grounds.set(t.id, ground);
-    lead.prepend(ground);
-    const h = $("h1", lead).getBoundingClientRect(), box = lead.getBoundingClientRect();
-    paintInto(ground, theme, t.look, { x: h.left - box.left, y: h.top - box.top, w: h.width, h: h.height });
-  } else lead.prepend(ground);
+  // On the painting, the page's text is set one step stronger than on
+  // paper: its body in the ink, and what is quieter in the body's ink, so
+  // the press under it can stay as near the painting as the contrast allows.
+  const p = theme.palette, sp = sheetEl.style;
+  sp.setProperty("--body", p.ink); sp.setProperty("--muted", p.body); sp.setProperty("--cover-body", p.cover_ink);
+  if (!sheetEl.isConnected || sheetEl.hidden) return;
+  wearBox(p);
+  const W = scrollEl.clientWidth, V = scrollEl.clientHeight, dpr = Math.min(2, devicePixelRatio || 1);
+  sp.setProperty("--win-w", `${W}px`);
+  sp.setProperty("--win-h", `${V}px`);
+  const at = JSON.stringify([t.id, t.look, W, V, dpr]);
+  let g = grounds.get(at);
+  grounds.delete(at);
+  if (!g) {
+    g = { at };
+    g.ready = (async () => {
+      // After the page has drawn: the paper, or the painting for the size
+      // before, shows until this one lands.
+      await new Promise((ok) => requestAnimationFrame(() => setTimeout(ok)));
+      const s = getComputedStyle(sheetEl), pl = parseFloat(s.paddingLeft), pr = parseFloat(s.paddingRight);
+      const column = { x: sheetEl.getBoundingClientRect().left - scrollEl.getBoundingClientRect().left + pl, w: sheetEl.clientWidth - pl - pr };
+      const canvas = el("canvas"), t0 = performance.now();
+      paintInto(canvas, theme, t.look, quietOf({ w: W, h: V }, column), { w: W, h: V, dpr }, column);
+      // The press, at the painting's own hue where the text runs.
+      const tint = meanColour(canvas, { x: column.x * dpr, y: 0, w: column.w * dpr, h: canvas.height });
+      const { body, head } = pagePresses(p, tint);
+      // Where down the window the press would flatten the painting, for the soft press.
+      const rows = beyond(canvas, body.colour, body.blend);
+      performance.measure(`ground ${theme.name} ${W}x${V}@${dpr}`, { start: t0 });
+      Object.assign(g, { canvas, x: column.x, body, head, rows });
+    })().catch((e) => { grounds.delete(at); fail(`painting ${t.name}'s ground`, e); });
+  }
+  grounds.set(at, g);
+  for (const old of grounds.keys()) if (grounds.size > KEEP) grounds.delete(old);
+  await g.ready;
+  // A painting that failed leaves the page on its paper.
+  if (mine !== dressing || sheetEl.hidden || !g.canvas) return;
+  // Each block's press runs the window's full width, from its edge, fading
+  // across gutters wide enough to fade in (a phone's are not: there it has no sides).
+  sp.setProperty("--press-l", `${g.x}px`);
+  sp.setProperty("--press-g", `${g.x >= 48 ? g.x : 0}px`);
+  sp.setProperty("--press", g.body.colour); sp.setProperty("--press-blend", g.body.blend);
+  sp.setProperty("--press-lead", g.head.colour); sp.setProperty("--press-lead-blend", g.head.blend);
+  // Under the clamp, a screen (or multiply) toward the same colour lifts the
+  // painting's darks (or dims its lights) most of the way, keeping their
+  // texture, so what is left for the clamp to flatten is small.
+  const soft = (c) => c.blend === "lighten" ? [mix("#000000", c.colour, SOFT), "screen"] : [mix("#ffffff", c.colour, SOFT), "multiply"];
+  const [bs, bb] = soft(g.body), [hs, hb] = soft(g.head);
+  sp.setProperty("--press-soft", bs); sp.setProperty("--press-soft-blend", bb);
+  sp.setProperty("--press-lead-soft", hs); sp.setProperty("--press-lead-soft-blend", hb);
+  // The soft press shows only where it has something to keep: a block's
+  // place in the window as it scrolls (its view timeline, run by the
+  // compositor) sets how strong it is, from how much of the painting at that
+  // height the clamp would flatten. A property of the painting and the
+  // window, never of the page.
+  const name = `soft-${hash(g.at)}`;
+  let style = $("style.soft", sheetEl);
+  if (!style) { style = el("style", "soft"); sheetEl.append(style); }
+  const n = g.rows.length, frames = [];
+  for (let i = 0; i <= 20; i++) {
+    const at = (1 - i / 20) * (n - 1), r = Math.round(at);
+    const near = g.rows.slice(Math.max(0, r - 2), r + 3);
+    frames.push(`${i * 5}% { opacity: ${Math.min(1, 1.6 * Math.max(...near)).toFixed(2)} }`);
+  }
+  style.textContent = `@keyframes ${name} { ${frames.join(" ")} }`;
+  sp.setProperty("--soft-frames", name);
+  seat(g);
+}
+// What dress seated for this task (its painting and its soft press's
+// frames), kept through a redraw: dress seats it again only after awaiting
+// the theme, so a page without it would show a frame of bare paper.
+function seated(t) {
+  return dressed?.id === t.id ? sheetEl.querySelectorAll(":scope > .window, :scope > style.soft") : [];
+}
+function seat(g) {
+  let win = $(":scope > .window", sheetEl);
+  if (!win) { win = el("div", "window"); sheetEl.prepend(win); }
+  if (win.firstChild !== g.canvas) win.replaceChildren(g.canvas);
+}
+// The window settling at another size (a desktop window dragged, a phone
+// turned) paints the page again for it, once the size has held a moment.
+let settling;
+new ResizeObserver(() => {
+  clearTimeout(settling);
+  settling = setTimeout(() => { if (dressed && !sheetEl.hidden) dress(dressed); }, 250);
+}).observe(scrollEl);
+// The reply box in the page's paper and inks while a page shows (`p`), the
+// language's own otherwise.
+function wearBox(p) {
+  const s = composeEl.style, tokens = p && { paper: p.paper, white: p.paper, ink: p.ink, body: p.body, muted: p.muted, faint: p.muted, line: p.line };
+  for (const k of ["paper", "white", "ink", "body", "muted", "faint", "line"]) {
+    if (tokens) s.setProperty(`--${k}`, tokens[k]); else s.removeProperty(`--${k}`);
+  }
 }
 const redraw = () => sheetEl.dispatchEvent(new CustomEvent("sheet", { bubbles: true }));
 

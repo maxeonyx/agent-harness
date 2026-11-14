@@ -5,15 +5,66 @@
     --tint: #f4f1e8; --accent: #1d5f8a; --fig-1: #1d6a78; --fig-2: #b4573e; --fig-3: #6b7a2e; --fig-4: #5d6f86;
     --cover-ink: var(--ink); --cover-body: var(--body);
     --display: var(--serif); --display-bold: 600; --display-var: normal;
-    max-width: 48rem; margin: 0 auto 2em; padding: 2em 1.6em 1em;
+    --press: transparent; --press-blend: normal; --press-lead: transparent; --press-lead-blend: normal;
+    max-width: 44rem; margin: 0 auto; padding: 0 1.6em 4em; min-height: var(--win-h, 0); box-sizing: border-box;
+    position: relative; isolation: isolate; overflow: visible clip;
     background: var(--paper); color: var(--body); border-top: 1px solid var(--line);
     font: 16.5px/1.6 var(--serif);
   }
-  /* The lead on the task's painted ground, which dissolves into the paper. */
-  .sheet .lead { position: relative; isolation: isolate; margin: -2em -1.6em 0; padding: 3.2em 1.6em 2.4em; display: flex; flex-direction: column; justify-content: flex-end; }
-  .sheet .lead.new { min-height: 30vh; padding-top: 4.5em; }
-  .sheet .lead .ground { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; -webkit-mask-image: linear-gradient(#000 65%, transparent); mask-image: linear-gradient(#000 65%, transparent); }
-  .sheet.folded .lead { min-height: 0; padding: 2.2em 1.6em 1.6em; cursor: pointer; }
+  /* The ground, painted for the window the page is read in (sheet.js
+     `dress`), holds still behind the whole page while it scrolls: `.window`
+     sticks to the top of the scroll as long as the sheet is in it, as wide
+     and tall as the window, and the paper until the painting lands. Its
+     negative foot lets the page flow as if it weren't there. */
+  .sheet > .window { position: sticky; top: 0; z-index: -1; height: var(--win-h, 100vh); margin: 0 calc((100% - var(--win-w, 100%)) / 2) calc(-1 * var(--win-h, 100vh)); pointer-events: none; }
+  .sheet > .window > canvas { display: block; width: 100%; height: 100%; background: var(--paper); }
+  /* Painted, the page starts where the painting does: its top rule shows the chat behind it, not a strip of paper. */
+  .sheet:has(> .window) { border-top-color: transparent; background-clip: padding-box; }
+  /* Each block of text stands on a press of the painting (theme.js
+     `pressOf`): a lighten or darken with a colour that keeps its ink at 7:1 on
+     every pixel inside its box. It changes only the pixels that would break
+     the bar, only as far as the bar asks, and two presses that overlap are
+     one. It spans the window from edge to edge (--press-l is the column's
+     distance from the window's left). Where the gutters are wide enough to
+     fade across (--press-g, sheet.js), it is full over the column and eases
+     to nothing across each gutter, so a subject kept in the outer gutter stays
+     nearly whole; on a narrow window it runs off both edges, with no sides.
+     It fades in and out above and below the block on an eased curve, so
+     between the parts and round the lead the painting shows at full
+     strength. The soft press (::before) is the whole plan's, not each
+     step's, so steps of different depth leave no seam between them. */
+  .sheet :is(.lead > h1, section > *, .steps > li) { position: relative; --fy: 2em; }
+  .sheet :is(.lead > h1, section > :not(.steps), .steps > li)::after,
+  .sheet :is(.lead > h1, section > *:not(.changed))::before {
+    content: ""; position: absolute; z-index: -1; pointer-events: none;
+    top: calc(-1 * var(--fy)); bottom: calc(-1 * var(--fy)); left: calc(-1 * var(--press-l, 0px)); width: var(--win-w, 100%);
+    --across: linear-gradient(90deg, transparent, transparent calc(var(--press-g, 0px) * .3), rgb(0 0 0 / .3) calc(var(--press-g, 0px) * .65), #000 calc(var(--press-g, 0px) - .4em),
+      #000 calc(100% - var(--press-g, 0px) + .4em), rgb(0 0 0 / .3) calc(100% - var(--press-g, 0px) * .65), transparent calc(100% - var(--press-g, 0px) * .3), transparent);
+    --down: linear-gradient(transparent, rgb(0 0 0 / .1) calc(var(--fy) * .25), rgb(0 0 0 / .5) calc(var(--fy) * .5), rgb(0 0 0 / .9) calc(var(--fy) * .75), #000 var(--fy),
+      #000 calc(100% - var(--fy)), rgb(0 0 0 / .9) calc(100% - var(--fy) * .75), rgb(0 0 0 / .5) calc(100% - var(--fy) * .5), rgb(0 0 0 / .1) calc(100% - var(--fy) * .25), transparent);
+    -webkit-mask-image: var(--down), var(--across); -webkit-mask-composite: source-in;
+    mask-image: var(--down), var(--across); mask-composite: intersect;
+  }
+  .sheet :is(.lead > h1, section > :not(.steps), .steps > li)::after { background: var(--press); mix-blend-mode: var(--press-blend); }
+  /* Steps abut, their own padding the gap: each step's clamp barely spills, and the plan's soft press spans them all. */
+  .sheet .steps > li { --fy: .45em; }
+  .sheet .lead > h1::after { background: var(--press-lead); mix-blend-mode: var(--press-lead-blend); }
+  .sheet :is(.lead > h1, section > *:not(.changed))::before {
+    background: var(--press-soft, transparent); mix-blend-mode: var(--press-soft-blend, normal);
+    animation: var(--soft-frames, none) linear both; animation-timeline: view(); animation-range: cover;
+  }
+  .sheet .lead > h1::before { background: var(--press-lead-soft, transparent); mix-blend-mode: var(--press-lead-soft-blend, normal); }
+  /* The painting reaches the scroll's foot: the room kept for the dock is the sheet's own. */
+  .scroll:has(> .lane > .sheet:not([hidden], .folded)) > .end { margin-top: -72px; }
+  .sheet:not([hidden], .folded) { padding-bottom: calc(4em + 72px); }
+  /* A lead new to this tab stands taller, its title at the band's foot, the plan still on the first screen. */
+  .sheet .lead { padding-top: 2.8em; display: flex; flex-direction: column; justify-content: flex-end; }
+  .sheet .lead.new { min-height: 30vh; }
+  .sheet.folded .lead { cursor: pointer; }
+  /* Folded to its lead, the page is a band under the chat's quick answer, not a window tall, so the answer above it
+     stays in view; the room for the dock stays below it, so landing on it doesn't leave the chat at its end, following it. */
+  .sheet.folded, .sheet.folded .lead { min-height: 0; }
+  .sheet.folded { padding-bottom: 1.6em; }
   /* What changed since Max last looked: a bar in the left gutter. */
   .sheet .changed { position: relative; }
   .sheet .changed::before { content: ""; position: absolute; left: -.9em; top: .2em; bottom: .2em; width: 3px; border-radius: 2px; background: var(--accent); }
@@ -63,7 +114,7 @@
   .sheet :is(.step, .use).working .mark { color: var(--accent); }
   .sheet .step.done > .head .title { color: var(--muted); }
   .sheet .step > :not(.head) { margin-top: .3em; }
-  .sheet .ask { margin: .6em 0 .8em; padding: .8em 1em .4em; background: var(--tint); border-left: 3px solid var(--yours); border-radius: 0 6px 6px 0; }
+  .sheet .ask { margin: .6em 0 .8em; padding: .8em 1em .4em; border-left: 3px solid var(--yours); border-radius: 0 6px 6px 0; }
   .sheet .ask .question { color: var(--ink); font-size: 1.05em; font-weight: 600; }
   .sheet .ask :is(.end, .now, .why, .otherwise) { color: var(--body); font-size: .94em; }
   .sheet .ask :is(.end, .now) { margin-bottom: .2em; }
@@ -86,13 +137,13 @@
   .sheet-line .title { font-weight: 600; color: var(--ink); }
   .sheet-line:hover { background: var(--hover); }
   @media (max-width: 760px) {
-    .sheet { padding: 1.4em 1em .6em; font-size: 16px; }
+    .sheet { padding: 0 1em 4em; font-size: 16px; }
+    .sheet :is(.lead > h1, section > *) { --fy: 1.6em; }
+    .sheet .steps > li { --fy: .45em; }
     .sheet h1 { font-size: 1.7em; }
-    .sheet .lead { margin: -1.4em -1em 0; padding: 2.6em 1em 2em; }
-    .sheet .lead.new { min-height: 24vh; padding-top: 3.5em; }
+    .sheet .lead.new { min-height: 24vh; }
     .sheet .step > .head .now { display: block; margin-left: 0; }
     .sheet section + section { margin-top: 56px; }
     .sheet .use { grid-template-columns: minmax(0, 1fr); padding: .35em 0; }
-    .sheet.folded .lead { padding: 2em 1em 1.4em; }
     .sheet-line { padding: .55em 1em; }
   }
