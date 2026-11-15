@@ -962,8 +962,8 @@ function chart(ctx, s) {
   const { w, h, mass, calm, n } = s, { grid, iso, chains, lines, scatter, tint, ok, okRgb, ease } = s.kit;
   const INK = [0.45, 0.045, 228], COAST = 0.6;
   const depth = grid(w, h, 3, (x, y) => mass(x, y) * (0.12 + 0.88 * (0.5 + 0.5 * n.fbm(x * 0.0062 + 3, y * 0.0072 + 8, 5))));
-  const LAND = okRgb(0.94, 0.014, 112), SHOAL = okRgb(0.94, 0.022, 215);
-  tint(s.under, w, h, 2, (x, y) => { const d = depth.at(x, y); return d > COAST ? [...LAND, 235] : d > COAST - 0.08 ? [...SHOAL, Math.round(200 * ease((d - (COAST - 0.08)) / 0.03))] : null; });
+  const LAND = okRgb(0.94, 0.014, 100), SHOAL = okRgb(0.94, 0.02, 215), SEA = okRgb(0.952, 0.012, 222);
+  tint(s.under, w, h, 2, (x, y) => { const d = depth.at(x, y); return d > COAST ? [...LAND, 235] : d > COAST - 0.08 ? [...SHOAL, Math.round(120 + 80 * ease((d - (COAST - 0.08)) / 0.03))] : [...SEA, 120]; });
   for (const [k, dd] of [[0, 0.014], [1, 0.03], [2, 0.05]]) lines(ctx, chains(iso(depth, COAST - dd)), ok(...INK, [0.42, 0.3, 0.2][k]), 0.38, null, 8);
   for (const lv of [COAST - 0.1, COAST - 0.17]) lines(ctx, chains(iso(depth, lv)), ok(...INK, 0.4), 0.42, [0.4, 2.2], 30);
   lines(ctx, chains(iso(depth, COAST)), ok(...INK, 0.85), 0.85, null, 6);

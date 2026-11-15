@@ -195,7 +195,7 @@ export default {
   },
   // The five hours of light, each next as far round the ring from those before as it allows.
   slots: [0, 2 / 5, 4 / 5, 1 / 5, 3 / 5],
-  map: { hue: 140 },
+  map: { hue: 128 },
   chart,
 
   paint(ctx, { w, h, dpr, at, stream, quiet, kit }) {
@@ -486,13 +486,13 @@ function blade(x0, y0, a, len, curl, N = 10) {
 // scale, their crown outlined round a numbered trunk. A track winds through on the dry ground.
 function chart(ctx, s) {
   const { w, h, mass, calm, n } = s, { grid, iso, chains, within, poly, lines, length, scatter, dots, tint, ok, okRgb, ease } = s.kit;
-  const INK = [0.5, 0.035, 150];
+  const INK = [0.5, 0.03, 132];
   const forest = grid(w, h, 4, (x, y) => mass(x, y) * (0.5 + 0.5 * n.fbm(x * 0.0055 + 2, y * 0.007 - 1, 4)));
   const kind = grid(w, h, 6, (x, y) => n.fbm(x * 0.0042 - 7, y * 0.0052 + 3, 3));
   const EDGE = 0.36, SCRUB = EDGE - 0.1, KAURI = 0.1;
   const isKauri = (x, y) => kind.at(x, y) > KAURI;
-  // The bush in a pale sage, its kauri stands a step deeper.
-  const BUSH = okRgb(0.952, 0.02, 140), KST = okRgb(0.938, 0.026, 148);
+  // The bush in a pale olive sage, its kauri stands a step deeper.
+  const BUSH = okRgb(0.952, 0.016, 122), KST = okRgb(0.94, 0.02, 118);
   tint(s.under, w, h, 2, (x, y) => {
     const f = forest.at(x, y);
     return f <= EDGE ? null : [...(isKauri(x, y) ? KST : BUSH), Math.round(215 * ease((f - EDGE) / 0.03))];

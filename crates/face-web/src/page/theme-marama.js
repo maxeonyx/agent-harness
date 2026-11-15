@@ -223,7 +223,7 @@ export default {
   },
   // The night's hue, from teal to plum (hueOf): the two ends, then the middles.
   slots: [0, 1, 1 / 2, 1 / 4, 3 / 4],
-  map: { hue: 240, chroma: 0.55 },
+  map: { hue: 250, chroma: 0.35 },
   chart,
   paint(ctx, { w, h, dpr, at, stream, noise, quiet, kit }) {
     const N = night(at);
@@ -447,8 +447,8 @@ export default {
 // path along the ecliptic with its phases.
 function chart(ctx, s) {
   const { w, h, mass, calm, n } = s, { grid, iso, chains, within, lines, scatter, dots, tint, ok, okRgb, ease } = s.kit;
-  const INK = [0.44, 0.04, 258], r = s.stream("sky");
-  const SKY = okRgb(0.958, 0.01, 245), WAY = okRgb(0.938, 0.016, 245);
+  const INK = [0.44, 0.03, 258], r = s.stream("sky");
+  const SKY = okRgb(0.958, 0.007, 250), WAY = okRgb(0.942, 0.011, 250);
   // The Milky Way: a broad band across the area, wandering, its density uneven.
   const wa = r.range(0.5, 1.1) * (r.chance(0.5) ? 1 : -1), wx = w * r.range(0.3, 0.7), wy = h * r.range(0.3, 0.7);
   const way = grid(w, h, 6, (x, y) => {

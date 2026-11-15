@@ -287,7 +287,7 @@ function chart(ctx, s) {
   const ax = w * r.range(0.22, 0.78), ay = h * r.range(0.4, 0.85), rot = r.range(-0.6, 0.6), asp = r.range(1.25, 1.5), ecc = r.range(0.14, 0.24), phi = r.range(0, 6.283);
   // A growth layer at distance rho from the apex: an ear-shaped ring, its wobble the shell's own.
   const at = (rho, th) => {
-    const q = rho * (1 + ecc * Math.sin(th - phi)) * (1 + 0.035 * n.n2(Math.cos(th) * 1.3 + rho * 0.003, Math.sin(th) * 1.3));
+    const q = rho * (1 + ecc * Math.sin(th - phi)) * (1 + 0.05 * n.n2(Math.cos(th) * 1.3 + rho * 0.006, Math.sin(th) * 1.3));
     const x = Math.cos(th) * q * asp, y = Math.sin(th) * q;
     return [ax + x * Math.cos(rot) - y * Math.sin(rot), ay + x * Math.sin(rot) + y * Math.cos(rot)];
   };
@@ -301,12 +301,12 @@ function chart(ctx, s) {
   for (let rho = 16, k = 0; rho < far; k++) { layers.push(rho); rho += 2.8 * (2.2 + 2.6 * Math.sqrt(rho / 300)) * r.range(0.45, 1.5) * (r.chance(0.1) ? 2.1 : 1) + r.range(0, 2.4); }
   // Strata of three to eight layers, hatched and plain by turns, now and then stippled.
   const strata = [];
-  for (let k = 0, i = r.int(0, 1); k < layers.length - 1; i++) { const b = Math.min(layers.length - 1, k + r.int(3, 8)); strata.push({ a: k, b, kind: i % 2 ? (i % 6 === 3 ? "stipple" : "hatch") : "plain", angle: r.range(0, 3.14), gap: r.range(2.4, 4.8) }); k = b; }
+  for (let k = 0, i = r.int(0, 1); k < layers.length - 1; i++) { const b = Math.min(layers.length - 1, k + r.int(3, 8)); strata.push({ a: k, b, kind: i % 2 ? (i % 6 === 3 ? "stipple" : "hatch") : "plain", gap: r.range(2.4, 4.8) }); k = b; }
   // Each point's layer distance (at()'s rho, inverted), so a stratum's patterns stay inside it.
   const ca = Math.cos(rot), sa = Math.sin(rot);
   const rhoAt = grid(w, h, 2, (x, y) => {
     const dx = x - ax, dy = y - ay, u = (dx * ca + dy * sa) / asp, v = -dx * sa + dy * ca, th = Math.atan2(v, u), q = Math.hypot(u, v);
-    return q / ((1 + ecc * Math.sin(th - phi)) * (1 + 0.035 * n.n2(Math.cos(th) * 1.3 + q * 0.003, Math.sin(th) * 1.3)));
+    return q / ((1 + ecc * Math.sin(th - phi)) * (1 + 0.05 * n.n2(Math.cos(th) * 1.3 + q * 0.006, Math.sin(th) * 1.3)));
   });
   const stratumOf = (x, y) => {
     const q = rhoAt.at(x, y);
@@ -325,20 +325,20 @@ function chart(ctx, s) {
       u.beginPath(); u.moveTo(o[0], o[1]); for (let k = 2; k < o.length; k += 2) u.lineTo(o[k], o[k + 1]); u.closePath();
       u.moveTo(inner[inner.length - 2], inner[inner.length - 1]); for (let k = inner.length - 4; k >= 0; k -= 2) u.lineTo(inner[k], inner[k + 1]); u.closePath();
       u.fillStyle = TINT; u.fill();
-      // Hatching at the stratum's own angle, cut to the runs inside it.
-      let x0 = w, y0 = h, x1 = 0, y1 = 0;
-      for (let k = 0; k < o.length; k += 2) { x0 = Math.min(x0, o[k]); x1 = Math.max(x1, o[k]); y0 = Math.min(y0, o[k + 1]); y1 = Math.max(y1, o[k + 1]); }
-      x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(w, x1); y1 = Math.min(h, y1);
-      if (x1 <= x0 || y1 <= y0) continue;
-      const c = Math.cos(st.angle), sn = Math.sin(st.angle), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, half = Math.hypot(x1 - x0, y1 - y0) / 2, hatch = [];
-      // Hatched by hand: its own spacing, a line now and then left out, and worn thin in places.
-      for (let d = -half; d < half; d += st.gap * r.range(0.8, 1.25)) {
-        if (r.chance(0.12)) continue;
-        const p = [];
-        for (let t = -half; t <= half; t += 3) { const x = cx + c * d - sn * t, y = cy + sn * d + c * t; if (x >= x0 - 2 && x <= x1 + 2 && y >= y0 - 2 && y <= y1 + 2) p.push(x, y); }
-        hatch.push(p);
+      // Hatching across the band, square to its curve: a short stroke from each growth line to the next,
+      // at the stratum's own spacing, each row set off from the last, a stroke now and then left out.
+      const hatch = [];
+      for (let k = st.a; k < st.b; k++) {
+        const r0 = layers[k] + 0.7, r1 = layers[k + 1] - 0.7, dth = st.gap / ((r0 + r1) / 2);
+        if (r1 - r0 < 1.2) continue;
+        for (let th = r.range(0, dth); th < 6.2832; th += dth * r.range(0.8, 1.25)) {
+          if (r.chance(0.15)) continue;
+          const [x0, y0] = at(r0, th), [x1, y1] = at(r1, th);
+          if (x0 < -4 || y0 < -4 || x0 > w + 4 || y0 > h + 4) continue;
+          hatch.push([x0, y0, x1, y1]);
+        }
       }
-      lines(ctx, within(hatch, (x, y) => stratumOf(x, y) === st && mass(x, y) > 0.03 && n.n2(x / 34 + 40, y / 34) > -0.3), ok(...INK, 0.4), 0.32);
+      lines(ctx, within(hatch, (x, y) => mass(x, y) > 0.03), ok(...INK, 0.4), 0.32);
     }
   }
   // Stipple in its strata, in one pass.

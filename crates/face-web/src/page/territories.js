@@ -8,10 +8,10 @@
 // where the wash dried at its edge, mottled, thinning to bare paper in patches, grainy, and paler up
 // its history; the land hides the map's dot grid. Inside it, its theme draws its subject as a map
 // (`chart(ctx, scene)`): Harbour's as a nautical chart, Tussock's as a topographic sheet. The chart is
-// fullest round the present row and fades up the history; near the streams its ink thins, and it
-// stops crisply short of every stream and node, as an engraver breaks a contour at a road. The names
-// on the map carry their own halo (map.css). Every territory has its name lettered in spaced capitals
-// up its history, smaller where it is narrow.
+// fades gently up the history; near the streams its ink thins unevenly, with no edge, and it stops
+// crisply short of every stream and node, as an engraver breaks a contour at a road. The names on the
+// map carry their own halo (map.css). Every territory has its name lettered in spaced capitals up its
+// history, smaller where it is narrow, and every line stops short of it.
 //
 // Technique. `territories` works the map out once per layout, as a drawing in map units. Each area
 // has a distance field on a grid of `cell` map units, within its own window (its nodes', names' and
@@ -24,7 +24,7 @@
 // chart is recorded from a canvas context as paths and words in map units. `render` draws any part
 // of the drawing at any scale, sharp at the scale it is drawn at: the washes and the paper's grain,
 // the charts' ink with the graph knocked out of it and fading up the history, then the seams, the
-// coast, the water lines and the names.
+// coast and the water lines on the same layer, each name's room cut out of it, and the names.
 import { noise, rng, fromOklch, oklch, kit, rgb, mix, simplify } from "./theme.js";
 
 const LOOK = {
@@ -38,7 +38,8 @@ const LOOK = {
   clear: 34,       // no border nearer a node or a name than this
   halo: 2.2,       // the gap the charts' ink keeps round every stream and node, beyond the stroke, in map units,
   haloPx: 2.5,     // and never narrower than this many pixels as drawn
-  fade: [10, 20, 30], // beyond the gap the ink is a sixth lighter within each of these distances of a stream
+  thin: [36, 6, 0.55], // beyond the gap the ink thins within this distance of a stream, in steps, by at most this share,
+  patch: 220,      // unevenly, in patches this many map units across, so no edge shows
   bridge: 40,      // a sliver of paper narrower than about twice this between two territories is closed
   ribbon: [2.5, 4, 0.22], // the band of tint just inside the border: inset, width, opacity
   coast: 1.15,     // the coast's line, in map units, and never under 0.75 px as drawn; a seam is lighter and finer
@@ -56,13 +57,13 @@ const LOOK = {
   tintScale: 0.5,  // the wash, in pixels per map unit
 };
 // An area's hue as its wash's body and dried edge, the band inside its border, and its lettering.
-const inks = (hue, k = 1) => ({ fill: fromOklch(0.965, 0.013 * k, hue), wet: fromOklch(0.83, 0.03 * k, hue), band: fromOklch(0.8, 0.04 * k, hue), line: fromOklch(0.5, 0.035 * k, hue) });
+const inks = (hue, k = 1) => ({ fill: fromOklch(0.965, 0.013 * k, hue), wet: fromOklch(0.83, 0.025 * k, hue), band: fromOklch(0.8, 0.04 * k, hue), line: fromOklch(0.5, 0.035 * k, hue) });
 // The coast, the seams and the water lines belong to the whole map: one neutral ink.
 const COAST = fromOklch(0.46, 0.014, 80), SEAM = fromOklch(0.56, 0.012, 80);
 const ss = (a, b, t) => { t = Math.min(1, Math.max(0, (t - a) / (b - a))); return t * t * (3 - 2 * t); };
 // How much of its ink a chart keeps at height y: all of it to 30 units above the now line, half by
 // 360, and none past `rise`.
-const hist = (y) => (y > -30 ? 1 : 0.5 + 0.5 * ss(-360, -30, y)) * ss(-LOOK.rise, -LOOK.rise + 600, y);
+const hist = (y) => (0.62 + 0.38 * ss(-1500, 0, y)) * ss(-LOOK.rise, -LOOK.rise + 600, y);
 
 // areas: [{ id, theme (the module), seed, name, marks: [[x0, y0, x1, y1]], labels: [[x0, y0, x1, y1]] }],
 // each mark a node's box and each label a node's name's box, in map units, the now line at y = 0 and
@@ -244,8 +245,8 @@ export function territories(areas, lines, paper) {
       const cover = ss(-0.8, 0.8, sample(land, x, y)) * ss(-0.8, 0.8, at(ck, x, y) + 3);
       if (cover <= 0) continue;
       const f = at(fk, x, y), short = f < 6 ? 1.2 + 1.2 * nw.n2(x / 40, y / 40) : 0, inside = ss(-0.8, 0.8, f - short), m = at(mot, x, y);
-      const body = LOOK.wash * Math.max(0.2, 0.68 + 0.55 * bloom((x - X0) / cell - W.i0, (y - Y0) / cell - W.j0)) * (1 - 0.72 * ss(0.08, 0.3, m));
-      const edge = LOOK.wet * Math.exp(-Math.max(0, f - short) / LOOK.wetIn) + 0.14 * Math.exp(-(((m - 0.08) / 0.04) ** 2));
+      const body = LOOK.wash * Math.max(0.2, 0.68 + 0.55 * bloom((x - X0) / cell - W.i0, (y - Y0) / cell - W.j0)) * (1 - 0.5 * ss(0.05, 0.35, m));
+      const edge = LOOK.wet * Math.exp(-Math.max(0, f - short) / LOOK.wetIn) + 0.12 * Math.exp(-(((m - 0.05) / 0.04) ** 2));
       const A = Math.min(1, (body + edge * (1 - body)) * (0.55 + 0.45 * ss(-1800, -150, y)) * inside), e = edge / (body + edge);
       for (let ch = 0; ch < 3; ch++) px[i + ch] = Math.round(ground[ch] * (1 - A) + (fill[ch] * (1 - e) + wet[ch] * e) * A);
       px[i + 3] = Math.round(255 * cover);
@@ -253,7 +254,7 @@ export function territories(areas, lines, paper) {
     tctx.putImageData(img, 0, 0);
 
     // Its chart, in the box from `rise` above the now line to the territory's foot: ink recorded as
-    // paths and words in map units, pale tints into the wash, fading up its history faster than the ink.
+    // paths and words in map units, pale tints into the wash, fading up its history as the ink does.
     const ink = new Map(), texts = [], cx0 = box.x, cy0 = Math.max(box.y, -LOOK.rise), cw = box.w, ch = box.y + box.h - cy0;
     if (cw > 60 && ch > 60) {
       const under = new OffscreenCanvas(Math.ceil(cw * ts), Math.ceil(ch * ts)), uctx = under.getContext("2d");
@@ -268,7 +269,7 @@ export function territories(areas, lines, paper) {
       const mask = uctx.createImageData(under.width, under.height), md = mask.data;
       for (let j = 0, i = 0; j < under.height; j++) for (let q = 0; q < under.width; q++, i += 4) {
         const x = cx0 + (q + 0.5) / ts, y = cy0 + (j + 0.5) / ts;
-        md[i + 3] = Math.round(255 * ss(-1.5, 1.5, at(fk, x, y)) * hist(y) ** 2);
+        md[i + 3] = Math.round(255 * ss(-1.5, 1.5, at(fk, x, y)) * hist(y));
       }
       const mc = new OffscreenCanvas(under.width, under.height);
       mc.getContext("2d").putImageData(mask, 0, 0);
@@ -346,7 +347,7 @@ export function territories(areas, lines, paper) {
     p.moveTo(P[i - 1][0], P[i - 1][1]); p.lineTo(P[i][0], P[i][1]);
   }
   return {
-    areas: out, land: path2d(coast, true), coast: path2d(coast, true), shores, grainy,
+    areas: out, land: path2d(coast, true), coast: path2d(coast, true), shores, grainy, patchy: patchOf(),
     knock: [...knock], nodes: areas.flatMap((a) => a.marks),
     bounds: { x: X0, y: Y0, w: (nx - 1) * cell, h: (ny - 1) * cell }, unknown: [...unknown],
   };
@@ -407,42 +408,54 @@ export function render(d, rect, W, H, { dpr = 1, washOnly = false } = {}) {
     lc.restore();
   }
   const gap = Math.max(LOOK.halo, LOOK.haloPx / s);
-  Object.assign(lc, { globalCompositeOperation: "destination-out", strokeStyle: "#000", fillStyle: "#000", lineCap: "round", lineJoin: "round" });
-  for (const [extra, alpha] of [...LOOK.fade.map((f) => [f, 1 / 6]), [0, 1]]) {
-    lc.globalAlpha = alpha;
-    for (const [hw, path] of d.knock) { lc.lineWidth = 2 * (hw + gap + extra); lc.stroke(path); }
+  const graph = (c, extra) => {
+    for (const [hw, path] of d.knock) { c.lineWidth = 2 * (hw + gap + extra); c.stroke(path); }
     const nodes = new Path2D(), r = gap + extra;
     for (const [x0, y0, x1, y1] of d.nodes) nodes.roundRect(x0 - r, y0 - r, x1 - x0 + 2 * r, y1 - y0 + 2 * r, Math.min(x1 - x0, y1 - y0) / 2 + r);
-    lc.fill(nodes);
-  }
-  lc.globalAlpha = 1;
-  // The names' halo: the ink breaks round each letter, as an engraver keeps lettering clear.
-  for (const a of seen) for (const n of a.names) {
-    lc.save(); lc.translate(n.x, n.y); lc.rotate((n.rot * Math.PI) / 180);
-    Object.assign(lc, { font: `500 ${n.size}px Literata, Georgia, serif`, letterSpacing: `${n.size * 0.42}px`, textAlign: "center", textBaseline: "middle", lineWidth: 2 * gap });
-    lc.strokeText(n.text, 0, 0); lc.fillText(n.text, 0, 0);
-    lc.restore();
-  }
+    c.fill(nodes);
+  };
+  // The thinning: most at the gap and less further out, in patches, so it has no edge to read as a plate.
+  const [reach, steps, most] = LOOK.thin, mask = new OffscreenCanvas(W, H), mc = mask.getContext("2d");
+  mc.setTransform(...at);
+  Object.assign(mc, { strokeStyle: "#000", fillStyle: "#000", lineCap: "round", lineJoin: "round", globalAlpha: 1 - (1 - most) ** (1 / steps) });
+  for (let i = 1; i <= steps; i++) graph(mc, (reach * i) / steps);
+  const patchy = mc.createPattern(d.patchy, "repeat"), k = LOOK.patch / d.patchy.width;
+  patchy.setTransform(new DOMMatrix([k, 0, 0, k, 0, 0]));
+  Object.assign(mc, { globalCompositeOperation: "destination-in", globalAlpha: 1, fillStyle: patchy });
+  mc.fillRect(rect.x, rect.y, rect.w, rect.h);
+  Object.assign(lc, { globalCompositeOperation: "destination-out", strokeStyle: "#000", fillStyle: "#000", lineCap: "round", lineJoin: "round" });
+  lc.save(); lc.setTransform(1, 0, 0, 1, 0, 0); lc.drawImage(mask, 0, 0); lc.restore();
+  graph(lc, 0);
   lc.globalCompositeOperation = "destination-in";
   const y0 = rect.y, y1 = rect.y + rect.h, fadeY = [];
-  for (let i = 0; i <= 8; i++) fadeY.push(-LOOK.rise + (600 * i) / 8, -360 + (330 * i) / 8);
+  for (let i = 0; i <= 8; i++) fadeY.push(-LOOK.rise + (600 * i) / 8, -1500 + (1500 * i) / 8);
   const ys = [y0, y1, ...fadeY.filter((y) => y > y0 && y < y1)].sort((a, b) => a - b);
   const g = lc.createLinearGradient(0, y0, 0, y1);
   for (const y of ys) g.addColorStop((y - y0) / (y1 - y0), `rgba(0,0,0,${LOOK.ink * hist(y)})`);
   lc.fillStyle = g;
   lc.fill(d.land, "evenodd");
-  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(layer, 0, 0); ctx.restore();
 
-  // The seams, the coast and the water lines, sharp and never too fine to see.
-  Object.assign(ctx, { lineCap: "round", lineJoin: "round" });
-  ctx.save(); ctx.clip(d.land, "evenodd");
-  Object.assign(ctx, { strokeStyle: SEAM, lineWidth: Math.max(LOOK.seam, 0.5 / s), globalAlpha: 0.9 });
-  for (const a of seen) if (a.seams) ctx.stroke(a.seams);
-  ctx.restore();
-  Object.assign(ctx, { strokeStyle: COAST, lineWidth: Math.max(LOOK.coast, 0.75 / s), globalAlpha: 0.85 });
-  ctx.stroke(d.coast);
-  ctx.globalAlpha = 1;
-  for (const w of d.shores) { Object.assign(ctx, { strokeStyle: w.colour, lineWidth: Math.max(0.6, 0.5 / s) }); ctx.stroke(w.path); }
+  // The seams, the coast and the water lines on the same layer, sharp and never too fine to see.
+  Object.assign(lc, { globalCompositeOperation: "source-over", lineCap: "round", lineJoin: "round" });
+  lc.save(); lc.clip(d.land, "evenodd");
+  Object.assign(lc, { strokeStyle: SEAM, lineWidth: Math.max(LOOK.seam, 0.5 / s), globalAlpha: 0.9 });
+  for (const a of seen) if (a.seams) lc.stroke(a.seams);
+  lc.restore();
+  Object.assign(lc, { strokeStyle: COAST, lineWidth: Math.max(LOOK.coast, 0.75 / s), globalAlpha: 0.85 });
+  lc.stroke(d.coast);
+  lc.globalAlpha = 1;
+  for (const w of d.shores) { Object.assign(lc, { strokeStyle: w.colour, lineWidth: Math.max(0.6, 0.5 / s) }); lc.stroke(w.path); }
+  // Room for each name: every line stops short of it, as an engraver keeps lettering clear.
+  Object.assign(lc, { globalCompositeOperation: "destination-out", fillStyle: "#000" });
+  for (const a of seen) for (const n of a.names) {
+    lc.save(); lc.translate(n.x, n.y); lc.rotate((n.rot * Math.PI) / 180);
+    Object.assign(lc, { font: `500 ${n.size}px Literata, Georgia, serif`, letterSpacing: `${n.size * 0.42}px` });
+    const all = lc.measureText(n.text).width, tall = n.size * 0.8 + 2 * gap;
+    lc.beginPath(); lc.roundRect(-all / 2 - gap, -tall / 2, all - n.size * 0.42 + 2 * gap, tall, tall / 2); lc.fill();
+    lc.restore();
+  }
+  lc.globalCompositeOperation = "source-over";
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(layer, 0, 0); ctx.restore();
 
   // The areas' names, in spaced capitals.
   Object.assign(ctx, { textAlign: "center", textBaseline: "middle", globalAlpha: 0.5 });
@@ -470,6 +483,19 @@ function along(lines, step) {
 }
 
 // The paper's grain: a 64-pixel tile of darker specks, softened noise in the map's ground's shade.
+// Soft patches that tile: a few waves whose periods divide the tile, so its edges meet.
+function patchOf() {
+  const raw = rng("thinning"), N = 96, waves = Array.from({ length: 6 }, () => [1 + Math.floor(raw() * 3), Math.floor(raw() * 5) - 2, raw() * 6.283]);
+  const tile = new OffscreenCanvas(N, N), tc = tile.getContext("2d"), img = tc.createImageData(N, N);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    let v = 0;
+    for (const [fx, fy, ph] of waves) v += Math.cos((6.283 * (fx * i + fy * j)) / N + ph);
+    img.data[(j * N + i) * 4 + 3] = Math.round(255 * (0.45 + 0.55 * ss(-2, 2, v)));
+  }
+  tc.putImageData(img, 0, 0);
+  return tile;
+}
+
 function grainOf([r, g, b]) {
   const raw = rng("wash grain"), n = new Float32Array(64 * 64).map(() => raw() * 2 - 1);
   const tile = new OffscreenCanvas(64, 64), tc = tile.getContext("2d"), img = tc.createImageData(64, 64);

@@ -680,7 +680,7 @@ function chart(ctx, s) {
   ctx.beginPath();
   for (const [x, y] of scatter(s.stream("hachure"), w, h, 6, () => 1)) {
     const [gx, gy] = land.grad(x, y), g = Math.hypot(gx, gy), v = land.at(x, y);
-    if (g < 0.006 || v < 0.2) continue;
+    if (g < 0.011 || v < 0.2) continue;
     const len = Math.min(4, 600 * g), ux = -gx / g, uy = -gy / g;
     ctx.moveTo(x, y); ctx.lineTo(x + ux * len, y + uy * len);
   }
